@@ -24,10 +24,11 @@ from src.runtime.cli import session
 
 
 class RouteSessionManager:
-  """Session-manager double for the session-message route tests."""
+  """Session-manager double for the session-message route tests; its store is itself."""
 
   def __init__(self, by_id: dict[str, models.SessionMetadata]) -> None:
     self.sessions = by_id
+    self.store = self
 
   async def get_session(self, session_id: str) -> models.SessionMetadata | None:
     return self.sessions.get(session_id)

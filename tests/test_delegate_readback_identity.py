@@ -92,7 +92,7 @@ async def test_readback_returns_none_without_the_bound_child(
   assert common.find_local_task_child(
       manager.id, description=description, task_type="quick-edit", request_id="delegate-missing") is None
   # A manager root with no matching child also reads back None.
-  root = await session_mgr.create_session(models.CreateSessionRequest(name="Root"))
+  root = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="Root"))
   assert common.find_local_task_child(
       root.id, description="whatever", task_type="quick-edit", request_id="delegate-x") is None
 

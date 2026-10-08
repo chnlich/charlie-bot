@@ -21,6 +21,7 @@ from src.runtime.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     get_config_on_loop,
     get_session_manager,
+    get_session_store,
     get_task_manager,
 )
 from src.runtime.api.message_utils import build_session_bootstrap_data
@@ -31,6 +32,7 @@ from src.runtime.api.sessions import (
 )
 from src.runtime.hooks import page_render
 from src.runtime.hooks.sequence_controllers import sequence_listing_fields
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -79,11 +81,11 @@ async def auth_status() -> JSONResponse:
 async def events_viewer(
     request: Request,
     session_id: str,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
 ) -> HTMLResponse:
   """Render the JSONL events viewer page for a session."""
   try:
-    session = await session_mgr.get_session(session_id)
+    session = await store.get_session(session_id)
   except (KeyError, FileNotFoundError) as e:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except Exception as e:
@@ -138,6 +140,7 @@ async def index(
     request: Request,
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
@@ -175,7 +178,7 @@ async def index(
   session_bootstrap: dict | None = None
   if session:
     try:
-      active_session = await session_mgr.get_session(session)
+      active_session = await store.get_session(session)
     except Exception:
       log.exception("get_session_failed", session_id=session)
 

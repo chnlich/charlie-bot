@@ -59,12 +59,13 @@ async def _run_cc_with_backend(
 async def _task_node(tmp_path: Path, profile: str = "manager"):
   from conftest import make_home_config
 
+  from src.runtime.session_store import SessionStore
   from src.runtime.sessions import SessionManager
   from src.runtime.task_execution import set_task_manager
   from src.runtime.task_sessions import TaskTreeManager
 
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   tree = TaskTreeManager(cfg, session_mgr)
   node = await tree.create_task(
       request_id="node", task_parent_id=None, profile=profile, task=None, name="Node", backend=None, caller=OPERATOR)
@@ -82,7 +83,7 @@ async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -
   # the interrupted terminal fact the way a live process's exit would.
   await tree.runs.record_launch(node.id, run.id, pid=2**23, pid_start="1")
 
-  meta = await session_mgr.get_session(node.id)
+  meta = await session_mgr.store.get_session(node.id)
   assert meta is not None and meta.profile == "manager"
   result = await cancel_master_agent(node.id, _meta=meta, session_mgr=session_mgr, task_mgr=tree)
 
@@ -113,7 +114,7 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
     assert pair is not None
     # A recorded pid_start that /proc no longer reports: pid reuse evidence.
     await tree.runs.record_launch(node.id, run.id, pid=live.pid, pid_start="not-this-boot")
-    meta = await session_mgr.get_session(node.id)
+    meta = await session_mgr.store.get_session(node.id)
     with pytest.raises(HTTPException) as exc_info:
       await cancel_master_agent(node.id, _meta=meta, session_mgr=session_mgr, task_mgr=tree)
     assert exc_info.value.status_code == 409

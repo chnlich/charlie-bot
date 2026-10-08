@@ -54,6 +54,7 @@ from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.master_trigger import trigger_master
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import ArchivedSessionError, TriggerManager
 
@@ -451,15 +452,14 @@ def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:
 _TEXT_PREVIEW_CHARS = 200
 
 
-async def require_thread_session(
-    platform: ThreadPlatform, session_id: str, session_mgr: SessionManager) -> SessionMetadata:
+async def require_thread_session(platform: ThreadPlatform, session_id: str, store: SessionStore) -> SessionMetadata:
   """The session named by *session_id* when it exists and carries a platform thread.
 
   The reply-path preamble shared by ``assert_thread_fresh``, ``ack_messages``,
   and ``post_reply``. Refusals raise ``ThreadReplyError``: 404 unknown session,
   409 no platform thread.
   """
-  meta = await session_mgr.get_session(session_id)
+  meta = await store.get_session(session_id)
   if meta is None:
     raise ThreadReplyError(404, SESSION_NOT_FOUND_DETAIL)
   if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
@@ -483,7 +483,7 @@ async def unread_messages(adapter: ThreadAdapter, origin: Any, cfg: CharlieBotCo
 
 
 async def assert_thread_fresh(
-    adapter: ThreadAdapter, session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+    adapter: ThreadAdapter, session_id: str, cfg: CharlieBotConfig, store: SessionStore) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   The reply-path gate, run by the reply endpoint before ``post_reply``:
@@ -495,7 +495,7 @@ async def assert_thread_fresh(
   counts.
   """
   platform = adapter.platform
-  meta = await require_thread_session(platform, session_id, session_mgr)
+  meta = await require_thread_session(platform, session_id, store)
   fields = metadata_slots.fields_of(meta, platform.name)
   watermark = getattr(fields, platform.watermark_field)
   unread = await unread_messages(adapter, getattr(fields, platform.origin_field), cfg, watermark)
@@ -541,7 +541,7 @@ async def post_reply(
   reach the operator alone.
   """
   platform = adapter.platform
-  meta = await require_thread_session(platform, session_id, session_mgr)
+  meta = await require_thread_session(platform, session_id, session_mgr.store)
   if not text.strip():
     raise ThreadReplyError(422, "Reply text is empty")
 
@@ -611,7 +611,7 @@ async def ack_messages(
   ids at or below the watermark is an idempotent no-op counted as acked.
   """
   platform = adapter.platform
-  meta = await require_thread_session(platform, session_id, session_mgr)
+  meta = await require_thread_session(platform, session_id, session_mgr.store)
   ids = sorted(set(message_ids), key=platform.id_key)
   if not ids:
     raise ThreadReplyError(422, "message_ids is empty")
@@ -634,7 +634,7 @@ async def ack_messages(
     watermark = ceiling
     metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: watermark})
     meta.updated_at = utc_now()
-    await session_mgr.save_metadata(meta)
+    await session_mgr.store.save_metadata(meta)
   await session_mgr.persist_and_broadcast(
       session_id, {
           "type": platform.ack_event_type,
@@ -756,7 +756,7 @@ async def deliver_done(
   summon block, so both leave the thread alone.
   """
   platform = adapter.platform
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   if meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
     return False
   input_event_ids = master_done_input_event_ids(done)
@@ -928,10 +928,10 @@ async def arm_follow_trigger(
 
 
 async def consume_mention(
-    platform: ThreadPlatform, session_mgr: SessionManager, trigger_mgr: TriggerManager, session_id: str,
+    platform: ThreadPlatform, store: SessionStore, trigger_mgr: TriggerManager, session_id: str,
     mention_id: str) -> None:
   """The mention round consumes its own id: advance the watermark to it and cancel armed follows."""
-  meta = await session_mgr.get_session(session_id)
+  meta = await store.get_session(session_id)
   # A None here would silently skip the watermark advance, leaving the summon's own
   # mention permanently unread; the invariant break fails loudly instead.
   assert meta is not None, "unreachable: the summon path resolves the session just before this call"
@@ -940,7 +940,7 @@ async def consume_mention(
   if watermark is None or platform.id_key(watermark) < platform.id_key(mention_id):
     metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: mention_id})
     meta.updated_at = utc_now()
-    await session_mgr.save_metadata(meta)
+    await store.save_metadata(meta)
   cancelled = await cancel_armed_follow_triggers(platform, trigger_mgr, session_id)
   if cancelled:
     logger.info(f"{platform.name}_follow_trigger_cancelled_for_mention", session=session_id, cancelled=cancelled)
@@ -956,7 +956,7 @@ async def ensure_group(platform: ThreadPlatform, session_mgr: SessionManager, se
   swallowed, so summon, round, and reply behavior are unaffected.
   """
   try:
-    meta = await session_mgr.get_session(session_id)
+    meta = await session_mgr.store.get_session(session_id)
     if (meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None or
         meta.group):
       return
@@ -1002,7 +1002,7 @@ async def accept_summon(
   platform = adapter.platform
   fields = {**adapter.log_fields(block), f"{platform.name}_user": user}
 
-  session_meta = await session_mgr.get_session(session_id)
+  session_meta = await session_mgr.store.get_session(session_id)
   if session_meta is None:
     session_name = f"{label} {_local_time()}"
     await task_execution.task_manager().create_task(
@@ -1028,7 +1028,7 @@ async def accept_summon(
   else:
     logger.info(f"{platform.name}_mention_session_existing", **fields, session=session_id)
 
-  await consume_mention(platform, session_mgr, trigger_mgr, session_id, block[platform.mention_key])
+  await consume_mention(platform, session_mgr.store, trigger_mgr, session_id, block[platform.mention_key])
 
   await ensure_group(platform, session_mgr, session_id, label)
 
@@ -1115,7 +1115,7 @@ async def follow_message(
   entrypoint, which reads them off the raw event.
   """
   platform = adapter.platform
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   if meta is None:
     return None
   fields = metadata_slots.fields_of(meta, platform.name)

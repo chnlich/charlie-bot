@@ -7,7 +7,7 @@ from typing import Any
 
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
-from src.runtime import master_cc_run, master_cc_state, sidebar_state, streaming, thinking_state
+from src.runtime import master_cc_run, master_cc_state, session_store, sidebar_state, streaming, thinking_state
 from src.runtime.agent_process import base
 from src.runtime.hooks import backend_types, turn_contributions
 
@@ -130,8 +130,7 @@ async def _refresh_anchors_from_disk(
   what resumes the same conversation. On a failed disk read
   (raised or missing metadata) the relay alone applies.
   """
-  from src.runtime.sessions import SessionManager
-  fresh = await SessionManager(item.cfg).read_metadata_fresh(session_id)
+  fresh = await session_store.store().read_metadata_fresh(session_id)
   meta = item.session_meta
   if fresh is not None:
     if meta.cc_session_id is not None:

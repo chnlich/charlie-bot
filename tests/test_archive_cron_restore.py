@@ -33,9 +33,10 @@ def cron_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  from src.runtime.session_store import SessionStore
   from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   tree = TaskTreeManager(cfg, session_mgr)
   from conftest import bind_deps_managers
   bind_deps_managers(monkeypatch, tree, session_mgr)
@@ -106,7 +107,7 @@ async def test_auto_bind_restore_leaves_the_legacy_status_branch_alone(cron_env)
   session_cache: dict[str, list] = {}
   await scheduler._auto_bind(task_cfg, cfg, session_cache)
   assert task_cfg.session_id == node.id
-  restored = await session_mgr.get_session(node.id)
+  restored = await session_mgr.store.get_session(node.id)
   assert restored is not None and restored.status == SessionStatus.ACTIVE
   # No task_reopened fact: the legacy branch never wrote task facts.
   assert [e for e in tree.events.load_events(node.id) if e["type"] == ET.TASK_REOPENED] == []

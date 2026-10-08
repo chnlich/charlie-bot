@@ -20,7 +20,7 @@ async def test_archive_empty_session_permanently_deletes_it(tmp_path: pathlib.Pa
 
   assert response.status_code == 204
   assert not session_dir.exists()
-  assert await session_mgr.get_session(meta.id) is None
+  assert await session_mgr.store.get_session(meta.id) is None
   assert get_response.status_code == 404
 
 
@@ -41,6 +41,6 @@ async def test_archive_non_empty_session_keeps_files_and_marks_archived(tmp_path
   assert response.json() == {"archived": [meta.id]}
   assert session_dir.exists()
   assert events_path.exists()
-  fresh = await session_mgr.get_session(meta.id)
+  fresh = await session_mgr.store.get_session(meta.id)
   assert fresh is not None
   assert tree.task_state(meta.id) == "archived"

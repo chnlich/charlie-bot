@@ -9,7 +9,6 @@ import json
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Any
 
 from src.app import registrations
@@ -45,13 +44,12 @@ with gc_off(collect=False):
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions, threads
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
-  from src.runtime.api.deps import session_manager, set_trigger_manager
   from src.runtime.hooks import wiring
   from src.runtime.message_aggregator import MessageAggregator
-  from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
+  from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager, session_manager
   from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
   from src.runtime.task_execution import task_manager
-  from src.runtime.triggers import TriggerManager
+  from src.runtime.triggers import TriggerManager, set_trigger_manager
   from src.runtime.v1_sessions import require_no_v1_sessions
 
 log = LazyStructlogLogger()
@@ -391,7 +389,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
   await streaming_manager.subscribe(SIDEBAR_CHANNEL, websocket)
   try:
     session_mgr = session_manager()
-    meta = await session_mgr.get_session(session_id)
+    meta = await session_mgr.store.get_session(session_id)
     try:
       sent, total_event_count = await _send_session_catchup(websocket, session_mgr, session_id, cursor, meta)
       await websocket.send_json({"type": "catchup_complete"})

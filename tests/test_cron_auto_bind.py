@@ -28,8 +28,8 @@ from conftest import (
     SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
     bind_deps_managers,
     init_repo_with_origin,
-    make_cron_sessions_client,
     make_cron_session,
+    make_cron_sessions_client,
     registered_cron_handler,
     write_nightly_prompt,
     write_nightly_task,
@@ -40,6 +40,7 @@ from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionStatus, utc_now_iso
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_cron_backend import _patch_cron_d
@@ -78,7 +79,7 @@ def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   scheduler = Scheduler(cfg, session_mgr)
@@ -104,7 +105,7 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
   copied_run = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
   cron_session.last_scheduled_run = copied_run
   cron_session.last_scheduled_cron = "0 3 * * *"
-  await session_mgr.save_metadata(cron_session)
+  await session_mgr.store.save_metadata(cron_session)
   execute_task = AsyncMock()
   scheduler._execute_task = execute_task  # type: ignore[method-assign]
 
@@ -128,7 +129,7 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
   assert node.last_scheduled_cron == "0 3 * * *"
   execute_task.assert_not_awaited()
   # The legacy cron session is archived.
-  stored = await session_mgr.get_session(cron_session.id)
+  stored = await session_mgr.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
 
 
@@ -226,7 +227,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   # Last ran at yesterday's 03:00 occurrence: today's 03:00 is due.
   cron_session.last_scheduled_run = "2026-06-07T03:00:00-07:00"
   cron_session.last_scheduled_cron = "0 3 * * *"
-  await session_mgr.save_metadata(cron_session)
+  await session_mgr.store.save_metadata(cron_session)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   install_backends(
@@ -256,7 +257,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   assert run.pid == 424001 and run.pid_start == "1-424000"
   assert run.backend == OPUS_BACKEND_ID and run.model == "claude-opus-4-6"
   # The cron session is archived and holds no firing: the work went to the node.
-  stored = await session_mgr.get_session(cron_session.id)
+  stored = await session_mgr.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
   index = await tree._get_index()
   assert not [m for m in index.metas.values() if m.task_parent_id == cron_session.id]
@@ -287,7 +288,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   # fires and the copied bookkeeping is observable verbatim.
   copied_run = utc_now_iso()
   cron_session.last_scheduled_run = copied_run
-  await session_mgr.save_metadata(cron_session)
+  await session_mgr.store.save_metadata(cron_session)
 
   with pytest.MonkeyPatch().context() as crash:
     if fail_after == "create":
@@ -310,7 +311,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   else:
     # The binding landed; only the archive is missing.
     assert "session_id" in _read_task_yaml(home)
-    stored = await session_mgr.get_session(cron_session.id)
+    stored = await session_mgr.store.get_session(cron_session.id)
     assert stored is not None and stored.status == SessionStatus.ACTIVE
 
   # The replayed tick lands the end state.
@@ -325,7 +326,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   assert {m.id for m in roots} == {node.id, cron_session.id}
   # The migrated bookkeeping survived every replay path.
   assert node.last_scheduled_run == copied_run
-  stored = await session_mgr.get_session(cron_session.id)
+  stored = await session_mgr.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
 
 
@@ -356,7 +357,7 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
 
   await scheduler._tick()
 
-  stored = await session_mgr.get_session(cron_session.id)
+  stored = await session_mgr.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
   # The bound node is untouched by the sweep.
   node = await tree.load_meta(node_id)
@@ -506,7 +507,7 @@ async def test_task_delete_leaves_its_node_active(tick_env) -> None:
   assert not (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").exists()
   node = await tree.load_meta(node_id)
   assert node is not None
-  fresh = await session_mgr.get_session(node_id)
+  fresh = await session_mgr.store.get_session(node_id)
   assert fresh is not None and fresh.status == SessionStatus.ACTIVE
 
 
@@ -523,11 +524,11 @@ def _backdate_cc_anchor(session_mgr: SessionManager, session_id: str, *, started
   back to the disk anchor by the save guard, so the file itself is the only
   honest way to age an anchor in a test.
   """
-  path = session_mgr._metadata_path(session_id)
+  path = session_mgr.store.metadata_path(session_id)
   body = json.loads(path.read_text(encoding="utf-8"))
   body["cc_session_started_at"] = started_at.isoformat()
   path.write_text(json.dumps(body), encoding="utf-8")
-  session_mgr._metadata_cache.pop(session_id)  # the next read re-parses the file
+  session_mgr.store.metadata_cache.pop(session_id)  # the next read re-parses the file
 
 
 def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> pathlib.Path:
@@ -572,7 +573,7 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   assert backend.prompt is not None
   assert backend.prompt.startswith(scheduled_report_prefix("nightly"))
   # The recycle ran: it cleared the stale anchor and retained the old thread.
-  disk = await session_mgr.read_metadata_fresh(node_id)
+  disk = await session_mgr.store.read_metadata_fresh(node_id)
   assert disk.cc_session_id is None and disk.cc_session_started_at is None
   assert (old_thread / "sentinel.txt").read_text(encoding="utf-8") == "retained"
 
@@ -608,7 +609,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
 
   # A now-valid anchor on the same native identity: the conversation continues.
   await session_mgr.persist_cc_session_id(node_id, "cc-live")
-  disk = await session_mgr.read_metadata_fresh(node_id)
+  disk = await session_mgr.store.read_metadata_fresh(node_id)
   assert disk.native_prompt_hash is not None and disk.native_backend == OPUS_BACKEND_ID
 
   await tree.dispatch.deliver_child_report(

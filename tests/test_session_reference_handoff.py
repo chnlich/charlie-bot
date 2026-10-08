@@ -11,6 +11,7 @@ import pytest
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import sessions
+from src.runtime.session_store import SessionStore
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:
@@ -48,7 +49,7 @@ def _assert_child_log_is_parent_prefix_marker_and_creation(
 @pytest.mark.asyncio
 async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = sessions.SessionManager(cfg)
+  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   parent = await conftest.make_parent(mgr)
   # A third event past the fork point proves the copied prefix truncates there.
   conftest.append_events(mgr.get_chat_events_path(parent), [conftest.user_event("e2")])
@@ -62,8 +63,9 @@ async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log
 @pytest.mark.asyncio
 async def test_fork_session_rejects_corrupt_parent_line(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = sessions.SessionManager(cfg)
-  parent = await mgr.create_session(models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
+  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  parent = await conftest.create_root_session(
+      mgr, models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
   events_path = mgr.get_chat_events_path(parent.id)
   conftest.append_events(events_path, [conftest.user_event("ok")])
   with open(events_path, "a", encoding="utf-8") as f:
@@ -80,8 +82,9 @@ async def test_fork_session_rejects_corrupt_parent_line(tmp_path: pathlib.Path) 
 @pytest.mark.asyncio
 async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = sessions.SessionManager(cfg)
-  parent = await mgr.create_session(models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
+  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  parent = await conftest.create_root_session(
+      mgr, models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
   events_path = mgr.get_chat_events_path(parent.id)
   conftest.append_events(events_path, [conftest.user_event("ok")])
   # A non-ASCII but valid line rides the decode branch (the isascii() proof
@@ -99,7 +102,8 @@ async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(
 
   # Undecodable bytes raise at fork time, and the failed fork writes no child
   # chat log.
-  other = await mgr.create_session(models.CreateSessionRequest(name="Other"), backend=conftest.OPUS_BACKEND_ID)
+  other = await conftest.create_root_session(
+      mgr, models.CreateSessionRequest(name="Other"), backend=conftest.OPUS_BACKEND_ID)
   conftest.append_events(mgr.get_chat_events_path(other.id), [conftest.user_event("ok")])
   with open(mgr.get_chat_events_path(other.id), "ab") as f:
     f.write(b"\xff\xfe\n")

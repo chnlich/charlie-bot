@@ -65,7 +65,7 @@ from src.runtime.hooks.sequence_controllers import binding_for, controller_for
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.runtime.session_dispatch import child_report_text
-from src.runtime.sessions import SessionManager, backend_switch_reset_reason, context_reset_note
+from src.runtime.sessions import SessionManager, backend_switch_reset_reason, context_reset_note, session_manager
 from src.runtime.spawner_backends import resolve_backend_option
 from src.runtime.task_completion import (
     LANDING_REF_PREFIX,
@@ -2099,9 +2099,6 @@ def task_manager() -> TaskTreeManager:
   """
   global _task_manager
   if _task_manager is None:
-    # The session singleton lives in api.deps, which imports this module at top
-    # level, so the import stays inside the function until the singleton moves.
-    from src.runtime.api.deps import session_manager
     _task_manager = TaskTreeManager(get_config(), session_manager())
     _task_manager.dispatch.executor = TaskExecutionAdapter(get_config(), session_manager(), _task_manager)
   return _task_manager

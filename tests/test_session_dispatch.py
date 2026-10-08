@@ -337,17 +337,17 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   assert any("child report" in b for b in blockers)
   # An origin reference from another task's saved metadata.
   from src.infra.models import EventRef
-  fork_meta = await session_mgr.get_session(other_root.id)
+  fork_meta = await session_mgr.store.get_session(other_root.id)
   assert fork_meta is not None
   fork_meta.origin_ref = EventRef(session_id=child.id, event_id=None)
-  await session_mgr.save_metadata(fork_meta)
+  await session_mgr.store.save_metadata(fork_meta)
   blockers = await tree.deletion_blockers(child.id)
   assert any("origin_ref" in b for b in blockers)
 
   # A truly empty, unreferenced task is deletable under the same lock.
   empty = await create_task(tree, parent=None, request_id="empty")
   assert await tree.delete_permanently(empty.id, caller=OPERATOR) is True
-  assert await session_mgr.get_session(empty.id) is None
+  assert await session_mgr.store.get_session(empty.id) is None
   # Agents cannot delete.
   with pytest.raises(TaskForbiddenError):
     await tree.delete_permanently(
@@ -369,7 +369,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   import src.runtime.api.internal as internal_api
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_manager, get_task_manager
+  from src.runtime.api.deps import get_run_store, get_session_manager, get_session_store, get_task_manager
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
@@ -383,6 +383,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
 
@@ -466,7 +467,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
 
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_manager, get_task_manager
+  from src.runtime.api.deps import get_run_store, get_session_manager, get_session_store, get_task_manager
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
@@ -478,6 +479,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
   with TestClient(app) as client:
@@ -591,7 +593,7 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
 
 async def updated_at_of(session_mgr: SessionManager, session_id: str):
   """One node's current sidebar sort key."""
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   assert meta is not None
   return meta.updated_at
 
@@ -658,7 +660,7 @@ async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: P
   x = await create_task(tree, parent=None, request_id="x", name="X")
   s = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   # Pin both rows into the past, X two hours older than the scheduled node.
-  s_meta = await session_mgr.get_session(s.id)
+  s_meta = await session_mgr.store.get_session(s.id)
   assert s_meta is not None
   base = s_meta.updated_at
   await session_mgr.update_thinking_state(x.id, base - timedelta(hours=2))

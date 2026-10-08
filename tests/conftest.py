@@ -246,7 +246,7 @@ from src.backends.opencode.opencode import OpenCodeBackend  # noqa: E402
 from src.runtime.worker import Worker  # noqa: E402
 from src.features.cron import loader as cron_loader  # noqa: E402
 from src.features.cron.api import router as cron_router  # noqa: E402
-from src.runtime.api.deps import get_session_manager, get_task_manager  # noqa: E402
+from src.runtime.api.deps import get_session_manager, get_session_store, get_task_manager  # noqa: E402
 from src.runtime.api.internal import router as internal_router  # noqa: E402
 from src.app.pages import router as pages_router  # noqa: E402
 from src.runtime.api.sessions import router as sessions_router  # noqa: E402
@@ -264,6 +264,7 @@ from src.backends.claude_code.login_dirs import CREDENTIALS_FILE  # noqa: E402
 from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
+from src.runtime.session_store import SessionStore  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
@@ -287,7 +288,7 @@ def backend_option(**kwargs: Any) -> models.BackendOption:
 
 
 def fake_backends() -> dict[str, list[models.BackendOption]]:
-  """One cc-claude entry so SessionManager.create_session has a default backend."""
+  """One cc-claude entry so a root created without a backend has a default backend."""
   return {"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]}
 
 
@@ -477,7 +478,7 @@ async def run_session_consumer(
       session_id,
       work_items,
       fake_run_cc,
-      patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
+      patch(SESSION_STORE_ACCESSOR_PATCH_TARGET, return_value=workers_mock),
   )
 
 
@@ -539,7 +540,7 @@ def patch_resume_seams(
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast)
   workers_mock = MagicMock()
   workers_mock.read_metadata_fresh = AsyncMock(return_value=None)
-  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
+  monkeypatch.setattr(SESSION_STORE_ACCESSOR_PATCH_TARGET, lambda *a, **k: workers_mock)
   return broadcast
 
 
@@ -892,7 +893,7 @@ async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) ->
 
 async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
   """A session ready to elone: the two seed events give succession tests a cut point to reference."""
-  parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
+  parent = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
   append_events(
       mgr.get_chat_events_path(parent.id),
       [
@@ -958,7 +959,7 @@ def assert_cli_reject_exit2(
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
-  registered so SessionManager.create_session's default (backends.options[0]) resolves."""
+  registered so a root created without a backend resolves its default (backends.options[0])."""
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
@@ -966,21 +967,21 @@ def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
   """(cfg, SessionManager, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
   session manager's cfg, so tree-created sessions land in the same home."""
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, session_mgr: SessionManager) -> None:
-  """Install *tree* and *session_mgr* as the api deps module's manager singletons.
+  """Install *tree*, *session_mgr* and its store as the process singletons.
 
-  The pair rides one patch: a task tree bound without its session manager
-  leaves deps.session_manager() free to build a second SessionManager over the
+  The trio rides one patch: a task tree bound without its session manager
+  leaves sessions.session_manager() free to build a second SessionManager over the
   same home, whose private chat-event cache never sees the tree's rounds.
   """
-  from src.runtime import task_execution
-  from src.runtime.api import deps
+  from src.runtime import session_store, sessions, task_execution
   monkeypatch.setattr(task_execution, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  monkeypatch.setattr(sessions, "_session_manager", session_mgr)
+  monkeypatch.setattr(session_store, "_store", session_mgr.store)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1015,6 +1016,26 @@ async def create_task(
       task=task,
       name=name,
       backend=None,
+      caller=OPERATOR)
+
+
+async def create_root_session(
+    mgr: SessionManager, req: models.CreateSessionRequest, backend: str | None = None) -> models.SessionMetadata:
+  """One operator-created manager root, created through the task tree wired over *mgr*.
+
+  The tree is the one that registered itself on *mgr*, or a new one over *mgr* when none has.
+  """
+  tree = mgr.task_tree_manager or TaskTreeManager(mgr._cfg, mgr)
+  return await tree.create_task(
+      request_id=f"session-create:{req.session_id or uuid.uuid4()}",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name=req.name,
+      backend=backend,
+      group=req.group,
+      session_id=req.session_id,
+      slot_values=dict(req.model_extra or {}),
       caller=OPERATOR)
 
 
@@ -1101,7 +1122,7 @@ def make_session_mgr(tmp_path: Path) -> SessionManager:
   needing a richer cfg builds its own."""
   cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
   cfg.sessions_dir.mkdir()
-  return SessionManager(cfg)
+  return SessionManager(cfg, SessionStore(cfg))
 
 
 async def make_home_session(
@@ -1110,12 +1131,12 @@ async def make_home_session(
     name: str,
     backend: str | None = None) -> tuple[CharlieBotConfig, SessionManager, models.SessionMetadata]:
   """(cfg, SessionManager, one created session) over a CharlieBotConfig rooted at tmp_path/"home";
-  backend=None takes create_session's default (the first registered backend). A test needing more
-  sessions calls mgr.create_session directly; a test needing no session builds the cfg/mgr pair
+  backend=None takes the default (the first registered backend). A test needing more
+  sessions calls create_root_session directly; a test needing no session builds the cfg/mgr pair
   inline."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(models.CreateSessionRequest(name=name), backend=backend)
+  mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=backend)
   return cfg, mgr, session
 
 
@@ -1131,6 +1152,12 @@ def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
 
 
+def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
+  """Bind both session dependency keys on *app*: the manager, and the store the manager holds."""
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+
+
 def make_router_client(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
@@ -1142,7 +1169,7 @@ def make_router_client(
   app = FastAPI()
   app.include_router(router, prefix=prefix)
   apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  override_session_manager(app, session_mgr)
   return TestClient(app)
 
 
@@ -1186,7 +1213,7 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
   app.include_router(cron_router, prefix="/api/cron")
   app.include_router(sessions_router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  override_session_manager(app, session_mgr)
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
@@ -1198,7 +1225,7 @@ def make_sessions_listing_client(
   include_registered_routers(app, "/api/sessions", before_runtime=True)
   app.include_router(sessions_router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  override_session_manager(app, session_mgr)
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
@@ -1210,7 +1237,7 @@ def make_sessions_listing_page_client(
   app = FastAPI()
   app.include_router(pages_router)
   apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  override_session_manager(app, session_mgr)
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
@@ -1446,8 +1473,8 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 BROADCAST_PATCH_TARGET = "src.runtime.sessions.streaming_manager.broadcast"
 
 # Import-path patch target for consumer tests that stub fresh metadata reads.
-# master_cc_queue resolves SessionManager through a call-time local import.
-SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.runtime.sessions.SessionManager"
+# master_cc_queue reads the process store through session_store.store() at call time.
+SESSION_STORE_ACCESSOR_PATCH_TARGET = "src.runtime.session_store.store"
 
 # The trigger watcher tests stop at the task-tree admission seam. The tree
 # delivery itself is covered by tests/test_trigger_succession.py.
@@ -2018,8 +2045,8 @@ def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
 def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
   worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
-  touch real host worktrees. One cc-claude backend registered so SessionManager.create_session
-  (which reads cfg.backends.options[0]) resolves its default."""
+  touch real host worktrees. One cc-claude backend registered so a root created without a backend
+  resolves its default (cfg.backends.options[0])."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
@@ -2124,7 +2151,7 @@ def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManag
   process-wide SessionManager because a private instance keeps its own chat-event cache and its
   rounds would never reach the HTTP/WS read paths."""
   cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   return cfg, session_mgr, Scheduler(cfg, session_mgr)
 
 
@@ -2132,17 +2159,17 @@ async def make_plan_setup(
     tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, PlanRegistryManager, models.SessionMetadata]:
   """Session and plan managers plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   plan_mgr = PlanRegistryManager(cfg, session_mgr)
-  meta = await session_mgr.create_session(models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
+  meta = await create_root_session(session_mgr, models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
   return cfg, session_mgr, plan_mgr, meta
 
 
 async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
   """Real cfg/session_mgr/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(models.CreateSessionRequest(name="Trigger watch"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(session_mgr, models.CreateSessionRequest(name="Trigger watch"))
   trigger_mgr = TriggerManager(cfg, session_mgr)
   return cfg, session_mgr, trigger_mgr, session.id
 
@@ -2394,8 +2421,10 @@ async def make_cron_session(
     backend: str = OPUS_BACKEND_ID,
 ) -> models.SessionMetadata:
   """Create a scheduled manager task with a cron-owned metadata stamp."""
-  return await session_mgr.create_session(
-      models.CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
+  return await create_root_session(
+      session_mgr,
+      models.CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name),
+      backend=backend)
 
 
 def cron_d_dir(home: Path) -> Path:
@@ -2531,21 +2560,25 @@ class FakeWebSocket:
     self.sent.append(json.loads(text))
 
 
+class FakeSessionStore:
+  """SessionStore double: get_session answers a bare SessionMetadata for any id."""
+
+  async def get_session(self, session_id: str) -> models.SessionMetadata:
+    return models.SessionMetadata(profile="manager", id=session_id, name="Test")
+
+
 class FakeSessionManager:
   """SessionManager double replaying a canned chat-event list.
 
   Callers rely on load_chat_events_sync returning the constructor's events
   (takeoff-gate probes) and on persist_and_broadcast being an AsyncMock
-  (delegate/agent-message route tests); get_session answers a bare
-  SessionMetadata for any id.
+  (delegate/agent-message route tests); its store is a FakeSessionStore.
   """
 
   def __init__(self, events: list[dict[str, Any]]) -> None:
     self.events = events
     self.persist_and_broadcast = AsyncMock()
-
-  async def get_session(self, session_id: str) -> models.SessionMetadata:
-    return models.SessionMetadata(profile="manager", id=session_id, name="Test")
+    self.store = FakeSessionStore()
 
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
     return self.events

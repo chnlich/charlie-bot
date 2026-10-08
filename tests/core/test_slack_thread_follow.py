@@ -13,9 +13,9 @@ from src.features.slack import slack_listener
 from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
-from src.infra import metadata_slots
-from src.infra import models
+from src.infra import metadata_slots, models
 from src.runtime import sessions, triggers
+from src.runtime.session_store import SessionStore
 
 _TEAM = "T_TEST"
 _CHANNEL = "C_TEST"
@@ -54,7 +54,7 @@ def _thread_message(seq: int, text: str, user: str = "U_ALLOWED", bot: bool = Fa
 def _rig(tmp_path: pathlib.Path) -> tuple:
   """Slack rig: cfg and managers rooted at tmp_path, a recording fake client."""
   cfg = conftest.build_slack_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   return cfg, session_mgr, triggers.TriggerManager(cfg, session_mgr), conftest.FakeSlackClient()
 
 
@@ -64,14 +64,15 @@ async def _make_session(
     thread_ts: str = _ROOT,
 ) -> models.SessionMetadata:
   """Create one Slack thread's deterministic session and (unless None) stamp its watermark."""
-  meta = await session_mgr.create_session(
+  meta = await conftest.create_root_session(
+      session_mgr,
       models.CreateSessionRequest(
           session_id=slack_listener.summon_session_id(_TEAM, _CHANNEL, thread_ts),
           name="slack session",
           slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
   if watermark is not None:
     metadata_slots.set_fields(meta, "slack", slack_watermark_ts=watermark)
-    await session_mgr.save_metadata(meta)
+    await session_mgr.store.save_metadata(meta)
   return meta
 
 
@@ -92,7 +93,7 @@ async def test_watermark_persists_through_metadata_json(tmp_path: pathlib.Path) 
   cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   assert metadata_slots.fields_of(meta, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
-  reloaded = await sessions.SessionManager(cfg).get_session(meta.id)
+  reloaded = await SessionStore(cfg).get_session(meta.id)
   assert reloaded is not None
   assert metadata_slots.fields_of(reloaded, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
 
@@ -148,7 +149,7 @@ async def test_archived_session_revives_and_arms_on_a_follow_message(tmp_path: p
   sid = await slack_listener.handle_thread_message(_message_event(), cfg, session_mgr, client, trigger_mgr)
 
   assert sid == meta.id
-  revived = await session_mgr.get_session(meta.id)
+  revived = await session_mgr.store.get_session(meta.id)
   assert revived is not None and revived.status == models.SessionStatus.ACTIVE
   armed = await _armed(trigger_mgr, meta.id)
   assert len(armed) == 1
@@ -201,7 +202,7 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
       mock.patch(conftest.SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       pytest.raises(slack_listener.SlackReplyError) as excinfo,
   ):
-    await slack_listener.assert_thread_fresh(meta.id, cfg, session_mgr)
+    await slack_listener.assert_thread_fresh(meta.id, cfg, session_mgr.store)
 
   assert excinfo.value.status == 412
   payload = excinfo.value.detail

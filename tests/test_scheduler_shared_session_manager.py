@@ -20,6 +20,7 @@ from src.features.cron.scheduler import Scheduler
 from src.infra import config
 from src.infra import event_types as ET
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 
 def _count_event_lines(path: pathlib.Path) -> int:
@@ -42,7 +43,7 @@ def scheduler_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
           "access_key": "shared-key"
       }}))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   # The scheduler reloads the process config on every fire; pin the reload to
@@ -63,7 +64,7 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(sc
   with conftest.registered_cron_handler("probe", mock.AsyncMock(return_value="done")):
     await scheduler._execute_task(task_cfg)
 
-  fresh = await session_mgr.get_session(meta.id)
+  fresh = await session_mgr.store.get_session(meta.id)
   assert fresh is not None
   assert fresh.last_scheduled_run is not None
   events = [e for e in session_mgr.load_chat_events_sync(meta.id) if e.get("type") == ET.HANDLER_RESULT]

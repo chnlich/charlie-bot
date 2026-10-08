@@ -14,6 +14,7 @@ from conftest import (
     PUBLISH_BASE_URL,
     ROOT,
     bind_deps_managers,
+    create_root_session,
     fake_backends,
     mention_seam,
     shut_down_trigger_tasks,
@@ -38,6 +39,7 @@ from src.infra import event_types as ET
 from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus, TriggerStatus
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.triggers import TriggerManager
@@ -130,7 +132,7 @@ def _rig(
 ) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, FakeDiscordClient]:
   """Discord rig: cfg, managers, and session home rooted at tmp_path, plus the recording fake client."""
   cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   return cfg, session_mgr, TriggerManager(cfg, session_mgr), FakeDiscordClient(channels=channels, thread=thread)
 
 
@@ -194,7 +196,7 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
 
   assert sid == summon_session_id(_GUILD, _THREAD)
 
-  meta = await session_mgr.get_session(sid)
+  meta = await session_mgr.store.get_session(sid)
   assert meta is not None
   assert metadata_slots.fields_of(meta, "discord").discord_origin == DiscordOrigin(
       guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
@@ -299,7 +301,7 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
     await _drain(tasks)
 
   assert sid == summon_session_id(_GUILD, _THREAD)
-  meta = await session_mgr.get_session(sid)
+  meta = await session_mgr.store.get_session(sid)
   assert meta is not None
   assert metadata_slots.fields_of(meta, "discord").discord_origin == DiscordOrigin(
       guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
@@ -340,7 +342,7 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: 
   assert first == second == third
   sessions = await session_mgr.list_sessions()
   assert len(sessions) == 1
-  meta = await session_mgr.get_session(first)
+  meta = await session_mgr.store.get_session(first)
   assert meta is not None and meta.status == SessionStatus.ACTIVE
 
 
@@ -406,7 +408,7 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
   # message id below, so arming at all proves the comparison went through
   # snowflake_key.
   metadata_slots.set_fields(meta, "discord", discord_watermark_id="999")
-  await session_mgr.save_metadata(meta)
+  await session_mgr.store.save_metadata(meta)
   message_id = "1000000000000000100"
   message = _message(id=message_id, channel_id=_THREAD, content="the follow-up", mentions=[])
 
@@ -446,7 +448,7 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
         if t.status == TriggerStatus.PENDING and t.message.startswith("discord-thread-follow")
     ]
     assert sid == meta.id
-    revived = await session_mgr.get_session(meta.id)
+    revived = await session_mgr.store.get_session(meta.id)
     assert revived is not None and revived.status == SessionStatus.ACTIVE
     assert len(armed) == 1
   finally:
@@ -499,7 +501,8 @@ async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> N
 
 async def _discord_session(session_mgr: SessionManager) -> SessionMetadata:
   """Create the session bound to the test thread and return its metadata."""
-  return await session_mgr.create_session(
+  return await create_root_session(
+      session_mgr,
       CreateSessionRequest(
           session_id=summon_session_id(_GUILD, _THREAD),
           name="discord session",
@@ -593,8 +596,8 @@ async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: Pat
   # here proves the audit never reached for one.
   stub_credentials({})
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="plain"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  meta = await create_root_session(session_mgr, CreateSessionRequest(name="plain"))
   events_before = session_mgr.load_chat_events_sync(meta.id)
 
   assert await deliver_done(meta.id, {"type": ET.MASTER_DONE, "input_event_id": "e1"}, cfg, session_mgr) is False

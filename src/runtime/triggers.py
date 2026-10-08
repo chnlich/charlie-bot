@@ -14,7 +14,7 @@ from typing import Any
 import aiofiles
 
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
+from src.infra.config import CharlieBotConfig, get_config
 from src.infra.json_utils import write_model_json_atomically
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
@@ -31,7 +31,7 @@ from src.infra.ssh import ssh_cmd
 from src.infra.tasks import create_logged_task
 from src.infra.timeouts import SSH_OVERALL_TIMEOUT
 from src.runtime import trigger_files
-from src.runtime.sessions import SessionManager
+from src.runtime.sessions import SessionManager, session_manager
 from src.runtime.sidebar_state import mark_sidebar_dirty
 from src.runtime.task_errors import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_execution import task_manager
@@ -1138,3 +1138,20 @@ def _format_suffix(
   if finished_part:
     return f" (finished: {finished_part}; still alive: {alive_part})"
   return f" (still alive: {alive_part})"
+
+
+# The process owner of the trigger manager; built on the first ``trigger_manager()`` call.
+_trigger_manager: TriggerManager | None = None
+
+
+def trigger_manager() -> TriggerManager:
+  global _trigger_manager
+  if _trigger_manager is None:
+    _trigger_manager = TriggerManager(get_config(), session_manager())
+  return _trigger_manager
+
+
+def set_trigger_manager(mgr: TriggerManager) -> None:
+  """Set the trigger manager singleton (called from server lifespan)."""
+  global _trigger_manager
+  _trigger_manager = mgr

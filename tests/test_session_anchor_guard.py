@@ -11,6 +11,7 @@ from structlog import testing
 
 from src.infra import models
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 
 def _corrections(logs: list[dict]) -> list[dict]:
@@ -26,16 +27,17 @@ async def _seed_anchors(mgr: sessions.SessionManager, session_id: str, *, cc: st
 async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tmp_path: pathlib.Path) -> None:
   """The rate_round shape: a route mutates its injected (stale) meta object and
   whole-object saves. The guard corrects the anchor back to disk on the write."""
-  mgr = sessions.SessionManager(conftest.build_sessions_cfg(tmp_path))
-  session = await mgr.create_session(models.CreateSessionRequest(name="stale-writer"))
+  cfg = conftest.build_sessions_cfg(tmp_path)
+  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="stale-writer"))
   await _seed_anchors(mgr, session.id, cc="cc-live", label="pool-b")
 
-  stale = await mgr.get_session(session.id)
+  stale = await mgr.store.get_session(session.id)
   stale.claude_account = "pool-a"  # the enqueue-time value the caller still holds
   with testing.capture_logs() as logs:
-    await mgr.save_metadata(stale)
+    await mgr.store.save_metadata(stale)
 
-  disk = await mgr.read_metadata_fresh(session.id)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-b", "the stale whole-object write may not roll the label back"
   corrections = _corrections(logs)
   assert len(corrections) == 1
@@ -47,22 +49,23 @@ async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tm
 async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Path) -> None:
   """The two funnels and the clear channel write their fields; the guard's
   reconciliation is skipped for exactly them."""
-  mgr = sessions.SessionManager(conftest.build_sessions_cfg(tmp_path))
-  session = await mgr.create_session(models.CreateSessionRequest(name="channels"))
+  cfg = conftest.build_sessions_cfg(tmp_path)
+  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="channels"))
 
   read_back = await mgr.persist_cc_session_id(session.id, "cc-2")
   assert read_back == "cc-2"
-  disk = await mgr.read_metadata_fresh(session.id)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.cc_session_id == "cc-2" and disk.cc_session_started_at is not None
 
   await mgr.persist_account_label(session.id, "pool-c")
-  disk = await mgr.read_metadata_fresh(session.id)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-c" and disk.cc_session_id == "cc-2"
 
   # The switch endpoint's backfill funnel records the producing backend.
   read_back = await mgr.persist_native_backend(session.id, "codex-o3")
   assert read_back == "codex-o3"
-  disk = await mgr.read_metadata_fresh(session.id)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.native_backend == "codex-o3"
 
   # The v2 launch's spawn-time channel writes the provenance triple in one
@@ -71,26 +74,26 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   tree = task_sessions.TaskTreeManager(cfg, mgr)
   await tree.record_native_anchor(
       session.id, prompt_hash="hash-3", backend="opus", model="opus-model", reset_anchor=False)
-  disk = await mgr.read_metadata_fresh(session.id)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.native_prompt_hash == "hash-3"
   assert disk.native_backend == "opus" and disk.native_model == "opus-model"
 
   # A whole-object save after the funnels cannot roll either anchor back.
-  stale = await mgr.get_session(session.id)
+  stale = await mgr.store.get_session(session.id)
   stale.native_backend = "claude-opus-5"
-  await mgr.save_metadata(stale)
-  disk = await mgr.read_metadata_fresh(session.id)
+  await mgr.store.save_metadata(stale)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.native_backend == "opus"
 
   await mgr.clear_cc_session_anchor(session.id)
-  disk = await mgr.read_metadata_fresh(session.id)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.cc_session_id is None and disk.cc_session_started_at is None
   assert disk.claude_account == "pool-c", "the clear channel clears the resume anchor, not the label"
   assert disk.native_backend == "opus", "the clear channel clears the resume anchor, not the provenance"
 
   # A whole-object save after the clear cannot resurrect the cleared anchor.
-  stale = await mgr.get_session(session.id)
+  stale = await mgr.store.get_session(session.id)
   stale.cc_session_id = "cc-2"
-  await mgr.save_metadata(stale)
-  disk = await mgr.read_metadata_fresh(session.id)
+  await mgr.store.save_metadata(stale)
+  disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.cc_session_id is None

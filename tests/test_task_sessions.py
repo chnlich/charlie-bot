@@ -8,9 +8,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.infra import models
 from src.features.slack.metadata import SlackOrigin
-from src.infra import metadata_slots
+from src.infra import metadata_slots, models
 from src.runtime import run_token, task_errors, task_sessions
 
 
@@ -35,7 +34,7 @@ async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp
   ids = await build_three_levels(mgr)
 
   for label in ("root", "mid", "low"):
-    meta = await session_mgr.get_session(ids[label])
+    meta = await session_mgr.store.get_session(ids[label])
     assert meta is not None and meta.profile == "manager"  # one profile at every manager depth
     assert meta.schema_version == 2
 
@@ -47,11 +46,11 @@ async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp
 @pytest.mark.asyncio
 async def test_history_references_do_not_become_task_parent_edges(tmp_path: pathlib.Path) -> None:
   cfg, session_mgr, mgr = conftest.build_env(tmp_path)
-  parent = await session_mgr.create_session(
-      models.CreateSessionRequest(name="Parent history copy"), backend=conftest.OPUS_BACKEND_ID)
+  parent = await conftest.create_root_session(
+      session_mgr, models.CreateSessionRequest(name="Parent history copy"), backend=conftest.OPUS_BACKEND_ID)
   parent.parent_session_id = "some-old-session"
   parent.origin_ref = models.EventRef(session_id="some-old-session", event_id=None)
-  await session_mgr.save_metadata(parent)
+  await session_mgr.store.save_metadata(parent)
 
   index = await mgr._get_index()
   assert parent.id in index.children.get(None, [])
@@ -61,7 +60,7 @@ async def test_history_references_do_not_become_task_parent_edges(tmp_path: path
   before = meta_path.read_bytes()
   child = await conftest.create_task(mgr, parent=parent.id, request_id="child-of-parent")
   assert meta_path.read_bytes() == before
-  fresh = await session_mgr.get_session(parent.id)
+  fresh = await session_mgr.store.get_session(parent.id)
   assert fresh is not None and fresh.task_parent_id is None
   assert fresh.profile == "manager" and fresh.schema_version == 2
   assert child.task_parent_id == parent.id
@@ -108,7 +107,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   # The agent's own-child create stays legal; naming its id is the scope refusal.
   with pytest.raises(task_errors.TaskForbiddenError, match=task_sessions.AGENT_CREATE_SCOPE_REFUSAL):
     await mgr.create_task(request_id="by-agent", session_id="agent-picked-id", caller=agent, **create)
-  assert await session_mgr.get_session("agent-picked-id") is None
+  assert await session_mgr.store.get_session("agent-picked-id") is None
   assert (await mgr.create_task(request_id="by-agent", caller=agent, **create)).id != "agent-picked-id"
 
   origin = SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
@@ -124,7 +123,8 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
       request_id="by-operator", session_id="operator-picked-id", caller=conftest.OPERATOR, **create)
   assert (by_server.id, by_operator.id) == ("server-picked-id", "operator-picked-id")
   # The origin rides the same publish as the metadata: no read sees the node without it.
-  assert metadata_slots.fields_of(await session_mgr.get_session("server-picked-id"), "slack").slack_origin == origin
+  assert metadata_slots.fields_of(
+      await session_mgr.store.get_session("server-picked-id"), "slack").slack_origin == origin
   # A replay under the explicit id returns the original node instead of a second one.
   replay = await mgr.create_task(
       request_id="by-server", session_id="server-picked-id", caller="system", **{
@@ -185,7 +185,7 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
   for call, landed in shapes:
     meta = await tree.update_slot_fields(node.id, "cron", **call)
     assert meta.updated_at == fired_at
-    fresh = await session_mgr.get_session(node.id)
+    fresh = await session_mgr.store.get_session(node.id)
     assert fresh is not None and fresh.updated_at == fired_at
     row = next(r for r in await session_mgr.list_sessions(status=models.SessionStatus.ACTIVE) if r.id == node.id)
     for name, value in landed.items():

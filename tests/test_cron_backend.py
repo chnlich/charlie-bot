@@ -73,7 +73,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   node.last_scheduled_run = "2026-06-07T09:00:00+00:00"
   node.last_scheduled_cron = "0 2 * * *"
-  await session_mgr.save_metadata(node)
+  await session_mgr.store.save_metadata(node)
 
   task_cfg = ScheduledTaskConfig(
       name="nightly",
@@ -84,7 +84,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   )
   await scheduler._align_bound_backend(task_cfg, cfg)
 
-  fresh = await session_mgr.get_session(node.id)
+  fresh = await session_mgr.store.get_session(node.id)
   assert fresh is not None
   assert fresh.backend == "codex-o3"
   assert fresh.scheduled_task is None  # the node is a task-tree node, never re-stamped
@@ -123,7 +123,7 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   await scheduler._maybe_run(task_cfg, session_mgr, {}, cfg)
 
   execute_task.assert_not_awaited()
-  fresh = await session_mgr.get_session(node.id)
+  fresh = await session_mgr.store.get_session(node.id)
   assert fresh is not None
   assert fresh.backend == "codex-o3"
   assert fresh.last_scheduled_run == now.isoformat()

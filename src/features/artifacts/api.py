@@ -14,8 +14,9 @@ from src.features.artifacts.plans import PlanRegistryManager
 from src.infra import config
 from src.infra.models import SessionMetadata
 from src.infra.responses import FastJsonResponse
-from src.runtime.api.deps import bad_request, get_session_manager, require_found, require_session, session_manager
-from src.runtime.sessions import SessionManager
+from src.runtime.api.deps import bad_request, get_session_store, require_found, require_session
+from src.runtime.session_store import SessionStore
+from src.runtime.sessions import session_manager
 
 internal_router = APIRouter()
 sessions_router = APIRouter()
@@ -105,18 +106,18 @@ def _build_base(req: PlanPresentRequest | PlanAmendRequest) -> dict | None:
   return {"repo": req.base_repo, "branch": req.base_branch, "sha": req.base_sha}
 
 
-async def _authorize_plan_session(session_id: str, session_mgr: SessionManager) -> None:
-  require_found(await session_mgr.get_session(session_id))
+async def _authorize_plan_session(session_id: str, store: SessionStore) -> None:
+  require_found(await store.get_session(session_id))
 
 
 @internal_router.post("/plan/present")
 async def plan_present(
     req: PlanPresentRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ) -> dict:
   """Register a new plan lineage (v1, trigger=initial)."""
-  await _authorize_plan_session(req.session_id, session_mgr)
+  await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.present(
         req.session_id,
@@ -131,11 +132,11 @@ async def plan_present(
 @internal_router.post("/plan/amend")
 async def plan_amend(
     req: PlanAmendRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ) -> dict:
   """Append the next version to a plan lineage."""
-  await _authorize_plan_session(req.session_id, session_mgr)
+  await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.amend(
         req.session_id,
@@ -152,11 +153,11 @@ async def plan_amend(
 @internal_router.post("/plan/approve")
 async def plan_approve(
     req: PlanApproveRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ) -> dict:
   """Record a takeoff against the latest version of a plan lineage."""
-  await _authorize_plan_session(req.session_id, session_mgr)
+  await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.approve(req.session_id, plan_id=req.plan_id)
   except ValueError as e:
@@ -166,11 +167,11 @@ async def plan_approve(
 @internal_router.post("/plan/close")
 async def plan_close(
     req: PlanCloseRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ) -> dict:
   """Terminate a plan lineage as superseded, abandoned, or completed."""
-  await _authorize_plan_session(req.session_id, session_mgr)
+  await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.close(req.session_id, req.plan_id, req.close_as)
   except ValueError as e:

@@ -31,7 +31,7 @@ from conftest import make_session_mgr as _make_session_mgr
 
 from src.infra.memo import stat_signature
 from src.infra.models import SessionMetadata
-from src.runtime.sessions import SessionManager
+from src.runtime.session_store import SessionStore
 
 _REAL_REPLACE = REAL_OS_REPLACE
 
@@ -46,15 +46,15 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
-  await mgr.save_metadata(meta)
-  target = mgr._metadata_path(meta.id)
+  await mgr.store.save_metadata(meta)
+  target = mgr.store.metadata_path(meta.id)
 
   replaced_targets: list[str] = []
 
   with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_os_replace_spy(replaced_targets)):
     updated = meta.model_copy()
     updated.name = "changed"
-    await mgr.save_metadata(updated)
+    await mgr.store.save_metadata(updated)
 
   assert str(target) in replaced_targets
 
@@ -69,15 +69,15 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(profile="manager", name="before", backend=OPUS_BACKEND_ID)
-  await mgr.save_metadata(meta)
-  target = mgr._metadata_path(meta.id)
+  await mgr.store.save_metadata(meta)
+  target = mgr.store.metadata_path(meta.id)
 
   read_at_swap: list[str] = []
 
   with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_read_at_os_replace(read_at_swap, target)):
     updated = meta.model_copy()
     updated.name = "after"
-    await mgr.save_metadata(updated)
+    await mgr.store.save_metadata(updated)
 
   assert len(read_at_swap) == 1
   raw = read_at_swap[0]
@@ -118,16 +118,16 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   With a shared temp name the delayed first replacer would raise
   FileNotFoundError because its source was moved away by the second write, so
   ``both return normally`` is the discriminating assertion -- a mere "target is
-  complete" check would not catch it. The writers are two SessionManager
-  instances: one manager's per-session save lock (the anchor guard) serializes
+  complete" check would not catch it. The writers are two SessionStore
+  instances: one store's per-session save lock (the anchor guard) serializes
   its own writers, so the defect window the unique temp name covers is between
   independent writers sharing the sessions directory.
   """
   mgr = _make_session_mgr(tmp_path)
-  other_mgr = SessionManager(SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  other_store = SessionStore(SimpleNamespace(sessions_dir=tmp_path / "sessions"))
   meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
-  await mgr.save_metadata(meta)
-  target = mgr._metadata_path(meta.id)
+  await mgr.store.save_metadata(meta)
+  target = mgr.store.metadata_path(meta.id)
 
   first = meta.model_copy()
   first.name = "first"
@@ -141,8 +141,8 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
 
   with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=_coordinated_replace):
     results = await asyncio.gather(
-        mgr.save_metadata(first),
-        other_mgr.save_metadata(second),
+        mgr.store.save_metadata(first),
+        other_store.save_metadata(second),
         return_exceptions=True,
     )
 
@@ -165,15 +165,15 @@ async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: Pat
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
-  await mgr.save_metadata(meta)
-  stored_sig = mgr._metadata_cache[meta.id][2]
+  await mgr.store.save_metadata(meta)
+  stored_sig = mgr.store.metadata_cache[meta.id][2]
   assert stored_sig is not None
-  assert stored_sig == stat_signature(mgr._metadata_path(meta.id))
+  assert stored_sig == stat_signature(mgr.store.metadata_path(meta.id))
 
   # Past the TTL, the revalidation stats and re-times instead of evicting:
   # the entry survives and the listings revision stands.
-  meta_ts = mgr._metadata_cache[meta.id][1]
-  mgr._metadata_cache[meta.id] = (mgr._metadata_cache[meta.id][0], time.monotonic() - 60.0, stored_sig)
-  served = mgr._fresh_cached_meta(meta.id)
+  meta_ts = mgr.store.metadata_cache[meta.id][1]
+  mgr.store.metadata_cache[meta.id] = (mgr.store.metadata_cache[meta.id][0], time.monotonic() - 60.0, stored_sig)
+  served = mgr.store._fresh_cached_meta(meta.id)
   assert served is not None and served.id == meta.id
-  assert mgr._metadata_cache[meta.id][1] > meta_ts  # re-timed, not re-read
+  assert mgr.store.metadata_cache[meta.id][1] > meta_ts  # re-timed, not re-read

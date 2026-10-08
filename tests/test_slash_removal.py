@@ -45,13 +45,14 @@ def _cron_app(cfg: CharlieBotConfig, session_mgr, tree, scheduler):
   from fastapi.testclient import TestClient
 
   from src.features.cron import api as cron_api
-  from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_task_manager
+  from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store, get_task_manager
 
   app = FastAPI()
   app.include_router(cron_api.router, prefix="/api/cron")
   app.state.scheduler = scheduler
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
@@ -81,6 +82,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
   """The manual run takes the scheduled path and leaves the node's pending
   inputs empty: no `user` event, nothing for a following dispatch to launch."""
   from src.runtime import sessions, task_sessions
+  from src.runtime.session_store import SessionStore
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -88,7 +90,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -125,6 +127,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
 async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A task name the loader does not know answers 404."""
   from src.runtime import sessions, task_sessions
+  from src.runtime.session_store import SessionStore
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -132,7 +135,7 @@ async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypa
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -154,7 +157,14 @@ async def test_slash_prefix_message_is_ordinary_task_input(
 
   from src.runtime import sessions, task_sessions
   from src.runtime.api import chat as chat_api
-  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+  from src.runtime.api.deps import (
+      get_config_on_loop,
+      get_run_store,
+      get_session_manager,
+      get_session_store,
+      get_task_manager,
+  )
+  from src.runtime.session_store import SessionStore
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -162,7 +172,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
 
@@ -173,6 +183,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
   app.include_router(chat_api.router, prefix="/api/chat")
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
 

@@ -59,7 +59,13 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   from src.infra import config
   from src.runtime.api import chat as chat_api
   from src.runtime.api import internal as internal_api
-  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+  from src.runtime.api.deps import (
+      get_config_on_loop,
+      get_run_store,
+      get_session_manager,
+      get_session_store,
+      get_task_manager,
+  )
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
@@ -78,6 +84,7 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
   agent_headers = {

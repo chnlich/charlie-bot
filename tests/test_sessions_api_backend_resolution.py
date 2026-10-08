@@ -9,10 +9,11 @@ import pytest
 
 from src.infra import config, models
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 
 async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
-  parent = await session_mgr.create_session(models.CreateSessionRequest(name="Parent"), backend=backend)
+  parent = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="Parent"), backend=backend)
   events_path = session_mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(
@@ -33,7 +34,7 @@ def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
   """(cfg, session_mgr, launches): cfg registers the two backends, the deps singletons are a task tree
   over that session manager, and launches records (session id, input contents) per dispatched run."""
   cfg = conftest.build_two_backend_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   launches: list[tuple[str, list[str]]] = []
@@ -100,7 +101,7 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
   parent_before = None
   if parent_backend is not None:
     parent_id = await _seed_parent(session_mgr, backend=parent_backend)
-    parent_before = await session_mgr.get_session(parent_id)
+    parent_before = await session_mgr.store.get_session(parent_id)
   before = conftest.session_dir_names(cfg)
   url = "/api/sessions/" if route == "create" else f"/api/sessions/{parent_id}/{route}"
 
@@ -110,7 +111,7 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
   assert response.status_code == 400
   assert conftest.session_dir_names(cfg) == before
   if parent_id is not None:
-    parent_after = await session_mgr.get_session(parent_id)
+    parent_after = await session_mgr.store.get_session(parent_id)
     assert parent_after.status == parent_before.status
 
 

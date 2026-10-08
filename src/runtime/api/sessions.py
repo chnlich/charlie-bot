@@ -62,6 +62,7 @@ from src.runtime.api.deps import (
     get_config_on_loop,
     get_run_store,
     get_session_manager,
+    get_session_store,
     get_task_manager,
     get_trigger_manager,
     require_caller,
@@ -83,6 +84,7 @@ from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
@@ -614,6 +616,7 @@ async def all_sessions_status(
     ids: str = Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     force: bool = False,
     session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
 ) -> Response:
   """Return derived sidebar state for the requested sessions.
 
@@ -635,12 +638,12 @@ async def all_sessions_status(
         # The every-10th tick keeps its sweep: the sweep's probe builds from
         # the sessions' metadata, so the resolution the memo hit skipped
         # happens here, on the one poll in ten that carries the tick.
-        sessions = await session_mgr.get_sessions_readonly(requested)
+        sessions = await store.get_sessions_readonly(requested)
         active = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
         if active:
           session_mgr.schedule_sidebar_sweep(active)
       return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
-  sessions = await session_mgr.get_sessions_readonly(requested)
+  sessions = await store.get_sessions_readonly(requested)
   if not sessions:
     return await _switch_payload_response(request, {})
   derived = await session_mgr.resolve_sidebar_state(
@@ -1283,6 +1286,7 @@ async def switch_session_backend(
     body: SwitchBackendRequest,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
   """Switch a session's backend in place, across model families.
@@ -1328,7 +1332,7 @@ async def switch_session_backend(
   # The audit event is the switch history; the durable metadata read here (the
   # backfill included) is what it records. previous_native_backend is None when
   # the session holds no native id to attribute.
-  durable = await session_mgr.read_metadata_fresh(session_id)
+  durable = await store.read_metadata_fresh(session_id)
   audit_event = {
       "type": BACKEND_SWITCHED,
       "from": previous,
@@ -1433,14 +1437,14 @@ async def rate_round(
     round_id: str,
     req: RateRoundRequest,
     meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
 ) -> SessionMetadata:
   if req.rating is None:
     meta.round_ratings.pop(round_id, None)
   else:
     meta.round_ratings[round_id] = req.rating
   meta.updated_at = datetime.now(UTC)
-  await session_mgr.save_metadata(meta)
+  await store.save_metadata(meta)
   log.info("round_rated", session_id=session_id, round_id=round_id, rating=req.rating)
   return meta
 

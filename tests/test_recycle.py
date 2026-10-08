@@ -10,7 +10,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.infra import event_types as ET, ndjson
+from src.infra import event_types as ET
+from src.infra import ndjson
 from src.runtime.api import message_utils
 
 
@@ -38,7 +39,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: pa
   live_lines = [json.loads(line) for line in live_path.read_text(encoding="utf-8").splitlines() if line.strip()]
   assert [e["content"] for e in live_lines] == [f"f{i}" for i in range(3)]
 
-  meta = await mgr.get_session(session.id)
+  meta = await mgr.store.get_session(session.id)
   assert meta is not None
   assert meta.archive_offset == 6
 
@@ -81,7 +82,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: pathlib.Path) -> None:
   assert [e["content"] for e in live_lines if e.get("type") == "user"] == ["future"]
   assert live_lines[0]["type"] == ET.TASK_CREATED
 
-  meta = await mgr.get_session(session.id)
+  meta = await mgr.store.get_session(session.id)
   assert meta is not None
   assert meta.archive_offset == 0
 

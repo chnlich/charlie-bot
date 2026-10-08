@@ -19,6 +19,7 @@ from src.features.backlog.config import ImprovementLoopConfig
 from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra.models import parse_utc_datetime
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -78,7 +79,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
     tmp_path: Path,
 ) -> None:
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   scheduler = Scheduler(cfg, session_mgr)
@@ -86,7 +87,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   # Base is in the future so croniter's next fire is always after now, removing the minute-boundary
   # race a past base had: with cron "* * * * *" it fired whenever the test ran just after a boundary.
   session.last_scheduled_run = (datetime.now(UTC) + timedelta(minutes=5)).replace(tzinfo=None).isoformat()
-  await session_mgr.save_metadata(session)
+  await session_mgr.store.save_metadata(session)
   task_cfg = ScheduledTaskConfig(
       name="backup",
       cron="* * * * *",

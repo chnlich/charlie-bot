@@ -18,6 +18,7 @@ from src.backends.claude_code import claude_code
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import runs, sessions
+from src.runtime.session_store import SessionStore
 
 CONFIGURED = "claude-fable-5-1"
 FABLE_OPTION = conftest.backend_option(
@@ -103,9 +104,9 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
 
   record = conftest.crashed_run_record(raw_path)
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
-  mgr = sessions.SessionManager(cfg)
-  session = await mgr.create_session(models.CreateSessionRequest(name="fb-persist"))
-  meta = await mgr.get_session(session.id)
+  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="fb-persist"))
+  meta = await mgr.store.get_session(session.id)
   assert meta is not None
 
   conftest.patch_resume_seams(monkeypatch)

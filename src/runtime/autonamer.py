@@ -152,7 +152,7 @@ async def _apply_name_to_session(
   if not name:
     return
 
-  current_meta = await session_mgr.get_session(session_meta.id)
+  current_meta = await session_mgr.store.get_session(session_meta.id)
   if current_meta is None:
     log.warning("autonamer_session_missing", session_id=session_meta.id)
     return
@@ -177,7 +177,7 @@ async def _apply_name_to_session(
 
   if not group:
     return
-  current_meta = await session_mgr.get_session(session_meta.id)
+  current_meta = await session_mgr.store.get_session(session_meta.id)
   if current_meta and not current_meta.group:
     await session_mgr.set_group(session_meta.id, group)
     log.info("session_auto_grouped", session_id=session_meta.id, group=group)
@@ -190,7 +190,7 @@ async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, sessio
   chat log's first user event for the prompt and every assistant event's text
   for the response, then delegates to maybe_auto_name().
   """
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   if meta is None or not is_default_session_name(meta.name):
     return
 

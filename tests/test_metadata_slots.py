@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 from src.app import registrations
 from src.infra import metadata_slot_registration, metadata_slots, models
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import TRANSIENT_METADATA_FIELDS, SessionStore
 
 DATA = pathlib.Path(__file__).parent / "data"
 
@@ -190,7 +191,7 @@ def test_task_node_metadata_saves_byte_identically() -> None:
   written = (DATA / "session_metadata_v2_manager.json").read_text()
 
   saved = models.SessionMetadata.model_validate_json(written).model_dump_json(
-      indent=2, exclude=sessions._TRANSIENT_METADATA_FIELDS)
+      indent=2, exclude=TRANSIENT_METADATA_FIELDS)
 
   assert saved == written
 
@@ -198,7 +199,7 @@ def test_task_node_metadata_saves_byte_identically() -> None:
 @pytest.fixture
 def create_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, probe_slots: None):
   cfg = conftest.build_two_backend_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   return cfg, session_mgr
@@ -215,12 +216,13 @@ async def test_a_create_request_sets_registered_fields_and_refuses_unknown_keys(
 
   assert created.status_code == 200
   assert created.json()["probe_note"] == "hello"
-  stored = await session_mgr.read_metadata_fresh(created.json()["id"])
+  stored = await session_mgr.store.read_metadata_fresh(created.json()["id"])
   assert metadata_slots.fields_of(stored, "probe") == ProbeSessionFields(probe_note="hello", probe_count=2)
   assert unknown.status_code == 422
   assert mistyped.status_code == 422
 
-  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="legacy", probe_note="direct"))
+  legacy = await conftest.create_root_session(
+      session_mgr, models.CreateSessionRequest(name="legacy", probe_note="direct"))
   assert metadata_slots.fields_of(legacy, "probe").probe_note == "direct"
 
 

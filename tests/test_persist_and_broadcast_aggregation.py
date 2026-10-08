@@ -7,6 +7,7 @@ import conftest
 import pytest
 
 from src.runtime import sessions
+from src.runtime.session_store import SessionStore
 
 
 def _broadcast_calls(broadcast_mock: mock.AsyncMock) -> list[dict]:
@@ -72,7 +73,7 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
     })
 
   # Simulate process restart: brand-new SessionManager with same on-disk state.
-  mgr2 = sessions.SessionManager(cfg)
+  mgr2 = sessions.SessionManager(cfg, SessionStore(cfg))
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast_mock:
     await mgr2.persist_and_broadcast(session.id, {
         "type": "user",

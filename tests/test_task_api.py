@@ -14,6 +14,7 @@ from conftest import stub_credentials
 from src.infra.models import RunRecord, utc_now_iso
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import read_pid_stat
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import make_api_client
@@ -23,7 +24,7 @@ from tests.test_task_execution import make_api_client
 async def task_env(tmp_path: Path):
   from conftest import make_home_config
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   task_mgr = TaskTreeManager(cfg, session_mgr)
   return cfg, session_mgr, task_mgr
 
@@ -175,7 +176,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   cutoff = datetime.now(UTC) + timedelta(hours=1)
   result = await session_mgr.recycle_history_before(worker, cutoff)
   assert result["events_archived"] > 0
-  meta = await session_mgr.get_session(worker)
+  meta = await session_mgr.store.get_session(worker)
   assert meta is not None and meta.archive_offset == result["events_archived"]
 
   # The rotation replaced the events cache's list, so the warm fold re-keyed
@@ -276,7 +277,7 @@ async def test_metadata_with_the_retired_pause_key_loads_and_drops_it_on_save(ta
   # The normal load paths answer the node, not a parse error.
   meta = await task_mgr.load_task_meta(ids["worker"])
   assert meta is not None and meta.id == ids["worker"]
-  loaded = await session_mgr.get_session(ids["worker"])
+  loaded = await session_mgr.store.get_session(ids["worker"])
   assert loaded is not None and loaded.id == ids["worker"]
 
   # The next save rewrites the file from the parsed model: the key is gone.

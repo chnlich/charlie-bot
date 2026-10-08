@@ -18,8 +18,8 @@ from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.tasks import create_logged_task
 from src.runtime import spawner_backends
-from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_manager, get_task_manager, require_found
-from src.runtime.sessions import SessionManager
+from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_store, get_task_manager, require_found
+from src.runtime.session_store import SessionStore
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -54,7 +54,7 @@ class ImproveStopRequest(BaseModel):
 async def stop_improve(
     req: ImproveStopRequest,
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
 ) -> dict:
   """Mark the session's running improve loop stopped (charliebot improve-stop).
 
@@ -62,7 +62,7 @@ async def stop_improve(
   the same session starts a new loop. No running loop is a 409, not an error
   to retry.
   """
-  require_found(await session_mgr.get_session(req.session_id))
+  require_found(await store.get_session(req.session_id))
   if not await stop_improve_loop(req.session_id, cfg):
     raise HTTPException(status_code=409, detail="No active improve loop in this session")
   log.info("improve_loop_stopped", session=req.session_id)
@@ -73,7 +73,7 @@ async def stop_improve(
 async def start_improve_loop(
     req: ImproveRequest,
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """Launch an iterative improvement loop on the task tree as a background task.
@@ -82,15 +82,15 @@ async def start_improve_loop(
   kind=improve), and one final sequence result delivered to the manager
   through the common report owner.
   """
-  require_found(await session_mgr.get_session(req.session_id))
-  return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
+  require_found(await store.get_session(req.session_id))
+  return await _start_improve_sequence(req, cfg, task_mgr, store)
 
 
 async def _start_improve_sequence(
     req: ImproveRequest,
     cfg: CharlieBotConfig,
     task_mgr: TaskTreeManager,
-    session_mgr: SessionManager,
+    store: SessionStore,
 ) -> dict:
   """The v2 improve path: one worker child, iteration Runs, one final report.
 
@@ -110,7 +110,7 @@ async def _start_improve_sequence(
   # "running" loop state or the active lock in this live process.
   try:
     resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
-        req.session_id, cfg, session_mgr, requested_backend=req.backend)
+        req.session_id, cfg, store, requested_backend=req.backend)
   except ValueError as e:
     raise bad_request(e) from e
 

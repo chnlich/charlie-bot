@@ -8,8 +8,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
 import conftest
+import pytest
 from conftest import (
     PUBLISH_BASE_URL,
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
@@ -24,14 +24,15 @@ from structlog.testing import capture_logs
 
 from src.features.chat_threads.thread_entry import _NO_REPLY_NOTICE, lost_summons
 from src.features.slack.event_types import SLACK_REPLY
-from src.features.slack.slack_listener import SLACK, SlackReplyError, backfill_lost_summons, deliver_done, post_reply
 from src.features.slack.metadata import SlackOrigin
+from src.features.slack.slack_listener import SLACK, SlackReplyError, backfill_lost_summons, deliver_done, post_reply
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, SessionMetadata
 from src.runtime import master_cc_state
 from src.runtime.agent_process.base import make_text_event
 from src.runtime.message_aggregator import MessageAggregator
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 _CHANNEL = "C_TEST"
@@ -51,7 +52,7 @@ def _rig(tmp_path: Path,
          fail_remove: bool = False) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
   """Slack rig: cfg and manager rooted at tmp_path, plus a recording fake client."""
   cfg = build_slack_cfg(tmp_path)
-  return cfg, SessionManager(cfg), FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
+  return cfg, SessionManager(cfg, SessionStore(cfg)), FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
 
 
 @contextlib.contextmanager
@@ -83,7 +84,8 @@ def _listener_seam(
 
 async def _slack_session(session_mgr: SessionManager) -> str:
   """Create a Slack-born session and return its id."""
-  meta = await session_mgr.create_session(
+  meta = await conftest.create_root_session(
+      session_mgr,
       CreateSessionRequest(
           name="slack session", slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=_THREAD)))
   return meta.id
@@ -387,7 +389,7 @@ async def test_round_end_without_a_slack_thread_answers_false_without_slack_cred
   audit answers False and never builds the bot client."""
   cfg, session_mgr, _ = _rig(tmp_path)
   stub_credentials({})  # no slack section: building the bot client raises
-  meta = await session_mgr.create_session(CreateSessionRequest(name="plain session"))
+  meta = await conftest.create_root_session(session_mgr, CreateSessionRequest(name="plain session"))
 
   assert await deliver_done(meta.id, _done(None), cfg, session_mgr) is False
 

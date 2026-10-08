@@ -3,22 +3,15 @@
 import fastapi
 
 from src.infra import config, constants, models
-from src.runtime import run_token, runs, sessions, task_execution, task_sessions, triggers
-
-# Module-level singletons (created once per process)
-_session_manager: sessions.SessionManager | None = None
-_trigger_manager: triggers.TriggerManager | None = None
-
-
-def session_manager() -> sessions.SessionManager:
-  global _session_manager
-  if _session_manager is None:
-    _session_manager = sessions.SessionManager(config.get_config())
-  return _session_manager
+from src.runtime import run_token, runs, session_store, sessions, task_execution, task_sessions, triggers
 
 
 def get_session_manager() -> sessions.SessionManager:
-  return session_manager()
+  return sessions.session_manager()
+
+
+async def get_session_store() -> session_store.SessionStore:
+  return session_store.store()
 
 
 async def get_task_manager() -> task_sessions.TaskTreeManager:
@@ -29,21 +22,8 @@ async def get_run_store() -> runs.RunStore:
   return task_execution.task_manager().runs
 
 
-def trigger_manager() -> triggers.TriggerManager:
-  global _trigger_manager
-  if _trigger_manager is None:
-    _trigger_manager = triggers.TriggerManager(config.get_config(), session_manager())
-  return _trigger_manager
-
-
 def get_trigger_manager() -> triggers.TriggerManager:
-  return trigger_manager()
-
-
-def set_trigger_manager(mgr: triggers.TriggerManager) -> None:
-  """Set the trigger manager singleton (called from server lifespan)."""
-  global _trigger_manager
-  _trigger_manager = mgr
+  return triggers.trigger_manager()
 
 
 def get_config_on_loop() -> config.CharlieBotConfig:
@@ -69,10 +49,10 @@ def require_found(meta: models.SessionMetadata | None) -> models.SessionMetadata
 
 async def require_session(
     session_id: str,
-    session_mgr: sessions.SessionManager = fastapi.Depends(get_session_manager),
+    store: session_store.SessionStore = fastapi.Depends(get_session_store),
 ) -> models.SessionMetadata:
   """Fetch a session or raise 404. Use as a FastAPI dependency."""
-  return require_found(await session_mgr.get_session(session_id))
+  return require_found(await store.get_session(session_id))
 
 
 def bad_request(exc: Exception) -> fastapi.HTTPException:

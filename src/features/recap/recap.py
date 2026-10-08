@@ -263,7 +263,7 @@ async def generate_and_cache_summary(
   preference entry resolves, this logs a warning and returns "" without writing
   the cache.
   """
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   if meta is None:
     log.warning("recap_skipped", reason="no_session_backend", session_id=session_id)
     return ""

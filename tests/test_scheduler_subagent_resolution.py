@@ -17,10 +17,10 @@ def _build_cfg(options: list[models.BackendOption]) -> config.CharlieBotConfig:
   )
 
 
-def _mock_session_mgr(session: models.SessionMetadata) -> mock.AsyncMock:
-  mgr = mock.AsyncMock()
-  mgr.get_session.return_value = session
-  return mgr
+def _mock_store(session: models.SessionMetadata) -> mock.AsyncMock:
+  store = mock.AsyncMock()
+  store.get_session.return_value = session
+  return store
 
 
 @pytest.mark.asyncio
@@ -30,10 +30,10 @@ async def test_session_default_returns_configured_backend() -> None:
           conftest.backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
       ])
   session = models.SessionMetadata(profile="manager", name="s", backend="claude-opus-4.7")
-  mgr = _mock_session_mgr(session)
+  store = _mock_store(session)
 
   backend, model = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
-      session.id, cfg, mgr, requested_backend=None)
+      session.id, cfg, store, requested_backend=None)
 
   assert backend == "claude-opus-4.7"
   assert model == "claude-opus-4-7"
@@ -84,8 +84,8 @@ async def test_unresolvable_backend_resolution_raises(
   and a selected option whose type needs a model it does not declare."""
   cfg = _build_cfg(options)
   session = models.SessionMetadata(profile="manager", name="s", backend=session_backend)
-  mgr = _mock_session_mgr(session)
+  store = _mock_store(session)
 
   with pytest.raises(ValueError, match=match):
     await spawner.spawner_backends.resolve_requested_subagent_backend_model(
-        session.id, cfg, mgr, requested_backend=requested_backend)
+        session.id, cfg, store, requested_backend=requested_backend)

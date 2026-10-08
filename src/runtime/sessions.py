@@ -1,35 +1,29 @@
 """Session management for CharlieBot."""
 
 import asyncio
-import contextlib
 import io
 import json
 import mmap
 import os
 import shutil
 import stat
-import time
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
-
-import aiofiles
 
 from src.infra import event_types as ET
 
 if TYPE_CHECKING:
   import numpy as np
 from src.infra import metadata_slots
-from src.infra.config import CharlieBotConfig
+from src.infra.config import CharlieBotConfig, get_config
 from src.infra.gc_control import gc_off
-from src.infra.json_utils import atomic_write_stream, atomic_write_text, load_json_meta
+from src.infra.json_utils import atomic_write_stream, load_json_meta
 from src.infra.locks import lock_for
 from src.infra.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.infra.memo import BoundedMemo, StatSignatureMemo, stat_signature
 from src.infra.models import (
-    CreateSessionRequest,
     EventRef,
     SessionCallbacks,
     SessionMetadata,
@@ -37,18 +31,16 @@ from src.infra.models import (
     parse_utc_datetime,
     utc_now,
     utc_now_iso,
-    validate_session_metadata,
 )
 from src.infra.process import cleanup_session_cgroup
 from src.infra.tasks import create_logged_task
-from src.runtime import sidebar_state, trigger_files
+from src.runtime import session_store, sidebar_state, trigger_files
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
 from src.runtime.hooks import backend_types, turn_contributions
 from src.runtime.hooks.sidebar_contributions import sidebar_contributions
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
-from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME
 from src.runtime.scheduled_sessions import sequence_subtree_roots, view_subtree_roots
 from src.runtime.session_usage import SessionUsageResolver
 from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
@@ -104,14 +96,6 @@ def context_reset_note(reason: str, task_goal: str | None = None) -> str:
   return (f"[Context reset: {reason}.{task_part} {HISTORY_LOCATION_NOTE} "
           f"{CONTEXT_RESET_INSTRUCTION}]")
 
-
-_METADATA_CACHE_TTL = 30.0  # seconds
-# Sweep bound for the listings memo. In-process writes bump the revision and
-# surface immediately; an out-of-band metadata edit moves neither, and is
-# caught by the entry's TTL revalidation on the first sweep walk after expiry —
-# at worst _METADATA_CACHE_TTL plus one interval, against the TTL-plus-one-call
-# bound the per-call walk gave it.
-_LISTINGS_SWEEP_INTERVAL = 10.0  # seconds
 
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 # The window must cover the tabs' session rotation, so a re-entry never re-pays
@@ -186,51 +170,6 @@ _SUCCESSOR_CHAIN_HOP_LIMIT = 100
 # whole-corpus single-span feed parks the loop behind GIL handoffs for its
 # full span (measured 23 ms worst hold per pass).
 _AGGREGATOR_INIT_SLICE_EVENTS = 256
-
-# The resume anchors: the metadata fields that name where the conversation
-# lives and who produced it (the cc-id and the backend the id came from; the
-# pool login holding the transcript is the backend lifecycle's account label,
-# guarded beside them). They change only through their authorized channels
-# (see save_metadata's guard).
-_ANCHOR_FIELDS = ("cc_session_id", "native_backend")
-
-_TRANSIENT_METADATA_FIELDS = {
-    "has_running_tasks",
-    "work_state",
-    "has_pending_trigger",
-    "pending_trigger_count",
-    "next_trigger_at",
-    "has_pending_plan_approval",
-    "schedule_cron",
-    "schedule_enabled",
-    "schedule_next_run",
-    "schedule_timezone",
-    "schedule_project",
-    "schedule_allow_failure",
-    "thinking_since",
-    "run_backend",
-}
-
-
-def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
-  """Overwrite thinking_since with the live value before *meta* reaches a caller.
-
-  thinking_since is a derived runtime fact owned by
-  :mod:`src.runtime.thinking_state`; it is never persisted (see
-  ``_TRANSIENT_METADATA_FIELDS``). Every API- and listing-bound return path
-  (``get_session``, the listing entry points routed through
-  ``_load_session_metas``, ``list_active_session_metas``, the spawn returns)
-  applies this stamp on the way out; the succession-internal
-  readers (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately
-  return the disk value unstamped, and a reader that needs live busy state stamps
-  the meta itself. The field stays
-  declared on the model, so a stale value parsed from an old metadata.json
-  or restored into the cache by a post-save rebuild must not leak out
-  through an unstamped API path.
-  """
-  meta.thinking_since = busy_since(meta.id)
-  meta.run_backend = run_backend(meta.id)
-  return meta
 
 
 def _sidebar_entry(
@@ -950,23 +889,10 @@ def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int,
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
-  def __init__(self, cfg: CharlieBotConfig) -> None:
+  def __init__(self, cfg: CharlieBotConfig, store: session_store.SessionStore) -> None:
     self._cfg = cfg
     self.task_tree_manager = None
-    # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp, disk signature).
-    # The signature is the (st_mtime_ns, st_size) of metadata.json taken BEFORE the read
-    # that produced the entry (write-populated entries carry the write's own published
-    # signature; None only when the reader could not stat). TTL-based to bound the per-read
-    # work within a poll cycle; on expiry the signature revalidates the entry with one stat
-    # instead of a re-read — every writer publishes through the atomic tmp rename, so a
-    # content change always moves st_mtime_ns, and a same-signature stat proves the parsed
-    # bytes current.
-    self._metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]] = {}
-    # Per-session asyncio.Lock guarding metadata read-modify-write operations.
-    # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
-    # update_thinking_state), which both load meta, mutate disjoint fields, and
-    # save back — without a lock the second save overwrites the first's change.
-    self._metadata_locks: dict[str, asyncio.Lock] = {}
+    self.store = store
     # The task-tree owner registers its projection invalidator here at wiring
     # time (TaskTreeManager.__init__). SessionManager-level writes that move a
     # tree-projection input must drop the tree's rebuildable index — the same
@@ -986,19 +912,6 @@ class SessionManager:
     # row's state is the tree's own verdict, never a second copy of the rules.
     # None only before that wiring exists (no tree consumer in this process).
     self.task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
-    # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
-    # The root's own mtime moves exactly when a session entry is created or removed (metadata
-    # writes land one level below), so an unchanged signature proves the name set current.
-    self._dir_names_memo: tuple[tuple[int, int], list[str]] | None = None
-    # Listings-memo revision: every session-metadata write, cache invalidation, or cache
-    # eviction bumps it, so a stored listing serves only while no write landed. Out-of-band
-    # edits (which bump nothing) are bounded by the sweep walk plus the entries' own TTL
-    # revalidation, per the _LISTINGS_SWEEP_INTERVAL note.
-    self._listings_revision = 0
-    # status -> (revision at walk time, monotonic at store time, root signature, metas).
-    # The stored list holds the cache's own meta objects: every consumer copies or
-    # stamps on the way out and mutates neither the list nor its rows.
-    self._listings_memo: dict[SessionStatus | None, tuple[int, float, tuple[int, int], list[SessionMetadata]]] = {}
     # The derived sequence-subtree map, memoized on the metas list identity the
     # listings memo already bounds: a listings hit serves the same list object
     # until a write bumps the revision, a create/delete moves the root
@@ -1006,7 +919,7 @@ class SessionManager:
     # inputs can have moved and never wider.
     self._sequence_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
     self._view_subtree_memo: tuple[list[SessionMetadata], dict[str, dict[str, str]]] | None = None
-    self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
+    self._chat_events = ChatEventStore(store.session_dir, store.metadata_path, store.metadata_cache)
     self._session_usage = SessionUsageResolver(
         cfg,
         self._chat_events.events_cache,
@@ -1047,99 +960,6 @@ class SessionManager:
   # Session CRUD
   # ---------------------------------------------------------------------------
 
-  async def create_session(self, req: CreateSessionRequest, backend: str | None = None) -> SessionMetadata:
-    """Create a root manager task through the task-tree owner."""
-    from src.runtime.run_token import CallerIdentity
-    from src.runtime.task_sessions import TaskTreeManager
-
-    tree = self.task_tree_manager or TaskTreeManager(self._cfg, self)
-    request_id = f"session-create:{req.session_id or uuid.uuid4()}"
-    return await tree.create_task(
-        request_id=request_id,
-        task_parent_id=None,
-        profile="manager",
-        task=None,
-        name=req.name,
-        backend=backend,
-        group=req.group,
-        session_id=req.session_id,
-        slot_values=dict(req.model_extra or {}),
-        caller=CallerIdentity(kind="operator"),
-    )
-
-  async def get_session(self, session_id: str) -> SessionMetadata | None:
-    """Load session metadata, using in-memory cache when available."""
-    meta = self._fresh_cached_meta(session_id)
-    cache_hit = meta is not None
-    sig: tuple[int, int] | None = None
-    if meta is None:
-      # The signature is taken before the read: a write landing between the two
-      # keys the entry under the older signature, which the next expiry stat
-      # mismatches — an entry can never be served for bytes it did not parse.
-      sig = stat_signature(self._metadata_path(session_id))
-      raw = await self._read_metadata_raw(session_id)
-      if raw is None:
-        return None
-      meta = validate_session_metadata(raw, str(self._metadata_path(session_id)))
-    # The migrate branch's save_metadata re-populates the cache, so the manual
-    # populate below covers disk loads only; re-stamping a hit's timestamp
-    # would wrongly extend its TTL.
-    if self._migrate_round_rating_keys(meta):
-      # Never acquires (get_session runs under callers' locks too); the anchor
-      # reconciliation still runs -- the upgrade path never legitimately
-      # changes an anchor, so a stale one is corrected to disk.
-      await self.save_metadata(meta, lock_held=True)
-    elif not cache_hit:
-      self._metadata_cache[session_id] = (meta, time.monotonic(), sig)
-    return _stamp_thinking_since(meta.model_copy())
-
-  async def _get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
-    """get_session forced past the TTL cache, so the read lands on disk.
-
-    The single-field mutators (``_save_field_fresh``, ``_persist_anchor_fresh``)
-    and their post-save read-backs must act on the latest on-disk state, not a
-    TTL-cached view: a stale view would clobber a concurrent writer's save.
-    Unlike ``read_metadata_fresh`` this stays a ``get_session`` call — the
-    rating-key migration still runs and the cache is re-populated from the
-    read. Hold ``self._lock_for(session_id)`` around the whole mutate-save;
-    without the lock the fresh view races other writers.
-    """
-    self._invalidate_cache(session_id)
-    return await self.get_session(session_id)
-
-  async def read_metadata_fresh(self, session_id: str) -> SessionMetadata | None:
-    """Read metadata.json directly from disk, bypassing ``_metadata_cache``.
-
-    The cache is TTL-based and can be stale relative to a concurrent elone, so
-    succession resolution always reads fresh. Returns None when the file is
-    absent or blank. Does not populate the cache from the read.
-    """
-    raw = await self._read_metadata_raw(session_id)
-    if raw is None:
-      return None
-    return validate_session_metadata(raw, str(self._metadata_path(session_id)))
-
-  async def _read_metadata_raw(self, session_id: str) -> str | None:
-    """Return the raw metadata.json text, or None when the file is missing or blank.
-
-    Single read tail for the one-session-at-a-time metadata readers (cached
-    ``get_session`` and bypassing ``read_metadata_fresh``): a blank file must
-    warn exactly once per read through the same ``session_metadata_empty``
-    event. The batched listing path (``_load_session_metas``) cannot route
-    through here — it batches all missing metadata reads synchronously in one
-    ``asyncio.to_thread`` call — and keeps its own absent/blank handling with
-    the same warning event.
-    """
-    path = self._metadata_path(session_id)
-    if not path.exists():
-      return None
-    async with aiofiles.open(path) as f:
-      raw = await f.read()
-    if not raw.strip():
-      log.warning("session_metadata_empty", session_id=session_id, path=str(path))
-      return None
-    return raw
-
   async def resolve_successor_chain(self, session_id: str) -> SessionMetadata | None:
     """Walk ``successor_session_id`` from *session_id* to the chain end.
 
@@ -1151,7 +971,7 @@ class SessionManager:
     Raises RuntimeError if the chain exceeds ``_SUCCESSOR_CHAIN_HOP_LIMIT``
     hops (a cycle must never spin).
     """
-    current = await self.read_metadata_fresh(session_id)
+    current = await self.store.read_metadata_fresh(session_id)
     if current is None:
       return None
     hops = 0
@@ -1161,7 +981,7 @@ class SessionManager:
             f"successor chain from {session_id} exceeds {_SUCCESSOR_CHAIN_HOP_LIMIT} hops;"
             " aborting to avoid a cycle")
       successor_id = current.successor_session_id
-      successor = await self.read_metadata_fresh(successor_id)
+      successor = await self.store.read_metadata_fresh(successor_id)
       if successor is None:
         log.error(
             "successor_chain_broken",
@@ -1191,10 +1011,10 @@ class SessionManager:
         log.error("deliver_to_successor_origin_missing", session_id=session_id)
         return None
 
-      async with self._lock_for(tail.id):
+      async with self.store.lock_for(tail.id):
         # Re-resolve from the tail with a fresh read: an elone may have landed
         # while we waited for the lock. If so, release and repeat from the top.
-        fresh_tail = await self.read_metadata_fresh(tail.id)
+        fresh_tail = await self.store.read_metadata_fresh(tail.id)
         if fresh_tail is None:
           log.error("deliver_to_successor_tail_missing", session_id=session_id, tail_id=tail.id)
           return None
@@ -1202,7 +1022,7 @@ class SessionManager:
           continue
         # The tail's metadata.json exists (confirmed above), so append_ndjson will
         # never recreate a directory for a permanently deleted session.
-        if not self._metadata_path(fresh_tail.id).exists():
+        if not self.store.metadata_path(fresh_tail.id).exists():
           log.error(
               "deliver_to_successor_metadata_missing",
               session_id=session_id,
@@ -1272,7 +1092,7 @@ class SessionManager:
     (:meth:`list_sessions`) stamps onto its copies; ``thinking_since`` is not
     among them (the caller reads :func:`busy_since` itself).
     """
-    metas = await self._with_derived_archive(await self._load_session_metas(status), status)
+    metas = await self._with_derived_archive(await self.store.load_session_metas(status), status)
     if scheduled is None:
       controllers = ()
     else:
@@ -1298,11 +1118,11 @@ class SessionManager:
     The name set is a read-only reduction of the shared cached metas, so no row
     copies or thinking stamps leave the manager, unlike ``list_sessions``.
     """
-    return sorted({meta.group for meta in await self._load_session_metas() if meta.group})
+    return sorted({meta.group for meta in await self.store.load_session_metas() if meta.group})
 
   async def sequence_subtree_roots(self) -> dict[str, str]:
     """The sequence-subtree membership map over every session's stored metadata."""
-    metas = await self._load_session_metas()
+    metas = await self.store.load_session_metas()
     cached = self._sequence_subtree_memo
     if cached is not None and cached[0] is metas:
       return cached[1]
@@ -1319,7 +1139,7 @@ class SessionManager:
     rows with no second read and no copy, memoized on unchanged metas exactly
     like :meth:`sequence_subtree_roots` beside which it lives.
     """
-    metas = await self._load_session_metas()
+    metas = await self.store.load_session_metas()
     cached = self._view_subtree_memo
     if cached is not None and cached[0] is metas:
       return cached[1]
@@ -1346,7 +1166,7 @@ class SessionManager:
     current filter) for the filter strip: named groups alphabetically, the
     ungrouped bucket (group=None) last. Ordering and aggregation are computed
     per request from the cache — archived entries never expire there
-    (``_fresh_cached_meta``), so the warm request path reads no metadata
+    (``SessionStore._fresh_cached_meta``), so the warm request path reads no metadata
     files. A cursor that fails to parse raises ValueError: the caller's
     explicit cursor stops with the error instead of silently serving page 1.
     Sequence-subtree rows are excluded before aggregation and pagination; the
@@ -1354,7 +1174,7 @@ class SessionManager:
     """
     limit = max(1, min(500, limit))
     metas = await self._with_derived_archive(
-        await self._load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
+        await self.store.load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
     # Sequence-subtree rows stay out of the Archived list; the owned sessions
     # themselves keep their rows. The exclusion runs before the group
     # aggregates and the keyset slice, so both describe the rows the page can
@@ -1389,7 +1209,7 @@ class SessionManager:
 
     page = rows[:limit]
     has_more = len(rows) > limit
-    sessions = [_stamp_thinking_since(meta.model_copy()) for meta in page]
+    sessions = [session_store.stamp_thinking_since(meta.model_copy()) for meta in page]
     await self.populate_sidebar_state(
         sessions,
         include_running_status=True,
@@ -1428,7 +1248,7 @@ class SessionManager:
       parent_id = row.task_parent_id
       while parent_id is not None and parent_id not in present and parent_id not in seen:
         seen.add(parent_id)
-        ancestor = await self.get_session(parent_id)
+        ancestor = await self.store.get_session(parent_id)
         if ancestor is None:
           break
         if ancestor.status != SessionStatus.ARCHIVED and ancestor.id not in derived:
@@ -1455,7 +1275,7 @@ class SessionManager:
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
     )
-    sessions = [_stamp_thinking_since(row.model_copy()) for row in rows]
+    sessions = [session_store.stamp_thinking_since(row.model_copy()) for row in rows]
     _apply_sidebar_state(sessions, derived, include_running_status, include_pending_trigger_status)
     return sessions
 
@@ -1485,7 +1305,7 @@ class SessionManager:
     ``_scan_content_for_hit`` documents.
     """
     query_lower = query.lower()
-    all_meta = await self._load_session_metas()
+    all_meta = await self.store.load_session_metas()
     cached = self._search_match_memo.get(query_lower)
     if (cached is not None and cached[0] is all_meta and _search_content_sigs_hold(cached[1], cached[2])):
       derived = await self.resolve_sidebar_state(
@@ -1643,7 +1463,7 @@ class SessionManager:
     their bound node is the task's stable binding, and an elone of it is an
     ordinary fork — the task keeps firing on the original node.
     """
-    fresh_parent = await self.read_metadata_fresh(parent_id)
+    fresh_parent = await self.store.read_metadata_fresh(parent_id)
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
     meta = await self._spawn_with_history(parent_id, event_index, backend, "E")
@@ -1652,13 +1472,13 @@ class SessionManager:
     # pointer (re-read under lock so concurrent mutations to the parent aren't
     # clobbered). Latest-wins: a parent's pointer is overwritten to name each
     # new child, so the pointer always names the most recent elone.
-    async with self._lock_for(parent_id):
-      fresh_parent = await self.get_session(parent_id)
+    async with self.store.lock_for(parent_id):
+      fresh_parent = await self.store.get_session(parent_id)
       if fresh_parent:
         fresh_parent.status = SessionStatus.ARCHIVED
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
-        await self.save_metadata(fresh_parent, lock_held=True)
+        await self.store.save_metadata(fresh_parent, lock_held=True)
     self._drop_session_runtime_state(parent_id)
 
     self._log_spawn("session_eloned", meta, parent_id, event_index)
@@ -1681,7 +1501,7 @@ class SessionManager:
     log the parent grepped. The parent is a history source only: the child
     carries no ``task_parent_id``.
     """
-    parent = await self.get_session(parent_id)
+    parent = await self.store.get_session(parent_id)
     if not parent:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
 
@@ -1709,7 +1529,7 @@ class SessionManager:
         task_spec_hash=None,
     )
     meta.created_by_event = EventRef(session_id=meta.id, event_id=str(created_event["id"]))
-    session_dir = self._session_dir(meta.id)
+    session_dir = self.store.session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
     events_path = self.get_chat_events_path(meta.id)
@@ -1726,15 +1546,15 @@ class SessionManager:
     # bytes' writeback class; the child's own appends keep the durable funnel.
     tail_lines = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in (clone_event, created_event))
     await asyncio.to_thread(self._write_history_file_sync, events_path, parent_id, end, tail_lines)
-    await self.save_metadata(meta)
+    await self.store.save_metadata(meta)
     if self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
-    await asyncio.to_thread(self._copy_on_fork_sync, self._session_dir(parent_id), session_dir)
+    await asyncio.to_thread(self._copy_on_fork_sync, self.store.session_dir(parent_id), session_dir)
     # A contribution's copy lands after save_metadata, and a poll racing between the two
     # could have snapshotted the child without the copied files; re-mark so they are always probed.
     sidebar_state.mark_sidebar_dirty(meta.id)
     await self.broadcast_task_tree_changed(meta.id, ET.TASK_CREATED)
-    return _stamp_thinking_since(meta)
+    return session_store.stamp_thinking_since(meta)
 
   @staticmethod
   def _copy_on_fork_sync(parent_dir: Path, child_dir: Path) -> None:
@@ -1764,7 +1584,7 @@ class SessionManager:
     """
     archive_take = min(self._chat_events.read_archive_offset_sync(parent_id), end)
     live_take = end - archive_take
-    parent_dir = self._session_dir(parent_id)
+    parent_dir = self.store.session_dir(parent_id)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def _write(out: BinaryIO) -> None:
@@ -1815,7 +1635,7 @@ class SessionManager:
 
   async def rename_session(self, session_id: str, new_name: str) -> SessionMetadata | None:
     """Rename a session and return the updated metadata."""
-    return await self._update_field(session_id, "name", new_name, "session_renamed", new_name=new_name)
+    return await self.store.update_field(session_id, "name", new_name, "session_renamed", new_name=new_name)
 
   async def switch_backend(self, session_id: str, backend: str) -> SessionMetadata | None:
     """Set the session's backend and return the updated metadata.
@@ -1825,7 +1645,7 @@ class SessionManager:
     ``None`` when the session is missing. Broadcasts a sidebar update so other
     open tabs refresh their header.
     """
-    meta = await self._update_field(session_id, "backend", backend, "session_backend_switched", backend=backend)
+    meta = await self.store.update_field(session_id, "backend", backend, "session_backend_switched", backend=backend)
     if meta:
       await self._broadcast_sidebar(session_id, ET.BACKEND_SWITCHED, backend=backend)
     return meta
@@ -1841,16 +1661,16 @@ class SessionManager:
   async def _set_unread_flag(self, session_id: str, has_unread: bool) -> SessionMetadata | None:
     """Write the unread flag and broadcast only when it actually flips.
 
-    Unlike ``_update_field`` this must not bump ``updated_at``: the sidebar
+    Unlike ``SessionStore.update_field`` this must not bump ``updated_at``: the sidebar
     sorts newest-first on that field, and a read/unread flip is not user
     activity worth reordering the list over.
     """
-    async with self._lock_for(session_id):
-      meta = await self.get_session(session_id)
+    async with self.store.lock_for(session_id):
+      meta = await self.store.get_session(session_id)
       if not meta or meta.has_unread == has_unread:
         return meta
       meta.has_unread = has_unread
-      await self.save_metadata(meta, lock_held=True)
+      await self.store.save_metadata(meta, lock_held=True)
       # The unread flag is a tree-row projection input (SessionRow.has_unread):
       # drop the rebuildable index so a tree page read after this flip is built
       # from the fresh flag, not from a pre-flip index snapshot.
@@ -1877,7 +1697,7 @@ class SessionManager:
     without it, a listing within _TREE_INDEX_TTL_SECONDS would compute the
     children's inherited state from the parent's pre-archive status.
     """
-    meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
+    meta = await self.store.update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._drop_session_runtime_state(session_id)
     if meta is not None and self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
@@ -1885,8 +1705,8 @@ class SessionManager:
 
   async def delete_session_permanently(self, session_id: str) -> bool:
     """Permanently delete a session and all its data from disk."""
-    async with self._lock_for(session_id):
-      session_dir = self._session_dir(session_id)
+    async with self.store.lock_for(session_id):
+      session_dir = self.store.session_dir(session_id)
       if not session_dir.exists():
         return False
       await asyncio.to_thread(shutil.rmtree, session_dir)
@@ -1895,7 +1715,7 @@ class SessionManager:
       # the kernel once its last process exits.
       await asyncio.to_thread(cleanup_session_cgroup, session_id)
       self._drop_session_runtime_state(session_id)
-      self._invalidate_cache(session_id)
+      self.store.invalidate_cache(session_id)
       # The sidebar's whole-body memo keys on (requested ids, generation), so a
       # deletion must bump the generation or a poll still carrying the deleted
       # id serves the ghost row. The mark is never consumed — the fold probes
@@ -1903,7 +1723,7 @@ class SessionManager:
       sidebar_state.mark_sidebar_dirty(session_id)
       # Popping the lock from the dict while holding it is safe: the popped lock
       # object stays valid for this holder until the ``async with`` exits.
-      self._metadata_locks.pop(session_id, None)
+      self.store.metadata_locks.pop(session_id, None)
     log.info("session_deleted_permanently", session_id=session_id)
     return True
 
@@ -1914,7 +1734,7 @@ class SessionManager:
     does (descendants inherit the ancestor's restored visibility), so the
     rebuildable index drops through the same hook.
     """
-    meta = await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
+    meta = await self.store.update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
     if meta is not None and self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
     return meta
@@ -1925,25 +1745,25 @@ class SessionManager:
     events_archived = archive_result["events_archived"]
     archive_file = archive_result["archive_file"]
     if events_archived:
-      async with self._lock_for(session_id):
-        fresh = await self.get_session(session_id)
+      async with self.store.lock_for(session_id):
+        fresh = await self.store.get_session(session_id)
         if fresh is not None:
           fresh.archive_offset += events_archived
-          await self.save_metadata(fresh, lock_held=True)
+          await self.store.save_metadata(fresh, lock_held=True)
       self._drop_session_runtime_state(session_id)
     return {"events_archived": events_archived, "archive_file": archive_file}
 
   async def star_session(self, session_id: str) -> SessionMetadata | None:
     """Star a session."""
-    return await self._update_field(session_id, "starred", value=True, log_event="session_starred")
+    return await self.store.update_field(session_id, "starred", value=True, log_event="session_starred")
 
   async def unstar_session(self, session_id: str) -> SessionMetadata | None:
     """Unstar a session."""
-    return await self._update_field(session_id, "starred", value=False, log_event="session_unstarred")
+    return await self.store.update_field(session_id, "starred", value=False, log_event="session_unstarred")
 
   async def set_group(self, session_id: str, group: str | None) -> SessionMetadata | None:
     """Set or clear the group for a session."""
-    meta = await self._update_field(session_id, "group", group, "session_group_set")
+    meta = await self.store.update_field(session_id, "group", group, "session_group_set")
     if meta:
       await self._broadcast_sidebar(session_id, ET.SESSION_GROUP_CHANGED, group=group)
     return meta
@@ -1966,18 +1786,18 @@ class SessionManager:
     """Set old_name's group to new_name on every matching session. Returns the count updated."""
     # Membership reads only, so the shared cached metas serve directly (read-only);
     # the leaving-the-manager copy is paid per matching row by get_session below.
-    all_sessions = await self._load_session_metas()
+    all_sessions = await self.store.load_session_metas()
     count = 0
     for meta in all_sessions:
       if meta.group != old_name:
         continue
-      async with self._lock_for(meta.id):
-        fresh = await self.get_session(meta.id)
+      async with self.store.lock_for(meta.id):
+        fresh = await self.store.get_session(meta.id)
         if not fresh or fresh.group != old_name:
           continue
         fresh.group = new_name
         fresh.updated_at = utc_now()
-        await self.save_metadata(fresh, lock_held=True)
+        await self.store.save_metadata(fresh, lock_held=True)
       count += 1
     return count
 
@@ -1993,13 +1813,13 @@ class SessionManager:
     channel (see ``save_metadata``). Returns the re-read metadata, None when
     the session does not exist.
     """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
+    async with self.store.lock_for(session_id):
+      fresh = await self.store.get_session_bypassing_cache(session_id)
       if fresh is None:
         return None
       if mutate(fresh):
-        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
-      return await self._get_session_bypassing_cache(session_id)
+        await self.store.save_metadata(fresh, lock_held=True, anchor_write=True)
+      return await self.store.get_session_bypassing_cache(session_id)
 
   async def persist_cc_session_id(
       self, session_id: str, cc_session_id: str, *, native_backend: str | None = None) -> str | None:
@@ -2120,56 +1940,9 @@ class SessionManager:
 
     return context_tokens, await asyncio.to_thread(newest_request)
 
-  async def _save_field_fresh(self, session_id: str, field: str, value: Any) -> None:
-    """Set one metadata field on a fresh disk read, under the per-session lock.
-
-    The fresh read inside the save lock is the single-field-mutator contract
-    (see ``_get_session_bypassing_cache``). No-op when the session does not
-    exist.
-    """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
-      if fresh is None:
-        return
-      setattr(fresh, field, value)
-      await self.save_metadata(fresh, lock_held=True)
-
   async def update_thinking_state(self, session_id: str, updated_at: datetime) -> None:
     """Persist updated_at without clobbering unrelated fields."""
-    await self._save_field_fresh(session_id, "updated_at", updated_at)
-
-  def list_active_session_metas(self) -> list[SessionMetadata]:
-    """Return metadata for active sessions by reading metadata.json files.
-
-    Sync method — returns full SessionMetadata objects so callers avoid
-    a second disk read. Populates the metadata cache for every status as a
-    side-effect: the boot-time recovery scan already reads each file, so the
-    same pass warms the listing cache and archived entries stay authoritative
-    from then on (``_fresh_cached_meta``).
-    """
-    if not self._cfg.sessions_dir.exists():
-      return []
-    results: list[SessionMetadata] = []
-    now = time.monotonic()
-    for d in self._cfg.sessions_dir.iterdir():
-      if not d.is_dir():
-        continue
-      meta_path = self._metadata_path(d.name)
-      if not meta_path.exists():
-        continue
-      try:
-        sig = stat_signature(meta_path)  # before the read, the cache revalidation key
-        raw = meta_path.read_text(encoding="utf-8")
-        meta = validate_session_metadata(raw, str(meta_path))
-        self._metadata_cache[d.name] = (meta, now, sig)
-        if meta.status == SessionStatus.ACTIVE:
-          results.append(_stamp_thinking_since(meta.model_copy()))
-      except (OSError, ValueError) as e:
-        log.debug("list_active_ids_skip", dir=d.name, error=str(e))
-    # The repopulate can replace cached metas with what the files now hold, so
-    # listings stored before this scan must not serve.
-    self._listings_revision += 1
-    return results
+    await self.store.save_field_fresh(session_id, "updated_at", updated_at)
 
   # ---------------------------------------------------------------------------
   # Chat event persistence (NDJSON — for WebSocket catch-up)
@@ -2212,7 +1985,7 @@ class SessionManager:
     # aggregator state matches what SSR/SPA-switch produced for the same
     # events).
     aggregator = await self._get_or_init_aggregator(session_id)
-    meta = await self.get_session(session_id)
+    meta = await self.store.get_session(session_id)
     archive_offset = meta.archive_offset if meta else 0
     await self.save_chat_event(session_id, event)
     await self._feed_and_broadcast(session_id, event, aggregator, archive_offset)
@@ -2252,7 +2025,7 @@ class SessionManager:
       log.debug("announce_skipped_rebuilt_aggregator", session_id=session_id, type=event.get("type"))
       return
     try:
-      meta = await self.get_session(session_id)
+      meta = await self.store.get_session(session_id)
       await self._feed_and_broadcast(session_id, event, aggregator, meta.archive_offset if meta else 0)
     except Exception:
       # The event is already durable; a notification failure is repaired by
@@ -2478,74 +2251,6 @@ class SessionManager:
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  def _invalidate_cache(self, session_id: str) -> None:
-    """Remove a session from the metadata cache."""
-    self._metadata_cache.pop(session_id, None)
-    self._listings_revision += 1
-
-  def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
-    """Return the cached metadata for *session_id* when the entry is authoritative.
-
-    An archived entry is served regardless of age: archived metadata changes
-    only through the in-process write funnel (``save_metadata`` refreshes the
-    entry, ``delete_session_permanently`` invalidates it), so a TTL re-read
-    buys nothing there and the archived set stays listable without disk scans.
-    Active entries keep the ``_METADATA_CACHE_TTL`` freshness window; an expired
-    entry revalidates against metadata.json with one stat — a same-signature
-    stat proves the parsed bytes unchanged (every writer publishes through the
-    atomic tmp rename, so a content change always moves ``st_mtime_ns``) and
-    re-times the entry, while a moved or unprovable signature (``None``, a
-    stat failure) evicts for the caller's disk read. The stat
-    revalidation keeps an active entry serving only while its bytes provably
-    stand, not on the clock alone. The two
-    TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
-    route through this one check, and a stale entry is evicted here, so the
-    two cannot drift on freshness semantics. ``list_active_session_metas``
-    reads metadata.json unconditionally and repopulates the cache from its own
-    scan instead — a third reader this check does not govern.
-    """
-    cached = self._metadata_cache.get(session_id)
-    if cached is None:
-      return None
-    meta, ts, sig = cached
-    if meta.status == SessionStatus.ARCHIVED:
-      return meta
-    if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
-      return meta
-    if sig is not None:
-      try:
-        st = os.stat(self._metadata_path_str(session_id))
-        if (st.st_mtime_ns, st.st_size) == sig:
-          self._metadata_cache[session_id] = (meta, time.monotonic(), sig)
-          return meta
-      except OSError:
-        pass
-    del self._metadata_cache[session_id]
-    # The entry's file moved or became unprovable without a write funnel bump
-    # (an out-of-band edit, or a stat failure on an expired entry): raise the
-    # listings revision so the next listing re-reads instead of serving the
-    # memoized rows this eviction just proved stale.
-    self._listings_revision += 1
-    return None
-
-  def fresh_cached_metas(self) -> dict[str, SessionMetadata]:
-    """The authoritative cached metadata entries, keyed by session id.
-
-    One :meth:`_fresh_cached_meta` check per entry — the shared check
-    ``get_session`` and ``_load_session_metas`` route through — so a caller
-    that snapshots this map reads exactly the metadata every other reader
-    serves: archived entries regardless of age, active entries while their
-    stat signature proves the parsed bytes stand. Entries past revalidation
-    re-time or evict here, the same side effects a per-id check has; ids with
-    no authoritative entry are absent and the caller reads their files.
-    """
-    resolved: dict[str, SessionMetadata] = {}
-    for session_id in list(self._metadata_cache):
-      meta = self._fresh_cached_meta(session_id)
-      if meta is not None:
-        resolved[session_id] = meta
-    return resolved
-
   @staticmethod
   def _parse_optional_utc(raw: Any, log_event: str, **log_ctx: Any) -> datetime | None:
     """Parse a stored timestamp tolerantly for trigger and plan state scans."""
@@ -2556,23 +2261,6 @@ class SessionManager:
     except ValueError as e:
       log.debug(log_event, **log_ctx, error=str(e))
       return None
-
-  @staticmethod
-  def _migrate_round_rating_keys(meta: SessionMetadata) -> bool:
-    """Rewrite pre-UUID rating keys from event_index strings to legacy ids."""
-    if not meta.round_ratings:
-      return False
-    migrated = {}
-    changed = False
-    for key, value in meta.round_ratings.items():
-      if key.isdigit():
-        migrated[f"legacy:{key}"] = value
-        changed = True
-      else:
-        migrated[key] = value
-    if changed:
-      meta.round_ratings = migrated
-    return changed
 
   async def _with_derived_archive(self, metas: list[SessionMetadata],
                                   status: SessionStatus | None) -> list[SessionMetadata]:
@@ -2596,163 +2284,11 @@ class SessionManager:
     if status == SessionStatus.ACTIVE:
       return [meta for meta in metas if meta.id not in derived]
     if status == SessionStatus.ARCHIVED:
-      active = await self._load_session_metas(SessionStatus.ACTIVE)
+      active = await self.store.load_session_metas(SessionStatus.ACTIVE)
       return metas + [as_archived(meta) for meta in active if meta.id in derived]
     return [
         as_archived(meta) if meta.id in derived and meta.status != SessionStatus.ARCHIVED else meta for meta in metas
     ]
-
-  async def _load_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
-    """Load session metadata, batching disk reads and parses for cache misses.
-
-    Performs the listing preamble for the entry points routed through here
-    (``list_sessions``, ``list_group_names``, ``search_sessions``, and
-    ``list_archived_page``):
-    (1) return [] if sessions_dir does not exist, (2) list session directories
-    under asyncio.to_thread to avoid blocking the event loop, (3) use fresh
-    cache entries directly and read+parse all missing metadata files serially
-    in one asyncio.to_thread call — the parse stays off the event loop —
-    logging and dropping any session that fails to load. Returns the cached
-    objects themselves, filtered to *status* when given: callers that hand
-    metadata out of the manager copy and stamp on the way out. The sync
-    active-only scan ``list_active_session_metas`` keeps its own per-file sync
-    reads and does not route through here.
-
-    The per-filter result memoizes on (``_listings_revision``, the sessions
-    root's signature, a ``_LISTINGS_SWEEP_INTERVAL`` clock): an in-process
-    write bumps the revision (``save_metadata`` is the single funnel) and a
-    create/delete moves the root signature, so both re-walk on the next call;
-    the sweep re-walks at least every interval, which is what bounds an
-    out-of-band metadata edit to the entry's ``_METADATA_CACHE_TTL`` expiry
-    plus one interval. A hit serves the cached meta objects read-only; the
-    walk itself never mutates the stored list.
-    """
-    if not self._cfg.sessions_dir.exists():
-      return []
-
-    def _session_dir_names() -> tuple[tuple[int, int], list[str]]:
-      # DirEntry.is_dir() answers from the directory record itself on
-      # d_type-aware filesystems, while Path.iterdir() rebuilds a Path per
-      # entry and pays one stat() each: ~1 ms vs ~6 ms measured at ~1000
-      # session dirs, per listing call. The signature is taken BEFORE the
-      # scan: a create/delete racing it moves the root's mtime after the
-      # stamp, so the memo keys a possibly-stale name list under a stale
-      # signature and the next call rescans; a hit pays one stat (~5 us)
-      # and skips the scandir (~1 ms at ~1000 dirs) on every listing call.
-      root = os.stat(self._cfg.sessions_dir)
-      sig = (root.st_mtime_ns, root.st_size)
-      if self._dir_names_memo is not None and self._dir_names_memo[0] == sig:
-        return sig, self._dir_names_memo[1]
-      with os.scandir(self._cfg.sessions_dir) as entries:
-        names = [entry.name for entry in entries if entry.is_dir()]
-      self._dir_names_memo = (sig, names)
-      return sig, names
-
-    # The hit check reads the revision directly: no await sits between the
-    # read and the comparison, so a bump cannot land inside the decision. The
-    # store tags the revision read after the miss decision, before the walk —
-    # a write landing mid-walk bumps past the tag and the next call re-walks
-    # (a mark landing mid-walk only raises the revision).
-    hit = self._listings_memo.get(status)
-    if (hit is not None and hit[0] == self._listings_revision and time.monotonic() - hit[1] < _LISTINGS_SWEEP_INTERVAL):
-      try:
-        root = os.stat(self._cfg.sessions_dir)
-      except OSError:
-        root = None
-      if root is not None and (root.st_mtime_ns, root.st_size) == hit[2]:
-        return hit[3]
-
-    revision = self._listings_revision
-    root_sig, dir_names = await asyncio.to_thread(_session_dir_names)
-
-    cached_metas: dict[str, SessionMetadata] = {}
-    missing_ids: list[str] = []
-    for session_id in dir_names:
-      meta = self._fresh_cached_meta(session_id)
-      if meta is None:
-        missing_ids.append(session_id)
-      else:
-        cached_metas[session_id] = meta
-
-    parsed_by_id: dict[str, SessionMetadata] = {}
-    parsed_sigs: dict[str, tuple[int, int] | None] = {}
-    empty_ids: set[str] = set()
-    load_failures: dict[str, Exception] = {}
-    if missing_ids:
-
-      def _read_and_parse_missing() -> None:
-        for session_id in missing_ids:
-          path = self._metadata_path(session_id)
-          # Signature before the read, per file: an entry keys only the bytes
-          # it parsed (see get_session's same rule), so a write landing between
-          # the two is re-read at the next expiry stat instead of served stale.
-          sig = stat_signature(path)
-          try:
-            if not path.exists():
-              continue
-            raw = path.read_text(encoding="utf-8")
-          except Exception as exc:
-            load_failures[session_id] = exc
-            continue
-          if not raw.strip():
-            empty_ids.add(session_id)
-            continue
-          try:
-            parsed_by_id[session_id] = validate_session_metadata(raw, str(self._metadata_path(session_id)))
-            parsed_sigs[session_id] = sig
-          except Exception as exc:
-            load_failures[session_id] = exc
-
-      await asyncio.to_thread(_read_and_parse_missing)
-
-    result: list[SessionMetadata] = []
-    for session_id in dir_names:
-      loaded_from_cache = session_id in cached_metas
-      if loaded_from_cache:
-        meta = cached_metas[session_id]
-      else:
-        if session_id in load_failures:
-          log.warning("session_load_failed", session_id=session_id, error=str(load_failures[session_id]))
-          continue
-        if session_id in empty_ids:
-          log.warning("session_metadata_empty", session_id=session_id, path=str(self._metadata_path(session_id)))
-          continue
-        if session_id not in parsed_by_id:
-          continue
-        meta = parsed_by_id[session_id]
-
-      try:
-        migrated = self._migrate_round_rating_keys(meta)
-        if migrated:
-          # Same no-acquire, still-checked migrate save as get_session's.
-          await self.save_metadata(meta, lock_held=True)
-      except Exception as exc:
-        log.warning("session_load_failed", session_id=session_id, error=str(exc))
-        continue
-
-      if not loaded_from_cache and not migrated:
-        self._metadata_cache.setdefault(session_id, (meta, time.monotonic(), parsed_sigs.get(session_id)))
-      if status is None or meta.status == status:
-        result.append(meta)
-    self._listings_memo[status] = (revision, time.monotonic(), root_sig, result)
-    return result
-
-  def _lock_for(self, session_id: str) -> asyncio.Lock:
-    """Return (creating on first use) the per-session metadata RMW lock."""
-    return lock_for(self._metadata_locks, session_id)
-
-  async def _update_field(
-      self, session_id: str, field: str, value: Any, log_event: str, **log_fields: Any) -> SessionMetadata | None:
-    """Get a session, set one field, save, and log. Returns None if session not found."""
-    async with self._lock_for(session_id):
-      meta = await self.get_session(session_id)
-      if not meta:
-        return None
-      setattr(meta, field, value)
-      meta.updated_at = utc_now()
-      await self.save_metadata(meta, lock_held=True)
-    log.info(log_event, session_id=session_id, **log_fields)
-    return meta
 
   def _probe_spec(self, meta: SessionMetadata, *, recheck_liveness: bool = False) -> SidebarProbeSpec:
     """The probe-input spec :func:`selective_probe_sidebar_state` consumes.
@@ -2765,7 +2301,7 @@ class SessionManager:
     """
     return SidebarProbeSpec(
         meta.id,
-        self._session_dir(meta.id) / "triggers", self._session_dir(meta.id), recheck_liveness)
+        self.store.session_dir(meta.id) / "triggers", self.store.session_dir(meta.id), recheck_liveness)
 
   async def resolve_sidebar_state(
       self,
@@ -2979,22 +2515,6 @@ class SessionManager:
     _apply_sidebar_state(
         sessions, derived, include_running_status, include_pending_trigger_status, include_pending_plan_approval)
 
-  async def get_sessions_readonly(self, session_ids: list[str]) -> list[SessionMetadata]:
-    """Resolve *session_ids* to metadata for consumers that only read it.
-
-    Warm entries serve the cached objects themselves — the caller must not
-    mutate them, the way :meth:`get_session`'s per-row copy would let it — and
-    only a cache miss pays a ``get_session`` read, which returns its own copy.
-    Ids that no longer resolve are dropped, and request order is preserved.
-    """
-    resolved: dict[str, SessionMetadata | None] = {}
-    for session_id in dict.fromkeys(session_ids):
-      resolved[session_id] = self._fresh_cached_meta(session_id)
-    for session_id, meta in resolved.items():
-      if meta is None:
-        resolved[session_id] = await self.get_session(session_id)
-    return [meta for meta in resolved.values() if meta is not None]
-
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.
 
@@ -3025,117 +2545,13 @@ class SessionManager:
       return 0
     return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
-  async def _reconcile_anchor_fields(self, meta: SessionMetadata) -> None:
-    """Correct *meta*'s anchor fields back to the on-disk values before a whole-object save.
 
-    The guard behind the authorized-channel model: the resume anchors change
-    only through their channels (``persist_cc_session_id``, ``persist_account_label``,
-    ``persist_native_backend``, ``persist_native_anchor_provenance``,
-    ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
-    meta must not roll them back. Reads metadata.json fresh (a cached view is the
-    very staleness this guard exists for) and mutates *meta* in place; a
-    correction logs ``session_anchor_write_corrected`` and the save proceeds
-    write-through rather than refusing. Runs under the per-session lock: inside
-    the caller's critical section for the lock-holding save sites, under the
-    acquisition save_metadata performs for everyone else.
-    """
-    disk = await self.read_metadata_fresh(meta.id)
-    if disk is None:
-      return
-    for field in _ANCHOR_FIELDS:
-      on_disk = getattr(disk, field)
-      if getattr(meta, field) != on_disk:
-        log.warning(
-            "session_anchor_write_corrected",
-            session_id=meta.id,
-            field=field,
-            on_disk=on_disk,
-            attempted=getattr(meta, field),
-        )
-        setattr(meta, field, on_disk)
-    for lifecycle in backend_types.lifecycles():
-      label_on_disk = lifecycle.account_label(disk)
-      if lifecycle.account_label(meta) != label_on_disk:
-        log.warning(
-            "session_anchor_write_corrected",
-            session_id=meta.id,
-            field=lifecycle.account_source,
-            on_disk=label_on_disk,
-            attempted=lifecycle.account_label(meta),
-        )
-        lifecycle.record_account_label(meta, label_on_disk)
+# The process owner of the session manager; built on the first ``session_manager()`` call.
+_session_manager: SessionManager | None = None
 
-  async def save_metadata(
-      self,
-      meta: SessionMetadata,
-      *,
-      lock_held: bool = False,
-      anchor_write: bool = False,
-  ) -> None:
-    """Persist *meta* to metadata.json and refresh the TTL cache from the serialized form.
 
-    The write is atomic — a unique-per-call tmp file swapped in by ``os.replace``
-    — and excludes ``_TRANSIENT_METADATA_FIELDS``. The cache entry stores the meta
-    re-validated from that serialized form, so a cached read sees exactly what a
-    disk read parses; that is what lets save-callers skip a manual cache populate
-    (see ``get_session``'s migrate branch). ``updated_at`` is written as given:
-    bumping or preserving it is the caller's decision (``_update_field`` bumps,
-    ``_set_unread_flag`` does not).
-
-    The anchor fields are reconciled against disk on every save that may carry
-    them (``_reconcile_anchor_fields``), always under the per-session lock:
-
-    * ``lock_held`` — the caller already holds the per-session lock (the in-class
-      read-modify-write sites, and the migrate branches whose get_session runs
-      both under callers' locks and lock-free, so their save can never acquire).
-      The lock is never reentrant; the reconciliation then runs inside the
-      caller's own critical section. Lock-free callers get the acquisition here.
-    * ``anchor_write`` — this save is an authorized anchor channel
-      (``persist_cc_session_id``, ``persist_account_label``,
-      ``persist_native_backend``, ``persist_native_anchor_provenance``,
-      ``clear_cc_session_anchor``) and legitimately changes an anchor field; the
-      reconciliation is skipped, because its whole purpose would revert the
-      intended write. Every other caller is reconciled: a stale anchor is
-      corrected back to the disk value and the correction is logged.
-    """
-    async with self._lock_for(meta.id) if not lock_held else contextlib.nullcontext():
-      if not anchor_write:
-        await self._reconcile_anchor_fields(meta)
-      path = self._metadata_path(meta.id)
-      path.parent.mkdir(parents=True, exist_ok=True)
-      serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
-
-      sig = await asyncio.to_thread(atomic_write_text, path, serialized)
-      # The entry re-keys from the write's own proven signature: the swap
-      # publishes the tmp inode the writer just statted, so a later
-      # same-signature stat proves the file still carries the funnel's bytes
-      # and the expiry revalidates by one stat instead of evicting into a full
-      # re-read (whose revision bump also forced the next listing to re-walk).
-      # A concurrent publish after this one replaces the inode; the next
-      # expiry's stat then evicts and re-reads — the same bound the
-      # signature-less entry paid on every expiry.
-      self._metadata_cache[meta.id] = (
-          validate_session_metadata(serialized, str(self._metadata_path(meta.id))), time.monotonic(), sig)
-      # The single funnel for every session-metadata write (35+ call sites, plus
-      # the save funnel): status transitions (archive/unarchive)
-      # land here, so the sidebar snapshot must re-probe this session.
-      sidebar_state.mark_sidebar_dirty(meta.id)
-      self._listings_revision += 1
-
-  def _session_dir(self, session_id: str) -> Path:
-    return self._cfg.sessions_dir / session_id
-
-  def _metadata_path(self, session_id: str) -> Path:
-    return self._session_dir(session_id) / METADATA_NAME
-
-  def _metadata_path_str(self, session_id: str) -> str:
-    """The string form of ``_metadata_path`` — same layout, no pathlib construction.
-
-    The expiry revalidation stats every expired entry inline on the event loop
-    (one stat per entry per listing past ``_METADATA_CACHE_TTL``), and pathlib's
-    two constructions plus the stat call's own path stringification price ~4.7 us
-    per entry on top of the ~2.5 us syscall on this host (measured against a
-    300-entry aged walk, Python 3.14). The layout stays owned by
-    :meth:`_metadata_path`; this form only skips the Path objects.
-    """
-    return f"{self._cfg.sessions_dir}/{session_id}/{METADATA_NAME}"
+def session_manager() -> SessionManager:
+  global _session_manager
+  if _session_manager is None:
+    _session_manager = SessionManager(get_config(), session_store.store())
+  return _session_manager

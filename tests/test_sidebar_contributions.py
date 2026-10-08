@@ -112,24 +112,29 @@ def test_a_view_no_session_roots_has_no_entry() -> None:
 PROBE = """
 import asyncio
 import json
+import sys
 from fastapi.testclient import TestClient
 from src.app import registrations
 registrations.PACKAGES = tuple(p for p in registrations.PACKAGES if p != {deleted!r})
 registrations.register_all()
 import server
+sys.path.insert(0, {tests!r})
+import conftest
 from pathlib import Path
 from src.features.slack.metadata import SlackOrigin
 from src.infra import backend_models, models
 from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_manager
+from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 
 async def main():
   option = backend_models.parse_option({{"id": "b", "label": "B", "type": "cc-claude", "model": "m"}})
   cfg = CharlieBotConfig(charliebot_home=Path({home!r}), backends={{"options": [option]}})
-  mgr = SessionManager(cfg)
-  thread = await mgr.create_session(
+  mgr = SessionManager(cfg, SessionStore(cfg))
+  thread = await conftest.create_root_session(
+      mgr,
       models.CreateSessionRequest(
           name="thread", slack_origin=SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0")),
       backend="b")
@@ -137,6 +142,7 @@ async def main():
   views = await mgr.view_subtree_roots()
   server.app.dependency_overrides[get_config_on_loop] = lambda: cfg
   server.app.dependency_overrides[get_session_manager] = lambda: mgr
+  server.app.dependency_overrides[get_session_store] = lambda: mgr.store
   workspace = TestClient(server.app).get("/api/sessions/").json()
   print(json.dumps({{"thread": thread.id, "views": views, "workspace_ids": [row["id"] for row in workspace]}}))
 
@@ -147,7 +153,10 @@ asyncio.run(main())
 
 def probe_without(package: str, home: Path) -> dict:
   probe = subprocess.run(
-      [sys.executable, "-c", PROBE.format(deleted=package, home=str(home / "profile"))],
+      [
+          sys.executable, "-c",
+          PROBE.format(deleted=package, home=str(home / "profile"), tests=str(conftest.ROOT / "tests"))
+      ],
       cwd=conftest.ROOT,
       capture_output=True,
       text=True,

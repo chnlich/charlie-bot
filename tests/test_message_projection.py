@@ -215,7 +215,7 @@ async def test_projection_memo_hit_archived_session_is_always_miss(tmp_path: Pat
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   await recycle_archive_cutoff_events(mgr, session.id)
-  meta = await mgr.get_session(session.id)
+  meta = await mgr.store.get_session(session.id)
   assert meta is not None and meta.archive_offset > 0
   assert mgr.get_message_projection(session.id) is None
   assert mgr.projection_memo_hit(session.id) is None

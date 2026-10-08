@@ -59,17 +59,17 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
 
   cron_archived = await conftest.make_cron_session(session_mgr, "nightly-archived")
   await session_mgr.archive_session(cron_archived.id)
-  plain_archived = await session_mgr.create_session(
-      models.CreateSessionRequest(name="Plain archived"), backend=conftest.OPUS_BACKEND_ID)
+  plain_archived = await conftest.create_root_session(
+      session_mgr, models.CreateSessionRequest(name="Plain archived"), backend=conftest.OPUS_BACKEND_ID)
   await session_mgr.archive_session(plain_archived.id)
-  plain_active = await session_mgr.create_session(
-      models.CreateSessionRequest(name="Plain active"), backend=conftest.OPUS_BACKEND_ID)
-  ordinary = await session_mgr.create_session(
-      models.CreateSessionRequest(name="Ordinary"), backend=conftest.OPUS_BACKEND_ID)
+  plain_active = await conftest.create_root_session(
+      session_mgr, models.CreateSessionRequest(name="Plain active"), backend=conftest.OPUS_BACKEND_ID)
+  ordinary = await conftest.create_root_session(
+      session_mgr, models.CreateSessionRequest(name="Ordinary"), backend=conftest.OPUS_BACKEND_ID)
   fillers = []
   for i in range(3):
-    filler = await session_mgr.create_session(
-        models.CreateSessionRequest(name=f"Filler {i}"), backend=conftest.OPUS_BACKEND_ID)
+    filler = await conftest.create_root_session(
+        session_mgr, models.CreateSessionRequest(name=f"Filler {i}"), backend=conftest.OPUS_BACKEND_ID)
     await session_mgr.archive_session(filler.id)
     fillers.append(filler)
   return Fixture(
@@ -184,14 +184,14 @@ async def test_subtree_map_rederives_after_a_metadata_write(tmp_path: pathlib.Pa
   # Attach the plain session under the cron session: the write funnel bumps the
   # listings revision, the next listing rebuilds its list, and the map keyed on
   # that list's identity re-derives with the new member.
-  meta = await fx.session_mgr.get_session(fx.ordinary.id)
+  meta = await fx.session_mgr.store.get_session(fx.ordinary.id)
   meta.task_parent_id = fx.cron.id
-  await fx.session_mgr.save_metadata(meta)
+  await fx.session_mgr.store.save_metadata(meta)
   attached = await fx.session_mgr.sequence_subtree_roots()
   assert attached[fx.ordinary.id] == fx.cron.id
   # Detach again: the map drops the member on the next read.
-  meta = await fx.session_mgr.get_session(fx.ordinary.id)
+  meta = await fx.session_mgr.store.get_session(fx.ordinary.id)
   meta.task_parent_id = None
-  await fx.session_mgr.save_metadata(meta)
+  await fx.session_mgr.store.save_metadata(meta)
   detached = await fx.session_mgr.sequence_subtree_roots()
   assert fx.ordinary.id not in detached

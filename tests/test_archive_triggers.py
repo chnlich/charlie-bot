@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import bind_deps_managers, build_env, create_task
+from conftest import bind_deps_managers, build_env, create_root_session, create_task
 
 from src.infra.models import PendingTrigger
 from src.runtime.triggers import ArchivedSessionError, TriggerManager
@@ -76,7 +76,7 @@ async def test_watchdog_reason_carries_into_the_cancel(tmp_path: Path, monkeypat
   assert await trigger_mgr._is_dormant_target(node.id) is True
   # An open manager root remains eligible for trigger registration.
   from src.infra.models import CreateSessionRequest
-  open_root = await session_mgr.create_session(CreateSessionRequest(name="Open root"), backend=None)
+  open_root = await create_root_session(session_mgr, CreateSessionRequest(name="Open root"), backend=None)
   assert open_root.profile == "manager"
   assert await trigger_mgr._dormancy_reason(open_root.id) is None
 

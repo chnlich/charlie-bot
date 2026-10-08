@@ -26,6 +26,7 @@ from src.infra import models
 from src.runtime import sessions, task_sessions
 from src.runtime.api import deps
 from src.runtime.api import sessions as sessions_api
+from src.runtime.session_store import SessionStore
 
 BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
@@ -33,7 +34,7 @@ BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 @pytest_asyncio.fixture
 async def store_env(tmp_path: pathlib.Path):
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   task = await tree.create_task(
       request_id="t",
@@ -97,7 +98,9 @@ async def api_env(store_env):
   tree, session_id = store_env
   app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.dependency_overrides[deps.get_session_manager] = lambda: sessions.SessionManager(tree._cfg)
+  app.dependency_overrides[
+      deps.get_session_manager] = lambda: sessions.SessionManager(tree._cfg, SessionStore(tree._cfg))
+  app.dependency_overrides[deps.get_session_store] = lambda: SessionStore(tree._cfg)
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
   app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
   return tree, session_id, testclient.TestClient(app)

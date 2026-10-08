@@ -92,6 +92,7 @@ from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
 from src.features.discord.metadata import DiscordOrigin
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 
@@ -429,13 +430,13 @@ async def handle_message_create(
 # ---------------------------------------------------------------------------
 
 
-async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: SessionStore) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
   on a lazily-built Discord adapter; the refusal shapes live there.
   """
-  return await thread_entry.assert_thread_fresh(DiscordThreadAdapter(), session_id, cfg, session_mgr)
+  return await thread_entry.assert_thread_fresh(DiscordThreadAdapter(), session_id, cfg, store)
 
 
 async def ack_messages(

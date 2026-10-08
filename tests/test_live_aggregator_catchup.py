@@ -21,10 +21,11 @@ import pytest
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import sessions as sessions_module
+from src.runtime.session_store import SessionStore
 
 
 async def _seed_session(mgr: sessions_module.SessionManager) -> str:
-  session = await mgr.create_session(models.CreateSessionRequest(name="catchup"))
+  session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="catchup"))
   await mgr.save_chat_event(
       session.id, {
           "type": ET.USER,
@@ -46,7 +47,7 @@ async def _seed_session(mgr: sessions_module.SessionManager) -> str:
 @pytest.mark.asyncio
 async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = sessions_module.SessionManager(cfg)
+  mgr = sessions_module.SessionManager(cfg, SessionStore(cfg))
   sid = await _seed_session(mgr)
 
   aggregator = await mgr._get_or_init_aggregator(sid)
@@ -66,7 +67,7 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path:
 @pytest.mark.asyncio
 async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = sessions_module.SessionManager(cfg)
+  mgr = sessions_module.SessionManager(cfg, SessionStore(cfg))
   sid = await _seed_session(mgr)
 
   inits = 0
@@ -93,7 +94,7 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -
 @pytest.mark.asyncio
 async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = sessions_module.SessionManager(cfg)
+  mgr = sessions_module.SessionManager(cfg, SessionStore(cfg))
   sid = await _seed_session(mgr)
 
   real_aggregator = sessions_module.MessageAggregator

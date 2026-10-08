@@ -28,10 +28,10 @@ async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
   assert response.status_code == 200
   assert response.json() == {"ok": True}
   assert not (conftest.cron_d_dir(temp_home) / "nightly.yaml").exists()
-  fresh_node = await session_mgr.get_session(node.id)
+  fresh_node = await session_mgr.store.get_session(node.id)
   assert fresh_node is not None
   assert fresh_node.status == models.SessionStatus.ACTIVE
-  fresh_cron = await session_mgr.get_session(cron_session.id)
+  fresh_cron = await session_mgr.store.get_session(cron_session.id)
   assert fresh_cron is not None
   assert fresh_cron.status == models.SessionStatus.ACTIVE
 

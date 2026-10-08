@@ -113,7 +113,7 @@ async def _ensure_backend_update_session(
   backend = effective_scheduled_task_backend(cand_model, cfg)
   if not cand_model.session_id:
     return None
-  node = await session_mgr.get_session(cand_model.session_id)
+  node = await session_mgr.store.get_session(cand_model.session_id)
   if node is None or node.backend == backend:
     return None
   if await _scheduled_node_busy(node):

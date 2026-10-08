@@ -14,10 +14,10 @@ import conftest
 import pytest
 
 from src.features.slack.slack_listener import handle_app_mention, summon_session_id
-from src.infra import metadata_slots
-from src.infra import config
+from src.infra import config, metadata_slots
 from src.infra import event_types as ET
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:
@@ -44,7 +44,7 @@ def _assert_manager_root(cfg: config.CharlieBotConfig, session_id: str) -> list[
 async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = conftest.build_slack_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   launches: list[tuple[str, int]] = []
@@ -73,7 +73,7 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
   assert session_id == summon_session_id("T_TEST", "C_TEST", "1700000000.000100")
   assert launches == [(session_id, 1)]
   _assert_manager_root(cfg, session_id)
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   assert meta is not None
   origin = metadata_slots.fields_of(meta, "slack").slack_origin
   assert origin is not None
@@ -107,7 +107,7 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
          ] == [ET.CLONE_START, ET.TASK_CREATED, ET.USER]
   assert (child.parent_session_id, child.origin_ref, child.task_parent_id) == (parent, None, None)
   if spawn == "elone":
-    fresh_parent = await mgr.get_session(parent)
+    fresh_parent = await mgr.store.get_session(parent)
     assert fresh_parent is not None and fresh_parent.successor_session_id == child.id
 
 

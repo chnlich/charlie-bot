@@ -47,7 +47,7 @@ def scheduler_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   # The scheduler reloads the process config on every fire; pin the reload to
   # the synthetic home's in-memory cfg.
-  monkeypatch.setattr(conftest.SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   scheduler = Scheduler(cfg, session_mgr)
   return cfg, session_mgr, tree, scheduler, monkeypatch
 

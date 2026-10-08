@@ -91,7 +91,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
   session_mgr = sessions.SessionManager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
-  monkeypatch.setattr(conftest.SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   scheduler = Scheduler(cfg, session_mgr)
 
   meta = await conftest.create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
@@ -135,7 +135,7 @@ async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypa
   session_mgr = sessions.SessionManager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
-  monkeypatch.setattr(conftest.SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   scheduler = Scheduler(cfg, session_mgr)
 
   client = _cron_app(cfg, session_mgr, tree, scheduler)

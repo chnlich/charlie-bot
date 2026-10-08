@@ -280,7 +280,7 @@ Known-alive symbols:
   reads the names statically. Vulture flags each write as an unused attribute: the only
   reader is the runtime attribute access on the double, which static analysis cannot tie
   back to this write site.
-- `search_sessions` (the `SessionManager` method in `src/runtime/sessions.py`) — deliberately
+- `search_sessions` (the `SessionSearch` method in `src/runtime/session_search.py`) — deliberately
   retained two-tier search API, not an orphan. The `/api/sessions/search` route serves
   `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
   wrapper's owned-copy + sidebar-state-fold form has zero production callers since that

@@ -327,7 +327,7 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   cfg = build_sessions_cfg(tmp_path)
   mgr = build_session_manager(cfg)
   session = await create_root_session(mgr, CreateSessionRequest(name="anchor-preserved"))
-  await mgr.persist_cc_session_id(session.id, "kept-anchor")
+  await mgr.anchors.persist_cc_session_id(session.id, "kept-anchor")
 
   snapshot = SessionMetadata(
       profile="manager", id=session.id, name="anchor-preserved", backend=cfg.backends.options[0].id)

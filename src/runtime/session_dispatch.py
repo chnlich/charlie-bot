@@ -269,7 +269,7 @@ class TaskInputDispatcher:
         for node in chain:
           current = await tree.sessions.store.get_session(node.id)
           if when > current.updated_at:
-            await tree.sessions.update_thinking_state(node.id, when)
+            await tree.sessions.anchors.update_thinking_state(node.id, when)
         tree.invalidate_tree_index()
     # The restore's per-node announcements ride the same after-lock window as
     # restore_chain's: each reopened fact reaches the page from its own node

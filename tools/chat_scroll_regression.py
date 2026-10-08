@@ -604,6 +604,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   from src.infra.config import get_config
   from src.runtime.api.message_utils import build_session_bootstrap_data
   from src.runtime.run_token import CallerIdentity
+  from src.runtime.session_anchors import SessionAnchors
   from src.runtime.session_events import SessionEvents
   from src.runtime.session_fork import SessionFork
   from src.runtime.session_lifecycle import SessionLifecycle
@@ -620,7 +621,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   events = SessionEvents(cfg, store)
   session_mgr = SessionManager(
       cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events))
+      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events))
   tree = TaskTreeManager(cfg, session_mgr)
   operator = CallerIdentity(kind="operator")
   main = await tree.create_task(

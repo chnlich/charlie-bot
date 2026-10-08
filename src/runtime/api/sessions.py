@@ -61,11 +61,11 @@ from src.runtime.api.deps import (
     bad_request,
     get_config_on_loop,
     get_run_store,
+    get_session_anchors,
     get_session_events,
     get_session_fork,
     get_session_lifecycle,
     get_session_listing,
-    get_session_manager,
     get_session_search,
     get_session_sidebar,
     get_session_store,
@@ -89,6 +89,7 @@ from src.runtime.message_aggregator import tool_preview
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
 from src.runtime.scheduled_sessions import sequence_subtree_roots
+from src.runtime.session_anchors import SessionAnchors
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
 from src.runtime.session_fork import (
@@ -102,7 +103,6 @@ from src.runtime.session_listing import SessionListing
 from src.runtime.session_search import SessionSearch
 from src.runtime.session_sidebar import SessionSidebar
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_errors import (
@@ -1076,7 +1076,7 @@ async def mark_session_read(
 async def get_session_usage(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    anchors: SessionAnchors = Depends(get_session_anchors),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
@@ -1085,7 +1085,7 @@ async def get_session_usage(
     from src.runtime.api.message_utils import _worker_usage
     usage = await _worker_usage(task_mgr, session_id)
   else:
-    usage = await session_mgr.resolve_session_usage(session_id, meta)
+    usage = await anchors.resolve_session_usage(session_id, meta)
   payload = {
       "session": meta.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE),
       "usage": usage,
@@ -1304,7 +1304,7 @@ async def switch_session_backend(
     session_id: str,
     body: SwitchBackendRequest,
     parent: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    anchors: SessionAnchors = Depends(get_session_anchors),
     lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
     store: SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
@@ -1345,7 +1345,7 @@ async def switch_session_backend(
   # field changes. Same-domain switches backfill too, so the next same-domain
   # turn still resumes as today.
   if parent.cc_session_id and not parent.native_backend:
-    await session_mgr.persist_native_backend(session_id, effective_current)
+    await anchors.persist_native_backend(session_id, effective_current)
 
   previous = effective_current
   meta = require_found(await lifecycle.switch_backend(session_id, body.backend))

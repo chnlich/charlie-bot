@@ -259,6 +259,7 @@ from src.runtime import streaming  # noqa: E402
 from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.runtime.api.deps import (  # noqa: E402
     get_config_on_loop,
+    get_session_anchors,
     get_session_events,
     get_session_fork,
     get_session_lifecycle,
@@ -272,6 +273,7 @@ from src.backends.claude_code.login_dirs import CREDENTIALS_FILE  # noqa: E402
 from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
+from src.runtime.session_anchors import SessionAnchors  # noqa: E402
 from src.runtime.session_events import SessionEvents  # noqa: E402
 from src.runtime.session_fork import SessionFork  # noqa: E402
 from src.runtime.session_lifecycle import SessionLifecycle  # noqa: E402
@@ -354,10 +356,10 @@ def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
   return models.SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
       **mocked_callback_fields(
-          persist_cc_session_id=mgr.persist_cc_session_id,
+          persist_cc_session_id=mgr.anchors.persist_cc_session_id,
           task_tree_activity=mgr.sidebar.task_tree_activity,
       ),
-      persist_account_label=mgr.persist_account_label,
+      persist_account_label=mgr.anchors.persist_account_label,
       context_state=AsyncMock(return_value=(None, None)),
   )
 
@@ -978,13 +980,13 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
 
 
 def build_session_manager(cfg: Any) -> SessionManager:
-  """A SessionManager over its own store, events, sidebar, listing, search, lifecycle and fork blocks, all built on *cfg*."""
+  """A SessionManager over its own store, events, sidebar, listing, search, lifecycle, fork and anchors blocks, all built on *cfg*."""
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
   return SessionManager(
       cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events))
+      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events))
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
@@ -1003,6 +1005,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   same home, whose private chat-event cache never sees the tree's rounds.
   """
   from src.runtime import (
+      session_anchors,
       session_events,
       session_fork,
       session_lifecycle,
@@ -1022,6 +1025,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   monkeypatch.setattr(session_search, "_search", session_mgr.search)
   monkeypatch.setattr(session_lifecycle, "_lifecycle", session_mgr.lifecycle)
   monkeypatch.setattr(session_fork, "_fork", session_mgr.fork)
+  monkeypatch.setattr(session_anchors, "_anchors", session_mgr.anchors)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1202,6 +1206,7 @@ def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
   app.dependency_overrides[get_session_search] = lambda: session_mgr.search
   app.dependency_overrides[get_session_lifecycle] = lambda: session_mgr.lifecycle
   app.dependency_overrides[get_session_fork] = lambda: session_mgr.fork
+  app.dependency_overrides[get_session_anchors] = lambda: session_mgr.anchors
 
 
 def make_router_client(

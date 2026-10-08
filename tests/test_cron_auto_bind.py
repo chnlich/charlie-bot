@@ -558,7 +558,7 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   # An anchor and worker-thread directory predate the last Saturday 01:00 PT.
-  await session_mgr.persist_cc_session_id(node_id, "cc-old")
+  await session_mgr.anchors.persist_cc_session_id(node_id, "cc-old")
   _backdate_cc_anchor(session_mgr, node_id, started_at=datetime.now(UTC) - timedelta(days=8))
   old_thread = _write_old_thread(cfg, node_id, "legacy-round")
 
@@ -608,7 +608,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   assert builds[0]["backend"].prompt.startswith(scheduled_report_prefix("nightly"))
 
   # A now-valid anchor on the same native identity: the conversation continues.
-  await session_mgr.persist_cc_session_id(node_id, "cc-live")
+  await session_mgr.anchors.persist_cc_session_id(node_id, "cc-live")
   disk = await session_mgr.store.read_metadata_fresh(node_id)
   assert disk.native_prompt_hash is not None and disk.native_backend == OPUS_BACKEND_ID
 

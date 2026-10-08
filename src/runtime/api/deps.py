@@ -6,6 +6,7 @@ from src.infra import config, constants, models
 from src.runtime import (
     run_token,
     runs,
+    session_anchors,
     session_events,
     session_fork,
     session_lifecycle,
@@ -30,6 +31,10 @@ async def get_session_store() -> session_store.SessionStore:
 
 async def get_session_events() -> session_events.SessionEvents:
   return session_events.events()
+
+
+async def get_session_anchors() -> session_anchors.SessionAnchors:
+  return session_anchors.anchors()
 
 
 async def get_session_fork() -> session_fork.SessionFork:

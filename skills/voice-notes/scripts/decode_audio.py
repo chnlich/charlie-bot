@@ -58,9 +58,12 @@ def main() -> int:
   root = repo_root()
   if str(root) not in sys.path:
     sys.path.insert(0, str(root))
+  from src.app.registrations import register_all
   from src.features.voice.transcriber import ensure_models_cached, get_transcription_bundle, transcribe_pcm_offline
   from src.infra.config import get_config
 
+  # The packages register their config sections and backend option models before the first parse.
+  register_all()
   cfg = get_config()
   ensure_models_cached(cfg)
   bundle = get_transcription_bundle(cfg)

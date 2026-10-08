@@ -483,11 +483,7 @@ class TaskCompletionManager:
     replay = self._replay_close_request(session_id, request_id)
     if replay is not None:
       return replay
-    # A non-CallerIdentity caller (the legacy string convenience) carries no
-    # session header; None never skips the wake.
-    caller_session_id = caller.session_id if isinstance(caller, CallerIdentity) else None
-    return await self._close_now(
-        session_id, request_id=request_id, evidence=evidence, actor=ACTOR_USER, caller_session_id=caller_session_id)
+    return await self._close_now(session_id, request_id=request_id, evidence=evidence, actor=ACTOR_USER)
 
   def _replay_close_request(self, session_id: str, request_id: str) -> tuple[int, dict] | None:
     """The original outcome of an already-recorded operation id, if one exists.
@@ -569,7 +565,6 @@ class TaskCompletionManager:
       actor: str,
       exclude_run_ids: set[str] | None = None,
       exclude_input_ids: set[str] | None = None,
-      caller_session_id: str | None = None,
   ) -> tuple[int, dict]:
     """Evaluate, validate, and land one completed close (the operator path).
 
@@ -644,8 +639,7 @@ class TaskCompletionManager:
       # report — so the failure is logged loudly and the close result
       # stands.
       try:
-        await tree.dispatch.wake_parent(
-            str(fresh_meta.task_parent_id), report=report, caller_session_id=caller_session_id)
+        await tree.dispatch.wake_parent(str(fresh_meta.task_parent_id), report=report)
       except Exception as exc:
         log.warning(
             "close_parent_wake_failed",
@@ -1071,7 +1065,7 @@ class TaskCompletionManager:
       # failed wake is logged and the cancellation result stands (the
       # parent's turn is re-drivable; see _close_now).
       try:
-        await tree.dispatch.wake_parent(str(meta.task_parent_id), report=report, caller_session_id=caller.session_id)
+        await tree.dispatch.wake_parent(str(meta.task_parent_id), report=report)
       except Exception as exc:
         log.warning(
             "cancel_parent_wake_failed",

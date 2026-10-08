@@ -411,14 +411,15 @@ class TaskInputDispatcher:
 
   async def wake_parent(
       self, parent_id: str, *, report: dict, caller_session_id: str | None = None) -> asyncio.Task | None:
-    """Dispatch a newly delivered child report to its parent task."""
-    tree = self._tree
-    meta = await tree.load_task_meta(parent_id)
-    if caller_session_id == parent_id:
-      log.info("parent_report_self_delivery", parent=parent_id, report=report.get("id"))
-      return None
-    if tree.task_state(meta.id) != "open":
-      return None
+    """Dispatch a newly delivered child report to its parent task.
+
+        The dispatch reads the parent's durable inputs and never consults the
+        caller — not even the parent's own turn closing its child: a busy node
+        defers the launch to its turn-end dispatch, a closed node retains the
+        report as history, and the delivered report event stays the durable
+        record either way. Returns None: the dispatch is synchronous with the
+        caller; no scheduled master wake exists to return.
+        """
     await self.dispatch_pending(parent_id)
     return None
 

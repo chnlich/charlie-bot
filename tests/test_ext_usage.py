@@ -9,23 +9,28 @@ from typing import Any
 import pytest
 from conftest import codex_token_count_event, fresh_state_fixture
 
+from src.backends.claude_code import usage_quota as claude_quota
 from src.backends.claude_code.claude_config import ClaudeAccount
-from src.features.usage import ext_usage as ext_usage_mod
-from src.features.usage.ext_usage import (
-    ClaudeUsageProvider,
-    _derive_accounts,
+from src.backends.claude_code.usage_quota import ClaudeQuotaAccount
+from src.backends.codex import usage_quota as codex_quota
+from src.backends.codex.usage_quota import (
     _extract_codex_spend_events,
     _latest_token_count_event,
-    _poll_loop,
     _sum_codex_spend_events,
     _transform_codex_response,
 )
+from src.features.usage import api as usage_api
+from src.features.usage import ext_usage as ext_usage_mod
+from src.features.usage.ext_usage import _poll_loop
 from src.infra.config import CharlieBotConfig
+from src.runtime.hooks import usage_sources, wiring
 
-_fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
-_fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._CREDENTIAL_READ_WARNINGS_SEEN.clear)
+_fresh_unknown_limit_shape_registry = fresh_state_fixture(usage_sources._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
+_fresh_credential_read_warning_registry = fresh_state_fixture(claude_quota._CREDENTIAL_READ_WARNINGS_SEEN.clear)
 _fresh_usage_cache = fresh_state_fixture(ext_usage_mod._cached_usage.clear)
-_fresh_user_agent_cache = fresh_state_fixture(ext_usage_mod._reset_user_agent_for_tests)
+_fresh_user_agent_cache = fresh_state_fixture(claude_quota._reset_user_agent_for_tests)
+_fresh_claude_accounts = fresh_state_fixture(claude_quota._accounts.clear)
+_fresh_codex_account = fresh_state_fixture(lambda: setattr(codex_quota, "_account", None))
 
 
 def _build_token_count_event(
@@ -133,9 +138,9 @@ def test_codex_usage_transform_adds_token_count_observed_at() -> None:
 
 
 def _capture_warnings(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
-  """Capture ext_usage's warning lines in order as ``{"event": name, **fields}`` dicts."""
+  """Capture the unknown-limit-shape warning lines in order as ``{"event": name, **fields}`` dicts."""
   warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  monkeypatch.setattr(usage_sources.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
   return warns
 
 
@@ -198,32 +203,86 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Account-set derivation (T2)
+# Account-set derivation: quota_accounts() reads the live config on every call
 # ---------------------------------------------------------------------------
 
 
-def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+def _use_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *pool: ClaudeAccount) -> None:
+  """Serve a config whose Claude pool is *pool*, and a HOME under tmp_path so no real login is named."""
+  monkeypatch.setenv("HOME", str(tmp_path))
+  monkeypatch.setattr("src.infra.config.get_config", lambda: CharlieBotConfig(accounts={"claude": list(pool)}))
+
+
+def test_claude_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   # Two distinct dirs both labelled "invite-1": the later one is skipped (logged)
   # rather than overwriting the first.
-  cfg = CharlieBotConfig(
-      accounts={
-          "claude":
-              [
-                  ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
-                  ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
-              ]
-      })
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  _use_config(
+      monkeypatch,
+      tmp_path,
+      ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
+      ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
+  )
 
-  labels = [label for label, _ in _derive_accounts()["claude"]]
+  labels = [account.label for account in claude_quota.quota_accounts()]
 
   assert labels == ["main", "invite-1"]
+
+
+def test_claude_accounts_keep_their_backoff_between_rounds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """A login that stays in the config comes back as the same account with its backoff armed; a login the
+  config dropped is forgotten, and returns fresh."""
+  invite = ClaudeAccount(label="invite-1", config_dir=str(tmp_path / ".claude-invite-1"))
+  _use_config(monkeypatch, tmp_path, invite)
+  main, invite_account = claude_quota.quota_accounts()
+  invite_account._arm_backoff()
+  armed_until = invite_account._backoff_until
+
+  main_again, invite_again = claude_quota.quota_accounts()
+  assert (main_again, invite_again) == (main, invite_account)
+  assert invite_again._backoff_until == armed_until > 0
+
+  _use_config(monkeypatch, tmp_path)
+  assert [account.label for account in claude_quota.quota_accounts()] == ["main"]
+  _use_config(monkeypatch, tmp_path, invite)
+  _, readded = claude_quota.quota_accounts()
+  assert readded is not invite_account
+  assert readded._backoff_until == 0.0
+
+
+def test_claude_account_marks_login_and_expired_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """A pool login without credentials carries ``login_required`` with its directory; a window whose reset has
+  passed since the sample carries ``expired`` on an emit copy, and the cached entry stays as fetched."""
+  pool_dir = tmp_path / ".claude-invite-1"
+  _use_config(monkeypatch, tmp_path, ClaudeAccount(label="invite-1", config_dir=str(pool_dir)))
+  _, account = claude_quota.quota_accounts()
+  entry = {
+      "provider": "claude",
+      "account": "invite-1",
+      "fetched_at": "2026-01-01T00:00:00+00:00",
+      "windows": [
+          {"window_minutes": 300, "utilization": 5.0, "resets_at": "2026-01-01T03:00:00+00:00"},
+          {"window_minutes": 10080, "utilization": 6.0, "resets_at": "2026-01-07T00:00:00+00:00"},
+      ],
+  }  # yapf: disable
+
+  account.mark_login_required(entry)
+  assert entry["login_required"] == str(pool_dir)
+  pool_dir.mkdir()
+  _write_credentials(pool_dir / ".credentials.json")
+  account.mark_login_required(entry)
+  assert "login_required" not in entry
+
+  emitted = account.mark_expired(entry, datetime(2026, 1, 2, tzinfo=UTC))
+  assert [w.get("expired") for w in emitted["windows"]] == [True, None]
+  assert all("expired" not in w for w in entry["windows"])
+  main_account, _ = claude_quota.quota_accounts()
+  assert main_account.login_dir is None
 
 
 # ---------------------------------------------------------------------------
 # Poller payload semantics (T3): multi-account keys, stale-keep, error
 # placeholder, drop-on-removal. Drives the real _poll_loop for N cycles with
-# monkeypatched derivation/providers and a sleep that stops the loop.
+# fake accounts and a sleep that stops the loop.
 # ---------------------------------------------------------------------------
 
 
@@ -236,9 +295,11 @@ class _StopAfter(BaseException):
   """
 
 
-class _FakeProvider:
+class _FakeAccount(usage_sources.QuotaAccount):
 
-  def __init__(self, get_value: Callable[[], Any], error: str = "no data") -> None:
+  def __init__(self, provider: str, label: str, get_value: Callable[[], Any], error: str = "no data") -> None:
+    self.provider = provider
+    self.label = label
     self._get_value = get_value
     self.last_error = error
 
@@ -252,8 +313,7 @@ class _FakeProvider:
 def _run_poll_cycles(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    accounts_fn: Callable[[], dict],
-    create_provider: Callable[[str, str, str], _FakeProvider],
+    accounts_fn: Callable[[], list[usage_sources.QuotaAccount]],
     n: int,
 ) -> dict:
   """Drive the real ``_poll_loop`` for ``n`` round-gap sleeps, then return counters.
@@ -274,10 +334,8 @@ def _run_poll_cycles(
 
   monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
   monkeypatch.setattr("src.runtime.streaming.streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
-  monkeypatch.setattr(ext_usage_mod, "_derive_accounts", accounts_fn)
-  monkeypatch.setattr(ext_usage_mod, "_create_provider", create_provider)
+  monkeypatch.setattr(usage_sources, "quota_accounts", accounts_fn)
   ext_usage_mod._cached_usage.clear()
-  ext_usage_mod._instances.clear()
 
   with pytest.raises(_StopAfter):
     asyncio.run(_poll_loop())
@@ -303,17 +361,13 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> No
   fetch_no = {"i": 0}
   original = _claude_fetch_value(42.0)
 
-  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
+  def get_value() -> dict | None:
+    fetch_no["i"] += 1
+    return original if fetch_no["i"] == 1 else None
 
-    def get_value() -> dict | None:
-      fetch_no["i"] += 1
-      return original if fetch_no["i"] == 1 else None
-
-    return _FakeProvider(get_value, error="rate limited")
-
-  accounts = {"claude": [("main", "/fake/main")], "codex": []}
+  accounts = [_FakeAccount("claude", "main", get_value, error="rate limited")]
   # 1 account per round, so 2 sleeps == 2 rounds == 2 fetches of the same account.
-  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=2)
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, n=2)
 
   kept = ext_usage_mod._cached_usage["claude:main"]
   assert kept["windows"][0]["utilization"] == 42.0
@@ -322,8 +376,87 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> No
   assert state["broadcasts"] == 2
 
 
+def test_poll_panel_keys_order_pending_markers_and_error_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The panel's wire contract: one ``<provider>:<label>`` entry per account in registration order, a pending
+  marker for every account not yet read, and an error entry carrying the account's last error."""
+  codex_reading = {"windows": [], "fetched_at": "2026-01-01T00:00:00+00:00", "provider": "codex"}
+  accounts = [
+      _FakeAccount("claude", "main", lambda: _claude_fetch_value(1.0)),
+      _FakeAccount("claude", "ext-1", lambda: None, error="credentials not found"),
+      _FakeAccount("codex", "main", lambda: codex_reading),
+  ]
+
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, n=3)
+
+  first, second, third = (payload["providers"] for payload in state["payloads"])
+  assert list(first) == ["claude:main", "claude:ext-1", "codex:main"]
+  assert first["claude:main"]["account"] == "main" and "windows" in first["claude:main"]
+  assert first["claude:ext-1"] == {"provider": "claude", "account": "ext-1", "pending": True}
+  assert first["codex:main"] == {"provider": "codex", "account": "main", "pending": True}
+  assert second["claude:ext-1"] == {"provider": "claude", "account": "ext-1", "error": "credentials not found"}
+  assert third["codex:main"] == {**codex_reading, "account": "main"}
+
+
+def test_poll_drops_an_account_the_next_round_no_longer_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+  rounds = iter([
+      [_FakeAccount("claude", "main", lambda: _claude_fetch_value(1.0)),
+       _FakeAccount("claude", "gone", lambda: _claude_fetch_value(2.0))],
+      [_FakeAccount("claude", "main", lambda: _claude_fetch_value(3.0))],
+  ])  # yapf: disable
+
+  _run_poll_cycles(monkeypatch, accounts_fn=lambda: next(rounds), n=3)
+
+  assert list(ext_usage_mod._cached_usage) == ["claude:main"]
+
+
 # ---------------------------------------------------------------------------
-# ClaudeUsageProvider: 401-triggered renewal. The provider owns no clock; the
+# Services: the poller and the tally warmup start and stop through the wiring registry
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def usage_services_only(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The wiring registry holding only the usage package's own services, so starting a phase
+  imports no other package's service module."""
+  services = {name: entry for name, entry in wiring._SERVICES.items() if name in ("usage_tally", "ext_usage")}
+  assert list(services) == ["usage_tally", "ext_usage"]
+  monkeypatch.setattr(wiring, "_SERVICES", services)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("usage_services_only")
+async def test_the_poller_and_the_warmup_start_and_stop_through_the_wiring_registry(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(usage_sources, "quota_accounts", list)
+  monkeypatch.setattr(usage_api, "preload_usage_tally_stack", lambda: None)
+  ctx = wiring.ServiceContext(None, None, None, None)
+
+  early = dict(wiring.service_starts("early"))
+  ready = dict(wiring.service_starts("ready"))
+  assert (list(early), list(ready)) == (["usage_tally"], ["ext_usage"])
+  await early["usage_tally"](ctx)
+  await ready["ext_usage"](ctx)
+  warmup, poller = usage_api._warmup_task, ext_usage_mod._poller.task
+  assert warmup is not None and poller is not None
+  await asyncio.wait_for(warmup, timeout=10)
+  assert not poller.done()
+
+  stops = wiring.service_stops()
+  assert [name for name, _ in stops] == ["ext_usage", "usage_tally"]
+  for _, stop in stops:
+    await stop()
+  assert poller.done() and usage_api._warmup_task is None and ext_usage_mod._poller.task is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("usage_services_only")
+async def test_a_usage_service_that_never_started_stops_at_once() -> None:
+  for _, stop in wiring.service_stops():
+    await asyncio.wait_for(stop(), timeout=1)
+
+
+# ---------------------------------------------------------------------------
+# ClaudeQuotaAccount: 401-triggered renewal. The provider owns no clock; the
 # server's 401 is the only signal that a stored token is unusable.
 # ---------------------------------------------------------------------------
 
@@ -403,11 +536,11 @@ def _write_credentials(path: Path, *, access: str = "tok-stored", refresh: str =
 
 
 def _claude_provider(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeUsageHTTP, **creds: Any) -> ClaudeUsageProvider:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeUsageHTTP, **creds: Any) -> ClaudeQuotaAccount:
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, **creds)
   monkeypatch.setattr("src.infra.http.get_http_client", lambda: fake)
-  return ClaudeUsageProvider("ext-test", credentials_path)
+  return ClaudeQuotaAccount("ext-test", credentials_path)
 
 
 @pytest.mark.asyncio

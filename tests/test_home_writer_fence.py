@@ -92,6 +92,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   from src.features.cron import scheduler as scheduler_module
   from src.features.voice import service as voice_service
   from src.infra.config import CharlieBotConfig
+  from src.runtime.hooks import usage_sources
 
   home = tmp_path / "home"
   (home / "sessions").mkdir(parents=True)
@@ -111,8 +112,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setattr(server_module, "set_trigger_manager", lambda *a, **k: None)
   monkeypatch.setattr(server_module, "close_http_client", _AsyncStub())
   monkeypatch.setattr(server_module.streaming_manager, "close_all", _AsyncStub())
-  monkeypatch.setattr(server_module.ext_usage, "start_poller", _AsyncStub())
-  monkeypatch.setattr(server_module.ext_usage, "stop_poller", _AsyncStub())
+  monkeypatch.setattr(usage_sources, "quota_accounts", list)
   from src.runtime import task_recovery
   monkeypatch.setattr(task_recovery, "reconcile_task_tree", _AsyncStub(return_value={}))
   return server_module
@@ -131,9 +131,8 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
   server_module = lifespan_env
   calls: list[int] = []
   monkeypatch.setattr(usage_api, "preload_usage_tally_stack", lambda: calls.append(1))
-  app = FastAPI()
-  async with server_module.lifespan(app):
-    await asyncio.wait_for(app.state.usage_tally_warmup_task, timeout=10)
+  async with server_module.lifespan(FastAPI()):
+    await asyncio.wait_for(usage_api._warmup_task, timeout=10)
   assert calls == [1]
 
 

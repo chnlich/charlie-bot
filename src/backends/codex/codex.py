@@ -14,6 +14,10 @@ log = log_once.LazyStructlogLogger()
 
 _MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
 
+# The event type the translation emits for each file a `file_change` item adds or updates.
+# Codex is the only backend that emits it; the wire value is persisted in events.jsonl.
+FILE_WRITE = "file_write"
+
 
 class CodexBackend(base.AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
@@ -290,7 +294,7 @@ class CodexBackend(base.AgentBackend):
       if kind not in {"add", "update"}:
         continue
       path = change["path"]
-      events.append({"type": ET.FILE_WRITE, "path": path})
+      events.append({"type": FILE_WRITE, "path": path})
     return events
 
   def _handle_mcp_tool_call(self, ev: dict) -> list[dict]:

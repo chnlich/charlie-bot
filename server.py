@@ -34,8 +34,6 @@ with gc_off(collect=False):
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
   from src.app import pages, registrations
-  from src.features.usage import api as usage_page
-  from src.features.usage import ext_usage
   from src.infra import responses, timeouts
   from src.infra.buildinfo import init_build_info
   from src.infra.config import CharlieBotConfig, get_config, require_backends
@@ -44,7 +42,6 @@ with gc_off(collect=False):
   from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
   from src.infra.models import SessionMetadata, utc_now
   from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-  from src.infra.tasks import cancel_and_wait, create_logged_task
   from src.runtime import init_master_recovery, init_seed
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions, threads
@@ -338,14 +335,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for _, start_service in wiring.service_starts("early"):
       await start_service(service_ctx)
 
-    # The tally stack loads here, not on the request path: a request-time
-    # first-import reads whatever files a mid-flight deploy left under a server
-    # whose in-memory modules are the started code, and the mixed-version import
-    # 500s the usage page (and the ledger cron handler) until restart. Same
-    # thread pattern as the speech service: the M99 import floor stays.
-    app.state.usage_tally_warmup_task = create_logged_task(
-        asyncio.to_thread(usage_page.preload_usage_tally_stack), name="usage-tally-warmup")
-
     # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
     # BEFORE any door that can start a competing process: a new chat input, a
     # cron fire, or a recovered trigger must not launch while a recorded live
@@ -368,8 +357,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for _, start_service in wiring.service_starts("ready"):
       await start_service(service_ctx)
 
-    await ext_usage.start_poller()
-
     log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
     yield
 
@@ -386,8 +373,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await result
       step_ms[name] = round((time.monotonic() - started) * 1000)
 
-    await timed_step("usage_tally_ms", lambda: cancel_and_wait(getattr(app.state, "usage_tally_warmup_task", None)))
-    await timed_step("ext_usage_ms", ext_usage.stop_poller)
     for name, stop_service in wiring.service_stops():
       await timed_step(f"{name}_ms", stop_service)
     await timed_step("http_client_ms", close_http_client)

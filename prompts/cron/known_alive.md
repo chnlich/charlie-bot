@@ -28,7 +28,7 @@ Known-alive symbols:
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
 - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
-  `_fresh_user_agent_cache` (`tests/test_ext_usage.py`),
+  `_fresh_user_agent_cache`, `_fresh_claude_accounts`, `_fresh_codex_account` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
   `_reset_config_caches` (`tests/test_charliebot_home.py`),
   `_fresh_unhandled_part_type_registry` (`tests/test_opencode_backend.py`),
@@ -159,13 +159,6 @@ Known-alive symbols:
   definition, and vulture flags each as an unused method. Same class as the
   `do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
   virtual dispatch in place of stdlib string dispatch.
-- `dir_path` (the `create_provider(provider, label, dir_path)` stubs in
-  `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
-  `monkeypatch.setattr`) — the real `_create_provider` (src/features/usage/ext_usage.py) is called
-  with three positional arguments, so the stubs' replaced
-  signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
-  makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
-  confidence as an unused variable at every stub site in `tests/test_ext_usage.py`.
 - `format` (`tests/test_cli_restart_contract.py`, the `log_message` override's second
   parameter) — signature-mirror parameter kept deliberately, not fixed by any call: the
   stdlib invokes `log_message(format, *args)` positionally into the override's trailing

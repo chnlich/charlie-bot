@@ -60,21 +60,6 @@ MIN_IDLE_DAYS = 14
 PERFETTO_MERGED_PATH = "/perfetto/merged"
 AUTH_STATUS_PATH = "/api/auth/status"
 
-# Usage-source vocabulary: the ledger's source values. Each backend package's register() names
-# its usage source (src/runtime/hooks/usage_sources.py) and its log reader tags every record with
-# the same value; the token tally (src/features/usage/token_tally.py) tags the records of
-# CharlieBot's own logs USAGE_SOURCE_CHARLIE_BOT. The usage page (src/features/usage/api.py)
-# attributes each charlie-bot row's accounts to the CLI that ran the call, so its cards key on the
-# registered names, never on USAGE_SOURCE_CHARLIE_BOT.
-USAGE_SOURCE_CLAUDE_CODE = "Claude Code"
-USAGE_SOURCE_CODEX = "Codex"
-USAGE_SOURCE_OPENCODE = "opencode"
-USAGE_SOURCE_CHARLIE_BOT = "charlie-bot"
-# The panel's CLC source: Charlie Code's own usage, which only CharlieBot's own logs hold.
-# The constant spells the full name; the value is the CLC spelling the interface uses.
-# Not to be confused with USAGE_SOURCE_CLAUDE_CODE above, the Claude Code CLI's source.
-USAGE_SOURCE_CHARLIE_CODE = "CLC"
-
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

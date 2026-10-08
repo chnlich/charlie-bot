@@ -53,11 +53,6 @@ MAX_TRIGGER_MESSAGE_CHARS = 200
 # the CLI parser's --min-idle-days default and --help text share one number.
 MIN_IDLE_DAYS = 14
 
-# The merged-trace route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
-# reads local trace files, so it sits behind the access key like the file server. It is also the
-# special case server.py's gzip middleware skips (the body is already-compressed
-# trace bytes) and the URL built for merged traces.
-PERFETTO_MERGED_PATH = "/perfetto/merged"
 AUTH_STATUS_PATH = "/api/auth/status"
 
 

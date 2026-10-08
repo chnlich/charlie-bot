@@ -15,6 +15,7 @@ from conftest import (
     WsServerNeverAnswersClose,
     bind_deps_managers,
     build_slack_cfg,
+    create_root_session,
     mention_seam,
 )
 
@@ -24,10 +25,11 @@ from src.features.slack.slack_listener import (
     handle_app_mention,
     summon_session_id,
 )
-from src.infra import metadata_slots
 from src.infra import event_types as ET
+from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -83,7 +85,7 @@ def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotCon
   same session manager.
   """
   cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   bind_deps_managers(monkeypatch, TaskTreeManager(cfg, session_mgr), session_mgr)
   return cfg, session_mgr, FakeSlackClient()
 
@@ -101,7 +103,7 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
 
   assert sid == _sid(event)
 
-  meta = await session_mgr.get_session(sid)
+  meta = await session_mgr.store.get_session(sid)
   assert meta is not None
   origin = metadata_slots.fields_of(meta, "slack").slack_origin
   assert origin is not None
@@ -231,7 +233,7 @@ async def test_unhandled_event_drops_with_no_side_effects(
 
   assert result is None
   assert not client.calls
-  assert await session_mgr.get_session(_sid(event)) is None
+  assert await session_mgr.store.get_session(_sid(event)) is None
 
 
 @pytest.mark.asyncio
@@ -240,7 +242,7 @@ async def test_trigger_master_forwards_input_id_to_the_task_wake(
   from src.runtime import master_trigger
 
   cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
+  meta = await create_root_session(session_mgr, CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "_wake_task_node", new=AsyncMock()) as wake_mock:
     await master_trigger.trigger_master(meta.id, "s", session_mgr, event_type=ET.AGENT_MESSAGE, input_id="evt-1")

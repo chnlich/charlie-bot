@@ -19,11 +19,13 @@ from src.runtime import spawner_backends
 from src.runtime.api.deps import (
     bad_request,
     get_session_manager,
+    get_session_store,
     get_task_manager,
     get_trigger_manager,
     require_found,
 )
 from src.runtime.api.deps import require_caller as require_caller_dep
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
@@ -70,7 +72,7 @@ class _SpawnRequest(Protocol):
 
 async def _authorize_spawn_request(
     req: _SpawnRequest,
-    session_mgr: SessionManager,
+    store: SessionStore,
     task_mgr: TaskTreeManager,
 ) -> tuple[str | None, str | None]:
   """Validate session, enforce the takeoff gate, and resolve backend/model for spawn-style endpoints.
@@ -81,7 +83,7 @@ async def _authorize_spawn_request(
   nothing).
   A node inherits authorization from its nearest real-user ancestor.
   """
-  meta = require_found(await session_mgr.get_session(req.session_id))
+  meta = require_found(await store.get_session(req.session_id))
 
   if not (isinstance(req, DelegateRequest) and is_verify_exempt(req.task_type)):
     try:
@@ -92,11 +94,10 @@ async def _authorize_spawn_request(
   cfg = get_config()
   try:
     if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY and req.backend is None:
-      resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(
-          req.session_id, cfg, session_mgr, [])
+      resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(req.session_id, cfg, store, [])
     else:
       resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
-          req.session_id, cfg, session_mgr, requested_backend=req.backend)
+          req.session_id, cfg, store, requested_backend=req.backend)
   except ValueError as e:
     raise bad_request(e) from e
 
@@ -223,6 +224,7 @@ async def _delegate_task_tree(
 async def delegate_task(
     req: DelegateRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: object = Depends(require_caller_dep),
 ) -> dict:
@@ -248,19 +250,19 @@ async def delegate_task(
           status_code=400,
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
           "give both for a repo task, neither for a repo-less one")
-  require_found(await session_mgr.get_session(req.session_id))
-  resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
+  require_found(await store.get_session(req.session_id))
+  resolved_backend, resolved_model = await _authorize_spawn_request(req, store, task_mgr)
   return await _delegate_task_tree(req, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
 
 
 @router.post("/schedule-trigger")
 async def schedule_trigger(
     req: ScheduleTriggerRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
 ) -> dict:
   """Schedule a delayed trigger that will wake the master CC after a delay."""
-  require_found(await session_mgr.get_session(req.session_id))
+  require_found(await store.get_session(req.session_id))
 
   if req.watch_targets is not None:
     if len(req.watch_targets) == 0:
@@ -318,7 +320,7 @@ async def cancel_trigger(
 @router.post("/session-message")
 async def session_message(
     req: SessionMessageRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
@@ -330,8 +332,8 @@ async def session_message(
   (``task <id> is archived``);
   only the user's own message restores an archived node.
   """
-  caller = require_found(await session_mgr.get_session(req.session_id))
-  target = await session_mgr.get_session(req.target_session_id)
+  caller = require_found(await store.get_session(req.session_id))
+  target = await store.get_session(req.target_session_id)
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
 

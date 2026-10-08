@@ -68,6 +68,7 @@ class Scheduler:
     chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
     self._cfg = cfg
     self._session_mgr = session_mgr
+    self._store = session_mgr.store
     self._task: asyncio.Task | None = None
     # Process-local registry of the background task each task's most recent
     # *scheduled* fire spawned (keyed by task name). Empty after a restart, so
@@ -283,7 +284,7 @@ class Scheduler:
     due fire in the same tick agree.
     """
     backend = effective_scheduled_task_backend(task_cfg, cfg)
-    node = await self._session_mgr.get_session(task_cfg.session_id)
+    node = await self._store.get_session(task_cfg.session_id)
     if node is None or node.backend == backend:
       return
     await self._session_mgr.switch_backend(task_cfg.session_id, backend)

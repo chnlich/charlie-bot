@@ -42,6 +42,7 @@ from src.infra.models import CreateSessionRequest, SessionMetadata
 from src.runtime import master_cc_queue, master_cc_run, master_cc_state, message_aggregator, streaming
 from src.runtime.agent_process.base import make_result_event
 from src.runtime.hooks import turn_contributions
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_prompts import build_segments
 
@@ -274,6 +275,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
       from src.infra.models import CreateSessionRequest
       from src.runtime import sessions
       from src.runtime.hooks import turn_contributions
+      from src.runtime.session_store import SessionStore
       from src.runtime.task_prompts import SCOPE_MEMORY, build_segments
 
       async def main():
@@ -281,7 +283,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
         conftest.write_memory_topics(memory_dir(cfg), ["profile resident"])
         conftest.write_memory_entry(
             memory_dir(cfg), "profile", "resident-note", audience="master", body="resident memory")
-        manager = sessions.SessionManager(cfg)
+        manager = sessions.SessionManager(cfg, SessionStore(cfg))
         tasks = []
 
         def schedule(coro, *, name):
@@ -290,7 +292,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
           return task
 
         sessions.create_logged_task = schedule
-        meta = await manager.create_session(CreateSessionRequest(name="scratch"))
+        meta = await conftest.create_root_session(manager, CreateSessionRequest(name="scratch"))
         await manager.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE}})
         await asyncio.gather(*tasks)
         assert {contribution_type!r} not in [type(item).__name__ for item in turn_contributions.turn_contributions()]
@@ -353,8 +355,8 @@ class _Raises(turn_contributions.TurnContribution):
 async def test_one_master_done_calls_each_platforms_deliver_done_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  meta = await mgr.create_session(CreateSessionRequest(name="both"))
+  mgr = SessionManager(cfg, SessionStore(cfg))
+  meta = await conftest.create_root_session(mgr, CreateSessionRequest(name="both"))
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   # A failing contribution in front of the real ones must not stop them or the append.
   real = turn_contributions.turn_contributions()
@@ -403,8 +405,8 @@ async def run_turn(
   Returns the manager, the session id and the after_turn tasks the funnel spawned.
   """
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="tex"))
+  mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await conftest.create_root_session(mgr, CreateSessionRequest(name="tex"))
   tasks: list[asyncio.Task] = []
   monkeypatch.setattr(master_cc_run, "_run_cc", turn)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
@@ -480,8 +482,8 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   """A turn left running in another process ends in CancelledError: the consumer appends no MASTER_DONE,
   so no after_turn runs, and the agent's edit stays on disk for the next boot's re-attach to settle."""
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="let-go"))
+  mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await conftest.create_root_session(mgr, CreateSessionRequest(name="let-go"))
   tasks: list[asyncio.Task] = []
   install_scripted_backends(monkeypatch, [_LetGoBackend(tex_file)], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())

@@ -397,14 +397,15 @@ class FakeTree:
 
 
 class FakeSessions:
-  """The session-manager surface the round side and the summon side touch, over
-  one in-memory metadata; persisted events land in ``persisted`` for the
+  """The session-manager and session-store surface the round side and the summon side touch, over
+  one in-memory metadata (``store`` is the double itself); persisted events land in ``persisted`` for the
   readback asserts and the summon create/group writes land in ``created`` and
   ``groups``. A None *meta* is the no-session-yet state the summon create
   resolves."""
 
   def __init__(self, meta: SimpleNamespace | None, order: list[str] | None = None) -> None:
     self.meta = meta
+    self.store = self
     self.events: list[dict] = []
     self.persisted: list[dict] = []
     self.created: list = []

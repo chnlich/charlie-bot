@@ -81,7 +81,7 @@ async def _read_own_thread(
   ``thread_entry.ack_messages``, which advances the watermark; ``more_unread``
   counts the unread left outside the window.
   """
-  meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, session_mgr)
+  meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, session_mgr.store)
   fields = cast(DiscordSessionFields, metadata_slots.fields_of(meta, "discord"))
   origin = fields.discord_origin
   assert origin is not None

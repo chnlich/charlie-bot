@@ -43,7 +43,7 @@ class RouterDouble:
 
     from src.infra import config
     from src.runtime.api import sessions as sessions_api
-    from src.runtime.api.deps import get_run_store, get_session_manager, get_task_manager
+    from src.runtime.api.deps import get_run_store, get_session_manager, get_session_store, get_task_manager
 
     app = FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -55,6 +55,7 @@ class RouterDouble:
     app.dependency_overrides[config.get_config] = lambda: cfg
     app.dependency_overrides[config.configured_access_key] = lambda: KEY
     app.dependency_overrides[get_session_manager] = lambda: session_mgr
+    app.dependency_overrides[get_session_store] = lambda: session_mgr.store
     app.dependency_overrides[get_task_manager] = lambda: tree
     app.dependency_overrides[get_run_store] = lambda: tree.runs
     self.client = TestClient(app)

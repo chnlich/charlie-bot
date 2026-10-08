@@ -61,7 +61,7 @@ async def test_delivered_worker_moves_from_the_active_list_to_the_archived_list(
   assert set(archived) == {worker.id}
   assert archived[worker.id].status == SessionStatus.ARCHIVED
   # Derived, never stored: the metadata on disk still says active.
-  stored = await session_mgr.get_session(worker.id)
+  stored = await session_mgr.store.get_session(worker.id)
   assert stored is not None and stored.status == SessionStatus.ACTIVE
   # An unfiltered listing shows the derived state on the row.
   everything = {m.id: m.status for m in await session_mgr.list_sessions()}

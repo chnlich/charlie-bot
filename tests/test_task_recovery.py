@@ -22,6 +22,7 @@ from conftest import (
     OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
+    create_root_session,
     fresh_master_state,
     init_repo_with_origin,
     patch_resume_seams,
@@ -437,7 +438,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  manager = await session_mgr.create_session(CreateSessionRequest(name="Manager"), backend="fake")
+  manager = await create_root_session(session_mgr, CreateSessionRequest(name="Manager"), backend="fake")
   worker = await tree.create_task(
       request_id="w",
       task_parent_id=manager.id,

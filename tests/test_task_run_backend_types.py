@@ -20,6 +20,7 @@ import pytest
 from src.infra import backend_models, config_registry
 from src.infra import event_types as ET
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 
 def build_env(tmp_path: pathlib.Path, backend_type: str):
@@ -46,7 +47,7 @@ def build_env(tmp_path: pathlib.Path, backend_type: str):
       core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
           "access_key": "key-type"
       }}))
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   return cfg, session_mgr, task_sessions.TaskTreeManager(cfg, session_mgr)
 
 

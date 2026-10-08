@@ -91,7 +91,7 @@ from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
 from src.infra.yaml_utils import load_yaml, save_yaml
-from src.runtime import init_seed, task_execution
+from src.runtime import init_seed, session_store, sessions, task_execution, triggers
 from src.runtime.home_writer_fence import (
     FENCE_IDENTITY_NAME,
     FENCE_LOCK_NAME,
@@ -775,12 +775,11 @@ def activate_preview_environment(setup: PreviewSetup) -> None:
 
 def assert_no_bound_singletons() -> None:
   """Fail fast if an application singleton was constructed before the environment switch."""
-  from src.runtime.api import deps
-
   bound = [
       name for name, singleton in (
-          ("_session_manager", deps._session_manager),
-          ("_trigger_manager", deps._trigger_manager),
+          ("_store", session_store._store),
+          ("_session_manager", sessions._session_manager),
+          ("_trigger_manager", triggers._trigger_manager),
           ("_task_manager", task_execution._task_manager),
       ) if singleton is not None
   ]

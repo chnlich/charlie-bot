@@ -74,7 +74,8 @@ from src.runtime.control_events import (
 from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
 from src.runtime.runs import DATA_DIR_NAME, METADATA_NAME, RunStore, is_run_alive, stop_requested_in_events
 from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
-from src.runtime.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
+from src.runtime.session_store import TRANSIENT_METADATA_FIELDS
+from src.runtime.sessions import SessionManager
 from src.runtime.takeoff_gate import is_verify_exempt
 from src.runtime.task_completion import TaskCompletionManager
 from src.runtime.task_errors import (
@@ -354,6 +355,7 @@ class TaskTreeManager:
   def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     self._cfg = cfg
     self._sessions = session_mgr
+    self._store = session_mgr.store
     session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
     self.events = control_sink.ControlEventSink(session_mgr)
@@ -425,7 +427,7 @@ class TaskTreeManager:
   # ------------------------------------------------------------------
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
-    return await self._sessions.get_session(session_id)
+    return await self._store.get_session(session_id)
 
   def _require_task(self, meta: SessionMetadata | None, session_id: str) -> SessionMetadata:
     if meta is None:
@@ -441,7 +443,7 @@ class TaskTreeManager:
 
   async def _save_meta(self, meta: SessionMetadata) -> None:
     meta.updated_at = utc_now()
-    await self._sessions.save_metadata(meta)
+    await self._store.save_metadata(meta)
     self._invalidate_index()  # any metadata write may move the projection inputs
 
   # ------------------------------------------------------------------
@@ -467,7 +469,7 @@ class TaskTreeManager:
     # The metadata snapshot resolves on the loop through the shared per-entry
     # check (_fresh_cached_meta), so the thread build reads a file only for a
     # session no authoritative entry covers (cold cache, out-of-band create).
-    cached_metas = self._sessions.fresh_cached_metas()
+    cached_metas = self._store.fresh_cached_metas()
     task = create_logged_task(asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
     self._index_build_task = task
     self._index_build_generation = generation
@@ -948,7 +950,7 @@ class TaskTreeManager:
           session_id, prompt_hash=prompt_hash, native_backend=backend, model=model)
       self._invalidate_index()  # any metadata write may move the projection inputs
       if reset_anchor:
-        fresh = await self._sessions.read_metadata_fresh(session_id)
+        fresh = await self._store.read_metadata_fresh(session_id)
         if fresh is not None and fresh.cc_session_id is not None:
           # The fresh native context voids the old conversation anchor. The clear
           # goes through the authorized channel: a whole-object save's anchor
@@ -1099,7 +1101,7 @@ class TaskTreeManager:
       )
     self._invalidate_index()
     # The publish rename took the node out from under any cached entry.
-    self._sessions._invalidate_cache(task_id)
+    self._store.invalidate_cache(task_id)
     fresh = await self.load_meta(task_id)
     assert fresh is not None
     # The creation fact is durably published; connected clients learn about it
@@ -1209,7 +1211,7 @@ class TaskTreeManager:
       meta.created_by_event = EventRef(session_id=task_id, event_id=str(created_event["id"]))
       await asyncio.to_thread(
           atomic_write_text, temp_dir / METADATA_NAME,
-          meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS))
+          meta.model_dump_json(indent=2, exclude=TRANSIENT_METADATA_FIELDS))
       try:
         os.replace(temp_dir, final_dir)
       except OSError:
@@ -1274,7 +1276,7 @@ class TaskTreeManager:
       if meta is None:
         raise TaskNotFoundError(f"session {session_id} not found")
       metadata_slots.set_fields(meta, owner, **values)
-      await self._sessions.save_metadata(meta)
+      await self._store.save_metadata(meta)
       self._invalidate_index()
       return meta
 

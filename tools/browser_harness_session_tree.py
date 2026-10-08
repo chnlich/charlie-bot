@@ -257,14 +257,15 @@ async def seed_scenario(home: Path) -> dict:
   from src.app import registrations
   from src.infra import event_types as ET
   from src.infra.config import get_config
-  from src.infra.models import CreateSessionRequest, PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
+  from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
   from src.runtime.run_token import CallerIdentity
+  from src.runtime.session_store import SessionStore
   from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
   registrations.register_all()
   cfg = get_config()
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
   tree = TaskTreeManager(cfg, session_mgr)
   OP = CallerIdentity(kind="operator")
 
@@ -694,7 +695,14 @@ async def seed_scenario(home: Path) -> dict:
     # A pre-task-tree delegation lives in the parent session's threads/
     # directory; the sidebar projects it as a read-only row and the thread
     # URL opens its transcript in the main chat.
-    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy operator"), backend="fake-scripted")
+    legacy = await tree.create_task(
+        request_id="seed-legacy-operator",
+        task_parent_id=None,
+        profile="manager",
+        task=None,
+        name="Legacy operator",
+        backend="fake-scripted",
+        caller=OP)
     legacy_thread_id = "thread-legacy-1"
     thread_dir = home / "sessions" / legacy.id / "threads" / legacy_thread_id
     (thread_dir / "data").mkdir(parents=True)
@@ -825,12 +833,22 @@ async def seed_scenario(home: Path) -> dict:
     # one delegated child: Workspace lists neither, the Threads pill lists
     # the pair nested, and no group-header plus button renders there.
     from src.features.discord.metadata import DiscordOrigin
-    discord_thread = await session_mgr.create_session(
-        CreateSessionRequest(
-            name="Discord #general 2026",
-            discord_origin=DiscordOrigin(
-                guild_id="900000000000000010", parent_channel_id="900000000000000011", thread_id="900000000000000012"),
-            group="Discord #general"))
+    discord_thread = await tree.create_task(
+        request_id="seed-discord-thread",
+        task_parent_id=None,
+        profile="manager",
+        task=None,
+        name="Discord #general 2026",
+        backend=None,
+        group="Discord #general",
+        slot_values={
+            "discord_origin":
+                DiscordOrigin(
+                    guild_id="900000000000000010",
+                    parent_channel_id="900000000000000011",
+                    thread_id="900000000000000012")
+        },
+        caller=OP)
     discord_thread_child = await tree.create_task(
         request_id="seed-discord-child",
         task_parent_id=discord_thread.id,

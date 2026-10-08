@@ -20,6 +20,7 @@ from conftest import (
 )
 
 from src.infra.models import SessionMetadata, SessionStatus
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 _BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
@@ -38,7 +39,7 @@ async def _add_session(
       profile="manager", name=name, status=status, group=group, updated_at=_BASE_TIME + timedelta(minutes=minutes))
   if session_id is not None:
     meta.id = session_id
-  await mgr.save_metadata(meta)
+  await mgr.store.save_metadata(meta)
   return meta
 
 
@@ -108,8 +109,8 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
 
   # Age every cache entry past the TTL without touching the clock machinery.
   # Signature None: the expired entry cannot revalidate by stat and re-reads.
-  for sid, (meta, _ts, _sig) in list(mgr._metadata_cache.items()):
-    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
+  for sid, (meta, _ts, _sig) in list(mgr.store.metadata_cache.items()):
+    mgr.store.metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
 
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
   listed = await mgr.list_sessions()
@@ -270,9 +271,9 @@ async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
   archived = await _add_session(mgr, "cold-archived", minutes=0)
   active = await _add_session(mgr, "cold-active", status=SessionStatus.ACTIVE, minutes=1)
 
-  rebooted = SessionManager(mgr._cfg)
-  listed = rebooted.list_active_session_metas()
+  rebooted = SessionManager(mgr._cfg, SessionStore(mgr._cfg))
+  listed = rebooted.store.list_active_session_metas()
 
   assert [s.id for s in listed] == [active.id]
-  assert archived.id in rebooted._metadata_cache
-  assert rebooted._metadata_cache[archived.id][0].status == SessionStatus.ARCHIVED
+  assert archived.id in rebooted.store.metadata_cache
+  assert rebooted.store.metadata_cache[archived.id][0].status == SessionStatus.ARCHIVED

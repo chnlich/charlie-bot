@@ -3,6 +3,7 @@
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata, SessionStatus
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_execution import task_manager
 
@@ -10,7 +11,7 @@ log = LazyStructlogLogger()
 
 
 async def _wake_task_node(
-    session_mgr: SessionManager,
+    store: SessionStore,
     node: SessionMetadata,
     *,
     requested_id: str,
@@ -24,7 +25,7 @@ async def _wake_task_node(
   """Dispatch a wake into the resolved task node's pending input queue."""
   dispatch = task_manager().dispatch
   if node.id != requested_id and from_session is None:
-    predecessor = await session_mgr.get_session(requested_id)
+    predecessor = await store.get_session(requested_id)
     assert predecessor is not None
     from_session = predecessor.id
     from_session_name = predecessor.name
@@ -70,13 +71,13 @@ async def trigger_master(
     await session_mgr.unarchive_session(resolved.id)
     log.info("wake_pulled_back_archived_session", session=session_id, resolved_session=resolved.id)
 
-  session_meta = await session_mgr.get_session(resolved.id)
+  session_meta = await session_mgr.store.get_session(resolved.id)
   if session_meta is None:
     log.error("trigger_master_session_not_found", session=resolved.id)
     return
 
   await _wake_task_node(
-      session_mgr,
+      session_mgr.store,
       session_meta,
       requested_id=session_id,
       summary=summary,

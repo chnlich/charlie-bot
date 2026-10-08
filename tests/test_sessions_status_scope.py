@@ -10,14 +10,14 @@ from pathlib import Path
 
 import orjson
 import pytest
-from conftest import build_two_backend_cfg
-from conftest import make_sessions_listing_client
+from conftest import build_two_backend_cfg, create_root_session, make_sessions_listing_client
 
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.runtime import sidebar_state, thinking_state
-from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.api import sessions as sessions_api
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager, _iter_trigger_stats, _listing_row_copy
+from src.runtime.task_sessions import TaskTreeManager
 
 
 def _build_client(cfg, session_mgr: SessionManager):
@@ -39,9 +39,9 @@ async def test_status_returns_exactly_the_requested_ids(
     tmp_path: Path,
 ) -> None:
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  wanted = await session_mgr.create_session(CreateSessionRequest(name="Sidebar"))
-  other = await session_mgr.create_session(CreateSessionRequest(name="Off screen"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  wanted = await create_root_session(session_mgr, CreateSessionRequest(name="Sidebar"))
+  other = await create_root_session(session_mgr, CreateSessionRequest(name="Off screen"))
   _forbid_list_sessions(monkeypatch)
 
   with _build_client(cfg, session_mgr) as client:
@@ -74,8 +74,8 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Memo"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(session_mgr, CreateSessionRequest(name="Memo"))
   flags = {
       "include_running_status": True,
       "include_pending_trigger_status": True,
@@ -118,8 +118,8 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Body memo"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(session_mgr, CreateSessionRequest(name="Body memo"))
   renders: list[object] = []
 
   def count_render(content: object) -> bytes:
@@ -168,9 +168,9 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  kept = await session_mgr.create_session(CreateSessionRequest(name="Survivor"))
-  gone = await session_mgr.create_session(CreateSessionRequest(name="Deleted"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  kept = await create_root_session(session_mgr, CreateSessionRequest(name="Survivor"))
+  gone = await create_root_session(session_mgr, CreateSessionRequest(name="Deleted"))
   ids = f"{kept.id},{gone.id}"
 
   with _build_client(cfg, session_mgr) as client:
@@ -203,8 +203,8 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Stamped"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(session_mgr, CreateSessionRequest(name="Stamped"))
   thinking_state.mark_busy(session.id)
   flags = {
       "include_running_status": True,
@@ -235,7 +235,7 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
       "has_running_tasks": True,
       "status": SessionStatus.ARCHIVED,
   }
-  for meta in await session_mgr._load_session_metas():
+  for meta in await session_mgr.store.load_session_metas():
     meta.unregistered_key = "kept"  # an extra key rides the copy
     fast = _listing_row_copy(meta, update)
     reference = meta.model_copy(update=update)
@@ -263,10 +263,10 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   sessions_api._workspace_list_memos.whole_body = None
   sessions_api._workspace_list_memos.row_render.clear()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  await session_mgr.create_session(CreateSessionRequest(name="Steady"))
-  mover = await session_mgr.create_session(CreateSessionRequest(name="Churning"))
-  leaving = await session_mgr.create_session(CreateSessionRequest(name="Departing"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  await create_root_session(session_mgr, CreateSessionRequest(name="Steady"))
+  mover = await create_root_session(session_mgr, CreateSessionRequest(name="Churning"))
+  leaving = await create_root_session(session_mgr, CreateSessionRequest(name="Departing"))
   counts = {"dump": 0}
   real_dump = SessionMetadata.model_dump
 

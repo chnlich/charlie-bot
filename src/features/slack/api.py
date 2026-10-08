@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_manager
+from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 router = APIRouter()
@@ -30,6 +31,7 @@ class SlackAckRequest(BaseModel):
 async def slack_reply(
     req: SlackReplyRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Slack thread and return the readback.
@@ -45,7 +47,7 @@ async def slack_reply(
   """
   from src.features.slack.slack_listener import SlackReplyError, assert_thread_fresh, post_reply
   try:
-    await assert_thread_fresh(req.session_id, cfg, session_mgr)
+    await assert_thread_fresh(req.session_id, cfg, store)
     return await post_reply(req.session_id, req.text, cfg, session_mgr)
   except SlackReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc

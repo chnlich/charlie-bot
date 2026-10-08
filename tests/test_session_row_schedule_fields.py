@@ -18,9 +18,10 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    OPUS_BACKEND_ID,
     OPERATOR,
+    OPUS_BACKEND_ID,
     build_env,
+    create_root_session,
     create_task,
     cron_d_dir,
     dump_yaml,
@@ -81,7 +82,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
     node = await create_task(tree, parent=None, request_id=request_id, profile="manager", name=name)
     if group is not None:
       node.group = group
-      await session_mgr.save_metadata(node)
+      await session_mgr.store.save_metadata(node)
     return node
 
   bound = await manager("synthetic-daily", "bind-1", "Synthetic")
@@ -192,7 +193,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
   root.group = "Alpha"
-  await session_mgr.save_metadata(root)
+  await session_mgr.store.save_metadata(root)
   # An archived intermediate (its own close fact): it is itself an archived
   # row, and the walk climbs past it to the active root.
   hidden = await create_task(
@@ -213,7 +214,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   # Fillers push the archived rows past one small page.
   fillers = []
   for i in range(3):
-    filler = await session_mgr.create_session(CreateSessionRequest(name=f"Filler {i}"), backend=OPUS_BACKEND_ID)
+    filler = await create_root_session(session_mgr, CreateSessionRequest(name=f"Filler {i}"), backend=OPUS_BACKEND_ID)
     await session_mgr.archive_session(filler.id)
     fillers.append(filler)
 

@@ -602,14 +602,24 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   session manager).
   """
   from src.infra.config import get_config
-  from src.infra.models import CreateSessionRequest
   from src.runtime.api.message_utils import build_session_bootstrap_data
+  from src.runtime.run_token import CallerIdentity
+  from src.runtime.session_store import SessionStore
   from src.runtime.sessions import SessionManager
+  from src.runtime.task_sessions import TaskTreeManager
 
   cfg = get_config()
-  session_mgr = SessionManager(cfg)
-  main = await session_mgr.create_session(
-      CreateSessionRequest(name="Reading-position regression"), backend="fake-scripted")
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  tree = TaskTreeManager(cfg, session_mgr)
+  operator = CallerIdentity(kind="operator")
+  main = await tree.create_task(
+      request_id="seed-main",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="Reading-position regression",
+      backend="fake-scripted",
+      caller=operator)
   sid = main.id
   # One real round per turn: the question, the answer, and the round end —
   # the aggregator projects master_done into the separator message that closes
@@ -627,8 +637,14 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
             }
         })
     await session_mgr.save_chat_event(sid, {"type": "master_done"})
-  other = await session_mgr.create_session(
-      CreateSessionRequest(name="Reading-position second"), backend="fake-scripted")
+  other = await tree.create_task(
+      request_id="seed-second",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="Reading-position second",
+      backend="fake-scripted",
+      caller=operator)
   sid_b = other.id
   for i in range(3):
     await session_mgr.save_chat_event(sid_b, {"type": "user", "content": f"Session B opening question {i}"})

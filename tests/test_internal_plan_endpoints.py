@@ -20,6 +20,7 @@ def _build_app(session_mgr: sessions.SessionManager, plan_mgr: plans.PlanRegistr
   app.include_router(artifacts_api.internal_router, prefix="/api/internal")
   app.include_router(artifacts_api.sessions_router, prefix="/api/sessions")
   app.dependency_overrides[deps.get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[deps.get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[artifacts_api.get_plan_manager] = lambda: plan_mgr
   return app
 

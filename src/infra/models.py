@@ -364,13 +364,13 @@ class SessionMetadata(BaseModel):
   has_pending_plan_approval: bool = False
   starred: bool = False
   # Transient runtime fact derived from src.runtime.thinking_state at read time;
-  # never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
+  # never persisted (excluded by session_store.TRANSIENT_METADATA_FIELDS).
   thinking_since: UtcDatetime | None = None
   # Transient display fact: a task-tree node's newest Run's backend, stamped
   # at read time from thinking_state's display-backend map. The persisted
   # metadata.backend keeps its inherited creation value; readers prefer
   # run_backend and fall back to backend. Never persisted (excluded by
-  # _TRANSIENT_METADATA_FIELDS).
+  # session_store.TRANSIENT_METADATA_FIELDS).
   run_backend: str | None = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
   # The sidebar sort key: records the user's last action on the row; server bookkeeping writes keep it.
@@ -413,7 +413,7 @@ class SessionMetadata(BaseModel):
   # The native-context continuation anchor's provenance: the instruction-hash
   # and backend identity the current cc_session_id conversation was continued
   # under. Changes only through authorized anchor writes (see
-  # _ANCHOR_FIELDS in src/runtime/sessions.py); earlier history stays on disk,
+  # _ANCHOR_FIELDS in src/runtime/session_store.py); earlier history stays on disk,
   # never rewritten.
   native_prompt_hash: str | None = None
   # The backend that produced the current cc_session_id conversation. Every

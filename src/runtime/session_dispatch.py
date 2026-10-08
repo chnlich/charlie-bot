@@ -267,7 +267,7 @@ class TaskInputDispatcher:
             break
           chain.append(ancestor)
         for node in chain:
-          current = await tree.sessions.get_session(node.id)
+          current = await tree.sessions.store.get_session(node.id)
           if when > current.updated_at:
             await tree.sessions.update_thinking_state(node.id, when)
         tree.invalidate_tree_index()

@@ -219,7 +219,7 @@ async def build_session_bootstrap_data(
   (src/runtime/worker_transcript.py) served through the same page shape, so the
   caller must pass the owning *tree* for it.
   """
-  session_meta = await session_mgr.get_session(session_id)
+  session_meta = await session_mgr.store.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 

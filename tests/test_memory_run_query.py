@@ -15,6 +15,7 @@ import pytest
 from src.features.memory.store_root import memory_dir as store_memory_dir
 from src.infra import constants, models
 from src.runtime import run_token, sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -47,7 +48,7 @@ async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
               "access_key": "query-op-key"
           }}))
   _write_store(cfg)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   meta = await tree.create_task(
       request_id="r",

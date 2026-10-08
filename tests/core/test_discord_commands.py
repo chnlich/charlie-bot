@@ -19,6 +19,7 @@ from src.features.discord import discord_client, discord_commands, discord_liste
 from src.features.discord.metadata import DiscordOrigin
 from src.infra import config, metadata_slots, models
 from src.runtime import sessions
+from src.runtime.session_store import SessionStore
 
 _GUILD = "800000000000000001"
 _PARENT = "800000000000000002"
@@ -120,7 +121,7 @@ def _rig(tmp_path: pathlib.Path,
          **client_kwargs: object) -> tuple[config.CharlieBotConfig, sessions.SessionManager, FakeDiscordClient]:
   """Rig: cfg and session home rooted at tmp_path, plus the recording fake client."""
   cfg = _build_cfg(tmp_path)
-  return cfg, sessions.SessionManager(cfg), FakeDiscordClient(**client_kwargs)
+  return cfg, sessions.SessionManager(cfg, SessionStore(cfg)), FakeDiscordClient(**client_kwargs)
 
 
 def _message(
@@ -152,7 +153,8 @@ def _message(
 
 async def _make_session(session_mgr: sessions.SessionManager, *, watermark: str | None = None) -> str:
   """A Discord-backed session like a summon leaves it, with an optional read watermark."""
-  meta = await session_mgr.create_session(
+  meta = await conftest.create_root_session(
+      session_mgr,
       models.CreateSessionRequest(
           session_id=discord_listener.summon_session_id(_GUILD, _THREAD),
           name="discord session",
@@ -160,7 +162,7 @@ async def _make_session(session_mgr: sessions.SessionManager, *, watermark: str 
   if watermark is not None:
     metadata_slots.set_fields(meta, "discord", discord_watermark_id=watermark)
     meta.updated_at = models.utc_now()
-    await session_mgr.save_metadata(meta)
+    await session_mgr.store.save_metadata(meta)
   return meta.id
 
 
@@ -206,7 +208,7 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   assert result["watermark_id"] == _mid(7)
   assert result["more_unread"] == 3
 
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   assert meta is not None and metadata_slots.fields_of(meta, "discord").discord_watermark_id == _mid(7)
   acks = _ack_events(session_mgr, session_id)
   assert len(acks) == 1
@@ -368,7 +370,7 @@ async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path
   assert result["watermark_id"] is None
   assert result["more_unread"] == 0
   # Nothing was marked: the session's watermark is untouched and no ack landed.
-  meta = await session_mgr.get_session(session_id)
+  meta = await session_mgr.store.get_session(session_id)
   assert meta is not None and metadata_slots.fields_of(meta, "discord").discord_watermark_id is None
   assert _ack_events(session_mgr, session_id) == []
   # Only the linked channel was read, newest-three shape (no ``after``).
@@ -403,7 +405,7 @@ async def test_read_with_url_refuses_hidden_channel_and_bad_link(tmp_path: pathl
 async def test_read_on_a_non_discord_session_answers_409(tmp_path: pathlib.Path) -> None:
   """A session without a Discord thread refuses with 409 before any Discord call."""
   cfg, session_mgr, client = _rig(tmp_path)
-  meta = await session_mgr.create_session(models.CreateSessionRequest(name="plain"))
+  meta = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="plain"))
 
   with (
       mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
@@ -529,7 +531,7 @@ async def test_check_without_a_token_answers_409(tmp_path: pathlib.Path) -> None
   conftest.stub_credentials({})
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
 
-  with conftest.make_internal_router_client(cfg, sessions.SessionManager(cfg)) as http:
+  with conftest.make_internal_router_client(cfg, sessions.SessionManager(cfg, SessionStore(cfg))) as http:
     resp = http.post("/api/internal/discord/check", json={})
 
   assert resp.status_code == 409

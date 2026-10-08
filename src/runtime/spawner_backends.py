@@ -1,7 +1,7 @@
 """Spawn-time backend+model resolution — explicit requests, session defaults, verify selection."""
 
 from src.infra import config, log_once, models
-from src.runtime import review, sessions
+from src.runtime import review, session_store
 
 log = log_once.LazyStructlogLogger()
 
@@ -65,9 +65,9 @@ def _resolve_session_default_backend_model(
   return option.id, models.option_default_model(option, subject="session backend ")
 
 
-async def _require_session(session_mgr: sessions.SessionManager, session_id: str) -> models.SessionMetadata:
+async def _require_session(store: session_store.SessionStore, session_id: str) -> models.SessionMetadata:
   """Fetch the session's metadata; raise ValueError when the session doesn't exist."""
-  session_meta = await session_mgr.get_session(session_id)
+  session_meta = await store.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' not found")
   return session_meta
@@ -76,7 +76,7 @@ async def _require_session(session_mgr: sessions.SessionManager, session_id: str
 async def resolve_requested_subagent_backend_model(
     session_id: str,
     cfg: config.CharlieBotConfig,
-    session_mgr: sessions.SessionManager,
+    store: session_store.SessionStore,
     requested_backend: str | None,
 ) -> tuple[str, str | None]:
   """Resolve backend+model from an explicit configured backend or the session default.
@@ -85,7 +85,7 @@ async def resolve_requested_subagent_backend_model(
   session pinned to an id config.yaml no longer defines both raise. Only an empty session
   backend defaults, and it defaults to cfg.backends.options[0].
   """
-  session_meta = await _require_session(session_mgr, session_id)
+  session_meta = await _require_session(store, session_id)
   if requested_backend is not None:
     if not requested_backend:
       raise ValueError("requested backend is required")
@@ -97,7 +97,7 @@ async def resolve_requested_subagent_backend_model(
 async def select_verify_backend(
     session_id: str,
     cfg: config.CharlieBotConfig,
-    session_mgr: sessions.SessionManager,
+    store: session_store.SessionStore,
     tried_backends: list[str],
 ) -> tuple[str, str | None, list[str]] | None:
   """Select a VERIFY task's checking backend when none was requested.
@@ -107,6 +107,6 @@ async def select_verify_backend(
   Never None with an untried (empty) list; None only when every configured backend
   has already been tried.
   """
-  session_meta = await _require_session(session_mgr, session_id)
+  session_meta = await _require_session(store, session_id)
   session_backend, session_model = _resolve_session_default_backend_model(cfg, session_meta)
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)

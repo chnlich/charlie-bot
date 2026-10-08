@@ -17,6 +17,7 @@ from conftest import (
     TerminateFlagBackend,
     _run_seeded_consumer,
     build_master_cc_cfg,
+    create_root_session,
     drain_session_consumer,
     fresh_master_state,
     make_sound_round,
@@ -25,9 +26,9 @@ from conftest import (
     mock_session_callbacks,
     mocked_callback_fields,
     patch_resume_seams,
-    run_task_manager_message,
     run_resume_round,
     run_session_consumer,
+    run_task_manager_message,
 )
 
 from src.features.latex import latex
@@ -35,6 +36,7 @@ from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionCallbacks, SessionMetadata
 from src.runtime import master_cc_queue, master_cc_run, master_cc_state, streaming, thinking_state
 from src.runtime.agent_process.base import make_result_event
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 
@@ -199,8 +201,8 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   an assertion an in-memory-object check cannot make.
   """
   cfg = build_master_cc_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="anchor-on-disk"))
+  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(session_mgr, CreateSessionRequest(name="anchor-on-disk"))
   backend_returned_id = "cc-backend-session-42"
 
   monkeypatch.setattr(master_cc_run, "_run_cc", make_sound_round(backend_returned_id))
@@ -213,8 +215,8 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
     await drain_session_consumer(session.id, timeout=5)
 
   # Cold-cache reader: a fresh SessionManager parses metadata.json from disk.
-  cold_reader = SessionManager(cfg)
-  cold_meta = await cold_reader.get_session(session.id)
+  cold_reader = SessionManager(cfg, SessionStore(cfg))
+  cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == backend_returned_id
 
@@ -324,8 +326,8 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   from conftest import build_sessions_cfg
 
   cfg = build_sessions_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="anchor-preserved"))
+  mgr = SessionManager(cfg, SessionStore(cfg))
+  session = await create_root_session(mgr, CreateSessionRequest(name="anchor-preserved"))
   await mgr.persist_cc_session_id(session.id, "kept-anchor")
 
   snapshot = SessionMetadata(
@@ -338,7 +340,7 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
 
   await run_consumer_over_real_disk(session.id, [item], refused_round)
 
-  cold_reader = SessionManager(cfg)
-  cold_meta = await cold_reader.get_session(session.id)
+  cold_reader = SessionManager(cfg, SessionStore(cfg))
+  cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"

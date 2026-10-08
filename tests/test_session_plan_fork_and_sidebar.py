@@ -145,7 +145,8 @@ async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: p
 @pytest.mark.asyncio
 async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_path: pathlib.Path) -> None:
   cfg, mgr, parent = await conftest.make_home_session(tmp_path, name="Parent", backend=conftest.OPUS_BACKEND_ID)
-  other = await mgr.create_session(models.CreateSessionRequest(name="Other"), backend=conftest.OPUS_BACKEND_ID)
+  other = await conftest.create_root_session(
+      mgr, models.CreateSessionRequest(name="Other"), backend=conftest.OPUS_BACKEND_ID)
   conftest.append_events(mgr.get_chat_events_path(parent.id), [conftest.user_event("e0")])
 
   artifact_rel = "artifacts/collision.html"

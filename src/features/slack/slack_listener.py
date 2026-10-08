@@ -63,6 +63,7 @@ from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
 from src.features.slack.metadata import SlackOrigin
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 
@@ -472,13 +473,13 @@ class SlackThreadAdapter(ThreadAdapter):
 SlackReplyError = ThreadReplyError
 
 
-async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: SessionStore) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
   on the Slack adapter; the refusal shapes live there.
   """
-  return await thread_entry.assert_thread_fresh(SlackThreadAdapter(), session_id, cfg, session_mgr)
+  return await thread_entry.assert_thread_fresh(SlackThreadAdapter(), session_id, cfg, store)
 
 
 async def ack_messages(

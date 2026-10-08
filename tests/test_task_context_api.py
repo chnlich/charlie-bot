@@ -21,7 +21,14 @@ from fastapi.testclient import TestClient
 from src.infra import config
 from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.runtime.api import sessions as sessions_api
-from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+from src.runtime.api.deps import (
+    get_config_on_loop,
+    get_run_store,
+    get_session_manager,
+    get_session_store,
+    get_task_manager,
+)
+from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -32,13 +39,14 @@ class _TaskEnv:
 
   def __init__(self, tmp_path: Path) -> None:
     self.cfg = make_home_config(tmp_path)
-    self.session_mgr = SessionManager(self.cfg)
+    self.session_mgr = SessionManager(self.cfg, SessionStore(self.cfg))
     self.tree = TaskTreeManager(self.cfg, self.session_mgr)
     app = FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
     app.dependency_overrides[config.get_config] = lambda: self.cfg
     app.dependency_overrides[get_config_on_loop] = lambda: self.cfg
     app.dependency_overrides[get_session_manager] = lambda: self.session_mgr
+    app.dependency_overrides[get_session_store] = lambda: self.session_mgr.store
     app.dependency_overrides[get_task_manager] = lambda: self.tree
     app.dependency_overrides[get_run_store] = lambda: self.tree.runs
     self.client = TestClient(app)

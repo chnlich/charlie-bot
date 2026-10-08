@@ -24,6 +24,7 @@ from src.features.cron import config
 from src.features.cron import scheduler as scheduler_module
 from src.infra import models
 from src.runtime import sessions, task_sessions
+from src.runtime.session_store import SessionStore
 
 
 class _Clock:
@@ -144,7 +145,7 @@ async def _bound_rig_tree(
   """One synthetic home with the tree wired as the scheduler's deps singleton,
   plus the task's manager node carrying the clock's instant as its anchor."""
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   session = await conftest.create_scheduled_node(tree, name="code-health", backend=None)

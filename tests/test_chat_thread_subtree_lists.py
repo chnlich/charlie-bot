@@ -17,9 +17,9 @@ import pathlib
 import conftest
 import pytest
 
+from src.features.chat_threads import api as chat_threads_api
 from src.features.discord.metadata import DiscordOrigin
 from src.features.slack.metadata import SlackOrigin
-from src.features.chat_threads import api as chat_threads_api
 from src.infra import config, models
 from src.runtime import sessions, task_sessions
 from src.runtime.api import sessions as sessions_api
@@ -44,13 +44,15 @@ class Fixture:
 
 async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   cfg, session_mgr, tree = conftest.build_env(tmp_path)
-  thread = await session_mgr.create_session(
+  thread = await conftest.create_root_session(
+      session_mgr,
       models.CreateSessionRequest(
           name="Discord #general 2026",
           discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t1"),
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
-  slack_thread = await session_mgr.create_session(
+  slack_thread = await conftest.create_root_session(
+      session_mgr,
       models.CreateSessionRequest(
           name="Slack #general 2026",
           slack_origin=SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")),
@@ -59,7 +61,8 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
       tree, parent=thread.id, request_id="th-child-1", profile="manager", name="thread child")
   grandchild = await conftest.create_task(
       tree, parent=child.id, request_id="th-child-2", profile="worker", name="thread grandchild")
-  archived_thread = await session_mgr.create_session(
+  archived_thread = await conftest.create_root_session(
+      session_mgr,
       models.CreateSessionRequest(
           name="Discord #general archived",
           discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t2"),
@@ -69,7 +72,8 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   cron = await conftest.make_cron_session(session_mgr, "nightly")
   cron_child = await conftest.create_task(
       tree, parent=cron.id, request_id="cron-leaf-1", profile="worker", name="cron leaf")
-  plain = await session_mgr.create_session(models.CreateSessionRequest(name="Plain"), backend=conftest.OPUS_BACKEND_ID)
+  plain = await conftest.create_root_session(
+      session_mgr, models.CreateSessionRequest(name="Plain"), backend=conftest.OPUS_BACKEND_ID)
   return Fixture(
       cfg=cfg,
       session_mgr=session_mgr,

@@ -90,5 +90,5 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
     return orig(tree, session_id)
 
   monkeypatch.setattr(tree, "_facts_of", counting)
-  tree._build_index_sync(tree._sessions.fresh_cached_metas())
+  tree._build_index_sync(tree._sessions.store.fresh_cached_metas())
   assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"

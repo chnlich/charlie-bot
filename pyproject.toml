@@ -113,11 +113,11 @@ package-dir = {"" = "."}
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
 
-# The data directories hold no Python module, so they are listed beside the package that finds them
-# through __file__: the agent PATH shims, the git stash guard, and the node math pre-render driver.
+# The data directories hold no Python module, so they are listed by payload kind: the agent
+# PATH shims and the git stash guard beside the runtime package, and every package's "*.js" assets.
 [tool.setuptools.package-data]
 "src.runtime" = ["agent_entry_points/*", "git_stash_guard/*"]
-"src.features.artifacts" = ["prerender_math.js"]
+"*" = ["*.js"]
 
 # The vfork spawn seam's child-side stub (pdeathsig, setsid, stdio dup2,
 # close-from-3, execve as pure syscalls) — a compiled module because the

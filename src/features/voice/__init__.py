@@ -1,3 +1,10 @@
+"""Voice dictation: the recording endpoints, the transcription backends and the engine setup.
+
+Deleting this package also deletes ``skills/voice-notes/``: the skill's
+``scripts/decode_audio.py`` imports the voice transcriber, so the skill goes
+with the package.
+"""
+
 from src.infra import config_registry
 from src.runtime.hooks import page_render, wiring
 

@@ -4,22 +4,25 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-# The host-auth panel files: the panel parses ~/.ssh/config at run time, so the
-# leak guard scans these four from birth. The list is literal on purpose -- the
-# panel's tests assert it, and adding a file here is a review-visible act.
-host_auth_scan=(
-  "src/features/host_auth/host_auth.py"
-  "src/features/host_auth/api.py"
-  "src/features/host_auth/templates/host_auth.html"
-  "tests/test_host_auth.py"
-)
+# A feature package's leak_scan_files.txt names the files the leak guard scans
+# from birth. The manifest is literal, and adding a line is a review-visible act.
+manifest_scan=()
+shopt -s nullglob
+for manifest in src/features/*/leak_scan_files.txt; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -n "$line" ]]; then
+      manifest_scan+=("$line")
+    fi
+  done < "$manifest"
+done
+shopt -u nullglob
 
 files=()
 if [[ $# -eq 0 ]]; then
   while IFS= read -r -d '' file; do
     files+=("$file")
   done < <(find skills prompts -type f -name '*.md' -print0)
-  for scan_file in "${host_auth_scan[@]}"; do
+  for scan_file in "${manifest_scan[@]}"; do
     if [[ -f "$scan_file" ]]; then
       files+=("$scan_file")
     fi
@@ -28,7 +31,7 @@ else
   for input in "$@"; do
     rel=${input#./}
     rel=${rel#"$repo_root"/}
-    for scan_file in "${host_auth_scan[@]}"; do
+    for scan_file in "${manifest_scan[@]}"; do
       if [[ "$rel" == "$scan_file" ]]; then
         files+=("$rel")
         continue 2

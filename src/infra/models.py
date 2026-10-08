@@ -15,12 +15,7 @@ from src.infra.deferred import deferred_import_loader
 # CLI import floor's contract).
 if TYPE_CHECKING:
   from src.infra.backend_models import (  # noqa: F401  (re-export)
-      BACKEND_OPTION_ADAPTER,
-      BackendBase,
       BackendOption,
-      CcClaudeBackend,
-      ClaudeAccount,
-      ClaudeCompactionConfig,
       backend_type_allows_missing_model,
       option_default_model,
   )
@@ -30,17 +25,11 @@ from src.infra.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 # CLI invocation's get_config) constructs no session/API models; the re-export
 # keeps the established src.infra.models import path working, bound on first
 # read so this module's session/run-model consumers pay no backend stack.
-_BACKEND_REEXPORTS = frozenset(
-    {
-        "BACKEND_OPTION_ADAPTER",
-        "BackendBase",
-        "BackendOption",
-        "CcClaudeBackend",
-        "ClaudeAccount",
-        "ClaudeCompactionConfig",
-        "backend_type_allows_missing_model",
-        "option_default_model",
-    })
+_BACKEND_REEXPORTS = frozenset({
+    "BackendOption",
+    "backend_type_allows_missing_model",
+    "option_default_model",
+})
 
 
 def __getattr__(name: str) -> Any:

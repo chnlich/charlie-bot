@@ -20,9 +20,13 @@ the output and emits no ``message`` delta. The next ``stream`` delta
 
 from collections.abc import Callable, Iterator
 
-from src.infra import backend_models
 from src.infra import event_types as ET
 from src.runtime import message_events
+from src.runtime.model_family import model_family
+
+# The Claude account pool's operator notice type, spelled where the chat renders it: the runtime imports no
+# backend module, and src/backends/claude_code/claude_relay.py holds the emitting constant.
+_CLAUDE_ACCOUNT_LOGIN_REQUIRED = "claude_account_login_required"
 
 # The renderer's preview bound for one tool row (renderToolActivity,
 # web/static/js/chat/rendering.js): an output's first 500 characters render
@@ -152,7 +156,7 @@ def _compacting_model_note(ev: dict) -> str:
   model = ev.get('model')
   if not isinstance(model, str) or not model:
     return ''
-  return f'by {backend_models.model_family(model).capitalize()}'
+  return f'by {model_family(model).capitalize()}'
 
 
 def _format_k_tokens(count: float) -> str:
@@ -203,7 +207,7 @@ def _claude_account_login_required_msg(ev: dict) -> dict:
   del ev
   return {
       'role': 'system',
-      'kind': ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
+      'kind': _CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       'content': 'One account in the Claude pool needs a new login; see the usage panel.',
   }
 
@@ -423,7 +427,7 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _context_compact_failed_msg,
     ET.RESUME_CONTEXT_DROPPED:
         _resume_context_dropped_msg,
-    ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED:
+    _CLAUDE_ACCOUNT_LOGIN_REQUIRED:
         _claude_account_login_required_msg,
     ET.SYSTEM:
         _system_msg,

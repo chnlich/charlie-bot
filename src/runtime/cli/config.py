@@ -28,7 +28,7 @@ def main() -> None:
       "get",
       help="Print a config key's value to stdout (nothing else)",
       formatter_class=help_formatter.CliHelpFormatter)
-  p_get.add_argument("key", help="Top-level CharlieBotConfig field name")
+  p_get.add_argument("key", help="Top-level CharlieBotConfig field or registered section name")
 
   args = parser.parse_args()
   if args.command == "get":
@@ -42,10 +42,10 @@ def _cmd_get(key: str) -> None:
   # wall is not this deferral's subject.
   import pydantic
 
-  from src.infra import config
+  from src.infra import config, config_registry
 
-  if key not in config.CharlieBotConfig.model_fields:
-    print(f"error: unknown config key: {key} (not a CharlieBotConfig field)", file=sys.stderr)
+  if key not in config.CharlieBotConfig.model_fields and key not in config_registry.section_models():
+    print(f"error: unknown config key: {key} (not a CharlieBotConfig field or registered section)", file=sys.stderr)
     sys.exit(2)
   value = getattr(config.get_config(), key)
   # An unset (None) credential must fail rather than print "None" into a

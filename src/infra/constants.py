@@ -92,15 +92,6 @@ PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMP
 # makes a missed step fail loud.
 ARTIFACT_GENRES = ("plan", "understanding", "sitrep", "debug", "explain")
 
-# opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
-# applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The only reader is the
-# usage resolver's compact-point math (src.runtime.session_usage); the opencode backend
-# (src.backends.opencode.opencode) never reads it — the binary's own default applies, and the
-# backend's module note carries the fact without an import. The stdlib-only home is what
-# keeps the usage chain off the backends stack (the M99 server import floor).
-OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
-
 # File-server URL prefix: server.py mounts the one files router under it. The prefix names
 # what has to follow it — the absolute filesystem path with its leading `/` removed — so a
 # path that dropped its leading segments reads as wrong where it is written. The legacy /files
@@ -143,16 +134,3 @@ class WatchKind(StrEnum):
   LOCAL_PID = "local_pid"
   REMOTE_PID = "remote_pid"
   SLURM_JOB = "slurm_job"
-
-
-class BackendType(StrEnum):
-  """The BackendOption.type vocabulary; config.yaml carries the same strings."""
-
-  CC_CLAUDE = "cc-claude"
-  CC_KIMI = "cc-kimi"
-  CC_OPENAI_COMPATIBLE = "cc-openai-compatible"
-  CODEX = "codex"
-  CHARLIE_CODE = "charlie-code"
-  GEMINI = "gemini"
-  OPENCODE = "opencode"
-  ANTIGRAVITY = "antigravity"

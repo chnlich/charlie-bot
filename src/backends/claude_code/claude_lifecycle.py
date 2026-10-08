@@ -21,6 +21,7 @@ import dataclasses
 from pathlib import Path
 
 from src.backends.claude_code import claude_accounts, claude_code, claude_relay, master_cc_relay
+from src.backends.claude_code.claude_config import ClaudeAccount
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
 from src.runtime.hooks import backend_lifecycle
@@ -40,7 +41,7 @@ class ClaudeLaunch(backend_lifecycle.Launch):
   ``account`` is the pool login of the process and ``relay_watch`` watches it; both are None
   outside the pool. ``relays`` is the number of relays that led to this process.
   """
-  account: models.ClaudeAccount | None = None
+  account: ClaudeAccount | None = None
   relay_watch: claude_relay.RelayWatch | None = None
   relays: int = 0
 
@@ -197,7 +198,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
   def _pooled_launch(
       self,
       ctx: backend_lifecycle.LaunchContext,
-      account: models.ClaudeAccount,
+      account: ClaudeAccount,
       *,
       resume_id: str | None,
       prompt: str | None,

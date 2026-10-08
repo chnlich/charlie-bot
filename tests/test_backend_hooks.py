@@ -67,7 +67,11 @@ def test_registering_a_type_twice_raises() -> None:
   traits = backend_types.traits_for("codex")
 
   with pytest.raises(ValueError, match="already registered"):
-    backend_types.register_backend_type("codex", factory="src.backends.codex.factory:build", traits=traits)
+    backend_types.register_backend_type(
+        "codex",
+        options="src.backends.codex.options:CodexBackend",
+        factory="src.backends.codex.factory:build",
+        traits=traits)
 
 
 def test_an_unregistered_type_raises_naming_the_type() -> None:

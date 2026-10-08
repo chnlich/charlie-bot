@@ -27,13 +27,21 @@ from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 from src.backends.claude_code import claude_accounts
+from src.backends.claude_code.claude_config import ClaudeAccount
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.models import ClaudeAccount
 
 # One run relays at most this many times: four accounts rejecting in turn must
 # end in a loud error, never a loop.
 MAX_RELAYS_PER_TURN = 3
+
+# Operator notice from the account pool (claude_accounts.py): one login lost its credentials or
+# failed to authenticate and needs an interactive `claude /login` in ``config_dir``. Fields:
+# account, config_dir, reason ("auth_failed" | "empty_credentials"). The chat renders it
+# account-free (src/runtime/message_aggregator.py spells the same value); the account and
+# directory are for the server log and the usage panel. The emit sites also label their
+# server-log lines with this constant, so the chat event type and the log label stay the same string.
+CLAUDE_ACCOUNT_LOGIN_REQUIRED = "claude_account_login_required"
 
 # A warning whose window resets sooner than this is left alone: waiting for the
 # reset costs less than a cold start on another account.
@@ -166,7 +174,7 @@ def relay_limit_message() -> str:
 def login_required_event(account: ClaudeAccount, reason: str) -> dict:
   """The operator notice for an account that needs a new login; chat renders it account-free."""
   return {
-      "type": ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
+      "type": CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       "account": account.label,
       "config_dir": account.config_dir,
       "reason": reason,

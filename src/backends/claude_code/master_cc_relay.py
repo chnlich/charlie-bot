@@ -26,8 +26,8 @@ from __future__ import annotations
 import datetime
 
 from src.backends.claude_code import claude_accounts, claude_compaction, claude_relay
+from src.backends.claude_code.claude_config import ClaudeAccount
 from src.infra import config, log_once, models
-from src.infra import event_types as ET
 from src.runtime import master_cc_state
 from src.runtime.hooks import backend_lifecycle
 
@@ -75,7 +75,7 @@ def choose_turn_account(
     last_request_at: datetime.datetime | None,
     now: datetime.datetime | None,
     account_pool: str | None = None,
-) -> tuple[models.ClaudeAccount | None, bool]:
+) -> tuple[ClaudeAccount | None, bool]:
   """The account this turn runs on and whether the cache is cold.
 
   The current account stays while it belongs to pool *account_pool*, the cache
@@ -113,7 +113,7 @@ GUARD_REFUSED_NEWER_TRANSCRIPT = "guard_refused_newer_transcript"
 async def adopt_transcript_holder(
     ctx: backend_lifecycle.LaunchContext,
     cc_session_id: str | None,
-    holder: models.ClaudeAccount,
+    holder: ClaudeAccount,
     previous_label: str | None,
     reason: str,
 ) -> None:
@@ -172,7 +172,7 @@ async def place_turn(
     context_tokens: int | None,
     last_request_at: datetime.datetime | None,
     now: datetime.datetime | None = None,
-) -> models.ClaudeAccount:
+) -> ClaudeAccount:
   """Pick the turn's account, move the transcript to it and compact on a cold cache.
 
   The account label is disk-true from the moment the move lands: the lineage
@@ -229,15 +229,14 @@ async def place_turn(
 # ---------------------------------------------------------------------------
 
 
-async def _report_login_required(
-    ctx: backend_lifecycle.LaunchContext, account: models.ClaudeAccount, reason: str) -> None:
+async def _report_login_required(ctx: backend_lifecycle.LaunchContext, account: ClaudeAccount, reason: str) -> None:
   """Emit the login-required operator notice once.
 
   The log line keeps the chat event's type as its label, and the chat event
   leaves through the run's ``emit``.
   """
   log.error(
-      ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
+      claude_relay.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       session=ctx.session_meta.id,
       account=account.label,
       config_dir=account.config_dir,
@@ -245,7 +244,7 @@ async def _report_login_required(
   await ctx.emit(claude_relay.login_required_event(account, reason))
 
 
-async def report_login_failure(ctx: backend_lifecycle.LaunchContext, account: models.ClaudeAccount) -> None:
+async def report_login_failure(ctx: backend_lifecycle.LaunchContext, account: ClaudeAccount) -> None:
   """Mark *account* unhealthy for the cooldown and tell the operator (account-free in chat)."""
   claude_accounts.record_auth_failure(account.label, None)
   await _report_login_required(ctx, account, claude_relay.LOGIN_REASON_AUTH_FAILED)
@@ -261,11 +260,11 @@ async def report_empty_credentials(ctx: backend_lifecycle.LaunchContext) -> None
 
 async def prepare_relay(
     ctx: backend_lifecycle.LaunchContext,
-    current: models.ClaudeAccount,
+    current: ClaudeAccount,
     cc_session_id: str | None,
     reason: str | None,
     relays: int,
-) -> models.ClaudeAccount:
+) -> ClaudeAccount:
   """Move the run to the next account and compact a large Fable context there.
 
   Returns the account the run continues on. Raises ``LaunchRefused`` when the

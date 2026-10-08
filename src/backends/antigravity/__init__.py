@@ -7,6 +7,7 @@ def register() -> None:
 
   backend_types.register_backend_type(
       "antigravity",
+      options="src.backends.antigravity.options:AntigravityBackend",
       factory="src.backends.antigravity.factory:build",
       traits=backend_types.BackendTraits(
           resume="native_id",

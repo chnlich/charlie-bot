@@ -132,9 +132,9 @@ def preflight() -> None:
     contacted.
     """
   from src.backends.claude_code.claude_accounts import credentials_present
+  from src.backends.claude_code.claude_config import ClaudeAccount
   from src.infra.config import claude_config_dir, load_config, load_credentials
   from src.infra.home import CREDENTIALS_FILE
-  from src.infra.models import ClaudeAccount
 
   cfg = load_config()
   for backend_id in BACKEND_IDS:
@@ -773,6 +773,8 @@ def main() -> None:
   parser.add_argument("--out", required=True, help="Path the JSON results are written to")
   parser.add_argument("--keep", action="store_true", help="Keep the trial home for inspection")
   args = parser.parse_args()
+  from src.app import registrations
+  registrations.register_all()
   raise SystemExit(asyncio.run(accept(Path(args.out).expanduser(), args.keep)))
 
 

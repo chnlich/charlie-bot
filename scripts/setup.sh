@@ -49,11 +49,13 @@ DRY_RUN_VAL=$DRY_RUN uv run python - <<'PY'
 import asyncio
 import os
 
+from src.app import registrations
 from src.infra.config import get_config, get_scheduled_tasks
 from src.runtime import init_seed
 from src.features.cron.scheduler import effective_scheduled_task_backend
 
 dry = os.environ.get("DRY_RUN_VAL") == "1"
+registrations.register_all()
 cfg = get_config()
 
 # Per-item created/exists for the home layout. init_charliebot_home() is the

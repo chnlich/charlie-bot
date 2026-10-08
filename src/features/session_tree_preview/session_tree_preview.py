@@ -85,7 +85,7 @@ from src.infra.config import (
     load_config,
     load_credentials,
 )
-from src.infra.constants import INHERITED_IDENTITY_ENV_VARS, REPO_ROOT, BackendType
+from src.infra.constants import INHERITED_IDENTITY_ENV_VARS, REPO_ROOT
 from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
@@ -379,9 +379,9 @@ def _read_source_backend_option(backend_id: str) -> tuple[dict, tuple[str, str] 
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise PreviewRefusedError(f"backend {backend_id!r} is not configured in the source profile {cfg.config_file}")
-  if option.type is not BackendType.CHARLIE_CODE:
+  if option.type != "charlie-code":
     raise PreviewRefusedError(
-        f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
+        f"backend {backend_id!r} has type {option.type!r}; the preview isolates native "
         "session state only for charlie-code (its --session-dir override), so other backend "
         "types are refused until their isolation is proven")
   if not option.api_base:
@@ -544,7 +544,7 @@ def validate_existing_config(home: Path) -> dict:
     raise PreviewRefusedError(f"{path} must configure at least one backend for the trial; found {count}")
   seen_ids: set[str] = set()
   for entry in options:
-    if not isinstance(entry, dict) or entry.get("type") != BackendType.CHARLIE_CODE.value:
+    if not isinstance(entry, dict) or entry.get("type") != "charlie-code":
       raise PreviewRefusedError(
           f"{path} configures a non-charlie-code backend; the preview isolates native state only "
           "for charlie-code")
@@ -790,7 +790,7 @@ def wrap_build_backend(original: Callable[..., Any], clc_sessions: Path) -> Call
   """Wrap one ``build_backend`` so charlie-code builds carry ``--session-dir`` isolation."""
 
   def wrapped(option: Any, cfg: Any, **kwargs: Any) -> Any:
-    if getattr(option, "type", None) is BackendType.CHARLIE_CODE:
+    if getattr(option, "type", None) == "charlie-code":
       kwargs["extra_flags"] = [
           *(kwargs.get("extra_flags") or []),
           "--session-dir",

@@ -39,6 +39,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(_REPO_ROOT))
 
+from src.app import registrations  # noqa: E402
 from src.features.voice import transcriber  # noqa: E402
 from src.features.voice.transcription import registry  # noqa: E402
 from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
@@ -430,6 +431,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
+  registrations.register_all()
   cfg = load_config()
   out_dir = ensure_out_dir(
       Path(args.out) if args.out else cfg.charliebot_home / "voice_eval" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),

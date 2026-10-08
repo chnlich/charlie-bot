@@ -41,11 +41,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.infra import backend_models
-from src.infra.constants import BackendType
+from src.backends.claude_code.claude_config import ClaudeAccount
+from src.backends.claude_code.options import CcClaudeBackend
 from src.infra.home import CREDENTIALS_FILE
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import BackendOption, CcClaudeBackend, ClaudeAccount
+from src.infra.models import BackendOption
+from src.runtime.model_family import model_family
 
 # future-annotations keep every cfg: CharlieBotConfig hint unevaluated, so the config
 # model stack stays out of this module's import.
@@ -162,7 +163,7 @@ def is_pooled(option: BackendOption, cfg: CharlieBotConfig) -> bool:
   pools every cc-claude entry, and every other backend family has no Claude login
   at all.
   """
-  return option.type == BackendType.CC_CLAUDE and bool(cfg.accounts.claude)
+  return option.type == "cc-claude" and bool(cfg.accounts.claude)
 
 
 def option_pool(option: BackendOption) -> str | None:
@@ -174,8 +175,8 @@ def pool_accounts(cfg: CharlieBotConfig, name: str | None) -> list[ClaudeAccount
   """The accounts of pool *name*, or every configured account when *name* is None.
 
   A named pool holds the accounts its ``claude_pools`` labels list; a name
-  ``claude_pools`` does not define is a config error the CharlieBotConfig
-  validator refuses at load, so a KeyError here means a caller bypassed it.
+  ``claude_pools`` does not define is a config error ``claude_config.check_claude_pools``
+  refuses at load, so a KeyError here means a caller bypassed it.
   """
   if name is None:
     return pool(cfg)
@@ -211,7 +212,7 @@ def continuation_domain(option: BackendOption, cfg: CharlieBotConfig) -> str:
   turn-start continuation rule (``src/runtime/api/sessions.py``,
   ``src/runtime/master_cc_run.py``).
   """
-  if option.type == BackendType.CC_CLAUDE:
+  if option.type == "cc-claude":
     if is_pooled(option, cfg):
       return POOL_DOMAIN
     # Lazy: the config model stack stays out of this module's import.
@@ -378,7 +379,7 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
   stored = _panel_readings.get(label)
   if stored is None:
     return []
-  family = backend_models.model_family(model)
+  family = model_family(model)
   live: list[dict[str, Any]] = []
   for window in stored[PANEL_WINDOWS]:
     if panel_window_expired(window, stored["at"], now):

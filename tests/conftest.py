@@ -250,7 +250,8 @@ from src.infra import event_types as ET  # noqa: E402
 from src.runtime import runs  # noqa: E402
 from src.runtime import thinking_state  # noqa: E402
 from src.runtime import init_worker_recovery as worker_recovery_module  # noqa: E402
-from src.infra import models  # noqa: E402
+from src.infra import backend_models, models  # noqa: E402
+from src.backends.claude_code.claude_config import ClaudeAccount  # noqa: E402
 from src.runtime import streaming  # noqa: E402
 from src.runtime.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.runtime.api.deps import get_config_on_loop  # noqa: E402
@@ -279,12 +280,12 @@ registrations.register_all()
 pytest_plugins = ["pytester"]
 
 
-def backend_option(**kwargs: Any) -> models.BackendBase:
+def backend_option(**kwargs: Any) -> models.BackendOption:
   """Build a typed backend option from raw kwargs (the config.yaml shape), dispatching on ``type``."""
-  return models.BACKEND_OPTION_ADAPTER.validate_python(kwargs)
+  return backend_models.parse_option(kwargs)
 
 
-def fake_backends() -> dict[str, list[models.BackendBase]]:
+def fake_backends() -> dict[str, list[models.BackendOption]]:
   """One cc-claude entry so SessionManager.create_session has a default backend."""
   return {"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]}
 
@@ -1287,7 +1288,7 @@ def pool_cfg(
   ``claude_pools`` splits the labels into named pools; the caller's cc-claude options then name
   their pool in ``account_pool`` (the config validator refuses an unpaired combination).
   """
-  accounts = [models.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
+  accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
   for account in accounts:
     write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(

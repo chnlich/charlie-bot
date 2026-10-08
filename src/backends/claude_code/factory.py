@@ -3,6 +3,7 @@
 from typing import Any
 
 from src.backends.claude_code import claude_code
+from src.backends.claude_code.claude_config import ClaudeAccount
 from src.infra import config, models
 from src.runtime.agent_process import base
 
@@ -11,7 +12,7 @@ def build(
     option: models.BackendOption | None,
     cfg: config.CharlieBotConfig,
     *,
-    claude_account: config.ClaudeAccount | None = None,
+    claude_account: ClaudeAccount | None = None,
     **kwargs: Any,
 ) -> base.AgentBackend:
   """Instantiate the ClaudeCodeBackend for *option*.

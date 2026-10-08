@@ -99,6 +99,7 @@ if str(_REPO_ROOT) not in sys.path:
 import websockets  # noqa: E402
 from websockets.asyncio import client  # noqa: E402
 
+from src.app import registrations  # noqa: E402
 from src.infra.config import CharlieBotConfig, configured_access_key, get_config  # noqa: E402
 from tools.browser_harness_session_tree import stop_child  # noqa: E402
 
@@ -582,6 +583,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
   args = parse_args()
+  registrations.register_all()
   if args.report:
     return report_mode(args)
   return asyncio.run(drive_mode(args))

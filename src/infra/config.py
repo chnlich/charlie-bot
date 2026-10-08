@@ -4,21 +4,24 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import (
     AliasChoices,
     AliasPath,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
+    SerializeAsAny,
     ValidationError,
     model_validator,
 )
 
-from src.infra import constants, home
-from src.infra.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
+from src.infra import config_registry, home
+from src.infra.backend_models import BackendOption, parse_option
+from src.infra.config_registry import CREDENTIALS_PREFIX
 from src.infra.constants import REPO_ROOT
 from src.infra.credentials import (  # noqa: F401  (re-export: the established src.infra.config import path)
     CREDENTIALS_FILENAME,
@@ -334,32 +337,10 @@ class BackendsConfig(BaseModel):
   # Empty list (default) skips the one-shot.
   preference: list[str] = []
 
-  # Backend options available for model switching
-  # Additional backends (Codex/Gemini/Kimi/Antigravity/etc.) must be configured via
-  # ~/.charliebot/config.yaml -> backends.options.
-  options: list[BackendOption] = []
-
-
-class AccountsConfig(BaseModel):
-  """``accounts:`` section: the Claude subscription pool and its compaction floors."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  # The Claude subscription logins (each label names one CLAUDE_CONFIG_DIR);
-  # accounts.claude lists every login, and claude_pools groups them into the
-  # named pools cc-claude entries draw from (src/backends/claude_code/claude_accounts.py).
-  claude: list[ClaudeAccount] = []
-
-  # Named account pools: each key is a pool name, its value the account labels
-  # (from `claude` above) the pool holds. One label may sit in several pools.
-  # Empty = no pools: every cc-claude entry draws from all of `claude`, exactly
-  # as before pools existed. Cross-field checks against the backends options
-  # (each cc-claude entry's `account_pool`) run in CharlieBotConfig's validator,
-  # which sees both sections.
-  claude_pools: dict[str, list[str]] = {}
-
-  # Token floors for the Sonnet compaction the pool runs on Fable sessions.
-  claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
+  # Backend options available for model switching. Each entry parses as the option model that
+  # its ``type`` names in the config registry (src/infra/config_registry.py). Additional
+  # backends must be configured via ~/.charliebot/config.yaml -> backends.options.
+  options: list[Annotated[SerializeAsAny[BackendOption], BeforeValidator(parse_option)]] = []
 
 
 class VoiceConfig(BaseModel):
@@ -379,8 +360,8 @@ class VoiceConfig(BaseModel):
   model_id: str = 'Qwen/Qwen3-ASR-1.7B-hf'
 
   # Transcription backend used before the user picks one in the page's dropdown. One of
-  # the transcription registry's ids (src/features/voice/transcription/registry.py); a typo fails
-  # config load like any other unknown value.
+  # the transcription registry's ids (src/features/voice/transcription/registry.py); the voice
+  # package's config check (src/features/voice/config_check.py) fails config load on a typo.
   default_backend: str = 'local'
 
   # Proper-noun vocabulary passed to the backends that support it (Gemini's
@@ -395,22 +376,6 @@ class VoiceConfig(BaseModel):
   # recording through the gateway's /gemini pass-through to Gemini 3.5 Transcribe.
   # Empty leaves that backend unavailable. Credential: credentials.yaml aigw.api_key.
   aigw_base_url: str = ''
-
-  @model_validator(mode='after')
-  def _default_backend_is_registered(self) -> VoiceConfig:
-    """A default_backend typo must fail at startup: validate against the registry's ids.
-
-    The registry import stays inside the validator: the config module's import
-    path must not pull the transcription package (the M99 server import floor).
-    """
-    from src.features.voice.transcription import registry
-
-    known = registry.backend_ids()
-    if self.default_backend not in known:
-      raise ValueError(
-          f"voice.default_backend {self.default_backend!r} is not a transcription backend; "
-          f"known: {', '.join(known)}")
-    return self
 
 
 class CodeServerConfig(BaseModel):
@@ -517,6 +482,14 @@ def _alias_field_names(alias: str | AliasChoices | AliasPath | None) -> set[str]
   return set()
 
 
+def _locate_in_section(key: str, err: Any) -> Any:
+  """One pydantic error detail of section *key*'s own validation, with *key* as the first segment of its location."""
+  located = {"type": err["type"], "loc": (key, *err["loc"]), "input": err["input"]}
+  if "ctx" in err:
+    located["ctx"] = err["ctx"]
+  return located
+
+
 class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml.
 
@@ -527,9 +500,14 @@ class CharlieBotConfig(BaseModel):
   :class:`ScheduledTaskConfig`). ``model_construct`` is overridden for the same
   reason: pydantic 2.12.5 drops unknown construct kwargs silently even under
   forbid.
+
+  A package owns a section by registering it in :mod:`src.infra.config_registry`.
+  The parsed section is a pydantic extra, so ``cfg.<key>`` reads it like a field,
+  and ``_parse_package_sections`` refuses every key that is neither a field nor a
+  registered section.
   """
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = ConfigDict(extra='allow')
 
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
   charliebot_home: Path = Field(default_factory=charliebot_home_dir)
@@ -542,7 +520,6 @@ class CharlieBotConfig(BaseModel):
   server: ServerConfig = Field(default_factory=ServerConfig)
   paths: PathsConfig = Field(default_factory=PathsConfig)
   backends: BackendsConfig = Field(default_factory=BackendsConfig)
-  accounts: AccountsConfig = Field(default_factory=AccountsConfig)
   voice: VoiceConfig = Field(default_factory=VoiceConfig)
   code_server: CodeServerConfig = Field(default_factory=CodeServerConfig)
   ui: UiConfig = Field(default_factory=UiConfig)
@@ -551,41 +528,47 @@ class CharlieBotConfig(BaseModel):
   publish: PublishConfig = Field(default_factory=PublishConfig)
   telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
-  @model_validator(mode='after')
-  def _validate_claude_pools(self) -> CharlieBotConfig:
-    """Gate the Claude account pools across the ``accounts`` and ``backends`` sections.
+  @classmethod
+  def _field_names(cls) -> set[str]:
+    """The top-level names the model declares: its fields and their aliases."""
+    names = set(cls.model_fields)
+    for field in cls.model_fields.values():
+      names |= _alias_field_names(field.alias) | _alias_field_names(field.validation_alias)
+    return names
 
-    The pool table and the cc-claude options that name a pool live in different
-    sections, so neither section's own model can check the pairing; a config
-    that fails here is refused at load, and a failed hot reload keeps the
-    previous config. Every error names the pool or the option id it concerns.
+  @model_validator(mode='before')
+  @classmethod
+  def _parse_package_sections(cls, data: Any) -> Any:
+    """Parse the registered sections and refuse every key that no field or section names.
+
+    A section the input omits takes the model's defaults. Each error keeps the section
+    key as the first segment of its location, as a declared field's error would.
     """
-    labels = {account.label for account in self.accounts.claude}
-    for pool_name, pool_labels in self.accounts.claude_pools.items():
-      unknown = [label for label in pool_labels if label not in labels]
-      if unknown:
-        raise ValueError(
-            f"accounts.claude_pools['{pool_name}'] names accounts missing from accounts.claude: "
-            f"{', '.join(unknown)}")
-      if not pool_labels:
-        raise ValueError(f"accounts.claude_pools['{pool_name}'] lists no account")
-    for option in self.backends.options:
-      if option.type != constants.BackendType.CC_CLAUDE:
-        continue
-      if not self.accounts.claude_pools:
-        if option.account_pool is not None:
-          raise ValueError(
-              f"backend '{option.id}' sets account_pool '{option.account_pool}' but "
-              "accounts.claude_pools defines no pools")
-        continue
-      if option.account_pool is None:
-        raise ValueError(
-            f"backend '{option.id}' (cc-claude) names no account_pool; defined pools: "
-            f"{', '.join(self.accounts.claude_pools)}")
-      if option.account_pool not in self.accounts.claude_pools:
-        raise ValueError(
-            f"backend '{option.id}' names undefined account_pool '{option.account_pool}'; defined pools: "
-            f"{', '.join(self.accounts.claude_pools)}")
+    if not isinstance(data, dict):
+      return data
+    sections = config_registry.section_models()
+    known = cls._field_names() | set(sections)
+    unknown = [key for key in data if key not in known]
+    if unknown:
+      raise ValidationError.from_exception_data(
+          cls.__name__, [{
+              "type": "extra_forbidden",
+              "loc": (key,),
+              "input": data[key]
+          } for key in unknown])
+    parsed = dict(data)
+    for key, model in sections.items():
+      try:
+        parsed[key] = model.model_validate(data[key]) if key in data else model()
+      except ValidationError as exc:
+        raise ValidationError.from_exception_data(
+            cls.__name__, [_locate_in_section(key, err) for err in exc.errors(include_url=False)]) from exc
+    return parsed
+
+  @model_validator(mode='after')
+  def _run_package_checks(self) -> CharlieBotConfig:
+    """Run the checks that packages registered, once the whole config has validated."""
+    config_registry.run_config_checks(self)
     return self
 
   @classmethod
@@ -594,16 +577,17 @@ class CharlieBotConfig(BaseModel):
 
     pydantic 2.12.5's ``model_construct`` silently drops kwargs that match no
     field — even with ``extra='forbid'`` — so a caller redirecting a non-field
-    name gets a silently unredirected copy. Names outside the fields and their
-    aliases raise :class:`TypeError` listing them; everything else delegates to
-    ``super().model_construct()``.
+    name gets a silently unredirected copy. Names outside the fields, their
+    aliases and the registered sections raise :class:`TypeError` listing them;
+    everything else delegates to ``super().model_construct()``, with each
+    registered section the caller omits set to its defaults, as validation does.
     """
-    known: set[str] = set(cls.model_fields)
-    for field in cls.model_fields.values():
-      known |= _alias_field_names(field.alias) | _alias_field_names(field.validation_alias)
-    unknown = sorted(set(values) - known)
+    sections = config_registry.section_models()
+    unknown = sorted(set(values) - cls._field_names() - sections.keys())
     if unknown:
       raise TypeError(f"{cls.__name__}.model_construct() got unexpected keyword argument(s): " + ", ".join(unknown))
+    for key, model in sections.items():
+      values.setdefault(key, model())
     return super().model_construct(_fields_set, **values)
 
   @property
@@ -722,6 +706,8 @@ def _install_config_snapshot(current: CharlieBotConfig | None, fresh: CharlieBot
     return fresh
   for name in type(fresh).model_fields:
     setattr(current, name, getattr(fresh, name))
+  for name, section in fresh.__pydantic_extra__.items():
+    setattr(current, name, section)
   return current
 
 
@@ -732,9 +718,8 @@ _config_cache = _HotReloadCache(
 # one, and the error names where the key moved. A plain dotted value points into
 # the sectioned mapping; a value under :data:`CREDENTIALS_PREFIX` moves into
 # credentials.yaml (secrets live there, and the suffix is that file's key path);
-# a ``removed...`` value has no successor.
-CREDENTIALS_PREFIX = "credentials: "
-
+# a ``removed...`` value has no successor. A package's own retired keys register
+# through :mod:`src.infra.config_registry`; the loader reads both maps.
 LEGACY_KEYS: dict[str, str] = {
     "server_host": "server.host",
     "server_port": "server.port",
@@ -742,13 +727,8 @@ LEGACY_KEYS: dict[str, str] = {
     "workspace_dirs": "paths.workspace_dirs",
     "project_dirs": "paths.workspace_dirs",
     "worktree_dir": "paths.worktree_dir",
-    # Per-entry moves inside a backend option: claude_config_dir and codex_home are
-    # retired, api_key/api_key_env fold into credential, opencode_proxy_url into
-    # proxy_url, aliases retired.
     "backend_options": "backends.options",
     "model_preference": "backends.preference",
-    "claude_accounts": "accounts.claude",
-    "claude_compaction": "accounts.claude_compaction",
     "voice_engine": "voice.engine",
     "voice_model_id": "voice.model_id",
     "code_server_bin": "code_server.bin",
@@ -769,8 +749,6 @@ LEGACY_KEYS: dict[str, str] = {
     CREDENTIALS_PREFIX + "moonshot_api_key": "moonshot.api_key",
     CREDENTIALS_PREFIX + "aigw_api_key": "aigw.api_key",
     CREDENTIALS_PREFIX + "linear_api_key": "linear.api_key",
-    CREDENTIALS_PREFIX + "gemini_api_key": "gemini.api_key",
-    CREDENTIALS_PREFIX + "gemini_model": "gemini.model",
     CREDENTIALS_PREFIX + "feishu_app_id": "feishu.app_id",
     CREDENTIALS_PREFIX + "feishu_app_secret": "feishu.app_secret",
     CREDENTIALS_PREFIX + "feishu_refresh_token": "feishu.refresh_token",
@@ -795,10 +773,10 @@ def load_config() -> CharlieBotConfig:
   The file holds the whole sectioned mapping; secrets live separately in
   ``credentials.yaml``. Two tripwires fire before validation: any ``*.yaml``
   file directly under ``config.d/`` (only ``config.d/cron.d/`` holds fragment
-  files now), and any top-level key from :data:`LEGACY_KEYS` — structure keys
-  and secrets alike; the error opens with the config path and names each old
-  key with its new location (a secret's location is its ``credentials.yaml``
-  key path).
+  files now), and any top-level key from :data:`LEGACY_KEYS` or a package's
+  registered legacy keys — structure keys and secrets alike; the error opens
+  with the config path and names each old key with its new location (a
+  secret's location is its ``credentials.yaml`` key path).
   """
   home = charliebot_home_dir()
   config_path = home / CONFIG_FILENAME
@@ -812,11 +790,12 @@ def load_config() -> CharlieBotConfig:
             "keys belong in config.yaml (structure) or credentials.yaml (secrets)")
 
   yaml_data: dict = load_yaml(config_path, default={})
-  legacy_hits = [key for key in yaml_data if key in LEGACY_KEYS or CREDENTIALS_PREFIX + key in LEGACY_KEYS]
+  legacy_keys = {**LEGACY_KEYS, **config_registry.legacy_keys()}
+  legacy_hits = [key for key in yaml_data if key in legacy_keys or CREDENTIALS_PREFIX + key in legacy_keys]
   if legacy_hits:
     lines = "\n".join(
         f"  {key} -> " +
-        (LEGACY_KEYS[key] if key in LEGACY_KEYS else "credentials.yaml " + LEGACY_KEYS[CREDENTIALS_PREFIX + key])
+        (legacy_keys[key] if key in legacy_keys else "credentials.yaml " + legacy_keys[CREDENTIALS_PREFIX + key])
         for key in legacy_hits)
     raise ValueError(f"{config_path} still uses retired top-level keys; move each one:\n{lines}")
 
@@ -831,9 +810,9 @@ def load_config() -> CharlieBotConfig:
     return CharlieBotConfig(charliebot_home=home, **yaml_data)
   except ValidationError as e:
     # An unknown field inside a backend entry gets its own message: the raw
-    # entry's id and type are what the operator greps the file for. The
-    # discriminated union inserts the matched type tag into the error path, so
-    # the field name is the last segment.
+    # entry's id and type are what the operator greps the file for. The error
+    # path is ("backends", "options", index, field), so the field name is the
+    # last segment.
     for err in e.errors():
       if err["type"] == "extra_forbidden" and err["loc"][:2] == ("backends", "options"):
         raw_entry = yaml_data["backends"]["options"][err["loc"][2]]
@@ -845,7 +824,7 @@ def load_config() -> CharlieBotConfig:
       raise
     raise ValueError(
         "unknown config key(s) " + ", ".join(repr(key) for key in extras) +
-        "; declare the key(s) on CharlieBotConfig or remove them") from e
+        "; declare the key(s) on CharlieBotConfig, register a config section for them, or remove them") from e
 
 
 def require_backends(cfg: CharlieBotConfig, cron_tasks: list[ScheduledTaskConfig]) -> None:

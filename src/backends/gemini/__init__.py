@@ -3,10 +3,12 @@
 
 def register() -> None:
   """Register the gemini backend type with the runtime."""
+  from src.infra import config_registry
   from src.runtime.hooks import backend_types
 
   backend_types.register_backend_type(
       "gemini",
+      options="src.backends.gemini.options:GeminiBackend",
       factory="src.backends.gemini.factory:build",
       traits=backend_types.BackendTraits(
           resume="native_id",
@@ -16,3 +18,8 @@ def register() -> None:
           family_prefix=None,
       ),
   )
+  config_registry.register_legacy_keys(
+      {
+          config_registry.CREDENTIALS_PREFIX + "gemini_api_key": "gemini.api_key",
+          config_registry.CREDENTIALS_PREFIX + "gemini_model": "gemini.model",
+      })

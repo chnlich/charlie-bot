@@ -159,14 +159,6 @@ SESSION_WS_CURSOR_TIMEOUT = 5.0  # seconds
 WS_KEEPALIVE_TIMEOUT = 30.0  # seconds
 
 # ---------------------------------------------------------------------------
-# Claude compaction
-# ---------------------------------------------------------------------------
-
-# Whole Claude Code /compact run. A 70K-token compaction measured 21 s; the
-# ceiling leaves room for a 400K one.
-CLAUDE_COMPACTION_TIMEOUT = 900.0  # seconds
-
-# ---------------------------------------------------------------------------
 # code-server
 # ---------------------------------------------------------------------------
 
@@ -224,41 +216,6 @@ NO_OUTPUT_REPORT_THRESHOLD = 2 * 3600  # seconds
 # (server down/restarting); exponential backoff inside. Measured server cold
 # start is <0.5 s, so 60 s is two orders of magnitude of headroom.
 CLI_CONNECT_TOTAL_TIMEOUT = 60  # seconds
-
-# ---------------------------------------------------------------------------
-# OpenCode backend
-# ---------------------------------------------------------------------------
-
-# httpx client for the per-run control API: health probe, model limit, session
-# create, prompt send. The long-lived SSE stream overrides this with
-# timeout=None (its liveness is the watchdog constant below).
-OPENCODE_HTTP_API_TIMEOUT = 30.0  # seconds
-
-# Spawned `opencode serve` startup: deadline for the server URL to appear on
-# the subprocess's stdout.
-OPENCODE_SERVER_START_TIMEOUT = 30.0  # seconds
-
-# Grace for the spawned server to exit after SIGTERM; past it the shutdown
-# escalates to SIGKILL (base._graceful_shutdown).
-OPENCODE_SERVER_STOP_TIMEOUT = 5.0  # seconds
-
-# POST to /session/{id}/abort when a turn is cancelled. Best-effort: a failure
-# is logged and cleanup proceeds without it.
-OPENCODE_ABORT_TIMEOUT = 5.0  # seconds
-
-# Grace wait for the stdout log-tail task to reach EOF after the run ends; past
-# it the task is cancelled. The tail loop polls on a sub-second interval, so EOF
-# arrives within milliseconds of the process exiting.
-OPENCODE_STDOUT_DRAIN_TIMEOUT = 5.0  # seconds
-
-# An opencode /event SSE stream carrying no session-id-bearing event for longer
-# than this is declared dead: the turn fails loudly through the normal backend
-# failure path. Server-level events (server.heartbeat every ~10 s,
-# server.connected) pass through but do not reset the timer. Basis, measured on
-# opencode-backend runs: p99 inter-event gap 131 s, longest legitimate gap on a
-# completed turn 29.3 min; observed hangs run 25-497 min, so 60 min covers
-# every observed hang.
-OPENCODE_SSE_PROGRESS_TIMEOUT = 3600.0  # seconds
 
 # ---------------------------------------------------------------------------
 # Process-group kill escalation

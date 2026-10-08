@@ -12,6 +12,7 @@ def register() -> None:
       "src.backends.openai_compatible.anthropic_proxy", prefix="/api/anthropic-proxy", tags=("anthropic-proxy",))
   backend_types.register_backend_type(
       "cc-openai-compatible",
+      options="src.backends.openai_compatible.options:CcOpenAICompatibleBackend",
       factory="src.backends.openai_compatible.factory:build",
       traits=backend_types.BackendTraits(
           resume="cli_flag",

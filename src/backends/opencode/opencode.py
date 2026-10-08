@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from src.infra import log_once, process, sse, timeouts
+from src.backends.opencode import opencode_limits
 from src.infra import event_types as ET
+from src.infra import log_once, process, sse
 from src.runtime.agent_process import base
 
 if TYPE_CHECKING:
@@ -121,7 +122,7 @@ def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
 
 
 class OpenCodeSseSilenceError(RuntimeError):
-  """The SSE stream carried no session-id-bearing event within timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT."""
+  """The SSE stream carried no session-id-bearing event within opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT."""
 
 
 class OpenCodeBackend(base.AgentBackend):
@@ -213,7 +214,7 @@ class OpenCodeBackend(base.AgentBackend):
 
         import httpx
 
-        async with httpx.AsyncClient(base_url=self._server_url, timeout=timeouts.OPENCODE_HTTP_API_TIMEOUT,
+        async with httpx.AsyncClient(base_url=self._server_url, timeout=opencode_limits.OPENCODE_HTTP_API_TIMEOUT,
                                      verify=_SERVE_SSL_CONTEXT) as client:
           await self._check_health(client)
           self._model_limit = await self._fetch_model_limit(client)
@@ -368,7 +369,7 @@ class OpenCodeBackend(base.AgentBackend):
   async def _read_server_url(self) -> str:
     assert self._proc is not None and self._proc.stdout is not None
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeouts.OPENCODE_SERVER_START_TIMEOUT
+    deadline = loop.time() + opencode_limits.OPENCODE_SERVER_START_TIMEOUT
     while True:
       remaining = deadline - loop.time()
       if remaining <= 0:
@@ -510,7 +511,7 @@ class OpenCodeBackend(base.AgentBackend):
       yield orjson.loads(b"\n".join(data_lines))
 
   async def _with_sse_progress_watchdog(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
-    """Fail the turn when no session progress arrives within timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT.
+    """Fail the turn when no session progress arrives within opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT.
 
     Every upstream event is awaited under ``asyncio.wait_for`` with a monotonic
     deadline. An event carrying a session id (top-level ``properties.sessionID``
@@ -524,7 +525,7 @@ class OpenCodeBackend(base.AgentBackend):
     """
     loop = asyncio.get_running_loop()
     last_progress_at = loop.time()
-    deadline = last_progress_at + timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT
+    deadline = last_progress_at + opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT
     silent_heartbeats = 0
     events_iter = aiter(sse_events)
     while True:
@@ -546,7 +547,7 @@ class OpenCodeBackend(base.AgentBackend):
         silent_heartbeats += 1
       if self._event_carries_session_id(event):
         last_progress_at = loop.time()
-        deadline = last_progress_at + timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT
+        deadline = last_progress_at + opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT
         silent_heartbeats = 0
       yield event
 
@@ -735,7 +736,7 @@ class OpenCodeBackend(base.AgentBackend):
       # (~260 us measured); _SERVER_URL_RE pins the serve URL to plain
       # http://localhost, so the singleton's default verify never engages here.
       response = await http.get_http_client().post(
-          f"{self._server_url}/session/{self._session_id}/abort", timeout=timeouts.OPENCODE_ABORT_TIMEOUT)
+          f"{self._server_url}/session/{self._session_id}/abort", timeout=opencode_limits.OPENCODE_ABORT_TIMEOUT)
       response.raise_for_status()
     except Exception as e:
       log.warning("opencode_abort_failed", session_id=self._session_id, error=str(e), exc_info=True)
@@ -744,7 +745,7 @@ class OpenCodeBackend(base.AgentBackend):
     if self._stdout_task is None:
       return
     try:
-      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=timeouts.OPENCODE_STDOUT_DRAIN_TIMEOUT)
+      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=opencode_limits.OPENCODE_STDOUT_DRAIN_TIMEOUT)
     except TimeoutError:
       self._stdout_task.cancel()
       try:
@@ -761,7 +762,7 @@ class OpenCodeBackend(base.AgentBackend):
       await self._abort_session()
       if self._proc is not None and self._proc.returncode is None:
         await self._graceful_shutdown(
-            timeouts.OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
+            opencode_limits.OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
       await self._finish_stdout_task()
       self._close_stdout_log()
       if self._proc is not None:

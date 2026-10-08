@@ -196,9 +196,9 @@ async def test_worker_login_failure_marks_the_account_and_notifies_the_session(
   assert exit_code == 0
   assert not claude_accounts.healthy(claude_accounts.account_by_label(cfg, "main"))
   notice = worker.on_session_event.await_args.args[0]
-  assert notice["type"] == ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED
+  assert notice["type"] == claude_relay.CLAUDE_ACCOUNT_LOGIN_REQUIRED
   assert (notice["account"], notice["reason"]) == ("main", "auth_failed")
-  assert any(ev["type"] == ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED for ev in _logged_events(tmp_path))
+  assert any(ev["type"] == claude_relay.CLAUDE_ACCOUNT_LOGIN_REQUIRED for ev in _logged_events(tmp_path))
   assert builds[1]["kwargs"]["claude_account"].label == "ext-1"
 
 

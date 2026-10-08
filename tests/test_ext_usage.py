@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from conftest import codex_token_count_event, fresh_state_fixture
 
+from src.backends.claude_code.claude_config import ClaudeAccount
 from src.features.usage import ext_usage as ext_usage_mod
 from src.features.usage.ext_usage import (
     ClaudeUsageProvider,
@@ -20,7 +21,6 @@ from src.features.usage.ext_usage import (
     _transform_codex_response,
 )
 from src.infra.config import CharlieBotConfig
-from src.infra.models import ClaudeAccount
 
 _fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
 _fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._CREDENTIAL_READ_WARNINGS_SEEN.clear)

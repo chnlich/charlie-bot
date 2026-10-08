@@ -19,23 +19,29 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
   from src.infra.models import SessionMetadata
   from src.runtime.sessions import SessionManager
-  from src.runtime.task_prompts import RuleSegment
 
 DEFAULT_WORKFLOW_RULES_FILE = "manager_workflows.md"
 
 _Answer = TypeVar("_Answer")
 
 
+class InstructionSegment(Protocol):
+  """One ordered instruction unit a contribution returns; the runtime reads it as its ``RuleSegment``.
+
+  The hook only passes segments to the runtime and reads no member of them, so the protocol lists none.
+  """
+
+
 class TurnContribution:
   """One feature package's part in a master turn; subclasses override the steps they take part in."""
 
-  def instruction_segments(self, meta: SessionMetadata, kind: str, cfg: CharlieBotConfig) -> list[RuleSegment]:
+  def instruction_segments(self, meta: SessionMetadata, kind: str, cfg: CharlieBotConfig) -> list[InstructionSegment]:
     """Segments for the managed instructions of a run of *kind*.
 
     They follow the model overlay segments and precede the local rule segments, in registration order.

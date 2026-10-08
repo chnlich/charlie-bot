@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 from src.features.cron import event_types as ET
 from src.features.cron.config import ScheduledTaskConfig, ScheduledTaskFields
@@ -21,11 +21,9 @@ from src.features.cron.loader import (
     get_scheduled_tasks,
 )
 from src.features.cron.scheduler import effective_scheduled_task_backend
-from src.infra.compression import gzip_level1
 from src.infra.config import CharlieBotConfig, require_backend_option
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
-from src.infra.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
 from src.infra.yaml_utils import load_yaml, save_yaml
 from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_manager
 from src.runtime.scheduled_sessions import ScheduledSessionBusyError
@@ -178,7 +176,7 @@ class TaskCreate(ScheduledTaskFields):
 
 
 @router.get('/tasks')
-async def list_cron_tasks(request: Request) -> Response:
+async def list_cron_tasks():
   """Return all scheduled tasks plus one error entry per broken file, never 500.
 
   Valid jobs are sorted by name, followed by one entry per error record shaped
@@ -190,39 +188,17 @@ async def list_cron_tasks(request: Request) -> Response:
   # prompt is resolved from prompt_file for the in-process scheduler/master
   # reads; no consumer of this route reads it (the UI edits prompt_file), and
   # shipping the resolved bodies was ~90 KB of the 96 KB response. The steps
-  # exclusion is the same field one level down on a chain task. The dump feeds
-  # the response render (orjson) directly with no encoder pass left to convert
-  # types, so it must hand the render plain JSON types: mode="json" is that
-  # guarantee should a datetime or enum field join the model (today every field
-  # is already a primitive, so the bytes equal the encoder-rendered output).
-  # Returning the mapped list instead would pay jsonable_encoder's dict
-  # recursion per request for the same bytes.
-  body, gz = _cron_tasks_body()
-  if not request_wants_gzip(request):
-    return PreencodedJSONResponse(body)
-  return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
-
-
-# The sidebar's Workspace view fetches this list on every view load, and the
-# browser's fetch always accepts gzip. The rendered bytes and
-# their level-1 gzip form cache on the snapshot's own generation: the identity
-# of the tasks list get_scheduled_tasks returns — stable between config
-# changes, rebuilt by any reload, and pinned by the cache's own reference so a
-# freed list's address can never be reused for a new one. One config change
-# re-renders and re-compresses once; every poll in between serves both bodies
-# with zero render and zero deflate, and Content-Encoding set upstream makes
-# the middleware skip its own pass (the M72 mechanism).
-_CRON_TASKS_BODY_CACHE: tuple[list, bytes, bytes] | None = None
-
-
-def _cron_tasks_body() -> tuple[bytes, bytes]:
-  """Return (plain body, gzip body) for the current cron snapshot, rendering once per generation."""
-  global _CRON_TASKS_BODY_CACHE
-  tasks = get_scheduled_tasks()
-  cache = _CRON_TASKS_BODY_CACHE
-  if cache is not None and cache[0] is tasks:
-    return cache[1], cache[2]
-  valid = [t.model_dump(mode="json", exclude={'prompt': True, 'steps': {'__all__': {'prompt': True}}}) for t in tasks]
+  # exclusion is the same field one level down on a chain task.
+  valid = [
+      t.model_dump(exclude={
+          'prompt': True,
+          'steps': {
+              '__all__': {
+                  'prompt': True
+              }
+          }
+      }) for t in get_scheduled_tasks()
+  ]
   broken = [
       {
           'name': e.name,
@@ -232,10 +208,7 @@ def _cron_tasks_body() -> tuple[bytes, bytes]:
           'enabled': e.enabled
       } for e in get_scheduled_task_errors()
   ]
-  body = fast_json_bytes(valid + broken)
-  gz = gzip_level1(body)
-  _CRON_TASKS_BODY_CACHE = (tasks, body, gz)
-  return body, gz
+  return valid + broken
 
 
 async def apply_task_yaml_update(

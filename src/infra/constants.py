@@ -9,12 +9,12 @@ from enum import StrEnum
 
 # Checkout root (where pyproject.toml lives): this file sits at src/infra/, so
 # parents[2] is the root; moving this file breaks the depth. Buildinfo's git
-# calls, the artifact template reads, the /static mount, and the pages layer's
+# calls, the HTML page-template reads, the /static mount, and the pages layer's
 # git-version cwd, static-tree digest, and Jinja templates directory derive
 # from it. Built on first access, not at import: this module loads on every
 # ``charliebot`` verb (the M92 CLI import floor), and pathlib's import chain
 # (~5 ms) prices every verb's parser build while only the REPO_ROOT readers
-# (the server pages, the artifact writers, the config re-export) touch it.
+# (the server pages, the HTML page writers, the config re-export) touch it.
 
 
 def __getattr__(name: str):

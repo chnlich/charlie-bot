@@ -1,12 +1,12 @@
 """The profile-home and claude-login-directory resolution: the one place that
 reads ``CHARLIEBOT_HOME`` and the Claude login-dir derivations.
 
-Every state path derives from :func:`charliebot_home_dir`. The memory CLI
-imports from here directly: its store root is a pure derivation of the home,
-so resolving it must not drag the config model stack (src.infra.config's
-pydantic chain, ~180 ms of the M98 CLI wall) into a fresh process. Other
-config-importing readers reach these names through the src.infra.config
-re-export.
+Every state path derives from :func:`charliebot_home_dir`. A feature CLI that
+keeps a store imports from here directly: its store root is a pure derivation
+of the home, so resolving it must not drag the config model stack
+(src.infra.config's pydantic chain, ~180 ms of the M98 CLI wall) into a fresh
+process. Other config-importing readers reach these names through the
+src.infra.config re-export.
 """
 
 import os

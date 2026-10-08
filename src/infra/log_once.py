@@ -1,9 +1,9 @@
 """The one warn-once rule: at most one log line per key per process.
 
 Also home to the structlog-deferring logger proxy and the server's lean
-log-line renderer. Every resident stays stdlib-only at import: config and
-memory bind them at import, on CLI chains whose measured floors depend on
-structlog staying out until first use.
+log-line renderer. Every resident stays stdlib-only at import: config and the
+modules of a feature CLI bind them at import, on CLI chains whose measured
+floors depend on structlog staying out until first use.
 """
 
 import os
@@ -59,7 +59,7 @@ class LazyStructlogLogger:
 
   ``import structlog`` eagerly pulls structlog.dev (rich, pygments, the traceback
   formatter) — ~67 ms of the CLI import floor the M92 collector measures and ~97 ms
-  of the memory-CLI invocation wall the M98 collector measures — while the modules
+  of the feature-CLI invocation wall the M98 collector measures — while the modules
   binding ``log`` emit only on log lines those CLI invocations never reach. A test
   may monkeypatch an attribute on a module's ``log``: the patch lands on this
   object, which every later lookup reaches.

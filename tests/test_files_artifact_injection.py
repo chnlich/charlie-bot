@@ -1,5 +1,6 @@
-"""Tests for artifact review-UI injection in the file server (src/features/files/api.py)."""
+"""Tests for the artifact view the file server reaches through the wiring registry (src/features/artifacts/artifact_view.py)."""
 
+import asyncio
 import pathlib
 import types
 
@@ -7,6 +8,7 @@ import fastapi
 import pytest
 from fastapi import testclient
 
+from src.features.artifacts import artifact_view
 from src.features.files import api as files_api
 from src.infra import config
 from src.runtime import templating
@@ -51,7 +53,7 @@ def _write(path: pathlib.Path) -> pathlib.Path:
 
 def test_inject_inserts_exactly_one_before_body() -> None:
   html = "<html><body><p>plan body</p></body></html>"
-  out = files_api._inject_artifact_ui(html, "S")
+  out = artifact_view._inject_artifact_ui(html, "S")
   assert out.count("artifact-comments.js") == 1
   # The closing tag is preserved and the script sits before it.
   assert out.count("</body>") == 1
@@ -134,7 +136,7 @@ def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions
   assert resp.status_code == 200
   # Exactly the bytes the handler produced before the diff feature existed:
   # the page wrapped in the artifact UI, with no diff machinery involved.
-  assert resp.text == files_api._inject_artifact_ui(original, "S")
+  assert resp.text == artifact_view._inject_artifact_ui(original, "S")
 
 
 def test_serve_file_diff_missing_base_is_404_naming_the_path(sessions_root: pathlib.Path) -> None:
@@ -158,3 +160,30 @@ def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: pa
 
 # --- diff requests: the gzip form ships pre-compressed so the server's gzip
 # middleware skips its own whole-body deflate ---
+
+# --- the view costs a plain file and a listing no executor hop ---
+
+
+@pytest.mark.parametrize(
+    ("target", "accept_encoding", "hops"),
+    [("notes.txt", "identity", 1), ("notes.txt", "gzip", 2), ("", "identity", 1), ("", "gzip", 2)],
+    ids=["file", "file-gzip", "listing", "listing-gzip"])
+def test_a_plain_file_and_a_listing_take_the_executor_hops_they_took_before_the_view(
+    sessions_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch, target: str, accept_encoding: str, hops: int) -> None:
+  """The hop counts are the file server's own: its resolve-and-list hop, plus the gzip memo's."""
+  served = sessions_root / "plain"
+  served.mkdir()
+  (served / "notes.txt").write_text("plain text\n" * 20, encoding="utf-8")
+  calls: list[object] = []
+  real_to_thread = asyncio.to_thread
+
+  async def counting_to_thread(func, /, *args, **kwargs):
+    calls.append(func)
+    return await real_to_thread(func, *args, **kwargs)
+
+  monkeypatch.setattr(asyncio, "to_thread", counting_to_thread)
+
+  resp = _build_client(None).get(f"/absolute_filepath{served}/{target}", headers={"Accept-Encoding": accept_encoding})
+
+  assert resp.status_code == 200
+  assert len(calls) == hops

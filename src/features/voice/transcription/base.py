@@ -56,7 +56,7 @@ class TranscriptionBackend(ABC):
   call order to follow.
   """
 
-  # Registry key ("local", "gemini", "gemini-aigw", "muse") and the dropdown text shown beside
+  # Registry key ("local", "gemini", "muse") and the dropdown text shown beside
   # the microphone. A backend whose label depends on config overrides ``label``
   # with a property.
   id: ClassVar[str]

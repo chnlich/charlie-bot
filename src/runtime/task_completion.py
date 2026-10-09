@@ -824,7 +824,7 @@ class TaskCompletionManager:
       tree._index_meta(index, session_id)
       if tree.task_state(session_id) != "open":
         raise TaskConflictError([f"task {session_id} is no longer open"])
-      blockers = self.cancellation_blockers(session_id)
+      blockers = self.cancellation_blockers(index, session_id)
     if blockers:
       raise TaskConflictError(sorted(set(blockers)))
     if completing:
@@ -832,7 +832,7 @@ class TaskCompletionManager:
       # verification included — runs outside the control lock and is
       # authoritative, exactly as the operator close runs it; the locked
       # pass below revalidates the fast shape layer over fresh facts.
-      evidence_blockers = await self.verified_evidence_blockers(pre_meta, evidence)
+      evidence_blockers = await self.verified_evidence_blockers(index, pre_meta, evidence)
       if evidence_blockers:
         raise TaskConflictError(sorted(set(evidence_blockers)))
     child_epoch = await tree.session_events.prime_aggregator(session_id)
@@ -851,9 +851,9 @@ class TaskCompletionManager:
         raise TaskConflictError([f"task {session_id} is no longer open"])
       fresh_meta = await tree.load_meta(session_id)
       assert fresh_meta is not None
-      fresh_blockers = self.cancellation_blockers(session_id)
+      fresh_blockers = self.cancellation_blockers(index, session_id)
       if completing:
-        fresh_blockers += self.evidence_blockers(fresh_meta, evidence)
+        fresh_blockers += self.evidence_blockers(index, fresh_meta, evidence)
       if fresh_blockers:
         # The locked revalidation is authoritative: conditions that changed
         # during the outside-the-lock validation leave the task open with

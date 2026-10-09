@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import CLI_MEMORY_HOME_PATCH_TARGET, legacy_memory_entry_text, run_git
+from conftest import CLI_MEMORY_HOME_PATCH_TARGET, run_git
 from conftest import write_memory_entry as _write_entry
 from conftest import write_memory_topics as _write_topics
 
@@ -593,11 +593,12 @@ def test_land_refuses_dirty_live_checkout(store: Path, monkeypatch, capsys) -> N
 
 def test_land_refuses_tree_failing_lint(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
-  # A legacy (v1) entry: strict v2 lint flags 'created' in entries/.
+  # An entry missing the required 'audience' header fails lint.
   worktree = memory_proposal.proposal_worktree(store)
-  rel = Path("entries/profile/legacy.md")
-  (worktree / rel).write_text(legacy_memory_entry_text("profile", "legacy"), encoding="utf-8")
-  memory_proposal.commit(store, rel.as_posix(), _message_file(store, "admit legacy"))
+  rel = Path("entries/profile/no-audience.md")
+  text = _entry_text("no-audience", "body\n").replace("audience: master, worker\n", "")
+  (worktree / rel).write_text(text, encoding="utf-8")
+  memory_proposal.commit(store, rel.as_posix(), _message_file(store, "admit no-audience"))
   head_before = run_git(store, "rev-parse", "HEAD").strip()
   pr_head = run_git(store, "rev-parse", "proposal").strip()
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "land", pr_head)

@@ -17,12 +17,8 @@ Entry grammar (format v2): line 1 is exactly ``---``; header lines each match
 ``^([a-z_]+): <value>$`` until the next line that is exactly ``---``; everything
 after is an opaque pure-markdown body with no first-line requirement. The v2
 header carries ``scope``, ``topic``, ``audience`` (comma list of ``master`` /
-``worker``), and ``title``; ``revises`` is staging-only. Only the first header
-block is parsed, so the body may contain ``---`` lines.
-
-Parsing reads both store formats: a missing frontmatter ``title`` falls back to a body first line of
-``# <title>``, legacy ``audience: both`` reads as ``master, worker``, and
-``created``/``source`` remain parseable (lint rejects them in entries/ only).
+``worker``), and ``title``. Only the first header block is parsed, so the
+body may contain ``---`` lines.
 
 All logic lives here; the CLI (``src/features/memory/cli.py``) is a thin wrapper, and task
 prompt snapshots use the selection functions directly.
@@ -62,14 +58,10 @@ _TOPIC_LINE_RE = re.compile(r"^([a-z0-9][a-z0-9-]*)( resident)?$")
 TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # Slug charset (entry filename stem / header value charset).
 _SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-# Created date (legacy field): YYYY-MM-DD.
-_CREATED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # Audience value: comma list of slug-charset elements.
 _AUDIENCE_VALUE_RE = re.compile(r"^[A-Za-z0-9._-]+( *, *[A-Za-z0-9._-]+)*$")
 
-# ``created``/``source`` stay parseable for dual-read; lint rejects them in
-# entries/ only.
-_KNOWN_FIELDS = frozenset({"scope", "topic", "audience", "title", "created", "source", "revises"})
+_KNOWN_FIELDS = frozenset({"scope", "topic", "audience", "title"})
 _SCOPES = frozenset({"user", "host"})
 _AUDIENCE_ELEMENTS = frozenset({"master", "worker"})
 
@@ -98,10 +90,8 @@ class Topic:
 class Entry:
   """One parsed entry file.
 
-  ``audience`` is the comma list parsed out (legacy ``both`` -> ["master", "worker"]);
-  ``audience_raw`` keeps the raw frontmatter value for lint diagnostics (literal
-  ``both``). ``title`` is the frontmatter ``title`` when present, else the body's
-  first ``# `` line (legacy).
+  ``audience`` is the comma list parsed out of the frontmatter value. ``title``
+  is the frontmatter ``title``.
   """
 
   path: pathlib.Path
@@ -109,12 +99,7 @@ class Entry:
   slug: str
   scope: str | None
   audience: list[str] | None
-  audience_raw: str | None
-  created: str | None
-  source: str | None
-  revises: str | None
   title: str
-  title_in_header: bool  # True when the title came from frontmatter (v2) rather than the body (legacy)
   body: str
 
   @property
@@ -132,9 +117,7 @@ class Store:
 
 
 def _parse_audience(raw: str) -> list[str]:
-  """Split a comma-list audience value; legacy ``both`` reads as ``["master", "worker"]``."""
-  if raw == "both":
-    return ["master", "worker"]
+  """Split a comma-list audience value."""
   return [part.strip() for part in raw.split(",")]
 
 
@@ -146,10 +129,6 @@ def parse_entry(path: pathlib.Path) -> Entry:
   topic vocabulary membership, value domains) are done by :func:`load_store`
   and :func:`lint`. The body may contain ``---`` lines; only the first header
   block is parsed.
-
-  Dual-read: the title comes from frontmatter ``title`` when present, else
-  falls back to a legacy body first line of ``# <title>``; when neither exists
-  the entry is malformed (fail-loud).
   """
   return parse_entry_text(path.read_text(encoding="utf-8"), entry_path=path)
 
@@ -195,32 +174,16 @@ def parse_entry_text(text: str, *, entry_path: pathlib.Path) -> Entry:
   if not body_lines or (len(body_lines) == 1 and body_lines[0] == ""):
     raise MemoryFormatError(f"{entry_path}: line {i + 2}: empty body")
   body = "\n".join(body_lines)
-  if "title" in header:
-    title = header["title"]
-    title_in_header = True
-  else:
-    # Legacy fallback: the body's first line carries `# <title>`.
-    first = body_lines[0]
-    if not first.startswith("# "):
-      raise MemoryFormatError(
-          f"{entry_path}: line {i + 2}: no frontmatter 'title' and body must start with '# <title>'")
-    title = first[2:].strip()
-    title_in_header = False
-    if not title:
-      raise MemoryFormatError(f"{entry_path}: line {i + 2}: empty title after '# '")
-  audience_raw = header.get("audience")
+  if "title" not in header:
+    raise MemoryFormatError(f"{entry_path}: missing header field 'title'")
+  audience = header.get("audience")
   return Entry(
       path=entry_path,
       topic=header.get("topic"),
       slug=entry_path.stem,
       scope=header.get("scope"),
-      audience=_parse_audience(audience_raw) if audience_raw is not None else None,
-      audience_raw=audience_raw,
-      created=header.get("created"),
-      source=header.get("source"),
-      revises=header.get("revises"),
-      title=title,
-      title_in_header=title_in_header,
+      audience=_parse_audience(audience) if audience is not None else None,
+      title=header["title"],
       body=body,
   )
 
@@ -254,35 +217,16 @@ def _audience_violations(entry: Entry, v: Callable[[str], str]) -> list[str]:
   ]
 
 
-def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, strict_v2: bool = False) -> list[str]:
-  """Return a list of semantic violations for *entry* (empty = valid).
+def _validate_entry(entry: Entry, topics: dict[str, Topic]) -> list[str]:
+  """Return a list of semantic violations for an entries/ *entry* (empty = valid).
 
-  ``relaxed`` matches the staging/ rules for legacy frontmatter candidates:
-  header fields are optional except ``topic`` (which need not be in the
-  vocabulary), ``revises`` is allowed, and
-  ``created``/``source`` are not violations (existing staged candidates stay
-  lint-clean). Strict (entries/) requires ``scope``/``audience``, topic
-  vocabulary membership, and a matching directory name, and forbids
-  ``revises``. The base strict rules stay dual-read so :func:`load_store`
-  keeps loading the legacy store; ``strict_v2`` (lint only) adds the v2
-  requirements: frontmatter ``title``, no literal ``both``, and no
-  ``created``/``source``.
+  Requires ``scope``/``audience``, topic vocabulary membership, and a matching
+  directory name.
   """
-  where = _STAGING_DIRNAME if relaxed else _ENTRIES_DIRNAME
   topic_label = entry.topic or "?"
 
   def v(msg: str) -> str:
-    return f"{where}/{topic_label}/{entry.slug}.md: {msg}"
-
-  def header_field_violations() -> list[str]:
-    """The scope/audience/created header checks both rule sets share."""
-    out: list[str] = []
-    if entry.scope is not None and entry.scope not in _SCOPES:
-      out.append(v(f"scope {entry.scope!r} not in {{user, host}}"))
-    out.extend(_audience_violations(entry, v))
-    if entry.created is not None and not _CREATED_RE.match(entry.created):
-      out.append(v(f"created {entry.created!r} not YYYY-MM-DD"))
-    return out
+    return f"{_ENTRIES_DIRNAME}/{topic_label}/{entry.slug}.md: {msg}"
 
   violations: list[str] = []
   if not _SLUG_RE.match(entry.slug):
@@ -291,34 +235,16 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
     violations.append(v("missing required header field 'topic'"))
   elif not TOPIC_NAME_RE.match(entry.topic):
     violations.append(v(f"topic {entry.topic!r} is not a valid topic name"))
-  if relaxed:
-    violations.extend(header_field_violations())
-    if entry.revises is not None and not _SLUG_RE.match(entry.revises):
-      violations.append(v(f"revises {entry.revises!r} does not match slug charset"))
-  else:
-    if entry.topic and entry.topic not in topics:
-      violations.append(v(f"topic {entry.topic!r} not in topics vocabulary"))
-    parent_name = entry.path.parent.name
-    if entry.topic and parent_name != entry.topic:
-      violations.append(v(f"directory name {parent_name!r} != topic {entry.topic!r}"))
-    violations.extend(
-        v(f"missing required header field {field!r}")
-        for field in ("scope", "audience")
-        if getattr(entry, field) is None)
-    violations.extend(header_field_violations())
-    if entry.source is not None and not _SLUG_RE.match(entry.source):
-      violations.append(v(f"source {entry.source!r} does not match slug charset"))
-    if entry.revises is not None:
-      violations.append(v("'revises' is forbidden in entries/ (only staging candidates may carry it)"))
-    if strict_v2:
-      if not entry.title_in_header:
-        violations.append(v("missing required header field 'title'"))
-      if entry.audience_raw == "both":
-        violations.append(v("literal audience 'both' is forbidden in entries/; write 'master, worker'"))
-      if entry.created is not None:
-        violations.append(v("'created' is forbidden in entries/ (dropped in entry format v2)"))
-      if entry.source is not None:
-        violations.append(v("'source' is forbidden in entries/ (dropped in entry format v2)"))
+  if entry.topic and entry.topic not in topics:
+    violations.append(v(f"topic {entry.topic!r} not in topics vocabulary"))
+  parent_name = entry.path.parent.name
+  if entry.topic and parent_name != entry.topic:
+    violations.append(v(f"directory name {parent_name!r} != topic {entry.topic!r}"))
+  violations.extend(
+      v(f"missing required header field {field!r}") for field in ("scope", "audience") if getattr(entry, field) is None)
+  if entry.scope is not None and entry.scope not in _SCOPES:
+    violations.append(v(f"scope {entry.scope!r} not in {{user, host}}"))
+  violations.extend(_audience_violations(entry, v))
   return violations
 
 
@@ -365,18 +291,15 @@ def load_store(memory_dir: pathlib.Path) -> Store:
   file is created from the scaffold defaults and loads as the valid empty store.
 
   Fail-loud: an unknown topic, a directory/topic mismatch, a bad filename
-  charset, an unresolvable title (no frontmatter ``title`` and no ``# ``
-  body opener), or ``revises`` in entries/ all raise
-  :class:`MemoryFormatError`. Validation stays dual-read: legacy
-  ``created``/``source``/``both``/body-title entries still load (only lint is
-  v2-strict).
+  charset, a missing ``title`` header, or an unknown header field all raise
+  :class:`MemoryFormatError`.
   """
   ensure_store(memory_dir)
   topics = _load_topics(memory_dir)
   entries: list[Entry] = []
   for md_file in _iter_entry_files(memory_dir):
     entry = parse_entry(md_file)
-    violations = _validate_entry(entry, topics, relaxed=False)
+    violations = _validate_entry(entry, topics)
     if violations:
       raise MemoryFormatError(violations[0])
     entries.append(entry)
@@ -386,14 +309,9 @@ def load_store(memory_dir: pathlib.Path) -> Store:
 def lint(memory_dir: pathlib.Path) -> list[str]:
   """Return all store violations (empty = clean).
 
-  Validates entries/ with the strict v2 rules (frontmatter ``title`` required;
-  literal ``both`` and ``created``/``source`` are violations). staging/ files
-  dispatch on the first line: a first line of exactly ``---`` parses as a
-  frontmatter candidate under the relaxed rules (header fields optional except
-  ``topic``; ``revises`` allowed; topic need not be in the vocabulary;
-  comma-list audience and legacy ``both`` accepted; ``created``/``source``
-  not flagged); any other file is a free-form capture, valid iff it is
-  non-empty and its first line is a non-empty ``# <title>``.
+  Validates entries/ against the entry grammar. staging/ files are free-form
+  captures, each valid iff it is non-empty and its first line is a non-empty
+  ``# <title>``.
   A malformed topics file or entry body is reported as a violation rather than
   raised, so the full list surfaces at once.
   """
@@ -414,22 +332,12 @@ def lint(memory_dir: pathlib.Path) -> list[str]:
     except MemoryFormatError as e:
       violations.append(str(e))
       continue
-    violations.extend(_validate_entry(entry, topics, relaxed=False, strict_v2=True))
+    violations.extend(_validate_entry(entry, topics))
   staging_dir = memory_dir / _STAGING_DIRNAME
   if staging_dir.is_dir():
     for md_file in sorted(staging_dir.glob("*.md")):
       text = md_file.read_text(encoding="utf-8")
       first_line = text.split("\n", 1)[0]
-      if first_line == "---":
-        # Legacy frontmatter candidate: relaxed rules, unchanged.
-        try:
-          entry = parse_entry(md_file)
-        except MemoryFormatError as e:
-          violations.append(str(e))
-          continue
-        violations.extend(_validate_entry(entry, topics, relaxed=True))
-        continue
-      # Free-form capture: valid iff non-empty with a '# <title>' first line.
       if not text:
         violations.append(f"{md_file}: empty capture file")
       elif not first_line.startswith("# "):
@@ -442,8 +350,8 @@ def lint(memory_dir: pathlib.Path) -> list[str]:
 def full_text(entry: Entry) -> str:
   """The entry's presentable full text: ``# {title}`` + blank line + body.
 
-  A legacy body that already opens with ``# `` is returned as-is so its own
-  heading is not duplicated. Trailing newlines are stripped.
+  A body that already opens with ``# `` is returned as-is so its own heading
+  is not duplicated. Trailing newlines are stripped.
   """
   body = entry.body.rstrip("\n")
   if body.startswith("# "):

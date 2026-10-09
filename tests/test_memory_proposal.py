@@ -81,7 +81,8 @@ def _pr_commit(store: Path, rel_path: Path, text: str, message: str) -> str:
   target = worktree / rel_path
   target.parent.mkdir(parents=True, exist_ok=True)
   target.write_text(text, encoding="utf-8")
-  return memory_proposal.commit(store, rel_path.as_posix(), _message_file(store, message))
+  sha, _warnings = memory_proposal.commit(store, rel_path.as_posix(), _message_file(store, message))
+  return sha
 
 
 def _live_commit(store: Path, rel_path: Path, text: str, message: str) -> None:
@@ -534,6 +535,107 @@ def test_commit_refuses_a_prose_violation_even_with_replace_pr_lines(store: Path
   assert "prose check failed:" in err
   assert "sentence over 25 words" in err
   assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
+
+
+# --- negation warnings --------------------------------------------------------
+
+
+def _negation_warning(word: str, sentence: str) -> str:
+  """One negation warning's payload, as the commit message records it; the CLI prints it
+  on stderr with a ``warning: `` prefix."""
+  return (
+      f"negation or contrast '{word}': state the standing reality or the action to take, "
+      f"and keep the fact it carried: {sentence}")
+
+
+def _head_message(worktree: Path) -> str:
+  # %B prints the stored message (one trailing newline) plus git log's entry terminator.
+  return subprocess.run(
+      ["git", "log", "-1", "--format=%B"], cwd=str(worktree), capture_output=True, text=True, check=True).stdout
+
+
+def test_commit_warns_on_a_new_sentence_with_a_negation_word(store: Path, monkeypatch, capsys) -> None:
+  """A list-word hit never refuses: the commit lands, the warning reaches stderr, and the
+  commit message records the same line under Negation warnings:."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/warned.md")
+  sentence = "The proposal branch holds the draft, not the live store."
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("warned", f"- {sentence}\n"), encoding="utf-8")
+  code, out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert _fields(out)["committed"] == run_git(store, "rev-parse", "proposal").strip()
+  assert err == f"warning: {_negation_warning('not', sentence)}\n"
+  assert _head_message(worktree) == f"admit\nNegation warnings:\n  {_negation_warning('not', sentence)}\n\n"
+
+
+def test_commit_warns_on_a_changed_title_with_a_negation_word(store: Path, monkeypatch, capsys) -> None:
+  """A title that differs from the base version's and carries a list word warns, with the
+  title text in the sentence slot and the word named as the title writes it."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/retitled.md")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(
+      "---\nscope: user\ntopic: profile\ntitle: The Draft Is Not The Store\naudience: master, worker\n---\n"
+      "body stands.\n",
+      encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert err == f"warning: {_negation_warning('Not', 'The Draft Is Not The Store')}\n"
+  assert "Negation warnings:" in _head_message(worktree)
+
+
+def test_commit_ignores_a_negation_word_inside_backticks(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/backtick-negation.md")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("backtick-negation", "- Run `git not-a-flag` twice.\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert err == ""
+  assert "Negation warnings" not in _head_message(worktree)
+
+
+def test_commit_ignores_a_base_verbatim_sentence_with_a_negation_word(store: Path, monkeypatch, capsys) -> None:
+  """A bullet the base already holds verbatim escapes the negation check, so old sentences
+  never warn a commit that edits other lines of their entry."""
+  rel = Path("entries/profile/legacy-not.md")
+  base_text = _entry_text("legacy-not", "- The live store never holds the draft.\n")
+  _live_commit(store, rel, base_text, "base holds the negation")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text + "- Short added line.\n", encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "append")))
+  assert code == 0, err
+  assert err == ""
+
+
+def test_commit_warns_on_a_rewritten_pr_line_and_lists_both_trailer_sections(store: Path, monkeypatch, capsys) -> None:
+  """With --replace-pr-lines the rewritten PR line lands, and the commit message records the
+  replaced line first, then the negation warning for the new text."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/replaced-warned.md")
+  old_line = "- The draft lives in the worktree, not the live store."
+  new_line = "- The draft never lives in the live store."
+  _pr_commit(store, rel, _entry_text("replaced-warned", f"{old_line}\n"), "first")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(_entry_text("replaced-warned", f"{new_line}\n"), encoding="utf-8")
+  code, out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "replace")),
+      "--replace-pr-lines")
+  assert code == 0, err
+  assert _fields(out)["committed"] == run_git(store, "rev-parse", "proposal").strip()
+  assert err == f"warning: {_negation_warning('never', new_line.removeprefix('- '))}\n"
+  assert _head_message(worktree) == (
+      f"replace\nReplaced PR lines:\n  {old_line}\n"
+      f"Negation warnings:\n  {_negation_warning('never', new_line.removeprefix('- '))}\n\n")
 
 
 # --- land ---------------------------------------------------------------------

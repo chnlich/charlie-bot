@@ -27,6 +27,12 @@ from src.features.memory import memory
 PROPOSAL_BRANCH = "proposal"
 _WORKTREE_SUFFIX = "-proposal"
 _SENTENCE_WORD_LIMIT = 25
+# Negation and contrast words the commit check warns on: whole words, case-insensitive.
+_NEGATION = re.compile(
+    r"\b(not|no|never|none|nothing|nobody|nowhere|neither|nor|without|instead of|rather than|cannot|lacks?)\b|n't\b",
+    re.IGNORECASE,
+)
+_NEGATION_ADVICE = "state the standing reality or the action to take, and keep the fact it carried"
 _BODY_LINE_LIMIT = 12
 _BACKTICKED = re.compile(r"`[^`]*`")
 
@@ -282,6 +288,52 @@ def _prose_violations(text: str, base_text: str | None) -> list[str]:
   return violations
 
 
+def _negation_payload(sentence: str) -> str | None:
+  """The warning payload when *sentence* carries a negation or contrast word, else None.
+
+  The match runs on the backtick-masked sentence and names the first list word as the
+  sentence writes it.
+  """
+  masked, mapping = _mask_backticks(sentence)
+  m = _NEGATION.search(masked)
+  if m is None:
+    return None
+  word = sentence[mapping[m.start()]:mapping[m.end() - 1] + 1]
+  return f"negation or contrast '{word}': {_NEGATION_ADVICE}: {sentence}"
+
+
+def _title_line(text: str) -> str | None:
+  """The front matter's ``title:`` line, or None when the text holds none."""
+  return next((line for line in text.split("\n") if line.startswith("title:")), None)
+
+
+def _negation_warnings(text: str, base_text: str | None) -> list[str]:
+  """The negation-word warnings of *text* over the same file's base version: one payload per
+  added-or-rewritten sentence or changed title that carries a word from the list.
+
+  The exemptions mirror :func:`_prose_violations`: a unit the base version holds verbatim
+  escapes, and so does a title equal to the base version's. A warning never refuses the
+  commit — the CLI prints it on stderr and the commit message records it under
+  ``Negation warnings:``, so the reviewer rewrites the sentence at its next pass.
+  """
+  warnings: list[str] = []
+  base_units = set(_prose_units(_entry_body(base_text))) if base_text is not None else set()
+  for unit in _prose_units(_entry_body(text)):
+    if unit in base_units:
+      continue
+    for sentence in _sentences(unit):
+      payload = _negation_payload(sentence)
+      if payload is not None:
+        warnings.append(payload)
+  title = _title_line(text)
+  base_title = _title_line(base_text) if base_text is not None else None
+  if title is not None and title != base_title:
+    payload = _negation_payload(title.removeprefix("title:").strip())
+    if payload is not None:
+      warnings.append(payload)
+  return warnings
+
+
 def _store_path(path: str) -> pathlib.PurePosixPath:
   """Validate a store-relative path argument; anything escaping the store is a refusal."""
   rel = pathlib.PurePosixPath(path)
@@ -290,8 +342,14 @@ def _store_path(path: str) -> pathlib.PurePosixPath:
   return rel
 
 
-def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path, replace_pr_lines: bool = False) -> str:
-  """Commit exactly one store-relative path on the proposal branch; return the new SHA.
+def commit(
+    memory_dir: pathlib.Path,
+    path: str,
+    message_file: pathlib.Path,
+    replace_pr_lines: bool = False,
+) -> tuple[str, list[str]]:
+  """Commit exactly one store-relative path on the proposal branch; return the new SHA and
+  the negation warnings (:func:`_negation_warnings`) the committed text drew.
 
   The guard: every non-blank line the PR already added to this file (the
   multiset ``proposal:<path> - <base>:<path>``) must still be present in the
@@ -305,7 +363,10 @@ def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path, repl
   The prose check then refuses an entry whose added or rewritten sentences
   break the "Text a model reads" rules (a sentence over 25 words, a semicolon
   joining clauses) or whose body exceeds 12 lines; the ``topics`` vocabulary
-  file is exempt.
+  file is exempt. The negation check over the same sentences and the title
+  never refuses: each hit comes back as a warning for the caller to print, and
+  the commit message records the payloads under ``Negation warnings:`` after
+  ``Replaced PR lines:``.
 
   *message_file* resolves against the caller's working directory here: the
   git subprocess runs inside the worktree, so a relative path would otherwise
@@ -334,17 +395,23 @@ def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path, repl
     replaced = [line for line, count in sorted(missing.items()) for _ in range(count)]
   else:
     replaced = []
+  warnings: list[str] = []
   if current_text is not None and rel != pathlib.PurePosixPath("topics"):
-    violations = _prose_violations(current_text, _rev_text(memory_dir, base, path))
+    base_text = _rev_text(memory_dir, base, path)
+    violations = _prose_violations(current_text, base_text)
     if violations:
       raise ProposalRefusalError(f"{path}: prose check failed:\n" + "\n".join(f"  {v}" for v in violations))
+    warnings = _negation_warnings(current_text, base_text)
   with tempfile.TemporaryDirectory() as tmp:
     commit_message = pathlib.Path(tmp) / "message"
-    if replaced:
+    if replaced or warnings:
       message = message_file.read_text(encoding="utf-8")
       if message and not message.endswith("\n"):
         message += "\n"
-      message += "Replaced PR lines:\n" + "".join(f"  {line}\n" for line in replaced)
+      if replaced:
+        message += "Replaced PR lines:\n" + "".join(f"  {line}\n" for line in replaced)
+      if warnings:
+        message += "Negation warnings:\n" + "".join(f"  {w}\n" for w in warnings)
       commit_message.write_text(message, encoding="utf-8")
     else:
       commit_message.write_bytes(message_file.read_bytes())
@@ -352,7 +419,7 @@ def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path, repl
     result = _run(worktree, "commit", "--only", "-F", str(commit_message), "--", path)
     if result.returncode != 0:
       raise ProposalRefusalError(f"committing {path} failed: {result.stderr.strip()}")
-  return _git(worktree, "rev-parse", "HEAD").strip()
+  return _git(worktree, "rev-parse", "HEAD").strip(), warnings
 
 
 def land(memory_dir: pathlib.Path, sha: str) -> dict[str, str]:

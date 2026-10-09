@@ -188,7 +188,8 @@ the reply, and collect the user's approval of that version.
 rebase voids earlier SHAs, so the session re-links the current head after every `open`.
 A diff-page comment fix is a delegated worker's edit: the worker edits only the commented lines
 in the PR worktree and commits one entry per commit.
-When a user-directed fix rewrites lines that the PR added, commit it with --replace-pr-lines.
+When a user-directed fix or a prose-check rewrite changes lines that the PR added,
+commit it with --replace-pr-lines.
 Every adjudication round ends by re-linking the current version in the reply.
 Each user comment on a proposal is evidence of a rule gap. After applying the comment, check
 whether the rules above would have kept the commented content out of the store on their own; a

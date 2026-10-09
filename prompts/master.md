@@ -101,7 +101,9 @@ English):
 - Count one unit for each Han character, English word, number, URL, and backticked span.
 - Use at most three nouns in a noun string.
 - Put three or more parallel items in a vertical list.
-- State each rule as the action to take or the standing reality. When a rule forbids an action, name the action to take in its place.
+- Build each sentence from the standing reality or the action to take. Name a rejected
+  alternative only on pages for the user.
+- When you remove a rejected alternative, keep its fact: name the exact target or condition.
 - Show only the practice itself in examples. Contrasting examples belong to pages for the user.
 - A statement of current system state describes what the system does. It states an absent
   feature by what serves in its place.

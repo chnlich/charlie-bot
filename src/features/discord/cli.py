@@ -43,14 +43,8 @@ import argparse
 import json
 import sys
 
-from src.infra.help_formatter import CliHelpFormatter
-from src.runtime.cli.common import (
-    add_session_arg,
-    exit_usage_error,
-    post_internal_api,
-    read_reply_text,
-    resolve_session_id,
-)
+from src.infra import help_formatter
+from src.runtime.cli import common
 
 _READ_LIMIT_MIN = 1
 _READ_LIMIT_MAX = 100
@@ -58,16 +52,19 @@ _READ_LIMIT_DEFAULT = 50
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot Discord thread verbs", formatter_class=CliHelpFormatter)
+  parser = argparse.ArgumentParser(
+      description="CharlieBot Discord thread verbs", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="discord_command", required=True)
 
   reply = sub.add_parser(
-      "reply", help="Post a reply to this session's Discord thread", formatter_class=CliHelpFormatter)
+      "reply", help="Post a reply to this session's Discord thread", formatter_class=help_formatter.CliHelpFormatter)
   reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
-  add_session_arg(reply)
+  common.add_session_arg(reply)
 
   read = sub.add_parser(
-      "read", help="Read thread messages, marking the returned unread ones read", formatter_class=CliHelpFormatter)
+      "read",
+      help="Read thread messages, marking the returned unread ones read",
+      formatter_class=help_formatter.CliHelpFormatter)
   read.add_argument(
       "--url", default=None, help="Discord link to read instead of this session's own thread; marks nothing read")
   read.add_argument(
@@ -76,35 +73,42 @@ def _build_parser() -> argparse.ArgumentParser:
       default=_READ_LIMIT_DEFAULT,
       metavar="N",
       help=f"Messages per page, {_READ_LIMIT_MIN}..{_READ_LIMIT_MAX} (default {_READ_LIMIT_DEFAULT})")
-  add_session_arg(read)
+  common.add_session_arg(read)
 
   sub.add_parser(
-      "check", help="Verify the Discord bot setup; exits 1 when ok is false", formatter_class=CliHelpFormatter)
+      "check",
+      help="Verify the Discord bot setup; exits 1 when ok is false",
+      formatter_class=help_formatter.CliHelpFormatter)
   return parser
 
 
 def _validate_read_limit(limit: int) -> int:
   if not _READ_LIMIT_MIN <= limit <= _READ_LIMIT_MAX:
-    exit_usage_error(f"--limit must be between {_READ_LIMIT_MIN} and {_READ_LIMIT_MAX}, got: {limit}")
+    common.exit_usage_error(f"--limit must be between {_READ_LIMIT_MIN} and {_READ_LIMIT_MAX}, got: {limit}")
   return limit
 
 
 def _cmd_reply(args: argparse.Namespace) -> None:
-  session_id = resolve_session_id(args.session)
-  text = read_reply_text(args.file)
-  result = post_internal_api("/api/internal/discord/reply", {"session_id": session_id, "text": text})
+  session_id = common.resolve_session_id(args.session)
+  text = common.read_reply_text(args.file)
+  result = common.post_internal_api("/api/internal/discord/reply", {"session_id": session_id, "text": text})
   print(json.dumps(result))
 
 
 def _cmd_read(args: argparse.Namespace) -> None:
-  session_id = resolve_session_id(args.session)
+  session_id = common.resolve_session_id(args.session)
   limit = _validate_read_limit(args.limit)
-  result = post_internal_api("/api/internal/discord/read", {"session_id": session_id, "url": args.url, "limit": limit})
+  result = common.post_internal_api(
+      "/api/internal/discord/read", {
+          "session_id": session_id,
+          "url": args.url,
+          "limit": limit
+      })
   print(json.dumps(result))
 
 
 def _cmd_check() -> None:
-  result = post_internal_api("/api/internal/discord/check", {})
+  result = common.post_internal_api("/api/internal/discord/check", {})
   print(json.dumps(result))
   if not result.get("ok"):
     sys.exit(1)

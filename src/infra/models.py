@@ -443,25 +443,6 @@ def validate_session_metadata(data: Any, path: str | None = None) -> SessionMeta
 
 
 # ---------------------------------------------------------------------------
-# Worker Output Models
-# ---------------------------------------------------------------------------
-
-
-class WorkerEvent(BaseModel):
-  type: str
-  content: str | None = None
-  path: str | None = None
-  message: str | None = None
-  status: str | None = None
-  tool_name: str | None = None
-  input: dict | None = None
-  # Set only when the projection trimmed this row's output to the
-  # TOOL_PREVIEW_CHARS wire bound; the persisted events log keeps the full text.
-  output_truncated: bool | None = None
-  timestamp: UtcDatetime = Field(default_factory=utc_now)
-
-
-# ---------------------------------------------------------------------------
 # API Request / Response Models
 # ---------------------------------------------------------------------------
 

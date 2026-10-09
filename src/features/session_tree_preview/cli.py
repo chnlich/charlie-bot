@@ -65,10 +65,6 @@ def _build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def _emit(payload: dict) -> None:
-  print(json.dumps(payload, indent=2, default=str))
-
-
 def _fail(message: str, details: list[str] | None = None) -> None:
   payload = {"error": message}
   if details:

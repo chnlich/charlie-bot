@@ -33,6 +33,7 @@ import dataclasses
 import pathlib
 import re
 import subprocess
+import threading
 from collections.abc import Callable
 
 _TOPICS_FILENAME = "topics"
@@ -267,21 +268,31 @@ def _seed_if_missing(path: pathlib.Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+# Each launch's prompt assembly reaches this on its own worker thread, so first-use calls overlap. A
+# ``git init`` that starts while another runs in the same directory exits 128: git creates its template
+# files and ``.git/config.lock`` with exclusive opens. The lock makes the ``.git`` check and the
+# ``git init`` one step.
+_ENSURE_STORE_LOCK = threading.Lock()
+
+
 def ensure_store(memory_dir: pathlib.Path) -> None:
-  """Create the labeled-entry store scaffold at *memory_dir* (idempotent).
+  """Create the labeled-entry store scaffold at *memory_dir* (idempotent, thread-safe).
 
   Creates the directory, runs ``git init`` when it is not already a repo, seeds
   the topics vocabulary and .gitignore (never overwriting existing files), and
   creates the ``entries/`` and ``staging/`` directories. The canon (entries/
   and topics) is populated only by user-approved curation diffs, never here.
+  Concurrent calls in one process run one after the other; a call that returns
+  leaves the whole scaffold in place.
   """
-  memory_dir.mkdir(parents=True, exist_ok=True)
-  if not (memory_dir / ".git").exists():
-    subprocess.run(["git", "init"], cwd=str(memory_dir), check=True, capture_output=True)
-  _seed_if_missing(memory_dir / _TOPICS_FILENAME, DEFAULT_MEMORY_TOPICS)
-  _seed_if_missing(memory_dir / ".gitignore", DEFAULT_MEMORY_GITIGNORE)
-  (memory_dir / _ENTRIES_DIRNAME).mkdir(exist_ok=True)
-  (memory_dir / _STAGING_DIRNAME).mkdir(exist_ok=True)
+  with _ENSURE_STORE_LOCK:
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    if not (memory_dir / ".git").exists():
+      subprocess.run(["git", "init"], cwd=str(memory_dir), check=True, capture_output=True)
+    _seed_if_missing(memory_dir / _TOPICS_FILENAME, DEFAULT_MEMORY_TOPICS)
+    _seed_if_missing(memory_dir / ".gitignore", DEFAULT_MEMORY_GITIGNORE)
+    (memory_dir / _ENTRIES_DIRNAME).mkdir(exist_ok=True)
+    (memory_dir / _STAGING_DIRNAME).mkdir(exist_ok=True)
 
 
 def load_store(memory_dir: pathlib.Path) -> Store:

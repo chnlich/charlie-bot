@@ -1,7 +1,9 @@
 """Tests for the labeled-entry memory store library (src/features/memory/memory.py)."""
 
+import concurrent.futures
 import io
 import pathlib
+import threading
 import types
 from collections.abc import Callable
 
@@ -108,6 +110,24 @@ def test_ensure_store_twice_leaves_files_unchanged(tmp_path: pathlib.Path) -> No
   memory.ensure_store(mem)
   assert _snapshot(mem) == before
   assert (mem / "topics").read_text(encoding="utf-8") == "alpha resident\n"
+
+
+def test_ensure_store_serves_concurrent_first_use(tmp_path: pathlib.Path) -> None:
+  """Each launch's prompt assembly calls ensure_store on its own thread, so first-use calls overlap. A
+  ``git init`` that starts while another runs in the same directory exits 128, which kills that launch."""
+  mem = tmp_path / "store"
+  callers = 8
+  start = threading.Barrier(callers)
+
+  def first_use() -> None:
+    start.wait()
+    memory.ensure_store(mem)
+
+  with concurrent.futures.ThreadPoolExecutor(max_workers=callers) as pool:
+    futures = [pool.submit(first_use) for _ in range(callers)]
+    for future in futures:
+      future.result()
+  _assert_fresh_scaffold(mem)
 
 
 def test_lint_reports_a_missing_topics_file_without_creating_the_scaffold(tmp_path: pathlib.Path) -> None:

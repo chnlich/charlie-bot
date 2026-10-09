@@ -58,7 +58,7 @@ async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
     if reviewer_pushes:
       conftest.run_git(test_task_execution.work_run_worktree(tree, worker.id), "push", "-q", "origin", "HEAD:main")
 
-  test_task_execution.install_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           test_task_execution.SpawningScriptedBackend(
               [test_task_execution.result_event("implemented")],
@@ -133,7 +133,7 @@ async def test_blocked_child_report_reaches_the_manager_turn_with_its_summary(
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   child = await conftest.create_task(
       tree, parent=manager.id, request_id="child", profile="worker", task=models.TaskSpec(goal="work"))
-  builds = test_task_execution.install_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("noted")])],
       conftest.BUILD_BACKEND_PATCH_TARGET)
   summary = "work run run-w passed review but its branch did not land on main: ancestry check failed"

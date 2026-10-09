@@ -32,6 +32,7 @@ from conftest import (
     build_session_blocks,
     build_task_tree,
     init_repo_with_origin,
+    install_scripted_backends,
     make_cron_session,
     make_cron_sessions_client,
     registered_cron_handler,
@@ -51,7 +52,6 @@ from tests.test_task_execution import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
-    install_backends,
     result_event,
     stub_credentials,
     wait_for_terminal_run,
@@ -232,7 +232,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   await session_blocks.store.save_metadata(cron_session)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("sweep done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await scheduler._tick()
@@ -557,7 +557,7 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("reviewed: merged")])
-  install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   # An anchor and worker-thread directory predate the last Saturday 01:00 PT.
   await session_blocks.anchors.persist_cc_session_id(node_id, "cc-old")
@@ -594,7 +594,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
 
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch,
       [SpawningScriptedBackend([result_event("first")]),
        SpawningScriptedBackend([result_event("second")])], BUILD_BACKEND_PATCH_TARGET)

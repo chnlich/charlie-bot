@@ -57,7 +57,7 @@ CURSOR_NAME = "agent.raw.cursor"
 # The transport directory every per-run file sits in (a thread's data dir, a
 # master run's <session>/data/master_runs/<started_at> dir) and the
 # master-capture directory name under a session's data dir. Writers (the
-# master turn in src/runtime, threads.py's creation skeleton) and readers
+# master turn in src/runtime, the task tree's node creation) and readers
 # (token_tally's corpus walk, the cold-storage transport sweep) must agree on
 # these names.
 DATA_DIR_NAME = "data"
@@ -72,9 +72,9 @@ THREADS_DIR_NAME = "threads"
 # walk joins the same relative suffix by string, so the names move together.
 EVENTS_LOG_NAME = "events.jsonl"
 
-# The per-session metadata filename (threads.py's node records, the task tree's
-# files; threads re-exports it): defined in src.runtime.run_identity, whose
-# run-scoped CLI path reads session metadata without this module's model stack.
+# The per-session metadata filename (the task tree's node records; re-exported
+# here): defined in src.runtime.run_identity, whose run-scoped CLI path reads
+# session metadata without this module's model stack.
 from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
 

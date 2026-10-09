@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from src.infra.deferred import import_attr
+from src.infra import deferred
 
 CREDENTIALS_PREFIX = "credentials: "
 
@@ -59,7 +59,7 @@ def option_model(backend_type: str) -> type:
   if path is None:
     raise ValueError(
         f"backend type {backend_type!r} is not registered; registered types: {', '.join(_option_models) or 'none'}")
-  option_class = import_attr(path)
+  option_class = deferred.import_attr(path)
   declared = option_class.model_fields["type"].default
   if declared != backend_type:
     raise ValueError(f"{path} declares type {declared!r}; it is registered as backend type {backend_type!r}")
@@ -102,7 +102,7 @@ def section_models() -> dict[str, type]:
   """The registered section models by key, in registration order; each model imports on the first call."""
   for key, path in _section_models.items():
     if key not in _section_classes:
-      _section_classes[key] = import_attr(path)
+      _section_classes[key] = deferred.import_attr(path)
   return dict(_section_classes)
 
 
@@ -120,4 +120,4 @@ def register_config_check(fn: str) -> None:
 def run_config_checks(cfg: Any) -> None:
   """Run every registered check on ``cfg``, in registration order."""
   for fn in _checks:
-    import_attr(fn)(cfg)
+    deferred.import_attr(fn)(cfg)

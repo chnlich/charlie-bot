@@ -2,12 +2,13 @@
 
 from typing import Literal
 
-from pydantic import Field
+import pydantic
 
-from src.infra.backend_models import BackendOption
+from src.infra import backend_models
 
 
-class CodexBackend(BackendOption):
+class CodexBackend(backend_models.BackendOption):
   type: Literal["codex"] = "codex"
   model_reasoning_effort: str | None = None  # per-backend reasoning effort override
-  model_auto_compact_token_limit: int | None = Field(default=None, gt=0)  # per-backend auto-compact token limit
+  model_auto_compact_token_limit: int | None = pydantic.Field(
+      default=None, gt=0)  # per-backend auto-compact token limit

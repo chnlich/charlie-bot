@@ -5,7 +5,10 @@
 // resolution reads, and the namespace+artifacts sources loaded into one vm.
 // opts.document/opts.planPanel inject artifacts.js's optional globals;
 // opts.sessionId overrides the 'test-session' default for suites whose staged
-// paths name another session id.
+// paths name another session id; opts.window merges extra members into the
+// window stub (a recording addEventListener, an innerHeight); opts.withScroll
+// also loads chat/scroll.js, for suites exercising the scroll seam
+// (restoreBottomPin) that artifacts.js's follow decisions route through.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 
@@ -20,9 +23,11 @@ function loadArtifactsScript(opts) {
     escapeHtml,
     hljs: { highlight: (value) => ({ value: escapeHtml(value) }) },
     localStorage: { getItem: () => null, setItem: () => {} },
-    window: { addEventListener: () => {}, SESSIONS_ROOT },
+    window: Object.assign({ addEventListener: () => {}, SESSIONS_ROOT }, o.window),
     console,
     URL: globalThis.URL,
+    CSS: { escape: (value) => String(value) },
+    Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
   };
   if (o.document) context.document = o.document;
   if (o.planPanel) context.planPanel = o.planPanel;
@@ -31,6 +36,7 @@ function loadArtifactsScript(opts) {
   // globalThis, not the outer Node global.
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
   vm.runInContext(readStatic('chat/artifacts.js'), context, { filename: 'artifacts.js' });
+  if (o.withScroll) vm.runInContext(readStatic('chat/scroll.js'), context, { filename: 'chat/scroll.js' });
   return context;
 }
 

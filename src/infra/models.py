@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from src.infra import metadata_slots
+from src.infra.config import CharlieBotConfig
 from src.infra.deferred import deferred_import_loader
 
 # The cross-layer constants single-home in src.infra.constants (stdlib-only, the
@@ -737,3 +738,7 @@ class SessionCallbacks:
   context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
   # The task-tree owner supplies its shared activity verdict for sidebar updates.
   task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
+  # Runs after each finished round (session naming today) with the round's config and the session
+  # id. Optional so callback bundles built without it (tests) stay valid; the live bundle always
+  # sets it.
+  after_round: Callable[[CharlieBotConfig, str], Awaitable[None]] | None = None

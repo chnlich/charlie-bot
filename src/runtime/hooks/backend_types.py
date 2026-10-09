@@ -83,11 +83,6 @@ def lifecycle_for(option: BackendOption) -> backend_lifecycle.BackendLifecycle:
   return _lifecycle_at(backend_type_registration.registration_of(option.type).lifecycle)
 
 
-def lifecycle_for_type(backend_type: str) -> backend_lifecycle.BackendLifecycle:
-  """The lifecycle of ``backend_type``; ValueError when the type is unregistered."""
-  return _lifecycle_at(backend_type_registration.registration_of(backend_type).lifecycle)
-
-
 def lifecycles() -> tuple[backend_lifecycle.BackendLifecycle, ...]:
   """Every registered lifecycle, each once, in registration order; types without one are left out."""
   registrations = backend_type_registration.registrations().values()

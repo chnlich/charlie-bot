@@ -31,33 +31,25 @@ place.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import datetime
 import json
 import os
+import pathlib
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
 
-from src.backends.claude_code import claude_accounts
-from src.backends.claude_code.claude_code import BASE_COMMAND, HEADLESS_DISALLOWED_TOOLS, claude_supervisor_env
-from src.backends.claude_code.claude_launch import DISABLE_CONNECTOR_SETTINGS, headless_claude_env
+from src.backends.claude_code import claude_accounts, claude_code, claude_launch
+from src.infra import config, log_once, process
 from src.infra import event_types as ET
-from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.process import kill_process_group, make_session_cgroup_preexec, prepare_session_cgroup
-from src.runtime.agent_process.base import (
-    DISALLOWED_TOOLS_FLAG,
-    make_context_compact_failed_event,
-    make_context_compacted_event,
-)
-from src.runtime.model_family import model_family
+from src.runtime import model_family
+from src.runtime.agent_process import base
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Claude Code writes one-hour prompt-cache entries only, and every hit renews the
 # entry, so a request more than an hour after the previous one finds nothing cached.
-CACHE_TTL = timedelta(minutes=60)
+CACHE_TTL = datetime.timedelta(minutes=60)
 
 # Whole Claude Code /compact run. A 70K-token compaction measured 21 s; the
 # ceiling leaves room for a 400K one.
@@ -72,7 +64,7 @@ FABLE_FAMILY = "fable"
 # run can only read the transcript and write the summary.
 COMPACTION_DISALLOWED_TOOLS = ",".join(
     (
-        HEADLESS_DISALLOWED_TOOLS,
+        claude_code.HEADLESS_DISALLOWED_TOOLS,
         "Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,TodoWrite,Skill,ToolSearch",
         "KillShell,BashOutput,AskUserQuestion,ExitPlanMode,Task",
     ))
@@ -93,20 +85,20 @@ _COST_STATE_MARKER = '"cost-state"'
 
 
 def is_fable(model: str | None) -> bool:
-  return model_family(model) == FABLE_FAMILY
+  return model_family.model_family(model) == FABLE_FAMILY
 
 
-def cache_expired(last_request_at: datetime | None, now: datetime | None) -> bool:
+def cache_expired(last_request_at: datetime.datetime | None, now: datetime.datetime | None) -> bool:
   """True when the previous request is more than CACHE_TTL old; None (no request yet) is not expired."""
   return last_request_at is not None and claude_accounts.now_or(now) - last_request_at > CACHE_TTL
 
 
 def expired_cache_compaction_wanted(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     model: str | None,
     context_tokens: int | None,
-    last_request_at: datetime | None,
-    now: datetime | None,
+    last_request_at: datetime.datetime | None,
+    now: datetime.datetime | None,
 ) -> bool:
   """A Fable turn starting on an expired cache with a context at or above the floor."""
   return (
@@ -114,7 +106,7 @@ def expired_cache_compaction_wanted(
       context_tokens >= cfg.accounts.claude_compaction.expired_cache_tokens and cache_expired(last_request_at, now))
 
 
-def relay_compaction_wanted(cfg: CharlieBotConfig, model: str | None, context_tokens: int | None) -> bool:
+def relay_compaction_wanted(cfg: config.CharlieBotConfig, model: str | None, context_tokens: int | None) -> bool:
   """A Fable session about to relay to another account with a context at or above the floor."""
   return is_fable(
       model) and context_tokens is not None and context_tokens >= cfg.accounts.claude_compaction.relay_tokens
@@ -125,7 +117,7 @@ def relay_compaction_wanted(cfg: CharlieBotConfig, model: str | None, context_to
 # ---------------------------------------------------------------------------
 
 
-def _boundary_rows(transcript: Path) -> list[dict]:
+def _boundary_rows(transcript: pathlib.Path) -> list[dict]:
   rows: list[dict] = []
   with transcript.open(encoding="utf-8", errors="replace") as handle:
     for line in handle:
@@ -140,12 +132,12 @@ def _boundary_rows(transcript: Path) -> list[dict]:
   return rows
 
 
-def count_compact_boundaries(transcript: Path) -> int:
+def count_compact_boundaries(transcript: pathlib.Path) -> int:
   """Number of ``compact_boundary`` rows in an on-disk transcript."""
   return len(_boundary_rows(transcript))
 
 
-def _newest_cost_state_model_usage(transcript: Path) -> dict:
+def _newest_cost_state_model_usage(transcript: pathlib.Path) -> dict:
   """The newest ``cost-state`` row's ``modelUsage``, the session's running
   per-model totals; {} when the transcript carries no such row."""
   newest: dict = {}
@@ -174,7 +166,7 @@ def _snake_case_keys(meta: dict) -> dict:
   return {_CAMEL_TO_SNAKE.sub("_", key).lower(): value for key, value in meta.items()}
 
 
-def _newest_boundary_compact_metadata(transcript: Path) -> dict | None:
+def _newest_boundary_compact_metadata(transcript: pathlib.Path) -> dict | None:
   """The newest boundary row's ``compactMetadata`` with snake_case keys; None when
   the transcript has no boundary row carrying one."""
   rows = _boundary_rows(transcript)
@@ -189,7 +181,7 @@ def _newest_boundary_compact_metadata(transcript: Path) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class CompactionOutcome:
   ok: bool
   error: str | None = None
@@ -198,7 +190,7 @@ class CompactionOutcome:
 
 def compaction_command(cc_session_id: str) -> list[str]:
   return [
-      BASE_COMMAND[0],
+      claude_code.BASE_COMMAND[0],
       "-p",
       "--resume",
       cc_session_id,
@@ -206,24 +198,24 @@ def compaction_command(cc_session_id: str) -> list[str]:
       COMPACTION_MODEL,
       "--output-format",
       "json",
-      DISALLOWED_TOOLS_FLAG,
+      base.DISALLOWED_TOOLS_FLAG,
       COMPACTION_DISALLOWED_TOOLS,
       # The compaction subprocess is a CharlieBot-spawned Claude session too,
-      # so connector sync stays off here as well (DISABLE_CONNECTOR_SETTINGS).
+      # so connector sync stays off here as well (claude_launch.DISABLE_CONNECTOR_SETTINGS).
       "--settings",
-      json.dumps(DISABLE_CONNECTOR_SETTINGS),
+      json.dumps(claude_launch.DISABLE_CONNECTOR_SETTINGS),
   ]
 
 
-def compaction_env(config_dir: str | Path) -> dict[str, str]:
+def compaction_env(config_dir: str | pathlib.Path) -> dict[str, str]:
   """Headless Claude Code environment pinned to one login directory.
 
   The host's own CLAUDE_CONFIG_DIR never reaches the child: the pool chose the
   directory and an inherited value would silently pick another account.
   """
-  env = {**claude_supervisor_env(os.environ), **headless_claude_env()}
-  env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
-  env[CLAUDE_CONFIG_DIR_ENV_VAR] = str(Path(config_dir).expanduser())
+  env = {**claude_code.claude_supervisor_env(os.environ), **claude_launch.headless_claude_env()}
+  env.pop(config.CLAUDE_CONFIG_DIR_ENV_VAR, None)
+  env[config.CLAUDE_CONFIG_DIR_ENV_VAR] = str(pathlib.Path(config_dir).expanduser())
   return env
 
 
@@ -257,7 +249,7 @@ def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: i
     return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
   if after <= before:
     return CompactionOutcome(ok=False, error="transcript gained no compact_boundary row", models=models)
-  if not models or any(model_family(name) != COMPACTION_FAMILY for name in models):
+  if not models or any(model_family.model_family(name) != COMPACTION_FAMILY for name in models):
     return CompactionOutcome(ok=False, error=f"compaction served by {', '.join(models) or 'no model'}", models=models)
   return CompactionOutcome(ok=True, models=models)
 
@@ -266,7 +258,7 @@ async def compact_with_sonnet(
     *,
     cc_session_id: str,
     cwd: str,
-    config_dir: str | Path,
+    config_dir: str | pathlib.Path,
     pre_tokens: int | None,
     persist_and_broadcast: Callable[[dict], Awaitable[None]],
     log_context: dict,
@@ -295,8 +287,8 @@ async def compact_with_sonnet(
   baseline = _newest_cost_state_model_usage(transcript)
   cmd = compaction_command(cc_session_id)
   log.info("claude_compaction_starting", cc_session_id=cc_session_id, pre_tokens=pre_tokens, **log_context)
-  cfg = get_config()
-  session_cgroup = prepare_session_cgroup(
+  cfg = config.get_config()
+  session_cgroup = process.prepare_session_cgroup(
       cgroup_session_id,
       memory_max_mb=cfg.server.session_memory_max_mb,
       swap_max_mb=cfg.server.session_swap_max_mb,
@@ -310,7 +302,7 @@ async def compact_with_sonnet(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
-        preexec_fn=make_session_cgroup_preexec(session_cgroup.path if session_cgroup else None),
+        preexec_fn=process.make_session_cgroup_preexec(session_cgroup.path if session_cgroup else None),
     )
   except OSError as exc:
     return await _fail(persist_and_broadcast, log_context, f"could not start {cmd[0]}: {exc}")
@@ -318,7 +310,7 @@ async def compact_with_sonnet(
     stdout, stderr = await asyncio.wait_for(proc.communicate(COMPACT_PROMPT.encode("utf-8")), timeout)
   except TimeoutError:
     if proc.pid is not None:
-      kill_process_group(proc.pid)
+      process.kill_process_group(proc.pid)
     await proc.wait()
     return await _fail(persist_and_broadcast, log_context, f"timed out after {int(timeout)} s")
   after = count_compact_boundaries(transcript)
@@ -333,7 +325,7 @@ async def compact_with_sonnet(
         stderr=stderr_tail,
         **log_context,
     )
-    await persist_and_broadcast(make_context_compact_failed_event(outcome.error, model=COMPACTION_MODEL))
+    await persist_and_broadcast(base.make_context_compact_failed_event(outcome.error, model=COMPACTION_MODEL))
     return False
   # The boundary row's payload travels whole; the caller's own reading still wins
   # for the pre count (today's precedence). When the row carries no readable
@@ -350,11 +342,11 @@ async def compact_with_sonnet(
       models=list(outcome.models),
       **log_context,
   )
-  await persist_and_broadcast(make_context_compacted_event("manual", compact_metadata, model=COMPACTION_MODEL))
+  await persist_and_broadcast(base.make_context_compacted_event("manual", compact_metadata, model=COMPACTION_MODEL))
   return True
 
 
 async def _fail(persist_and_broadcast: Callable[[dict], Awaitable[None]], log_context: dict, error: str) -> bool:
   log.warning("claude_compaction_failed", error=error, **log_context)
-  await persist_and_broadcast(make_context_compact_failed_event(error, model=COMPACTION_MODEL))
+  await persist_and_broadcast(base.make_context_compact_failed_event(error, model=COMPACTION_MODEL))
   return False

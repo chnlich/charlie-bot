@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -397,3 +398,187 @@ async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_p
   closes, reports = persisted_close_and_report(tree, manager.id, child.id, "cancelled")
   assert len(closes) == 1 and closes[0]["summary"] == "no longer needed"
   assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# close_sequence_child: the sequence owner's close of an ended loop's child
+# ---------------------------------------------------------------------------
+
+
+async def _sequence_child(tree: TaskTreeManager) -> tuple[object, object]:
+  """One root with one open worker child, the shape a sequence close targets."""
+  root = await create_task(tree, parent=None, request_id="root")
+  child = await create_task(tree, parent=root.id, request_id="child", profile="worker", task=TaskSpec(goal="loop"))
+  return root, child
+
+
+def _sequence_close_and_reports(tree: TaskTreeManager, root_id: str, child_id: str) -> tuple[list[dict], list[dict]]:
+  """The child's task_closed facts and the parent's child_reports from it."""
+  closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
+  reports = [
+      e for e in tree.events.load_events(root_id) if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id
+  ]
+  return closes, reports
+
+
+@pytest.mark.asyncio
+async def test_close_sequence_child_completed_on_proven_run_evidence(tmp_path: Path) -> None:
+  """A completed loop outcome with a successful named Run closes completed: the
+  close fact carries the loop outcome as sequence_outcome, records the system
+  actor, and the one delivered report takes the sequence outcome."""
+  _cfg, _session_blocks, tree = build_env(tmp_path)
+  root, child = await _sequence_child(tree)
+  await tree.runs.register_run(RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
+  await tree.dispatch.finish_run(child.id, "run-iter-1", outcome="success")
+
+  evidence = CompletionEvidence(summary="[Improve loop 1] landed", result_refs=["loop:1"], run_ids=["run-iter-1"])
+  status, payload = await tree.completion.close_sequence_child(
+      child.id, request_id="improve:1:close", outcome="completed", evidence=evidence)
+
+  assert status == 200
+  assert tree.task_state(child.id) == "completed"
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert len(closes) == 1 and len(reports) == 1
+  close = closes[0]
+  assert close["id"] == payload["closed_event_id"]
+  assert close["actor"] == "system"
+  assert close["outcome"] == "completed" and close["sequence_outcome"] == "completed"
+  assert close["run_ids"] == ["run-iter-1"]
+  assert reports[0]["outcome"] == "completed"
+  assert reports[0]["summary"] == "[Improve loop 1] landed"
+  assert reports[0]["result_refs"] == ["loop:1"]
+
+
+@pytest.mark.asyncio
+async def test_close_sequence_child_completed_without_a_successful_run_closes_cancelled(tmp_path: Path) -> None:
+  """The completed loop outcome without a named successful Run writes the
+  cancelled lifecycle (an empty-handed delivery is never completed) while the
+  report still tells the parent the loop completed."""
+  _cfg, _session_blocks, tree = build_env(tmp_path)
+  root, child = await _sequence_child(tree)
+
+  evidence = CompletionEvidence(summary="[Improve loop 1] landed", result_refs=["loop:1"], run_ids=[])
+  status, _payload = await tree.completion.close_sequence_child(
+      child.id, request_id="improve:1:close", outcome="completed", evidence=evidence)
+
+  assert status == 200
+  assert tree.task_state(child.id) == "cancelled"
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert closes[0]["outcome"] == "cancelled" and closes[0]["sequence_outcome"] == "completed"
+  assert reports[0]["outcome"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["blocked", "failed", "cancelled"])
+async def test_close_sequence_child_non_completed_outcomes_record_evidence_as_content(
+    tmp_path: Path, outcome: str) -> None:
+  """blocked/failed/cancelled close as cancelled with the evidence carried as
+  content only: a failed Run named in run_ids is never read as completion
+  evidence, and the report outcome is the loop's own."""
+  _cfg, _session_blocks, tree = build_env(tmp_path)
+  root, child = await _sequence_child(tree)
+  await tree.runs.register_run(RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
+  await tree.dispatch.finish_run(child.id, "run-iter-1", outcome="failed")
+
+  evidence = CompletionEvidence(summary=f"[Improve loop 1] {outcome}", result_refs=["loop:1"], run_ids=["run-iter-1"])
+  status, _payload = await tree.completion.close_sequence_child(
+      child.id, request_id="improve:1:close", outcome=outcome, evidence=evidence)
+
+  assert status == 200
+  assert tree.task_state(child.id) == "cancelled"
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert len(closes) == 1 and len(reports) == 1
+  assert closes[0]["outcome"] == "cancelled" and closes[0]["sequence_outcome"] == outcome
+  assert closes[0]["run_ids"] == ["run-iter-1"]  # content, not a success claim
+  assert reports[0]["outcome"] == outcome
+
+
+@pytest.mark.asyncio
+async def test_close_sequence_child_blocks_on_execution_only(tmp_path: Path) -> None:
+  """The cancellation blocker rule: a queued Run without a stop request blocks
+  (an active Run and an open descendant read the same way); unprocessed input
+  never does."""
+  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _root, child = await _sequence_child(tree)
+  await tree.runs.register_run(RunRecord(id="run-queued", session_id=child.id, kind="iteration"))
+  await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="unconsumed note", actor="user")
+  evidence = CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
+
+  with pytest.raises(TaskConflictError, match="queued"):
+    await tree.completion.close_sequence_child(
+        child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)
+
+  # The durable stop request settles the queued Run; the unprocessed input
+  # stays pending on the child and never blocks the close.
+  await tree.runs.request_stop(child.id, "run-queued", "improve:1:close")
+  assert tree.dispatch.pending_inputs(child.id) != []
+  status, _payload = await tree.completion.close_sequence_child(
+      child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)
+  assert status == 200
+  assert tree.task_state(child.id) == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_close_sequence_child_replays_raced_repeated_and_post_reopen_calls(tmp_path: Path) -> None:
+  """One request id lands one close fact and one report: two raced calls
+  converge, a repeated call replays the first result, and a call arriving
+  after the operator reopened the node replays it too (the node stays open).
+  """
+  _cfg, _session_blocks, tree = build_env(tmp_path)
+  root, child = await _sequence_child(tree)
+  evidence = CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
+
+  first, second = await asyncio.gather(
+      tree.completion.close_sequence_child(
+          child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence),
+      tree.completion.close_sequence_child(
+          child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence))
+  assert first[0] == second[0] == 200
+  assert first[1]["closed_event_id"] == second[1]["closed_event_id"]
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert len(closes) == 1 and len(reports) == 1
+
+  repeated = await tree.completion.close_sequence_child(
+      child.id, request_id="improve:1:close", outcome="failed", evidence=CompletionEvidence(summary="other"))
+  assert repeated[1]["closed_event_id"] == first[1]["closed_event_id"]
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert len(closes) == 1 and len(reports) == 1
+
+  await tree.completion.restore_task(child.id, request_id="reopen-1", reason="operator retry", caller=OPERATOR)
+  assert tree.task_state(child.id) == "open"
+  after_reopen = await tree.completion.close_sequence_child(
+      child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)
+  assert after_reopen[1]["closed_event_id"] == first[1]["closed_event_id"]
+  assert tree.task_state(child.id) == "open"
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert len(closes) == 1 and len(reports) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovered_sequence_close_report_takes_the_sequence_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The crash window close-fact-written/report-not-delivered: recovery
+  re-derives the report from the close fact and its outcome is the fact's
+  sequence_outcome, not its lifecycle outcome."""
+  _cfg, _session_blocks, tree = build_env(tmp_path)
+  root, child = await _sequence_child(tree)
+
+  original = tree.dispatch.deliver_child_report_locked
+
+  async def crash_before_report(*args, **kwargs):
+    raise RuntimeError("simulated crash after the close fact")
+
+  monkeypatch.setattr(tree.dispatch, "deliver_child_report_locked", crash_before_report)
+  evidence = CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
+  with pytest.raises(RuntimeError, match="simulated crash"):
+    await tree.completion.close_sequence_child(
+        child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)
+  closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
+  assert len(closes) == 1 and closes[0]["outcome"] == "cancelled" and closes[0]["sequence_outcome"] == "blocked"
+  assert reports == []
+
+  monkeypatch.setattr(tree.dispatch, "deliver_child_report_locked", original)
+  delivered = await tree.dispatch.recover_pending_reports(child.id)
+  assert len(delivered) == 1
+  assert delivered[0]["outcome"] == "blocked"
+  assert delivered[0]["summary"] == "[Improve loop 1] blocked"

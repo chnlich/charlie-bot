@@ -2,9 +2,9 @@
 
 from typing import Literal
 
-from src.infra.backend_models import BackendOption
+from src.infra import backend_models
 
 
-class CcKimiBackend(BackendOption):
+class CcKimiBackend(backend_models.BackendOption):
   type: Literal["cc-kimi"] = "cc-kimi"
   credential: str

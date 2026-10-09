@@ -8,9 +8,9 @@ backend layout (src/runtime/agent_process/base.py plus that package's registry).
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import abc
+import dataclasses
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
 from typing import ClassVar, Literal
 
 # The capture worklet's chunk (web/static/js/voice-input.js VOICE_CHUNK_SAMPLES):
@@ -28,7 +28,7 @@ VOICE_CHUNK_SAMPLES = 2048
 SAMPLE_RATE = 16_000
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class TranscriptEvent:
   """One transcription output event.
 
@@ -48,7 +48,7 @@ class TranscriptionRejected(Exception):  # noqa: N818
   rejection — it propagates as the transport's own error."""
 
 
-class TranscriptionBackend(ABC):
+class TranscriptionBackend(abc.ABC):
   """One speech-to-text engine the voice input can select by id.
 
   The whole backend session — connect, handshake, audio turns, close — lives
@@ -73,7 +73,7 @@ class TranscriptionBackend(ABC):
     """
     return None
 
-  @abstractmethod
+  @abc.abstractmethod
   def transcribe(
       self,
       audio: AsyncIterator[bytes],

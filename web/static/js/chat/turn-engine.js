@@ -147,12 +147,13 @@
       // source for every follow decision — never live geometry, which still
       // reads "pinned" inside the 150px band a reader paused in.
       this.pinnedIntent = true;
-      // "Follow the next turn": the open logic sets this when an anchor
-      // restore clamped to the bottom (a reply that fits the view lands there
-      // without the pin), so the next append re-arms the follow pin while
-      // late layout changes leave the restored position alone. Cleared by
-      // mount, by jumpToBottom, and by any genuine reader scroll; engine
-      // write echoes and the browser's clamp over shrunk content keep it.
+      // "Follow the next turn": the engine sets this at the end of every
+      // anchor restore that leaves the view at the bottom (a reply that fits
+      // the view lands there without the pin), so the next append re-arms
+      // the follow pin while late layout changes leave the restored position
+      // alone. Cleared by mount, by jumpToBottom, and by any genuine reader
+      // scroll; engine write echoes and the browser's clamp over shrunk
+      // content keep it.
       this.followNextTurn = false;
       // scrollTop at the last genuine (non-echo) scroll event; the direction
       // of each new genuine event is read against it.
@@ -631,9 +632,9 @@
     }
 
     // The follow decision for incoming content: the reader's pin intent, or
-    // the deferred follow the open logic recorded when a fitting reply opened
-    // clamped at the bottom. appendMessage and the stream paint read this one
-    // method; live geometry never feeds it.
+    // the deferred follow the engine recorded when an anchor restore left
+    // the view at the bottom. appendMessage and the stream paint read this
+    // one method; live geometry never feeds it.
     shouldFollow() {
       return this.pinnedIntent || this.followNextTurn;
     }

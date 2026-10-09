@@ -9,6 +9,7 @@ const {
   installEngineTimers,
   installScrollTopClamp,
   settle,
+  scrollTo,
   eMsg,
 } = require('./turn_engine_harness');
 const {baseSessionContext, createChatSidebarContext} = require('./session_context_stub');
@@ -44,9 +45,9 @@ function turn(prefix, i, extra = {}) {
 // Mirrors transcriptRig in chat_scroll_reading_position.test.js: a chat
 // container with the turn engine supported, driving the real renderSessionView
 // with a master session's bootstrap payload.
-function openRig({messages, session = {}, thinkingSince = null, pendingDraft = null} = {}) {
+function openRig({messages, session = {}, thinkingSince = null, pendingDraft = null, clientHeight = CLIENT_HEIGHT} = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
-  root.clientHeight = CLIENT_HEIGHT;
+  root.clientHeight = clientHeight;
   installScrollTopClamp(root);
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
@@ -116,22 +117,108 @@ test('an idle open lands at the top of a last reply taller than the viewport', (
 test('an idle open of a fitting reply lands at the bottom and follows the next turn', () => {
   // Eight finished turns: the last reply (70px) fits the 300px viewport while
   // the folded history around it does not, so the anchor restore clamps to
-  // the maximum scroll and the open re-arms the pin there.
+  // the maximum scroll. The open does not pin there — it records "follow the
+  // next turn" on the engine, so late layout changes cannot drag the view
+  // down, and the next append re-arms the pin when it lands.
   const messages = [];
   for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
   const rig = openRig({messages});
   assert.ok(rig.root.scrollHeight > rig.root.clientHeight + 80, 'the history overflows the viewport');
   assert.ok(rig.engine.lastRestoreClamp, 'the anchor restore asked past the scroll range');
   assert.ok(distanceFromBottom(rig.root) <= 1, 'the clamped restore landed at the bottom');
-  assert.equal(rig.engine.pinnedIntent, true, 'a bottom landing re-armed the pin');
+  assert.equal(rig.engine.pinnedIntent, false, 'the open does not re-arm the pin');
+  assert.equal(rig.engine.followNextTurn, true, 'the open records the deferred follow');
   settle(rig.timers);
-  assert.equal(rig.engine.pinnedIntent, true, 'the pin survives the idle slices');
+  assert.equal(rig.engine.pinnedIntent, false, 'the idle slices do not pin');
+  assert.equal(rig.engine.followNextTurn, true, 'the deferred follow survives the idle slices');
 
-  // A WS-shaped arrival (no force) follows only through the pin.
+  // A WS-shaped arrival (no force) follows through the record.
   rig.context.appendMessageObject(eMsg('user', 'live-1', 'next question'), 'session-a', false);
   settle(rig.timers);
   assert.ok(distanceFromBottom(rig.root) <= 1, 'the append kept the view at the bottom');
-  assert.equal(rig.engine.pinnedIntent, true, 'the append kept the pin');
+  assert.equal(rig.engine.pinnedIntent, true, 'the append re-armed the pin');
+  assert.equal(rig.engine.followNextTurn, false, 'the append consumed the record');
+});
+
+test('an idle open of a fitting reply keeps the reply top when the view shrinks', () => {
+  // Size the viewport to the content below the reply top, measured by a probe
+  // open: the reply top opens exactly at the viewport top with the view
+  // exactly at the bottom — the shape a late usage strip or trigger tray
+  // then shrinks. A bottom-pinned view would follow the shrink and push the
+  // reply top off the first screen; the deferred follow holds the position.
+  const messages = [];
+  for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
+  const probe = openRig({messages});
+  settle(probe.timers);
+  const replyContentTop = probe.root.scrollTop + anchorY(probe.root, 't7_c7');
+  const belowReply = probe.root.scrollHeight - replyContentTop;
+
+  const rig = openRig({messages, clientHeight: belowReply});
+  settle(rig.timers);
+  assert.ok(distanceFromBottom(rig.root) <= 1, 'the open landed at the bottom');
+  assert.ok(Math.abs(anchorY(rig.root, 't7_c7')) <= 1, 'the reply top opens at the viewport top');
+
+  const beforeTop = anchorY(rig.root, 't7_c7');
+  rig.root.clientHeight = belowReply - 60;
+  rig.engine.handleResize();
+  settle(rig.timers);
+  const afterTop = anchorY(rig.root, 't7_c7');
+  assert.ok(
+      Math.abs(afterTop - beforeTop) <= 1,
+      `the reply top held its place across the shrink (${beforeTop} -> ${afterTop})`);
+  assert.ok(afterTop >= 0, 'the reply top stayed on the first screen');
+  assert.equal(rig.engine.pinnedIntent, false, 'the shrink did not pin');
+  assert.equal(rig.engine.followNextTurn, true, "the open's deferred follow survived the shrink");
+});
+
+test('a fitting reply opened at the bottom follows an append that lands after a shrink', () => {
+  const messages = [];
+  for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
+  const rig = openRig({messages});
+  settle(rig.timers);
+  assert.equal(rig.engine.followNextTurn, true, 'the open records the deferred follow');
+
+  rig.root.clientHeight = CLIENT_HEIGHT - 60;
+  rig.engine.handleResize();
+  settle(rig.timers);
+  assert.equal(rig.engine.pinnedIntent, false, 'the shrink did not pin');
+  assert.equal(rig.engine.followNextTurn, true, 'the shrink kept the deferred follow');
+
+  rig.context.appendMessageObject(eMsg('user', 'live-1', 'next question'), 'session-a', false);
+  settle(rig.timers);
+  assert.ok(distanceFromBottom(rig.root) <= 1, 'the append brought the view to the bottom');
+  assert.equal(rig.engine.pinnedIntent, true, 'the append re-armed the pin');
+  assert.equal(rig.engine.followNextTurn, false, 'the append consumed the record');
+});
+
+test('a reader scroll after a fitting open cancels the deferred follow', () => {
+  const messages = [];
+  for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
+  const rig = openRig({messages});
+  settle(rig.timers);
+  assert.equal(rig.engine.followNextTurn, true, 'the open records the deferred follow');
+
+  scrollTo(rig.timers, rig.root, rig.root.scrollTop - 100);
+  settle(rig.timers);
+  assert.equal(rig.engine.followNextTurn, false, 'the reader scroll cleared the record');
+  assert.equal(rig.engine.pinnedIntent, false, 'an upward scroll does not pin');
+
+  const parked = rig.root.scrollTop;
+  rig.context.appendMessageObject(eMsg('user', 'live-1', 'next question'), 'session-a', false);
+  settle(rig.timers);
+  assert.equal(rig.root.scrollTop, parked, 'the append left the reader where they parked');
+});
+
+test('an idle open of a tall reply keeps the reply top when the view shrinks', () => {
+  const messages = [...turn('t0_', 0), ...turn('t1_', 1, {fakeHeight: 900})];
+  const rig = openRig({messages});
+  settle(rig.timers);
+  assert.ok(Math.abs(anchorY(rig.root, 't1_c1')) <= 1, 'the tall reply opens at the viewport top');
+
+  rig.root.clientHeight = CLIENT_HEIGHT - 60;
+  rig.engine.handleResize();
+  settle(rig.timers);
+  assert.ok(Math.abs(anchorY(rig.root, 't1_c1')) <= 1, 'the reply top stayed at the viewport top');
 });
 
 test('a session with a turn in flight keeps the bottom-pinned mount', () => {

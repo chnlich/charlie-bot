@@ -147,6 +147,13 @@
       // source for every follow decision — never live geometry, which still
       // reads "pinned" inside the 150px band a reader paused in.
       this.pinnedIntent = true;
+      // "Follow the next turn": the open logic sets this when an anchor
+      // restore clamped to the bottom (a reply that fits the view lands there
+      // without the pin), so the next append re-arms the follow pin while
+      // late layout changes leave the restored position alone. Cleared by
+      // mount, by jumpToBottom, and by any genuine reader scroll; engine
+      // write echoes and the browser's clamp over shrunk content keep it.
+      this.followNextTurn = false;
       // scrollTop at the last genuine (non-echo) scroll event; the direction
       // of each new genuine event is read against it.
       this.lastUserScrollTop = null;
@@ -623,6 +630,14 @@
       return el.scrollHeight - el.scrollTop - el.clientHeight < 150;
     }
 
+    // The follow decision for incoming content: the reader's pin intent, or
+    // the deferred follow the open logic recorded when a fitting reply opened
+    // clamped at the bottom. appendMessage and the stream paint read this one
+    // method; live geometry never feeds it.
+    shouldFollow() {
+      return this.pinnedIntent || this.followNextTurn;
+    }
+
     // Window bookkeeping + DOM projection. One reproject covers everything:
     // scroll migrations, ingest reshapes, estimate refinements and policy
     // changes. Reads batched first (viewport + anchor offsets), mutations
@@ -848,6 +863,11 @@
       // A genuine scroll re-declares the reading position by itself; a sticky
       // restore target from an earlier update must not fight it.
       this.pendingAnchor = null;
+      // The deferred follow yields to the reader: any genuine scroll event
+      // clears it. The browser clamping an out-of-range position over shrunk
+      // content is not the reader's motion and keeps it — the same ruling the
+      // pin intent below applies.
+      if (!(shrank && prev != null && top < prev - 0.5)) this.followNextTurn = false;
       // Pin intent follows the user's motion, not the 150px geometry band: any
       // upward scroll stops the follow (a 100px wheel-up from the bottom sits
       // inside the band but is still reading), and only a downward scroll that
@@ -913,6 +933,7 @@
       const pinned = options.pinned !== false;
       const anchor = pinned ? null : (options.readingAnchor || null);
       this.pinnedIntent = pinned;
+      this.followNextTurn = false;
       this.readingAnchor = anchor;
       this.pendingAnchor = anchor;
 
@@ -1140,6 +1161,7 @@
 
     jumpToBottom() {
       this.pinnedIntent = true;
+      this.followNextTurn = false;
       this.pendingAnchor = null;
       this.writeScrollTop(this.container.scrollHeight);
     }
@@ -1219,7 +1241,7 @@
           id: 'client:' + String(this.sessionId) + ':' + (++this.liveMessageSequence),
         });
       }
-      const wasPinned = this.pinnedIntent;
+      const wasPinned = this.shouldFollow();
       const entry = {msg, node: null, ready: false};
       this.renderAtom(entry, true);
       this.entries.push(entry);

@@ -50,9 +50,7 @@ if TYPE_CHECKING:
 
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-      prog="charliebot artifact",
-      description="Artifact checks",
-      formatter_class=help_formatter.CliHelpFormatter)
+      prog="charliebot artifact", description="Artifact checks", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="verb", required=True)
   check = sub.add_parser(
       "check",
@@ -118,8 +116,7 @@ def _rejection_reason(captured_stderr: str) -> str:
   return str(json.loads(captured_stderr.strip().splitlines()[-1])["error"])
 
 
-def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path,
-                                cfg: config.CharlieBotConfig) -> int:
+def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path, cfg: config.CharlieBotConfig) -> int:
   """Detach the cold read and register its wake; the module docstring holds the contract."""
   # The autonamer import drags fastapi and the sessions stack (~250 ms); it serves only this
   # branch's backend count, so the wrap and foreground paths must not pay it.
@@ -173,8 +170,9 @@ def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path
 
 def _run_check(args: argparse.Namespace) -> int:
   if args.background and args.assertions_only:
-    cli_common.exit_usage_error("--background cannot combine with --assertions-only: "
-                                "the background child runs the full check, probe included")
+    cli_common.exit_usage_error(
+        "--background cannot combine with --assertions-only: "
+        "the background child runs the full check, probe included")
   if args.background and args.trigger is None:
     cli_common.exit_usage_error("--background requires --trigger: the cold read answers the trigger")
   if args.trigger is None and not args.assertions_only:

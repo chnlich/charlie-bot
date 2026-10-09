@@ -267,8 +267,7 @@ class TaskCompletionManager:
   # Evidence
   # ------------------------------------------------------------------
 
-  def _delivery_run_outcomes(
-      self, index: Any, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
+  def _delivery_run_outcomes(self, index: Any, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
     """The delivery-run universe of one task: its own Runs plus the Runs of
         its direct children (a manager's delivery evidence legitimately cites
         the child work it consumed). Returns (run records by id, outcomes)."""
@@ -496,8 +495,8 @@ class TaskCompletionManager:
         blockers.append(f"landing evidence unverified in {repo}: {branch}@{commit}: {reason}")
     return blockers
 
-  async def verified_evidence_blockers(
-      self, index: Any, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
+  async def verified_evidence_blockers(self, index: Any, meta: SessionMetadata,
+                                       evidence: CompletionEvidence) -> list[str]:
     """The full evidence check: the shape/record layer plus the git landing layer.
 
         The slow git verification runs outside the control lock; the locked

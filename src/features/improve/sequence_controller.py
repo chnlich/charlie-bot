@@ -1,17 +1,20 @@
-"""Sequence controller for interrupted improve loops.
+"""Sequence controller for improve loops.
 
 The controller owns every Run whose ``sequence_ref.kind`` is ``"improve"``:
 ``launch_context`` renders the iteration's task/input context, and recovery
-never resumes a loop (the restart boundary) — ``after_run`` does nothing and
-``recover_run`` returns False, so an iteration Run is left exactly as its
-durable facts hold it. ``redrive`` raises if a replay is ever routed here.
-The controller binds no sessions, claims no session ownership, and adds no
-listing fields.
+never resumes a loop (the restart boundary). ``after_run`` and
+``recover_run`` run the loop's close step
+(:func:`src.features.improve.improve_sequence.close_ended_loop_child`): once
+the loop has ended and no launched iteration still owes its terminal fact,
+the step closes the loop's worker child through the common completion owner.
+``redrive`` raises if a replay is ever routed here. The controller binds no
+sessions, claims no session ownership, and adds no listing fields.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.features.improve import improve_sequence
@@ -50,16 +53,25 @@ class ImproveSequenceController(SequenceController):
     return improve_sequence.iteration_context(cfg, meta, run, seq, launch_text)
 
   async def after_run(self, session_id: str, run: RunRecord, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
-    """An iteration's finish carries no delivery chain of its own.
+    """An iteration's durable finish re-runs its loop's close step.
 
-    The loop's own controller task observes the terminal fact and owns
-    progression (judge, next launch, the one final report).
+    The loop's own controller task owns progression while it lives; this is
+    the call point that closes the worker child when the loop has already
+    ended (or died) with this Run's terminal fact landing last. The step
+    returns immediately while the loop can still progress.
     """
-    return
+    await _close_loop_for_run(run, tree, cfg)
 
   async def recover_run(
       self, session_id: str, run: RunRecord, outcome: str | None, tree: TaskTreeManager, cfg: CharlieBotConfig) -> bool:
-    """An improve loop is never resumed: recovery leaves every iteration Run alone."""
+    """Recovery runs the same close step; the loop itself is never resumed.
+
+    Covers the windows ``after_run`` cannot: a stop-requested iteration whose
+    interrupted finish recovery writes directly, and a crash between
+    run_finished and after_run. Returns False either way — the close step is
+    idempotent by the close request id, so nothing here counts a follow-up.
+    """
+    await _close_loop_for_run(run, tree, cfg)
     return False
 
   async def reconcile_interrupted(self, cfg: CharlieBotConfig, tree: TaskTreeManager) -> None:
@@ -73,3 +85,16 @@ class ImproveSequenceController(SequenceController):
 
   def listing_fields(self, session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
     return {}
+
+
+async def _close_loop_for_run(run: RunRecord, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
+  """Run the owning loop's close step, located through the Run's sequence_ref.
+
+  The owner_ref is the loop directory (``<sessions>/<session>/loops/<id>``),
+  the shape ``improve_sequence.loop_owner_ref`` writes; the manager session
+  id and the loop id read back out of it.
+  """
+  seq = run.sequence_ref
+  assert seq is not None  # the runtime only routes sequence Runs here
+  loop_dir = Path(seq.owner_ref)
+  await improve_sequence.close_ended_loop_child(tree, cfg, loop_dir.parent.parent.name, int(loop_dir.name))

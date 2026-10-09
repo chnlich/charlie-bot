@@ -14,6 +14,7 @@ import sys
 from collections.abc import Sequence
 
 from src.app import registrations
+from src.runtime.cli import common as cli_common
 from src.runtime.hooks import wiring
 
 _RUNTIME_COMMANDS = {
@@ -35,6 +36,9 @@ def _print_help(prog: str, commands: dict[str, str]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> None:
   """Dispatch to a subcommand's existing main() without duplicating its parser."""
+  # Let any subcommand re-enter the unified CLI in a subprocess (src/app is a group only app
+  # may name, so the string stays here and runtime hands it out).
+  cli_common.set_cli_entry_module("src.app.main")
   prog = os.path.basename(sys.argv[0]) if argv is None and sys.argv else "charliebot"
   args = list(sys.argv[1:] if argv is None else argv)
   registrations.register_cli_commands()

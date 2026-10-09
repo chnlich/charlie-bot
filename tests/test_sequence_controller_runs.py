@@ -74,9 +74,13 @@ async def test_dispatcher_never_launches_a_queued_sequence_run(tmp_path: Path, m
 async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A durable finish asks the owning controller's after_run: the cron step
-  re-drives its firing, the improve iteration asks a no-op, and no owned Run
-  logs the no-controller warning."""
+  re-drives its firing, the improve iteration runs its loop's close step —
+  which leaves the node open while the loop is still running — and no owned
+  Run logs the no-controller warning."""
+  import os
+
   from src.features.cron import cron_sequence
+  from src.features.improve.improve_command import ImproveState, save_loop_state
   from src.features.improve.improve_sequence import loop_owner_ref
 
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
@@ -106,9 +110,22 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
   await adapter._after_worker_run(meta, cron_step, "success")
   redrive.assert_awaited_once_with(leaf.id, tree, cfg)
 
+  # A running loop: after_run's close step returns on the running state and
+  # the node stays open.
+  await save_loop_state(
+      leaf.id,
+      ImproveState(
+          loop_id=1,
+          goal="improve the thing",
+          status="running",
+          work_branch="improve/test",
+          repo_path=str(tmp_path),
+          created_at="2026-10-08T00:00:00+00:00",
+          server_pid=os.getpid()), cfg)
   with capture_logs() as logs:
     await adapter._after_worker_run(meta, iteration, "success")
   assert _without_controller(logs) == []
+  assert tree.task_state(leaf.id) == "open"
 
 
 @pytest.mark.asyncio

@@ -235,7 +235,10 @@ function applyTranscriptUpdate(data) {
       // keeps their message at the same viewport offset.
       const engine = globalThis.Chat && Chat.TurnEngine
         ? Chat.TurnEngine.activeFor(container) : null;
-      const wasPinned = engine ? engine.pinnedIntent : shouldAutoScroll(container);
+      // The follow decision is the engine's shouldFollow(): a fitting reply
+      // opened at the bottom is not pinned, but its deferred follow must
+      // survive the reset remount the same way the pin does.
+      const wasPinned = engine ? engine.shouldFollow() : shouldAutoScroll(container);
       const reading = engine
         ? engine.captureReadingAnchor()
         : captureReadingPosition(container);
@@ -551,11 +554,14 @@ function openMountOptions(session, data, messages) {
 // that fits the viewport lands at the bottom without the follow pin. mount()
 // restored the anchor synchronously before returning, so this read sees the
 // restored position, not the seed estimate; within 1 px of the bottom means
-// the clamp fired, and the pin comes back so a short reply follows new turns
-// exactly as the default mount does.
-function rearmBottomPinIfAtBottom(engine, container) {
+// the clamp fired. Pinning there would let late-arriving layout (the usage
+// strip, the trigger tray) drag the view to the new bottom and push the
+// reply's top off the first screen, so the open instead records "follow the
+// next turn" on the engine: the next append re-arms the pin when it lands,
+// and a genuine reader scroll cancels the record first.
+function followNextTurnIfAtBottom(engine, container) {
   if (container.scrollHeight - container.scrollTop - container.clientHeight <= 1) {
-    engine.jumpToBottom();
+    engine.followNextTurn = true;
   }
 }
 
@@ -603,7 +609,7 @@ function renderSessionView(data) {
     ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, mountOptions || undefined)
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
-  else if (mountOptions) rearmBottomPinIfAtBottom(turnEngine, container);
+  else if (mountOptions) followNextTurnIfAtBottom(turnEngine, container);
 
   if (sessionHasMore) ensureSentinel(container, 'idle');
 

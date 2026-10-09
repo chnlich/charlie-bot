@@ -23,9 +23,10 @@ function paintStreamDraft(draft) {
   const inner = document.getElementById('streaming-content');
   const container = document.getElementById('messages');
   // A reader parked inside the 150px geometry band is still reading: under
-  // the turn engine the follow decision is the engine's user-intent flag.
+  // the turn engine the follow decision is the engine's shouldFollow() — the
+  // pin intent, or the follow the open deferred to the next turn.
   const engine = Chat.TurnEngine && container ? Chat.TurnEngine.activeFor(container) : null;
-  const wasAtBottom = engine ? engine.pinnedIntent : shouldAutoScroll(container);
+  const wasAtBottom = engine ? engine.shouldFollow() : shouldAutoScroll(container);
   el.classList.remove('hidden');
   const content = (draft && draft.content) || '';
   const thinking = (draft && draft.thinking) || '';

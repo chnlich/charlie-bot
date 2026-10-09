@@ -2,7 +2,8 @@
 
 This module owns every evidence check and every blocker for manual
 ``complete``, automatic successful worker completion, operator ``cancel``,
-and explicit ``reopen``. Nothing else appends a task_closed, task_reopened,
+explicit ``reopen``, and the sequence controllers' close of an ended loop's
+worker child. Nothing else appends a task_closed, task_reopened,
 or task_close_requested fact.
 
 Contracts this stage pins:
@@ -32,13 +33,18 @@ Contracts this stage pins:
 - Agent permissions are own-node reporting, own-manager closure, and
   cancellation of a direct child of the agent's own task; unauthorized
   mutation paths raise 403 and retries never bypass scope.
+- A sequence controller closes its ended loop's worker child through
+  ``close_sequence_child``: the lifecycle outcome stays "completed" (proven
+  delivery) or "cancelled" (every other ending), and the loop's own outcome
+  rides the close fact as ``sequence_outcome`` and becomes the delivered
+  report's outcome.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from src.infra import event_types as ET
 from src.infra.git import git_verify_commit_landed
@@ -98,7 +104,6 @@ class CompletionTree(Protocol):
   events: ControlEventSink
   runs: RunStore
   dispatch: session_dispatch.TaskInputDispatcher
-  _index: tuple[Any, float] | None
   session_events: SessionEvents
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
@@ -176,6 +181,15 @@ class CompletionEvidence:
   landing: LandingEvidence | None = None
 
 
+# The loop's own outcome a sequence close carries onto the close fact's
+# ``sequence_outcome`` field and into the delivered report: "completed" is a
+# proven landing, "blocked" a finished loop without proven delivery,
+# "failed" a mid-loop failure or restart interruption, "cancelled" a user
+# stop. The lifecycle outcome never takes these values; it stays
+# "completed" or "cancelled".
+SequenceCloseOutcome = Literal["completed", "blocked", "failed", "cancelled"]
+
+
 class TaskCompletionManager:
   """The close/cancel/reopen owner wired over one TaskTreeManager."""
 
@@ -188,21 +202,17 @@ class TaskCompletionManager:
 
   def _execution_blockers(
       self,
+      index: Any,
       session_id: str,
       *,
-      label: str,
       exclude_run_ids: set[str] | None = None,
   ) -> list[str]:
     """The Run blockers plus open-descendant blockers of one task, from current
-        facts (lock held by caller). ``label`` names the caller in the
-        caller-held-index error; ``exclude_run_ids`` carves out the Run whose
+        facts (lock held by caller). ``index`` is the tree index the caller
+        got from ``_get_index``; ``exclude_run_ids`` carves out the Run whose
         own closure request is being re-evaluated.
         """
     tree = self._tree
-    cached = tree._index
-    if cached is None:
-      raise RuntimeError(f"{label} blockers require the caller-held tree index")
-    index = cached[0]
     tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
     blockers: list[str] = []
     events = tree.runs.load_events_sync(session_id)
@@ -219,6 +229,7 @@ class TaskCompletionManager:
 
   def completion_blockers(
       self,
+      index: Any,
       session_id: str,
       *,
       exclude_run_ids: set[str] | None,
@@ -232,7 +243,7 @@ class TaskCompletionManager:
         ``exclude_input_ids`` carves out exactly that Run's already-claimed
         batch — never later inputs or other Runs' claims.
         """
-    blockers = self._execution_blockers(session_id, label="completion", exclude_run_ids=exclude_run_ids)
+    blockers = self._execution_blockers(index, session_id, exclude_run_ids=exclude_run_ids)
     pending = [
         e for e in self._tree.dispatch.pending_inputs(session_id)
         if str(e.get("id")) not in (exclude_input_ids or set())
@@ -241,7 +252,7 @@ class TaskCompletionManager:
       blockers.insert(0, session_dispatch.unprocessed_input_blocker(pending))
     return blockers
 
-  def cancellation_blockers(self, session_id: str) -> list[str]:
+  def cancellation_blockers(self, index: Any, session_id: str) -> list[str]:
     """The cancellation blockers of one task, from current facts (lock held by caller).
 
         Explicit cancellation (operator or the owning agent) refuses
@@ -250,13 +261,14 @@ class TaskCompletionManager:
         input is preserved history on the cancelled node — refusing cancel
         over it would trap every task whose input nothing consumed yet.
         """
-    return self._execution_blockers(session_id, label="cancellation")
+    return self._execution_blockers(index, session_id)
 
   # ------------------------------------------------------------------
   # Evidence
   # ------------------------------------------------------------------
 
-  def _delivery_run_outcomes(self, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
+  def _delivery_run_outcomes(
+      self, index: Any, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
     """The delivery-run universe of one task: its own Runs plus the Runs of
         its direct children (a manager's delivery evidence legitimately cites
         the child work it consumed). Returns (run records by id, outcomes)."""
@@ -266,17 +278,16 @@ class TaskCompletionManager:
     for run in tree.runs.list_run_records_sync(meta.id):
       runs[run.id] = run
       outcomes[run.id] = tree.facts_of(meta.id).run_outcomes.get(run.id)
-    index = tree._index[0] if tree._index is not None else None
-    if index is not None:
-      for child_id in tree._children_of(index, meta.id):
-        child_facts = tree.facts_of(child_id)
-        for run in tree.runs.list_run_records_sync(child_id):
-          runs[run.id] = run
-          outcomes[run.id] = child_facts.run_outcomes.get(run.id)
+    for child_id in tree._children_of(index, meta.id):
+      child_facts = tree.facts_of(child_id)
+      for run in tree.runs.list_run_records_sync(child_id):
+        runs[run.id] = run
+        outcomes[run.id] = child_facts.run_outcomes.get(run.id)
     return runs, outcomes
 
   def evidence_blockers(
       self,
+      index: Any,
       meta: SessionMetadata,
       evidence: CompletionEvidence,
       *,
@@ -296,7 +307,7 @@ class TaskCompletionManager:
     if not evidence.result_refs:
       blockers.append("completion requires result evidence (result_refs)")
     tree = self._tree
-    runs, outcomes = self._delivery_run_outcomes(meta)
+    runs, outcomes = self._delivery_run_outcomes(index, meta)
     for run_id in succeeding_run_ids or ():
       outcomes[run_id] = "success"
     facts = tree.facts_of(meta.id)
@@ -485,14 +496,15 @@ class TaskCompletionManager:
         blockers.append(f"landing evidence unverified in {repo}: {branch}@{commit}: {reason}")
     return blockers
 
-  async def verified_evidence_blockers(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
+  async def verified_evidence_blockers(
+      self, index: Any, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
     """The full evidence check: the shape/record layer plus the git landing layer.
 
         The slow git verification runs outside the control lock; the locked
         revalidation re-runs the shape layer over fresh facts (a landed commit
         cannot un-land, so the outside-lock git verdict stands).
         """
-    blockers = self.evidence_blockers(meta, evidence)
+    blockers = self.evidence_blockers(index, meta, evidence)
     blockers.extend(await self.landing_blockers(meta, evidence))
     return blockers
 
@@ -589,10 +601,10 @@ class TaskCompletionManager:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
       blockers = self.completion_blockers(
-          session_id, exclude_run_ids={run.id}, exclude_input_ids=set(run.input_event_ids))
+          index, session_id, exclude_run_ids={run.id}, exclude_input_ids=set(run.input_event_ids))
       meta = await tree.load_meta(session_id)
       assert meta is not None
-      blockers.extend(self.evidence_blockers(meta, evidence, succeeding_run_ids={run.id}))
+      blockers.extend(self.evidence_blockers(index, meta, evidence, succeeding_run_ids={run.id}))
     blockers.extend(await self.landing_blockers(meta, evidence))
     return sorted(set(blockers))
 
@@ -646,7 +658,7 @@ class TaskCompletionManager:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
       blockers = self.completion_blockers(
-          session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
+          index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       meta = await tree.load_meta(session_id)
       assert meta is not None
     if blockers:
@@ -659,7 +671,7 @@ class TaskCompletionManager:
     # cannot un-land between the two passes, and a moving condition
     # (run finished, input processed) is caught by the fresh structural
     # and shape revalidation.
-    evidence_blockers = await self.verified_evidence_blockers(meta, evidence)
+    evidence_blockers = await self.verified_evidence_blockers(index, meta, evidence)
     if evidence_blockers:
       raise TaskConflictError(sorted(set(evidence_blockers)))
     # Live-announce epochs are taken before any append, so the announce
@@ -667,15 +679,15 @@ class TaskCompletionManager:
     child_epoch = await tree.session_events.prime_aggregator(session_id)
     parent_epoch = (await tree.session_events.prime_aggregator(meta.task_parent_id) if meta.task_parent_id else None)
     async with tree.control_lock:
-      index = await tree._get_index()
-      tree._index_meta(index, session_id)
+      fresh_index = await tree._get_index()
+      tree._index_meta(fresh_index, session_id)
       if tree.task_state(session_id) != "open":
         raise TaskConflictError([f"task {session_id} is no longer open"])
       fresh_blockers = self.completion_blockers(
-          session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
+          fresh_index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       fresh_meta = await tree.load_meta(session_id)
       assert fresh_meta is not None
-      fresh_evidence_blockers = self.evidence_blockers(fresh_meta, evidence)
+      fresh_evidence_blockers = self.evidence_blockers(fresh_index, fresh_meta, evidence)
       all_blockers = sorted(set(fresh_blockers + fresh_evidence_blockers))
       if all_blockers:
         # The locked revalidation is authoritative: conditions changed
@@ -727,19 +739,26 @@ class TaskCompletionManager:
       result_refs: list[str],
       run_ids: list[str],
       actor: str,
+      sequence_outcome: str | None = None,
   ) -> tuple[dict, dict, bool]:
     """Append one task_closed fact, then deliver its parent report.
 
         Lock held by the caller. The report's outcome, summary, and
-        result_refs are the close fact's own fields: recovery re-derives a
-        replayed report from the close fact, so a live delivery carrying
-        different values would make the parent's view depend on which pass
-        landed first. report_to fixes this closure's delivery ownership at
-        close time; retries, recovery, and reparenting can never retarget it.
-        The report lands before the lock releases (a control fact); the live
-        announcements follow outside it (the caller's).
+        result_refs are the close fact's own fields — the outcome reads
+        ``sequence_outcome`` when the close carries one, the lifecycle
+        outcome otherwise: recovery re-derives a replayed report from the
+        close fact, so a live delivery carrying different values would make
+        the parent's view depend on which pass landed first. report_to fixes
+        this closure's delivery ownership at close time; retries, recovery,
+        and reparenting can never retarget it. The report lands before the
+        lock releases (a control fact); the live announcements follow outside
+        it (the caller's).
         """
     tree = self._tree
+    payload: dict[str, Any] = {}
+    if sequence_outcome is not None:
+      # The loop's own outcome: only a sequence close carries this field.
+      payload["sequence_outcome"] = sequence_outcome
     close_event = build_control_event(
         ET.TASK_CLOSED,
         actor=actor,
@@ -751,12 +770,13 @@ class TaskCompletionManager:
         result_refs=list(result_refs),
         run_ids=list(run_ids),
         report_to=meta.task_parent_id,
+        **payload,
     )
     await tree.events.append(session_id, close_event)
     report, report_created = await tree.dispatch.deliver_child_report_locked(
         session_id,
         source_event=close_event,
-        outcome=outcome,
+        outcome=sequence_outcome if sequence_outcome is not None else outcome,
         summary=summary,
         result_refs=list(result_refs),
         recipient=meta.task_parent_id,
@@ -764,6 +784,108 @@ class TaskCompletionManager:
     )
     tree._invalidate_index()
     return close_event, report, report_created
+
+  async def close_sequence_child(
+      self,
+      session_id: str,
+      *,
+      request_id: str,
+      outcome: SequenceCloseOutcome,
+      evidence: CompletionEvidence,
+  ) -> tuple[int, dict]:
+    """The sequence owner's close of its ended loop's worker child: one close fact, one parent report.
+
+        The caller is the server itself (a sequence controller), so the close
+        fact records the system actor. The lifecycle outcome is "completed"
+        only when the loop's own outcome is "completed" AND the evidence
+        names at least one Run — that claim passes the same checks the
+        operator close runs (``verified_evidence_blockers`` outside the
+        control lock, the shape layer revalidated under it). Every other
+        outcome closes as "cancelled" with the evidence recorded as content
+        only: a cancelled lifecycle never claims successful delivery.
+        Blockers are the cancellation rule — an active Run, a queued Run
+        without a stop request, an unresolved process, or an open descendant;
+        unprocessed input never blocks. The close fact carries the loop's own
+        outcome as ``sequence_outcome`` and the delivered report takes it as
+        its outcome, so the parent reads exactly what the loop reported. A
+        replayed (session, request_id) returns the original close — including
+        one arriving after the node was reopened.
+        """
+    if not request_id:
+      raise TaskInvalidError("request_id is required for sequence close")
+    tree = self._tree
+    replay = self._replay_close_request(session_id, request_id)
+    if replay is not None:
+      return replay
+    completing = outcome == "completed" and bool(evidence.run_ids)
+    pre_meta = await tree.load_task_meta(session_id)
+    async with tree.control_lock:
+      index = await tree._get_index()
+      tree._index_meta(index, session_id)
+      if tree.task_state(session_id) != "open":
+        raise TaskConflictError([f"task {session_id} is no longer open"])
+      blockers = self.cancellation_blockers(index, session_id)
+    if blockers:
+      raise TaskConflictError(sorted(set(blockers)))
+    if completing:
+      # The potentially slow evidence validation — the git landing
+      # verification included — runs outside the control lock and is
+      # authoritative, exactly as the operator close runs it; the locked
+      # pass below revalidates the fast shape layer over fresh facts.
+      evidence_blockers = await self.verified_evidence_blockers(index, pre_meta, evidence)
+      if evidence_blockers:
+        raise TaskConflictError(sorted(set(evidence_blockers)))
+    child_epoch = await tree.session_events.prime_aggregator(session_id)
+    parent_epoch = (
+        await tree.session_events.prime_aggregator(pre_meta.task_parent_id) if pre_meta.task_parent_id else None)
+    async with tree.control_lock:
+      index = await tree._get_index()
+      tree._index_meta(index, session_id)
+      # The replay re-check leads: a raced close under this request id — the
+      # other call point of the same loop-close step — returns the first
+      # result, whatever state the node has since reached.
+      replay = self._replay_close_request(session_id, request_id)
+      if replay is not None:
+        return replay
+      if tree.task_state(session_id) != "open":
+        raise TaskConflictError([f"task {session_id} is no longer open"])
+      fresh_meta = await tree.load_meta(session_id)
+      assert fresh_meta is not None
+      fresh_blockers = self.cancellation_blockers(index, session_id)
+      if completing:
+        fresh_blockers += self.evidence_blockers(index, fresh_meta, evidence)
+      if fresh_blockers:
+        # The locked revalidation is authoritative: conditions that changed
+        # during the outside-the-lock validation leave the task open with
+        # the current, visible blockers.
+        raise TaskConflictError(sorted(set(fresh_blockers)))
+      close_event, report, report_created = await self._append_closed(
+          session_id,
+          fresh_meta,
+          request_id=request_id,
+          outcome="completed" if completing else "cancelled",
+          summary=evidence.summary,
+          result_refs=evidence.result_refs,
+          run_ids=evidence.run_ids,
+          actor=ACTOR_SYSTEM,
+          sequence_outcome=outcome)
+    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
+    if report_created and parent_epoch is not None:
+      await tree.session_events.announce_appended_event(str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
+    if report_created and fresh_meta.task_parent_id:
+      # Same delivered-report wake the cancel close performs. The close and
+      # its report are already durable here, so a failed wake is logged and
+      # the close stands (the parent's turn is re-drivable; see _close_now).
+      try:
+        await tree.dispatch.wake_parent(str(fresh_meta.task_parent_id), report=report)
+      except Exception as exc:
+        log.warning(
+            "sequence_close_parent_wake_failed",
+            session_id=session_id,
+            parent=str(fresh_meta.task_parent_id),
+            report=str(report.get("id")),
+            error=str(exc))
+    return 200, {"session_id": session_id, "closed_event_id": close_event["id"]}
 
   # ------------------------------------------------------------------
   # Own-run close re-evaluation and automatic worker completion
@@ -1099,7 +1221,7 @@ class TaskCompletionManager:
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay[1]
-      blockers = self.cancellation_blockers(session_id)
+      blockers = self.cancellation_blockers(index, session_id)
       if blockers:
         raise TaskConflictError(sorted(set(blockers)))
       close_event, report, report_created = await self._append_closed(

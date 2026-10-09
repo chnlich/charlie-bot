@@ -686,10 +686,16 @@ function renderPlanCompactCard(link, ordinal, prose, reg) {
     throw new Error('artifact compact card render produced no element');
   }
   var mc = document.getElementById('messages');
-  var atBottom = mc ? shouldAutoScroll(mc) : false;
+  // With the turn engine the follow decision is the reader's pin intent,
+  // never the 150px geometry band: a fitting reply opens at the bottom
+  // unpinned, and a late card landing there must not yank the view down.
+  // Views without the engine keep the geometry read and the direct write.
+  var engine = (mc && Chat.TurnEngine) ? Chat.TurnEngine.activeFor(mc) : null;
+  var atBottom = engine ? engine.pinnedIntent : (mc ? shouldAutoScroll(mc) : false);
   insertHtmlArtifactCard(prose, card, ordinal);
   link.el.dataset.embedded = '1';
-  if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
+  if (engine) restoreBottomPin(mc, atBottom, false);
+  else if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
 }
 
 function renderArtifactLink(link, ordinal, prose) {
@@ -953,10 +959,14 @@ function installHtmlArtifactListener() {
     // Stop auto-fitting height once the user has manually resized the frame.
     if (frame.dataset.manualHeight === '1') return;
     var container = document.getElementById('messages');
-    var wasAtBottom = container ? shouldAutoScroll(container) : false;
+    // The same follow rule as the card insertion above: the engine's pin
+    // intent when hosted, the geometry band when it is not.
+    var engine = (container && Chat.TurnEngine) ? Chat.TurnEngine.activeFor(container) : null;
+    var wasAtBottom = engine ? engine.pinnedIntent : (container ? shouldAutoScroll(container) : false);
     var cap = Math.floor(window.innerHeight * 0.8);
     frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';
-    if (wasAtBottom && container) container.scrollTop = container.scrollHeight;
+    if (engine) restoreBottomPin(container, wasAtBottom, false);
+    else if (wasAtBottom && container) container.scrollTop = container.scrollHeight;
   });
 }
 installHtmlArtifactListener();

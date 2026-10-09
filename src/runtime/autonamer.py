@@ -1,8 +1,9 @@
 """Session auto-naming.
 
 Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.):
-- Entry: name_after_round(...) — fired by the per-session queue consumer after a
-  master round; it assembles the prompt from the chat log and delegates to
+- Entry: name_after_round(...) — started by the per-session queue consumer
+  (master_cc_queue._session_consumer, through SessionCallbacks.after_round) after
+  each MASTER_DONE; it assembles the prompt from the chat log and delegates to
   maybe_auto_name(...).
 - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
 - Picks resolved light backends from backends.preference in order

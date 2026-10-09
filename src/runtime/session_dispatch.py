@@ -734,7 +734,10 @@ class TaskInputDispatcher:
     await tree.load_task_meta(session_id)
     delivered: list[dict] = []
     for close, recipient in self._undelivered_close_recipients(session_id):
-      outcome = str(close.get("outcome") or "completed")
+      # A sequence close's report outcome is its sequence_outcome (the loop's
+      # own verdict), exactly as the live delivery in _append_closed sent it;
+      # every other close reports its lifecycle outcome.
+      outcome = str(close.get("sequence_outcome") or close.get("outcome") or "completed")
       report, created = await self.deliver_child_report(
           session_id,
           source_event=close,

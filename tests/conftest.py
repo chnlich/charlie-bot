@@ -2174,25 +2174,6 @@ class FakeSlackClient:
     return f"name-of-{channel_id}"
 
 
-def make_instruction_cfg(tmp_path: Path) -> SimpleNamespace:
-  """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
-  reads "BASE PROMPT", with the two second rule files the builder reads after it. claude_md_file
-  names a path that does not exist, so the built instructions carry no host override. The memory
-  store root under charliebot_home does not exist yet: the build creates the empty scaffold there,
-  so the instructions carry no memory block."""
-  home = tmp_path / "home"
-  repo = tmp_path / "repo"
-  (repo / "prompts").mkdir(parents=True)
-  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
-  (repo / "prompts" / "manager_workflows.md").write_text("MANAGER WORKFLOWS PROMPT", encoding="utf-8")
-  (repo / "prompts" / "thread_session.md").write_text("THREAD SESSION PROMPT", encoding="utf-8")
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      charliebot_home=home,
-  )
-
-
 def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
   """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
   charlie_bot_repo is a derived property tied to the installed package location, so a plain
@@ -3109,11 +3090,6 @@ async def _noop() -> None:
   return
 
 
-def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
-  """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
-  coro.close()
-
-
 async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:
   """Downstream ASGI app the auth-middleware tests wrap; records that it ran."""
   _ok_asgi_downstream.called = True
@@ -3164,16 +3140,6 @@ async def cancel_and_drain(task: asyncio.Task) -> None:
   task.cancel()
   with contextlib.suppress(asyncio.CancelledError):
     await task
-
-
-def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
-  """Return a create_logged_task stand-in that records each spawn's task name."""
-
-  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> None:
-    names.append(name or "")
-    coro.close()
-
-  return fake_create_logged_task
 
 
 # Shared test helpers, single-homed here: the waits and the settle/reader

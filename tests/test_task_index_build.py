@@ -1,5 +1,7 @@
 """The tree index's rebuild concurrency: one build serves every reader of one
 invalidation, and a write landing mid-build never installs over its generation.
+The completion, cancellation and patch checks read the index their caller holds,
+so a build no write let install still serves them.
 
 The sidebar poll, the tree page, and every delegation read the index through
 :meth:`TaskTreeManager._get_index`; a structural write invalidates it, and the
@@ -13,7 +15,11 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, build_env
+from conftest import OPERATOR, build_env, create_task
+
+from src.infra.models import PatchSessionTaskRequest, RunRecord
+from src.runtime.task_completion import CompletionEvidence
+from src.runtime.task_errors import TaskConflictError
 
 
 @pytest_asyncio.fixture
@@ -92,3 +98,64 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
   monkeypatch.setattr(tree, "_facts_of", counting)
   tree._build_index_sync(tree.session_store.fresh_cached_metas())
   assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"
+
+
+def _invalidate_during_builds(tree, monkeypatch):
+  """Every build from now on is overtaken by a write, so the cache slot stays empty."""
+  orig = tree._build_index_sync
+
+  def invalidating_build(cached_metas):
+    index = orig(cached_metas)
+    tree._invalidate_index()  # the write lands while the build runs
+    return index
+
+  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
+  tree._invalidate_index()
+
+
+@pytest.mark.asyncio
+async def test_automatic_completion_closes_when_a_write_lands_mid_build(tree, monkeypatch):
+  manager = await create_task(tree, parent=None, request_id="mgr")
+  worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  _invalidate_during_builds(tree, monkeypatch)
+  await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
+  assert tree._index is None  # the builds never installed
+  assert tree.task_state(worker.id) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_succeeds_when_a_write_lands_mid_build(tree, monkeypatch):
+  manager = await create_task(tree, parent=None, request_id="mgr")
+  worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker")
+  _invalidate_during_builds(tree, monkeypatch)
+  await tree.completion.cancel_task(worker.id, request_id="cancel", reason="not needed", caller=OPERATOR)
+  assert tree.task_state(worker.id) == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_manager_close_citing_a_child_run_passes_evidence_when_a_write_lands_mid_build(tree, monkeypatch):
+  feature = await create_task(tree, parent=None, request_id="feature")
+  worker = await create_task(tree, parent=feature.id, request_id="w", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
+  # The worker's report is unprocessed input on the manager until a turn consumes it.
+  await tree.runs.register_run(RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
+  async with tree.control_lock:
+    await tree.dispatch.claim_input_batch_locked(feature.id, "run-turn")
+  await tree.dispatch.finish_run(feature.id, "run-turn", outcome="success")
+  _invalidate_during_builds(tree, monkeypatch)
+  evidence = CompletionEvidence(summary="delivered", result_refs=["run:run-w"], run_ids=["run-w"])
+  status, _payload = await tree.completion.complete_task(
+      feature.id, request_id="close", evidence=evidence, caller=OPERATOR)
+  assert status == 200
+  assert tree.task_state(feature.id) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_structural_patch_runs_its_guards_when_a_write_lands_mid_build(tree, monkeypatch):
+  manager = await create_task(tree, parent=None, request_id="mgr")
+  await create_task(tree, parent=manager.id, request_id="child", profile="worker")
+  _invalidate_during_builds(tree, monkeypatch)
+  with pytest.raises(TaskConflictError, match="no child tasks"):
+    await tree.patch_task(manager.id, PatchSessionTaskRequest(profile="worker"), caller=OPERATOR)

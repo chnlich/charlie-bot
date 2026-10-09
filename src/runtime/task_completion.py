@@ -104,7 +104,6 @@ class CompletionTree(Protocol):
   events: ControlEventSink
   runs: RunStore
   dispatch: session_dispatch.TaskInputDispatcher
-  _index: tuple[Any, float] | None
   session_events: SessionEvents
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
@@ -203,21 +202,17 @@ class TaskCompletionManager:
 
   def _execution_blockers(
       self,
+      index: Any,
       session_id: str,
       *,
-      label: str,
       exclude_run_ids: set[str] | None = None,
   ) -> list[str]:
     """The Run blockers plus open-descendant blockers of one task, from current
-        facts (lock held by caller). ``label`` names the caller in the
-        caller-held-index error; ``exclude_run_ids`` carves out the Run whose
+        facts (lock held by caller). ``index`` is the tree index the caller
+        got from ``_get_index``; ``exclude_run_ids`` carves out the Run whose
         own closure request is being re-evaluated.
         """
     tree = self._tree
-    cached = tree._index
-    if cached is None:
-      raise RuntimeError(f"{label} blockers require the caller-held tree index")
-    index = cached[0]
     tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
     blockers: list[str] = []
     events = tree.runs.load_events_sync(session_id)
@@ -234,6 +229,7 @@ class TaskCompletionManager:
 
   def completion_blockers(
       self,
+      index: Any,
       session_id: str,
       *,
       exclude_run_ids: set[str] | None,
@@ -247,7 +243,7 @@ class TaskCompletionManager:
         ``exclude_input_ids`` carves out exactly that Run's already-claimed
         batch — never later inputs or other Runs' claims.
         """
-    blockers = self._execution_blockers(session_id, label="completion", exclude_run_ids=exclude_run_ids)
+    blockers = self._execution_blockers(index, session_id, exclude_run_ids=exclude_run_ids)
     pending = [
         e for e in self._tree.dispatch.pending_inputs(session_id)
         if str(e.get("id")) not in (exclude_input_ids or set())
@@ -256,7 +252,7 @@ class TaskCompletionManager:
       blockers.insert(0, session_dispatch.unprocessed_input_blocker(pending))
     return blockers
 
-  def cancellation_blockers(self, session_id: str) -> list[str]:
+  def cancellation_blockers(self, index: Any, session_id: str) -> list[str]:
     """The cancellation blockers of one task, from current facts (lock held by caller).
 
         Explicit cancellation (operator or the owning agent) refuses
@@ -265,13 +261,14 @@ class TaskCompletionManager:
         input is preserved history on the cancelled node — refusing cancel
         over it would trap every task whose input nothing consumed yet.
         """
-    return self._execution_blockers(session_id, label="cancellation")
+    return self._execution_blockers(index, session_id)
 
   # ------------------------------------------------------------------
   # Evidence
   # ------------------------------------------------------------------
 
-  def _delivery_run_outcomes(self, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
+  def _delivery_run_outcomes(
+      self, index: Any, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
     """The delivery-run universe of one task: its own Runs plus the Runs of
         its direct children (a manager's delivery evidence legitimately cites
         the child work it consumed). Returns (run records by id, outcomes)."""
@@ -281,17 +278,16 @@ class TaskCompletionManager:
     for run in tree.runs.list_run_records_sync(meta.id):
       runs[run.id] = run
       outcomes[run.id] = tree.facts_of(meta.id).run_outcomes.get(run.id)
-    index = tree._index[0] if tree._index is not None else None
-    if index is not None:
-      for child_id in tree._children_of(index, meta.id):
-        child_facts = tree.facts_of(child_id)
-        for run in tree.runs.list_run_records_sync(child_id):
-          runs[run.id] = run
-          outcomes[run.id] = child_facts.run_outcomes.get(run.id)
+    for child_id in tree._children_of(index, meta.id):
+      child_facts = tree.facts_of(child_id)
+      for run in tree.runs.list_run_records_sync(child_id):
+        runs[run.id] = run
+        outcomes[run.id] = child_facts.run_outcomes.get(run.id)
     return runs, outcomes
 
   def evidence_blockers(
       self,
+      index: Any,
       meta: SessionMetadata,
       evidence: CompletionEvidence,
       *,
@@ -311,7 +307,7 @@ class TaskCompletionManager:
     if not evidence.result_refs:
       blockers.append("completion requires result evidence (result_refs)")
     tree = self._tree
-    runs, outcomes = self._delivery_run_outcomes(meta)
+    runs, outcomes = self._delivery_run_outcomes(index, meta)
     for run_id in succeeding_run_ids or ():
       outcomes[run_id] = "success"
     facts = tree.facts_of(meta.id)
@@ -500,14 +496,15 @@ class TaskCompletionManager:
         blockers.append(f"landing evidence unverified in {repo}: {branch}@{commit}: {reason}")
     return blockers
 
-  async def verified_evidence_blockers(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
+  async def verified_evidence_blockers(
+      self, index: Any, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
     """The full evidence check: the shape/record layer plus the git landing layer.
 
         The slow git verification runs outside the control lock; the locked
         revalidation re-runs the shape layer over fresh facts (a landed commit
         cannot un-land, so the outside-lock git verdict stands).
         """
-    blockers = self.evidence_blockers(meta, evidence)
+    blockers = self.evidence_blockers(index, meta, evidence)
     blockers.extend(await self.landing_blockers(meta, evidence))
     return blockers
 
@@ -604,10 +601,10 @@ class TaskCompletionManager:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
       blockers = self.completion_blockers(
-          session_id, exclude_run_ids={run.id}, exclude_input_ids=set(run.input_event_ids))
+          index, session_id, exclude_run_ids={run.id}, exclude_input_ids=set(run.input_event_ids))
       meta = await tree.load_meta(session_id)
       assert meta is not None
-      blockers.extend(self.evidence_blockers(meta, evidence, succeeding_run_ids={run.id}))
+      blockers.extend(self.evidence_blockers(index, meta, evidence, succeeding_run_ids={run.id}))
     blockers.extend(await self.landing_blockers(meta, evidence))
     return sorted(set(blockers))
 
@@ -661,7 +658,7 @@ class TaskCompletionManager:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
       blockers = self.completion_blockers(
-          session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
+          index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       meta = await tree.load_meta(session_id)
       assert meta is not None
     if blockers:
@@ -674,7 +671,7 @@ class TaskCompletionManager:
     # cannot un-land between the two passes, and a moving condition
     # (run finished, input processed) is caught by the fresh structural
     # and shape revalidation.
-    evidence_blockers = await self.verified_evidence_blockers(meta, evidence)
+    evidence_blockers = await self.verified_evidence_blockers(index, meta, evidence)
     if evidence_blockers:
       raise TaskConflictError(sorted(set(evidence_blockers)))
     # Live-announce epochs are taken before any append, so the announce
@@ -682,15 +679,15 @@ class TaskCompletionManager:
     child_epoch = await tree.session_events.prime_aggregator(session_id)
     parent_epoch = (await tree.session_events.prime_aggregator(meta.task_parent_id) if meta.task_parent_id else None)
     async with tree.control_lock:
-      index = await tree._get_index()
-      tree._index_meta(index, session_id)
+      fresh_index = await tree._get_index()
+      tree._index_meta(fresh_index, session_id)
       if tree.task_state(session_id) != "open":
         raise TaskConflictError([f"task {session_id} is no longer open"])
       fresh_blockers = self.completion_blockers(
-          session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
+          fresh_index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       fresh_meta = await tree.load_meta(session_id)
       assert fresh_meta is not None
-      fresh_evidence_blockers = self.evidence_blockers(fresh_meta, evidence)
+      fresh_evidence_blockers = self.evidence_blockers(fresh_index, fresh_meta, evidence)
       all_blockers = sorted(set(fresh_blockers + fresh_evidence_blockers))
       if all_blockers:
         # The locked revalidation is authoritative: conditions changed
@@ -1224,7 +1221,7 @@ class TaskCompletionManager:
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay[1]
-      blockers = self.cancellation_blockers(session_id)
+      blockers = self.cancellation_blockers(index, session_id)
       if blockers:
         raise TaskConflictError(sorted(set(blockers)))
       close_event, report, report_created = await self._append_closed(

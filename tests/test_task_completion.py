@@ -139,7 +139,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
       summary="s",
       result_refs=["run:run-work", "spec:" + "b" * 64, f"landed:other-branch@{'c' * 40}"],
       run_ids=["run-work"])
-  blockers = tree.completion.evidence_blockers(index.metas[worker.id], bad)
+  blockers = tree.completion.evidence_blockers(index, index.metas[worker.id], bad)
   assert any("task spec" in b for b in blockers)
   assert any("lands on other-branch" in b for b in blockers)
 
@@ -150,7 +150,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   await tree.runs.record_finish(worker.id, "run-misreview", "success")
   mischained = CompletionEvidence(
       summary="s", result_refs=["review:run-misreview"], run_ids=["run-work"], review_run_ids=["run-misreview"])
-  blockers = tree.completion.evidence_blockers(index.metas[worker.id], mischained)
+  blockers = tree.completion.evidence_blockers(index, index.metas[worker.id], mischained)
   assert any("reviews work run run-earlier-attempt" in b for b in blockers)
 
   # A review run of ANOTHER task is not review evidence.
@@ -162,7 +162,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
       result_refs=["review:run-stranger-review"],
       run_ids=["run-work"],
       review_run_ids=["run-stranger-review"])
-  blockers = tree.completion.evidence_blockers(index.metas[worker.id], wrong_owner)
+  blockers = tree.completion.evidence_blockers(index, index.metas[worker.id], wrong_owner)
   assert any("review Run of task" in b for b in blockers)
 
   # Complete evidence closes the implement worker: a successful review run of

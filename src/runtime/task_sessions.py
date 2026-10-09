@@ -1387,13 +1387,13 @@ class TaskTreeManager:
     """Apply one v2 metadata mutation with its structural guards (operator-only)."""
     require_operator(caller, "task metadata mutations require operator credentials")
     async with self.control_lock:
-      await self._get_index()
+      index = await self._get_index()
       meta = await self.load_task_meta(session_id)
       fs = req.model_fields_set
       structural = bool(fs & {"task", "profile", "task_parent_id"})
       blockers = self._structural_blockers(session_id) if structural else []
       if ("profile" in fs and req.profile is not None and req.profile != meta.profile and req.profile == "worker" and
-          self._children_count(session_id) > 0):
+          self._children_count(index, session_id) > 0):
         blockers.append("demotion to worker requires a task with no child tasks")
       if "task_parent_id" in fs and req.task_parent_id != meta.task_parent_id:
         blockers.extend(await self._reparent_blockers(session_id, req.task_parent_id))
@@ -1417,10 +1417,8 @@ class TaskTreeManager:
           session_id, ET.PROMPT_CHANGED if fs & {"subtree_prompt", "node_prompt"} else "task_updated")
       return meta
 
-  def _children_count(self, session_id: str) -> int:
-    if self._index is None:
-      raise RuntimeError("tree index must be built before structural guards")
-    return len(self._children_of(self._index[0], session_id))
+  def _children_count(self, index: _TreeIndex, session_id: str) -> int:
+    return len(self._children_of(index, session_id))
 
   def _structural_blockers(self, session_id: str) -> list[str]:
     """Running and pending-execution blockers of one node (run facts; input seam extends)."""

@@ -2,10 +2,10 @@
 
 from typing import Literal
 
-from src.infra.backend_models import BackendOption
+from src.infra import backend_models
 
 
-class CcClaudeBackend(BackendOption):
+class CcClaudeBackend(backend_models.BackendOption):
   type: Literal["cc-claude"] = "cc-claude"
   effort: str | None = None
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'

@@ -211,10 +211,10 @@ MODEL_FALLBACK_NOTICE = "model_fallback_notice"
 # apart by its reason field. An unreadable overlay degrades to a fenceless run
 # — the read failure does NOT raise and never kills the wake.
 BACKEND_OVERLAY_INACTIVE = "backend_overlay_inactive"
-# The reason field's two values; the producer (src/runtime/master_cc_run.py) and
-# the renderer (src/runtime/message_aggregator.py) share this one spelling, so a
-# one-site edit cannot fork the pair.
-OVERLAY_REASON_UNDECLARED = "undeclared"
+# The reason field's declared-but-unreadable value: the producer
+# (src/runtime/task_execution.py) emits the same spelling as a literal and the
+# renderer (src/runtime/message_aggregator.py) compares against this constant,
+# so the two must agree.
 OVERLAY_REASON_UNREADABLE = "unreadable"
 # Legacy render-only constant: history events carry no reason field and render
 # as undeclared. New code never emits it.

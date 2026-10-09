@@ -625,11 +625,17 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
       await asyncio.sleep(0.1)
     assert archived, "the worker task was not auto-archived after its delivered report"
     assert tree.task_state(manager.id) == "open"
-    reports = [
-        e for e in tree.events.load_events(manager.id)
-        if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id
-    ]
-    assert reports and reports[-1]["outcome"] == "completed"
+
+    def reports_of(cid: str) -> list[dict]:
+      return [e for e in child_reports(tree, manager.id) if e["child_session_id"] == cid]
+
+    # Each child's close fact and its parent report are two appends under one
+    # lock (_append_closed). The lock-free state reads above can fall between
+    # them, and the settle below returns at once while a report is unwritten,
+    # so each child's report is waited for on its own.
+    for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
+      await poll_until(lambda cid=cid: reports_of(cid), timeout=15.0, what=f"the completed report of child {cid}")
+      assert reports_of(cid)[-1]["outcome"] == "completed"
 
     legacy_dir = cfg.sessions_dir / child_id / "threads"
     assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True

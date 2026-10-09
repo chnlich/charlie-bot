@@ -117,9 +117,10 @@ test('an idle open lands at the top of a last reply taller than the viewport', (
 test('an idle open of a fitting reply lands at the bottom and follows the next turn', () => {
   // Eight finished turns: the last reply (70px) fits the 300px viewport while
   // the folded history around it does not, so the anchor restore clamps to
-  // the maximum scroll. The open does not pin there — it records "follow the
-  // next turn" on the engine, so late layout changes cannot drag the view
-  // down, and the next append re-arms the pin when it lands.
+  // the maximum scroll. The open does not pin there — the engine records
+  // "follow the next turn" when the mount restore leaves the view at the
+  // bottom, so late layout changes cannot drag the view down, and the next
+  // append re-arms the pin when it lands.
   const messages = [];
   for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
   const rig = openRig({messages});
@@ -138,6 +139,47 @@ test('an idle open of a fitting reply lands at the bottom and follows the next t
   assert.ok(distanceFromBottom(rig.root) <= 1, 'the append kept the view at the bottom');
   assert.equal(rig.engine.pinnedIntent, true, 'the append re-armed the pin');
   assert.equal(rig.engine.followNextTurn, false, 'the append consumed the record');
+});
+
+test('a short reply whose tail placeholder shrinks follows the next turn', () => {
+  // Eight finished turns, then one trailing system message after the last
+  // separator: the engine groups it into a pending flat segment that opens
+  // as a placeholder at its estimate (64 + 14 × 21 = 358px for 1000 chars),
+  // far taller than the 54px it renders at. The mount restore leaves the
+  // view above the bottom and sets no record; the placeholder resolving
+  // shrinks the content, the restore clamps the view to the bottom, and the
+  // engine sets the record there.
+  const messages = [];
+  for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i));
+  messages.push(eMsg('system', 'tail-1', 'x'.repeat(1000), {fakeHeight: 30}));
+  const rig = openRig({messages});
+  assert.ok(rig.root.querySelector('.turn-placeholder'), 'the tail segment opened as a placeholder');
+  assert.ok(distanceFromBottom(rig.root) > 1, 'the mount restore left the view above the bottom');
+  assert.equal(rig.engine.followNextTurn, false, 'no follow record before the placeholder resolves');
+  settle(rig.timers);
+  assert.equal(rig.root.querySelector('.turn-placeholder'), null, 'every placeholder resolved');
+  assert.ok(distanceFromBottom(rig.root) <= 1, 'the shrink left the view at the bottom');
+  assert.equal(rig.engine.followNextTurn, true, 'the restore at the bottom set the record');
+
+  rig.context.appendMessageObject(eMsg('user', 'live-1', 'next question'), 'session-a', false);
+  settle(rig.timers);
+  assert.ok(distanceFromBottom(rig.root) <= 1, 'the append brought the view to the bottom');
+  assert.equal(rig.engine.pinnedIntent, true, 'the append re-armed the pin');
+});
+
+test('a tall reply keeps its top and sets no record when the tail placeholder shrinks', () => {
+  // The same trailing placeholder under a reply taller than the viewport:
+  // the shrink lands below the anchored reply, the restore holds the reply
+  // top at the viewport top, and the view never reaches the bottom, so the
+  // engine sets no record.
+  const messages = [];
+  for (let i = 0; i < 8; i++) messages.push(...turn(`t${i}_`, i, i === 7 ? {fakeHeight: 900} : {}));
+  messages.push(eMsg('system', 'tail-1', 'x'.repeat(1000), {fakeHeight: 30}));
+  const rig = openRig({messages});
+  settle(rig.timers);
+  assert.equal(rig.root.querySelector('.turn-placeholder'), null, 'every placeholder resolved');
+  assert.equal(rig.engine.followNextTurn, false, 'the view never reached the bottom');
+  assert.ok(Math.abs(anchorY(rig.root, 't7_c7')) <= 1, 'the reply top held the viewport top');
 });
 
 test('an idle open of a fitting reply keeps the reply top when the view shrinks', () => {

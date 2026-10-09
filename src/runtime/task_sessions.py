@@ -31,7 +31,7 @@ import re
 import shutil
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -81,7 +81,7 @@ from src.runtime.control_events import (
     stable_close_event_id,
     stable_task_id,
 )
-from src.runtime.hooks.sequence_controllers import binding_for
+from src.runtime.hooks.sequence_controllers import binding_for, sequence_controllers
 from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
 from src.runtime.runs import (
     DATA_DIR_NAME,
@@ -412,6 +412,10 @@ class TaskTreeManager:
     # standing.
     self._lifecycle.tree_index_invalidator = self.invalidate_tree_index
     fork.tree_index_invalidator = self.invalidate_tree_index
+    # The fork consumes this tree through its TaskTreeOwner protocol (clone
+    # validation, the elone replacement); the last-built tree over one fork
+    # owns it, the same rule the invalidator rides.
+    fork.tree = self
     # The session lists read stored status; the archive of a task node is a
     # derived fact (archived_of, subtree inheritance included). The overlay
     # lets the sidebar's active list drop a delivered worker — and, with it,
@@ -1652,6 +1656,157 @@ class TaskTreeManager:
   # Archive: the user's single end state, cascading down the subtree
   # ------------------------------------------------------------------
 
+  def archived_close_event(
+      self,
+      session_id: str,
+      request_id: str,
+      *,
+      summary: str,
+      archived_with: str | None = None,
+  ) -> dict:
+    """One node's archive-format close fact: outcome ``archived``, ``report_to``
+    null — an archive reports to nobody and wakes nobody. ``archived_with``
+    names the node the user archived when this fact closes a descendant."""
+    return build_control_event(
+        ET.TASK_CLOSED,
+        actor=ACTOR_USER,
+        source_session_id=session_id,
+        event_id=stable_close_event_id(session_id, request_id),
+        request_id=request_id,
+        outcome="archived",
+        summary=summary,
+        result_refs=[],
+        run_ids=[],
+        report_to=None,
+        **({
+            "archived_with": archived_with
+        } if archived_with is not None else {}),
+    )
+
+  async def clone_blocker(self, source_id: str) -> str | None:
+    """The clone refusal for one source, or None: a manager source's parent
+    task must be open — a clone writes nothing under a closed parent."""
+    source = await self.load_meta(source_id)
+    if source is None or source.profile != "manager" or source.task_parent_id is None:
+      return None
+    state = self.task_state(source.task_parent_id)
+    if state != "open":
+      return f"parent task {source.task_parent_id} is {state}; the clone writes nothing"
+    return None
+
+  async def run_elone_replacement(
+      self,
+      source: SessionMetadata,
+      event_index: int,
+      backend: str | None,
+      publish: Callable[[], Awaitable[SessionMetadata]],
+      archive: Callable[[str], Awaitable[None]],
+  ) -> SessionMetadata:
+    """Replace one manager source with its elone child; returns the child.
+
+    The whole replacement runs under the control lock, in this order: the
+    refusals (an unfinished run on the source, a closed parent task), the
+    subtree's undelivered close reports, *publish* (the child's birth), the
+    child-edge move, the source's archive-format close, *archive* (the stored
+    status and successor pointer), and the scheduled-task rebind. A failed
+    step raises with the steps that completed listed.
+    """
+    completed: list[str] = []
+    async with self.control_lock:
+      try:
+        blockers = self._elone_blockers(source)
+        if blockers:
+          raise TaskConflictError(blockers)
+        completed.append("validated the source")
+        await self._redeliver_subtree_close_reports(source.id)
+        completed.append("redelivered the subtree's undelivered close reports")
+        new_meta = await publish()
+        completed.append("published the new node")
+        await self._move_source_children(source.id, new_meta.id)
+        completed.append("moved the source's child tasks")
+        await self._close_source_archived(source.id, new_meta.id)
+        completed.append("closed the source")
+        await archive(new_meta.id)
+        completed.append("archived the source with its successor pointer")
+        await self._rebind_scheduled_tasks(source, new_meta)
+        completed.append("rebound the scheduled tasks")
+      except Exception as e:
+        e.add_note(f"elone of {source.id} completed before the failure: {', '.join(completed) or 'no step'}")
+        raise
+    return new_meta
+
+  def _elone_blockers(self, source: SessionMetadata) -> list[str]:
+    """The elone refusals: an unfinished run on the source, a closed parent task."""
+    blockers: list[str] = []
+    events = self.runs.load_events_sync(source.id)
+    host_boot = self._host_boot_time()
+    for run in self.runs.list_run_records_sync(source.id):
+      blocker = self.runs.run_blocker(run, events, host_boot)
+      if blocker is not None:
+        blockers.append(f"{source.id}: {blocker}")
+    if source.task_parent_id is not None:
+      state = self.task_state(source.task_parent_id)
+      if state != "open":
+        blockers.append(f"parent task {source.task_parent_id} is {state}")
+    return blockers
+
+  async def _redeliver_subtree_close_reports(self, source_id: str) -> None:
+    """Land every close report the moving subtree still owes its recipient.
+
+    The source is the dominant recipient (its direct children's close facts
+    name it), so the redelivery runs before the source closes and no close
+    report arrives at a closed node. Deliveries wake nobody: the locked
+    variant's caller owns the wakes, and the source closes right after.
+    """
+    index = await self._get_index(force=True)
+    for descendant_id in self._descendants(index, source_id):
+      await self.dispatch.recover_pending_reports_locked(descendant_id)
+
+  async def _move_source_children(self, source_id: str, new_id: str) -> None:
+    """Point every direct child's decomposition edge at the new node.
+
+    The edge is the only move: the children keep their own logs, close facts
+    and report recipients, and the subtree move's idle check does not apply —
+    the position stays where it was, so a running child moves and keeps
+    reporting, its next report reading the new edge.
+    """
+    index = await self._get_index(force=True)
+    for child_id in self._children_of(index, source_id):
+      child = await self.load_task_meta(child_id)
+      child.task_parent_id = new_id
+      await self._save_meta(child)
+
+  async def _close_source_archived(self, source_id: str, new_id: str) -> None:
+    """Close an open source with the archive format; a closed source keeps its fact."""
+    if self.task_state(source_id) != "open":
+      return
+    event = self.archived_close_event(
+        source_id,
+        f"elone-{uuid.uuid4()}",
+        summary=f"archived by elone successor {new_id}",
+    )
+    await self.events.append(source_id, event)
+    self._invalidate_index()
+
+  async def _rebind_scheduled_tasks(self, source: SessionMetadata, new_meta: SessionMetadata) -> None:
+    """Move every scheduled task bound to the source onto the new node.
+
+    Each registered sequence controller rebinds its own bindings' yaml
+    ``session_id``; the scheduler's bookkeeping copies to the new node, so the
+    next fire computes its due time from the source's true last occurrence and
+    lands on the child.
+    """
+    moved = False
+    for controller in sequence_controllers():
+      if await controller.move_bindings(source.id, new_meta.id):
+        moved = True
+    if not moved:
+      return
+    fresh_new = await self.load_task_meta(new_meta.id)
+    metadata_slots.copy_fields(
+        source, fresh_new, "cron", names=("last_scheduled_run", "last_scheduled_cron", "last_run_status"))
+    await self._save_meta(fresh_new)
+
   async def archive_subtree(self, session_id: str, *, caller: object) -> list[str]:
     """Archive *session_id*'s whole subtree: one archived close fact per open node.
 
@@ -1693,20 +1848,11 @@ class TaskTreeManager:
       for sid in subtree:
         if tree.task_state(sid) != "open":
           continue
-        event = build_control_event(
-            ET.TASK_CLOSED,
-            actor=ACTOR_USER,
-            source_session_id=sid,
-            event_id=stable_close_event_id(sid, request_id),
-            request_id=request_id,
-            outcome="archived",
+        event = tree.archived_close_event(
+            sid,
+            request_id,
             summary="archived by the user" if sid == session_id else "",
-            result_refs=[],
-            run_ids=[],
-            report_to=None,
-            **({
-                "archived_with": session_id
-            } if sid != session_id else {}),
+            archived_with=session_id if sid != session_id else None,
         )
         await tree.events.append(sid, event)
         archived.append(sid)

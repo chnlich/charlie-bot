@@ -137,11 +137,19 @@ class DispatchTree(Protocol):
 INPUT_EVENT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 
-def child_report_text(report: dict) -> str:
-  """A child_report event as the parent's turn input: the typed header, then its summary."""
-  return (
-      f"[Report from task {report.get('child_session_id')} | "
-      f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
+def child_report_text(report: dict, provenance: str | None = None) -> str:
+  """A child_report event as the parent's turn input: the typed header, then its summary.
+
+  *provenance* names a fork/elone child's origin in the header —
+  ``clone of <source id>`` or ``elone of <source id>``, resolved from the
+  child's ``parent_session_id`` (``TaskInputDispatcher.child_report_provenance``
+  owns the judgment); a task-tree-born child carries none and the header keeps
+  its original shape. The child_report event's own format never changes.
+  """
+  header = f"[Report from task {report.get('child_session_id')}"
+  if provenance:
+    header += f" ({provenance})"
+  return f"{header} | outcome {report.get('outcome')}] {str(report.get('summary') or '')}"
 
 
 # The admitted input types a message route may produce. A run-token caller on
@@ -318,6 +326,40 @@ class TaskInputDispatcher:
   # ------------------------------------------------------------------
   # Pending inputs (pure, recoverable)
   # ------------------------------------------------------------------
+
+  async def child_report_provenance(self, child_session_id: str) -> str | None:
+    """The fork/elone origin fragment for one child's report header.
+
+    The child's ``parent_session_id`` names its history source; the source's
+    ``successor_session_id`` naming the child means the child replaced the
+    source in place (elone), and any other fork is a clone. A task-tree-born
+    child carries no ``parent_session_id`` and no provenance.
+    """
+    child = await self._tree.load_meta(child_session_id)
+    if child is None or child.parent_session_id is None:
+      return None
+    source = await self._tree.load_meta(child.parent_session_id)
+    if source is not None and source.successor_session_id == child.id:
+      return f"elone of {child.parent_session_id}"
+    return f"clone of {child.parent_session_id}"
+
+  async def child_report_provenances(self, events: list[dict]) -> dict[str, str]:
+    """The provenance fragment per fork/elone child that reports in *events*.
+
+    One judgment per distinct child: a batch can carry several reports from one
+    child, and the header fragment depends on the child alone.
+    """
+    provenance: dict[str, str] = {}
+    for event in events:
+      if event.get("type") != ET.CHILD_REPORT:
+        continue
+      child_id = str(event.get("child_session_id"))
+      if child_id in provenance:
+        continue
+      fragment = await self.child_report_provenance(child_id)
+      if fragment is not None:
+        provenance[child_id] = fragment
+    return provenance
 
   def pending_inputs(self, session_id: str) -> list[dict]:
     """The task's currently pending input events, derived from disk facts.
@@ -719,6 +761,13 @@ class TaskInputDispatcher:
       if already is None:
         yield close, str(recipient)
 
+  @staticmethod
+  def _close_report_outcome(close: dict) -> str:
+    """A close fact's report outcome: a sequence close reports its
+    sequence_outcome (the loop's own verdict), exactly as the live delivery in
+    _append_closed sent it; every other close reports its lifecycle outcome."""
+    return str(close.get("sequence_outcome") or close.get("outcome") or "completed")
+
   async def recover_pending_reports(self, session_id: str) -> list[dict]:
     """Repair the crash window *child result saved before parent append*.
 
@@ -733,14 +782,34 @@ class TaskInputDispatcher:
     await tree.load_task_meta(session_id)
     delivered: list[dict] = []
     for close, recipient in self._undelivered_close_recipients(session_id):
-      # A sequence close's report outcome is its sequence_outcome (the loop's
-      # own verdict), exactly as the live delivery in _append_closed sent it;
-      # every other close reports its lifecycle outcome.
-      outcome = str(close.get("sequence_outcome") or close.get("outcome") or "completed")
       report, created = await self.deliver_child_report(
           session_id,
           source_event=close,
-          outcome=outcome,
+          outcome=self._close_report_outcome(close),
+          summary=str(close.get("summary") or ""),
+          result_refs=list(close.get("result_refs") or []),
+          recipient=recipient,
+          actor=ACTOR_SYSTEM,
+      )
+      if created:
+        delivered.append(report)
+    return delivered
+
+  async def recover_pending_reports_locked(self, session_id: str) -> list[dict]:
+    """recover_pending_reports for a caller already holding the control lock.
+
+        Same scan, same stable-id dedup; each delivery appends under the held
+        lock and wakes nobody — the locked entry's callers own their wakes, and
+        the elone flow closes the redelivery's recipient right after.
+        """
+    tree = self._tree
+    await tree.load_task_meta(session_id)
+    delivered: list[dict] = []
+    for close, recipient in self._undelivered_close_recipients(session_id):
+      report, created = await self.deliver_child_report_locked(
+          session_id,
+          source_event=close,
+          outcome=self._close_report_outcome(close),
           summary=str(close.get("summary") or ""),
           result_refs=list(close.get("result_refs") or []),
           recipient=recipient,

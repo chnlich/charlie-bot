@@ -97,7 +97,10 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
     await mgr.events.save_chat_event(child.id, conftest.user_event("first turn"))
     assert fdatasync.call_count == born_syncs + 1
 
-  assert born_syncs == 0
+  # The child's birth is one sync-free atomic stream. An elone adds one durable
+  # append beside it — the source's own archive-format close fact — never a
+  # sync inside the child's born history.
+  assert born_syncs == (1 if spawn == "elone" else 0)
   events = _assert_manager_root(cfg, child.id)
   copied_count = len(parent_events) if spawn == "fork" else 2
   assert events[:copied_count] == parent_events[:copied_count]

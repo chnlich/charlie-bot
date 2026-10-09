@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from src.features.cron import loader
 from src.features.cron.cron_files import write_cron_key
-from src.features.cron.cron_sequence import bound_task_name, redrive_firing
+from src.features.cron.cron_sequence import bound_task_name, bound_task_names, redrive_firing
 from src.features.cron.scheduler import load_croniter
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
@@ -145,6 +145,20 @@ class CronSequenceController(SequenceController):
       return False
     await self.redrive(session_id, tree, cfg)
     return True
+
+  async def move_bindings(self, source_session_id: str, new_session_id: str) -> bool:
+    """The elone move: every task bound to the source fires on its successor.
+
+    The yaml's ``session_id`` key rebinds through the single-key write, one
+    write per bound task; the loader's fingerprint picks the change up on the
+    next read, so the next tick resolves the new node. True when at least one
+    task was bound to the source.
+    """
+    names = bound_task_names(source_session_id)
+    for name in names:
+      await asyncio.to_thread(write_cron_key, name, "session_id", new_session_id)
+      log.info("scheduled_task_moved", task=name, source=source_session_id, session=new_session_id)
+    return bool(names)
 
   def binding(self, session_id: str) -> CronBinding | None:
     name = bound_task_name(session_id)

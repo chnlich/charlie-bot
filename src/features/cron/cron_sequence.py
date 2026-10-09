@@ -91,6 +91,21 @@ def load_bound_task(task_name: str, cfg: object) -> config.ScheduledTaskConfig |
   return task
 
 
+def bound_task_names(session_id: str, tasks: list[config.ScheduledTaskConfig] | None = None) -> list[str]:
+  """Every loaded scheduled task whose ``session_id`` binding names *session_id*.
+
+  The plural form of the one binding judgment (see :func:`bound_task_name`):
+  the elone rebind moves every match rather than assuming a node holds one
+  binding. *tasks* injects the caller's snapshot so a consumer that already
+  holds one reads a single generation; the default loads the current one.
+  """
+  return [
+      task_cfg.name
+      for task_cfg in (tasks if tasks is not None else loader.get_scheduled_tasks())
+      if task_cfg.session_id == session_id
+  ]
+
+
 def bound_task_name(session_id: str, tasks: list[config.ScheduledTaskConfig] | None = None) -> str | None:
   """The loaded scheduled task whose ``session_id`` binding names *session_id*.
 
@@ -101,10 +116,8 @@ def bound_task_name(session_id: str, tasks: list[config.ScheduledTaskConfig] | N
   that already holds one (the sidebar lists' schedule join) reads a single
   generation; the default loads the current one.
   """
-  for task_cfg in (tasks if tasks is not None else loader.get_scheduled_tasks()):
-    if task_cfg.session_id == session_id:
-      return task_cfg.name
-  return None
+  names = bound_task_names(session_id, tasks)
+  return names[0] if names else None
 
 
 def chain_step_prompt(prompt: str, previous_name: str, previous_result: str) -> str:

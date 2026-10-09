@@ -10,13 +10,16 @@ takeoff-exemption site reads.
 
 The verdict reads two answers out of the chat history: the takeoff phrase in
 the file-last real user message, and the file-last parseable pre-takeoff
-stamp. Both are complete prefix facts of the event list, so the answers memo
-carries them across calls and an appended suffix folds by scanning only the
-suffix: a user message in the suffix is the new file-last one, and the
-prefix's stored stamp answer is the file-older bound the backward
-continuation would stop at. A wholesale list replacement (a new object)
-rebuilds from a fresh walk, the same identity contract the usage fold's memo
-rides.
+stamp. A fork/elone child's log opens with its source's copied lines, so both
+answers read only the user messages after the newest ``clone_start`` marker —
+the user's words to the source authorize the source, never the child. Both
+are complete prefix facts of the event list, so the answers memo carries them
+across calls and an appended suffix folds by scanning only the suffix: a user
+message in the suffix is the new file-last one, a marker in the suffix voids
+every earlier answer, and the prefix's stored stamp answer is the file-older
+bound the backward continuation would stop at. A wholesale list replacement
+(a new object) rebuilds from a fresh walk, the same identity contract the
+usage fold's memo rides.
 """
 
 import datetime
@@ -97,6 +100,16 @@ def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime.datet
   return issued_at.astimezone(datetime.UTC)
 
 
+def _newest_clone_start_index(events: list[dict]) -> int:
+  """The newest ``clone_start`` marker's index in *events*, or -1 when the log
+  holds none. A fork/elone child's log opens with its source's copied lines;
+  the marker separates the source's history from the child's own turns."""
+  for index in range(len(events) - 1, -1, -1):
+    if events[index].get("type") == event_types.CLONE_START:
+      return index
+  return -1
+
+
 def _backward_user_answers(
     events: list[dict],
     session_id: str,
@@ -104,6 +117,9 @@ def _backward_user_answers(
   """Backward walk over the given span: the span-last real user message's
   takeoff phrase, the span-last parseable pre-takeoff stamp, and whether the
   span held a real user message at all.
+
+  Callers pass the span the gate may judge: the messages after the newest
+  ``clone_start`` marker, or the whole list when the log holds none.
 
   No early break. The stored answers must be complete prefix facts for the
   suffix fold to combine with, and an early break could fire with the stamp
@@ -135,29 +151,45 @@ def _settled_user_answers(
 ) -> tuple[bool, datetime.datetime | None, bool]:
   """Return the two gate answers plus whether *events* holds any real user message.
 
+  The answers judge the messages after the newest ``clone_start`` marker in
+  the list — a fork/elone child inherits its source's copied lines, and the
+  user's words to the source authorize the source, never the child.
+
   A cold or replaced list pays one full backward walk and stores the answers
   with the list and its length. An identity match folds only the appended
   suffix — the chat-events cache grows the list in place, so the answers as
   of the covered length stay valid and the suffix holds the file-last user
-  message when it holds one at all; the store claims exactly the scanned
-  span, so an append landing between the slice and the store is scanned by
-  the next call instead of being claimed unseen.
+  message when it holds one at all; a marker in the suffix voids the stored
+  answers and the walk restarts behind it. The store claims exactly the
+  scanned span, so an append landing between the slice and the store is
+  scanned by the next call instead of being claimed unseen.
   """
   cached = _gate_answers_memo.get(session_id)
   if cached is not None and cached[0] is events:
     covered, has_takeoff, pre_takeoff_at, seen_any_user = cached[1], cached[2], cached[3], cached[4]
     suffix = events[covered:]
     if suffix:
-      suffix_has_takeoff, suffix_pre_takeoff_at, seen_user = _backward_user_answers(suffix, session_id)
-      if seen_user:
-        has_takeoff = suffix_has_takeoff
-        seen_any_user = True
-      if suffix_pre_takeoff_at is not None:
-        pre_takeoff_at = suffix_pre_takeoff_at
+      cut = _newest_clone_start_index(suffix)
+      if cut >= 0:
+        # A marker in the suffix voids the prefix's answers: the copied
+        # history before it belongs to the source, so the walk starts
+        # behind the newest marker and nothing older joins the fold.
+        has_takeoff, pre_takeoff_at, seen_any_user = _backward_user_answers(suffix[cut + 1:], session_id)
+      else:
+        suffix_has_takeoff, suffix_pre_takeoff_at, seen_user = _backward_user_answers(suffix, session_id)
+        if seen_user:
+          has_takeoff = suffix_has_takeoff
+          seen_any_user = True
+        if suffix_pre_takeoff_at is not None:
+          pre_takeoff_at = suffix_pre_takeoff_at
       _gate_answers_memo.store(session_id, (events, covered + len(suffix), has_takeoff, pre_takeoff_at, seen_any_user))
     return has_takeoff, pre_takeoff_at, seen_any_user
   count = len(events)
-  span = events[:count]  # the walked span is the claimed span: an append landing mid-walk is not claimed unseen
+  cut = _newest_clone_start_index(events)
+  # The walked span is the claimed span: an append landing mid-walk is not
+  # claimed unseen. The answers judge the messages after the newest marker
+  # only — the user's words to the fork's source stay the source's own.
+  span = events[cut + 1:] if cut >= 0 else events
   has_takeoff, pre_takeoff_at, seen_any_user = _backward_user_answers(span, session_id)
   _gate_answers_memo.store(session_id, (events, count, has_takeoff, pre_takeoff_at, seen_any_user))
   return has_takeoff, pre_takeoff_at, seen_any_user

@@ -2,20 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest.mock import patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
-    assert_trigger_fired,
-    make_sacct_mock,
-    patch_trigger_fire,
-)
-from conftest import make_trigger_setup as _make_mgr
-from conftest import no_sleep as _no_sleep
 
-from src.infra.models import SlurmJob
+from src.infra import models
 
 # ---------------------------------------------------------------------------
 # Single slurm job: terminal-state detection
@@ -67,7 +60,7 @@ from src.infra.models import SlurmJob
         ),
     ])
 async def test_slurm_single_job_terminal_state(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     sacct_lines: list[str],
     message: str,
     job_id: int,
@@ -80,19 +73,19 @@ async def test_slurm_single_job_terminal_state(
   answer (accounting lag) and an unknown state are not terminal: the probe keeps
   polling until a terminal state arrives, which min_polls pins for those rows.
   """
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = make_sacct_mock({(None, job_id): sacct_lines})
+  _, _, trigger_mgr, session_id = await conftest.make_trigger_setup(tmp_path)
+  sacct = conftest.make_sacct_mock({(None, job_id): sacct_lines})
 
-  with patch_trigger_fire(sacct, sacct_available=True, sleep_mock=_no_sleep) as mock_master:
+  with conftest.patch_trigger_fire(sacct, sacct_available=True, sleep_mock=conftest.no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=600,
         message=message,
-        watch_targets=[SlurmJob(job_id=job_id)],
+        watch_targets=[models.SlurmJob(job_id=job_id)],
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
+  msg = await conftest.assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert sacct.call_count >= min_polls
   assert final_line in msg
 
@@ -103,15 +96,15 @@ async def test_slurm_single_job_terminal_state(
 
 
 @pytest.mark.asyncio
-async def test_no_sacct_host_slurm_create_fails(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
+async def test_no_sacct_host_slurm_create_fails(tmp_path: pathlib.Path) -> None:
+  _, _, trigger_mgr, session_id = await conftest.make_trigger_setup(tmp_path)
   with (
-      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
+      mock.patch(conftest.TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
       pytest.raises(RuntimeError, match="sacct unavailable"),
   ):
     await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=600,
         message="no slurm here",
-        watch_targets=[SlurmJob(job_id=12345)],
+        watch_targets=[models.SlurmJob(job_id=12345)],
     )

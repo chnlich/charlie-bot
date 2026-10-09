@@ -12,36 +12,34 @@ There is no incremental state.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
+import pathlib
 import shutil
 import tarfile
 import threading
+import types
 import urllib.request
 import uuid
-from dataclasses import dataclass, replace
-from pathlib import Path
-from types import SimpleNamespace
 from typing import BinaryIO
 
 import numpy as np
 import structlog
 
-from src.features.voice.transcription.base import SAMPLE_RATE
-from src.infra.config import CharlieBotConfig
-from src.infra.json_utils import atomic_write_stream
-from src.infra.timeouts import HTTP_MODEL_DOWNLOAD_TIMEOUT
+from src.features.voice.transcription import base
+from src.infra import config, json_utils, timeouts
 
 log = structlog.get_logger()
 
 MAX_RECORDING_SECONDS = 5 * 60
-MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
+MAX_RECORDING_SAMPLES = base.SAMPLE_RATE * MAX_RECORDING_SECONDS
 # A segment's decode starts where the previous one's ended, pause included, so quiet
 # speech the detector labels silence still reaches the model. The cap bounds one
 # decode at 5s pause + the detector's 20s max_speech_duration + 0.4s tail = 25.4s,
 # about 330 audio positions plus 256 new tokens, inside the CPU engine's
 # max_total_len=1024.
-SEGMENT_DECODE_PAUSE_SAMPLES = 5 * SAMPLE_RATE
+SEGMENT_DECODE_PAUSE_SAMPLES = 5 * base.SAMPLE_RATE
 # Padding after a segment's speech end, so a word tail just past the cut still decodes.
 SEGMENT_DECODE_PAD_SAMPLES = 6_400
 # The offline path feeds the VAD in 128 ms steps, the browser worklet's capture-chunk
@@ -80,22 +78,22 @@ class SpeechModelsNotReadyError(RuntimeError):
   """Raised when a voice request arrives before model provisioning is complete."""
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class VoiceModelPaths:
-  cache_dir: Path
-  qwen3_archive: Path
-  qwen3_dir: Path
-  qwen3_conv_frontend: Path
-  qwen3_encoder: Path
-  qwen3_decoder: Path
-  qwen3_tokenizer: Path
-  silero_vad: Path
+  cache_dir: pathlib.Path
+  qwen3_archive: pathlib.Path
+  qwen3_dir: pathlib.Path
+  qwen3_conv_frontend: pathlib.Path
+  qwen3_encoder: pathlib.Path
+  qwen3_decoder: pathlib.Path
+  qwen3_tokenizer: pathlib.Path
+  silero_vad: pathlib.Path
   # qwen3_hf engine only: local snapshot dir of cfg.voice.model_id under cache_dir,
   # published by ensure_models_cached after snapshot_download. None for the sherpa engine.
-  hf_snapshot: Path | None = None
+  hf_snapshot: pathlib.Path | None = None
 
 
-@dataclass
+@dataclasses.dataclass
 class _SpeechModelBundle:
   # One recognizer per pool worker; the CPU engine builds _DECODE_WORKERS of them,
   # the GPU engine exactly one (concurrent generate calls serialize on the device).
@@ -124,7 +122,7 @@ _bundle: _SpeechModelBundle | None = None
 _bundle_engine: str | None = None
 
 
-def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
+def voice_model_paths(cfg: config.CharlieBotConfig) -> VoiceModelPaths:
   cache_dir = cfg.charliebot_home / "models"
   qwen3_dir = cache_dir / QWEN3_ASR_DIR_NAME
   return VoiceModelPaths(
@@ -139,7 +137,7 @@ def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
   )
 
 
-def provision_models(cfg: CharlieBotConfig) -> None:
+def provision_models(cfg: config.CharlieBotConfig) -> None:
   """Provision the speech models once per process; failures park the error.
 
   Runs on a worker thread (src.features.voice.service._provision_speech_models): this module's numpy
@@ -177,13 +175,13 @@ def get_ready_model_paths() -> VoiceModelPaths:
   raise SpeechModelsNotReadyError("speech models are still downloading")
 
 
-def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
+def ensure_models_cached(cfg: config.CharlieBotConfig) -> VoiceModelPaths:
   """Download missing model artifacts for the configured engine, verify, and publish readiness."""
   if cfg.voice.engine == "qwen3_hf":
     paths = voice_model_paths(cfg)
     paths.cache_dir.mkdir(parents=True, exist_ok=True)
     _ensure_artifact(paths.silero_vad, SILERO_VAD_URL, SILERO_VAD_SHA256)
-    paths = replace(paths, hf_snapshot=ensure_qwen3_hf_snapshot(cfg))
+    paths = dataclasses.replace(paths, hf_snapshot=ensure_qwen3_hf_snapshot(cfg))
     global _ready_paths
     with _state_lock:
       _ready_paths = paths
@@ -191,7 +189,7 @@ def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
   return _ensure_sherpa_paths_cached(cfg)
 
 
-def ensure_qwen3_hf_snapshot(cfg: CharlieBotConfig) -> Path:
+def ensure_qwen3_hf_snapshot(cfg: config.CharlieBotConfig) -> pathlib.Path:
   """Return the local snapshot dir of cfg.voice.model_id, downloading it when missing.
 
   Uses huggingface_hub (ships with transformers in the gpu-voice group), so the import
@@ -202,27 +200,27 @@ def ensure_qwen3_hf_snapshot(cfg: CharlieBotConfig) -> Path:
 
   cache_dir = cfg.charliebot_home / "models"
   cache_dir.mkdir(parents=True, exist_ok=True)
-  snapshot = Path(
+  snapshot = pathlib.Path(
       snapshot_download(
           repo_id=cfg.voice.model_id,
           cache_dir=str(cache_dir),
-          etag_timeout=HTTP_MODEL_DOWNLOAD_TIMEOUT,
+          etag_timeout=timeouts.HTTP_MODEL_DOWNLOAD_TIMEOUT,
       ))
   _verify_hf_snapshot(snapshot)
   return snapshot
 
 
-def _snapshot_complete(snapshot: Path) -> bool:
+def _snapshot_complete(snapshot: pathlib.Path) -> bool:
   """Whether a downloaded HF snapshot dir carries the weights and config to load."""
   return (snapshot / "config.json").is_file() and any(snapshot.glob("*.safetensors"))
 
 
-def _verify_hf_snapshot(snapshot: Path) -> None:
+def _verify_hf_snapshot(snapshot: pathlib.Path) -> None:
   if not _snapshot_complete(snapshot):
     raise RuntimeError(f"qwen3_hf snapshot is incomplete (no config.json or safetensors): {snapshot}")
 
 
-def _ensure_sherpa_paths_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
+def _ensure_sherpa_paths_cached(cfg: config.CharlieBotConfig) -> VoiceModelPaths:
   """Download/verify the sherpa CPU artifacts and publish them as the ready paths.
 
   Also the fallback provisioning path when the GPU engine fails after a qwen3_hf
@@ -249,7 +247,7 @@ def _open_vad(vad_config: object, buffer_seconds: float) -> object:
   return sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=buffer_seconds)
 
 
-def get_transcription_bundle(cfg: CharlieBotConfig) -> _SpeechModelBundle:
+def get_transcription_bundle(cfg: config.CharlieBotConfig) -> _SpeechModelBundle:
   """The resident recognizer + VAD bundle for offline transcription calls.
 
   Raises SpeechModelsNotReadyError while provisioning is incomplete; the voice
@@ -309,7 +307,7 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   samples = np.frombuffer(pcm_bytes, dtype="<i2")
   # The buffer is sized to the whole recording, so the detector's internal buffer
   # cannot wrap no matter how long the input is.
-  vad = _open_vad(bundle.vad_config, samples.size / SAMPLE_RATE + 10)
+  vad = _open_vad(bundle.vad_config, samples.size / base.SAMPLE_RATE + 10)
   windows = offline_decode_windows(vad, samples)
   texts: list[str] = [""] * len(windows)
   errors: list[BaseException] = []
@@ -353,7 +351,7 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   return _join_segments(*texts)
 
 
-def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
+def _ensure_artifact(path: pathlib.Path, url: str, expected_sha256: str) -> None:
   if path.exists():
     actual = _sha256_file(path)
     if actual != expected_sha256:
@@ -361,7 +359,7 @@ def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
     return
 
   def _write(stream: BinaryIO) -> None:
-    with urllib.request.urlopen(url, timeout=HTTP_MODEL_DOWNLOAD_TIMEOUT) as response:
+    with urllib.request.urlopen(url, timeout=timeouts.HTTP_MODEL_DOWNLOAD_TIMEOUT) as response:
       status = getattr(response, "status", 200)
       if status != 200:
         raise RuntimeError(f"model download failed for {url}: HTTP {status}")
@@ -375,10 +373,10 @@ def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
 
   # The swap discipline lives in json_utils.atomic_write_stream, so the verify
   # runs inside its write callback: a mismatch raises before the publish.
-  atomic_write_stream(path, _write)
+  json_utils.atomic_write_stream(path, _write)
 
 
-def _qwen3_model_files(paths: VoiceModelPaths) -> tuple[Path, ...]:
+def _qwen3_model_files(paths: VoiceModelPaths) -> tuple[pathlib.Path, ...]:
   return (
       paths.qwen3_conv_frontend,
       paths.qwen3_encoder,
@@ -413,7 +411,7 @@ def _verify_model_files(paths: VoiceModelPaths) -> None:
     raise RuntimeError("speech model files are missing: " + ", ".join(missing))
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_file(path: pathlib.Path) -> str:
   digest = hashlib.sha256()
   with path.open("rb") as f:
     for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -421,7 +419,7 @@ def _sha256_file(path: Path) -> str:
   return digest.hexdigest()
 
 
-def _get_model_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechModelBundle:
+def _get_model_bundle(cfg: config.CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechModelBundle:
   global _bundle, _bundle_engine
   with _state_lock:
     bundle = _bundle
@@ -477,7 +475,7 @@ def create_sherpa_bundle(paths: VoiceModelPaths, hotwords: str = "") -> _SpeechM
         decoder=str(paths.qwen3_decoder),
         tokenizer=str(paths.qwen3_tokenizer),
         num_threads=_DECODE_THREADS,
-        sample_rate=SAMPLE_RATE,
+        sample_rate=base.SAMPLE_RATE,
         max_total_len=1024,
         max_new_tokens=256,
         hotwords=hotwords,
@@ -493,7 +491,7 @@ def create_sherpa_bundle(paths: VoiceModelPaths, hotwords: str = "") -> _SpeechM
   )
 
 
-def create_qwen3_hf_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechModelBundle:
+def create_qwen3_hf_bundle(cfg: config.CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechModelBundle:
   """Build the GPU bundle: official transformers Qwen3-ASR weights on cuda in BF16.
 
   No fallback here — callers that must survive a GPU failure wrap this; the
@@ -526,7 +524,7 @@ def _create_vad_config(paths: VoiceModelPaths) -> object:
   vad_config.silero_vad.min_silence_duration = 1.0
   vad_config.silero_vad.min_speech_duration = 0.25
   vad_config.silero_vad.max_speech_duration = 20.0
-  vad_config.sample_rate = SAMPLE_RATE
+  vad_config.sample_rate = base.SAMPLE_RATE
   return vad_config
 
 
@@ -535,7 +533,7 @@ class _Qwen3HfStream:
 
   def __init__(self) -> None:
     self.samples: np.ndarray | None = None
-    self.result = SimpleNamespace(text="")
+    self.result = types.SimpleNamespace(text="")
 
   def accept_waveform(self, sample_rate: int, samples: np.ndarray) -> None:
     del sample_rate  # decode_stream feeds the processor, whose feature extractor samples at 16k
@@ -574,7 +572,7 @@ def _decode_samples(bundle: _SpeechModelBundle, samples: np.ndarray, worker: int
   with bundle.decode_locks[worker]:
     recognizer = bundle.recognizers[worker]
     stream = recognizer.create_stream()
-    stream.accept_waveform(SAMPLE_RATE, contiguous)
+    stream.accept_waveform(base.SAMPLE_RATE, contiguous)
     recognizer.decode_stream(stream)
     text = stream.result.text
   return " ".join(text.strip().split())
@@ -601,8 +599,8 @@ def warm_up_bundle(bundle: _SpeechModelBundle) -> None:
   identical cold cost — so it is dropped; this is not a transcription correctness
   check.
   """
-  positions = np.arange(int(SAMPLE_RATE * WARMUP_SECONDS), dtype=np.float64)
-  samples = np.sin(2 * np.pi * WARMUP_FREQUENCY_HZ * positions / SAMPLE_RATE)
+  positions = np.arange(int(base.SAMPLE_RATE * WARMUP_SECONDS), dtype=np.float64)
+  samples = np.sin(2 * np.pi * WARMUP_FREQUENCY_HZ * positions / base.SAMPLE_RATE)
   sine = samples.astype(np.float32)
   for worker in range(len(bundle.recognizers)):
     _decode_samples(bundle, sine, worker)

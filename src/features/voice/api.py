@@ -35,7 +35,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Form, Request, UploadFile, WebSocket
 
-from src.features.voice.transcription import registry
+from src.features.voice.transcription import base, registry
 from src.features.voice.transcription.local import LocalTranscriptionBackend
 from src.features.voice.transcription.registry import build_transcription_backend
 from src.infra.config import CharlieBotConfig, get_config
@@ -254,9 +254,7 @@ def _log_voice_transcribed(
 
 
 def _confirm_max_samples() -> int:
-  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
-
-  return SAMPLE_RATE * CONFIRM_MAX_SECONDS
+  return base.SAMPLE_RATE * CONFIRM_MAX_SECONDS
 
 
 def _full_max_samples() -> int:
@@ -274,21 +272,19 @@ def _wav_body_to_pcm(body: bytes, max_samples: int) -> bytes:
   """
   import wave
 
-  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
-
   try:
     reader = wave.open(io.BytesIO(body), "rb")
   except (wave.Error, EOFError) as exc:
     raise _VoiceRequestError(400, f"malformed WAV body: {exc}") from exc
   with reader:
     format_ = (reader.getnchannels(), reader.getsampwidth(), reader.getframerate())
-    if format_ != (1, 2, SAMPLE_RATE):
+    if format_ != (1, 2, base.SAMPLE_RATE):
       raise _VoiceRequestError(
           400, f"voice upload must be 16 kHz mono PCM16 WAV, got {format_[0]}ch/"
           f"{format_[1] * 8}bit/{format_[2]}Hz")
     pcm_bytes = reader.readframes(reader.getnframes())
   if len(pcm_bytes) > max_samples * 2:
-    raise _VoiceRequestError(400, f"voice recording exceeds the {max_samples // SAMPLE_RATE}s limit")
+    raise _VoiceRequestError(400, f"voice recording exceeds the {max_samples // base.SAMPLE_RATE}s limit")
   return pcm_bytes
 
 
@@ -382,9 +378,7 @@ class _PreviewQueue:
 
 def _preview_queue_budget_bytes() -> int:
   """The buffer's size: 30 s of audio, in bytes at the transcriber's rate."""
-  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
-
-  return PREVIEW_QUEUE_SECONDS * SAMPLE_RATE * 2
+  return PREVIEW_QUEUE_SECONDS * base.SAMPLE_RATE * 2
 
 
 def _preview_recording_budget_bytes() -> int:
@@ -736,10 +730,8 @@ def _write_wav(path: Path, pcm_bytes: bytes) -> None:
   # M99 server import floor carries no audio-container stack.
   import wave
 
-  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
-
   with wave.open(str(path), "wb") as wav:
     wav.setnchannels(1)
     wav.setsampwidth(2)
-    wav.setframerate(SAMPLE_RATE)
+    wav.setframerate(base.SAMPLE_RATE)
     wav.writeframes(pcm_bytes)

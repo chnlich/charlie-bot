@@ -25,40 +25,48 @@ the reply-format contract is prompts/thread_reply_format.md.
 import argparse
 import json
 
-from src.infra.help_formatter import CliHelpFormatter
-from src.runtime.cli.common import add_session_arg, post_internal_api, read_reply_text, resolve_session_id
+from src.infra import help_formatter
+from src.runtime.cli import common
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot Slack thread verbs", formatter_class=CliHelpFormatter)
+  parser = argparse.ArgumentParser(
+      description="CharlieBot Slack thread verbs", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="slack_command", required=True)
 
-  reply = sub.add_parser("reply", help="Post a reply to this session's Slack thread", formatter_class=CliHelpFormatter)
+  reply = sub.add_parser(
+      "reply", help="Post a reply to this session's Slack thread", formatter_class=help_formatter.CliHelpFormatter)
   reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
-  add_session_arg(reply)
+  common.add_session_arg(reply)
 
   ack = sub.add_parser(
-      "ack", help="Mark read thread messages, advancing the read watermark", formatter_class=CliHelpFormatter)
+      "ack",
+      help="Mark read thread messages, advancing the read watermark",
+      formatter_class=help_formatter.CliHelpFormatter)
   ack.add_argument(
       "--message-id",
       nargs="+",
       required=True,
       metavar="TS",
       help="Slack ts of each read message; every read id at or below the newest must be included")
-  add_session_arg(ack)
+  common.add_session_arg(ack)
   return parser
 
 
 def _cmd_reply(args: argparse.Namespace) -> None:
-  session_id = resolve_session_id(args.session)
-  text = read_reply_text(args.file)
-  result = post_internal_api("/api/internal/slack/reply", {"session_id": session_id, "text": text})
+  session_id = common.resolve_session_id(args.session)
+  text = common.read_reply_text(args.file)
+  result = common.post_internal_api("/api/internal/slack/reply", {"session_id": session_id, "text": text})
   print(json.dumps(result))
 
 
 def _cmd_ack(args: argparse.Namespace) -> None:
-  session_id = resolve_session_id(args.session)
-  result = post_internal_api("/api/internal/slack/ack", {"session_id": session_id, "message_ids": args.message_id})
+  session_id = common.resolve_session_id(args.session)
+  result = common.post_internal_api(
+      "/api/internal/slack/ack", {
+          "session_id": session_id,
+          "message_ids": args.message_id
+      })
   print(json.dumps(result))
 
 

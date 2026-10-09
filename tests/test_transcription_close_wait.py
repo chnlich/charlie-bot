@@ -13,24 +13,34 @@ synthetic.
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import ModuleType
+import pathlib
+import types
 from typing import Any
 
+import conftest
 import pytest
-from conftest import assert_transcribe_cancel_honors_close_timeout
 
-from src.features.voice.transcription import muse
-from src.features.voice.transcription.gemini import GeminiTranscriptionBackend
-from src.features.voice.transcription.muse import MuseTranscriptionBackend
-from src.infra import credentials
-from src.infra.config import CharlieBotConfig
-from src.infra.credentials import Credentials
+from src.features.voice.transcription import gemini, muse
+from src.infra import config, credentials
 
 # The credentials section shape and the handshake reply are each backend's own
 # wire contract; the sections dict is what the patched get_credentials() serves.
-_GEMINI_CASE = (credentials, GeminiTranscriptionBackend, {"gemini": {"api_key": "test-key"}}, [{"setupComplete": {}}])
-_MUSE_CASE = (muse, MuseTranscriptionBackend, {"meta": {"model_api_key": "test-key"}}, [{"type": "sessionStarted"}])
+_GEMINI_CASE = (
+    credentials, gemini.GeminiTranscriptionBackend, {
+        "gemini": {
+            "api_key": "test-key"
+        }
+    }, [{
+        "setupComplete": {}
+    }])
+_MUSE_CASE = (
+    muse, muse.MuseTranscriptionBackend, {
+        "meta": {
+            "model_api_key": "test-key"
+        }
+    }, [{
+        "type": "sessionStarted"
+    }])
 
 CLOSE_WAIT_CASES = [
     pytest.param(*_GEMINI_CASE, id="gemini"),
@@ -41,7 +51,7 @@ CLOSE_WAIT_CASES = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mod, backend_cls, sections, handshake_reply", CLOSE_WAIT_CASES)
 async def test_transcribe_cancel_waits_only_the_configured_close_timeout(
-    monkeypatch: pytest.MonkeyPatch, mod: ModuleType, backend_cls: type[Any], sections: dict,
+    monkeypatch: pytest.MonkeyPatch, mod: types.ModuleType, backend_cls: type[Any], sections: dict,
     handshake_reply: list[dict]) -> None:
   """Cancelling a transcription in progress waits WS_CLIENT_CLOSE_TIMEOUT for the
   peer's close frame, not websockets' 10 s default (synthetic credentials only)."""
@@ -51,10 +61,10 @@ async def test_transcribe_cancel_waits_only_the_configured_close_timeout(
   monkeypatch.setattr(
       mod,
       "get_credentials",
-      lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections=sections),
+      lambda: credentials.Credentials(path=pathlib.Path("/tmp/fake-credentials.yaml"), sections=sections),
   )
 
   def backend(url: str) -> Any:
-    return backend_cls(CharlieBotConfig(charliebot_home=Path("/tmp/fake-home")), endpoint_url=url)
+    return backend_cls(config.CharlieBotConfig(charliebot_home=pathlib.Path("/tmp/fake-home")), endpoint_url=url)
 
-  await assert_transcribe_cancel_honors_close_timeout(backend, handshake_reply)
+  await conftest.assert_transcribe_cancel_honors_close_timeout(backend, handshake_reply)

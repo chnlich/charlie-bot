@@ -20,10 +20,9 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   if one exists, change nothing about it. Never rewrites or drops host-only
   files.
 
-  With ``dry_run`` the same validation and legacy tripwire run, nothing is
-  written or created, and a would-be seed reports ``would-create`` — the
-  preview ``./scripts/setup.sh -n`` shows must fail exactly where the real
-  run would.
+  With ``dry_run`` the same validation runs, nothing is written or created,
+  and a would-be seed reports ``would-create`` — the preview
+  ``./scripts/setup.sh -n`` shows must fail exactly where the real run would.
 
   Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.infra.yaml_utils.save_yaml` (the same writer ``src/features/cron/api.py``
@@ -31,9 +30,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
   entry with ``steps`` resolves each step's ``prompt_file`` exactly like the
   task-level pointer) and every ``prompt_file`` must resolve to an existing
-  file. Fails loudly without writing if validation fails, and fails loudly
-  (writing nothing) when a legacy ``config.d/cron.yaml`` exists — migration to
-  the per-job layout is a human action, never automatic.
+  file. Fails loudly without writing if validation fails.
 
   Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}]``
   (``dry_run`` reports ``would-create`` instead of ``created``).
@@ -60,14 +57,6 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
         loader._resolve_prompt_file(step, repo_root)  # raises ValueError
     loader._resolve_local_timezone(resolved)
     ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
-
-  # A leftover legacy cron.yaml is a loud tripwire, never a silent fallback:
-  # refuse to seed (and write nothing) until a human migrates and removes it.
-  legacy_path = cfg.config_d_dir / "cron.yaml"
-  if legacy_path.exists():
-    raise ValueError(
-        f"legacy {legacy_path} present; not seeding. Split its entries into "
-        f"config.d/cron.d/<name>.yaml and remove cron.yaml (migration is manual)")
 
   cron_d_dir = cfg.config_d_dir / "cron.d"
   if not dry_run:
@@ -96,8 +85,8 @@ def setup_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   print("==> Seeding default cron tasks")
   # Per-task created/exists for repo-default cron entries, keyed on whether the
   # per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
-  # same validation and legacy tripwire as the real run and writes nothing, so
-  # the preview fails exactly where the real run would.
+  # same validation as the real run and writes nothing, so the preview fails
+  # exactly where the real run would.
   for item in seed_default_cron_tasks(cfg, dry_run=dry_run):
     print(f"  cron {item['name']}: {item['status']}")
 

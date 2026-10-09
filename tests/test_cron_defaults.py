@@ -36,13 +36,6 @@ def _write_healthy(home: pathlib.Path, name: str, cron: str, prompt_body: str) -
   return pf
 
 
-def _write_legacy_cron(home: pathlib.Path) -> pathlib.Path:
-  p = pathlib.Path(home) / ".charliebot" / "config.d" / "cron.yaml"
-  p.parent.mkdir(parents=True, exist_ok=True)
-  p.write_text("scheduled_tasks: []\n", encoding="utf-8")
-  return p
-
-
 # --- 1. seed idempotence (per-job files) -------------------------------------
 
 
@@ -171,16 +164,6 @@ def test_loader_fails_the_file_whose_loop_field_the_loop_model_rejects(temp_home
 
 
 # --- 6. shipped default is loadable and seeds per-job files ------------------
-
-
-def test_seed_fails_loud_on_legacy_cron(temp_home: pathlib.Path) -> None:
-  cfg = config.get_config()
-  _write_legacy_cron(temp_home)
-  assert not (cfg.config_d_dir / "cron.d").exists()
-  with pytest.raises(ValueError, match="legacy"):
-    seed.seed_default_cron_tasks(cfg)
-  assert not (cfg.config_d_dir / "cron.d").exists(), "nothing written on legacy tripwire"
-
 
 # --- 9. failure isolation: one broken file never aborts another ---------------
 #

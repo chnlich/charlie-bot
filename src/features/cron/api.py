@@ -184,8 +184,8 @@ async def list_cron_tasks():
   Valid jobs are sorted by name, followed by one entry per error record shaped
   ``{"name", "error", "broken": True, "path": str, "enabled": bool | None}`` —
   ``path`` is the failing file's absolute path and ``enabled`` its raw value
-  (None when the body could not be parsed). A broken or legacy file must never
-  cause this route to fail.
+  (None when the body could not be parsed). A broken file must never cause
+  this route to fail.
   """
   # prompt is resolved from prompt_file for the in-process scheduler/master
   # reads; no consumer of this route reads it (the UI edits prompt_file), and

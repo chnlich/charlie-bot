@@ -197,13 +197,19 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.runtime.session_search as session_search_module
 
-  # One active chat file per session, the population just past the pre-4096
-  # file cap (260 sessions over the 256-entry cap): a cap under the
-  # candidate population evicts roots the corpus outgrew, and the next
-  # churn derive re-reads every evicted file from byte 0 instead of the
-  # appended tail alone.
+  # One active chat file per session, the population exactly at the miss
+  # memo's file cap: a cap under the candidate population evicts roots the
+  # corpus outgrew, and the next churn derive re-reads every evicted file
+  # from byte 0 instead of the appended tail alone. Every seeded session
+  # costs durable writes, so the test lowers the cap to a handful of files
+  # and pins the production cap separately: it covers a 260-file corpus.
+  assert session_search_module._SEARCH_MISS_MEMO_LIMIT >= 260
+  population = 6
+  monkeypatch.setattr(session_search_module, "_SEARCH_MISS_MEMO_LIMIT", population)
   mgr = make_session_blocks(tmp_path)
-  carriers = [await _add_session(mgr, f"bulk-{i:03d}", status=SessionStatus.ACTIVE, minutes=i) for i in range(260)]
+  carriers = [
+      await _add_session(mgr, f"bulk-{i:03d}", status=SessionStatus.ACTIVE, minutes=i) for i in range(population)
+  ]
   for meta in carriers:
     await mgr.events.save_chat_event(meta.id, user_event("filler line\n"))
 

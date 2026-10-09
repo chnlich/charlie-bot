@@ -2,8 +2,7 @@
 
 The mechanism assertions pin the design's acceptance terms: after the cache is
 warm, list request paths read zero session metadata.json files; archived cache
-entries never expire while active entries keep the TTL; the boot scan warms the
-cache for every status.
+entries never expire while active entries keep the TTL.
 """
 
 from __future__ import annotations

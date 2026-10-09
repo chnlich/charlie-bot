@@ -97,9 +97,9 @@ RUNTIME_LAYERS = (
     Layer(2, "hooks", ("hooks", "templating")),
     Layer(
         1, "foundation", (
-            "agent_process.pty_common", "chat_events", "file_urls", "init_seed", "message_events",
-            "model_family", "run_identity", "run_token", "sidebar_state", "task_errors", "thinking_state",
-            "v1_sessions", "verify_trailer", "worktree_trash")),
+            "agent_process.pty_common", "chat_events", "file_urls", "init_seed", "message_events", "model_family",
+            "run_identity", "run_token", "sidebar_state", "task_errors", "thinking_state", "v1_sessions",
+            "verify_trailer", "worktree_trash")),
 )
 
 

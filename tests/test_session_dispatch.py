@@ -327,30 +327,30 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
 
   # Child reference.
-  blockers = await tree.deletion_blockers(root.id)
-  assert any("child task" in b for b in blockers)
+  with pytest.raises(TaskConflictError, match="child task"):
+    await tree.delete_permanently(root.id, caller=OPERATOR)
   # Runs.
   await tree.runs.register_run(RunRecord(id="run-blk", session_id=child.id))
-  blockers = await tree.deletion_blockers(child.id)
-  assert any("run record" in b for b in blockers)
+  with pytest.raises(TaskConflictError, match="run record"):
+    await tree.delete_permanently(child.id, caller=OPERATOR)
   # Preserved conversation beyond the creation fact.
   await admit(tree, child.id, "history", input_id="hist-1")
-  blockers = await tree.deletion_blockers(child.id)
-  assert any("preserved conversation" in b for b in blockers)
+  with pytest.raises(TaskConflictError, match="preserved conversation"):
+    await tree.delete_permanently(child.id, caller=OPERATOR)
   # A child report held in another task's log.
   other_root = await create_task(tree, parent=None, request_id="other-root")
   await tree.dispatch.deliver_child_report(
       child.id, source_event={"id": "src-1"}, outcome="failed", summary="s", result_refs=[], recipient=other_root.id)
-  blockers = await tree.deletion_blockers(child.id)
-  assert any("child report" in b for b in blockers)
+  with pytest.raises(TaskConflictError, match="child report"):
+    await tree.delete_permanently(child.id, caller=OPERATOR)
   # An origin reference from another task's saved metadata.
   from src.infra.models import EventRef
   fork_meta = await session_blocks.store.get_session(other_root.id)
   assert fork_meta is not None
   fork_meta.origin_ref = EventRef(session_id=child.id, event_id=None)
   await session_blocks.store.save_metadata(fork_meta)
-  blockers = await tree.deletion_blockers(child.id)
-  assert any("origin_ref" in b for b in blockers)
+  with pytest.raises(TaskConflictError, match="origin_ref"):
+    await tree.delete_permanently(child.id, caller=OPERATOR)
 
   # A truly empty, unreferenced task is deletable under the same lock.
   empty = await create_task(tree, parent=None, request_id="empty")

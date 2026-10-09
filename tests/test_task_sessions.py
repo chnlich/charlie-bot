@@ -79,21 +79,21 @@ async def test_permanent_delete_blockers(tmp_path: pathlib.Path) -> None:
   cfg, _, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
 
-  blockers = await mgr.deletion_blockers(ids["low"])
-  assert any("child task" in b for b in blockers)
+  with pytest.raises(task_errors.TaskConflictError, match="child task"):
+    await mgr.delete_permanently(ids["low"], caller=conftest.OPERATOR)
 
   await mgr.runs.register_run(models.RunRecord(id="run-q", session_id=ids["worker1"]))
-  blockers = await mgr.deletion_blockers(ids["worker1"])
-  assert any("run record" in b for b in blockers)
+  with pytest.raises(task_errors.TaskConflictError, match="run record"):
+    await mgr.delete_permanently(ids["worker1"], caller=conftest.OPERATOR)
 
   triggers_dir = cfg.sessions_dir / ids["worker2"] / "triggers"
   triggers_dir.mkdir(parents=True)
   (triggers_dir / "t.json").write_text("{}", encoding="utf-8")
-  blockers = await mgr.deletion_blockers(ids["worker2"])
-  assert any("trigger" in b for b in blockers)
+  with pytest.raises(task_errors.TaskConflictError, match="trigger"):
+    await mgr.delete_permanently(ids["worker2"], caller=conftest.OPERATOR)
 
   leaf = await conftest.create_task(mgr, parent=ids["root"], request_id="leafy", profile="worker", name="Leafy")
-  assert await mgr.deletion_blockers(leaf.id) == []
+  assert await mgr.delete_permanently(leaf.id, caller=conftest.OPERATOR) is True
 
 
 @pytest.mark.asyncio

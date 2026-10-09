@@ -157,8 +157,8 @@ def _cmd_query(args: argparse.Namespace) -> None:
     return
   if not matched:
     return
-  # Synthesize the `# {title}` heading so query output stays navigable: v2
-  # bodies carry no heading; legacy bodies keep their own.
+  # Synthesize the `# {title}` heading so query output stays navigable: entry
+  # bodies omit it by convention.
   for e in matched:
     print(memory.full_text(e))
 

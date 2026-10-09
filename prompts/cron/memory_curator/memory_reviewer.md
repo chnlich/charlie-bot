@@ -48,7 +48,7 @@ Step 3: commit entry by entry.
 Write each commit message to a file and run
 `charliebot memory proposal commit <store-relative path> --message-file F`, one commit per
 changed file. The subject follows the store's convention as the skill's "Commit message
-prefixes" chapter words it (`admit:` / `revise:` / `migrate:` / `remove:` / `scaffold:`),
+prefixes" chapter words it (`admit:` / `revise:` / `remove:` / `scaffold:`),
 and the body holds the entry's three proof lines plus one `Staging: <file>` line per consumed
 candidate. When the command lists PR lines that the worktree lost, restore their PR wording. Record the
 conflict as a report row: the candidate's intent beside the PR line it meets. When the command

@@ -2684,6 +2684,12 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
   run_id = decision["run_id"]
   _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
   assert outcome == "failed"  # landed immediately by the existing path
+  # The landing's follow-ups (the failed report, the retry decision) run after
+  # the terminal fact; the launch task ends when they are done. The parent has
+  # no pending input or active run until the report lands, so settling it
+  # earlier would pass before the report exists.
+  await poll_until(
+      lambda: (worker.id, run_id) not in adapter._launch_inflight, timeout=15.0, what="the failed run's launch chain")
   assert adapter._landing_retries == {}  # no retry for a non-space error
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
   assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["failed"]
@@ -2699,8 +2705,11 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
   second_id = decision["run_id"]
   _second_run, second_outcome = await wait_for_terminal_run(tree, worker.id, second_id)
   assert second_outcome == "success"
+  await poll_until(
+      lambda: (worker.id, second_id) not in adapter._launch_inflight,
+      timeout=15.0,
+      what="the second run's launch chain")
   assert adapter._landing_retries == {}
-  await poll_until(lambda: len(child_reports(tree, manager.id)) >= 1, what="the retried delivery")
   outcomes = [r.get("outcome") for r in child_reports(tree, manager.id)]
   assert "failed" not in outcomes[1:], outcomes  # the second run sent no failed report
 

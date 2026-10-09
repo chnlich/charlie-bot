@@ -86,10 +86,12 @@ from src.infra.config import (
     load_credentials,
 )
 from src.infra.constants import REPO_ROOT
+from src.infra.http import close_http_client
 from src.infra.identity_env import inherited_identity_env_vars
 from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
+from src.infra.timeouts import SERVER_GRACEFUL_SHUTDOWN_TIMEOUT
 from src.infra.yaml_utils import load_yaml, save_yaml
 from src.runtime import (
     init_seed,
@@ -111,7 +113,10 @@ from src.runtime.home_writer_fence import (
     HomeWriterFence,
     acquire_home_writer_fence,
 )
+from src.runtime.hooks import wiring
 from src.runtime.runs import read_pid_stat
+from src.runtime.streaming import streaming_manager
+from src.runtime.task_execution import task_manager
 from src.runtime.task_recovery import reconcile_task_tree
 
 log = LazyStructlogLogger()
@@ -946,8 +951,6 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
       # Scheduling, trigger recovery, external messaging, the global cgroup
       # sweep and the other shared provisioners never start in a preview
       # instance; the request-boundary gate keeps their routes unreachable.
-      from src.runtime.task_execution import task_manager
-
       tree = task_manager()
       tree.dispatch.executor.launch_workspace_guard = make_workspace_guard(cfg)
       stats = await reconcile_task_tree(cfg, tree)
@@ -960,10 +963,6 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
           flush=True)
       yield
     finally:
-      from src.infra.http import close_http_client
-      from src.runtime.hooks import wiring
-      from src.runtime.streaming import streaming_manager
-
       await close_http_client()
       await streaming_manager.close_all()
       for _, stop_service in wiring.service_stops():
@@ -1056,8 +1055,6 @@ def run_preview_command(home_raw: str, port: int, backend_id: str | None, add_ba
 
 def _run_uvicorn(setup: PreviewSetup) -> None:
   import uvicorn
-
-  from src.infra.timeouts import SERVER_GRACEFUL_SHUTDOWN_TIMEOUT
 
   uvicorn.run(
       build_preview_app(setup),

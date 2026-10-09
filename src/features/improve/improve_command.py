@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 import pydantic
 
-from src.infra import config, git, log_once, models, timeouts
+from src.infra import config, git, log_once, models, ndjson, timeouts
 from src.infra import event_types as ET
 from src.runtime import message_aggregator
 
@@ -572,8 +572,6 @@ def _newest_first_events(events_path: pathlib.Path) -> Iterator[dict]:
   """The iteration thread's events log, newest line first — the stream both
   iteration judgments scan (the from-the-end walk parses only the bytes the
   answer needs)."""
-  from src.infra import ndjson
-
   # Both judgments match on these five types alone (_quota_blocker_match,
   # _summary_text), so the walk parses nothing else — the multi-megabyte
   # tool_result lines a no-match exhaustion would otherwise parse whole.

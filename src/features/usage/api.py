@@ -43,6 +43,7 @@ def preload_usage_tally_stack() -> None:
   started = time.monotonic()
   import sqlite3  # noqa: F401  -- the pin is the import itself
 
+  # deferred: import server
   from src.features.usage import token_tally, usage_ledger  # noqa: F401
   for source in usage_source_registration.sources():
     if source.module is not None:
@@ -80,10 +81,7 @@ def _read_ledger() -> tuple[list[usage_ledger.LedgerRow], dict[str, str], dt.dat
   Runs in a thread. A read error propagates to the request: the page fails loudly instead of
   rendering rows it could not read.
   """
-  # The ledger + tally stack (sqlite3, the token_tally parsers) rides the page like croniter
-  # rides its next-run resolutions: the M99 server import floor carries no tally stack for a
-  # page that may never load.
-  from src.features.usage import token_tally, usage_ledger
+  from src.features.usage import token_tally, usage_ledger  # deferred: import server
 
   started = time.monotonic()
   with usage_ledger.UsageLedger(usage_ledger.default_ledger_path()) as ledger:
@@ -133,9 +131,7 @@ def _account_source(
   """
   if row.source != CHARLIE_BOT_SOURCE:
     return row.source, False
-  # The tally rides the page like the ledger read does (see _read_ledger): imported here so
-  # the module stays off the server's import floor.
-  from src.features.usage import token_tally
+  from src.features.usage import token_tally  # deferred: import server
 
   name = token_tally.backend_page_source(account, registry)
   return name, not next(card for card in cards if card.name == name).run_logs_only

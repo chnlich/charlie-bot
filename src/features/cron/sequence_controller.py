@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 
 from src.features.cron import loader
 from src.features.cron.cron_files import write_cron_key
+from src.features.cron.cron_sequence import bound_task_name, redrive_firing
+from src.features.cron.scheduler import load_croniter
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
@@ -31,8 +33,6 @@ _ROW_SCHEDULE_NO_FIRE = datetime.max.replace(tzinfo=UTC)
 
 def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
   """ISO next fire time of *cron_expr* in *timezone*, computed on every call."""
-  from src.features.cron.scheduler import load_croniter
-
   if "croniter" not in globals():
     load_croniter(globals())
   tz = ZoneInfo(timezone)
@@ -110,8 +110,6 @@ class CronSequenceController(SequenceController):
   sequence_kind = "cron_steps"
 
   async def redrive(self, session_id: str, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
-    from src.features.cron.cron_sequence import redrive_firing
-
     await redrive_firing(session_id, tree, cfg)
 
   async def launch_context(
@@ -149,8 +147,6 @@ class CronSequenceController(SequenceController):
     return True
 
   def binding(self, session_id: str) -> CronBinding | None:
-    from src.features.cron.cron_sequence import bound_task_name
-
     name = bound_task_name(session_id)
     return None if name is None else CronBinding(name)
 
@@ -173,7 +169,6 @@ class CronSequenceController(SequenceController):
     if (hit is not None and now_utc < hit[3] and hit[1] == ids and fingerprint == hit[0]):
       return hit[2]
     out: dict[str, dict] = {}
-    from src.features.cron.cron_sequence import bound_task_name
 
     for session_id in ids:
       task_name = bound_task_name(session_id, tasks)

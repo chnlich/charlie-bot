@@ -8,17 +8,20 @@ from pydantic import BaseModel, ConfigDict
 from src.features.improve.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
+    clear_active_loop_lock,
     loop_goal_path,
     loop_plan_path,
     reserve_loop_state,
     save_loop_state,
     stop_improve_loop,
 )
+from src.features.improve.improve_sequence import create_improve_child, run_improve_sequence
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.tasks import create_logged_task
 from src.runtime import spawner_backends
 from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_store, get_task_manager, require_found
+from src.runtime.api.sessions import _task_http_error
 from src.runtime.session_store import SessionStore
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_sessions import TaskTreeManager
@@ -98,8 +101,6 @@ async def _start_improve_sequence(
   carried the request), the loop state and the child are reserved under the
   stable ids, and the controller task owns the iterations from there.
   """
-  from src.features.improve.improve_sequence import create_improve_child, run_improve_sequence
-
   try:
     await task_mgr.check_task_authorization(req.session_id)
   except DelegationBlockedError as e:
@@ -140,7 +141,6 @@ async def _start_improve_sequence(
     # ever spawned for it, and its active lock would block every later improve
     # request until the next restart's dirty-pid reconciliation.
     await _fail_reserved_loop(req.session_id, state, cfg)
-    from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
 
   create_logged_task(
@@ -180,8 +180,6 @@ async def _fail_reserved_loop(session_id: str, state: ImproveState, cfg: Charlie
   never leaves a permanently blocking active.lock or a "running" loop no
   controller owns.
   """
-  from src.features.improve.improve_command import clear_active_loop_lock
-
   state.status = "failed"
   await save_loop_state(session_id, state, cfg)
   await clear_active_loop_lock(session_id, cfg)

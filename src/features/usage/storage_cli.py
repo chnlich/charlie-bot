@@ -14,11 +14,8 @@ from src.infra import constants, help_formatter
 
 
 def _cmd_cool(args: argparse.Namespace) -> None:
-  # The sweep and config stacks ride the one sweep command that needs them: a
-  # deferral here keeps --help and parser errors off their import chains (the
-  # src.runtime.cli.config deferral shape).
-  from src.features.usage import storage_cool
-  from src.infra import config
+  from src.features.usage import storage_cool  # deferred: charliebot storage --help
+  from src.infra import config  # deferred: charliebot storage --help
 
   try:
     result = storage_cool.run_cool_sweep(

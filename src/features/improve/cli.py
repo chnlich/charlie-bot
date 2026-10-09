@@ -104,12 +104,9 @@ def main() -> None:
     # Sent-but-lost: the loop's live goal file and its sequence's worker
     # child prove the launch landed. Returns the endpoint's response shape so steering output
     # stays identical.
-    # The improve-sequence and config stacks ride the one readback that needs
-    # them: a deferral here keeps --help and parser errors off their import
-    # chains (the src.runtime.cli.config deferral shape).
-    from src.features.improve import improve_sequence
-    from src.infra import config, models
-    from src.runtime.runs import RUN_METADATA_NAME
+    from src.features.improve import improve_sequence  # deferred: charliebot improve --help
+    from src.infra import config, models  # deferred: charliebot improve --help
+    from src.runtime.runs import RUN_METADATA_NAME  # deferred: charliebot improve --help
 
     cfg = config.get_config()
     loops_dir = cfg.sessions_dir / session_id / "loops"

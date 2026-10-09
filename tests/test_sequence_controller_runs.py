@@ -79,7 +79,7 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
   Run logs the no-controller warning."""
   import os
 
-  from src.features.cron import cron_sequence
+  from src.features.cron import sequence_controller
   from src.features.improve.improve_command import ImproveState, save_loop_state
   from src.features.improve.improve_sequence import loop_owner_ref
 
@@ -105,7 +105,7 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
   await tree.runs.register_run(cron_step)
   await tree.runs.register_run(iteration)
   redrive = AsyncMock()
-  monkeypatch.setattr(cron_sequence, "redrive_firing", redrive)
+  monkeypatch.setattr(sequence_controller, "redrive_firing", redrive)
 
   await adapter._after_worker_run(meta, cron_step, "success")
   redrive.assert_awaited_once_with(leaf.id, tree, cfg)
@@ -133,7 +133,7 @@ async def test_recovery_asks_the_owning_controller_and_counts_one_follow_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Recovery replays a terminal cron step and an unlaunched one (one follow-up
   each), and leaves a launched non-terminal step to the ordinary follow."""
-  from src.features.cron import cron_sequence
+  from src.features.cron import sequence_controller
   from src.runtime.task_execution import _replay_followups
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
@@ -156,7 +156,7 @@ async def test_recovery_asks_the_owning_controller_and_counts_one_follow_up(
     await tree.runs.register_run(run)
   await tree.runs.record_finish(leaf.id, finished.id, "success", exit_code=0)
   redrive = AsyncMock()
-  monkeypatch.setattr(cron_sequence, "redrive_firing", redrive)
+  monkeypatch.setattr(sequence_controller, "redrive_firing", redrive)
   counters = {"followups": 0}
 
   await _replay_followups(leaf.id, tree, None, counters, cfg)

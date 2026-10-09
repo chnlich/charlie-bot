@@ -20,16 +20,13 @@ import json
 import shlex
 import sys
 
-from src.infra import help_formatter, timeouts
+from src.infra import help_formatter, ssh, timeouts
 from src.runtime.cli import common
 
 
 def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
-  # The ssh driver and its subprocess ride the one launch that shells out;
-  # --help and parser errors read neither.
+  # subprocess rides the one launch that shells out; --help and parser errors read neither.
   import subprocess
-
-  from src.infra import ssh
 
   remote_dir = f"/tmp/charliebot_runs/{launch_id}"
   remote_log = f"{remote_dir}/log"
@@ -77,10 +74,7 @@ def main() -> None:
   parser.add_argument("--cwd", required=True, help="Working directory on the remote host")
   parser.add_argument("--cmd", required=True, help="Command to execute on the remote host")
   args = parser.parse_args()
-  # The model and config stacks ride the one launch that needs them: a
-  # deferral here keeps --help and parser errors off their import chains (the
-  # src.runtime.cli.config deferral shape).
-  from src.infra import config, models
+  from src.infra import config, models  # deferred: charliebot remote-launch --help
 
   session_id = common.resolve_session_id(args.session)
 

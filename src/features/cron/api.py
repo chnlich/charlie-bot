@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 
 from src.features.cron import event_types as ET
 from src.features.cron.config import ScheduledTaskConfig, ScheduledTaskFields
+from src.features.cron.cron_sequence import effective_scheduled_task_backend
 from src.features.cron.loader import (
     _load_cron_file,
     _valid_cron_name,
@@ -20,7 +21,6 @@ from src.features.cron.loader import (
     get_scheduled_task_errors,
     get_scheduled_tasks,
 )
-from src.features.cron.scheduler import effective_scheduled_task_backend
 from src.infra.config import CharlieBotConfig, require_backend_option
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
@@ -29,6 +29,7 @@ from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_li
 from src.runtime.scheduled_sessions import ScheduledSessionBusyError
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_store import SessionStore
+from src.runtime.task_execution import task_manager
 from src.runtime.thinking_state import busy_since
 
 log = LazyStructlogLogger()
@@ -135,7 +136,6 @@ async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: Sch
   """
   if req.enabled is not True or not cand_model.session_id:
     return
-  from src.runtime.task_execution import task_manager
 
   tree = task_manager()
   meta = await tree.load_meta(cand_model.session_id)

@@ -1,9 +1,9 @@
 """Transcription backend registry — the only place that maps ids to backends.
 
-Adding a backend is one subclass module plus one line in ``_FACTORIES``. The map
-holds factories whose bodies do the imports, so importing this module loads
-neither numpy nor websockets (the server import floor, docs/perf_baseline.md@5175adf09
-M99): a backend's heavy module loads when that backend is first built.
+Adding a backend is one subclass module plus one line in ``_FACTORIES``. Importing
+this module loads every backend module but neither numpy nor websockets: the local
+backend loads the engine module when it first decodes, and the streaming backends
+import websockets when they open a connection.
 """
 
 from __future__ import annotations
@@ -11,37 +11,28 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from src.features.voice.transcription import base
+from src.features.voice.transcription import base, gemini, gemini_aigw, local, muse
 
 if TYPE_CHECKING:
   from src.infra import config
 
-# id -> factory(cfg, **kwargs) -> backend. Each factory imports its module on
-# first call; the registered callables keep this module import-light.
+# id -> factory(cfg, **kwargs) -> backend.
 _FACTORIES: dict[str, Callable[..., base.TranscriptionBackend]] = {}
 
 
 def _local(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
-  from src.features.voice.transcription import local
-
   return local.LocalTranscriptionBackend(cfg, **kwargs)
 
 
 def _gemini(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
-  from src.features.voice.transcription import gemini
-
   return gemini.GeminiTranscriptionBackend(cfg, **kwargs)
 
 
 def _gemini_aigw(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
-  from src.features.voice.transcription import gemini_aigw
-
   return gemini_aigw.GeminiAigwTranscriptionBackend(cfg, **kwargs)
 
 
 def _muse(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
-  from src.features.voice.transcription import muse
-
   return muse.MuseTranscriptionBackend(cfg, **kwargs)
 
 

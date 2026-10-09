@@ -178,7 +178,7 @@ to a `~/.charliebot` repo if one exists. Cross-host shared skills go in
 
 - The repo-to-host invariant (host files reference repo content; the bodies live in the repo) cuts by evolution: evolving bodies stay in the repo via pointers, while non-evolving entry skeletons (name/cron/timezone/prompt_file) may be seeded once into host files.
 - Seeding belongs to an explicitly invoked setup command; keep it out of the server-start path, where writers reorder user files and race concurrent writes.
-- `effective_scheduled_task_backend` (src/features/cron/scheduler.py) resolves an omitted cron `backend` to `cfg.backends.options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
+- `effective_scheduled_task_backend` (src/features/cron/cron_sequence.py) resolves an omitted cron `backend` to `cfg.backends.options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
 - Repo content reaching a host already depends on rerunning setup (`sync-skills.sh` symlinks skills), so "new default cron tasks need setup rerun" matches existing product rules.
 
 ---

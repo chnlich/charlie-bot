@@ -386,9 +386,9 @@ def test_rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table(tmp_
 
 def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path):
   """The CLI's default ledger resolves per call from the config's charliebot home."""
-  import src.infra.config as config_module
+  import src.features.usage.usage_ledger as ledger_module
 
-  monkeypatch.setattr(config_module, "get_config", lambda: SimpleNamespace(charliebot_home=tmp_path / "home"))
+  monkeypatch.setattr(ledger_module, "get_config", lambda: SimpleNamespace(charliebot_home=tmp_path / "home"))
   assert default_ledger_path() == tmp_path / "home" / "usage" / "ledger.sqlite3"
 
 

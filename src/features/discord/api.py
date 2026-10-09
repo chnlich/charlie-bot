@@ -3,6 +3,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.features.chat_threads.thread_entry import ThreadReplyError
+from src.features.discord import discord_listener
+from src.features.discord.discord_commands import check_setup, read_thread
 from src.infra.config import CharlieBotConfig
 from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_store
 from src.runtime.session_events import SessionEvents
@@ -51,10 +54,6 @@ async def discord_reply(
   above the session's watermark refuse with a 412 ``stale_thread`` payload
   naming each unseen message, before any chunk posts.
   """
-  # The M99 server import floor carries no Discord-gateway stack for endpoints a
-  # server may never call; the imports ride the handlers that reach the gateway.
-  from src.features.chat_threads.thread_entry import ThreadReplyError
-  from src.features.discord import discord_listener
   try:
     await discord_listener.assert_thread_fresh(req.session_id, cfg, store)
     return await discord_listener.post_reply(req.session_id, req.text, cfg, store, session_events)
@@ -82,8 +81,6 @@ async def discord_read(
   thread, 422 a *url* that is not a discord.com link, 404 a channel the bot
   cannot see, 502 Discord refused the read.
   """
-  from src.features.chat_threads.thread_entry import ThreadReplyError
-  from src.features.discord.discord_commands import read_thread
   try:
     return await read_thread(req.session_id, req.url, req.limit, cfg, store, session_events)
   except ThreadReplyError as exc:
@@ -103,8 +100,6 @@ async def discord_check(
   not set, 502 when Discord refuses the token (a 401 means it is invalid). The
   readback carries no token.
   """
-  from src.features.chat_threads.thread_entry import ThreadReplyError
-  from src.features.discord.discord_commands import check_setup
   try:
     return await check_setup(cfg)
   except ThreadReplyError as exc:

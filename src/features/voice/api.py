@@ -35,6 +35,9 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Form, Request, UploadFile, WebSocket
 
+from src.features.voice.transcription import registry
+from src.features.voice.transcription.local import LocalTranscriptionBackend
+from src.features.voice.transcription.registry import build_transcription_backend
 from src.infra.config import CharlieBotConfig, get_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.responses import FastJsonResponse
@@ -117,11 +120,7 @@ async def upload_voice_recording(
     audio_path = await asyncio.to_thread(_persist_voice_audio, get_config(), session_id, pcm_bytes)
     text = await _transcribe_with_bundle(session_id, bundle, pcm_bytes)
     # The server decoded this recording, so the local backend produced the
-    # persisted text; its id comes from the class, not a fresh literal. Lazy
-    # import: the speech stack stays off `import server`'s startup path
-    # (the M99 import floor, docs/perf_baseline.md@5175adf09).
-    from src.features.voice.transcription.local import LocalTranscriptionBackend
-
+    # persisted text; its id comes from the class, not a fresh literal.
     produced_by = LocalTranscriptionBackend.id
   except _VoiceRequestError as exc:
     # A decode failure (500) leaves the wav on disk: persist-before-decode means the
@@ -144,9 +143,6 @@ def _selected_cloud_backend(backend_id: str | None) -> TranscriptionBackend | No
   that is unavailable raises instead — the selection never falls back to the
   local model, the same no-fallback contract the relay follows.
   """
-  from src.features.voice.transcription import registry
-  from src.features.voice.transcription.local import LocalTranscriptionBackend
-
   if not backend_id or backend_id == LocalTranscriptionBackend.id:
     return None
   if backend_id not in registry.backend_ids():
@@ -258,14 +254,14 @@ def _log_voice_transcribed(
 
 
 def _confirm_max_samples() -> int:
-  from src.features.voice.transcriber import SAMPLE_RATE
+  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
 
   return SAMPLE_RATE * CONFIRM_MAX_SECONDS
 
 
 def _full_max_samples() -> int:
   """The recording cap is the transcriber's own: one source owns the number."""
-  from src.features.voice.transcriber import MAX_RECORDING_SAMPLES
+  from src.features.voice.transcriber import MAX_RECORDING_SAMPLES  # deferred: import server
 
   return MAX_RECORDING_SAMPLES
 
@@ -278,7 +274,7 @@ def _wav_body_to_pcm(body: bytes, max_samples: int) -> bytes:
   """
   import wave
 
-  from src.features.voice.transcriber import SAMPLE_RATE
+  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
 
   try:
     reader = wave.open(io.BytesIO(body), "rb")
@@ -386,7 +382,7 @@ class _PreviewQueue:
 
 def _preview_queue_budget_bytes() -> int:
   """The buffer's size: 30 s of audio, in bytes at the transcriber's rate."""
-  from src.features.voice.transcriber import SAMPLE_RATE
+  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
 
   return PREVIEW_QUEUE_SECONDS * SAMPLE_RATE * 2
 
@@ -422,7 +418,6 @@ async def voice_preview_relay(websocket: WebSocket, session_id: str, backend_id:
   draining until the browser closes. Closing the socket from either side closes
   the backend iterator, which closes the backend's own connection.
   """
-  from src.features.voice.transcription.registry import build_transcription_backend
   cfg = get_config()
   try:
     backend = build_transcription_backend(backend_id, cfg)
@@ -666,7 +661,7 @@ async def _close_preview_socket(websocket: WebSocket) -> None:
 
 async def _speech_bundle() -> object:
   """The resident speech bundle, built off the event loop on first use."""
-  from src.features.voice import transcriber
+  from src.features.voice import transcriber  # deferred: import server
 
   try:
     return await asyncio.to_thread(transcriber.get_transcription_bundle, get_config())
@@ -684,7 +679,7 @@ async def _decode_pcm(session_id: str, pcm_bytes: bytes) -> str:
 
 async def _transcribe_with_bundle(session_id: str, bundle: object, pcm_bytes: bytes) -> str:
   """Offline-decode the PCM; decode-stage failures map to 500, never to a silent error."""
-  from src.features.voice import transcriber
+  from src.features.voice import transcriber  # deferred: import server
 
   try:
     return await asyncio.to_thread(transcriber.transcribe_pcm_offline, bundle, pcm_bytes)
@@ -741,7 +736,7 @@ def _write_wav(path: Path, pcm_bytes: bytes) -> None:
   # M99 server import floor carries no audio-container stack.
   import wave
 
-  from src.features.voice.transcriber import SAMPLE_RATE
+  from src.features.voice.transcriber import SAMPLE_RATE  # deferred: import server
 
   with wave.open(str(path), "wb") as wav:
     wav.setnchannels(1)

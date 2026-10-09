@@ -16,9 +16,19 @@ from zoneinfo import ZoneInfo
 
 from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.cron_files import write_cron_key
+from src.features.cron.cron_sequence import (
+    check_fireable_binding,
+    effective_scheduled_task_backend,
+    ensure_firing_leaf,
+    fire_bound_master,
+    launch_and_settle,
+    register_leaf_run,
+    resolved_backend_model,
+    run_firing_steps,
+)
 from src.features.cron.loader import get_scheduled_tasks
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, load_config, require_backend_option
+from src.infra.config import CharlieBotConfig, load_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
 from src.infra.tasks import cancel_and_wait, create_logged_task
@@ -27,6 +37,7 @@ from src.runtime.session_events import SessionEvents
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
+from src.runtime.task_execution import task_manager
 
 log = LazyStructlogLogger()
 
@@ -51,16 +62,6 @@ def load_croniter(namespace: dict[str, Any]) -> Any:
 
   namespace["croniter"] = croniter
   return croniter
-
-
-def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig) -> str:
-  """Return the backend id a scheduled task should use."""
-  if task_cfg.backend:
-    require_backend_option(cfg, task_cfg.backend, subject="scheduled task ")
-    return task_cfg.backend
-  if not cfg.backends.options:
-    raise ValueError("scheduled task backend resolution requires a configured backends.options entry")
-  return cfg.backends.options[0].id
 
 
 class Scheduler:
@@ -187,8 +188,6 @@ class Scheduler:
     only after the write-back lands, so the same tick's fire evaluates against
     the node instead of routing back to a cron session.
     """
-    from src.runtime.task_execution import task_manager
-
     tree = task_manager()
     backend = effective_scheduled_task_backend(task_cfg, cfg)
     # Step 1 — create or reattach the node. The request id derives from the
@@ -318,8 +317,6 @@ class Scheduler:
     # A bound task fires against its stable task-tree node: the binding is
     # validated here (a missing/legacy node fails the tick visibly), never
     # discovered or replaced.
-    from src.features.cron.cron_sequence import check_fireable_binding
-    from src.runtime.task_execution import task_manager
     tree = task_manager()
     session = await check_fireable_binding(task_cfg, tree)
 
@@ -404,9 +401,6 @@ class Scheduler:
 
     The binding resolves strictly by the task's ``session_id``.
     """
-    from src.features.cron.cron_sequence import check_fireable_binding, fire_bound_master, run_firing_steps
-    from src.runtime.task_execution import task_manager
-
     self._reload_config()
     tree = task_manager()
     meta = await check_fireable_binding(task_cfg, tree)
@@ -435,7 +429,6 @@ class Scheduler:
 
     if task_cfg.steps:
       leaf = await self._bound_leaf(task_cfg, meta, tree, firing, goal=f"{task_cfg.name} steps")
-      from src.features.cron.cron_sequence import register_leaf_run
       # The firing's first durable product is the leaf's first step Run: the
       # checkpoint advances only after it exists, so a replayed occurrence
       # re-admits the same leaf/Run (stable firing identity).
@@ -461,7 +454,6 @@ class Scheduler:
     # action stays a type-less leaf whose success closes it.
     leaf = await self._bound_leaf(
         task_cfg, meta, tree, firing, goal=prompt, task_type=TaskType.IMPLEMENT if action == "implement" else None)
-    from src.features.cron.cron_sequence import register_leaf_run
     await register_leaf_run(tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
     await self._record_bound_fire(meta, task_cfg)
     handle = await self._launch_bound_round(
@@ -482,7 +474,6 @@ class Scheduler:
     """
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
-    from src.runtime.task_execution import task_manager
     await task_manager().update_slot_fields(
         meta.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron=task_cfg.cron)
 
@@ -491,7 +482,6 @@ class Scheduler:
       task_cfg: ScheduledTaskConfig,
       tree,
   ) -> tuple[str, str | None]:
-    from src.features.cron.cron_sequence import resolved_backend_model
     return resolved_backend_model(task_cfg, tree, task_cfg.backend)
 
   async def _resolve_bound_prompt(
@@ -508,7 +498,6 @@ class Scheduler:
       action_type, prompt = await scheduled_handlers.loop_action()(
           name=task_cfg.name, repo=task_cfg.repo, loop=task_cfg.loop)
       if prompt is None:
-        from src.runtime.task_execution import task_manager
         await task_manager().update_slot_fields(meta.id, "cron", last_run_status=LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
         return None, action_type
@@ -525,7 +514,6 @@ class Scheduler:
       goal: str,
       task_type: TaskType | None = None,
   ):
-    from src.features.cron.cron_sequence import ensure_firing_leaf
     return await ensure_firing_leaf(task_cfg, meta, tree, firing, goal, task_type=task_type)
 
   async def _launch_bound_round(
@@ -545,7 +533,6 @@ class Scheduler:
     and failure follow-ups; a launch withheld by its preconditions leaves the
     queued Run as the retained pending request with its durable withheld
     record and blocked report, and only releases the overlap handle."""
-    from src.features.cron.cron_sequence import launch_and_settle, register_leaf_run
 
     async def _round() -> None:
       run = await register_leaf_run(
@@ -576,7 +563,6 @@ class Scheduler:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
     session = meta
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
-    from src.runtime.task_execution import task_manager
     try:
       result = await handler()
       event = {

@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from src.features.cron import scheduler as scheduler_module
 from src.runtime import session_events, session_lifecycle, session_listing, session_store
 from src.runtime.hooks import wiring
-
-if TYPE_CHECKING:
-  from src.features.cron import scheduler as scheduler_module
 
 _scheduler: scheduler_module.Scheduler | None = None
 
@@ -16,7 +12,6 @@ _scheduler: scheduler_module.Scheduler | None = None
 async def start_service(ctx: wiring.ServiceContext) -> None:
   """Build the scheduler, publish it on app.state for the cron API's run-now route, and start it."""
   global _scheduler
-  from src.features.cron import scheduler as scheduler_module
 
   _scheduler = scheduler_module.Scheduler(
       ctx.cfg, session_store.store(), session_events.events(), session_listing.listing(), session_lifecycle.lifecycle())

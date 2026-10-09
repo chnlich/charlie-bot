@@ -2,6 +2,7 @@
 
 import fastapi
 
+from src.features.terminal import terminal
 from src.infra import log_once
 from src.runtime.api import auth
 
@@ -17,8 +18,6 @@ async def terminal_websocket(websocket: fastapi.WebSocket) -> None:
   await websocket.accept()
   log.info("terminal_ws_connected")
   try:
-    from src.features.terminal import terminal
-
     await terminal.run_terminal_attachment(websocket)
   finally:
     log.info("terminal_ws_disconnected")

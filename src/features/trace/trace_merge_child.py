@@ -40,11 +40,11 @@ def main(argv: list[str]) -> int:
   parses but is not Chrome-JSON is EXIT_NOT_A_TRACE, every other build failure
   (a decode error, a missing file's traceback exit) is EXIT_FAILED.
   """
-  sys.path.insert(0, argv[1])
+  sys.path.insert(0, argv[1])  # the child runs by file path: its src import stays below this line
   paths = [pathlib.Path(value) for value in argv[2:-2]]
   out_path = pathlib.Path(argv[-2])
   slim = argv[-1] == "1"
-  from src.features.trace import trace_merge
+  from src.features.trace import trace_merge  # deferred: python src/features/trace/trace_merge_child.py
 
   try:
     trace_merge.merge_traces(paths, out_path, slim)

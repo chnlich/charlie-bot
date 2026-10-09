@@ -25,7 +25,7 @@ def _provision_speech_models(cfg: config.CharlieBotConfig) -> None:
   warm failure only logs: readiness stays exactly as provisioning published it
   and the endpoints keep their lazy path as the fallback.
   """
-  from src.features.voice import transcriber
+  from src.features.voice import transcriber  # deferred: server start
 
   transcriber.provision_models(cfg)
   started = time.monotonic()

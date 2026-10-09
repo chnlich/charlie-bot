@@ -15,7 +15,7 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.backends.claude_code import USAGE_SOURCE, login_dirs
+from src.backends.claude_code import USAGE_SOURCE, login_dirs, usage_quota
 from src.infra import config, ndjson
 from src.infra import event_types as ET
 from src.runtime.hooks import usage_sources
@@ -84,14 +84,12 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
 
 
 def quota_accounts() -> list[usage_sources.QuotaAccount]:
-  """The Claude logins on the quota panel; the quota module loads on the first call."""
-  from src.backends.claude_code import usage_quota
-
+  """The Claude logins on the quota panel."""
   return usage_quota.quota_accounts()
 
 
 def sweep(scope: usage_sources.SweepScope) -> usage_sources.SourceSweep:
   """Claude Code's part of the cold-storage sweep; the sweep module loads on the first call."""
-  from src.backends.claude_code import usage_sweep
+  from src.backends.claude_code import usage_sweep  # deferred: import server
 
   return usage_sweep.sweep(scope)

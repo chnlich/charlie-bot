@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from starlette.responses import Response
 
+from src.features.ncu.ncu_parsing import NcuParseError, parse_ncu_report
 from src.runtime import templating
 from src.runtime.file_urls import FILE_SERVER_MOUNTS
 
@@ -54,10 +55,6 @@ async def ncu_viewer(
 
   if not await asyncio.to_thread(path.is_file):
     return _ncu_error_page(request, f"Report not found: {target}", 404)
-
-  # The NCU report parser rides the viewer like croniter rides its next-run
-  # resolutions: the M99 server import floor carries no report-parsing stack.
-  from src.features.ncu.ncu_parsing import NcuParseError, parse_ncu_report
 
   try:
     report = await asyncio.to_thread(parse_ncu_report, str(path))

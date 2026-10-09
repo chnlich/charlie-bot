@@ -8,7 +8,7 @@ import fastapi
 import pydantic
 from fastapi import responses
 
-from src.infra import git, log_once, tasks, yaml_utils
+from src.infra import config, git, log_once, tasks, yaml_utils
 
 log = log_once.LazyStructlogLogger()
 
@@ -19,7 +19,6 @@ def _repo_path(repo: str | None) -> pathlib.Path | None:
   """Resolve the backlog repo for *repo*, or None when config.yaml configures none."""
   if repo:
     return pathlib.Path(repo).expanduser()
-  from src.infra import config
   cfg = config.get_config()
   if cfg.backlog.repos:
     return pathlib.Path(cfg.backlog.repos[0].path)
@@ -83,7 +82,6 @@ def _find_item_file(repo_path: pathlib.Path, item_id: str,
 @router.get('/repos')
 async def get_repos() -> responses.JSONResponse:
   """Return configured backlog repos [{label, path}]."""
-  from src.infra import config
   cfg = config.get_config()
   return responses.JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.backlog.repos])
 

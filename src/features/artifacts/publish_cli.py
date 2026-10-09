@@ -22,11 +22,8 @@ def main() -> None:
       formatter_class=help_formatter.CliHelpFormatter)
   parser.add_argument("artifact", help="Path of the artifact file to publish")
   args = parser.parse_args()
-  # The publish and config stacks ride the one publish that needs them: a
-  # deferral here keeps --help and parser errors off their import chains (the
-  # src.runtime.cli.config deferral shape).
-  from src.features.artifacts import publish
-  from src.infra import config
+  from src.features.artifacts import publish  # deferred: charliebot publish --help
+  from src.infra import config  # deferred: charliebot publish --help
 
   try:
     result = publish.publish_artifact(args.artifact, config.get_config())

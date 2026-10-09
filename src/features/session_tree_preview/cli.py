@@ -78,8 +78,8 @@ def _fail(message: str, details: list[str] | None = None) -> None:
 
 
 def _cmd_preview(args: argparse.Namespace) -> None:
-  from src.features.session_tree_preview import session_tree_preview
-  from src.runtime import home_writer_fence
+  from src.features.session_tree_preview import session_tree_preview  # deferred: charliebot session-tree --help
+  from src.runtime import home_writer_fence  # deferred: charliebot session-tree --help
 
   try:
     session_tree_preview.run_preview_command(args.home, args.port, args.backend, args.add_backend or [])

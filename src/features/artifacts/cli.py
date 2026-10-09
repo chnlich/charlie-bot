@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from src.features.artifacts import artifact_wrap, constants
+from src.features.artifacts import artifact_check, artifact_wrap, constants
 from src.infra import constants as infra_constants
 from src.infra import help_formatter, home
 from src.runtime.cli import common as cli_common
@@ -121,12 +121,9 @@ def _rejection_reason(captured_stderr: str) -> str:
 def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path,
                                 cfg: config.CharlieBotConfig) -> int:
   """Detach the cold read and register its wake; the module docstring holds the contract."""
-  # The probe's backend chain is the same one run_probe will walk.
-  from src.features.artifacts import artifact_check
-
   # The autonamer import drags fastapi and the sessions stack (~250 ms); it serves only this
   # branch's backend count, so the wrap and foreground paths must not pay it.
-  from src.runtime import autonamer
+  from src.runtime import autonamer  # deferred: charliebot artifact --help
 
   session_id = cli_common.resolve_session_id(None)
   timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -175,10 +172,6 @@ def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path
 
 
 def _run_check(args: argparse.Namespace) -> int:
-  # The assertion stack (dataclasses→inspect, plan_diff, html, ~23 ms) serves only this
-  # verb; the wrap verb's import floor (docs/perf_baseline.md@5175adf09 M102) must not pay it.
-  from src.features.artifacts import artifact_check
-
   if args.background and args.assertions_only:
     cli_common.exit_usage_error("--background cannot combine with --assertions-only: "
                                 "the background child runs the full check, probe included")

@@ -13,6 +13,7 @@ import stat
 import fastapi
 from fastapi import responses
 
+from src.features.artifacts import plan_diff
 from src.infra import config
 from src.runtime import templating
 
@@ -139,10 +140,6 @@ async def serve_artifact_path(request: fastapi.Request, path: str) -> responses.
     # The marks themselves are spliced into the response before the comment layer wraps them.
     base_text = await asyncio.to_thread(_read_diff_base, session_id, diff_param)
     page_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
-    # plan_diff drags html.parser and difflib and serves only this compare view;
-    # the server import floor (docs/perf_baseline.md@5175adf09 M99) depends on it staying
-    # off the module import.
-    from src.features.artifacts import plan_diff
     html_text = plan_diff.annotate(base_text, page_text)
     html_text = _inject_artifact_ui(html_text, session_id)
     return responses.HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)

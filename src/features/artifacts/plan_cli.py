@@ -18,7 +18,7 @@ import json
 import os.path
 from collections.abc import Sequence
 
-from src.features.artifacts import constants
+from src.features.artifacts import constants, plan_diff
 from src.features.artifacts import plans as core_plans
 from src.infra import help_formatter
 from src.runtime.cli import common as cli_common
@@ -244,11 +244,6 @@ def _read_version_file(session_id: str, version: dict) -> str:
 
 def _build_diff(session_id: str, args: argparse.Namespace) -> dict:
   """One diff object computed locally: registry through the list endpoint, files off disk."""
-  # plan_diff's difflib + html subtree is ~10 ms of the M97 wall and only the
-  # diff verb renders diff text, so it loads here instead of on every plan
-  # invocation (dataclasses/inspect ride back with pydantic either way).
-  from src.features.artifacts import plan_diff
-
   listing = cli_common.get_api(f"/api/sessions/{session_id}/plans")
   plan, from_version, to_version = _resolve_diff_plan(listing.get("plans", []), args)
   old_html = _read_version_file(session_id, from_version)

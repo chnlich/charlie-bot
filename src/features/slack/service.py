@@ -3,6 +3,7 @@
 import asyncio
 
 from src.features.chat_threads import backfill
+from src.features.slack import slack_listener
 from src.infra import config, log_once, tasks
 from src.runtime import session_events, session_lifecycle, session_listing, session_store, session_successor
 from src.runtime.hooks import wiring
@@ -18,8 +19,6 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
   global _listener_task, _backfill_task
   creds = config.get_credentials()
   if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and ctx.cfg.slack.allowed_user_ids:
-    from src.features.slack import slack_listener  # lazy: avoids import cycle at module scope
-
     listing, store, lifecycle = session_listing.listing(), session_store.store(), session_lifecycle.lifecycle()
     events, successor = session_events.events(), session_successor.successor()
     _listener_task = tasks.create_logged_task(

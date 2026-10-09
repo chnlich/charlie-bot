@@ -16,7 +16,8 @@ import orjson
 
 from src.backends.opencode import opencode_limits
 from src.infra import event_types as ET
-from src.infra import log_once, process, sse
+from src.infra import http, log_once, process, sse
+from src.runtime import message_aggregator
 from src.runtime.agent_process import base
 
 log = log_once.LazyStructlogLogger()
@@ -706,7 +707,6 @@ class OpenCodeBackend(base.AgentBackend):
   async def _abort_session(self) -> None:
     if self._server_url is None or self._session_id is None:
       return
-    from src.infra import http
 
     try:
       # The shared client skips the per-call AsyncClient construction
@@ -773,8 +773,6 @@ class OpenCodeBackend(base.AgentBackend):
     cumulative logic applies to ``text``-type parts. The process group is killed
     on timeout.
     """
-    from src.runtime import message_aggregator
-
     self._reset_run_state()
     framed = self._frame_system_prompt(system_prompt, prompt)
     cmd = [

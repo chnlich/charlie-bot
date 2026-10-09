@@ -135,11 +135,6 @@ def cron_path(name: str) -> Path:
   return cron_dir() / f"{name}.yaml"
 
 
-def _legacy_cron_file() -> Path:
-  """Path of the legacy single-file cron config (a tripwire, never a fallback)."""
-  return charliebot_home_dir() / "config.d" / "cron.yaml"
-
-
 def _valid_cron_name(name: str) -> bool:
   """Return whether *name* is a safe cron job name for a single host file.
 
@@ -274,7 +269,6 @@ def _reload_cron_snapshot() -> _CronSnapshot:
   global _cron_snapshot
   repo = get_config().charlie_bot_repo
   cron_d = cron_dir()
-  legacy_file = _legacy_cron_file()
 
   tasks: list[ScheduledTaskConfig] = []
   errors: list[ScheduledTaskError] = []
@@ -321,17 +315,6 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         continue
       tasks.append(task)
       prompt_mtimes.update(file_prompt_mtimes)
-
-  # Legacy tripwire: a leftover config.d/cron.yaml is a loud error, never a
-  # silent fallback. None of its entries are loaded.
-  if legacy_file.exists():
-    errors.append(
-        ScheduledTaskError(
-            name="cron.yaml (legacy)",
-            path=str(legacy_file),
-            error="legacy config.d/cron.yaml present; entries not loaded — "
-            "split into config.d/cron.d/<name>.yaml"))
-    log.error("cron_legacy_file_present", path=str(legacy_file))
 
   tasks.sort(key=lambda t: t.name)
   errors.sort(key=lambda e: e.name)
@@ -419,14 +402,13 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
 
 
 def _cron_fingerprint(
-    prompt_mtimes: dict[Path, float],) -> tuple[tuple[tuple[str, float], ...], dict[Path, float] | None, bool]:
-  """Compute the hot-reload fingerprint over all three re-read inputs.
+    prompt_mtimes: dict[Path, float],) -> tuple[tuple[tuple[str, float], ...], dict[Path, float] | None]:
+  """Compute the hot-reload fingerprint over both re-read inputs.
 
-  The set of ``cron.d/*.yaml`` paths with each file's mtime, the mtime of every
-  referenced ``prompt_file`` (a referenced file that has gone missing makes the
-  stat fail, returning ``None`` and forcing a full re-read so the failure
-  surfaces instead of a stale cached body), and whether the legacy
-  ``config.d/cron.yaml`` exists.
+  The set of ``cron.d/*.yaml`` paths with each file's mtime, and the mtime of
+  every referenced ``prompt_file`` (a referenced file that has gone missing
+  makes the stat fail, returning ``None`` and forcing a full re-read so the
+  failure surfaces instead of a stale cached body).
 
   This walk runs on every ``get_scheduled_tasks`` call (each /scheduled and
   /api/cron/tasks request, every scheduler tick), so it is one ``os.scandir``
@@ -435,7 +417,6 @@ def _cron_fingerprint(
   the pathlib form measured 174 us vs 53 us on the live 13-file corpus.
   """
   cron_d = str(cron_dir())
-  legacy_file = str(_legacy_cron_file())
   files: list[tuple[str, float]] = []
   if os.path.isdir(cron_d):
     with os.scandir(cron_d) as entries:
@@ -451,7 +432,7 @@ def _cron_fingerprint(
           except OSError:
             files.append((entry.name, 0.0))
   current_prompt_mtimes = _stat_prompt_files(prompt_mtimes)
-  return (tuple(files), current_prompt_mtimes, os.path.exists(legacy_file))
+  return (tuple(files), current_prompt_mtimes)
 
 
 def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
@@ -484,8 +465,7 @@ def scheduled_tasks_snapshot() -> tuple[list[ScheduledTaskConfig], object]:
 def get_scheduled_task_errors() -> list[ScheduledTaskError]:
   """Return one record per failing cron job file, sorted by name.
 
-  Total and never raises, mirroring :func:`get_scheduled_tasks`. Includes the
-  legacy-tripwire record when ``config.d/cron.yaml`` exists.
+  Total and never raises, mirroring :func:`get_scheduled_tasks`.
   """
   return _refresh_cron_snapshot().errors
 

@@ -10,11 +10,8 @@ import conftest
 import pytest
 
 from src.infra import config, models
+from src.runtime import worker
 from src.runtime.agent_process import base
-
-# The tests bind a local `worker`: `from src.runtime import worker` would turn
-# the `worker.Worker(...)` calls below into an UnboundLocalError.
-from src.runtime.worker import Worker
 
 
 class _FakeBackend(base.AgentBackend):
@@ -47,7 +44,7 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: pathlib.
   fake_diag = {"captured_at": "2026-05-03T00:00:00+00:00", "pid": 12345, "process_tree": "fake-tree"}
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "cb-home")
 
-  worker = Worker(
+  subject = worker.Worker(
       thread_metadata=thread,
       working_dir=tmp_path,
       events_log_path=events_log,
@@ -62,7 +59,7 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: pathlib.
       mock.patch(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
       mock.patch(conftest.WORKER_TRANSLATE_FALLBACK_PATCH_TARGET, return_value=fake_backend),
   ):
-    exit_code = await worker.run()
+    exit_code = await subject.run()
 
   assert exit_code == 143
   diag_path = events_log.parent / "hang_diagnostics.json"
@@ -88,7 +85,7 @@ async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: pathlib.
   events_log = tmp_path / "events.jsonl"
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "cb-home")
 
-  worker = Worker(
+  subject = worker.Worker(
       thread_metadata=thread,
       working_dir=tmp_path,
       events_log_path=events_log,
@@ -103,7 +100,7 @@ async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: pathlib.
       mock.patch(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
       mock.patch(conftest.WORKER_TRANSLATE_FALLBACK_PATCH_TARGET, return_value=fake_backend),
   ):
-    exit_code = await worker.run()
+    exit_code = await subject.run()
 
   assert exit_code == 0
   assert not (events_log.parent / "hang_diagnostics.json").exists()

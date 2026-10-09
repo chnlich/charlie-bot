@@ -4,8 +4,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.backends.claude_code import claude_code
-from src.backends.claude_code.claude_config import ClaudeAccount
+from src.backends.claude_code import claude_code, claude_config
 from src.infra import config
 from src.runtime.hooks import backend_types
 
@@ -71,11 +70,11 @@ def test_claude_supervisor_env_does_not_mutate_input() -> None:
 
 
 def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:
-  """A cc-claude entry's login dir rides the pool account (ClaudeAccount.config_dir);
+  """A cc-claude entry's login dir rides the pool account (claude_config.ClaudeAccount.config_dir);
   the backend expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""
   monkeypatch.setenv("HOME", "/home/test-user")
   option = conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
-  account = ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
+  account = claude_config.ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
 
   backend = backend_types.build_backend(option, config.CharlieBotConfig(), claude_account=account)
 

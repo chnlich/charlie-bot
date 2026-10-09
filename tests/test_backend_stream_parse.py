@@ -12,20 +12,14 @@ their existing raise-on-malformed contract, only the parser moves.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import tempfile
-from pathlib import Path
 from typing import Any
 
+import conftest
 import pytest
-from conftest import _async_wait_for, cancel_and_drain
 
-from src.runtime.agent_process.base import (
-    _TORN_TAIL_WINDOW_BYTES,
-    DEFAULT_BUFFER_LIMIT,
-    _tail_region_has_content,
-    iter_ndjson_events,
-    tail_follow_events,
-)
+from src.runtime.agent_process import base
 
 _LINES = [
     b'{"type": "assistant", "seq": 1}\n',
@@ -57,17 +51,17 @@ class _LineReader:
 
 @pytest.mark.asyncio
 async def test_iter_ndjson_events_parses_and_skips() -> None:
-  events = [event async for event in iter_ndjson_events(_LineReader(_LINES))]
+  events = [event async for event in base.iter_ndjson_events(_LineReader(_LINES))]
   assert [event["seq"] for event in events] == [1, 3]
 
 
 async def _collect_tail_events(raw_bytes: bytes, buffer_limit: int, **kwargs: Any) -> list[dict]:
   """Write *raw_bytes* as the raw log and return every event tail_follow_events yields."""
   with tempfile.TemporaryDirectory() as work:
-    raw = Path(work) / "agent.raw.ndjson"
+    raw = pathlib.Path(work) / "agent.raw.ndjson"
     raw.write_bytes(raw_bytes)
     return [
-        event async for event in tail_follow_events(
+        event async for event in base.tail_follow_events(
             raw,
             translate=lambda event: [event],
             is_alive=lambda: False,
@@ -86,7 +80,7 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
   defeat the staging, so the caller passes a byte string with no newline.
   """
   with tempfile.TemporaryDirectory() as work:
-    raw = Path(work) / "agent.raw.ndjson"
+    raw = pathlib.Path(work) / "agent.raw.ndjson"
     assert b"\n" not in partial
     raw.write_bytes(partial)
     events: list[dict] = []
@@ -94,11 +88,11 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
     async def consume() -> None:
       # Per-item append is load-bearing: the mid-flight `assert events == []` below
       # probes incremental delivery, which a collect-then-extend defers to the end.
-      async for event in tail_follow_events(
+      async for event in base.tail_follow_events(
           raw,
           translate=lambda event: [event],
           is_alive=lambda: True,
-          buffer_limit=DEFAULT_BUFFER_LIMIT,
+          buffer_limit=base.DEFAULT_BUFFER_LIMIT,
           post_result_timeout=9999.0,
       ):
         events.append(event)  # noqa: PERF401  (see comment above)
@@ -109,9 +103,9 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
       assert events == []
       with raw.open("ab") as f:
         f.write(completion)
-      await _async_wait_for(lambda: bool(events), 2.0, "the follow never consumed the appended line")
+      await conftest._async_wait_for(lambda: bool(events), 2.0, "the follow never consumed the appended line")
     finally:
-      await cancel_and_drain(task)
+      await conftest.cancel_and_drain(task)
     return events
 
 
@@ -119,7 +113,7 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
 async def test_tail_follow_events_replays_from_offset() -> None:
   """The re-attach shape: a restart resumes at the recorded byte offset."""
   events = await _collect_tail_events(
-      b"".join(_LINES), DEFAULT_BUFFER_LIMIT, start_offset=_ASSISTANT_LINE_BYTES, post_result_timeout=60.0)
+      b"".join(_LINES), base.DEFAULT_BUFFER_LIMIT, start_offset=_ASSISTANT_LINE_BYTES, post_result_timeout=60.0)
 
   # The NaN-bearing line lands in this range and skips as malformed (the
   # parser boundary the funnels adopt), so only the result line survives.
@@ -135,15 +129,15 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
 
   raw_bytes = b"".join(_LINES)
   with tempfile.TemporaryDirectory() as work:
-    raw = Path(work) / "agent.raw.ndjson"
+    raw = pathlib.Path(work) / "agent.raw.ndjson"
     raw.write_bytes(raw_bytes)
-    cursor = Path(work) / runs.CURSOR_NAME
+    cursor = pathlib.Path(work) / runs.CURSOR_NAME
     events = [
-        event async for event in tail_follow_events(
+        event async for event in base.tail_follow_events(
             raw,
             translate=lambda event: [event],
             is_alive=lambda: False,
-            buffer_limit=DEFAULT_BUFFER_LIMIT,
+            buffer_limit=base.DEFAULT_BUFFER_LIMIT,
             cursor=cursor,
             post_result_timeout=60.0,
         )
@@ -152,11 +146,11 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
     assert runs.read_raw_cursor(cursor) == len(raw_bytes)
     # A re-attach at the recorded offset replays nothing.
     events = [
-        event async for event in tail_follow_events(
+        event async for event in base.tail_follow_events(
             raw,
             translate=lambda event: [event],
             is_alive=lambda: False,
-            buffer_limit=DEFAULT_BUFFER_LIMIT,
+            buffer_limit=base.DEFAULT_BUFFER_LIMIT,
             cursor=cursor,
             start_offset=runs.read_raw_cursor(cursor),
             post_result_timeout=60.0,
@@ -179,7 +173,7 @@ async def test_tail_follow_events_drops_torn_final_line() -> None:
   """A final line the producer never finished stays unprocessed (the torn
   final write replays as at most a duplicate — never a loss)."""
   torn = b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2'
-  events = await _collect_tail_events(torn, DEFAULT_BUFFER_LIMIT, post_result_timeout=60.0)
+  events = await _collect_tail_events(torn, base.DEFAULT_BUFFER_LIMIT, post_result_timeout=60.0)
   assert [event["seq"] for event in events] == [1]
 
 
@@ -198,7 +192,7 @@ async def test_tail_follow_events_skips_a_completed_line_over_the_buffer_limit()
   assert [event["seq"] for event in events] == [1, 3]
 
 
-def test_tail_region_has_content_stops_at_the_first_content_byte(tmp_path: Path) -> None:
+def test_tail_region_has_content_stops_at_the_first_content_byte(tmp_path: pathlib.Path) -> None:
   """The drain-end torn-tail scan reads bounded windows, not the whole tail.
 
   The content byte sits exactly at the first window's edge: an off-by-one
@@ -207,11 +201,11 @@ def test_tail_region_has_content_stops_at_the_first_content_byte(tmp_path: Path)
   False only after the last one.
   """
   raw = tmp_path / "agent.raw.ndjson"
-  raw.write_bytes(b" " * _TORN_TAIL_WINDOW_BYTES + b"{")
+  raw.write_bytes(b" " * base._TORN_TAIL_WINDOW_BYTES + b"{")
   with raw.open("rb") as f:
-    assert not _tail_region_has_content(f, 0, _TORN_TAIL_WINDOW_BYTES)
-    assert _tail_region_has_content(f, 0, _TORN_TAIL_WINDOW_BYTES + 1)
-    assert _tail_region_has_content(f, _TORN_TAIL_WINDOW_BYTES, _TORN_TAIL_WINDOW_BYTES + 1)
+    assert not base._tail_region_has_content(f, 0, base._TORN_TAIL_WINDOW_BYTES)
+    assert base._tail_region_has_content(f, 0, base._TORN_TAIL_WINDOW_BYTES + 1)
+    assert base._tail_region_has_content(f, base._TORN_TAIL_WINDOW_BYTES, base._TORN_TAIL_WINDOW_BYTES + 1)
   raw.write_bytes(b'{"type": "assistant"')
   with raw.open("rb") as f:
-    assert _tail_region_has_content(f, 0, raw.stat().st_size)
+    assert base._tail_region_has_content(f, 0, raw.stat().st_size)

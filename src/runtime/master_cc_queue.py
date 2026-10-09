@@ -5,14 +5,16 @@ import datetime
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from src.infra import config, log_once, models
+from src.infra import config, log_once, models, tasks
 from src.infra import event_types as ET
 from src.runtime import (
+    autonamer,
     master_cc_run,
     master_cc_state,
     session_anchors,
     session_events,
     session_lifecycle,
+    session_listing,
     session_sidebar,
     session_store,
     sidebar_state,
@@ -32,6 +34,12 @@ def session_callbacks(
     sidebar: session_sidebar.SessionSidebar,
 ) -> models.SessionCallbacks:
   """The run callbacks that ``run_message`` takes, bound to the session blocks that serve them."""
+
+  async def after_round(cfg: config.CharlieBotConfig, session_id: str) -> None:
+    """Post-round hook (session naming); store and listing resolve at naming time."""
+    await autonamer.name_after_round(
+        cfg, session_id, session_store.store(), events, session_listing.listing(), lifecycle)
+
   return models.SessionCallbacks(
       persist_and_broadcast=events.persist_and_broadcast,
       mark_unread=lifecycle.mark_unread,
@@ -39,6 +47,7 @@ def session_callbacks(
       persist_account_label=anchors.persist_account_label,
       context_state=anchors.context_state,
       task_tree_activity=sidebar.task_tree_activity,
+      after_round=after_round,
   )
 
 
@@ -301,6 +310,13 @@ async def _session_consumer(session_id: str) -> None:
 
         if not item.future.done():
           item.future.set_result(cc_session_id)
+
+        # Every round origin (chat, task, auto-trigger) ends on this MASTER_DONE
+        # path, so the hook runs for every origin with no origin gate here.
+        # Fire-and-forget: the consumer serializes rounds; awaiting it would
+        # delay the next round.
+        if item.callbacks.after_round is not None:
+          tasks.create_logged_task(item.callbacks.after_round(item.cfg, session_id), name=f"after-round-{session_id}")
 
       except Exception as exc:
         log.exception("session_consumer_item_error", session=session_id)

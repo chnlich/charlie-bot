@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,6 +18,9 @@ from conftest import (
     ConsumerRound,
     TerminateFlagBackend,
     _run_seeded_consumer,
+    append_events,
+    assistant_event,
+    backend_option,
     bind_session_blocks,
     build_master_cc_cfg,
     build_session_blocks,
@@ -31,12 +36,15 @@ from conftest import (
     run_resume_round,
     run_session_consumer,
     run_task_manager_message,
+    user_event,
 )
 
 from src.features.latex import latex
 from src.infra import event_types as ET
+from src.infra import tasks as infra_tasks
+from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionCallbacks, SessionMetadata
-from src.runtime import master_cc_run, master_cc_state, streaming, thinking_state
+from src.runtime import autonamer, master_cc_queue, master_cc_run, master_cc_state, streaming, thinking_state
 from src.runtime.agent_process.base import make_result_event
 
 
@@ -349,3 +357,70 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"
+
+
+# ---------------------------------------------------------------------------
+# After-round session naming: the consumer starts the autonamer after MASTER_DONE
+# ---------------------------------------------------------------------------
+
+
+class _StubLightBackend:
+  """Light-backend double whose one_shot_text answers with the fixed naming verdict."""
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+    return json.dumps({"name": "Stub Title", "group": "Stub"})
+
+
+@pytest.mark.asyncio
+async def test_consumer_names_a_default_session_after_master_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """One round through the real consumer names "Session 7" via the autonamer.
+
+  The consumer resolves the round future and then starts name_after_round
+  fire-and-forget; the test awaits that background task (no fixed sleep) before
+  reading the renamed metadata. Guards the call itself: with the after-round
+  lines removed, no naming task starts and the session keeps its default name.
+  """
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backends={
+          "options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")],
+          "preference": ["fake"],
+      })
+  blocks = build_session_blocks(cfg)
+  session = await create_root_session(blocks, CreateSessionRequest(name="Session 7"))
+  bind_session_blocks(monkeypatch, blocks)
+  append_events(
+      blocks.events.get_chat_events_path(session.id),
+      [user_event("Name this conversation."),
+       assistant_event("We planned the session naming fix.")],
+  )
+  monkeypatch.setattr(autonamer, "build_backend", lambda option, cfg, **_: _StubLightBackend())
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
+
+  naming_tasks: list[asyncio.Task] = []
+  real_create_logged_task = infra_tasks.create_logged_task
+
+  def spy_create_logged_task(coro: Any, *, name: str | None = None) -> asyncio.Task:
+    task = real_create_logged_task(coro, name=name)
+    if name == f"after-round-{session.id}":
+      naming_tasks.append(task)
+    return task
+
+  monkeypatch.setattr(master_cc_queue.tasks, "create_logged_task", spy_create_logged_task)
+
+  snapshot = SessionMetadata(profile="manager", id=session.id, name="Session 7", backend=cfg.backends.options[0].id)
+  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=blocks.callbacks())
+
+  async def sound_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return ("cc-named-round", 0, None, {})
+
+  await run_consumer_over_real_disk(session.id, [item], sound_round)
+
+  assert naming_tasks, "the consumer never started the after-round naming task"
+  await asyncio.wait_for(asyncio.gather(*naming_tasks), timeout=10)
+
+  named = await blocks.store.get_session(session.id)
+  assert named is not None
+  assert named.name == "7: Stub Title"
+  assert named.group == "Stub"

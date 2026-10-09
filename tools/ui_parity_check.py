@@ -52,6 +52,7 @@ import asyncio
 import difflib
 import json
 import os
+import pathlib
 import re
 import shutil
 import socket
@@ -59,23 +60,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
 
-SCRIPT_REPO = Path(__file__).resolve().parent.parent
+SCRIPT_REPO = pathlib.Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
   sys.path.insert(0, str(SCRIPT_REPO))
 
-from src.infra.constants import SESSION_ID_ENV_VAR  # noqa: E402
-from tools.browser_harness_session_tree import (  # noqa: E402
-    CDP,
-    devtools_ws_url,
-    launch_chrome,
-    mint_access_key,
-    open_cdp_page,
-    pick_free_port,
-    stop_child,
-    write_credentials_yaml,
-)
+from src.infra import constants  # noqa: E402
+from tools import browser_harness_session_tree  # noqa: E402
 
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))
@@ -137,7 +128,7 @@ def synthetic_sessions() -> list[dict]:
   return out
 
 
-def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> None:
+def write_home(home: pathlib.Path, port: int, access_key: str, sessions: list[dict]) -> None:
   home.mkdir(parents=True)
   config = {
       "server": {
@@ -162,7 +153,7 @@ def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> 
       },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-  write_credentials_yaml(home, access_key)
+  browser_harness_session_tree.write_credentials_yaml(home, access_key)
   for meta in sessions:
     session_dir = home / "sessions" / meta["id"]
     session_dir.mkdir(parents=True)
@@ -174,7 +165,7 @@ def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> 
 # ---------------------------------------------------------------------------
 
 
-def serve(repo: Path, port: int) -> None:
+def serve(repo: pathlib.Path, port: int) -> None:
   sys.path.insert(0, str(repo))
   import uvicorn
 
@@ -190,11 +181,11 @@ def serve(repo: Path, port: int) -> None:
 class Side:
   """One checkout served from a temporary home by a child process."""
 
-  def __init__(self, name: str, repo: Path, tmp: Path, sessions: list[dict]) -> None:
+  def __init__(self, name: str, repo: pathlib.Path, tmp: pathlib.Path, sessions: list[dict]) -> None:
     self.name = name
     self.repo = repo
-    self.port = pick_free_port()
-    self.access_key = mint_access_key(f"parity-{name}-")
+    self.port = browser_harness_session_tree.pick_free_port()
+    self.access_key = browser_harness_session_tree.mint_access_key(f"parity-{name}-")
     self.home = tmp / f"home-{name}"
     write_home(self.home, self.port, self.access_key, sessions)
     self.log_path = tmp / f"serve-{name}.log"
@@ -205,14 +196,20 @@ class Side:
     return f"http://127.0.0.1:{self.port}"
 
   def start(self) -> None:
-    env = {k: v for k, v in os.environ.items() if k not in (SESSION_ID_ENV_VAR, "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in (constants.SESSION_ID_ENV_VAR, "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")
+    }
     env.update({"CHARLIEBOT_HOME": str(self.home), "PYTHONPATH": str(self.repo)})
     log = self.log_path.open("w", encoding="utf-8")
     self.proc = subprocess.Popen(
-        [sys.executable,
-         str(Path(__file__).resolve()), "serve", "--repo",
-         str(self.repo), "--port",
-         str(self.port)],
+        [
+            sys.executable,
+            str(pathlib.Path(__file__).resolve()), "serve", "--repo",
+            str(self.repo), "--port",
+            str(self.port)
+        ],
         cwd=self.repo,
         env=env,
         stdout=subprocess.PIPE,
@@ -223,7 +220,7 @@ class Side:
       fail(f"{self.name} server did not start; log {self.log_path}: {line.strip()}")
     modules = json.loads(line[len(READY_PREFIX):])
     paths = [modules["server"], *modules["src"]]
-    if not all(Path(p).resolve().is_relative_to(self.repo.resolve()) for p in paths):
+    if not all(pathlib.Path(p).resolve().is_relative_to(self.repo.resolve()) for p in paths):
       fail(f"{self.name} server imported code outside {self.repo}: {paths}")
     deadline = time.monotonic() + 30
     while True:
@@ -236,7 +233,7 @@ class Side:
         time.sleep(0.1)
 
   def stop(self) -> None:
-    stop_child(self.proc, grace_s=10, kill_reap_s=10)
+    browser_harness_session_tree.stop_child(self.proc, grace_s=10, kill_reap_s=10)
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +286,7 @@ OUTLINE_JS = r"""
 """
 
 
-async def evaluate(cdp: CDP, session_id: str, expression: str):
+async def evaluate(cdp: browser_harness_session_tree.CDP, session_id: str, expression: str):
   result = await cdp.send(
       "Runtime.evaluate", {
           "expression": expression,
@@ -302,7 +299,8 @@ async def evaluate(cdp: CDP, session_id: str, expression: str):
   return result.get("result", {}).get("value")
 
 
-async def wait_for(cdp: CDP, session_id: str, expression: str, what: str, timeout: float = 20) -> None:
+async def wait_for(
+    cdp: browser_harness_session_tree.CDP, session_id: str, expression: str, what: str, timeout: float = 20) -> None:
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
     if await evaluate(cdp, session_id, expression):
@@ -321,8 +319,8 @@ def outline_lines(rows: list[list]) -> list[str]:
 
 
 async def capture(
-    cdp: CDP, session_id: str, side: Side, width: int, height: int, mobile: bool, view_filter: str,
-    parent_of: dict) -> dict:
+    cdp: browser_harness_session_tree.CDP, session_id: str, side: Side, width: int, height: int, mobile: bool,
+    view_filter: str, parent_of: dict) -> dict:
   await cdp.send(
       "Emulation.setDeviceMetricsOverride", {
           "width": width,
@@ -358,22 +356,22 @@ async def capture(
 async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
   import websockets
 
-  profile = Path(tempfile.mkdtemp(prefix="ui-parity-chrome-"))
-  debug_port = pick_free_port()
-  proc = launch_chrome(
+  profile = pathlib.Path(tempfile.mkdtemp(prefix="ui-parity-chrome-"))
+  debug_port = browser_harness_session_tree.pick_free_port()
+  proc = browser_harness_session_tree.launch_chrome(
       chrome, profile, debug_port,
       ["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-allow-origins=*"])
   try:
-    ws_url = await devtools_ws_url(proc, 20, fail)
+    ws_url = await browser_harness_session_tree.devtools_ws_url(proc, 20, fail)
     async with websockets.connect(ws_url, max_size=50 * 1024 * 1024) as ws:
-      cdp = CDP(ws)
+      cdp = browser_harness_session_tree.CDP(ws)
       captures: dict = {}
       for width, height, mobile in WIDTHS:
         for view_filter in FILTERS:
           view = f"{width}px/{view_filter}"
           captures[view] = {}
           for side in sides:
-            session_id, target_id = await open_cdp_page(cdp, ("Page", "Network"))
+            session_id, target_id = await browser_harness_session_tree.open_cdp_page(cdp, ("Page", "Network"))
             await cdp.send(
                 "Page.addScriptToEvaluateOnNewDocument", {
                     "source":
@@ -387,7 +385,7 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
             await cdp.send("Target.closeTarget", {"targetId": target_id})
       return captures
   finally:
-    stop_child(proc, grace_s=5, kill_reap_s=5)
+    browser_harness_session_tree.stop_child(proc, grace_s=5, kill_reap_s=5)
     shutil.rmtree(profile, ignore_errors=True)
 
 
@@ -413,14 +411,14 @@ def check(args: argparse.Namespace) -> int:
     fail("google-chrome is not installed; pass --chrome")
   main_sha = resolve_main_ref(args.main_ref)
   branch_sha = git("rev-parse", "HEAD")
-  evidence = Path(args.evidence_dir or tempfile.mkdtemp(prefix="ui-parity-evidence-"))
+  evidence = pathlib.Path(args.evidence_dir or tempfile.mkdtemp(prefix="ui-parity-evidence-"))
   evidence.mkdir(parents=True, exist_ok=True)
   sessions = synthetic_sessions()
   parent_of = {m["id"]: m["task_parent_id"] for m in sessions if m.get("task_parent_id")}
   print(f"main {main_sha[:10]} vs branch {branch_sha[:10]} (working tree of {SCRIPT_REPO})", flush=True)
 
   with tempfile.TemporaryDirectory(prefix="ui-parity-") as tmp_name:
-    tmp = Path(tmp_name)
+    tmp = pathlib.Path(tmp_name)
     main_tree = tmp / "main-checkout"
     git("worktree", "add", "--detach", "--quiet", str(main_tree), main_sha)
     sides = [Side("main", main_tree, tmp, sessions), Side("branch", SCRIPT_REPO, tmp, sessions)]
@@ -472,7 +470,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   sub = parser.add_subparsers(dest="mode")
   serve_parser = sub.add_parser("serve", help="internal: serve one checkout (spawned by the check)")
-  serve_parser.add_argument("--repo", type=Path, required=True)
+  serve_parser.add_argument("--repo", type=pathlib.Path, required=True)
   serve_parser.add_argument("--port", type=int, required=True)
   parser.add_argument("--main-ref", default=None, help="main commit (default: merge-base HEAD origin/main)")
   parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome on PATH)")

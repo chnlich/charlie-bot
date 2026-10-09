@@ -1180,8 +1180,11 @@ async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkey
   # No review Run exists for a quick-edit delivery.
   review_runs = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
   assert review_runs == []
-  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-  assert reports[-1]["outcome"] == "completed"
+  # The close fact and the parent report are two appends under one lock
+  # (_append_closed); this lock-free read of the closed state can fall between
+  # them, so the report is waited for on its own.
+  await poll_until(lambda: child_reports(tree, manager.id), timeout=15.0, what="the completed child report")
+  assert child_reports(tree, manager.id)[-1]["outcome"] == "completed"
 
   await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
   assert pm_builds, "the delivered report never triggered a parent manager turn"

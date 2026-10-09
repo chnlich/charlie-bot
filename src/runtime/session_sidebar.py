@@ -3,8 +3,8 @@
 ``SessionSidebar.resolve_sidebar_state`` is the one derivation of those flags. It serves the in-process snapshot
 (:mod:`src.runtime.sidebar_state`) and re-probes only the sessions whose probe inputs moved; the listing and search
 blocks call it for the rows they return. The task-tree owner registers its activity derivation as
-``task_tree_activity``. The process builds one block (``sidebar()``); tests build their own and install it with
-``set_sidebar()``.
+``task_tree_activity``. The process builds one block (``sidebar()``); tests monkeypatch the ``_sidebar``
+global.
 """
 
 import asyncio
@@ -672,9 +672,3 @@ def sidebar() -> SessionSidebar:
   if _sidebar is None:
     _sidebar = SessionSidebar(get_config(), session_store.store())
   return _sidebar
-
-
-def set_sidebar(replacement: SessionSidebar | None) -> None:
-  """Replace the process sidebar singleton (tests); None restores lazy construction."""
-  global _sidebar
-  _sidebar = replacement

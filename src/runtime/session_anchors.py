@@ -6,8 +6,8 @@ the pool account holding the transcript. Each write is a fresh read-modify-write
 through ``SessionStore.save_metadata(anchor_write=True)``, so a stale whole-object save cannot roll an anchor back.
 The block also reads the context size for the account pool, persists ``updated_at`` for the thinking state, and
 resolves the usage panel through ``SessionUsageResolver``. The reset-note helpers live here because they describe
-a fresh native conversation. The process builds one block (``anchors()``); tests build their own and install it with
-``set_anchors()``.
+a fresh native conversation. The process builds one block (``anchors()``); tests monkeypatch the ``_anchors``
+global.
 """
 
 import asyncio
@@ -242,9 +242,3 @@ def anchors() -> SessionAnchors:
   if _anchors is None:
     _anchors = SessionAnchors(get_config(), session_store.store(), session_events.events())
   return _anchors
-
-
-def set_anchors(replacement: SessionAnchors | None) -> None:
-  """Replace the process anchors singleton (tests); None restores lazy construction."""
-  global _anchors
-  _anchors = replacement

@@ -1144,6 +1144,10 @@
           };
         }
       }
+      // Every restore checks, delta or not: a restore that leaves the view
+      // at the bottom earns the follow-the-next-turn record.
+      const el = this.container;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 1) this.followNextTurn = true;
       return true;
     }
 

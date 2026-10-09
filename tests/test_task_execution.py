@@ -905,8 +905,12 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   local_main = run_git(repo, "rev-parse", "main")
   assert local_main != origin_tip
 
+  # The review lands the work and removes the work worktree. It runs on the
+  # event loop right after the work Run ends, so the test holds it at its
+  # backend's gate until it has read the worktree.
   work_backend = SpawningScriptedBackend([result_event("implemented")])
-  review_backend = SpawningScriptedBackend([result_event("review ok")])
+  review_released: asyncio.Event = asyncio.Event()
+  review_backend = SpawningScriptedBackend([result_event("review ok")], gate=review_released.wait)
   install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(
@@ -927,6 +931,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   # The work branch started at the new origin tip, never at the stale local main.
   assert run_git(work_wt, "rev-parse", "HEAD") == origin_tip
   assert run_git(repo, "rev-parse", "main") == local_main
+  review_released.set()
 
   # The header the worker page projects for the launched Run: plain success,
   # both refs pointing at the files the launch produced.

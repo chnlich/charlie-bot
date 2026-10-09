@@ -26,7 +26,7 @@ import structlog
 
 from src.infra import config, deferred, json_utils, models, tasks
 from src.runtime import streaming
-from src.runtime.agent_process import deferred_build
+from src.runtime.agent_process import base, deferred_build
 from src.runtime.api import message_utils
 from src.runtime.session_events import SessionEvents
 
@@ -48,15 +48,13 @@ def __getattr__(name: str) -> Any:
 def _load_base_one_shot_text(namespace: dict[str, Any]) -> Any:
   """Bind the BASE ``AgentBackend.one_shot_text`` into *namespace* on first use.
 
-  The backend modules stay off the server import chain (the deferred_build rule),
-  so the base class resolves inside this call; an existing binding — a test's
+  The base class resolves inside this call; an existing binding — a test's
   stand-in — returns untouched, keeping ``src.features.explain.explain.base_one_shot_text``
   the patch target, exactly as ``load_build_backend`` does for ``build_backend``.
   """
   bound = namespace.get("base_one_shot_text")
   if bound is not None:
     return bound
-  from src.runtime.agent_process import base
   namespace["base_one_shot_text"] = base.AgentBackend.one_shot_text
   return base.AgentBackend.one_shot_text
 

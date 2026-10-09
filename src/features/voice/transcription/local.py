@@ -45,7 +45,7 @@ class LocalTranscriptionBackend(base.TranscriptionBackend):
     ``vocabulary`` is ignored: the local engine's word biasing is sherpa's
     hotwords parameter, a constructor argument, not a per-recording one.
     """
-    from src.features.voice import transcriber
+    from src.features.voice import transcriber  # deferred: import server
 
     pcm = bytearray()
     async for chunk in audio:
@@ -59,7 +59,7 @@ class LocalTranscriptionBackend(base.TranscriptionBackend):
 
   def _decode_with_hotwords(self, pcm: bytes) -> str:
     """Decode on a dedicated sherpa bundle carrying the hotwords, built once."""
-    from src.features.voice import transcriber
+    from src.features.voice import transcriber  # deferred: import server
 
     if self._hotwords_bundle is None:
       paths = transcriber._ensure_sherpa_paths_cached(self._cfg)

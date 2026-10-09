@@ -1,15 +1,11 @@
-"""The template globals of the index page: the voice dropdown's backends and the default backend.
+"""The template globals of the index page: the voice dropdown's backends and the default backend."""
 
-Each global imports the speech stack inside its call, so the stack loads when the index page
-renders, not at server import and not at the first render of another page.
-"""
-
+from src.features.voice.transcription.registry import build_transcription_backends
 from src.infra import config
 
 
 def voice_backends() -> list[dict]:
   """One entry per transcription backend, in dropdown order."""
-  from src.features.voice.transcription.registry import build_transcription_backends
   return [
       {
           "id": backend.id,

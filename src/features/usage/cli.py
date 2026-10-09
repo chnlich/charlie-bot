@@ -16,8 +16,7 @@ from src.infra import help_formatter
 def _ledger_path(args: argparse.Namespace) -> pathlib.Path:
   if args.ledger is not None:
     return args.ledger
-  # Deferred like the other core stacks: --help and parser errors stay off the config import.
-  from src.features.usage import usage_ledger
+  from src.features.usage import usage_ledger  # deferred: charliebot usage-ledger --help
 
   return usage_ledger.default_ledger_path()
 
@@ -28,7 +27,7 @@ def _print_written(written: dict[str, int]) -> None:
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
-  from src.features.usage import token_tally, usage_ledger
+  from src.features.usage import token_tally, usage_ledger  # deferred: charliebot usage-ledger --help
 
   with usage_ledger.UsageLedger(_ledger_path(args)) as ledger:
     _print_written(token_tally.capture_local(ledger))

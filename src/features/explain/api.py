@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from src.features.explain import explain
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata
 from src.infra.responses import FastJsonResponse
@@ -32,7 +33,6 @@ async def request_session_explain(
   the fresh pending entry; a pending one returns 200 with the stored entry so one
   divider never runs a second concurrent generation.
   """
-  from src.features.explain import explain
   option = cfg.get_backend_option(body.backend)
   if option is None:
     raise bad_request(ValueError(f"unknown backend: {body.backend}"))
@@ -48,7 +48,6 @@ async def get_session_explain(
     session_events: SessionEvents = Depends(get_session_events),
 ) -> FastJsonResponse:
   """The single explain entry for a divider; answer and error bodies included."""
-  from src.features.explain import explain
   entry = await explain.get_explain_entry(session_events, session_id, upto)
   if entry is None:
     raise HTTPException(status_code=404, detail=f"no explain entry for event_index {upto}")
@@ -66,5 +65,4 @@ async def get_session_explain_status(
   The chat page pulls this once per session load/switch to render each divider's
   explain button from persisted truth.
   """
-  from src.features.explain import explain
   return FastJsonResponse(await explain.explain_status(session_events, session_id))

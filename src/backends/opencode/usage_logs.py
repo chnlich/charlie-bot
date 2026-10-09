@@ -134,6 +134,6 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
 
 def sweep(scope: usage_sources.SweepScope) -> usage_sources.SourceSweep:
   """opencode's part of the cold-storage sweep; the sweep module loads on the first call."""
-  from src.backends.opencode import usage_sweep
+  from src.backends.opencode import usage_sweep  # deferred: import server
 
   return usage_sweep.sweep(scope)

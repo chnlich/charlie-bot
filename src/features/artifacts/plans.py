@@ -17,27 +17,19 @@ import pathlib
 import posixpath
 from typing import TYPE_CHECKING
 
-from src.features.artifacts import constants, plan_paths
+from src.features.artifacts import artifact_check, constants, plan_paths
+from src.infra import json_utils, locks
 from src.runtime import sidebar_state
 
 if TYPE_CHECKING:
   import asyncio
 
-  from src.features.artifacts import artifact_check
   from src.infra import config
   from src.runtime import session_events
 
 
 def run_assertions(*args: object, **kwargs: object) -> list[artifact_check.AssertionOutcome]:
-  """Lazy delegate to ``artifact_check.run_assertions``.
-
-  The artifact-check import drags the backends registry (numpy, fastapi) — a
-  validation-path-only cost, paid here inside the verb's ``to_thread`` hop so
-  the plan chain's read paths (list endpoint, sidebar probe, ``plan list``)
-  never load it.
-  """
-  from src.features.artifacts import artifact_check
-
+  """Delegate to ``artifact_check.run_assertions``."""
   return artifact_check.run_assertions(*args, **kwargs)
 
 
@@ -112,9 +104,7 @@ def derive_state_str(plan: dict) -> str:
 
 
 def _utc_now_iso() -> str:
-  # Lazy: the model stack (pydantic) stays off this module's import path; only
-  # the verb paths stamp times. The stamp form itself lives on models.utc_now_iso.
-  from src.infra import models
+  from src.infra import models  # deferred: charliebot plan list
 
   return models.utc_now_iso()
 
@@ -232,8 +222,6 @@ class PlanRegistryManager:
   # -- locking ------------------------------------------------------------
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
-    # Deferred with asyncio itself: the sync CLI read path never reaches the locked verbs.
-    from src.infra import locks
     return locks.lock_for(self._locks, session_id)
 
   # -- persistence --------------------------------------------------------
@@ -263,7 +251,6 @@ class PlanRegistryManager:
     # this write, not resurrect.
     import asyncio
 
-    from src.infra import json_utils
     await asyncio.to_thread(
         json_utils.write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
     # Single funnel for every registry verb (present/amend/approve/close):

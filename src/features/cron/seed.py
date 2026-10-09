@@ -4,8 +4,8 @@ import copy
 
 from src.features.cron import loader
 from src.features.cron.config import ScheduledTaskConfig
+from src.features.cron.cron_sequence import effective_scheduled_task_backend
 from src.features.cron.loader import get_scheduled_tasks
-from src.features.cron.scheduler import effective_scheduled_task_backend
 from src.infra import config, yaml_utils
 
 

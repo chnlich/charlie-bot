@@ -9,7 +9,10 @@ from zoneinfo import ZoneInfo
 from src.features.cron.config import ScheduledTaskConfig, ScheduledTaskError
 from src.infra.config import get_config
 from src.infra.home import charliebot_home_dir
+from src.infra.json_utils import write_json_atomically
 from src.infra.log_once import LazyStructlogLogger
+from src.infra.notifications import send_telegram
+from src.infra.tasks import create_logged_task
 from src.infra.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()
@@ -394,12 +397,7 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   new_set = frozenset(error_names)
   if new_set == _read_cron_alert_state():
     return
-  # Lazy: all three imports ride the event-loop machinery, and a synchronous
-  # CLI path (scripts/setup.sh) that reads the loader never reaches here.
   import asyncio
-
-  from src.infra.json_utils import write_json_atomically
-  from src.infra.tasks import create_logged_task
 
   try:
     asyncio.get_running_loop()
@@ -409,9 +407,6 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   names = sorted(new_set)
   message = "⚠️ cron tasks failed to load: " + ", ".join(names) if names else "✅ all cron load failures resolved"
   try:
-    # Lazy: only the alert send needs the notification stack.
-    from src.infra.notifications import send_telegram
-
     create_logged_task(send_telegram(message, get_config()), name="cron-load-alert")
   except Exception:
     log.exception("cron_alert_dispatch_failed", names=names)

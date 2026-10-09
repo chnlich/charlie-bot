@@ -48,7 +48,11 @@ from src.infra.models import (
     utc_now,
 )
 from src.infra.tasks import create_logged_task
-from src.runtime import task_execution
+from src.runtime import (
+    master_cc_queue,
+    master_cc_state,
+    task_execution,
+)
 from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.runtime.file_urls import FILE_SERVER_MOUNTS
@@ -551,9 +555,6 @@ async def post_reply(
   assert_no_file_server_links(text)
   operator_only_links = application_route_links(text, cfg)
 
-  # lazy: mirrors the backfill import's agents-package guard
-  from src.runtime import master_cc_state
-
   events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
   # The in-process work item owns the input batch answered by this reply.
   input_event_ids = master_cc_state.running_user_event_ids(session_id)
@@ -800,7 +801,6 @@ async def backfill_lost_summons(
   chance.
   """
   platform = adapter.platform
-  from src.runtime import master_cc_queue  # lazy: mirrors the spawner import's cycle guard
 
   sessions = await listing.list_sessions()  # archived included: a thread can be summoned again
   reported = 0
@@ -808,7 +808,6 @@ async def backfill_lost_summons(
     if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
       continue
     events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
-    from src.runtime import master_cc_state
     lost = lost_summons(
         platform,
         events,

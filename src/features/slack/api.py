@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
+from src.features.slack.slack_listener import SlackReplyError, ack_messages, assert_thread_fresh, post_reply
 from src.infra.config import CharlieBotConfig
 from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_store
 from src.runtime.session_events import SessionEvents
@@ -45,7 +46,6 @@ async def slack_reply(
   eligible thread messages above the session's watermark refuse with a 412
   ``stale_thread`` payload naming each unseen message, before any chunk posts.
   """
-  from src.features.slack.slack_listener import SlackReplyError, assert_thread_fresh, post_reply
   try:
     await assert_thread_fresh(req.session_id, cfg, store)
     return await post_reply(req.session_id, req.text, cfg, store, session_events)
@@ -71,7 +71,6 @@ async def slack_ack(
   watermark is an idempotent no-op counted as acked. Refusals map
   SlackReplyError's status: 404 unknown session, 409 no Slack thread.
   """
-  from src.features.slack.slack_listener import SlackReplyError, ack_messages
   try:
     return await ack_messages(req.session_id, req.message_ids, cfg, store, session_events)
   except SlackReplyError as exc:

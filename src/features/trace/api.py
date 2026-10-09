@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
+import src.features.trace.trace_merge
 from src.features.trace import direct_pass_child, trace_merge_child
 from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger
@@ -72,13 +73,7 @@ def _perfetto_merge_cache_dir() -> Path:
 
 
 def _trace_merge() -> types.ModuleType:
-  """The request-time trace-merge stack, imported on first use and reused after.
-
-  The merge builders and the direct-pass validator are the only consumers; the
-  M99 server import floor carries no trace stack.
-  """
-  import src.features.trace.trace_merge
-
+  """The trace-merge module: the merge builders and the direct-pass validator are its only consumers."""
   return src.features.trace.trace_merge
 
 

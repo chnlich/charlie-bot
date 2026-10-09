@@ -8,6 +8,7 @@ from typing import ClassVar
 from src.backends.codex import codex_pricing
 from src.infra import event_types as ET
 from src.infra import log_once, process
+from src.runtime import message_aggregator
 from src.runtime.agent_process import base
 
 log = log_once.LazyStructlogLogger()
@@ -96,8 +97,6 @@ class CodexBackend(base.AgentBackend):
     timeout. Structured backend failures are raised instead of being mistaken for
     non-JSON assistant text.
     """
-    from src.runtime import message_aggregator
-
     framed = self._frame_system_prompt(system_prompt, prompt)
     cmd = [*self._exec_command_head(), "--", framed]
     self._last_agent_text.clear()

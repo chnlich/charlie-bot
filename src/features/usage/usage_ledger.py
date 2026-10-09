@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Self
 
 from src.infra import log_once
+from src.infra.config import get_config
 from src.infra.timeouts import USAGE_LEDGER_LOCK_WAIT_SECONDS
 from src.runtime.hooks import usage_sources
 
@@ -501,8 +502,6 @@ def _native_starts_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> dict[str
 
 def default_ledger_path() -> Path:
   """The CLI's default ledger: under the charliebot home, beside the sessions it indexes."""
-  from src.infra.config import get_config
-
   return get_config().charliebot_home / "usage" / "ledger.sqlite3"
 
 
@@ -822,11 +821,7 @@ class UsageLedger:
 
 async def run_scheduled_usage_ledger() -> str:
   """Built-in cron handler: capture this host's token usage into the usage ledger."""
-  # usage_ledger (sqlite3, token_tally) rides the handler like croniter: the
-  # registration holds this module's path and the scheduler imports it when the
-  # handler fires, so the M99 server import floor carries no ledger stack for a
-  # handler that may never fire. token_tally imports this module, so it loads here.
-  from src.features.usage.token_tally import capture_local
+  from src.features.usage.token_tally import capture_local  # deferred: import cycle src.features.usage.token_tally
 
   loop = asyncio.get_running_loop()
 

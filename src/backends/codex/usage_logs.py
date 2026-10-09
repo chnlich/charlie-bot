@@ -18,7 +18,7 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.backends.codex import USAGE_SOURCE, codex_usage
+from src.backends.codex import USAGE_SOURCE, codex_usage, usage_quota
 from src.infra import ndjson
 from src.runtime.hooks import usage_sources
 
@@ -123,14 +123,12 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
 
 
 def quota_accounts() -> list[usage_sources.QuotaAccount]:
-  """Codex's account on the quota panel; the quota module loads on the first call."""
-  from src.backends.codex import usage_quota
-
+  """Codex's account on the quota panel."""
   return usage_quota.quota_accounts()
 
 
 def sweep(scope: usage_sources.SweepScope) -> usage_sources.SourceSweep:
   """Codex's part of the cold-storage sweep; the sweep module loads on the first call."""
-  from src.backends.codex import usage_sweep
+  from src.backends.codex import usage_sweep  # deferred: import server
 
   return usage_sweep.sweep(scope)

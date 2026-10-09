@@ -263,11 +263,12 @@ def _validate_whole(trace_path: Path, orjson: object, shape_check: object, gc_of
 def main(argv: list[str]) -> int:
   if argv[1] == "--validate-chunk":
     return _validate_chunk_main(argv[2:])
-  sys.path.insert(0, argv[3])
+  sys.path.insert(0, argv[3])  # the child runs by file path: its src imports stay below this line
   import orjson
 
+  # deferred: import cycle src.features.trace.trace_merge
   from src.features.trace.trace_merge import NotATraceError, _trace_events_or_raise, igzip_command
-  from src.infra.gc_control import gc_off
+  from src.infra.gc_control import gc_off  # deferred: python src/features/trace/direct_pass_child.py
 
   trace_path, out_path = Path(argv[1]), Path(argv[2])
   # The compress starts before the parse so the two passes overlap, the shape the

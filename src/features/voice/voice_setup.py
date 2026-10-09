@@ -22,6 +22,7 @@ import wave
 import numpy as np
 import structlog
 
+from src.features.voice import transcriber
 from src.features.voice.transcription import base
 from src.infra import config, yaml_utils
 
@@ -136,8 +137,6 @@ def run_gpu_preflight(cfg: config.CharlieBotConfig) -> dict:
   """
   import torch
   import transformers
-
-  from src.features.voice import transcriber
 
   if not torch.cuda.is_available():
     raise RuntimeError("preflight (b) failed: torch imports but torch.cuda.is_available() is False")

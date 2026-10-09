@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 from src.features.artifacts import artifact_shared, plan_diff
 from src.features.artifacts.constants import ARTIFACT_GENRES
 from src.infra import constants
+from src.runtime.hooks import backend_types
 
 if TYPE_CHECKING:
   from src.infra import config
@@ -135,10 +136,7 @@ _PAGE_PROBE_TEMPLATE = """<!doctype html>
 
 def _measure_page_height(chrome_bin: pathlib.Path, artifact: pathlib.Path) -> int:
   """Render *artifact* headlessly through a session-unique probe page; return its scroll height."""
-  # The renderer's websockets stack costs ~60 ms of import and serves only this
-  # probe; the artifact chain's import floor (docs/perf_baseline.md@5175adf09 M102) depends
-  # on it loading here and nowhere earlier.
-  from src.features.artifacts import headless_render
+  from src.features.artifacts import headless_render  # deferred: charliebot plan --help
   probe = artifact.parent / f".page-height-probe-{uuid.uuid4().hex}.html"
   probe.write_text(
       _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()), encoding="utf-8")
@@ -791,14 +789,10 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
   """
   questions = _PROBE_QUESTIONS.replace("<trigger message verbatim>", trigger)
   prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
-  # The autonamer import drags fastapi and the sessions stack (~250 ms of
-  # import) and asyncio another ~35 ms; both serve only this probe, and the
-  # artifact chain's import floor (docs/perf_baseline.md@5175adf09 M102) depends on them
-  # loading here and nowhere earlier.
+  # The autonamer import drags fastapi and the sessions stack (~250 ms of import) and asyncio another ~35 ms.
   import asyncio
 
-  from src.runtime import autonamer
-  from src.runtime.hooks import backend_types
+  from src.runtime import autonamer  # deferred: charliebot plan --help
   options = list(autonamer.iter_light_backends(cfg))
   if not options:
     raise ValueError("no light backends resolvable from config backends.preference")

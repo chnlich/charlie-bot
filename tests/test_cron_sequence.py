@@ -465,19 +465,19 @@ async def test_steps_admission_failure_does_not_consume_the_occurrence(
   install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task("flaky-steps", manager.id, steps=[StepConfig(name="only", prompt="Do it.")])
   scheduler = build_scheduler(cfg, session_blocks)
-  from src.features.cron import cron_sequence as cs
-  original = cs.register_leaf_run
+  from src.features.cron import scheduler as scheduler_module
+  original = scheduler_module.register_leaf_run
 
   async def flaky_register(*args, **kwargs):
     raise RuntimeError("run registration exploded")
 
-  monkeypatch.setattr(cs, "register_leaf_run", flaky_register)
+  monkeypatch.setattr(scheduler_module, "register_leaf_run", flaky_register)
   with pytest.raises(RuntimeError):
     await scheduler._execute_task(task_cfg, record_handle=True, firing=FIRING)
   after_failure = await tree.load_meta(manager.id)
   assert after_failure.last_scheduled_run is None
 
-  monkeypatch.setattr(cs, "register_leaf_run", original)
+  monkeypatch.setattr(scheduler_module, "register_leaf_run", original)
   await scheduler._execute_task(task_cfg, record_handle=True, firing=FIRING)
   after_success = await tree.load_meta(manager.id)
   assert after_success.last_scheduled_run is not None

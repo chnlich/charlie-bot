@@ -40,12 +40,13 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.features.cron import config, loader
+from src.infra import backend_models, log_once, models, tasks
 from src.infra import event_types as ET
-from src.infra import log_once, models
-from src.runtime import control_events, review, runs, task_completion
+from src.infra.config import CharlieBotConfig, require_backend_option
+from src.runtime import control_events, review, runs, task_completion, task_errors, task_execution
 
 if TYPE_CHECKING:
-  from src.runtime import task_execution, task_sessions
+  from src.runtime import task_sessions
 
 log = log_once.LazyStructlogLogger()
 
@@ -232,8 +233,6 @@ async def ensure_firing_leaf(
 
   The parent is the bound manager task, which owns the firing's worker leaf.
   """
-  from src.runtime import task_errors
-
   if meta.profile != "manager":
     raise task_errors.TaskInvalidError(
         f"scheduled task '{task_cfg.name}' cannot create a worker leaf under "
@@ -460,10 +459,19 @@ async def redrive_firing(leaf_id: str, tree: task_sessions.TaskTreeManager, cfg)
 # ---------------------------------------------------------------------------
 
 
+def effective_scheduled_task_backend(task_cfg: config.ScheduledTaskConfig, cfg: CharlieBotConfig) -> str:
+  """Return the backend id a scheduled task should use."""
+  if task_cfg.backend:
+    require_backend_option(cfg, task_cfg.backend, subject="scheduled task ")
+    return task_cfg.backend
+  if not cfg.backends.options:
+    raise ValueError("scheduled task backend resolution requires a configured backends.options entry")
+  return cfg.backends.options[0].id
+
+
 def effective_backend(task_cfg: config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str:
   """The task's effective backend id, resolved strictly against the config."""
-  from src.features.cron import scheduler
-  return scheduler.effective_scheduled_task_backend(task_cfg, tree._cfg)
+  return effective_scheduled_task_backend(task_cfg, tree._cfg)
 
 
 def resolved_backend_option(
@@ -487,8 +495,6 @@ def resolved_backend_model(
   """(backend, model) for one fire's run: the step's or task's backend, resolved
   strictly to its configured default model (the same resolution the legacy
   scheduled worker spawn rode)."""
-  from src.infra import backend_models
-
   option = resolved_backend_option(task_cfg, tree, backend_id)
   return option.id, backend_models.option_default_model(option, subject="scheduled task backend ")
 
@@ -502,8 +508,6 @@ def distinct_backend_conflict(task_cfg: config.ScheduledTaskConfig, tree: task_s
   routing type with its default model — an Antigravity-style backend that picks
   its own model is told apart by type alone.
   """
-  from src.infra import backend_models
-
   steps = task_cfg.steps or []
   positions = {step.name: i for i, step in enumerate(steps)}
   for step in steps:
@@ -526,8 +530,6 @@ def distinct_backend_conflict(task_cfg: config.ScheduledTaskConfig, tree: task_s
 
 
 def _adapter_of(tree: task_sessions.TaskTreeManager) -> object:
-  from src.runtime import task_execution
-
   adapter = tree.dispatch.executor
   if not isinstance(adapter, task_execution.TaskExecutionAdapter):
     raise RuntimeError("task execution adapter is not installed; cannot fire a scheduled task")
@@ -596,8 +598,6 @@ async def reconcile_bound_firings(
     # follow must not hold this pass. A withheld launch records and reports
     # itself (once, by stable id), and a settled step Run's own finish chain
     # re-drives the frontier, so nothing is owed here after scheduling.
-    from src.infra import tasks
-
     tasks.create_logged_task(launch_and_settle(tree, leaf_id, run_id, prompt), name=f"cron-recovered-step-{run_id[:8]}")
 
   if tree.task_state(leaf_id) != "open":
@@ -688,8 +688,6 @@ async def run_firing_steps_boundary_report(
     leaf_id: str,
 ) -> None:
   """The successful boundary's close (which delivers the one report)."""
-  from src.runtime import task_errors
-
   records = tree.runs.list_run_records_sync(leaf_id)
   events = tree.runs.load_events_sync(leaf_id)
   chain = sorted(

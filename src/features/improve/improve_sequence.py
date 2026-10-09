@@ -59,8 +59,9 @@ from src.runtime import task_prompts
 from src.runtime.control_events import stable_run_id, stable_task_id
 from src.runtime.runs import RUN_EVENTS_NAME
 from src.runtime.spawner_prompt import load_marker_sections, substitute_tokens
-from src.runtime.task_completion import CompletionEvidence, LandingEvidence, SequenceCloseOutcome
+from src.runtime.task_completion import RUN_REF_PREFIX, CompletionEvidence, LandingEvidence, SequenceCloseOutcome
 from src.runtime.task_errors import TaskConflictError, TaskInvalidError
+from src.runtime.task_execution import TaskExecutionAdapter
 
 if TYPE_CHECKING:
   from src.runtime.task_sessions import TaskTreeManager
@@ -283,8 +284,6 @@ async def run_improve_sequence(
   stop, or a quota blocker, and the ONE final result is delivered to the
   parent through the report owner.
   """
-  from src.runtime.task_execution import TaskExecutionAdapter
-
   state = await improve_command.require_loop_state(session_id, loop_id, cfg)
   loop_dir = cfg.sessions_dir / session_id / "loops" / str(loop_id)
   resolved_repo = Path(state.repo_path)
@@ -625,7 +624,6 @@ async def _deliver_iteration_report(
   its final report carries the error, so a missed audit never passes
   silently.
   """
-  from src.runtime.task_completion import RUN_REF_PREFIX
   meta = await tree.load_meta(child_id)
   if meta is None or not meta.task_parent_id:
     log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)

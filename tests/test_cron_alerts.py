@@ -26,7 +26,7 @@ from src.infra import config
 # so that import resolves the stand-in landed on the src.infra.notifications module attribute;
 # import-scope binders of the same function keep their own bound object and
 # are not intercepted through this route.
-NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.infra.notifications.send_telegram"
+NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.features.cron.loader.send_telegram"
 
 
 @pytest.fixture

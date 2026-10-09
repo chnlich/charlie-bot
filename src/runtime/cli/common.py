@@ -785,6 +785,28 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
   return deferred
 
 
+_CLI_ENTRY_MODULE: str | None = None
+
+
+def set_cli_entry_module(module: str) -> None:
+  """Record the unified CLI's entry module; the composition root (src/app/main.py) calls this so a
+  subcommand can re-enter the CLI in a subprocess without naming the app group across group lines."""
+  global _CLI_ENTRY_MODULE
+  _CLI_ENTRY_MODULE = module
+
+
+def cli_entry_module() -> str:
+  """The unified CLI's entry module recorded by ``set_cli_entry_module``.
+
+  Raises when the process never entered through the unified CLI (a bare
+  ``python -m <subcommand module>``): such a process also lacks the composition root's package
+  registrations, so no subprocess re-entry exists for it.
+  """
+  if _CLI_ENTRY_MODULE is None:
+    raise RuntimeError("CLI entry module unset: this process did not enter through the unified charliebot CLI")
+  return _CLI_ENTRY_MODULE
+
+
 def add_session_arg(parser: argparse.ArgumentParser) -> None:
   """Add the optional ``--session`` flag; ``resolve_session_id`` resolves its value."""
   parser.add_argument(

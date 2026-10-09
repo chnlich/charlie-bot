@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,15 +24,17 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _async_wait_for,
     create_task,
+    identity_of,
     rate_limit_event,
     stub_credentials,
 )
 
 from src.backends.claude_code import claude_accounts, claude_relay
-from src.features.improve import improve_sequence
-from src.features.improve.improve_command import load_loop_state
+from src.features.improve import improve_command, improve_sequence
+from src.features.improve.improve_command import ImproveState, load_loop_state, save_loop_state
 from src.infra import event_types as ET
-from src.infra.models import SessionMetadata, TaskSpec
+from src.infra.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.infra.tasks import create_logged_task
 from src.runtime.runs import RUN_EVENTS_NAME
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
@@ -40,9 +45,11 @@ from tests.test_task_execution import (
     build_env,
     build_pooled_env,
     install_backends,
+    install_worker_launch_and_resume_backends,
     make_api_client,
     make_pm_build,
     result_event,
+    write_raw_result,
 )
 
 
@@ -51,6 +58,102 @@ def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
   return install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event(text)]) for text in outcomes],
       WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+
+def _close_facts(tree, child_id: str) -> list[dict]:
+  """The child's task_closed facts (the loop's close step writes at most one)."""
+  return [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
+
+
+def _assert_single_close(tree, child_id: str, *, lifecycle: str, sequence_outcome: str) -> dict:
+  """The one close fact the loop's close step landed, with both outcome fields."""
+  closes = _close_facts(tree, child_id)
+  assert len(closes) == 1
+  assert closes[0]["request_id"] == "improve:1:close"
+  assert closes[0]["outcome"] == lifecycle
+  assert closes[0]["sequence_outcome"] == sequence_outcome
+  return closes[0]
+
+
+async def _start_loop_in_process(
+    cfg,
+    tree,
+    manager,
+    repo: Path,
+    *,
+    iterations: int = 2,
+    merge_back: bool = False,
+) -> tuple[dict, str, asyncio.Task]:
+  """Reserve and spawn the improve controller in this process (the API
+  handler's own steps), so the test drives gates on its own event loop."""
+  state = await improve_command.reserve_loop_state(
+      manager.id,
+      "## Goal\n\nimprove the thing\n",
+      "improve/test-branch",
+      str(repo),
+      cfg,
+      base_branch="main",
+      merge_back=merge_back,
+      resolved_backend="fake",
+      resolved_model="fake-model")
+  child = await improve_sequence.create_improve_child(
+      tree, manager.id, state.loop_id, "improve the thing", repo_path=str(repo), base_branch="main")
+  task = create_logged_task(
+      improve_sequence.run_improve_sequence(
+          manager.id,
+          cfg,
+          tree,
+          loop_id=state.loop_id,
+          iterations=iterations,
+          child_id=child.id,
+          goal="improve the thing"),
+      name=f"improve-sequence-test-{state.loop_id}")
+  return {"loop_id": state.loop_id, "child_session_id": child.id}, child.id, task
+
+
+async def _ended_loop_shape(
+    cfg,
+    tree,
+    manager,
+    *,
+    status: str,
+    iterations: list[tuple[str | None, str | None]],
+    server_pid: int | None = None,
+) -> str:
+  """One improve loop's durable after-crash shape: the worker child, the loop
+  state, and each iteration as (terminal outcome or None for still-queued,
+  judged report text or None). Returns the child id."""
+  loop_id = 1
+  child = await improve_sequence.create_improve_child(
+      tree, manager.id, loop_id, "improve the thing", repo_path=None, base_branch=None)
+  await save_loop_state(
+      manager.id,
+      ImproveState(
+          loop_id=loop_id,
+          goal="improve the thing",
+          status=status,
+          work_branch="improve/test",
+          base_branch="main",
+          repo_path=str(cfg.charliebot_home),
+          created_at="2026-10-08T00:00:00+00:00",
+          server_pid=os.getpid() if server_pid is None else server_pid,
+      ), cfg)
+  loop_dir = cfg.sessions_dir / manager.id / "loops" / str(loop_id)
+  for position, (outcome, report_text) in enumerate(iterations, start=1):
+    run = RunRecord(
+        id=f"iter-run-{position}",
+        session_id=child.id,
+        kind="iteration",
+        backend="fake",
+        model="fake-model",
+        sequence_ref=SequenceRef(
+            kind="improve", owner_ref=improve_sequence.loop_owner_ref(manager.id, loop_id, cfg), position=position))
+    await tree.runs.register_run(run)
+    if outcome is not None:
+      await tree.runs.record_finish(child.id, run.id, outcome)
+    if report_text is not None:
+      (loop_dir / f"iter_{position:04d}.md").write_text(report_text)
+  return child.id
 
 
 async def _admit_takeoff(tree: TaskTreeManager, manager: SessionMetadata) -> None:
@@ -149,6 +252,17 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
   # proven landing (no merge-back) is NOT successful delivery.
   state = await load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "blocked"
+  # The loop's end closed the child through the completion owner: lifecycle
+  # cancelled with the loop's own outcome on the close fact, and the listing
+  # counts the node as archived.
+  assert tree.task_state(child_id) == "cancelled"
+  index = await tree._get_index()
+  assert tree.archived_of(index, index.metas[child_id])
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  assert len(_final_reports(tree, manager.id)) == 1 and report["outcome"] == "blocked"
+  assert report["summary"].startswith("[Improve loop 1] Improve loop ran 2 iteration(s)")
+  assert "Iteration summaries:" in report["summary"] and "iter two words" in report["summary"]
+  assert report["result_refs"] == ["loop:1"]
 
 
 @pytest.mark.asyncio
@@ -384,6 +498,15 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
 
   state = await load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "failed"
+  # The quota failure closed the child cancelled with the loop's failed
+  # outcome; the one final report carries the blocked-on-iteration sentence
+  # the durable events log proves.
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  assert len(_final_reports(tree, manager.id)) == 1
+  assert report["summary"].startswith(
+      "[Improve loop 1] Improve loop blocked on iteration 1: "
+      "launch refused with quota exhausted:")
   failed_payloads = [e for e in tree.events.load_events(manager.id) if e.get("type") == improve_sequence.IMPROVE_FAILED]
   assert len(failed_payloads) == 1
   assert failed_payloads[0]["blocked_iteration"] == 1
@@ -433,13 +556,26 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
   # report woke the parent exactly once.
   assert len(_iteration_reports(tree, manager.id)) == 2
   assert wakes == [manager.id, manager.id, manager.id]
+  # The loop's end closed the child on the plan's table: a landed merge-back
+  # with successful iterations completes; an exhausted loop cancels.
+  if expected_outcome == "completed":
+    assert tree.task_state(child_id) == "completed"
+    close = _assert_single_close(tree, child_id, lifecycle="completed", sequence_outcome="completed")
+    records = tree.runs.list_run_records_sync(child_id)
+    assert sorted(close["run_ids"]) == sorted(r.id for r in records)
+  else:
+    assert tree.task_state(child_id) == "cancelled"
+    _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  assert len(_final_reports(tree, manager.id)) == 1
 
-  # The replay re-derives the same stable report id, appends nothing, and
-  # wakes nobody.
-  source = tree.dispatch.report_source_event(child_id, "improve child")
+  # The final report rides the child's close fact: a replayed delivery off
+  # that same source re-derives the same stable report id, appends nothing,
+  # and wakes nobody.
+  closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
   replayed, created = await tree.dispatch.deliver_child_report(
       child_id,
-      source_event=source,
+      source_event=closes[0],
       outcome=report["outcome"],
       summary=str(report["summary"]),
       result_refs=list(report["result_refs"]),
@@ -787,3 +923,573 @@ async def test_improve_controller_preserves_base_lookups_and_skips_recovery(
   await _replay_followups(manager.id, tree, None, counters, cfg)
   assert counters["followups"] == 0
   assert all(mock.await_count == 0 for mock in redrive_mocks)
+
+
+# ---------------------------------------------------------------------------
+# The loop close step: every loop end closes its worker child, exactly once
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_completed_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The landing succeeds but no iteration did: lifecycle cancelled (an
+  empty-handed delivery is never completed), report outcome completed."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  failed = result_event("the build broke")
+  failed["is_error"] = True
+  backends = [
+      SpawningScriptedBackend([failed], exit_code=1),
+      SpawningScriptedBackend([dict(failed)], exit_code=1),
+  ]
+  monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      payload_overrides={
+          "merge_back": True,
+          "work_branch": "improve/failed-merge",
+      },
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "completed"
+  assert tree.task_state(child_id) == "cancelled"
+  close = _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="completed")
+  assert close["run_ids"] == []  # no successful iteration to cite
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_controller_exception_closes_the_child_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """A controller failure after the iterations closes the child cancelled with
+  the loop's failed outcome and exactly one final report."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  _worker_backends(monkeypatch, ["iter one words", "iter two words"])
+
+  async def boom(*args, **kwargs):
+    raise RuntimeError("injected landing failure")
+
+  monkeypatch.setattr(improve_command, "_land_work_branch_after_loop", boom)
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "failed"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop failed.")
+  assert "iter one words" in finals[0]["summary"] and "iter two words" in finals[0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_worktree_failure_closes_the_child_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """A worktree creation failure before the first iteration closes the child
+  cancelled with the loop's failed outcome and exactly one final report."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  builds = _worker_backends(monkeypatch, ["never launched"])
+
+  async def boom(*args, **kwargs):
+    raise RuntimeError("injected worktree failure")
+
+  monkeypatch.setattr(improve_sequence.git, "git_create_worktree", boom)
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "failed"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+  assert finals[0]["summary"] == "[Improve loop 1] Improve loop failed."
+  assert builds == []  # no iteration ever launched
+  assert tree.runs.list_run_records_sync(child_id) == []
+
+
+@pytest.mark.asyncio
+async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """improve-stop during a running iteration: that iteration's finish runs
+  after_run, which must not close the child (the controller still holds the
+  active lock); the controller's own end path then closes it cancelled with
+  the loop's cancelled outcome, and the final report holds the iteration's
+  summary."""
+  from src.features.improve.sequence_controller import ImproveSequenceController
+
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  gate = asyncio.Event()
+  first = SpawningScriptedBackend([result_event("iter one words")], gate=gate.wait)
+  second = SpawningScriptedBackend([result_event("never reached")])
+  install_backends(monkeypatch, [first, second], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  # Park the controller inside the judgment that follows the iteration's
+  # finish, so the test observes the child between after_run and the
+  # controller's own end path.
+  release_judge = asyncio.Event()
+  real_judge = improve_sequence._judge_iteration
+
+  async def held_judge(*args):
+    await release_judge.wait()
+    return await real_judge(*args)
+
+  monkeypatch.setattr(improve_sequence, "_judge_iteration", held_judge)
+  after_run_calls: list[str] = []
+  real_after_run = ImproveSequenceController.after_run
+
+  async def recording_after_run(self, session_id, run, tree_, cfg_):
+    after_run_calls.append(run.id)
+    await real_after_run(self, session_id, run, tree_, cfg_)
+
+  monkeypatch.setattr(ImproveSequenceController, "after_run", recording_after_run)
+
+  body, child_id, controller = await _start_loop_in_process(cfg, tree, manager, repo, iterations=2)
+  await _async_wait_for(lambda: bool(tree.runs.list_run_records_sync(child_id)), 10.0, "iteration never registered")
+  assert await improve_command.stop_improve_loop(manager.id, cfg) is True
+  gate.set()
+  await _async_wait_for(lambda: bool(after_run_calls), 10.0, "after_run never ran")
+  # The iteration's finish did not close the child: the controller is still
+  # parked with its active lock held.
+  assert tree.task_state(child_id) == "open"
+  assert _close_facts(tree, child_id) == []
+
+  release_judge.set()
+  await asyncio.wait_for(controller, timeout=10)
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "stopped"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="cancelled")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "cancelled"
+  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop stopped by user after 1 iteration(s);")
+  assert "iter one words" in finals[0]["summary"]
+  assert finals[0]["result_refs"] == ["loop:1"]
+  # The stopped loop never registered a second iteration.
+  assert len(tree.runs.list_run_records_sync(child_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_withheld_iteration_launch_closes_the_child_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """A withheld iteration launch: the queued Run takes the close step's stop
+  request and never launches; the child closes cancelled with the loop's
+  blocked outcome and its work state reads idle."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: every worker launch is withheld
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  builds = _worker_backends(monkeypatch, ["never launched"])
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "blocked"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  records = tree.runs.list_run_records_sync(child_id)
+  assert len(records) == 1 and records[0].pid is None
+  events = tree.runs.load_events_sync(child_id)
+  assert tree.runs.terminal_outcome(events, records[0].id) is None
+  stops = [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED and e.get("run_id") == records[0].id]
+  assert len(stops) == 1 and stops[0]["request_id"] == "improve:1:close"
+  assert tree.work_state_of(child_id) == "idle"
+  assert builds == []  # no process ever started
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop ran 0 iteration(s)")
+
+
+@pytest.mark.asyncio
+async def test_controller_exception_while_an_iteration_runs_closes_after_its_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The controller fails while its iteration still runs: the close step
+  leaves the child open, and the iteration's own finish closes it cancelled
+  with the loop's failed outcome."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  hold = asyncio.Event()
+  backend = SpawningScriptedBackend([result_event("iter words")], post_events=hold.wait)
+
+  def one_backend(option, cfg_, **kwargs):
+    on_spawn = kwargs.get("on_spawn")
+    if on_spawn is not None:
+      backend.set_on_spawn(on_spawn)
+    return backend
+
+  monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, one_backend)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  real_settle = adapter.launch_and_settle
+  settle: dict = {}
+
+  async def raising_settle(session_id, run_id, *, prompt=None):
+    settle["task"] = asyncio.create_task(real_settle(session_id, run_id, prompt=prompt))
+    await _async_wait_for(
+        lambda: any(r.pid is not None for r in tree.runs.list_run_records_sync(session_id)), 10.0,
+        "the iteration never launched")
+    raise RuntimeError("injected controller failure")
+
+  monkeypatch.setattr(adapter, "launch_and_settle", raising_settle)
+
+  body, child_id, controller = await _start_loop_in_process(cfg, tree, manager, repo, iterations=1)
+  state_path = cfg.sessions_dir / manager.id / "loops" / str(body["loop_id"]) / "state.json"
+  await _async_wait_for(
+      lambda: state_path.is_file() and json.loads(state_path.read_text())["status"] == "failed", 10.0,
+      "the controller's failure never landed in the loop state")
+  # The iteration still owes its terminal fact: the child stays open.
+  records = tree.runs.list_run_records_sync(child_id)
+  assert len(records) == 1 and records[0].pid is not None
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), records[0].id) is None
+  assert tree.task_state(child_id) == "open"
+  assert _close_facts(tree, child_id) == []
+
+  hold.set()
+  await asyncio.wait_for(settle["task"], timeout=10)
+  await asyncio.wait_for(controller, timeout=10)
+  await _async_wait_for(
+      lambda: tree.task_state(child_id) == "cancelled", 10.0, "the iteration's finish never closed the child")
+
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), records[0].id) == "success"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# The startup pass closes what a crash left open
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_closes_an_interrupted_loop_whose_process_died(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Restart interruption with a dead iteration process: the reconcile marks
+  the loop interrupted, the Run's drain lands its terminal fact, and its
+  after_run closes the child cancelled with the loop's failed outcome."""
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
+  # The launched iteration died with the old server: a recorded pid that no
+  # longer exists, no terminal fact, and the drain's raw-log truth staged.
+  run = await tree.runs.get_run(child_id, "iter-run-1")
+  assert run is not None
+  run.pid = 999999
+  run.pid_start = "1-424000"
+  run.started_at = datetime(2026, 10, 8, tzinfo=UTC)
+  await tree.runs.write_record(child_id, run)
+  write_raw_result(tree.runs.run_dir(child_id, run.id), "crashed mid-iteration")
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  install_worker_launch_and_resume_backends(monkeypatch, [])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await reconcile_task_tree(cfg, tree)
+
+  state = await load_loop_state(manager.id, 1, cfg)
+  assert state is not None and state.status == "interrupted"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_leaves_a_live_iterations_child_open_until_its_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Restart interruption with the iteration process still alive: startup
+  follows the process without waiting and the child stays open; the process's
+  later finish closes it cancelled with the loop's failed outcome."""
+  import src.runtime.runs as runs_mod
+  import src.runtime.task_execution as task_execution_module
+
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
+  run = await tree.runs.get_run(child_id, "iter-run-1")
+  assert run is not None
+  run.pid = 424777
+  run.pid_start = "1-424000"
+  run.started_at = datetime(2026, 10, 8, tzinfo=UTC)
+  await tree.runs.write_record(child_id, run)
+  monkeypatch.setattr(runs_mod, "is_run_alive", lambda *args, **kwargs: True)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  follows: list[tuple[str, str]] = []
+  monkeypatch.setattr(adapter, "follow_run_in_background", lambda s, r: follows.append((s, r)))
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  # The startup pass itself: the loop is marked interrupted and the live Run
+  # is followed, and nothing waits for the process or closes the child.
+  await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
+  counters = {"resumed": 0, "drained": 0, "followups": 0}
+  await task_execution_module._reconcile_node(child_id, tree, adapter, counters, cfg)
+
+  state = await load_loop_state(manager.id, 1, cfg)
+  assert state is not None and state.status == "interrupted"
+  assert counters["resumed"] == 1 and follows == [(child_id, run.id)]
+  assert tree.task_state(child_id) == "open"
+  assert _close_facts(tree, child_id) == []
+
+  # The process ends: the follow lands the terminal fact and after_run
+  # closes the child.
+  await tree.dispatch.finish_run(child_id, run.id, outcome="success")
+  meta = await tree.load_meta(child_id)
+  assert meta is not None
+  fresh = await tree.runs.get_run(child_id, run.id)
+  assert fresh is not None
+  await adapter._after_worker_run(meta, fresh, "success")
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A launched iteration carrying a durable stop request at startup:
+  recovery lands its interrupted finish and recover_run closes the child."""
+  from src.runtime.control_events import ACTOR_SYSTEM, build_control_event
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
+  proc = subprocess.Popen(["/bin/sleep", "30"])
+  try:
+    pid, pid_start = identity_of(proc.pid)
+    run = await tree.runs.get_run(child_id, "iter-run-1")
+    assert run is not None
+    run.pid = pid
+    run.pid_start = pid_start
+    run.started_at = datetime.now(UTC)
+    await tree.runs.write_record(child_id, run)
+    # The durable stop request, staged as the old process left it (no follow).
+    await tree.events.append(
+        child_id,
+        build_control_event(
+            ET.RUN_STOP_REQUESTED,
+            actor=ACTOR_SYSTEM,
+            source_session_id=child_id,
+            request_id="boot-stop",
+            run_id=run.id))
+    adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+    tree.dispatch.executor = adapter
+    install_worker_launch_and_resume_backends(monkeypatch, [])
+    _count_manager_wakes(monkeypatch, tree, manager.id)
+
+    await reconcile_task_tree(cfg, tree)
+
+    assert proc.poll() is not None  # the stop's signal landed
+    assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), run.id) == "interrupted"
+    assert tree.task_state(child_id) == "cancelled"
+    _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+    finals = _final_reports(tree, manager.id)
+    assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+
+
+@pytest.mark.asyncio
+async def test_startup_closes_a_loop_that_crashed_between_final_state_and_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Crash window after the final state write and before the close: the
+  startup pass closes the child per the table and the parent receives one
+  final report carrying the judged iterations' summaries."""
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg,
+      tree,
+      manager,
+      status="blocked",
+      iterations=[("success", "## Iter 1\n\niter one report\n"), ("success", "## Iter 2\n\niter two report\n")])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await reconcile_task_tree(cfg, tree)
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop ran 2 iteration(s)")
+  assert "iter one report" in finals[0]["summary"] and "iter two report" in finals[0]["summary"]
+  assert finals[0]["result_refs"] == ["loop:1"]
+
+
+@pytest.mark.asyncio
+async def test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_unlaunched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Crash window with an iteration registered and never launched: the close
+  step stop-requests the queued Run, the child closes cancelled with the
+  loop's blocked outcome, and the queued Run never launches afterwards."""
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="blocked", iterations=[("success", "## Iter 1\n\niter one report\n"), (None, None)])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await reconcile_task_tree(cfg, tree)
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  events = tree.runs.load_events_sync(child_id)
+  queued = await tree.runs.get_run(child_id, "iter-run-2")
+  assert queued is not None and queued.pid is None
+  assert tree.runs.terminal_outcome(events, "iter-run-2") is None
+  assert tree.runs.stop_requested(events, "iter-run-2")
+  assert tree.work_state_of(child_id) == "idle"
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_startup_closes_a_loop_that_crashed_between_run_finished_and_after_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Crash window after run_finished and before after_run: the startup pass
+  closes the child per the table and the parent receives one final report."""
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="stopped", iterations=[("success", "## Iter 1\n\niter one report\n")])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await reconcile_task_tree(cfg, tree)
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="cancelled")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "cancelled"
+  assert "iter one report" in finals[0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_raced_close_step_calls_land_one_close_and_one_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Two call points running the close step at the same time (after_run
+  racing a controller end path): one close fact and one final report."""
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="blocked", iterations=[("success", "## Iter 1\n\niter one report\n")])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await asyncio.gather(
+      improve_sequence.close_ended_loop_child(tree, cfg, manager.id, 1),
+      improve_sequence.close_ended_loop_child(tree, cfg, manager.id, 1))
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_a_reopened_child_stays_open_across_restarts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The user reopens a closed loop child: the next startup's close step
+  returns at the recorded close before any stop request — the child stays
+  open and its queued Run gains no new stop request."""
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg, tree, manager, status="blocked", iterations=[("success", "## Iter 1\n\niter one report\n"), (None, None)])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await improve_sequence.close_ended_loop_child(tree, cfg, manager.id, 1)
+  assert tree.task_state(child_id) == "cancelled"
+  events = tree.runs.load_events_sync(child_id)
+  assert len([e for e in events if e["type"] == ET.RUN_STOP_REQUESTED]) == 1
+
+  await tree.completion.restore_task(child_id, request_id="reopen-1", reason="operator retry", caller=OPERATOR)
+  assert tree.task_state(child_id) == "open"
+
+  await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
+
+  assert tree.task_state(child_id) == "open"
+  events = tree.runs.load_events_sync(child_id)
+  assert len([e for e in events if e["type"] == ET.RUN_STOP_REQUESTED]) == 1
+  assert len(_close_facts(tree, child_id)) == 1
+  assert len(_final_reports(tree, manager.id)) == 1

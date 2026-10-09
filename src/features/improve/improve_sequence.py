@@ -16,15 +16,19 @@ Boundaries this module pins:
   judged by the same mechanical validity/quota rules as before. Every judged
   iteration is delivered to the fixed parent as ONE child_report through the
   common report owner — the delivery wakes the parent's master with that
-  iteration's audit input — and the final sequence result is delivered the
-  same way, once, at the end. The loop never waits for the audit.
-- One successful iteration never closes the child: the controller decides the
-  overall outcome after the loop ends. Exhausting the iterations without
-  proving the goal is NOT successful delivery — the final report says so
-  (``blocked`` when a decision is owed, ``failed`` on a quota/loop failure,
-  ``cancelled`` when the user stopped the loop) and the child stays open with
-  its evidence. ``completed`` requires the deliverable to be real: a
-  requested merge-back that actually landed.
+  iteration's audit input. The loop never waits for the audit.
+- One successful iteration never closes the child: the loop's own outcome is
+  decided after the loop ends. Whatever the end, the close step
+  (:func:`close_ended_loop_child`) then closes the child through the common
+  completion owner, exactly once under the request id ``improve:<loop
+  id>:close``: the close fact carries the loop's outcome as
+  ``sequence_outcome`` and delivers the ONE final report with it, and the
+  child's lifecycle ends ``completed`` (a requested merge-back that landed
+  with at least one successful iteration) or ``cancelled`` (every other
+  ending). Exhausting the iterations without proving the goal is NOT
+  successful delivery — the loop outcome says so (``blocked`` when a decision
+  is owed, ``failed`` on a quota/loop failure or a restart interruption,
+  ``cancelled`` when the user stopped the loop).
 - Re-entry is stable: the child's id derives from (parent, ``improve:<loop
   id>``) and each iteration's Run id from (child, ``improve:<loop id>:iter:<n>``),
   so a replayed admission or a repeated finalization never duplicates a child
@@ -33,7 +37,8 @@ Boundaries this module pins:
   but the whole loop is never automatically resumed (the existing improve
   boundary). The interrupted controller is reported honestly: the loop state
   is marked ``interrupted``, the stale active lock is cleared, and the chat
-  stream carries one visible notice.
+  stream carries one visible notice. The startup pass then runs the close
+  step for every loop, closing the children a crash left open.
 """
 
 from __future__ import annotations
@@ -51,10 +56,11 @@ from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
 from src.runtime import task_prompts
-from src.runtime.control_events import stable_run_id
+from src.runtime.control_events import stable_run_id, stable_task_id
 from src.runtime.runs import RUN_EVENTS_NAME
 from src.runtime.spawner_prompt import load_marker_sections, substitute_tokens
-from src.runtime.task_errors import TaskInvalidError
+from src.runtime.task_completion import CompletionEvidence, LandingEvidence, SequenceCloseOutcome
+from src.runtime.task_errors import TaskConflictError, TaskInvalidError
 
 if TYPE_CHECKING:
   from src.runtime.task_sessions import TaskTreeManager
@@ -83,6 +89,12 @@ def iteration_run_request_id(loop_id: int, iteration: int) -> str:
   """The stable run request_id of one iteration: a replayed finalization
   binds to the same Run, never a duplicate."""
   return f"improve:{loop_id}:iter:{iteration}"
+
+
+def improve_close_request_id(loop_id: int) -> str:
+  """The close request id every call point of one loop's close step binds to:
+  raced and repeated closes replay the one recorded close, never a second."""
+  return f"improve:{loop_id}:close"
 
 
 async def create_improve_child(
@@ -311,8 +323,7 @@ async def run_improve_sequence(
               "goal": goal,
               "error": improve_command.WORKTREE_CREATE_ERROR_PREFIX + str(e)
           })
-      await _deliver_sequence_report(
-          tree, child_id, session_id, loop_id, "failed", f"Improve loop failed to create its worktree: {e}", [])
+      await close_ended_loop_child(tree, cfg, session_id, loop_id)
       return
 
     for i in range(1, iterations + 1):
@@ -350,10 +361,10 @@ async def run_improve_sequence(
         if observation.withheld is not None:
           # No process started and no terminal fact will arrive: the
           # loop cannot continue. Settle honestly — blocked state,
-          # released active lock, the actual reason reported — and
-          # leave the queued iteration Run standing as the retained
-          # pending request (resume/retry uses the existing policy;
-          # the whole loop is never automatically restarted).
+          # released active lock, the actual reason reported — and let
+          # the close step settle the child (the queued iteration Run
+          # gets its stop request there; the whole loop is never
+          # automatically restarted).
           await _settle_withheld_iteration(
               tree, session_id, cfg, loop_id, goal, i, run.id, observation.withheld, previous_summaries, iterations)
           return
@@ -385,36 +396,24 @@ async def run_improve_sequence(
       merge_result = await improve_command._land_work_branch_after_loop(
           resolved_repo, work_branch, base_branch, merge_back, stopped_by_user, previous_summaries, session_id)
 
+    # The final report's per-outcome sentence is re-derived from the durable
+    # state by the close step; only the state's status and the payload's type
+    # label are decided here.
     if blocked is not None:
       state.status = 'failed'
       outcome_label = "failed"
-      summary = improve_command.blocked_loop_summary(blocked[0], blocked[1])
     elif stopped_by_user:
       state.status = 'stopped'
       outcome_label = "cancelled"
-      summary = (
-          f"Improve loop stopped by user after {completed_iterations} iteration(s); "
-          "evidence retained on the loop's task, no further iterations will run.")
     elif merge_result is not None and merge_result.get('merged') is True:
       state.status = 'completed'
       outcome_label = "completed"
-      summary = (
-          f"Improve loop completed {completed_iterations} iteration(s); work branch "
-          f"{work_branch} landed on {base_branch}.")
     else:
       # Exhausted iterations without proven delivery: never a fabricated
-      # success. The child stays open; the parent decides what is next.
+      # success. The close step's report says so; the parent decides what is
+      # next.
       state.status = 'blocked'
       outcome_label = "blocked"
-      detail = ""
-      if merge_result is not None and merge_result.get('merged') is False:
-        detail = (
-            f" The fast-forward landing onto {base_branch} failed "
-            f"({merge_result.get('error')}); the work branch was pushed to origin.")
-      summary = (
-          f"Improve loop ran {completed_iterations} iteration(s) on branch {work_branch}; "
-          f"the goal is not proven and the sequence delivered no landing.{detail} "
-          "Decide whether to land the branch, continue iterating, or close the task.")
     await improve_command.save_loop_state(session_id, state, cfg)
     await improve_command.clear_active_loop_lock(session_id, cfg)
 
@@ -431,7 +430,7 @@ async def run_improve_sequence(
       payload['merge_result'] = merge_result
     await tree.session_successor.deliver_to_successor(session_id, payload)
 
-    await _deliver_sequence_report(tree, child_id, session_id, loop_id, outcome_label, summary, previous_summaries)
+    await close_ended_loop_child(tree, cfg, session_id, loop_id)
   except asyncio.CancelledError:
     log.warning("improve_sequence_cancelled", session=session_id, loop_id=loop_id)
     raise
@@ -450,10 +449,11 @@ async def run_improve_sequence(
               "error": improve_command.LOOP_FAILURE_ERROR_PREFIX + str(exc),
               "iterations_completed": completed_iterations,
           })
-      await _deliver_sequence_report(
-          tree, child_id, session_id, loop_id, "failed", f"Improve loop controller failed: {exc}", previous_summaries)
     except Exception:
       log.exception("improve_sequence_failure_report_failed", session=session_id, loop_id=loop_id)
+    # The last iteration may still be running: the close step then returns
+    # and that Run's finish closes the child through after_run.
+    await close_ended_loop_child(tree, cfg, session_id, loop_id)
 
 
 async def _settle_withheld_iteration(
@@ -474,9 +474,9 @@ async def _settle_withheld_iteration(
   blocked with the actual reason and releases the active lock. The launch
   itself already recorded the durable run_launch_withheld fact and delivered
   the ONE blocked report to the manager (once, by stable id) — the
-  controller's chat progress event is all it still owes. No side effect ran
-  and none is retried automatically; the queued iteration Run stays as the
-  retained pending request for the existing explicit resume/retry policy.
+  controller's chat progress event is all it still owes. The close step then
+  stop-requests the queued iteration Run and closes the child (the loop's
+  blocked outcome); the whole loop is never automatically restarted.
   """
   state = await improve_command.require_loop_state(session_id, loop_id, cfg)
   state.status = "blocked"
@@ -495,6 +495,7 @@ async def _settle_withheld_iteration(
   payload["withheld_run_id"] = run_id
   payload["iterations_requested"] = iterations
   await tree.session_successor.deliver_to_successor(session_id, payload)
+  await close_ended_loop_child(tree, cfg, session_id, loop_id)
 
 
 @dataclass(frozen=True)
@@ -660,36 +661,178 @@ async def _deliver_iteration_report(
       outcome=outcome)
 
 
-async def _deliver_sequence_report(
+# ---------------------------------------------------------------------------
+# The loop close step: an ended loop closes its worker child, exactly once
+# ---------------------------------------------------------------------------
+
+# The loop outcome one durable loop status maps to (state.json's status
+# values; "running" never reaches this map — the step returns on it first).
+_SEQUENCE_OUTCOMES: dict[str, SequenceCloseOutcome] = {
+    "completed": "completed",
+    "blocked": "blocked",
+    "failed": "failed",
+    "stopped": "cancelled",
+    "interrupted": "failed",
+}
+
+
+async def close_ended_loop_child(
     tree: TaskTreeManager,
-    child_id: str,
+    cfg: CharlieBotConfig,
     session_id: str,
     loop_id: int,
-    outcome: str,
-    summary: str,
-    previous_summaries: list[str],
 ) -> None:
-  """The ONE final sequence result, delivered through the common report owner.
+  """Close one ended loop's worker child through the completion owner (the close step).
 
-  The child itself stays open: its evidence (the iteration Runs and loop
-  reports) remains, and the parent — or the operator — closes it through the
-  common closure guards.
+  Every controller end path runs this step after writing the final state and
+  clearing the active lock; ``after_run`` and ``recover_run`` run it for each
+  finished iteration Run; the startup reconcile runs it for every loop. It
+  never waits in-process: while the loop can still progress — its state says
+  running, or this process's controller still holds the active lock
+  (``improve-stop`` flips only the state, and the controller exits after its
+  current iteration) — or while a launched iteration still owes its terminal
+  fact, it returns and that Run's finish re-runs the step. Otherwise it
+  derives the outcome, the summary and the evidence from durable records only
+  — state.json, the child's Run records and events, the iteration report
+  files, and the work branch's git position — and closes the child once under
+  :func:`improve_close_request_id`; the close delivers the one final report.
+  A failure logs ``improve_sequence_close_failed`` and leaves the child open
+  for the next call point.
   """
-  meta = await tree.load_meta(child_id)
-  if meta is None or not meta.task_parent_id:
-    log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
+  try:
+    await _close_ended_loop_child(tree, cfg, session_id, loop_id)
+  except Exception:
+    log.exception("improve_sequence_close_failed", session=session_id, loop_id=loop_id)
+
+
+async def _close_ended_loop_child(
+    tree: TaskTreeManager,
+    cfg: CharlieBotConfig,
+    session_id: str,
+    loop_id: int,
+) -> None:
+  state = await improve_command.load_loop_state(session_id, loop_id, cfg)
+  if state is None or state.status == "running":
     return
-  source = tree.dispatch.report_source_event(child_id, "improve child")
-  detail = ("\n\nIteration summaries:\n" + "\n\n".join(previous_summaries)) if previous_summaries else ""
-  await tree.dispatch.deliver_child_report(
-      child_id,
-      source_event=source,
-      outcome=outcome,
-      summary=f"[Improve loop {loop_id}] {summary}{detail}",
+  if state.server_pid == os.getpid():
+    active = improve_command._active_loop_path(session_id, cfg)
+    named = await asyncio.to_thread(active.read_text) if await asyncio.to_thread(active.is_file) else ""
+    if named.strip() == str(loop_id):
+      # This process's controller still owns the loop: its own end path runs
+      # this step when the loop actually ends.
+      return
+  child_id = stable_task_id(session_id, improve_child_request_id(loop_id))
+  if await tree.load_meta(child_id) is None:
+    return  # a legacy loop owns no worker child
+  if tree.task_state(child_id) != "open":
+    return
+  request_id = improve_close_request_id(loop_id)
+  history = tree.fact_history(child_id)
+  if any(e.get("type") == ET.TASK_CLOSED and e.get("request_id") == request_id for e in history):
+    return  # closed by this step already; a manually reopened child stays as left
+  events = tree.runs.load_events_sync(child_id)
+  runs = tree.runs.list_run_records_sync(child_id)
+  for run in runs:
+    if tree.runs.run_has_terminal_fact(run, events) or run.pid is not None:
+      continue
+    # A queued iteration never launches on its own (the dispatcher skips
+    # sequence Runs), so the durable stop request settles what would
+    # otherwise block the close as pending execution.
+    await tree.runs.request_stop(child_id, run.id, request_id)
+  for run in runs:
+    if run.pid is not None and not tree.runs.run_has_terminal_fact(run, events):
+      # A launched iteration still owes its terminal fact; its finish runs
+      # after_run (or recovery's recover_run), which re-runs this step.
+      return
+  outcome, evidence = await _loop_close_verdict(tree, cfg, session_id, state, child_id, runs, events)
+  try:
+    await tree.completion.close_sequence_child(child_id, request_id=request_id, outcome=outcome, evidence=evidence)
+  except TaskConflictError:
+    # A raced close either landed under this request id (the loser returns
+    # quietly) or met a genuinely changed node; the next call point retries
+    # the latter through the wrapper's error log.
+    history = tree.fact_history(child_id)
+    if not any(e.get("type") == ET.TASK_CLOSED and e.get("request_id") == request_id for e in history):
+      raise
+  log.info("improve_sequence_child_closed", session=session_id, child=child_id, loop_id=loop_id, outcome=outcome)
+
+
+async def _loop_close_verdict(
+    tree: TaskTreeManager,
+    cfg: CharlieBotConfig,
+    session_id: str,
+    state: improve_command.ImproveState,
+    child_id: str,
+    runs: list[RunRecord],
+    events: list[dict],
+) -> tuple[SequenceCloseOutcome, CompletionEvidence]:
+  """The loop outcome and the close evidence, derived from durable records only."""
+  loop_id = state.loop_id
+  terminal: list[tuple[RunRecord, str]] = []
+  for run in runs:
+    outcome = tree.runs.terminal_outcome(events, run.id)
+    if outcome is not None:
+      terminal.append((run, outcome))
+  iteration_count = len(terminal)
+  successful_ids = [run.id for run, outcome in terminal if outcome == "success"]
+  # The quota-blocked iteration (a failed loop's only mechanical sub-case the
+  # records still prove) ends the loop before its judgment: it contributes
+  # the blocked sentence and no iteration summary, exactly as the live
+  # controller composed it.
+  blocked_iter: tuple[int, str] | None = None
+  if state.status == "failed":
+    for run, outcome in terminal:
+      if outcome == "success":
+        continue
+      position = run.sequence_ref.position if run.sequence_ref is not None else 0
+      reason, _summary = await _iteration_blocker(tree, child_id, run.id, position, outcome)
+      if reason:
+        blocked_iter = (position, reason)
+        break
+  if state.status == "completed":
+    sentence = (
+        f"Improve loop completed {iteration_count} iteration(s); work branch "
+        f"{state.work_branch} landed on {state.base_branch}.")
+  elif state.status == "blocked":
+    sentence = (
+        f"Improve loop ran {iteration_count} iteration(s) on branch {state.work_branch}; "
+        "the goal is not proven and the sequence delivered no landing. "
+        "Decide whether to land the branch, continue iterating, or close the task.")
+  elif state.status == "stopped":
+    sentence = (
+        f"Improve loop stopped by user after {iteration_count} iteration(s); "
+        "evidence retained on the loop's task, no further iterations will run.")
+  elif blocked_iter is not None:
+    sentence = improve_command.blocked_loop_summary(blocked_iter[0], blocked_iter[1])
+  elif state.status == "failed":
+    sentence = "Improve loop failed."
+  else:  # interrupted
+    sentence = "Improve loop interrupted by a server restart; the loop is NOT resumed automatically."
+  loop_dir = improve_command._loops_dir(session_id, cfg) / str(loop_id)
+  summaries: list[str] = []
+  for run, _outcome in terminal:
+    position = run.sequence_ref.position if run.sequence_ref is not None else None
+    if position is None or (blocked_iter is not None and position == blocked_iter[0]):
+      continue
+    report_path = loop_dir / f"iter_{position:04d}.md"
+    if not await asyncio.to_thread(report_path.is_file):
+      continue  # an iteration the loop never judged has no summary, as today
+    text = await asyncio.to_thread(report_path.read_text)
+    summaries.append(text.removeprefix(improve_command.RUNNER_FALLBACK_REPORT_MARKER)[:500])
+  detail = ("\n\nIteration summaries:\n" + "\n\n".join(summaries)) if summaries else ""
+  landing: LandingEvidence | None = None
+  if state.status == "completed" and state.base_branch:
+    # The merge-back's own evidence: the work branch's tip, which the FF push
+    # published onto the base's origin ref.
+    commit = await git.git_rev_parse(Path(state.repo_path), state.work_branch)
+    if commit:
+      landing = LandingEvidence(branch=f"origin/{state.base_branch}", commit=commit, repo_path=state.repo_path)
+  evidence = CompletionEvidence(
+      summary=f"[Improve loop {loop_id}] {sentence}{detail}",
       result_refs=[f"loop:{loop_id}"],
-      recipient=meta.task_parent_id,
-  )
-  log.info("improve_sequence_report_delivered", session=session_id, child=child_id, loop_id=loop_id, outcome=outcome)
+      run_ids=successful_ids,
+      landing=landing)
+  return _SEQUENCE_OUTCOMES[state.status], evidence
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +845,7 @@ async def reconcile_interrupted_sequences(
     tree: TaskTreeManager,
     boot_pid: int | None = None,
 ) -> int:
-  """Mark every improve loop whose controller died with the old process.
+  """Mark every improve loop whose controller died with the old process, then close what ended.
 
   The loop CONTINUATION is an explicit non-goal (the existing improve
   boundary): a restart never resumes the loop. What recovery owes is
@@ -711,8 +854,10 @@ async def reconcile_interrupted_sequences(
   carries one visible notice. The launched iteration itself is reconciled by
   the Run recovery pass, not here.
 
-  A loop whose state says running under THIS process's pid has a live
-  controller and is left alone.
+  Every loop then runs the close step: an ended loop whose child a crash left
+  open closes here (a loop with a launched, unfinished iteration returns and
+  closes from that Run's own recovery instead). A loop whose state says
+  running under THIS process's pid has a live controller and is left alone.
   """
   pid = boot_pid if boot_pid is not None else os.getpid()
   repaired = 0
@@ -728,31 +873,31 @@ async def reconcile_interrupted_sequences(
     session_id = session_dir.name
     for loop_id in await asyncio.to_thread(improve_command._find_state_loop_ids_sync, loops_dir):
       state = await improve_command.load_loop_state(session_id, loop_id, cfg)
-      if state is None or state.status != "running":
-        continue
-      if state.server_pid == pid:
-        continue  # this process's own controller is alive
-      state.status = "interrupted"
-      await improve_command.save_loop_state(session_id, state, cfg)
-      active = improve_command._active_loop_path(session_id, cfg)
-      if await asyncio.to_thread(active.exists):
-        await asyncio.to_thread(active.unlink)
-      repaired += 1
-      log.warning("improve_sequence_interrupted", session=session_id, loop_id=loop_id, recorded_pid=state.server_pid)
-      meta = await tree.load_meta(session_id)
-      if meta is not None:
-        await tree.session_successor.deliver_to_successor(
-            session_id, {
-                "type":
-                    IMPROVE_FAILED,
-                "goal":
-                    state.goal,
-                "error":
-                    (
-                        f"Improve loop {loop_id} was interrupted by a server restart; the loop is "
-                        "NOT resumed automatically (the existing improve boundary). Its state is "
-                        "marked interrupted, the stale lock is cleared, and the launched "
-                        "iteration's terminal fact was reconciled. Restart the loop explicitly "
-                        "if you want it to continue."),
-            })
+      if state is not None and state.status == "running" and state.server_pid != pid:
+        state.status = "interrupted"
+        await improve_command.save_loop_state(session_id, state, cfg)
+        active = improve_command._active_loop_path(session_id, cfg)
+        if await asyncio.to_thread(active.exists):
+          await asyncio.to_thread(active.unlink)
+        repaired += 1
+        log.warning("improve_sequence_interrupted", session=session_id, loop_id=loop_id, recorded_pid=state.server_pid)
+        meta = await tree.load_meta(session_id)
+        if meta is not None:
+          await tree.session_successor.deliver_to_successor(
+              session_id, {
+                  "type":
+                      IMPROVE_FAILED,
+                  "goal":
+                      state.goal,
+                  "error":
+                      (
+                          f"Improve loop {loop_id} was interrupted by a server restart; the loop is "
+                          "NOT resumed automatically (the existing improve boundary). Its state is "
+                          "marked interrupted, the stale lock is cleared, and the launched "
+                          "iteration's terminal fact was reconciled. Restart the loop explicitly "
+                          "if you want it to continue."),
+              })
+      # The startup pass is the close step's crash-window repair; it returns
+      # by itself for loops that are still running or still busy.
+      await close_ended_loop_child(tree, cfg, session_id, loop_id)
   return repaired

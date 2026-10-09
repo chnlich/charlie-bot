@@ -73,6 +73,10 @@ class SequenceRuns(Protocol):
   async def register_run_locked(self, record: RunRecord, *, task_spec_text: str | None) -> RunRecord:
     ...
 
+  async def request_stop(self, session_id: str, run_id: str, request_id: str) -> object:
+    """One idempotent stop request (the run store's RunStopResult; hooks names no records type)."""
+    ...
+
 
 class SequenceDispatch(Protocol):
   """The input dispatcher members the sequence controllers call."""
@@ -110,6 +114,22 @@ class SequenceCompletion(Protocol):
       result_refs: list[str] | None,
       request_id: str | None,
   ) -> tuple[int, dict]:
+    ...
+
+  async def close_sequence_child(
+      self,
+      session_id: str,
+      *,
+      request_id: str,
+      outcome: str,
+      evidence: object,
+  ) -> tuple[int, dict]:
+    """The sequence-owner close of an ended loop's worker child.
+
+    ``outcome`` is a ``src.runtime.task_completion.SequenceCloseOutcome`` and
+    ``evidence`` its CompletionEvidence; the hooks layer names no task-tree
+    types.
+    """
     ...
 
 

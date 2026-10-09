@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
-from _pytest.runner import runtestprotocol
+from _pytest.runner import SetupState, runtestprotocol
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
@@ -81,8 +81,12 @@ _BUDGET_REPORTED_ATTR = "_charliebot_budget_reported"
 # its budget-trip stamp is that hook's rerun evidence, and the rerun's reports
 # are the only ones any consumer sees. A rerun fires only when every
 # non-tripped report passed, so it can never mask an assertion failure, an
-# error, or a skip.
+# error, or a skip. Attempt 1's teardown reads the stage start and the
+# owns-failure mark to tell, before it pops the higher scopes, whether that
+# rerun follows (_run_attempt_one).
 _ATTEMPT_ATTR = "_charliebot_attempt"
+_STAGE_START_ATTR = "_charliebot_stage_start"
+_OWNS_FAILURE_ATTR = "_charliebot_owns_failure"
 _FIRST_ELAPSED_ATTR = "_charliebot_first_wall_seconds"
 _TRIP_ELAPSED_ATTR = "_charliebot_budget_trip_seconds"
 _RERUN_EVENTS = pytest.StashKey[list]()
@@ -123,6 +127,7 @@ def _accrue(item: pytest.Item, seconds: float) -> None:
 @pytest.hookimpl(wrapper=True)
 def _accrue_stage_time(item: pytest.Item) -> Any:
   start = time.perf_counter()
+  setattr(item, _STAGE_START_ATTR, start)
   result = yield
   _accrue(item, time.perf_counter() - start)
   return result
@@ -147,6 +152,7 @@ def _budget_longrepr(item: pytest.Item, budget: float, elapsed: float, kind: str
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Any:
   report: pytest.TestReport = yield
   if report.outcome != "passed":
+    setattr(item, _OWNS_FAILURE_ATTR, True)
     return report  # a real failure or a skip already owns this report
   budget = _budget_seconds(item)
   if budget is None:
@@ -177,17 +183,22 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
 
   Attempt 1 runs with logging off, so its reports reach no consumer until this
   hook decides: logged untouched, or discarded for a rerun whose reports carry
-  the outcome. Returning True halts the firstresult hook chain, keeping the
+  the outcome. Attempt 1 leaves the higher scopes up for a rerun
+  (_run_attempt_one), so the rerun builds only the item's function-scoped
+  fixtures. Returning True halts the firstresult hook chain, keeping the
   default protocol out; returning None would defer to it.
   """
   item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
-  reports = runtestprotocol(item, log=False, nextitem=nextitem)
+  reports = _run_attempt_one(item, nextitem)
   trips = [rep for rep in reports if getattr(rep, _TRIP_ELAPSED_ATTR, None) is not None]
   if len(trips) != 1 or not all(rep.passed or rep is trips[0] for rep in reports):
     # Nothing tripped, or the attempt owns a failure the budget cannot explain:
     # attempt 1 is the outcome.
     for rep in reports:
       item.ihook.pytest_runtest_logreport(report=rep)
+    # A no-op unless a teardown hook failed after attempt 1 kept its higher
+    # scopes up for the rerun that this failure now rules out.
+    item.session._setupstate.teardown_exact(nextitem)
     item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
     return True
   setattr(item, _ATTEMPT_ATTR, 2)
@@ -199,6 +210,48 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
   _record_rerun_event(item)
   item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
   return True
+
+
+def _run_attempt_one(item: pytest.Item, nextitem: pytest.Item | None) -> list[pytest.TestReport]:
+  """Attempt 1, unlogged, whose teardown keeps the higher scopes up when a rerun follows.
+
+  The default teardown pops every node that *nextitem* does not descend from.
+  For the last item of a module or of the session, those nodes hold the module-
+  and session-scoped fixtures; popped, they are built again in the rerun's
+  setup, inside its budget. This teardown first pops only the item's own node,
+  so the rerun builds fresh function-scoped fixtures. It pops the rest only
+  when no rerun follows; otherwise the rerun's teardown pops them. One case
+  still rebuilds: when the higher-scope teardown itself carries attempt 1 over
+  the budget, those scopes are down before the trip shows.
+  """
+  setupstate = item.session._setupstate
+
+  def teardown_exact(next_item: pytest.Item | None) -> None:
+    try:
+      SetupState.teardown_exact(setupstate, item.parent)
+    except BaseException:
+      # A failed item teardown is attempt 1's own outcome: no rerun follows.
+      SetupState.teardown_exact(setupstate, next_item)
+      raise
+    if not _headed_for_rerun(item):
+      SetupState.teardown_exact(setupstate, next_item)
+
+  setupstate.teardown_exact = teardown_exact
+  try:
+    return runtestprotocol(item, log=False, nextitem=nextitem)
+  finally:
+    del setupstate.teardown_exact
+
+
+def _headed_for_rerun(item: pytest.Item) -> bool:
+  """Whether attempt 1, now inside its teardown, ends in a rerun. It does when
+  its time so far exceeds the budget and every earlier report passed or
+  tripped."""
+  budget = _budget_seconds(item)
+  if budget is None or getattr(item, _OWNS_FAILURE_ATTR, False):
+    return False
+  elapsed = getattr(item, _ELAPSED_ATTR, 0.0) + time.perf_counter() - getattr(item, _STAGE_START_ATTR)
+  return elapsed > budget
 
 
 def _record_rerun_event(item: pytest.Item) -> None:

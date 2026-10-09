@@ -25,14 +25,14 @@ from src.infra import metadata_slots, models
 from src.infra.models import LastRunStatus
 from src.runtime import takeoff_gate, task_completion
 from tests.test_task_execution import (
-  OP_HEADERS,
-  SpawningScriptedBackend,
-  _adapter_with_silent_broadcast,
-  build_env,
-  make_api_client,
-  result_event,
-  stub_credentials,
-  wait_for_terminal_run,
+    OP_HEADERS,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
+    build_env,
+    make_api_client,
+    result_event,
+    stub_credentials,
+    wait_for_terminal_run,
 )
 
 

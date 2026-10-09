@@ -156,13 +156,11 @@ store states standing reality, and `LESSONS.md` holds the retirement event when 
 
 ## Commit message prefixes
 
-Curation commits use one of five prefixes so `git log` enumerates the canon's history:
+Curation commits use one of four prefixes so `git log` enumerates the canon's history:
 
 - `admit: <topic>/<slug> (<title>)`: a new entry promoted from staging.
-- `revise: <topic>/<slug> (<title>)`: an in-place edit of an existing entry (honoring a `revises`
-  candidate, including merge-ins).
-- `migrate: <topic>/<slug> (<title>)`: a format-only rewrite to entry format v2 (moving the
-  title to frontmatter, splitting `both`, dropping `created`/`source`) with no content change.
+- `revise: <topic>/<slug> (<title>)`: an in-place edit of an existing entry (including
+  merge-ins of change-proposing captures).
 - `remove: <topic>/<slug> (<title>)`: an entry's removal from the store.
 - `scaffold: <description>`: a `topics` vocabulary change, adding or retiring a topic.
 

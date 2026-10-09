@@ -1,10 +1,4 @@
-"""Tests for the labeled-entry memory store library (src/features/memory/memory.py).
-
-Fixtures are entry format v2 (frontmatter ``title``, comma-list ``audience``,
-no ``created``/``source``, heading-free body); ``legacy_memory_entry_text``
-(conftest) builds v1 files (``created``/``source``, ``both``, ``# <title>``
-body opener) to cover the dual-read path.
-"""
+"""Tests for the labeled-entry memory store library (src/features/memory/memory.py)."""
 
 import io
 import pathlib
@@ -27,12 +21,7 @@ def test_parse_valid(tmp_path: pathlib.Path) -> None:
   assert e.slug == "dark-mode"
   assert e.scope == "user"
   assert e.audience == ["master", "worker"]
-  assert e.audience_raw == "master, worker"
-  assert e.created is None
-  assert e.source is None
-  assert e.revises is None
   assert e.title == "Dark Mode"
-  assert e.title_in_header is True
   assert e.body == "body for dark-mode\n"
   assert e.id == "profile/dark-mode"
 
@@ -53,6 +42,13 @@ def _bad_filename_entry(tmp_path: pathlib.Path) -> None:
   (d / "bad slug.md").write_text(conftest.memory_entry_text("profile", "bad slug"), encoding="utf-8")
 
 
+def _retired_header_field_entry(tmp_path: pathlib.Path) -> None:
+  d = tmp_path / "entries" / "profile"
+  d.mkdir(parents=True)
+  text = conftest.memory_entry_text("profile", "rev").replace("---\n", "---\nrevises: old-entry\n", 1)
+  (d / "rev.md").write_text(text, encoding="utf-8")
+
+
 _LOAD_REJECTION_CASES = [
     # (entry placement against the written topics vocabulary, the MemoryFormatError fragment
     # naming the broken field).
@@ -60,11 +56,7 @@ _LOAD_REJECTION_CASES = [
         lambda p: conftest.write_memory_entry(p, "nonexistent", "x"), "not in topics vocabulary", id="unknown-topic"),
     pytest.param(_mismatched_dir_entry, "directory name 'wrongdir' != topic 'profile'", id="dir-topic-mismatch"),
     pytest.param(_bad_filename_entry, "does not match slug charset", id="bad-filename"),
-    pytest.param(
-        lambda p: conftest.write_memory_entry(p, "profile", "rev", revises="old-entry"),
-        "'revises' is forbidden in entries",
-        id="revises-in-entries",
-    ),
+    pytest.param(_retired_header_field_entry, "unknown header field 'revises'", id="retired-header-field"),
     pytest.param(
         lambda p: conftest.write_memory_entry(p, "profile", "a", audience="master,all"),
         "audience element 'all' not in {master, worker}",
@@ -220,17 +212,20 @@ def test_cli_lint_dir_reads_given_root(
   cli.main()
   assert capsys.readouterr().out.strip() == "clean"
 
-  # A second store root whose entry breaks the strict v2 rules.
+  # A second store root whose entry carries a retired header field.
   other = tmp_path / "memory-proposal"
   conftest.write_memory_topics(other)
-  conftest.write_memory_entry(other, "profile", "legacy", legacy=True)
+  d = other / "entries" / "profile"
+  d.mkdir(parents=True)
+  text = conftest.memory_entry_text("profile", "retired").replace("---\n", "---\ncreated: 2026-07-28\n", 1)
+  (d / "retired.md").write_text(text, encoding="utf-8")
   monkeypatch.setattr("sys.argv", ["charliebot memory", "lint", "--dir", str(other)])
   with pytest.raises(SystemExit) as exc_info:
     cli.main()
   assert exc_info.value.code == 1
   # The violations name the given root's entry (the CLI prints them on stdout).
   out = capsys.readouterr().out
-  assert "entries/profile/legacy.md" in out and "'created' is forbidden" in out
+  assert "entries/profile/retired.md" in out and "unknown header field 'created'" in out
 
 
 def test_cli_query_dir_reads_given_root(

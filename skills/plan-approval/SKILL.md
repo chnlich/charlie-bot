@@ -75,9 +75,9 @@ An understanding page precedes the plan when the master must first align the rea
   not use take off. The user confirms by answering the numbered divergences in chat; unmentioned
   items take their recommendation. Confirmation is ordinary feedback and introduces no new
   approval token. External system writes follow the master prompt's External System Writes rule.
-- Before sharing, the page passes the cold-read gate (file-server skill) with `--genre
-  understanding` and the originating request as the trigger, revised until answer (7) is
-  none; the share message carries the same one-line result.
+- Before sharing, the page passes the mechanical assertions with
+  `--genre understanding`. Its cold read runs after sharing, with the originating request as the
+  trigger, per the Cold-Read Gate of the file-server skill.
 - The subsequent plan carries the confirmed understanding's file path as a header
   meta chip; section 1 states the goal in its own words.
 - The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in
@@ -97,11 +97,7 @@ An understanding page precedes the plan when the master must first align the rea
   exception arrives as a bounded case rather than the sentence's spine, and dashes give
   way to commas, colons, semicolons, or a restructure (code excepted).
 - Render the artifact per the USAGE note atop the BLOCK KIT comment in `prompts/plan_template.html`.
-- Run the cold-read gate (file-server skill) with `--genre plan` before every
-  `charliebot plan present` or `amend`, trigger per the gate's rule, and revise until
-  answer (7) is none. The hand-over message for a plan or understanding version carries
-  one line with the cold read's result: the count of terms question 7 still lists (zero
-  when clean) and the count the revisions cleared.
+- Run the Cold-Read Gate of the file-server skill with `--genre plan`.
 - Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the code baseline when the plan pins one.
 - An improve-loop takeoff plan follows this same contract; its approval object covers
   repo, goal, iterations, work branch, and merge-back — loop parameters with reasonable
@@ -146,8 +142,14 @@ An understanding page precedes the plan when the master must first align the rea
 
 ## Verify
 
-- Fixed order: draft → register with `charliebot plan present` → verify → revise → hand the
-  plan to the user with its findings. Verify is a read-only repo-less delegation and runs on
+- Follow this fixed order:
+  1. Draft the plan.
+  2. Run the assertions.
+  3. Register the plan with `charliebot plan present`.
+  4. Start verify and the cold read in the same turn.
+  5. Revise from both results.
+  6. Hand the plan to the user with its findings.
+  Verify is a read-only repo-less delegation and runs on
   a registered plan, so the goal it measures against has one home and the plan is listed
   while the rounds run.
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,

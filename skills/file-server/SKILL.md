@@ -96,37 +96,68 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
 
 ### Cold-Read Gate
 
-The gate applies to every genre one step before the page leaves the author: before each
-`charliebot plan present` or `amend` for a plan page, and before sharing for
-understanding, sitrep, debug, and explain pages.
+Pages of every genre pass the cold-read gate.
+The gate has two parts: the genre's mechanical assertions and one cold read.
 
-Cold-read gate: the page first passes its genre's mechanical DOM assertions, then one
-zero-context model pass reads the file alone and answers seven questions: (1) the
-problem, (2) the conclusion and its epistemic state, (3) what is asked of the reader,
-(4) the section where the problem first became clear, (5) up to five re-read points,
-(6) whether the page answers the trigger quoted in the prompt, and (7) the project terms whose
-gloss is missing at first use, read for the Vocabulary rule's reader (prompts/master.md). Ship when answers (1)
-through (3) match the author's intent, (4) names the first content section, the
-epistemic state in (2) matches the page's own labels, (6) is a yes on every part of
-the trigger message, and (7) is none; for plan and understanding pages, (3) names the
-decisions the page asks for (Trade-offs or divergences). A re-read point in (5) naming
-section 1's forks, or a jump between a fork and another section, also means revise
-and re-run. Judge on these signals alone.
+Before you share a page or register a plan version, run the assertions:
 
-The trigger quoted in question 6 is the chat message that asked for the page; a plan
-quotes the confirmed understanding's goal sentence verbatim and falls back to the
-originating request when no understanding exists.
+    charliebot artifact check <page-file> --genre <genre> --assertions-only
 
-Invocation (the genre's assertions run first; the probe only fires once every one of
-them passed):
+When an assertion fails, fix the page and run the assertions again.
+Plan registration runs the same assertions.
+The page-height line reports the measured height against the 2000 px target.
+The page-height assertion passes at any height.
+When a gloss puts the page over the target, keep the gloss.
 
-```bash
-charliebot artifact check <page-file> --genre <plan|understanding|sitrep|debug|explain> --trigger "<trigger message verbatim>"
-```
+The cold read is one model pass without context. The model reads the page file alone.
+It answers seven questions about these items:
 
-`--assertions-only` runs the assertions alone and mirrors the plan registration gate.
+1. the problem;
+2. the conclusion and its epistemic state;
+3. the action that the page asks of the reader;
+4. the section where the problem first became clear;
+5. at most five re-read points;
+6. whether the page answers the trigger;
+7. the project terms without a gloss at first use, for the reader of the Vocabulary rule (prompts/master.md).
 
-The seven-question prompt, the backend order, and the timeout live in
-`src/features/artifacts/artifact_check.py`; the command prints each tried backend's failure, then the
-answering backend's id and the seven answers verbatim. Exit 0 means every assertion
-passed; judging the answers stays with the reader of this gate.
+The trigger is the chat message that asked for the page.
+For a plan, the trigger is the goal sentence of the confirmed understanding, verbatim.
+When no understanding exists, the trigger for a plan is the originating request.
+
+The cold read runs in the background after the page leaves the author.
+Start the cold read with this command:
+
+    charliebot artifact check <page-file> --genre <genre> --trigger "<trigger>" --background
+
+- After `charliebot plan present` or `charliebot plan amend`, start the cold read.
+- When verify runs on the plan version, start the cold read in the same turn as the verify delegation.
+- For a page of any other genre: after you share the page, start the cold read.
+
+The command starts the cold read and registers a session wake.
+After the command prints its result, end the turn.
+When the command prints "wake registration rejected", run the same command without --background.
+Wait for that command to end, and use its output as the log.
+
+When the wake arrives, read the log that the wake message names.
+When the log ends with "probe could not run", state in the reply that the cold read failed.
+When the page changed after the cold read started, check each answer against the current page.
+Each item below is a signal to revise the page:
+
+- Answers 1 to 3 differ from your intent for the page.
+- Answer 2 gives an epistemic state that differs from the labels on the page.
+- Answer 4 names a section other than the first content section.
+- Answer 6 is no for one part of the trigger.
+- Answer 7 lists one or more terms.
+- On a plan or understanding page, answer 3 omits a decision that the page asks for.
+- A re-read point in answer 5 names a decision fork (a div.fork block) in section 1, or a jump between a fork and another section.
+
+Judge the answers on these signals alone.
+For each signal, revise the page in place.
+For a plan, register the revision with `charliebot plan amend`.
+When a verify round runs, fold the cold-read revisions and the verify findings into one amend.
+In the reply, state the count of terms that answer 7 listed and the count that you glossed.
+A revision from cold-read findings closes the gate. That revision gets no cold read.
+
+The cold-read prompt and the backend settings live in `src/features/artifacts/artifact_check.py`.
+The log shows the failure of each backend that the cold read tried.
+After the failures, the log shows the answering backend and the seven answers verbatim.

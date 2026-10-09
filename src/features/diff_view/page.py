@@ -2,16 +2,16 @@
 
 import socket
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+import fastapi
+from fastapi import responses
 
 from src.runtime import templating
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
-@router.get("/diff", response_class=HTMLResponse)
-async def diff_viewer(request: Request) -> HTMLResponse:
+@router.get("/diff", response_class=responses.HTMLResponse)
+async def diff_viewer(request: fastapi.Request) -> responses.HTMLResponse:
   """Render the GitHub-style diff viewer page."""
   return templating.templates().TemplateResponse(
       request,

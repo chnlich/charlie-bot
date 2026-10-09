@@ -10,17 +10,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.infra import timeouts
+from src.infra.locks import lock_for
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC, SUBPROCESS_GIT_WRITE_TIMEOUT
 
 log = LazyStructlogLogger()
 
 _WORKTREE_LOCAL_ARTIFACT_NAMES = frozenset({".pixi", ".pixi-cache", ".uv-cache", ".venv", ".local", "build"})
-# Concurrent `git worktree add` calls in one repository race on shared state -
-# the .git/config lock, the .git/worktrees gitdir - and git reports those as
-# lock-class errors ("could not lock config file ...: File exists", "Unable to
-# create '<path>': File exists"). A short retry rides them out; any other
-# failure still raises on its first attempt.
+# Concurrent `git worktree add -b` calls in one repository race on shared state -
+# the .git/config lock (a call starting from origin/<branch> writes the new
+# branch's upstream settings) and the .git/worktrees gitdir - and git reports
+# those as lock-class errors ("could not lock config file ...: File exists",
+# "Unable to create '<path>': File exists"). A call that loses the config lock
+# exits non-zero after it created its branch, and the same command then fails on
+# "a branch named ... already exists", so no retry recovers that loss: this
+# process runs the adds of one repository one at a time (_worktree_add_locks).
+# A lock-class error caused by a git process outside this one gets a short
+# retry; any other failure raises on its first attempt.
+_worktree_add_locks: dict[Path, asyncio.Lock] = {}
 _WORKTREE_LOCK_RETRY_MARKERS = ("could not lock", "unable to create", "file exists")
 _WORKTREE_ADD_ATTEMPTS = 4  # the first invocation plus 3 retries
 _WORKTREE_RETRY_BACKOFF_S = 0.1  # doubled per retry: 100ms, 200ms, 400ms
@@ -372,20 +379,22 @@ async def git_create_worktree(
   """
   resolution = await resolve_base_branch(repo_path, base_branch, remote_tip=remote_tip)
   start_point = resolution.start_point
+  add_lock = lock_for(_worktree_add_locks, repo_path.resolve())
   for attempt in range(1, _WORKTREE_ADD_ATTEMPTS + 1):
-    try:
-      proc, stdout, stderr = await _git_proc_bytes(
-          repo_path,
-          "worktree",
-          "add",
-          "-b",
-          branch_name,
-          str(wt_path),
-          start_point,
-          timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      )
-    except TimeoutError as e:
-      raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
+    async with add_lock:
+      try:
+        proc, stdout, stderr = await _git_proc_bytes(
+            repo_path,
+            "worktree",
+            "add",
+            "-b",
+            branch_name,
+            str(wt_path),
+            start_point,
+            timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+        )
+      except TimeoutError as e:
+        raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
     if proc.returncode == 0:
       break
     out = stdout.decode().strip()

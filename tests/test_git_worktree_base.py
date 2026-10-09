@@ -200,6 +200,44 @@ async def test_worktree_add_retries_a_transient_config_lock(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_worktree_adds_in_one_repo_never_overlap(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """Overlapping adds contend for .git/config.lock, and the loser exits non-zero
+  after it created its branch, so a retry of the same command cannot succeed:
+  the adds of one repository run one at a time."""
+  from src.infra import git as git_mod
+
+  main_checkout = repo_setup["main_checkout"]
+  real_proc_bytes = git_mod._git_proc_bytes
+  running = {"now": 0, "most": 0}
+
+  async def _resolve(repo_path, base_branch, *, remote_tip=None):
+    return BaseResolution(canonical="feature", start_point="origin/feature", detail="fixed")
+
+  async def _count_overlap(repo_path, *args, timeout):
+    if args[:2] != ("worktree", "add"):
+      return await real_proc_bytes(repo_path, *args, timeout=timeout)
+    running["now"] += 1
+    running["most"] = max(running["most"], running["now"])
+    try:
+      return await real_proc_bytes(repo_path, *args, timeout=timeout)
+    finally:
+      running["now"] -= 1
+
+  monkeypatch.setattr(git_mod, "resolve_base_branch", _resolve)
+  monkeypatch.setattr(git_mod, "_git_proc_bytes", _count_overlap)
+
+  paths = [repo_setup["tmp_path"] / f"wt-parallel-{i}" for i in range(3)]
+  await asyncio.gather(
+      *(
+          git_create_worktree(main_checkout, "feature", f"charliebot/task-parallel-{i}", path)
+          for i, path in enumerate(paths)))
+
+  assert running["most"] == 1
+  assert all(path.is_dir() for path in paths)
+
+
+@pytest.mark.asyncio
 async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
     repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A lock that never clears fails loudly on the last attempt with git's own

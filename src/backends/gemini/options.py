@@ -2,8 +2,8 @@
 
 from typing import Literal
 
-from src.infra.backend_models import BackendOption
+from src.infra import backend_models
 
 
-class GeminiBackend(BackendOption):
+class GeminiBackend(backend_models.BackendOption):
   type: Literal["gemini"] = "gemini"

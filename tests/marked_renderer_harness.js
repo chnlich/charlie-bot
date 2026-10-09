@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Marked harness shared by the chat markdown vm tests and the stream
 // collectors: loads the page's real marked build and renderer, and owns the
-// CDN URL both fetch — import it instead of restating it.
+// CDN URL both fetch and the retrying fetch they share — import them instead
+// of restating them.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 const https = require('node:https');
@@ -14,29 +15,58 @@ const { buildRendererContext } = require('./renderer_vm_context');
 // tests stable while tracking whatever marked ships.
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
 
-let markedSrcCache = null;
-function fetchMarkedSrc() {
-  if (markedSrcCache) return Promise.resolve(markedSrcCache);
+// A CDN request fails now and then for reasons outside the repo (a dropped TLS
+// handshake, a 5xx from an edge node), and one failure fails the whole test
+// process. A network error or a 5xx status therefore gets two more attempts;
+// any other status is final, and so is the last failed attempt.
+const FETCH_ATTEMPTS = 3;
+const FETCH_RETRY_DELAY_MS = 500;
+
+// One GET: resolves { status, body } for any response, rejects on a network
+// error. A connection cut mid-body emits 'error' on res only when a listener
+// exists; without one 'end' never fires and the promise never settles.
+function getOnce(url) {
   return new Promise((resolve, reject) => {
-    https.get(MARKED_URL, (res) => {
-      let data = '';
+    https.get(url, (res) => {
+      let body = '';
       res.setEncoding('utf8');
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        markedSrcCache = data;
-        resolve(data);
-      });
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+      res.on('error', reject);
     }).on('error', reject);
   });
 }
 
-async function loadMarkedSrc() {
-  try {
-    return await fetchMarkedSrc();
-  } catch (err) {
-    // CDN unreachable in an offline sandbox; fail fast rather than silently pass.
-    throw new Error(`could not fetch ${MARKED_URL}: ${err.message}`);
+// The body of the 200 response from url. Throws one error that names the url
+// and every failed attempt: there is no offline fallback, so an unreachable
+// CDN fails the test loudly. A non-200 body is never returned.
+async function fetchUrl(url) {
+  const failures = [];
+  for (let attempt = 1; ; attempt++) {
+    let failure;
+    let retryable;
+    try {
+      const { status, body } = await getOnce(url);
+      if (status === 200) return body;
+      failure = `HTTP ${status}`;
+      retryable = status >= 500;
+    } catch (err) {
+      failure = err.message;
+      retryable = true;
+    }
+    failures.push(`attempt ${attempt}: ${failure}`);
+    if (!retryable || attempt === FETCH_ATTEMPTS) break;
+    await new Promise((resolve) => setTimeout(resolve, FETCH_RETRY_DELAY_MS));
   }
+  throw new Error(`could not fetch ${url}: ${failures.join('; ')}`);
+}
+
+// The promise is cached, a rejection included: an outage costs one
+// three-attempt cycle per process, not one per test in the file.
+let markedSrcPromise = null;
+function loadMarkedSrc() {
+  if (!markedSrcPromise) markedSrcPromise = fetchUrl(MARKED_URL);
+  return markedSrcPromise;
 }
 
 // Load the REAL markdown-renderer.js against the REAL marked in a shared vm
@@ -107,4 +137,12 @@ async function loadStreamPaintContext(opts) {
   return context;
 }
 
-module.exports = { MARKED_URL, loadRenderer, loadRendererContext, loadStockMarked, paint, loadStreamPaintContext };
+module.exports = {
+  MARKED_URL,
+  fetchUrl,
+  loadRenderer,
+  loadRendererContext,
+  loadStockMarked,
+  paint,
+  loadStreamPaintContext,
+};

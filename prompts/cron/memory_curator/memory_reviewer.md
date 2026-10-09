@@ -51,8 +51,9 @@ changed file. The subject follows the store's convention as the skill's "Commit 
 prefixes" chapter words it (`admit:` / `revise:` / `remove:` / `scaffold:`),
 and the body holds the entry's three proof lines plus one `Staging: <file>` line per consumed
 candidate. When the command lists PR lines that the worktree lost, restore their PR wording. Record the
-conflict as a report row: the candidate's intent beside the PR line it meets. When the command
-reports a prose violation, fix the listed text. Then run the commit again.
+conflict as a report row: the candidate's intent beside the PR line it meets. When the command reports a
+prose violation, rewrite the listed text, earlier PR lines included. Then run the commit again. When the
+command prints a negation warning, rewrite the listed sentence the same way, and commit the file again.
 
 Step 4: render the PR page.
 Render the page from `~/workspace/charlie-bot/prompts/memory_report_template.html`: copy it,

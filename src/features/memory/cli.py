@@ -19,7 +19,9 @@ store contract.
 The ``proposal`` verbs drive the store's PR flow (``src/features/memory/memory_proposal.py``):
 the ``proposal`` branch, worked in the sibling ``memory-proposal`` worktree,
 holds the drafted curation as commits, and only ``land`` — one approved
-version — fast-forwards the live checkout the sessions read.
+version — fast-forwards the live checkout the sessions read. ``commit`` prints each
+negation-word hit as a ``warning:`` line on stderr and still exits 0; the same lines
+land in the commit message's ``Negation warnings:`` section.
 
 ``query`` (through ``load_store``), ``add`` and the ``proposal`` verbs create the store
 scaffold on first use (``memory.ensure_store``); ``lint`` reports the tree as it finds it.
@@ -249,8 +251,10 @@ def _cmd_proposal(args: argparse.Namespace) -> None:
     elif args.proposal_command == "status":
       fields = memory_proposal.status(live)
     elif args.proposal_command == "commit":
-      sha = memory_proposal.commit(
+      sha, warnings = memory_proposal.commit(
           live, args.path, Path(args.message_file).expanduser(), replace_pr_lines=args.replace_pr_lines)
+      for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
       fields = {"committed": sha}
     else:
       fields = memory_proposal.land(live, args.sha)

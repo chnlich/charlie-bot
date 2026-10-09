@@ -10,19 +10,19 @@ registers it with ``src.runtime.hooks.backend_types``; ``src.infra.config_regist
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, model_validator
+import pydantic
 
 from src.infra import config_registry
 
 
-class BackendOption(BaseModel):
+class BackendOption(pydantic.BaseModel):
   """Fields every backend option carries; each type's own fields live on the subclass its package registers.
 
   A subclass narrows ``type`` to ``Literal[<its backend type>]``. A config entry validates against
   the subclass its ``type`` names, so illegal field/type combinations are unconstructable.
   ``model_optional`` is True for a type whose entries may omit ``model``.
   """
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   model_optional: ClassVar[bool] = False
 
@@ -37,7 +37,7 @@ class BackendOption(BaseModel):
   prompt_overlay: str | None = None
   type: str
 
-  @model_validator(mode='after')
+  @pydantic.model_validator(mode='after')
   def require_model(self) -> BackendOption:
     if self.model is None and not self.model_optional:
       raise ValueError(f"backend '{self.id}' (type '{self.type}') requires 'model'")

@@ -396,8 +396,8 @@ def test_background_kills_the_process_group_when_the_wake_is_rejected(
   monkeypatch.setattr(artifact_cli, "_spawn_cold_read", _sleep_spawn(spawned))
   reason = f"session {session_id} has 5 pending triggers (limit 5); trigger rejected"
 
-  def rejecting_post(endpoint: str, payload: dict, *, readback: object = None,
-                     rejection_exit_codes: object = None) -> dict:
+  def rejecting_post(
+      endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
     print(json.dumps({"error": reason, "code": "server_error", "effect": "none"}), file=sys.stderr)
     raise SystemExit(1)
 
@@ -457,8 +457,7 @@ def test_background_label_over_the_trigger_limit_exits_before_the_spawn(
   _clean_coldread_dir("sess-coldread-long")
 
 
-def test_cold_read_log_holds_the_header_then_the_probe_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cold_read_log_holds_the_header_then_the_probe_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The detached child's log, reproduced in process: the parent's first line, then exactly
   the foreground command's output (assertion lines, then the cold-read block)."""
   artifact = _write(tmp_path, _sitrep_ok_doc())

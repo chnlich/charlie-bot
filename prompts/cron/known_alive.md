@@ -398,7 +398,8 @@ Known-alive symbols:
   `check_sources_and_mode` entry above.
 - `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
   (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), each option model class in
-  `src/backends/*/options.py`, and `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`) —
+  `src/backends/*/options.py`, `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`), and
+  `claude_reading_limits` (`src/backends/claude_code/claude_code.py`) —
   reached by string: the `register()` of each package passes a "module:attr" string to
   `config_registry.register_config_check`, `register_config_section` or `register_option_model`
   (the option strings ride `backend_type_registration.register_backend_type(options=...)`) or to

@@ -140,13 +140,6 @@ def substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   return result
 
 
-def _require_tokens_resolved(assembled: str, *, prompt: str) -> None:
-  """Guard the end of prompt assembly: a leftover `{{token}}` means the template's token set
-  and the builder's token map disagree, and a half-built prompt must never reach a worker."""
-  if "{{" in assembled:
-    raise ValueError(prompt + " prompt assembly left an unresolved {{token}} in the output")
-
-
 def verify_contract_tokens(cfg: config.CharlieBotConfig) -> dict[str, str]:
   """verify.md's token map: the expected result trailer and the canonical plan template's path.
 

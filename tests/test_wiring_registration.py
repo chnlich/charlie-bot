@@ -38,6 +38,7 @@ print(json.dumps([route.path for route in server.app.routes]))
 """
 
 
+@pytest.mark.integration  # the probe is a fresh interpreter importing the server
 def test_deleting_a_package_line_removes_its_routes_and_keeps_the_others() -> None:
   probe = subprocess.run(
       [sys.executable, "-c", PROBE], cwd=conftest.ROOT, capture_output=True, text=True, timeout=60, check=False)
@@ -287,6 +288,7 @@ def probe_diff_page(deleted_package: str, home: Path) -> dict:
   return json.loads(probe.stdout.splitlines()[-1])
 
 
+@pytest.mark.integration  # the probe is a fresh interpreter importing the server
 def test_the_diff_page_renders_without_the_code_server_package(tmp_path: Path) -> None:
   without_package = probe_diff_page("src.features.code_server", tmp_path / "home")
 
@@ -307,6 +309,7 @@ print(json.dumps({{"status": response.status_code, "body": response.text}}))
 """
 
 
+@pytest.mark.integration  # the probe is a fresh interpreter importing the server
 def test_a_session_artifact_page_is_a_plain_file_without_the_artifacts_package(tmp_path: Path) -> None:
   home = tmp_path / "home"
   page = home / "sessions" / "S" / "artifacts" / "plan_01.html"

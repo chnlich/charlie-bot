@@ -89,11 +89,6 @@ class ThreadStatus(StrEnum):
   CANCELLED = "cancelled"
 
 
-# Terminal statuses: the worker will produce no more output. Callers compare
-# raw JSON strings against this set, valid because ThreadStatus is a str-enum.
-TERMINAL_THREAD_STATUSES: frozenset[ThreadStatus] = frozenset(
-    {ThreadStatus.COMPLETED, ThreadStatus.FAILED, ThreadStatus.CANCELLED})
-
 
 class SessionStatus(StrEnum):
   ACTIVE = "active"

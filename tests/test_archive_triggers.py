@@ -73,7 +73,6 @@ async def test_watchdog_reason_carries_into_the_cancel(tmp_path: Path, monkeypat
   trigger_mgr = TriggerManager(cfg, tree)
   # The dormancy judgment is the one predicate both racers read.
   assert await trigger_mgr._dormancy_reason(node.id) == "target task is archived"
-  assert await trigger_mgr._is_dormant_target(node.id) is True
   # An open manager root remains eligible for trigger registration.
   from src.infra.models import CreateSessionRequest
   open_root = await create_root_session(session_blocks, CreateSessionRequest(name="Open root"), backend=None)

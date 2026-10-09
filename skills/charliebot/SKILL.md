@@ -27,7 +27,7 @@ Source code: `~/workspace/charlie-bot/src/`
 
 If the reviewer's push fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
 
-Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, self-check `git rev-parse <branch> origin/<branch>`: ff-merge and push origin when behind; when already merged, ff the local worktree to origin — the reviewer push updates the remote only, and the server and delegation both run from the local worktree.
+Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, compare `git rev-parse <branch> origin/<branch>`. When origin lacks the delivered commit, push it from the kept worktree. Keep the runtime checkout (the clone the server runs from) on its current branch and commit. The running server imports code from it, so a moved checkout mixes new files with loaded modules. Only the user's deploy procedure moves it. Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
 
 **Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
@@ -86,7 +86,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 ## Repo-Specific Merge Policy
 
 - Use git worktrees for branch operations by default.
-- For `charlie-bot`, after a verified worktree change, it is okay to merge back into the main checkout automatically.
+- For `charlie-bot`, land a verified worktree change by a push to origin. Keep the runtime checkout as the merge-back paragraph above states.
 - For other repos, keep the main checkout untouched unless the user explicitly approves otherwise.
 
 ---

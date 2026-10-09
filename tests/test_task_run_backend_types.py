@@ -71,7 +71,7 @@ async def test_run_records_stream_identity_and_result_truth(
           session_attached_event("native-xyz-1"),
           test_task_execution.result_event("typed output"),
       ])
-  test_task_execution.install_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
   tree.dispatch.executor = conftest.build_execution_adapter(cfg, session_blocks, tree)
 
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Answer.", actor="user")
@@ -109,7 +109,7 @@ async def test_zero_output_and_error_results_fail_across_types(
   # a nonzero exit so the run fails instead of consuming the input silently.
   from src.runtime.agent_process import base as backend_base
   empty = test_task_execution.SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
-  test_task_execution.install_backends(monkeypatch, [empty], conftest.BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [empty], conftest.BUILD_BACKEND_PATCH_TARGET)
   tree.dispatch.executor = conftest.build_execution_adapter(cfg, session_blocks, tree)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Stay silent.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
@@ -128,7 +128,7 @@ async def test_zero_output_and_error_results_fail_across_types(
       yield  # pragma: no cover
 
   errored = _TransportDeath([])
-  test_task_execution.install_backends(monkeypatch, [errored], conftest.BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [errored], conftest.BUILD_BACKEND_PATCH_TARGET)
   retry = await tree.create_retry(root.id, "retry-error", run_id)
   await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
   _run, outcome = await test_task_execution.wait_for_terminal_run(tree, root.id, retry["run_id"], timeout=10.0)

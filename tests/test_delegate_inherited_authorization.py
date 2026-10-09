@@ -62,7 +62,7 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
     authorized ancestor creates one leaf and one launched Run; a replay returns
     the same child/Run and never spawns a second process."""
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("leaf done")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
@@ -107,7 +107,7 @@ async def test_shadowing_local_instruction_blocks_inherited_delegation(
     ancestor: the nearest node with a real user instruction is where the gate
     applies, and it fails there."""
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="please look into this", actor="user")
 
@@ -126,7 +126,7 @@ async def test_shadowing_local_instruction_blocks_inherited_delegation(
 async def test_expired_pre_takeoff_on_the_ancestor_blocks(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The established matching: the ordinary "take off" phrase is judged on the
   # FILE-LAST real user message, so an expiring window needs a later ordinary
   # message after the stamp (the same shape the legacy gate's expiry test uses).
@@ -150,7 +150,7 @@ async def test_worker_caller_cannot_delegate(
   """Delegating FROM a worker node is refused: agents run only under a
     manager task."""
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   worker = await tree.create_task(
       request_id="w",
       task_parent_id=child.id,
@@ -177,7 +177,7 @@ async def test_foreign_run_token_cannot_delegate(
   """A run token bound to one node cannot create a worker under a different
     node: the worker-leaf constraint refuses the foreign identity."""
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   agents_child = await tree.create_task(
       request_id="agent-leaf",
@@ -214,7 +214,7 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
     v2 route and still launches (and runs) with no user instruction anywhere —
     while a repo task type under the same tree stays blocked."""
   cfg, session_blocks, tree, _root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: no")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -258,7 +258,7 @@ async def test_agent_run_token_delegates_verify_without_a_takeoff(
     settles (the agent-creation check reads the same verify exemption the
     route and the launch read)."""
   cfg, session_blocks, tree, _root, child = await make_tree(tmp_path, monkeypatch)
-  builds = test_task_execution.install_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: yes")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await register_active_run(tree, child.id, "child-run")

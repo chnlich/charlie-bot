@@ -25,6 +25,7 @@ from conftest import (
     _async_wait_for,
     create_task,
     identity_of,
+    install_scripted_backends,
     rate_limit_event,
     stub_credentials,
 )
@@ -44,7 +45,6 @@ from tests.test_task_execution import (
     _adapter_with_silent_broadcast,
     build_env,
     build_pooled_env,
-    install_backends,
     install_worker_launch_and_resume_backends,
     make_api_client,
     make_pm_build,
@@ -55,7 +55,7 @@ from tests.test_task_execution import (
 
 def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
   """One scripted worker per iteration build, in launch order."""
-  return install_backends(
+  return install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event(text)]) for text in outcomes],
       WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -462,7 +462,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   failed — no second iteration — and the parent is woken once."""
   cfg, session_blocks, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   # An empty build queue: a spawned process would pop from it and fail loudly.
-  builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
     claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
   assert claude_accounts.select(cfg, FABLE_MODEL) is None
@@ -1064,7 +1064,7 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
   gate = asyncio.Event()
   first = SpawningScriptedBackend([result_event("iter one words")], gate=gate.wait)
   second = SpawningScriptedBackend([result_event("never reached")])
-  install_backends(monkeypatch, [first, second], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [first, second], WORKER_BUILD_BACKEND_PATCH_TARGET)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
   # Park the controller inside the judgment that follows the iteration's

@@ -206,7 +206,7 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
   takeoff, and the launched leaf run completes on the scripted backend."""
   cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
-  builds = test_task_execution.install_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("leaf done")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -277,7 +277,7 @@ async def test_expired_and_shadowing_authorization_still_block_delegation_at_dep
   """Expired pre-takeoff windows and a shadowing local instruction keep current
   semantics at manager depth: the nearest real user instruction decides."""
   cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
-  test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   child_id = ids["child"]
 
@@ -320,7 +320,7 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
   cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
-  builds = test_task_execution.install_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: no")]),
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: yes")])

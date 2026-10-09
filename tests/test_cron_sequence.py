@@ -31,6 +31,7 @@ from conftest import (
     bind_deps_blocks,
     build_scheduler,
     init_repo_with_origin,
+    install_scripted_backends,
 )
 
 from src.backends.claude_code import claude_accounts
@@ -45,7 +46,6 @@ from tests.test_task_execution import (
     _adapter_with_silent_broadcast,
     build_pooled_env,
     build_spawning_env,
-    install_backends,
     result_event,
     wait_for_terminal_run,
 )
@@ -145,7 +145,7 @@ def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> N
   """Script the parent node's report-consuming turn through the registry
   builder (the manager dispatch path), so no external process starts from
   these tests. One scripted backend per expected manager-turn build."""
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event(note)]) for note in notes], BUILD_BACKEND_PATCH_TARGET)
 
 
@@ -219,7 +219,7 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
 async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("broke")], exit_code=1),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -263,7 +263,7 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
   from src.features.cron.cron_sequence import ScheduledBindingError
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
   from src.runtime.task_completion import CompletionEvidence
   close_run = stable_run_id(manager.id, "close:evidence")
   await tree.runs.register_run(RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
@@ -312,7 +312,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   # Step 1 rides a scripted worker process; the manager's report-consuming
   # turn rides the registry builder (scripted) — no external process starts
   # from this test, and no background launch outlives it.
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("reviewer wrote the report")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -415,7 +415,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   handle ends with the controller instead of hanging."""
   _cfg, _session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "withheld-steps",
       manager.id,
@@ -449,7 +449,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   # launches the SAME step run (no duplicate) — no second report.
   await reopen_task_node(tree, leaf.id, "clear-leaf")
   assert tree.task_state(leaf.id) == "open"
-  builds2 = install_backends(
+  builds2 = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("first done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   await asyncio.wait_for(cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id), 20)
   await wait_for_terminal_run(tree, leaf.id, runs[0].id, timeout=15.0)
@@ -462,7 +462,7 @@ async def test_steps_admission_failure_does_not_consume_the_occurrence(
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task("flaky-steps", manager.id, steps=[StepConfig(name="only", prompt="Do it.")])
   scheduler = build_scheduler(cfg, session_blocks)
   from src.features.cron import scheduler as scheduler_module
@@ -496,7 +496,7 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
   # The leaf's work runs re-judge the nearest-user gate at launch: authorize
   # the manager so the repair run below launches.
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("step zero done")]),
           SpawningScriptedBackend([result_event("step one done")])
@@ -554,7 +554,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
 
   # The repaired close: consume the pending input with a successful run; the
   # normal completion owner closes and delivers the completed report.
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("answered")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(leaf.id)
   assert decision["launch"] is True
@@ -665,7 +665,7 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
   last_run_status bookkeeping as before."""
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "noop-loop",
       manager.id,
@@ -696,7 +696,7 @@ async def test_the_scheduler_calls_the_loop_action_with_the_task_name_repo_and_l
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "loop-args",
       manager.id,
@@ -742,7 +742,7 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
   # The unbound path binds through the scheduler's reloaded process config;
   # pin it to the synthetic home's cfg.
   monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("sweep done")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -789,7 +789,7 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   repo, _origin = init_repo_with_origin(tmp_path)
   _persist_unbound_cron_d(cfg, "repo-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   backend = SpawningScriptedBackend([result_event("sweep done")])
-  install_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The close report's wake dispatches the bound node's report-consuming turn;
   # script it through the registry builder so no external process starts.
   _script_manager_turn(monkeypatch, ["report noted"])
@@ -850,7 +850,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
                   },
               ],
       })
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("selector says pick three")]),
           SpawningScriptedBackend([result_event("reviewer wrote the report")]),
@@ -903,7 +903,7 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
   backend, and no scripted process ever starts."""
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # No backend written anywhere: the config loads (the repo default's shape),
   # and both steps resolve to the first configured option.
@@ -943,7 +943,7 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   from src.runtime.task_recovery import reconcile_task_tree
   cfg, _session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "distinct",
@@ -1009,7 +1009,7 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
   """The completion report's per-step headings carry the backend each step ran."""
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("picked three")]),
           SpawningScriptedBackend([result_event("reviewed the picks")]),
@@ -1053,7 +1053,7 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await make_manager(tree, "Pooled Manager")
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("step done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   # The boundary close's report wake dispatches the manager's turn; the launch

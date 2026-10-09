@@ -25,6 +25,7 @@ from conftest import (
     create_root_session,
     fresh_master_state,
     init_repo_with_origin,
+    install_scripted_backends,
     patch_resume_seams,
 )
 
@@ -39,7 +40,6 @@ from tests.test_task_execution import (
     implement_marker_commit,
     inject_chat_append_fault,
     inject_run_record_write_fault,
-    install_backends,
     install_worker_launch_and_resume_backends,
     make_pm_build,
     poll_until,
@@ -53,7 +53,8 @@ async def _takeoff_manager(tmp_path, monkeypatch):
   """One manager with its take-off turn already consumed (scripted backend)."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  install_backends(monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], BUILD_BACKEND_PATCH_TARGET)
   manager = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -152,7 +153,7 @@ async def test_restart_after_launch_reattaches_live_process(tmp_path: Path, monk
 async def test_stop_request_wins_over_launch_and_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime.task_recovery import reconcile_task_tree
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("x")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-stopped"
   await tree.runs.register_run(
@@ -186,7 +187,7 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
       worker.id,
       PatchSessionTaskRequest(task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
       caller=OPERATOR)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-reviewed"
   await tree.runs.register_run(
@@ -266,7 +267,7 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
   run_git(repo, "add", "-A")
   run_git(repo, "commit", "-q", "-m", "implement marker")
   run_git(repo, "push", "-q", "origin", "task/work:main")
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The delivered report's parent turn: one fresh scripted double per build.
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
@@ -382,7 +383,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
       worker.id,
       PatchSessionTaskRequest(task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
       caller=OPERATOR)
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-work"
   await tree.runs.register_run(
@@ -451,7 +452,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
       caller="operator")
 
   # The reviewer never pushes, so the landing check fails on every pass.
-  install_backends(
+  install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend(
               [result_event("implemented")], pre_run=partial(implement_marker_commit, tree, worker.id)),

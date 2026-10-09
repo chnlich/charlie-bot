@@ -2890,7 +2890,7 @@ def install_scripted_backends(
     patch_target: str,
 ) -> list[dict]:
   """Serve *backends* one build at a time from a patched build_backend, wiring
-  each build's on_spawn into the double the way install_backends does.
+  each build's on_spawn into the double.
 
   *patch_target* is the dotted import path of the build_backend binding the
   tested path reads: the master-cc run path reads the type table's attribute

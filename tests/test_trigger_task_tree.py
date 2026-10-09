@@ -20,6 +20,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     backend_option,
     bind_deps_blocks,
+    install_scripted_backends,
 )
 
 from src.infra import event_types as ET
@@ -29,7 +30,6 @@ from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_spawning_env,
-    install_backends,
     result_event,
 )
 
@@ -55,7 +55,8 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   bind_deps_blocks(monkeypatch, tree, session_blocks)
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
   manager = await tree.create_task(
       request_id="pm",
       task_parent_id=None,

@@ -36,7 +36,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   repo, _origin = conftest.init_repo_with_origin(tmp_path / "repo")
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
-  test_task_execution.install_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("taken off")])],
       conftest.BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
@@ -58,7 +58,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
     review_started.set()
     await review_gate.wait()
 
-  test_task_execution.install_backends(
+  conftest.install_scripted_backends(
       monkeypatch,
       [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("work done")]),

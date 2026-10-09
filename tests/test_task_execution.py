@@ -53,7 +53,7 @@ from src.backends.claude_code import claude_accounts, claude_relay, master_cc_re
 from src.features.voice.turn_contribution import VOICE_NOTE
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, SessionMetadata, TaskSpec
+from src.infra.models import PatchSessionTaskRequest, RunRecord, SessionMetadata, TaskSpec
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
@@ -178,27 +178,10 @@ def result_event(text: str) -> dict:
   return event
 
 
-def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list, target: str) -> list[dict]:
-  """Serve *backends* one build at a time, wiring each build's on_spawn into the double."""
-  builds: list[dict] = []
-  queue = list(backends)
-
-  def fake_build(option: BackendOption, cfg, **kwargs):
-    backend = queue.pop(0)
-    on_spawn = kwargs.get("on_spawn")
-    if on_spawn is not None:
-      backend.set_on_spawn(on_spawn)
-    builds.append({"option": option, "kwargs": kwargs, "backend": backend})
-    return backend
-
-  monkeypatch.setattr(target, fake_build)
-  return builds
-
-
 def make_pm_build(text: str, pm_builds: list | None = None):
   """The parent-manager turn's build function for BUILD_BACKEND_PATCH_TARGET:
     one scripted double per registry build, wired for on_spawn the way
-    install_backends wires worker builds. ``pm_builds`` collects the built
+    install_scripted_backends wires worker builds. ``pm_builds`` collects the built
     doubles for tests that assert the parent turn actually built one."""
 
   def pm_build(option, cfg_, **kwargs):
@@ -311,7 +294,7 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-  builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   admitted = await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
@@ -425,7 +408,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
   assert manager.task is not None and manager.task.goal == ""
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-  install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   admitted = await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="First message on a brand-new task.", actor="user")
@@ -447,7 +430,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
 async def test_concurrent_dispatch_starts_one_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("one")])
-  builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First message.", actor="user")
   # Two dispatch calls race the same pending batch: the reservation serializes
@@ -493,7 +476,7 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
   gate_release = asyncio.Event()
   first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
   second = _SpawnFirstBackend([result_event("second")])
-  install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
@@ -551,7 +534,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   pm_builds = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
   backend = SpawningScriptedBackend([result_event("phrase")])
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch,
       [backend,
        SpawningScriptedBackend([result_event("phrase")]),
@@ -685,7 +668,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
   assert tree.dispatch.pending_inputs(manager.id) == []
   admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Next.", actor="user")
   backend = SpawningScriptedBackend([result_event("next round")])
-  install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
   next_run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
@@ -698,7 +681,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
   retry_run = await tree.runs.get_run(manager.id, retry["run_id"])
   assert retry_run is not None and retry_run.input_event_ids == [str(first_in["id"])]
   backend2 = SpawningScriptedBackend([result_event("retried")])
-  install_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
   retried, _retried_outcome = await wait_for_terminal_run(tree, manager.id, retry["run_id"])
@@ -785,7 +768,8 @@ async def test_implement_delivery_requires_review_and_real_landing(
 
   review_backend = SpawningScriptedBackend([result_event("review ok")], pre_run=reviewer_push)
   review_retry_backend = SpawningScriptedBackend([result_event("review ok again")], pre_run=reviewer_push)
-  install_backends(monkeypatch, [work_backend, review_backend, review_retry_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(
+      monkeypatch, [work_backend, review_backend, review_retry_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(
       id="run-work",
@@ -917,7 +901,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   work_backend = SpawningScriptedBackend([result_event("implemented")])
   review_released: asyncio.Event = asyncio.Event()
   review_backend = SpawningScriptedBackend([result_event("review ok")], gate=review_released.wait)
-  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(
       id="run-work",
@@ -992,7 +976,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
   local_tip = run_git(repo, "rev-parse", "main")
 
   work_backend = SpawningScriptedBackend([result_event("never runs")])
-  install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(
       id="run-work",
@@ -1064,7 +1048,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
       "Acceptance tests: config parses — pass")
   work_backend = SpawningScriptedBackend([result_event(report)])
   review_backend = SpawningScriptedBackend([result_event("review ok")])
-  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -1134,7 +1118,7 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
   # outcome is failed); the retry policy exhausts and the existing
   # blocked-report path reports to the parent.
   review_backend = SpawningScriptedBackend([])
-  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -1163,7 +1147,7 @@ async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkey
   pm_builds = await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
 
   work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
-  install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -1306,7 +1290,7 @@ def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_blocks,
                      events: list[dict]) -> tuple[list[SpawningScriptedBackend], list[dict]]:
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend(events)
-  builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
   return [backend], builds
 
 
@@ -1458,7 +1442,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
   first = SpawningScriptedBackend([result_event("turn one")])
   second = SpawningScriptedBackend([result_event("turn two")])
   third = SpawningScriptedBackend([result_event("turn three")])
-  install_backends(monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
 
   # Turn 1: no anchor — a fresh native context, identity recorded at spawn.
   run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
@@ -1522,7 +1506,7 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
   _cfg, session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   first = SpawningScriptedBackend([result_event("one")])
   second = SpawningScriptedBackend([result_event("two")])
-  install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
   run1 = await _admit_and_dispatch(tree, manager.id, "one", "in-1")
   await wait_for_terminal_run(tree, manager.id, run1)
   snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
@@ -1569,7 +1553,7 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   first = SpawningScriptedBackend([result_event("turn one")])
   second = SpawningScriptedBackend([result_event("turn two")])
-  install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
   run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
   await wait_for_terminal_run(tree, manager.id, run1)
@@ -1835,7 +1819,8 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted"))
-  install_backends(monkeypatch, [SpawningScriptedBackend([result_event("phrase")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("phrase")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
 
   repo, _origin = init_repo_with_origin(tmp_path / "prep-fail")
@@ -1975,7 +1960,7 @@ async def test_pooled_fresh_worker_launches_build_on_the_selected_account(
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="implement"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("work done; modified /tmp/x.sh")]),
           SpawningScriptedBackend([result_event("review ok")])
@@ -2017,7 +2002,7 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # main sits at half a window; across all accounts an untouched beta account wins.
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"])
@@ -2048,7 +2033,7 @@ async def test_unpooled_fresh_worker_launch_carries_no_account(
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_backends(
+  builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await _register_work_run(tree, worker.id, "run-work", backend_id, FABLE_MODEL)
@@ -2070,7 +2055,7 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
   worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # An empty build queue: any process spawn would pop from it and fail loudly.
-  builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
     claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
   assert claude_accounts.select(cfg, FABLE_MODEL) is None

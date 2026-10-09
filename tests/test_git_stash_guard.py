@@ -24,6 +24,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     create_task,
     init_repo_with_origin,
+    install_scripted_backends,
     run_git,
     stub_credentials,
 )
@@ -265,7 +266,6 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       SpawningScriptedBackend,
       _adapter_with_silent_broadcast,
       build_env,
-      install_backends,
       make_pm_build,
       result_event,
       wait_for_review_terminal,
@@ -292,7 +292,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   committed: asyncio.Event = asyncio.Event()
   work_backend = SpawningScriptedBackend([result_event("implemented")], gate=committed.wait)
   review_backend = SpawningScriptedBackend([result_event("review ok")])
-  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(
       id="run-work",

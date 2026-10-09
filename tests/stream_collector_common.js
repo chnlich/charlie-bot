@@ -6,27 +6,16 @@
 // ~/.charliebot/sessions; the collectors keep their own metric definitions
 // (corpus filter, harness options, reporting).
 const fs = require('node:fs');
-const https = require('node:https');
 const path = require('node:path');
 const { MAX_STRING_LENGTH } = require('node:buffer').constants;
 
+const { fetchUrl } = require('./marked_renderer_harness');
 const { buildStreamHarness } = require('./stream_render_harness');
 
 // The highlight.js build the chat page serves (web/templates/index.html); the
 // collectors' numbers stay comparable only while they highlight through the
 // browser's build, so bump it with the template.
 const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
-
-function fetchUrl(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
-  });
-}
 
 // The live-corpus root liveChatFiles walks. Exported so a bridge-registered
 // suite can skip hosts that carry no live corpus (CI, fresh checkouts); the

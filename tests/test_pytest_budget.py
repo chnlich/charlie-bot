@@ -9,6 +9,8 @@ inner run's ini shrinks the budgets instead of sleeping for real seconds.
 
 from __future__ import annotations
 
+import gc
+
 import conftest
 import pytest
 
@@ -43,6 +45,34 @@ def test_over_budget_then_fast():
     calls["n"] += 1
     if calls["n"] == 1:
         time.sleep(0.12)
+"""
+
+_INNER_RERUN_SCOPE_TESTS = """
+import time
+
+import pytest
+
+builds = {"session": 0, "function": []}
+
+
+@pytest.fixture(scope="session")
+def session_resource():
+    builds["session"] += 1
+
+
+@pytest.fixture
+def function_resource():
+    resource = object()
+    builds["function"].append(resource)
+    return resource
+
+
+def test_last_item_over_budget_then_fast(session_resource, function_resource):
+    if len(builds["function"]) == 1:
+        time.sleep(0.12)
+        return
+    assert builds["session"] == 1, "the rerun built the session-scoped fixture again"
+    assert builds["function"][1] is not builds["function"][0], "the rerun reused attempt 1's function fixture"
 """
 
 _INNER_RERUN_FAIL_TESTS = """
@@ -80,7 +110,16 @@ def test_integration_two():
 def _run_inner(pytester: pytest.Pytester, ini: str, test_source: str) -> pytest.RunResult:
   pytester.makefile(".ini", pytest=ini)  # a real pytest.ini, not makeini's tox.ini
   pytester.makepyfile(test_source)
-  return pytester.runpytest("-p", "no:cacheprovider", plugins=[conftest])
+  # The inner session runs in this process, whose heap holds everything the
+  # outer suite has built. A full collection that fires inside an inner stage
+  # scans that heap: about 0.1s late in a full run, past the inner 0.03s
+  # budget. gc.freeze() keeps the heap out of every collection until
+  # gc.unfreeze().
+  gc.freeze()
+  try:
+    return pytester.runpytest("-p", "no:cacheprovider", plugins=[conftest])
+  finally:
+    gc.unfreeze()
 
 
 _INNER_FIXTURE_TIME_TESTS = """
@@ -134,6 +173,16 @@ def test_budget_only_failure_reruns_once_and_passes(pytester: pytest.Pytester) -
       [
           "*BUDGET RERUN*: attempt 1 0.1*s over the 0.03s unit budget; rerun 0.0*s within budget*",
       ])
+
+
+def test_budget_rerun_keeps_higher_scopes_and_refreshes_function_fixtures(pytester: pytest.Pytester) -> None:
+  """The rerun of the session's last item finds attempt 1's session-scoped
+  fixture still up and builds the function-scoped one fresh, so no
+  higher-scope rebuild lands in the rerun's setup budget."""
+  result = _run_inner(pytester, _INNER_INI, _INNER_RERUN_SCOPE_TESTS)
+  result.assert_outcomes(passed=1)
+  result.stdout.fnmatch_lines(
+      ["*BUDGET RERUN*: attempt 1 0.1*s over the 0.03s unit budget; rerun 0.0*s within budget*"])
 
 
 def test_budget_rerun_that_also_exceeds_fails_with_both_timings(pytester: pytest.Pytester) -> None:

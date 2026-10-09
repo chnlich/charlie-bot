@@ -7,26 +7,26 @@ section is ``cfg.accounts``. This module imports pydantic only, so a config pars
 
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
+import pydantic
 
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
 
-class ClaudeAccount(BaseModel):
+class ClaudeAccount(pydantic.BaseModel):
   """One Claude subscription login in the account pool (src/backends/claude_code/claude_accounts.py).
 
   ``label`` names the account in server logs and the usage panel (it follows the
   label the panel derived from the directory name before the pool existed);
   ``config_dir`` is the login's CLAUDE_CONFIG_DIR. Order carries no meaning.
   """
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   label: str
   config_dir: str
 
 
-class ClaudeCompactionConfig(BaseModel):
+class ClaudeCompactionConfig(pydantic.BaseModel):
   """Context floors, in tokens, for the Sonnet compaction the pool runs on Fable sessions.
 
   ``relay_tokens`` applies before an account relay (the cache is cold in the new
@@ -34,16 +34,16 @@ class ClaudeCompactionConfig(BaseModel):
   the one-hour prompt cache has expired. Below the floor a cold read is cheaper
   than a compaction, so nothing runs.
   """
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
-  relay_tokens: int = Field(default=100_000, gt=0)
-  expired_cache_tokens: int = Field(default=50_000, gt=0)
+  relay_tokens: int = pydantic.Field(default=100_000, gt=0)
+  expired_cache_tokens: int = pydantic.Field(default=50_000, gt=0)
 
 
-class AccountsConfig(BaseModel):
+class AccountsConfig(pydantic.BaseModel):
   """``accounts:`` section: the Claude subscription pool and its compaction floors."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # The Claude subscription logins (each label names one CLAUDE_CONFIG_DIR);
   # accounts.claude lists every login, and claude_pools groups them into the
@@ -62,7 +62,7 @@ class AccountsConfig(BaseModel):
   claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
 
 
-def check_claude_pools(cfg: CharlieBotConfig) -> None:
+def check_claude_pools(cfg: config.CharlieBotConfig) -> None:
   """Gate the Claude account pools across the ``accounts`` and ``backends`` sections.
 
   The pool table and the cc-claude options that name a pool live in different

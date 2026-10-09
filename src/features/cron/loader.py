@@ -443,8 +443,8 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   file still loads and is schedulable. The result is sorted by name.
 
   The snapshot refreshes whenever the fingerprint changes (cron.d file set and
-  mtimes, referenced prompt_file mtimes, and legacy-presence), so a change takes
-  effect on the next call with no restart.
+  mtimes, referenced prompt_file mtimes), so a change takes effect on the next
+  call with no restart.
   """
   return _refresh_cron_snapshot().tasks
 

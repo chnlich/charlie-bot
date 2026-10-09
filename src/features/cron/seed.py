@@ -85,8 +85,8 @@ def setup_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   print("==> Seeding default cron tasks")
   # Per-task created/exists for repo-default cron entries, keyed on whether the
   # per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
-  # same validation and legacy tripwire as the real run and writes nothing, so
-  # the preview fails exactly where the real run would.
+  # same validation as the real run and writes nothing, so the preview fails
+  # exactly where the real run would.
   for item in seed_default_cron_tasks(cfg, dry_run=dry_run):
     print(f"  cron {item['name']}: {item['status']}")
 

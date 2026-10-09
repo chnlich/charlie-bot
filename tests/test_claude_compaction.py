@@ -229,7 +229,7 @@ async def test_unparseable_stdout_fails_loudly(tmp_path: pathlib.Path, monkeypat
 async def test_timeout_kills_the_process_group_and_fails(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   killed: list[int] = []
-  monkeypatch.setattr(claude_compaction, "kill_process_group", lambda pid, *a, **k: killed.append(pid) or True)
+  monkeypatch.setattr(claude_compaction.process, "kill_process_group", lambda pid, *a, **k: killed.append(pid) or True)
   proc = _FakeProc(returncode=0, stdout=_result_json([SONNET]), delay=0.2)
 
   ok, events, _captured = await _run(tmp_path, monkeypatch, proc, timeout=0.01)

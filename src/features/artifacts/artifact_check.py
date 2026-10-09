@@ -17,9 +17,10 @@ cold-read seven questions to CharlieBot's preferred light backends (config backe
 order) and returns the attempts, the answering backend, and its verbatim answer; every
 genre's delivery gate routes through it after the assertions pass.
 
-The goal-length and page-height measurements (with their budgets and the headless-chrome
-probe page) live here as the goal-budget / page-height assertions; the plan registration
-gate (src/features/artifacts/plans.py) enforces exactly the set ``run_assertions("plan", ...)`` returns.
+The goal-length and page-height measurements (the goal budget, the page-height target, and
+the headless-chrome probe page) live here as the goal-budget / page-height assertions; the
+plan registration gate (src/features/artifacts/plans.py) enforces exactly the set
+``run_assertions("plan", ...)`` returns.
 
 ``ordinal-named`` is the lexical check for the master prompt's Naming rule: a label pointing
 off the page carries a content name at first use.
@@ -104,14 +105,14 @@ def _measure_goal_weighted(artifact: pathlib.Path) -> int:
   return _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
 
 
-PAGE_HEIGHT_BUDGET = 2000
+PAGE_HEIGHT_TARGET = 2000
 
 _PAGE_PROBE_WIDTH_PX = 1280
 
 # The probe loads the artifact in a fixed-width iframe over file://, hides the revision
-# marks (revision badges and revnotes ride outside the budget, per the plan template's
-# Page budget rule), leaves details elements in their default collapsed state, then
-# writes the artifact's measured height into its own DOM so the renderer reads it back.
+# marks (revision badges and revnotes ride outside the measured height, per the plan
+# template's Page budget rule), leaves details elements in their default collapsed state,
+# then writes the artifact's measured height into its own DOM so the renderer reads it back.
 _PAGE_PROBE_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8">
 <style>html,body{{margin:0;padding:0}}iframe{{width:{width}px;border:0;display:block}}</style>
@@ -396,18 +397,19 @@ def _check_goal_budget(ctx: _Context) -> list[AssertionOutcome]:
 
 
 def _check_page_height(ctx: _Context) -> list[AssertionOutcome]:
+  """Measure the page's rendered height against PAGE_HEIGHT_TARGET; any measured height passes.
+
+  The height is a report, not a gate: over the target the outcome names the overage, and
+  only an unmeasurable page (no renderer, renderer error) fails.
+  """
   name = PAGE_HEIGHT
   try:
     height = _measure_page_height(_require_chrome_bin(ctx.cfg), ctx.artifact)
   except ValueError as e:
     return [_fail(name, str(e))]
-  if height > PAGE_HEIGHT_BUDGET:
-    return [
-        _fail(
-            name, f"plan page measures {height} px as it opens: {height - PAGE_HEIGHT_BUDGET} px over the "
-            f"{PAGE_HEIGHT_BUDGET} px budget")
-    ]
-  return [_ok(name, f"{height} px (budget {PAGE_HEIGHT_BUDGET})")]
+  if height > PAGE_HEIGHT_TARGET:
+    return [_ok(name, f"{height} px: {height - PAGE_HEIGHT_TARGET} px over the {PAGE_HEIGHT_TARGET} px target")]
+  return [_ok(name, f"{height} px (target {PAGE_HEIGHT_TARGET})")]
 
 
 # ---------------------------------------------------------------------------

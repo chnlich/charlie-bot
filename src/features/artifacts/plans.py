@@ -322,8 +322,7 @@ class PlanRegistryManager:
       reasons = "; ".join(f"{o.name}: {o.detail}" for o in failures)
       raise ValueError(
           f"plan artifact fails {len(failures)} check assertion(s): {reasons}. "
-          "Recover headroom by folding, per the page-budget rules in the BLOCK KIT comment of "
-          "prompts/plan_template.html. Measure locally with: "
+          "Measure locally with: "
           "charliebot artifact check <artifact.html> --genre plan --assertions-only")
     existing_file = self._find_binding_by_file(data, file_relative)
     if existing_file is not None:

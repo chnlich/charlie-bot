@@ -105,6 +105,31 @@ def test_shipped_template_passes_its_own_genre(tmp_path: Path, genre: str, templ
 
 
 # ---------------------------------------------------------------------------
+# page-height: a measurement report against the 2000 px target, passing at any height
+# ---------------------------------------------------------------------------
+
+
+def test_page_height_over_the_target_passes_and_names_the_overage(tmp_path: Path) -> None:
+  cfg = SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 2600))
+  (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
+  assert outcome.passed
+  assert outcome.detail == "2600 px: 600 px over the 2000 px target"
+
+
+def test_page_height_at_or_under_the_target_reports_the_target(tmp_path: Path) -> None:
+  cfg = SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 1967))
+  (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
+  assert outcome.passed
+  assert outcome.detail == "1967 px (target 2000)"
+
+
+def test_page_height_without_a_renderer_fails(tmp_path: Path) -> None:
+  cfg = SimpleNamespace(headless_chrome_bin=None)
+  (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
+  assert not outcome.passed
+
+
+# ---------------------------------------------------------------------------
 # CLI: charliebot artifact check
 # ---------------------------------------------------------------------------
 
@@ -178,6 +203,23 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
 
 
+def test_cli_assertions_only_passes_a_page_over_the_height_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, plan_page_html())
+  cfg = SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 2600))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
+  assert "ok page-height 2600 px: 600 px over the 2000 px target" in capsys.readouterr().out
+
+
+def test_cli_assertions_only_fails_when_the_height_cannot_be_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, plan_page_html())
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: SimpleNamespace(headless_chrome_bin=None))
+  assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 1
+  assert "FAIL page-height" in capsys.readouterr().out
+
+
 def test_cli_unknown_genre_is_usage_error() -> None:
   assert _run_cli(["page.html", "--genre", "weird"]) == 2
 
@@ -204,6 +246,17 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
     assert name in message
   assert message.endswith(
       "Measure locally with: charliebot artifact check <artifact.html> --genre plan --assertions-only")
+
+
+@pytest.mark.asyncio
+async def test_plan_present_accepts_a_page_over_the_height_target(tmp_path: Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await make_plan_setup(tmp_path)
+  cfg.headless_chrome_bin = write_stub_chrome(tmp_path, 2600)
+  file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html")
+
+  result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+  assert result["v"] == 1
 
 
 # ---------------------------------------------------------------------------

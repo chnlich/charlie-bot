@@ -1896,7 +1896,7 @@ def write_stub_chrome(tmp_path: Path, height: int) -> str:
 
 
 def build_plan_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for plan tests: the 800px stub chrome sits under the 1-page height limit, and the
+  """CharlieBotConfig for plan tests: the 800px stub chrome answers the page-height measurement, and the
   sessions/worktrees dirs live under tmp_path so each test owns its own tree."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",

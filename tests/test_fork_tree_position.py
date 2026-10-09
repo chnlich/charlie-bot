@@ -16,17 +16,7 @@ import subprocess
 import conftest
 import pytest
 import yaml
-from conftest import ScriptedRelayBackend, temp_home, write_nightly_task  # noqa: F401
-from tests.test_task_execution import (
-    OP_HEADERS,
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
-    build_env,
-    make_api_client,
-    result_event,
-    stub_credentials,
-    wait_for_terminal_run,
-)
+from conftest import ScriptedRelayBackend, write_nightly_task
 
 from src.features.cron import cron_files, cron_sequence
 from src.features.cron import loader as cron_loader
@@ -34,6 +24,16 @@ from src.infra import event_types as ET
 from src.infra import metadata_slots, models
 from src.infra.models import LastRunStatus
 from src.runtime import takeoff_gate, task_completion
+from tests.test_task_execution import (
+  OP_HEADERS,
+  SpawningScriptedBackend,
+  _adapter_with_silent_broadcast,
+  build_env,
+  make_api_client,
+  result_event,
+  stub_credentials,
+  wait_for_terminal_run,
+)
 
 
 async def make_tree(tmp_path: pathlib.Path) -> tuple[object, conftest.SessionBlocks, conftest.TaskTreeManager]:
@@ -79,7 +79,7 @@ async def test_clone_child_manager_copies_position_and_stays_childless(tmp_path:
   """(a) A child manager's clone sits under the same parent with the source's
   task, group and prompt-rule references, holds no children, and leaves the
   source and its subtree untouched."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", task=models.TaskSpec(goal="project"), name="Root")
   source = await manager_child(tree, root.id, "source", task=models.TaskSpec(goal="feature"), name="Feature")
   source_child = await manager_child(tree, source.id, "source-child", name="Feature child")
@@ -112,7 +112,7 @@ async def test_clone_child_manager_copies_position_and_stays_childless(tmp_path:
 @pytest.mark.asyncio
 async def test_clone_root_manager_is_a_root(tmp_path: pathlib.Path) -> None:
   """(b) A root manager's clone is a root too."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", task=models.TaskSpec(goal="project"), name="Root")
 
   clone = await blocks.fork.fork_session(root.id)
@@ -188,7 +188,7 @@ async def test_elone_moves_subtree_and_archives_source(tmp_path: pathlib.Path) -
 async def test_elone_moves_children_created_after_the_cut(tmp_path: pathlib.Path) -> None:
   """(d) The move reads the current tree, not the copied log: a child the cut
   point predates still re-parents to the new node."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
   # The cut at index 0 copies only the creation fact; this child is created
@@ -217,7 +217,7 @@ async def test_elone_rebinds_scheduled_task_and_copies_bookkeeping(
     tmp_path: pathlib.Path, temp_home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(e) The elone of a bound node rewrites the yaml's ``session_id``, copies
   the scheduler bookkeeping, and the next fire resolves to the new node."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   source = await manager_child(tree, None, "source", task=models.TaskSpec(goal="nightly"), name="nightly")
   write_nightly_task(temp_home)
   cron_files.write_cron_key("nightly", "session_id", source.id)
@@ -344,7 +344,7 @@ async def test_worker_source_clone_and_elone_keep_the_ordinary_shape(tmp_path: p
   """(h) Clone and elone of a worker node behave as on origin/main: the child
   is a manager root with no position, and the elone archives the source with
   its successor pointer but writes no close fact."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", name="Root")
   worker = await manager_child(tree, root.id, "worker", profile="worker", name="W")
 
@@ -376,7 +376,7 @@ async def test_worker_source_clone_and_elone_keep_the_ordinary_shape(tmp_path: p
 async def test_clone_and_elone_write_nothing_into_the_parent_log(tmp_path: pathlib.Path) -> None:
   """(i) Neither operation appends a line to the tree parent's log or starts a
   parent round."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
   parent_events_before = event_ids(tree, root.id)
@@ -498,7 +498,7 @@ async def test_copied_pre_take_off_does_not_authorize_the_successor(tmp_path: pa
   """(n) A fresh pre take off in the source log authorizes the source itself,
   and neither its clone nor its elone child: the gate reads only the user
   messages after the newest clone_start."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
   await tree.dispatch.admit_input(source.id, event_type=ET.USER, content="pre take off, prepare the work", actor="user")
@@ -523,7 +523,7 @@ async def test_elone_redelivers_subtree_close_report_before_the_close(tmp_path: 
   """(o) A subtree close report the crash window lost is redelivered to the
   source first; the source receives no report after its own close fact, and a
   recovery pass duplicates nothing."""
-  cfg, blocks, tree = await make_tree(tmp_path)
+  _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
   child = await manager_child(tree, source.id, "child", name="Child")

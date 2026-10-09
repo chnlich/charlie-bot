@@ -14,7 +14,6 @@ import asyncio
 import json
 import mmap
 import os
-import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Protocol
@@ -27,10 +26,9 @@ from src.infra.config import CharlieBotConfig, get_config
 from src.infra.json_utils import atomic_write_stream
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import EventRef, SessionMetadata, SessionStatus, utc_now, utc_now_iso
-from src.runtime import session_events, session_store, sidebar_state
+from src.runtime import session_events, session_store, sidebar_state, task_errors
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
-from src.runtime import task_errors
 from src.runtime.hooks.sidebar_contributions import sidebar_contributions
 
 log = LazyStructlogLogger()

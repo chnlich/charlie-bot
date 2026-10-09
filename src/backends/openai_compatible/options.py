@@ -2,10 +2,10 @@
 
 from typing import Literal
 
-from src.infra.backend_models import BackendOption
+from src.infra import backend_models
 
 
-class CcOpenAICompatibleBackend(BackendOption):
+class CcOpenAICompatibleBackend(backend_models.BackendOption):
   type: Literal["cc-openai-compatible"] = "cc-openai-compatible"
   api_base: str  # OpenAI-compatible base URL
   credential: str | None = None

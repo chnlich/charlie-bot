@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 
 from src.features.voice import transcriber
-from src.features.voice.transcriber import _SpeechModelBundle
 
 
 class _StubStream:
@@ -72,8 +71,8 @@ class _StubRecognizer:
       self._busy = False
 
 
-def _stub_bundle(recognizers: list[_StubRecognizer]) -> _SpeechModelBundle:
-  return _SpeechModelBundle(
+def _stub_bundle(recognizers: list[_StubRecognizer]) -> transcriber._SpeechModelBundle:
+  return transcriber._SpeechModelBundle(
       recognizers=tuple(recognizers),
       vad_config=None,
       decode_locks=tuple(threading.Lock() for _ in recognizers),

@@ -1200,6 +1200,15 @@ def _transcript_reset(latest_revision: str, client_revision: str) -> bool:
   return not client_revision or client_revision != latest_revision
 
 
+def _successor_tree_note(new_session_id: str) -> str:
+  """The two tree sentences every fork/elone bootstrap appends: the new node's
+  copied history can hold child tasks that belong to the source session, so
+  the successor checks the live tree instead of trusting the copy."""
+  return (
+      f"Run `charliebot session tree --root {new_session_id}` to list your current child tasks. "
+      "Child tasks in the copied history can belong to the source session.")
+
+
 async def _start_successor_run(
     task_mgr: TaskTreeManager,
     caller: CallerIdentity,
@@ -1252,6 +1261,8 @@ async def fork_session(
     )
   except FileNotFoundError as e:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
+  except TaskConflictError as e:
+    raise _task_http_error(e) from e
   except ValueError as e:
     raise bad_request(e) from e
 
@@ -1260,7 +1271,9 @@ async def fork_session(
       caller,
       meta,
       prompt_head=f"{FORK_BOOTSTRAP_OPENER} ",
-      directive="Get oriented from that log, summarize where things stand, and wait for the user's next instruction.")
+      directive=(
+          "Get oriented from that log, summarize where things stand, and wait for the user's next instruction. " +
+          _successor_tree_note(meta.id)))
 
   return meta
 
@@ -1281,6 +1294,8 @@ async def elone_session(
     meta = await fork.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError as e:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
+  except TaskConflictError as e:
+    raise _task_http_error(e) from e
   except ValueError as e:
     raise bad_request(e) from e
 
@@ -1293,7 +1308,7 @@ async def elone_session(
           "The dissatisfaction is usually with the most recent exchange before the takeover point. "),
       directive=(
           "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
-          "Confirm with the user before acting."))
+          f"Confirm with the user before acting. {_successor_tree_note(meta.id)}"))
 
   return meta
 

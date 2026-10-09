@@ -2,19 +2,22 @@
 
 ``SessionFork`` creates the child session, writes its ``chat_events.jsonl`` as the parent's raw event lines followed
 by the ``clone_start`` marker and the child's creation fact, and lets every sidebar contribution copy its own files.
-``elone_session`` also archives the parent and points its ``successor_session_id`` at the child. The history copy
+The child of a manager source keeps the source's task-tree position: a clone lands as a sibling under the same
+parent, and ``elone_session`` replaces the source in place — the whole subtree re-parents to the child, the source
+closes with the archive format, and a scheduled task bound to the source rebinds to the child. The history copy
 streams the parent's lines through an mmap and a chunked numpy scan, so a gigabyte-class corpus never enters the
-Python heap. The task-tree owner registers ``tree_index_invalidator``. The process builds one block (``fork()``);
-tests build their own and install it with ``set_fork()``.
+Python heap. The task-tree owner registers ``tree_index_invalidator`` and itself. The process builds one block
+(``fork()``); tests build their own and install it with ``set_fork()``.
 """
 
 import asyncio
 import json
 import mmap
 import os
-from collections.abc import Callable
+import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, Protocol
 
 from src.infra import event_types as ET
 
@@ -27,6 +30,7 @@ from src.infra.models import EventRef, SessionMetadata, SessionStatus, utc_now, 
 from src.runtime import session_events, session_store, sidebar_state
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
+from src.runtime import task_errors
 from src.runtime.hooks.sidebar_contributions import sidebar_contributions
 
 log = LazyStructlogLogger()
@@ -210,6 +214,38 @@ def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int,
       mapping.close()
 
 
+class TaskTreeOwner(Protocol):
+  """The task-tree owner's surface this fork consumes; ``TaskTreeManager`` satisfies it.
+
+  The owner registers itself at wiring time (``fork.tree = self``). The
+  protocol keeps this module import-free of the task-tree layer above it: the
+  owner judges the derived task state and writes the tree's facts under its
+  own write lock, calling back into this fork for the history copy and the
+  stored-status archive.
+  """
+
+  async def clone_blocker(self, source_id: str) -> str | None:
+    """The clone refusal for one source, or None when the clone may write."""
+    ...
+
+  async def run_elone_replacement(
+      self,
+      source: SessionMetadata,
+      event_index: int,
+      backend: str | None,
+      publish: Callable[[], Awaitable[SessionMetadata]],
+      archive: Callable[[str], Awaitable[None]],
+  ) -> SessionMetadata:
+    """Replace one manager source with its elone child and return the child.
+
+    The owner validates, redelivers and moves under its own write lock, calls
+    *publish* once to create the child, and calls *archive(new_id)* to land
+    the source's stored-status archive and successor pointer. A failed step
+    raises with the steps that completed listed.
+    """
+    ...
+
+
 class SessionFork:
   """Session fork and elone over the store and events blocks."""
 
@@ -228,6 +264,9 @@ class SessionFork:
     # policy the task owner applies to its own metadata writes; None only
     # before that wiring exists (no tree consumer constructed in this process).
     self.tree_index_invalidator: Callable[[], None] | None = None
+    # The tree owner registers itself here at the same wiring point (the
+    # TaskTreeOwner protocol below); None only before that wiring exists.
+    self.tree: TaskTreeOwner | None = None
 
   async def fork_session(
       self,
@@ -235,7 +274,17 @@ class SessionFork:
       event_index: int | None = None,
       backend: str | None = None,
   ) -> SessionMetadata:
-    """Create a new session whose chat log opens with the parent's raw event lines."""
+    """Create a new session whose chat log opens with the parent's raw event lines.
+
+    A manager source's clone is a sibling at the source's position: it carries the
+    source's decomposition edge, task record, group and prompt-rule references, and
+    the source with its subtree stays untouched. The source's parent task must be
+    open — a closed parent refuses the clone before anything is written.
+    """
+    if self.tree is not None:
+      blocker = await self.tree.clone_blocker(parent_id)
+      if blocker is not None:
+        raise task_errors.TaskConflictError([blocker])
     meta = await self._spawn_with_history(parent_id, event_index, backend, "C")
     self._log_spawn("session_cloned", meta, parent_id, event_index)
     return meta
@@ -252,28 +301,60 @@ class SessionFork:
     The per-parent invariant: each elone overwrites ``successor_session_id`` so
     the pointer names the parent's most recent elone child, and consumers (chain
     resolution, delivery, trigger redirect) follow the pointer and therefore
-    land at the most recent takeover. Scheduled tasks have no succession here:
-    their bound node is the task's stable binding, and an elone of it is an
-    ordinary fork — the task keeps firing on the original node.
+    land at the most recent takeover.
+
+    An elone of a manager source keeps the node's task-tree position: under the
+    tree's write lock the child takes over the source's decomposition edge and
+    its whole subtree, and the source closes with the archive format
+    (``task_closed`` outcome ``archived``, ``report_to`` null). A scheduled task
+    bound to the source moves to the child: the binding's yaml ``session_id``
+    rebinds through the registered sequence controllers' move duty (the
+    ``write_cron_key`` single-key write), and the scheduler bookkeeping
+    (``last_scheduled_run``, ``last_scheduled_cron``, ``last_run_status``)
+    copies over, so the next fire runs on the child. An elone of a worker
+    source is an ordinary fork: the child is a manager root and the source
+    keeps only the archived status and the successor pointer.
     """
     fresh_parent = await self._store.read_metadata_fresh(parent_id)
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
+    if fresh_parent.profile != "manager":
+      return await self._elone_ordinary_session(parent_id, event_index, backend)
+    tree = self.tree
+    if tree is None:
+      raise RuntimeError("no task-tree owner is wired over this fork; build the TaskTreeManager first")
+    meta = await tree.run_elone_replacement(
+        fresh_parent,
+        event_index,
+        backend,
+        publish=lambda: self._spawn_with_history(parent_id, event_index, backend, "E"),
+        archive=lambda new_id: self._archive_source(parent_id, new_id))
+    self._log_spawn("session_eloned", meta, parent_id, event_index)
+    return meta
+
+  async def _archive_source(self, source_id: str, new_id: str) -> None:
+    """The stored-status archive and the elone successor pointer (re-read under
+    the store lock so concurrent mutations to the source aren't clobbered).
+    Latest-wins: a source's pointer is overwritten to name each new child, so
+    the pointer always names the most recent takeover."""
+    async with self._store.lock_for(source_id):
+      fresh_source = await self._store.get_session(source_id)
+      if fresh_source:
+        fresh_source.status = SessionStatus.ARCHIVED
+        fresh_source.successor_session_id = new_id
+        fresh_source.updated_at = utc_now()
+        await self._store.save_metadata(fresh_source, lock_held=True)
+    self._events.drop_session_runtime_state(source_id)
+
+  async def _elone_ordinary_session(
+      self,
+      parent_id: str,
+      event_index: int,
+      backend: str | None,
+  ) -> SessionMetadata:
+    """The worker-source elone: a manager-root child, archived source, successor pointer."""
     meta = await self._spawn_with_history(parent_id, event_index, backend, "E")
-
-    # Auto-archive the parent, and record the elone successor
-    # pointer (re-read under lock so concurrent mutations to the parent aren't
-    # clobbered). Latest-wins: a parent's pointer is overwritten to name each
-    # new child, so the pointer always names the most recent elone.
-    async with self._store.lock_for(parent_id):
-      fresh_parent = await self._store.get_session(parent_id)
-      if fresh_parent:
-        fresh_parent.status = SessionStatus.ARCHIVED
-        fresh_parent.successor_session_id = meta.id
-        fresh_parent.updated_at = utc_now()
-        await self._store.save_metadata(fresh_parent, lock_held=True)
-    self._events.drop_session_runtime_state(parent_id)
-
+    await self._archive_source(parent_id, meta.id)
     self._log_spawn("session_eloned", meta, parent_id, event_index)
     return meta
 
@@ -291,8 +372,10 @@ class SessionFork:
     the parent's event count), then the ``clone_start`` marker, then the
     child's ``task_created`` fact; the child appends its own events after it.
     One history per session, in the file the model reads in place — the same
-    log the parent grepped. The parent is a history source only: the child
-    carries no ``task_parent_id``.
+    log the parent grepped. A manager parent's child holds the parent's
+    task-tree position (its ``task_parent_id``, task record, group and
+    prompt-rule references); a worker parent's child stays a manager root with
+    no position, the shape this spawn always produced.
     """
     parent = await self._store.get_session(parent_id)
     if not parent:
@@ -306,6 +389,12 @@ class SessionFork:
         raise ValueError(f"event_index {event_index} out of range for parent session {parent_id} with {count} events")
       end = event_index + 1
 
+    # A manager source's child keeps the source's tree position: elone replaces
+    # the node in place and clone adds a sibling under the same parent, so the
+    # copy carries the decomposition edge, the task record and the prompt-rule
+    # references. The task spec is copied deep so the two nodes' specs never
+    # alias one object.
+    holds_position = parent.profile == "manager"
     meta = SessionMetadata(
         name=f"{name_prefix}{parent.name}",
         schema_version=2,
@@ -313,12 +402,16 @@ class SessionFork:
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,
+        task_parent_id=parent.task_parent_id if holds_position else None,
+        task=parent.task.model_copy(deep=True) if holds_position and parent.task is not None else None,
+        subtree_prompt_ref=parent.subtree_prompt_ref if holds_position else None,
+        node_prompt_ref=parent.node_prompt_ref if holds_position else None,
     )
     created_event = build_task_created_event(
         actor=ACTOR_USER,
         task_id=meta.id,
         request_id=f"history-copy-{meta.id}",
-        task_parent_id=None,
+        task_parent_id=meta.task_parent_id,
         task_spec_hash=None,
     )
     meta.created_by_event = EventRef(session_id=meta.id, event_id=str(created_event["id"]))

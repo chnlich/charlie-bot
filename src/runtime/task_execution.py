@@ -185,14 +185,20 @@ def free_disk_gib(path: Path) -> float:
   return shutil.disk_usage(probe).free / (1024**3)
 
 
-def compose_input_prompt(meta: SessionMetadata, events: list[dict]) -> tuple[str, list[dict]]:
+def compose_input_prompt(
+    meta: SessionMetadata,
+    events: list[dict],
+    report_provenance: dict[str, str] | None = None,
+) -> tuple[str, list[dict]]:
   """The manager-turn prompt body from its exact durable input batch.
 
     Real user input rides verbatim (its event is the durable fact the Run
     acknowledges — no second synthetic USER copy is persisted), opened by the
     preamble a turn contribution gives it, if any; relays, child reports and
     scheduled triggers keep their own typed framing so the manager sees the
-    provenance the event carries. Attachments ride the turn.
+    provenance the event carries. A fork/elone child's report header also names
+    its origin, resolved per child by the dispatcher
+    (``child_report_provenances``). Attachments ride the turn.
     """
   parts: list[str] = []
   uploads: list[dict] = []
@@ -207,7 +213,8 @@ def compose_input_prompt(meta: SessionMetadata, events: list[dict]) -> tuple[str
           f"[Message from session {event.get('from_session_name') or event.get('from_session') or 'unknown'}] "
           f"{content}")
     elif event_type == ET.CHILD_REPORT:
-      parts.append(child_report_text(event))
+      provenance = (report_provenance or {}).get(str(event.get("child_session_id")))
+      parts.append(child_report_text(event, provenance))
     elif event_type == ET.SCHEDULED_TRIGGER:
       parts.append(f"[Scheduled trigger] {content}")
     else:
@@ -1112,7 +1119,8 @@ class TaskExecutionAdapter:
     transport_dir = self._tree.runs.run_dir(session_id, run_id)
     batch_ids = set(run.input_event_ids)
     batch_events = [e for e in self._tree.fact_history(session_id) if str(e.get("id")) in batch_ids]
-    content, uploaded_files = compose_input_prompt(meta, batch_events)
+    content, uploaded_files = compose_input_prompt(
+        meta, batch_events, await self._tree.dispatch.child_report_provenances(batch_events))
     if not content:
       raise TaskInvalidError(f"run {run_id} claimed no consumable input; nothing to execute")
 
@@ -1415,7 +1423,8 @@ class TaskExecutionAdapter:
     spec_text = task.goal if (task is not None and task.goal.strip()) else ""
     batch_ids = set(run.input_event_ids)
     batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
-    content, _uploads = compose_input_prompt(meta, batch) if batch else ("", [])
+    provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
+    content, _uploads = compose_input_prompt(meta, batch, provenance) if batch else ("", [])
     description = "\n\n".join(part for part in (spec_text, content) if part)
     if not description.strip():
       raise TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")

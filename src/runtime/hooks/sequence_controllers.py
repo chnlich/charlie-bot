@@ -207,6 +207,13 @@ class SequenceController(Protocol):
     """Reconcile interrupted sequences before ordinary Run recovery, when needed."""
     return
 
+  async def move_bindings(self, source_session_id: str, new_session_id: str) -> bool:
+    """Move every binding of *source_session_id* onto the node that replaced
+    it (the elone successor), so the binding's next duty serves the new node.
+    True when at least one binding moved: the mover's follow-up duties key on
+    it."""
+    return False
+
   def binding(self, session_id: str) -> SequenceBinding | None:
     """The sequence binding for *session_id*, if one exists."""
     ...

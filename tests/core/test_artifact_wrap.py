@@ -5,28 +5,27 @@ KaTeX build (one CDN fetch per pytest session); the byte-integrity gate
 and the render-path assertion come from src/features/artifacts/artifact_check.py.
 """
 
+import pathlib
 import re
 import subprocess
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import ROOT
 
-from src.features.artifacts.artifact_wrap import ensure_vendored_katex, wrap_fragment
-from src.features.artifacts.cli import main as artifact_main
+from src.features.artifacts import artifact_wrap, cli
 
-_DRIVER = ROOT / "src" / "features" / "artifacts" / "prerender_math.js"
+_DRIVER = conftest.ROOT / "src" / "features" / "artifacts" / "prerender_math.js"
 
 
 @pytest.fixture(scope="session")
-def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
   """One CDN fetch per session, at the vendor path the CLI's home resolution derives."""
   home = tmp_path_factory.mktemp("katex-home")
-  return ensure_vendored_katex(home / "vendor" / "katex" / "katex.min.js")
+  return artifact_wrap.ensure_vendored_katex(home / "vendor" / "katex" / "katex.min.js")
 
 
 @pytest.fixture
-def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
+def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: pathlib.Path) -> pathlib.Path:
   """Point the CLI verb's home resolution at the fetched vendor copy's home.
 
   The wrap verb resolves the home off the env (src.infra.home), not the config —
@@ -36,7 +35,7 @@ def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
   return vendored_katex
 
 
-def _write_fragment(tmp_path: Path, fragment: str | bytes, name: str = "fragment.html") -> Path:
+def _write_fragment(tmp_path: pathlib.Path, fragment: str | bytes, name: str = "fragment.html") -> pathlib.Path:
   fragment_path = tmp_path / name
   if isinstance(fragment, bytes):
     fragment_path.write_bytes(fragment)
@@ -45,9 +44,9 @@ def _write_fragment(tmp_path: Path, fragment: str | bytes, name: str = "fragment
   return fragment_path
 
 
-def _wrap(tmp_path: Path, fragment: str | bytes, vendored_katex: Path) -> Path:
+def _wrap(tmp_path: pathlib.Path, fragment: str | bytes, vendored_katex: pathlib.Path) -> pathlib.Path:
   output = tmp_path / "page.html"
-  wrap_fragment(
+  artifact_wrap.wrap_fragment(
       genre="explain",
       fragment=_write_fragment(tmp_path, fragment),
       output=output,
@@ -57,9 +56,9 @@ def _wrap(tmp_path: Path, fragment: str | bytes, vendored_katex: Path) -> Path:
   return output
 
 
-def _wrap_cli(fragment_path: Path, output: Path, genre: str, *flags: str) -> SystemExit:
+def _wrap_cli(fragment_path: pathlib.Path, output: pathlib.Path, genre: str, *flags: str) -> SystemExit:
   with pytest.raises(SystemExit) as exc_info:
-    artifact_main(["wrap", str(fragment_path), "--genre", genre, "--output", str(output), *flags])
+    cli.main(["wrap", str(fragment_path), "--genre", genre, "--output", str(output), *flags])
   return exc_info.value
 
 
@@ -70,7 +69,7 @@ def _wrap_cli(fragment_path: Path, output: Path, genre: str, *flags: str) -> Sys
 
 @pytest.mark.integration
 def test_wrap_takes_head_and_style_from_the_template_and_the_body_from_the_fragment(
-    tmp_path: Path, vendored_katex: Path) -> None:
+    tmp_path: pathlib.Path, vendored_katex: pathlib.Path) -> None:
   output = _wrap(tmp_path, '<div class="wrap"><main><p>body text</p></main></div>', vendored_katex=vendored_katex)
   page = output.read_text(encoding="utf-8")
   assert "<title>CharlieBot Explain Template</title>" in page  # head verbatim from the template
@@ -81,7 +80,7 @@ def test_wrap_takes_head_and_style_from_the_template_and_the_body_from_the_fragm
   assert page.count("<body>") == 1
 
 
-def test_driver_runs_as_a_subprocess(tmp_path: Path, vendored_katex: Path) -> None:
+def test_driver_runs_as_a_subprocess(tmp_path: pathlib.Path, vendored_katex: pathlib.Path) -> None:
   fragment = _write_fragment(tmp_path, "<p>$x^2$</p>", name="driver.html")
   proc = subprocess.run(["node", str(_DRIVER), str(fragment), str(vendored_katex)], capture_output=True, check=False)
   assert proc.returncode == 0, proc.stderr.decode("utf-8")
@@ -89,7 +88,7 @@ def test_driver_runs_as_a_subprocess(tmp_path: Path, vendored_katex: Path) -> No
 
 
 def test_cli_defaults_math_on_for_explain_and_off_for_other_genres(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], cli_katex: pathlib.Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$y = x$$</p>")
   explain_output = tmp_path / "explain.html"
   assert _wrap_cli(fragment, explain_output, "explain").code == 0
@@ -115,7 +114,7 @@ def _damaged_fragment() -> bytes:
 
 
 def test_wrap_byte_gate_aborts_before_write_and_names_offsets(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], cli_katex: pathlib.Path) -> None:
   fragment = _write_fragment(tmp_path, _damaged_fragment(), name="damaged.html")
   output = tmp_path / "damaged_page.html"
   assert _wrap_cli(fragment, output, "explain").code == 1
@@ -127,7 +126,7 @@ def test_wrap_byte_gate_aborts_before_write_and_names_offsets(
 
 
 def test_wrap_byte_gate_runs_on_the_assembled_bytes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], cli_katex: pathlib.Path) -> None:
   r"""A fragment TAB reports at its assembled-page offset, past the template head."""
   fragment = _write_fragment(tmp_path, "<p>x\ty</p>")
   output = tmp_path / "page.html"

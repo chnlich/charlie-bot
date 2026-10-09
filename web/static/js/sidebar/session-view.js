@@ -550,21 +550,6 @@ function openMountOptions(session, data, messages) {
   return {pinned: false, readingAnchor: {kind: 'message', id: lastAssistant.id, offset: 0}};
 }
 
-// An anchor mount clamps its restore write to the maximum scroll, so a reply
-// that fits the viewport lands at the bottom without the follow pin. mount()
-// restored the anchor synchronously before returning, so this read sees the
-// restored position, not the seed estimate; within 1 px of the bottom means
-// the clamp fired. Pinning there would let late-arriving layout (the usage
-// strip, the trigger tray) drag the view to the new bottom and push the
-// reply's top off the first screen, so the open instead records "follow the
-// next turn" on the engine: the next append re-arms the pin when it lands,
-// and a genuine reader scroll cancels the record first.
-function followNextTurnIfAtBottom(engine, container) {
-  if (container.scrollHeight - container.scrollTop - container.clientHeight <= 1) {
-    engine.followNextTurn = true;
-  }
-}
-
 // A worker leaf's closing line in its own chat projection: the close event
 // projects to the system message "Task <outcome>: <summary>", and the leaf's
 // delivery banner shows that summary.
@@ -609,7 +594,6 @@ function renderSessionView(data) {
     ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, mountOptions || undefined)
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
-  else if (mountOptions) followNextTurnIfAtBottom(turnEngine, container);
 
   if (sessionHasMore) ensureSentinel(container, 'idle');
 

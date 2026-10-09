@@ -85,4 +85,26 @@ function paint(context, draft) {
   return html;
 }
 
-module.exports = { MARKED_URL, loadRenderer, loadRendererContext, loadStockMarked, paint };
+// The REAL paintStreamDraft (usage.js) over the real renderer, with the chat
+// seam it reads loaded in page order: namespace, then shared
+// (thinkingToggleHtml, shouldAutoScroll), then scroll (restoreBottomPin).
+// opts.document supplies the streaming-msg / streaming-content / messages
+// elements the paint looks up; the caller installs an engine under
+// Chat.TurnEngine.activeFor to drive the follow decision.
+async function loadStreamPaintContext(opts) {
+  const o = opts || {};
+  const markedSrc = await loadMarkedSrc();
+  const context = buildRendererContext();
+  if (o.document) context.document = o.document;
+  vm.createContext(context);
+  vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
+  vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
+  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
+  vm.runInContext(readStatic('chat/scroll.js'), context, { filename: 'chat/scroll.js' });
+  vm.runInContext(readStatic('usage.js'), context, { filename: 'usage.js' });
+  return context;
+}
+
+module.exports = { MARKED_URL, loadRenderer, loadRendererContext, loadStockMarked, paint, loadStreamPaintContext };

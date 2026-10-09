@@ -101,7 +101,6 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
 
   sidebar_state.store_snapshot_entry(
       session.id, {
-          sidebar_state.THREAD_RUNNING: False,
           sidebar_state.PENDING_TRIGGER_COUNT: 0,
           sidebar_state.NEXT_TRIGGER_AT: None,
           sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,

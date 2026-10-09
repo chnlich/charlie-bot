@@ -659,10 +659,6 @@ class TriggerManager:
       return "target task is archived"
     return None
 
-  async def _is_dormant_target(self, session_id: str) -> bool:
-    """The dormancy predicate over :meth:`_dormancy_reason` (create-time rejection)."""
-    return await self._dormancy_reason(session_id) is not None
-
   async def _watch_dormancy(self, trigger: PendingTrigger) -> str:
     """Watchdog racer: poll the dormancy predicate every ``_DORMANCY_CHECK_SECONDS``.
 

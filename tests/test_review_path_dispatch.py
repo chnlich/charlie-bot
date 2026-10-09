@@ -51,7 +51,13 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
       name="W",
       backend=None,
       caller="operator")
+  review_started = asyncio.Event()
   review_gate = asyncio.Event()
+
+  async def review_gate_wait() -> None:
+    review_started.set()
+    await review_gate.wait()
+
   test_task_execution.install_backends(
       monkeypatch,
       [
@@ -59,7 +65,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
           # The gated review: it cannot finish before the test's mid-review
           # actions below, so they are provably "during the review Run".
           test_task_execution.SpawningScriptedBackend(
-              [test_task_execution.result_event("review approved")], gate=review_gate.wait),
+              [test_task_execution.result_event("review approved")], gate=review_gate_wait),
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak done")]),
           # The tweak's own delivery chain spawns its review of the tweak run.
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak review approved")]),
@@ -70,12 +76,15 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   work_run_id = d1["run_id"]
   await test_task_execution.wait_for_terminal_run(tree, child.id, work_run_id)
 
+  # The work Run's terminal fact lands before its delivery chain registers the
+  # review Run; the gated review backend starting is the event that proves the
+  # review Run is registered and holds the node's serialized slot.
+  await asyncio.wait_for(review_started.wait(), timeout=15)
   review_runs = [r for r in tree.runs.list_run_records_sync(child.id) if r.kind == "review"]
   assert len(review_runs) == 1
   review_run = review_runs[0]
-  # The registered gated review holds the node's serialized slot and cannot
-  # finish before the gate below releases — everything here is provably
-  # "during the review Run" without a spawn-timing wait.
+  # The gated review cannot finish before the gate below releases, so every
+  # action until then is provably "during the review Run".
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), review_run.id) is None
 
   # DURING the review: admit the input and leave a commit on the work branch

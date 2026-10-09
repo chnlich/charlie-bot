@@ -12,15 +12,14 @@ the failure policy wrapped around it:
   ``__init__``; a real run never silently degrades to another backend.
 """
 
-from pathlib import Path
+import pathlib
 from typing import Any
 
+import conftest
 import pytest
-from conftest import backend_option, stub_credentials
 
-from src.infra.config import CharlieBotConfig
-from src.infra.models import ThreadMetadata
-from src.runtime.worker import Worker
+from src.infra import config, models
+from src.runtime import worker
 
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
 # other four never do and therefore never raise FileNotFoundError on build.
@@ -35,7 +34,7 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
   """Make every agent CLI binary unresolvable, independent of host install state."""
 
   def _missing(name: str, fallback_dir: str) -> str:
-    raise FileNotFoundError(f"{name} binary not found on PATH or at {Path(fallback_dir) / name}")
+    raise FileNotFoundError(f"{name} binary not found on PATH or at {pathlib.Path(fallback_dir) / name}")
 
   for target in _RESOLVER_PATCH_TARGETS:
     monkeypatch.setattr(target, _missing)
@@ -46,24 +45,24 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
 _CREDENTIAL_SECTIONS = {"test-kimi": {"api_key": "test-key"}, "charliebot": {"access_key": "test-key"}}
 
 
-def _worker(tmp_path: Path, backend_type: str) -> Worker:
-  stub_credentials(_CREDENTIAL_SECTIONS)
+def _worker(tmp_path: pathlib.Path, backend_type: str) -> worker.Worker:
+  conftest.stub_credentials(_CREDENTIAL_SECTIONS)
   option_kwargs: dict[str, Any] = {"id": "opt", "label": "Opt", "type": backend_type, "model": "test-model"}
   if backend_type in ("cc-openai-compatible", "charlie-code"):
     option_kwargs["api_base"] = "http://test.invalid"  # charlie-code requires it (validated before its binary)
   if backend_type == "cc-kimi":
     option_kwargs["credential"] = "test-kimi"
-  cfg = CharlieBotConfig(
+  cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
   )
-  return Worker(
-      thread_metadata=ThreadMetadata(session_id="sess-1", description="test"),
+  return worker.Worker(
+      thread_metadata=models.ThreadMetadata(session_id="sess-1", description="test"),
       working_dir=tmp_path / "work",
       events_log_path=tmp_path / "data" / "events.jsonl",
       task_description="test",
       cfg=cfg,
-      backend_option=backend_option(**option_kwargs),
+      backend_option=conftest.backend_option(**option_kwargs),
   )
 
 
@@ -73,7 +72,7 @@ async def _on_spawn(pid: int) -> None:
 
 @pytest.mark.parametrize("backend_type", BINARY_RESOLVING_TYPES)
 def test_launcher_build_still_fails_without_binaries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
   """on_spawn=<callable>: binary-resolving types still raise FileNotFoundError."""
   _hide_all_binaries(monkeypatch)
   with pytest.raises(FileNotFoundError):

@@ -6,7 +6,7 @@ Read, in this order:
 
 1. `gh pr view <N>` and `gh pr diff <N>` — the diff is the change set under review; its stated purpose matters for scope judgment.
 2. `CLAUDE.md` at the repo root — the conventions the diff must satisfy.
-3. Every source file the diff touches, enough to judge each hunk in its surrounding code.
+3. Every source file the diff touches, at the PR head, enough to judge each hunk in its surrounding code. Fetch the head with `git fetch origin pull/<N>/head`. Read each file with `git show <sha>:<path>`. Search the PR tree with `git grep <pattern> <sha>`. Take `<sha>` from `gh pr view <N> --json headRefOid`. Keep the branch and the working files of every checkout unchanged: a running CharlieBot server loads its code from one of them.
 
 Check, in order of importance:
 

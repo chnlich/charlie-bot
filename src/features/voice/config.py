@@ -33,8 +33,3 @@ class VoiceConfig(BaseModel):
   # Language hints as BCP-47 base codes (zh, en), mapped by each backend to its own wire
   # format; empty lets every backend auto-detect.
   languages: list[str] = []
-
-  # aigw gateway root URL for the 'gemini-aigw' backend, which sends the whole
-  # recording through the gateway's /gemini pass-through to Gemini 3.5 Transcribe.
-  # Empty leaves that backend unavailable. Credential: credentials.yaml aigw.api_key.
-  aigw_base_url: str = ''

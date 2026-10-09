@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from src.features.voice.transcription import base, gemini, gemini_aigw, local, muse
+from src.features.voice.transcription import base, gemini, local, muse
 
 if TYPE_CHECKING:
   from src.infra import config
@@ -28,15 +28,11 @@ def _gemini(cfg: config.CharlieBotConfig, **kwargs: object) -> base.Transcriptio
   return gemini.GeminiTranscriptionBackend(cfg, **kwargs)
 
 
-def _gemini_aigw(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
-  return gemini_aigw.GeminiAigwTranscriptionBackend(cfg, **kwargs)
-
-
 def _muse(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
   return muse.MuseTranscriptionBackend(cfg, **kwargs)
 
 
-_FACTORIES.update({"local": _local, "gemini": _gemini, "gemini-aigw": _gemini_aigw, "muse": _muse})
+_FACTORIES.update({"local": _local, "gemini": _gemini, "muse": _muse})
 
 
 def backend_ids() -> tuple[str, ...]:

@@ -177,12 +177,12 @@ async def test_a_transcription_failure_leaves_the_wav_on_disk(cfg: CharlieBotCon
 @pytest.mark.asyncio
 async def test_an_unavailable_selection_is_an_error_without_a_local_fallback(
     cfg: CharlieBotConfig, remote: _FakeRemote) -> None:
-  remote.unavailable = "needs aigw.api_key"
+  remote.unavailable = "needs fake.api_key"
 
   response, logs = await _post(BACKEND_ID)
 
   assert response.status_code == 400
-  assert json.loads(response.body)["error"] == f"{BACKEND_ID} is unavailable: needs aigw.api_key"
+  assert json.loads(response.body)["error"] == f"{BACKEND_ID} is unavailable: needs fake.api_key"
   # Nothing decoded, nothing persisted.
   assert remote.calls == []
   assert not _voice_dir(cfg).exists()

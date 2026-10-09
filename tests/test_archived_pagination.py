@@ -2,8 +2,7 @@
 
 The mechanism assertions pin the design's acceptance terms: after the cache is
 warm, list request paths read zero session metadata.json files; archived cache
-entries never expire while active entries keep the TTL; the boot scan warms the
-cache for every status.
+entries never expire while active entries keep the TTL.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from pathlib import Path
 import pytest
 from conftest import (
     SessionBlocks,
-    build_session_blocks,
     count_path_read_text,
     make_session_blocks,
     user_event,
@@ -271,17 +269,3 @@ def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch:
   accents = tmp_path / "accents.jsonl"
   accents.write_bytes("caf\u00e9".encode())
   assert session_search_module._scan_content_for_hit(accents, "s", "\u00e9", 0) is True
-
-
-@pytest.mark.asyncio
-async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
-  mgr = make_session_blocks(tmp_path)
-  archived = await _add_session(mgr, "cold-archived", minutes=0)
-  active = await _add_session(mgr, "cold-active", status=SessionStatus.ACTIVE, minutes=1)
-
-  rebooted = build_session_blocks(mgr.cfg)
-  listed = rebooted.store.list_active_session_metas()
-
-  assert [s.id for s in listed] == [active.id]
-  assert archived.id in rebooted.store.metadata_cache
-  assert rebooted.store.metadata_cache[archived.id][0].status == SessionStatus.ARCHIVED

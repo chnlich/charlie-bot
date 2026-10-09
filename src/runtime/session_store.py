@@ -68,7 +68,7 @@ def stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   :mod:`src.runtime.thinking_state`; it is never persisted (see
   ``TRANSIENT_METADATA_FIELDS``). Every API- and listing-bound return path
   (``get_session``, the listing entry points routed through
-  ``load_session_metas``, ``list_active_session_metas``, the spawn returns)
+  ``load_session_metas``, the spawn returns)
   applies this stamp on the way out; the succession-internal
   readers (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately
   return the disk value unstamped, and a reader that needs live busy state stamps
@@ -196,39 +196,6 @@ class SessionStore:
       setattr(fresh, field, value)
       await self.save_metadata(fresh, lock_held=True)
 
-  def list_active_session_metas(self) -> list[SessionMetadata]:
-    """Return metadata for active sessions by reading metadata.json files.
-
-    Sync method — returns full SessionMetadata objects so callers avoid
-    a second disk read. Populates the metadata cache for every status as a
-    side-effect: the boot-time recovery scan already reads each file, so the
-    same pass warms the listing cache and archived entries stay authoritative
-    from then on (``_fresh_cached_meta``).
-    """
-    if not self._cfg.sessions_dir.exists():
-      return []
-    results: list[SessionMetadata] = []
-    now = time.monotonic()
-    for d in self._cfg.sessions_dir.iterdir():
-      if not d.is_dir():
-        continue
-      meta_path = self.metadata_path(d.name)
-      if not meta_path.exists():
-        continue
-      try:
-        sig = stat_signature(meta_path)  # before the read, the cache revalidation key
-        raw = meta_path.read_text(encoding="utf-8")
-        meta = validate_session_metadata(raw, str(meta_path))
-        self.metadata_cache[d.name] = (meta, now, sig)
-        if meta.status == SessionStatus.ACTIVE:
-          results.append(stamp_thinking_since(meta.model_copy()))
-      except (OSError, ValueError) as e:
-        log.debug("list_active_ids_skip", dir=d.name, error=str(e))
-    # The repopulate can replace cached metas with what the files now hold, so
-    # listings stored before this scan must not serve.
-    self._listings_revision += 1
-    return results
-
   def invalidate_cache(self, session_id: str) -> None:
     """Remove a session from the metadata cache."""
     self.metadata_cache.pop(session_id, None)
@@ -251,9 +218,7 @@ class SessionStore:
     stand, not on the clock alone. The two
     TTL-checked metadata readers (``get_session`` and ``load_session_metas``)
     route through this one check, and a stale entry is evicted here, so the
-    two cannot drift on freshness semantics. ``list_active_session_metas``
-    reads metadata.json unconditionally and repopulates the cache from its own
-    scan instead — a third reader this check does not govern.
+    two cannot drift on freshness semantics.
     """
     cached = self.metadata_cache.get(session_id)
     if cached is None:
@@ -309,9 +274,7 @@ class SessionStore:
     in one asyncio.to_thread call — the parse stays off the event loop —
     logging and dropping any session that fails to load. Returns the cached
     objects themselves, filtered to *status* when given: callers that hand
-    metadata out of the manager copy and stamp on the way out. The sync
-    active-only scan ``list_active_session_metas`` keeps its own per-file sync
-    reads and does not route through here.
+    metadata out of the manager copy and stamp on the way out.
 
     The per-filter result memoizes on (``_listings_revision``, the sessions
     root's signature, a ``_LISTINGS_SWEEP_INTERVAL`` clock): an in-process

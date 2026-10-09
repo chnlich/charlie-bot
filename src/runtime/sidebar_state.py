@@ -21,10 +21,6 @@ from src.infra.memo import BoundedMemo
 # The sidebar dict keys, single-homed here: the probe snapshot and the
 # per-request derived entry both build and read their dicts by these names,
 # and /api/sessions relays the derived entry to web/static/js/sidebar/ verbatim.
-# The probe snapshot (what a deep probe measures) carries THREAD_RUNNING; the
-# derived entry resolves it into HAS_RUNNING_TASKS (plus the live busy state)
-# and HAS_PENDING_TRIGGER.
-THREAD_RUNNING = "thread_running"
 PENDING_TRIGGER_COUNT = "pending_trigger_count"
 NEXT_TRIGGER_AT = "next_trigger_at"
 HAS_PENDING_PLAN_APPROVAL = "has_pending_plan_approval"
@@ -45,7 +41,7 @@ _FORCE_FULL_EVERY = 10
 # Session ids whose probed state changed since the last re-probe.
 _dirty: set[str] = set()
 # session id -> the probe snapshot, keyed by the constants above:
-# THREAD_RUNNING bool, PENDING_TRIGGER_COUNT int, NEXT_TRIGGER_AT datetime | None,
+# PENDING_TRIGGER_COUNT int, NEXT_TRIGGER_AT datetime | None,
 # HAS_PENDING_PLAN_APPROVAL bool.
 # A session without an entry is cold for that poll (probed like a dirty one),
 # so an empty dict — a fresh boot — is a full probe.

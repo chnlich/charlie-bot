@@ -23,34 +23,26 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+import pathlib
 import pkgutil
 import sys
 from collections.abc import Awaitable, Callable
-from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
-    GEMINI_RESOLVE_BINARY_PATCH_TARGET,
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-    OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET,
-    RUNS_READ_PID_STAT_PATCH_TARGET,
-    stub_subprocess_spawn,
-)
 
 import src.backends as backends_package
 import src.runtime.agent_process as agent_process_package
-from src.backends.antigravity.antigravity_cli import AntigravityCliBackend
-from src.backends.charlie_code.charlie_code import CharlieCodeBackend
-from src.backends.claude_code.claude_code import AnthropicEndpointBackend, ClaudeCodeBackend
-from src.backends.codex.codex import CodexBackend
-from src.backends.gemini.gemini_cli import GeminiCliBackend
-from src.backends.kimi.kimi import KimiBackend
-from src.backends.openai_compatible.openai_compatible_claude import OpenAICompatibleClaudeBackend
-from src.backends.opencode.opencode import OpenCodeBackend
-from src.runtime.agent_process.base import AgentBackend
+from src.backends.antigravity import antigravity_cli
+from src.backends.charlie_code import charlie_code
+from src.backends.claude_code import claude_code
+from src.backends.codex import codex
+from src.backends.gemini import gemini_cli
+from src.backends.kimi import kimi
+from src.backends.openai_compatible import openai_compatible_claude
+from src.backends.opencode import opencode
+from src.runtime.agent_process import base
 
 # (start_time_field, state) 2-tuple in read_pid_stat's shape; [0] must land on
 # backend.pid_start and [1] must not leak into it.
@@ -59,29 +51,29 @@ _SENTINEL_STAT: tuple[str, str] = ("314159contract-start", "R")
 # Minimal constructor kwargs per base-path class. The subprocess is mocked in
 # the shared harness, so the resolved binary path only has to exist as a
 # string; resolve_binary itself is patched where the constructor calls it.
-_BASE_CTOR_KWARGS: dict[type[AgentBackend], dict] = {
-    ClaudeCodeBackend: {},
-    AnthropicEndpointBackend:
+_BASE_CTOR_KWARGS: dict[type[base.AgentBackend], dict] = {
+    claude_code.ClaudeCodeBackend: {},
+    claude_code.AnthropicEndpointBackend:
         {
             "base_url": "https://contract.invalid",
             "auth_token": "contract-token",
             "model": "contract-model",
         },
-    KimiBackend: {
+    kimi.KimiBackend: {
         "api_key": "contract-key",
         "model": "contract-model"
     },
-    CharlieCodeBackend: {
+    charlie_code.CharlieCodeBackend: {
         "model": "contract-model",
         "api_base": "https://contract.invalid"
     },
-    CodexBackend: {
+    codex.CodexBackend: {
         "model": "contract-model"
     },
-    GeminiCliBackend: {
+    gemini_cli.GeminiCliBackend: {
         "model": "contract-model"
     },
-    OpenAICompatibleClaudeBackend:
+    openai_compatible_claude.OpenAICompatibleClaudeBackend:
         {
             "proxy_base_url": "https://contract.invalid",
             "auth_token": "contract-token",
@@ -89,16 +81,16 @@ _BASE_CTOR_KWARGS: dict[type[AgentBackend], dict] = {
         },
 }
 
-_BASE_PATH_CLASSES: tuple[type[AgentBackend], ...] = tuple(_BASE_CTOR_KWARGS)
+_BASE_PATH_CLASSES: tuple[type[base.AgentBackend], ...] = tuple(_BASE_CTOR_KWARGS)
 
 
 class _SpawnObservedError(Exception):
   """Control-flow marker: the on_spawn probe raises it to halt base.run() exactly at notification."""
 
 
-def _enumerate_backend_classes() -> set[type[AgentBackend]]:
+def _enumerate_backend_classes() -> set[type[base.AgentBackend]]:
   """Every concrete AgentBackend subclass defined under src/backends and src/runtime/agent_process."""
-  classes: set[type[AgentBackend]] = set()
+  classes: set[type[base.AgentBackend]] = set()
   module_names = [
       module_info.name
       for package in (backends_package, agent_process_package)
@@ -107,7 +99,7 @@ def _enumerate_backend_classes() -> set[type[AgentBackend]]:
   for module_name in module_names:
     module = importlib.import_module(module_name)
     for _, cls in inspect.getmembers(module, inspect.isclass):
-      if cls is AgentBackend or not issubclass(cls, AgentBackend) or inspect.isabstract(cls):
+      if cls is base.AgentBackend or not issubclass(cls, base.AgentBackend) or inspect.isabstract(cls):
         continue
       classes.add(cls)
   return classes
@@ -115,10 +107,10 @@ def _enumerate_backend_classes() -> set[type[AgentBackend]]:
 
 def _install_sentinel_read_pid_stat(monkeypatch: pytest.MonkeyPatch) -> None:
   """Stub the /proc read to the sentinel pair; the pin must copy [0] onto pid_start."""
-  monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: _SENTINEL_STAT)
+  monkeypatch.setattr(conftest.RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: _SENTINEL_STAT)
 
 
-async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """Shared-path harness: drive the inherited base.run() with a mocked subprocess.
 
   The on_spawn probe records backend.pid_start at notification time and then
@@ -130,18 +122,18 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   module = sys.modules[cls.__module__]
   if "resolve_binary" in vars(module):  # some constructors resolve their CLI eagerly
     monkeypatch.setattr(f"{cls.__module__}.resolve_binary", lambda name, fallback: "/usr/bin/true")
-  elif cls in (CharlieCodeBackend, GeminiCliBackend, CodexBackend):
+  elif cls in (charlie_code.CharlieCodeBackend, gemini_cli.GeminiCliBackend, codex.CodexBackend):
     # their eager resolve reads the helper through the base module (module-style import)
-    monkeypatch.setattr(GEMINI_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/true")
+    monkeypatch.setattr(conftest.GEMINI_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/true")
   observed: list[tuple[int, str | None]] = []
-  backend: AgentBackend
+  backend: base.AgentBackend
 
   async def on_spawn(pid: int) -> None:
     observed.append((pid, backend.pid_start))
     raise _SpawnObservedError
 
   backend = cls(on_spawn=on_spawn, log_dir=tmp_path / "logs", **_BASE_CTOR_KWARGS[cls])
-  stub_subprocess_spawn(monkeypatch, BASE_SPAWN_SUBPROCESS_PATCH_TARGET, 31337)
+  conftest.stub_subprocess_spawn(monkeypatch, conftest.BASE_SPAWN_SUBPROCESS_PATCH_TARGET, 31337)
 
   with pytest.raises(_SpawnObservedError):
     async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
@@ -153,21 +145,21 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   assert backend.pid_start == _SENTINEL_STAT[0]
 
 
-async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """opencode custom run() harness over the shared conftest spawn stub."""
-  monkeypatch.setattr(OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
+  monkeypatch.setattr(conftest.OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
-  backend: AgentBackend
+  backend: base.AgentBackend
 
   async def on_spawn(pid: int) -> None:
     observed.append((pid, backend.pid_start))
 
   backend = cls(model="provider/model", on_spawn=on_spawn)
-  stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 1234)
-  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
-  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
-  monkeypatch.setattr(backend, "_cleanup_server", AsyncMock())
+  conftest.stub_subprocess_spawn(monkeypatch, conftest.OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 1234)
+  monkeypatch.setattr(backend, "_read_server_url", mock.AsyncMock(side_effect=RuntimeError("stop after spawn")))
+  monkeypatch.setattr(backend, "_stream_stderr", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_cleanup_server", mock.AsyncMock())
 
   _events = [event async for event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
@@ -177,7 +169,7 @@ async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
   await backend._stderr_task
 
 
-async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """antigravity custom run() harness (test_antigravity_cli_backend.py's real-script shape)."""
   fake_agy = tmp_path / "agy"
   fake_agy.write_text(
@@ -185,10 +177,10 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
       "\"response\":\"contract answer\",\"usage\":{}}'\n",
       encoding="utf-8")
   fake_agy.chmod(0o755)
-  monkeypatch.setattr(ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: str(fake_agy))
+  monkeypatch.setattr(conftest.ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: str(fake_agy))
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
-  backend: AgentBackend
+  backend: base.AgentBackend
 
   async def on_spawn(pid: int) -> None:
     observed.append((pid, backend.pid_start))
@@ -203,15 +195,15 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
   assert backend.pid_start == _SENTINEL_STAT[0]
 
 
-HarnessFn = Callable[[type[AgentBackend], pytest.MonkeyPatch, Path], Awaitable[None]]
+HarnessFn = Callable[[type[base.AgentBackend], pytest.MonkeyPatch, pathlib.Path], Awaitable[None]]
 
 # Harness-by-class map: the base-path classes share one harness driving the
 # inherited base.run(); opencode and antigravity each drive their own run().
 # This map is the ONLY opt-in — enumeration does not consult it.
-HARNESSES: dict[type[AgentBackend], HarnessFn] = {
+HARNESSES: dict[type[base.AgentBackend], HarnessFn] = {
     **dict.fromkeys(_BASE_PATH_CLASSES, _drive_base_path),
-    OpenCodeBackend: _drive_opencode,
-    AntigravityCliBackend: _drive_antigravity,
+    opencode.OpenCodeBackend: _drive_opencode,
+    antigravity_cli.AntigravityCliBackend: _drive_antigravity,
 }
 
 
@@ -228,12 +220,13 @@ def test_every_backend_subclass_has_a_harness() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cls", sorted(HARNESSES, key=lambda c: c.__name__), ids=lambda c: c.__name__)
-async def test_pid_start_pinned_at_spawn_notification(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_pid_start_pinned_at_spawn_notification(
+    cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """One run() per backend: pid_start == sentinel[0] when _on_spawn fires."""
   await HARNESSES[cls](cls, monkeypatch, tmp_path)
 
 
-class _SleeperChildBackend(AgentBackend):
+class _SleeperChildBackend(base.AgentBackend):
   """Concrete backend whose child is a real long-running process: a sleep no
   subprocess stub stands in for."""
 
@@ -242,7 +235,7 @@ class _SleeperChildBackend(AgentBackend):
 
 
 @pytest.mark.asyncio
-async def test_on_spawn_failure_ends_the_spawned_child(tmp_path: Path) -> None:
+async def test_on_spawn_failure_ends_the_spawned_child(tmp_path: pathlib.Path) -> None:
   """The spawned child is dead by the time the launch callback's exception leaves run().
 
   A failed launch callback (the store refusing a stopped run's identity, or

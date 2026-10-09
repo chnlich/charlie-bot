@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING
 from src.features.voice.transcription import registry
 
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
 
-def check_default_backend(cfg: CharlieBotConfig) -> None:
+def check_default_backend(cfg: config.CharlieBotConfig) -> None:
   """A default_backend typo must fail at startup: validate against the registry's ids."""
   known = registry.backend_ids()
   if cfg.voice.default_backend not in known:

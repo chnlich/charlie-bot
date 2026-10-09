@@ -492,8 +492,7 @@ class TaskInputDispatcher:
     decision["run_id"] = launched
     return decision
 
-  async def wake_parent(
-      self, parent_id: str, *, report: dict, caller_session_id: str | None = None) -> asyncio.Task | None:
+  async def wake_parent(self, parent_id: str, *, report: dict) -> asyncio.Task | None:
     """Dispatch a newly delivered child report to its parent task.
 
         The dispatch reads the parent's durable inputs and never consults the

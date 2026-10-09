@@ -89,7 +89,6 @@ class ThreadStatus(StrEnum):
   CANCELLED = "cancelled"
 
 
-
 class SessionStatus(StrEnum):
   ACTIVE = "active"
   ARCHIVED = "archived"

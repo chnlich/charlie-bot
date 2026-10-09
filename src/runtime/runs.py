@@ -12,7 +12,6 @@ This module owns the pure/queryable parts of that contract:
 - path derivation for the per-run dirs, and the on-disk file names each
   consumer joins onto the dir it already holds;
 - process liveness (``pid`` + ``/proc/<pid>/stat`` field 22 + host boot time);
-- the outcome table mapping on-disk facts to a ``RunOutcome``;
 - the pure raw-line -> translated-event projection shared by the live read
   loop, the re-attach path, and tests;
 - the end-of-run error-hint selection for a failed invocation (the
@@ -29,7 +28,6 @@ import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,10 +38,8 @@ from src.infra.json_utils import atomic_write_text
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import RunRecord, ensure_utc, utc_now
 from src.infra.ndjson import HeadProvableFilter, parse_ndjson_events, parse_ndjson_file, parse_ndjson_line
-from src.infra.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import ACTOR_SYSTEM, RunEventSink, build_control_event, sha256_hex, stable_run_id
-from src.runtime.hooks import backend_types
 from src.runtime.run_token import b64url_decode, b64url_encode
 from src.runtime.sidebar_state import mark_sidebar_dirty
 
@@ -81,21 +77,6 @@ EVENTS_LOG_NAME = "events.jsonl"
 # run-scoped CLI path reads session metadata without this module's model stack.
 from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
-# Backend types with event transports outside the shared base read loop register
-# restart_reattach=False. A restart cannot attach to those runs, so they fail with
-# an explicit reason instead of being disguised as crashes.
-TRANSPORT_NOT_COVERED_REASON = "backend transport not covered by restart-safe runtime"
-
-LEGACY_RAW_MISSING_REASON = "raw log missing (run predates restart-safe transport)"
-DIED_WITHOUT_RESULT_REASON = "process exited without a final result event"
-
-# Effective-alive verdicts: wherever death cannot be PROVEN (a liveness input
-# is missing, or the probe says alive), the run is treated as alive and never
-# finalized failed on missing evidence. These reasons route the boot-recovery
-# passes' report-only branch (no re-attach) for rows that have nothing followable.
-UNCOVERED_ALIVE_REASON = "uncovered-alive"
-RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
-
 
 def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
   """The configured transport type of ``backend_id``; None when unset or unknown."""
@@ -103,25 +84,6 @@ def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
     return None
   option = cfg.get_backend_option(backend_id)
   return option.type if option else None
-
-
-class RunOutcome(StrEnum):
-  """Outcome rows for an interrupted run."""
-  COMPLETED = "completed"  # last result event exists -> finalize from it
-  RUNNING = "running"  # alive and producing output -> re-attach
-  DIED = "died"  # gone without a result event -> fail, keep worktree
-  STALLED = "stalled"  # alive but raw log silent beyond the report threshold
-  NEVER_STARTED = "never_started"  # registered but never spawned -> respawn
-
-
-@dataclass(frozen=True)
-class RunResolution:
-  """Result of resolving an interrupted run from on-disk facts."""
-  outcome: RunOutcome
-  reason: str = ""
-  # Raw log's final mtime — the run's true completion time, independent of
-  # downtime. Present whenever the raw log exists.
-  completed_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -397,105 +359,6 @@ class RawCursorWriter:
     if self._fd is not None:
       os.close(self._fd)
       self._fd = None
-
-
-# ---------------------------------------------------------------------------
-# Outcome resolution
-# ---------------------------------------------------------------------------
-
-
-def _missing_liveness_fields(
-    pid: int | None,
-    pid_start: str | None,
-    started_at: datetime | None,
-) -> list[str]:
-  """Names of the liveness inputs that are absent, in fixed order."""
-  missing = []
-  if pid is None:
-    missing.append("pid")
-  if pid_start is None:
-    missing.append("pid_start")
-  if started_at is None:
-    missing.append("started_at")
-  return missing
-
-
-def resolve_run(
-    *,
-    raw_path: Path,
-    pid: int | None,
-    pid_start: str | None,
-    started_at: datetime | None,
-    backend_type: str | None,
-    translate: Callable[[dict], list[dict]],
-    host_boot_time: datetime,
-) -> RunResolution:
-  """Resolve an interrupted run's outcome purely from on-disk facts.
-
-  Row order matters: registered-but-never-spawned is judged before backend
-  coverage (a fresh spawn works for any backend), and coverage is judged
-  before semantics that need the shared read loop's artifacts.
-
-  One invariant governs every row below: death is reported only when it can be
-  PROVEN — pid, pid_start, and started_at all present AND ``is_run_alive``
-  says dead. Anything else (any input missing so death is unverifiable, or the
-  probe says alive) is treated as alive and resolves to a RUNNING/STALLED row,
-  never a DIED-on-missing-evidence finalize.
-  """
-  now = datetime.now(UTC)
-  raw_exists = raw_path.is_file()
-
-  if not raw_exists and pid is None:
-    return RunResolution(outcome=RunOutcome.NEVER_STARTED)
-
-  missing = _missing_liveness_fields(pid, pid_start, started_at)
-  missing_note = f"missing liveness field(s): {', '.join(missing)}" if missing else ""
-  alive = is_run_alive(pid, pid_start, started_at, host_boot_time)
-  # Effective-alive, defined once for the whole table: verified-alive, or death
-  # unverifiable because a liveness input is missing. Both mean "treat as alive".
-  effectively_alive = alive or bool(missing)
-
-  completed_at: datetime | None = None
-  result: dict | None = None
-  if raw_exists:
-    completed_at = raw_completion_time(raw_path)
-    events = project_raw_file(raw_path, translate)
-    result = summarize_result(events)
-
-  if backend_type is not None and not backend_types.traits_for(backend_type).restart_reattach and result is None:
-    # A result event already on disk falls through to the downstream result
-    # row and completes normally; this row only judges runs without one.
-    if effectively_alive:
-      return RunResolution(outcome=RunOutcome.RUNNING, reason=UNCOVERED_ALIVE_REASON, completed_at=completed_at)
-    return RunResolution(outcome=RunOutcome.DIED, reason=TRANSPORT_NOT_COVERED_REASON, completed_at=completed_at)
-  if not raw_exists:
-    if effectively_alive:
-      return RunResolution(outcome=RunOutcome.RUNNING, reason=RAW_MISSING_ALIVE_REASON)
-    return RunResolution(outcome=RunOutcome.DIED, reason=LEGACY_RAW_MISSING_REASON)
-
-  if result is not None:
-    return RunResolution(
-        outcome=RunOutcome.COMPLETED,
-        completed_at=completed_at,
-    )
-  if effectively_alive:
-    silent_for = (now - completed_at).total_seconds() if completed_at else 0.0
-    if silent_for > NO_OUTPUT_REPORT_THRESHOLD:
-      reason = (f"alive but no raw output for {int(silent_for)}s "
-                f"(>{NO_OUTPUT_REPORT_THRESHOLD}s threshold)")
-      if missing_note:
-        reason = f"{reason}; {missing_note}"
-      return RunResolution(
-          outcome=RunOutcome.STALLED,
-          reason=reason,
-          completed_at=completed_at,
-      )
-    return RunResolution(outcome=RunOutcome.RUNNING, reason=missing_note, completed_at=completed_at)
-  return RunResolution(
-      outcome=RunOutcome.DIED,
-      reason=DIED_WITHOUT_RESULT_REASON,
-      completed_at=completed_at,
-  )
 
 
 # ---------------------------------------------------------------------------

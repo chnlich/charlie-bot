@@ -614,8 +614,8 @@ def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cu
   attempt's raw bytes (e.g. the VERIFY quota-retry fallback, which respawns
   into the same thread data dir) would replay that entire prior stream —
   including whatever terminal error ended it. Rotated files are kept under a
-  numbered suffix distinct from RAW_LOG_NAME/STDERR_LOG_NAME (so resolve_run
-  and raw_completion_time keep seeing only the current attempt) for
+  numbered suffix distinct from RAW_LOG_NAME/STDERR_LOG_NAME (so
+  raw_completion_time keeps seeing only the current attempt) for
   debugging, and the stale cursor is removed so it can never point past the
   new file's EOF.
   """

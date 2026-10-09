@@ -223,16 +223,3 @@ def relay_move(
     refused = claude_accounts.is_newer_transcript_refusal(exc)
     return RelayMove(None, f"Claude account relay failed: {exc}", nxt if refused else None, pool_exhausted=False)
   return RelayMove(nxt, None, None, pool_exhausted=False)
-
-
-def move_to_next_account(
-    cfg: CharlieBotConfig,
-    model: str | None,
-    current: ClaudeAccount,
-    cc_session_id: str | None,
-    now: datetime | None = None,
-    account_pool: str | None = None,
-) -> tuple[ClaudeAccount | None, str | None, ClaudeAccount | None]:
-  """``relay_move`` as ``(account, error, refused_holder)``."""
-  move = relay_move(cfg, model, current, cc_session_id, now, account_pool)
-  return move.account, move.error, move.refused_holder

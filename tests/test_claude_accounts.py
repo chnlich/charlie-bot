@@ -154,26 +154,24 @@ def test_a_label_in_two_pools_loads_and_selects_from_either(tmp_path: Path) -> N
 
 
 def test_relay_stays_inside_the_pool_and_names_it_when_exhausted(tmp_path: Path) -> None:
-  """move_to_next_account picks the next account inside the pool only; a healthy account in
+  """relay_move picks the next account inside the pool only; a healthy account in
   another pool stays unused, and exhaustion names the pool and its earliest reset."""
   cfg = _pool_cfg(tmp_path, pools={"alpha": ["main", "ext-1"], "beta": ["ext-2"]})
   make_transcript(tmp_path / "claude-main", "uuid-1")
   current = claude_accounts.account_by_label(cfg, "main")
   claude_accounts.observe_rate_limit("main", _event("allowed", 0.80, 0.10), now=NOW)
 
-  nxt, error, refused = claude_relay.move_to_next_account(
-      cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
+  move = claude_relay.relay_move(cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
 
-  assert (nxt.label, error, refused) == ("ext-1", None, None)
+  assert (move.account.label, move.error, move.refused_holder) == ("ext-1", None, None)
 
   claude_accounts.observe_rate_limit(
       "ext-1", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
 
-  nxt, error, refused = claude_relay.move_to_next_account(
-      cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
+  move = claude_relay.relay_move(cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
 
-  assert (nxt, refused) == (None, None)
-  assert error == (
+  assert (move.account, move.refused_holder) == (None, None)
+  assert move.error == (
       "Claude account pool has no available account (pool 'alpha'; earliest reset 21:00 UTC); "
       "this run did not complete.")
 
@@ -186,11 +184,11 @@ def test_relay_exhaustion_without_pools_keeps_the_unnamed_message(tmp_path: Path
     claude_accounts.observe_rate_limit(
         label, _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
 
-  nxt, error, _refused = claude_relay.move_to_next_account(cfg, FABLE_MODEL, current, "uuid-1", now=NOW)
+  move = claude_relay.relay_move(cfg, FABLE_MODEL, current, "uuid-1", now=NOW)
 
-  assert nxt is None
-  assert error == claude_relay.pool_exhausted_message(cfg, NOW)
-  assert error == (
+  assert move.account is None
+  assert move.error == claude_relay.pool_exhausted_message(cfg, NOW)
+  assert move.error == (
       "Claude account pool has no available account (earliest reset 21:00 UTC); "
       "this run did not complete.")
 
@@ -203,11 +201,10 @@ def test_pool_exhaustion_names_the_pool_even_without_a_reset_time(tmp_path: Path
   write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
   current = claude_accounts.account_by_label(cfg, "main")
 
-  nxt, error, refused = claude_relay.move_to_next_account(
-      cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
+  move = claude_relay.relay_move(cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
 
-  assert (nxt, refused) == (None, None)
-  assert error == (
+  assert (move.account, move.refused_holder) == (None, None)
+  assert move.error == (
       "Claude account pool has no available account (pool 'alpha'; no reset time known); "
       "this run did not complete.")
 

@@ -51,24 +51,19 @@ import argparse
 import json
 import uuid
 
-from src.infra.help_formatter import CliHelpFormatter
-from src.runtime.cli.common import (
-    add_session_arg,
-    exit_usage_error,
-    find_local_task_close,
-    get_api,
-    post_internal_api,
-    read_required_text_file,
-    resolve_session_id,
-)
+from src.infra import help_formatter
+from src.runtime.cli import common
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot session mutations", formatter_class=CliHelpFormatter)
+  parser = argparse.ArgumentParser(
+      description="CharlieBot session mutations", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="session_command", required=True)
 
   create = sub.add_parser(
-      "create", help="Create a session (metadata only, no first message)", formatter_class=CliHelpFormatter)
+      "create",
+      help="Create a session (metadata only, no first message)",
+      formatter_class=help_formatter.CliHelpFormatter)
   create.add_argument("--name", default=None, help="Session/task name (optional)")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
@@ -130,15 +125,17 @@ def _build_parser() -> argparse.ArgumentParser:
   cancel.add_argument("--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
 
   send = sub.add_parser(
-      "send", help="Relay a message to another session as an agent_message", formatter_class=CliHelpFormatter)
+      "send",
+      help="Relay a message to another session as an agent_message",
+      formatter_class=help_formatter.CliHelpFormatter)
   send.add_argument("target", help="Target session id")
   source = send.add_mutually_exclusive_group(required=True)
   source.add_argument("--message", default=None, help="Message text")
   source.add_argument("--file", default=None, help="Read the message text from this file")
-  add_session_arg(send)
+  common.add_session_arg(send)
 
   dialog = sub.add_parser("dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
-  add_session_arg(dialog)
+  common.add_session_arg(dialog)
   return parser
 
 
@@ -150,15 +147,15 @@ def _cmd_create(args: argparse.Namespace) -> None:
     payload["backend"] = args.backend
   if args.parent is not None or args.profile is not None or args.task_file is not None:
     if args.parent is None or not args.profile:
-      exit_usage_error("v2 task create requires both --parent and --profile")
+      common.exit_usage_error("v2 task create requires both --parent and --profile")
     if args.task_file is not None:
-      payload["task"] = json.loads(read_required_text_file("--task-file", args.task_file))
+      payload["task"] = json.loads(common.read_required_text_file("--task-file", args.task_file))
     payload["task_parent_id"] = args.parent
     payload["profile"] = args.profile
     payload["request_id"] = args.request_id or str(uuid.uuid4())
-  result = post_internal_api("/api/sessions/", payload)
+  result = common.post_internal_api("/api/sessions/", payload)
   if args.group is not None:
-    result = post_internal_api(f"/api/sessions/{result['id']}/group", {"group": args.group})
+    result = common.post_internal_api(f"/api/sessions/{result['id']}/group", {"group": args.group})
   print(json.dumps(result, indent=2))
 
 
@@ -168,38 +165,39 @@ def _cmd_tree(args: argparse.Namespace) -> None:
     params["parent_id"] = args.root
   if args.cursor is not None:
     params["cursor"] = args.cursor
-  print(json.dumps(get_api("/api/sessions/tree", params), indent=2))
+  print(json.dumps(common.get_api("/api/sessions/tree", params), indent=2))
 
 
 def _cmd_retry(args: argparse.Namespace) -> None:
   payload = {"request_id": args.request_id or str(uuid.uuid4()), "run_id": args.run}
-  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2))
+  print(json.dumps(common.post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2))
 
 
 def _cmd_complete(args: argparse.Namespace) -> None:
-  body = json.loads(read_required_text_file("--result-file", args.result_file))
+  body = json.loads(common.read_required_text_file("--result-file", args.result_file))
   if not isinstance(body, dict):
-    exit_usage_error("--result-file must carry the complete request's JSON object")
+    common.exit_usage_error("--result-file must carry the complete request's JSON object")
   body = dict(body)
   request_id = args.request_id or body.get("request_id") or str(uuid.uuid4())
   body["request_id"] = request_id
-  result = post_internal_api(
+  result = common.post_internal_api(
       f"/api/sessions/{args.session_id}/complete",
       body,
-      readback=lambda: find_local_task_close(args.session_id, request_id))
+      readback=lambda: common.find_local_task_close(args.session_id, request_id))
   print(json.dumps(result, indent=2))
 
 
 def _cmd_acknowledge(args: argparse.Namespace) -> None:
   input_ids = [part.strip() for part in args.input_ids.split(",") if part.strip()]
   if not input_ids:
-    exit_usage_error("--input-ids must name at least one input event id")
+    common.exit_usage_error("--input-ids must name at least one input event id")
   body = {
       "request_id": args.request_id or str(uuid.uuid4()),
       "input_ids": input_ids,
       "note": args.note,
   }
-  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body), indent=2))
+  print(
+      json.dumps(common.post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body), indent=2))
 
 
 def _cmd_cancel(args: argparse.Namespace) -> None:
@@ -208,22 +206,22 @@ def _cmd_cancel(args: argparse.Namespace) -> None:
       "request_id": request_id,
       "reason": args.reason,
   }
-  result = post_internal_api(
+  result = common.post_internal_api(
       f"/api/sessions/{args.session_id}/cancel",
       payload,
-      readback=lambda: find_local_task_close(args.session_id, request_id))
+      readback=lambda: common.find_local_task_close(args.session_id, request_id))
   print(json.dumps(result, indent=2))
 
 
 def _cmd_send(args: argparse.Namespace) -> None:
-  session_id = resolve_session_id(args.session)
+  session_id = common.resolve_session_id(args.session)
   if args.message is not None:
     content = args.message
   elif args.file is not None:
-    content = read_required_text_file("--file", args.file)
+    content = common.read_required_text_file("--file", args.file)
   else:
-    exit_usage_error("one of --message or --file is required")
-  result = post_internal_api(
+    common.exit_usage_error("one of --message or --file is required")
+  result = common.post_internal_api(
       "/api/internal/session-message", {
           "session_id": session_id,
           "target_session_id": args.target,
@@ -267,17 +265,17 @@ def _format_message_block(msg: dict) -> str | None:
 
 
 def _cmd_dialog(args: argparse.Namespace) -> None:
-  session_id = resolve_session_id(args.session)
+  session_id = common.resolve_session_id(args.session)
   # The bootstrap payload is the newest page the chat UI opens with; its
   # oldest_message_ordinal is the cursor backward paging starts from, in the
   # events endpoint's own cursor space (message ordinals for an ordinary
   # session, legacy event indices for an archived one).
-  boot = get_api(f"/api/sessions/{session_id}/bootstrap")
+  boot = common.get_api(f"/api/sessions/{session_id}/bootstrap")
   pages: list[list[dict]] = [boot["messages"]]
   cursor = boot["oldest_message_ordinal"]
   has_more = boot["has_more"]
   while has_more:
-    page = get_api(f"/api/sessions/{session_id}/events", {"before": cursor, "limit": _DIALOG_PAGE_LIMIT})
+    page = common.get_api(f"/api/sessions/{session_id}/events", {"before": cursor, "limit": _DIALOG_PAGE_LIMIT})
     pages.append(page["messages"])
     cursor = page["next_before"]
     has_more = page["has_more"]

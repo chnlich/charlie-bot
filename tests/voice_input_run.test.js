@@ -44,6 +44,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     workletNodes: [],
     sockets: [],
     timers: [],
+    audioContexts: [],
+    addModuleCalls: 0,
+    moduleError: null,
+    modulePending: null,
+    micPending: null,
     input: {value: '', focus() {}, addEventListener() {}},
     chatFlags: [],
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
@@ -94,9 +99,17 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     constructor() {
       this.sampleRate = 48000;
       this.closed = false;
+      state.audioContexts.push(this);
     }
     get audioWorklet() {
-      return {addModule: async () => {}};
+      return {
+        addModule: () => {
+          state.addModuleCalls += 1;
+          if (state.moduleError) return Promise.reject(state.moduleError);
+          if (state.modulePending) return state.modulePending;
+          return Promise.resolve();
+        },
+      };
     }
     createMediaStreamSource() {
       return {connect() {}, disconnect() {}};
@@ -237,10 +250,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     VOICE_DEFAULT_BACKEND: 'local',
     navigator: {
       mediaDevices: {
-        getUserMedia: async () => {
+        getUserMedia: () => {
           state.micCalls += 1;
-          if (micError) throw micError;
-          return new FakeStream();
+          if (state.micPending) return state.micPending;
+          if (micError) return Promise.reject(micError);
+          return Promise.resolve(new FakeStream());
         },
         enumerateDevices: () => {
           state.enumerateCalls += 1;
@@ -343,6 +357,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   state.relayTimeoutTimer = () => state.timers.find((timer) => timer.ms === 2000 && !timer.cleared);
   state.arm = arm;
   state.stopWithFlush = stopWithFlush;
+  state.FakeStream = FakeStream;
 
   return {context, state};
 }
@@ -372,19 +387,102 @@ function parseWavHeader(buffer) {
   };
 }
 
-test('arming claims the slot, lights the button, and paints the zeroed indicator', async () => {
+test('arming claims the slot, lights the starting state, and paints the zeroed indicator', async () => {
   const {context, state} = buildHarness();
 
   const worklet = await state.arm();
 
-  assert.deepEqual([...state.buttonClasses].sort(), ['bg-red-600', 'border-red-500']);
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-amber-600', 'border-amber-500']);
   assert.equal(state.micCalls, 1);
   assert.equal(state.enumerateCalls, 1); // device collection starts at recording start
   const ui = state.voiceUi();
   assert.equal(ui.fill.style.width, undefined); // no chunk yet: level untouched
   assert.equal(ui.timer.textContent, '0:00');
-  assert.equal(ui.hint.textContent, 'Listening...');
+  assert.equal(ui.hint.textContent, 'Waiting for microphone signal...');
   assert.equal(worklet.postMessageCalls.length, 0);
+});
+
+test('the click lights the starting state and launches both startup branches at once', async () => {
+  const {context, state} = buildHarness();
+  let releaseMic;
+  state.micPending = new Promise((resolve) => { releaseMic = resolve; });
+
+  context.toggleVoice(); // no await: the starting state is synchronous with the click
+
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-amber-600', 'border-amber-500']);
+  assert.equal(state.voiceUi().hint.textContent, 'Starting...');
+  // The mic branch is still open, yet the graph branch already launched too.
+  assert.equal(state.micCalls, 1);
+  assert.equal(state.audioContexts.length, 1);
+  assert.equal(state.addModuleCalls, 1);
+
+  releaseMic(new state.FakeStream());
+  await tick();
+  await tick();
+  assert.equal(state.workletNodes.length, 1); // both branches settled: connected
+  assert.equal(state.voiceUi().hint.textContent, 'Waiting for microphone signal...');
+});
+
+test('the mic branch launches while the worklet module branch is still open', async () => {
+  const {context, state} = buildHarness();
+  let releaseModule;
+  state.modulePending = new Promise((resolve) => { releaseModule = resolve; });
+
+  context.toggleVoice();
+  await tick(); // the mic resolves: the module load is still pending
+
+  assert.equal(state.micCalls, 1);
+  assert.equal(state.streams.length, 1);
+  assert.equal(state.addModuleCalls, 1);
+  assert.equal(state.workletNodes.length, 0); // no graph before both branches settle
+
+  releaseModule();
+  await tick();
+  await tick();
+  assert.equal(state.workletNodes.length, 1);
+});
+
+test('all-zero chunks keep the button in the starting state', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+
+  worklet.emitPcmCount(RATE, 0);
+  worklet.emitPcmCount(RATE, 0);
+
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-amber-600', 'border-amber-500']);
+  assert.equal(state.voiceUi().hint.textContent, 'Waiting for microphone signal...');
+});
+
+test('the first chunk with a non-zero sample lights the recording state and the listening hint', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(RATE, 0); // digital silence: still starting
+
+  const oneSample = new Int16Array(RATE);
+  oneSample[123] = -7; // a single non-zero sample readies the run
+  worklet.emitPcm(oneSample);
+
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-red-600', 'border-red-500']);
+  assert.equal(state.voiceUi().hint.textContent, 'Listening...');
+
+  worklet.emitPcmCount(RATE, 0); // later silence leaves the state alone
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-red-600', 'border-red-500']);
+});
+
+test('the recording keeps the chunks that arrived before the ready signal', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+
+  worklet.emitPcmCount(2 * RATE, 0); // 2 s of digital zero before the sound
+  worklet.emitPcmCount(RATE); // this chunk lights the recording state
+
+  const upload = await state.stopWithFlush();
+  const header = parseWavHeader(await sentWavBytes(upload));
+  assert.equal(header.dataBytes, 3 * RATE * 2); // the silent prefix rides the WAV
+
+  upload.respond(200, {text: 'ok'});
+  await tick();
+  await tick();
 });
 
 test('chunks update the level bar and the elapsed timer client-side', async () => {
@@ -683,6 +781,8 @@ test('arming failure toasts the error, unlights the button, and frees the slot',
 
   await context.toggleVoice();
   assert.deepEqual(state.toasts, [{msg: 'Voice input failed: boom', isError: true}]);
+  assert.equal(state.audioContexts.length, 1);
+  assert.equal(state.audioContexts[0].closed, true); // the failed arm closes its context
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
   assert.equal(state.voiceUi(), null);
   assert.equal(state.beforeunloadCount, 0);
@@ -690,6 +790,23 @@ test('arming failure toasts the error, unlights the button, and frees the slot',
   context.toggleVoice();
   await tick();
   assert.equal(state.micCalls, 2);
+});
+
+test('a worklet module failure stops the opened mic tracks and frees the slot', async () => {
+  const {context, state} = buildHarness();
+  state.moduleError = new Error('no module');
+
+  await context.toggleVoice();
+  assert.deepEqual(state.toasts, [{msg: 'Voice input failed: no module', isError: true}]);
+  assert.equal(state.streams.length, 1); // the mic resolved while the module failed
+  assert.equal(state.streams[0].stopped, true);
+  assert.equal(state.audioContexts[0].closed, true);
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
+
+  state.moduleError = null;
+  context.toggleVoice();
+  await tick();
+  assert.equal(state.micCalls, 2); // the slot is free for the next run
 });
 
 test('validation failure keeps the wording, slot empty, and button unlit', async () => {
@@ -729,9 +846,10 @@ test('a live backend opens the relay at recording start and replays pre-open chu
 
 test('live partials render as grey not-yet-final text and the hint names the backend', async () => {
   const {state} = buildHarness();
-  const {socket} = await armLive(state);
+  const {worklet, socket} = await armLive(state);
   socket.openSocket();
 
+  worklet.emitPcmCount(RATE); // the ready chunk: the hint names the backend
   assert.equal(state.voiceUi().hint.textContent, 'Listening \u00b7 Gemini 3.5 Transcribe Live');
   socket.receiveMessage({type: 'partial', text: '\u4f60\u597d'});
   assert.equal(state.voiceUi().partial.textContent, '\u4f60\u597d');
@@ -745,10 +863,11 @@ test('the end frame waits for the device enumeration without delaying recording 
   const {worklet, socket} = await armLive(state);
 
   assert.equal(state.enumerateCalls, 1); // collection started at recording start
-  assert.equal(state.voiceUi().hint.textContent, 'Listening \u00b7 Gemini 3.5 Transcribe Live'); // already live
+  assert.equal(state.voiceUi().hint.textContent, 'Waiting for microphone signal...'); // already recording
 
   socket.openSocket();
   worklet.emitPcmCount(RATE);
+  assert.equal(state.voiceUi().hint.textContent, 'Listening \u00b7 Gemini 3.5 Transcribe Live'); // the ready chunk
   context.toggleVoice();
   const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
   worklet.replyFlushed(flush.id);
@@ -931,8 +1050,8 @@ test('the local backend opens no relay, fires the probe, and uploads as the fall
   const worklet = await state.arm();
 
   assert.equal(state.sockets.length, 0); // no relay for a non-live backend
-  assert.equal(state.voiceUi().hint.textContent, 'Listening...');
   worklet.emitPcmCount(CONFIRM_SAMPLES);
+  assert.equal(state.voiceUi().hint.textContent, 'Listening...'); // the ready chunk lit it
   await tick();
   await tick();
   assert.equal(state.xhrs.length, 1); // the probe still fires at 5 s

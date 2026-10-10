@@ -8,7 +8,7 @@ inherited value where it pinned the directory itself, and ``claude_config_dir`` 
 import os
 import pathlib
 
-from src.infra.home import CLAUDE_CONFIG_DIR_ENV_VAR
+from src.infra import home
 
 # The OAuth credential filename inside a login directory: the account pool reads
 # it for health, and the usage provider derives its per-account path from it.
@@ -33,7 +33,7 @@ def claude_config_dir() -> pathlib.Path:
   else. A pool account's pinned ``config_dir`` rides the ``CLAUDE_CONFIG_DIR``
   value the backend sets on the process environment, never this call.
   """
-  env_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
+  env_dir = os.environ.get(home.CLAUDE_CONFIG_DIR_ENV_VAR)
   if env_dir:
     return pathlib.Path(env_dir).expanduser()
   return default_claude_dir()

@@ -16,13 +16,13 @@ import. This module imports no feature module.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 from typing import TYPE_CHECKING
 
-from src.infra.deferred import import_attr
+from src.infra import deferred
 
 if TYPE_CHECKING:
-  from src.infra.models import SessionMetadata
+  from src.infra import models
 
 
 class SidebarContribution:
@@ -32,17 +32,17 @@ class SidebarContribution:
   # when one of these files, or another probe input, changed.
   watched_files: tuple[str, ...] = ()
 
-  def row_flags(self, session_dir: Path, session_id: str) -> dict[str, bool]:
+  def row_flags(self, session_dir: pathlib.Path, session_id: str) -> dict[str, bool]:
     """The sidebar flags this feature sets on one session's row, by flag name. Must not raise for a corrupt file."""
     return {}
 
-  def copy_on_fork(self, parent_dir: Path, child_dir: Path) -> None:
+  def copy_on_fork(self, parent_dir: pathlib.Path, child_dir: pathlib.Path) -> None:
     """Copy this feature's files from the parent's session directory into the child's."""
 
   def drop_runtime_state(self, session_id: str) -> None:
     """Drop this feature's in-memory state for one session."""
 
-  def view_member(self, meta: SessionMetadata) -> str | None:
+  def view_member(self, meta: models.SessionMetadata) -> str | None:
     """The key of the sidebar view whose root *meta* is, or None. A view lists its roots and every row below them."""
     return None
 
@@ -67,5 +67,6 @@ def sidebar_contributions() -> tuple[SidebarContribution, ...]:
   """The registered contributions, imported, in registration order."""
   global _resolved
   if _resolved is None:
-    _resolved = tuple(import_attr(target) if isinstance(target, str) else target for target in _registered.values())
+    _resolved = tuple(
+        deferred.import_attr(target) if isinstance(target, str) else target for target in _registered.values())
   return _resolved

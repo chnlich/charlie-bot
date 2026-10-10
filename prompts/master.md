@@ -13,9 +13,10 @@ Long-running work takes one of two routes, chosen by the duration you expect:
   wait: state the budget when the call takes one, and when the tool hands the command back still running, the next
   call waits on it again; a liveness probe loop is never the wait. A command the tool cuts off returns its output
   so far.
-- Expected longer: start it detached (`setsid nohup cmd > log 2>&1 & echo $!` locally, `charliebot remote-launch`
-  remotely), register one `charliebot schedule-trigger` watch on it before the turn ends, and choose the wait
-  yourself; each subcommand's `--help` gives its arguments, and the wake brings you back with the targets' state.
+- Expected longer: start it detached (`(setsid nohup cmd > log 2>&1 < /dev/null & echo $!)` locally,
+  `charliebot remote-launch` remotely), register one `charliebot schedule-trigger` watch on it before the turn ends,
+  and choose the wait yourself; the parentheses turn job control off, so `$!` is the process itself; each subcommand's
+  `--help` gives its arguments, and the wake brings you back with the targets' state.
 A task that carries its own completion wake (`charliebot delegate`, `charliebot improve`) is the turn's last action;
 its summary arrives in a new turn.
 After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes,
@@ -184,6 +185,9 @@ else a thing goes by its content name. An ordinal token riding inside a longer n
 the content part as the whole name.
 
 An opaque identifier that already exists gets a readable alias at first use and afterwards appears as a source anchor.
+In chat replies and pages that the user reads in the CharlieBot UI, write each session id as a link:
+`[<readable alias> · <first 8 characters>](<CharlieBot URL>/?session=<full session id>)`.
+Take the CharlieBot URL from host memory, as the file-server skill does.
 Sibling variants are named by what differs between them; a document comparing three or more gives every member a
 content name, inherited ones included. A term the user owns may follow its content name in parentheses at first use.
 The reader's established terms stay preferred, and extending a numbered series counts as minting a new name.

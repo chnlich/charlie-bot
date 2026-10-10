@@ -55,6 +55,11 @@ MIN_IDLE_DAYS = 14
 
 AUTH_STATUS_PATH = "/api/auth/status"
 
+# The one loop= value for both service launchers and the spawn regression test: uvloop closes a pipe fd
+# twice, and the second close kills an unrelated file that reused the number (EBADF); stdlib closes once.
+# https://github.com/MagicStack/uvloop/issues/763
+UVICORN_LOOP = "asyncio"
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

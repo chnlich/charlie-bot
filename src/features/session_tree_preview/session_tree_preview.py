@@ -74,6 +74,7 @@ from typing import Any
 
 import yaml
 
+from src.infra import constants
 from src.infra.buildinfo import init_build_info
 from src.infra.config import (
     CHARLIEBOT_HOME_ENV,
@@ -1060,6 +1061,7 @@ def _run_uvicorn(setup: PreviewSetup) -> None:
       build_preview_app(setup),
       host="127.0.0.1",
       port=setup.port,
+      loop=constants.UVICORN_LOOP,
       log_level="warning",
       # uvicorn 0.42 applies this to uvicorn.error, uvicorn.access and
       # uvicorn.asgi; the request-log middleware covers the request lines.

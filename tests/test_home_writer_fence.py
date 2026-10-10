@@ -10,27 +10,21 @@ lifespan's refuse-to-start / release-on-exit behavior.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import pathlib
 
 import pytest
 
-from src.runtime.home_writer_fence import (
-    HomeWriterActiveError,
-    acquire_home_writer_fence,
-    fence_identity_path,
-    probe_writer_fence,
-    read_fence_holder,
-)
+from src.runtime import home_writer_fence
 
 
-def test_acquire_excludes_and_reports_holder(tmp_path: Path) -> None:
+def test_acquire_excludes_and_reports_holder(tmp_path: pathlib.Path) -> None:
   home = tmp_path / "home"
   home.mkdir()
-  first = acquire_home_writer_fence(home, purpose="first")
+  first = home_writer_fence.acquire_home_writer_fence(home, purpose="first")
   try:
-    assert read_fence_holder(home) is not None
-    with pytest.raises(HomeWriterActiveError) as excinfo:
-      acquire_home_writer_fence(home, purpose="second")
+    assert home_writer_fence.read_fence_holder(home) is not None
+    with pytest.raises(home_writer_fence.HomeWriterActiveError) as excinfo:
+      home_writer_fence.acquire_home_writer_fence(home, purpose="second")
     holder = excinfo.value.holder
     assert holder is not None and holder.pid == os.getpid()
     assert holder.purpose == "first"
@@ -38,8 +32,8 @@ def test_acquire_excludes_and_reports_holder(tmp_path: Path) -> None:
   finally:
     first.release()
   # Release drops the identity row and frees the lock.
-  assert not fence_identity_path(home).exists()
-  second = acquire_home_writer_fence(home, purpose="second")
+  assert not home_writer_fence.fence_identity_path(home).exists()
+  second = home_writer_fence.acquire_home_writer_fence(home, purpose="second")
   second.release()
 
 
@@ -82,7 +76,7 @@ class _StubTriggerManager:
 
 
 @pytest.fixture
-def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def lifespan_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """A minimal server-lifespan environment over one synthetic home.
 
   Only the doors that would touch the filesystem or the network are stubbed;
@@ -91,15 +85,15 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   import server as server_module
   from src.features.cron import scheduler as scheduler_module
   from src.features.voice import service as voice_service
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
   from src.runtime.hooks import usage_sources
 
   home = tmp_path / "home"
   (home / "sessions").mkdir(parents=True)
-  cfg = CharlieBotConfig(charliebot_home=home)
+  cfg = config.CharlieBotConfig(charliebot_home=home)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  from conftest import reset_config_caches
-  reset_config_caches()
+  import conftest
+  conftest.reset_config_caches()
 
   monkeypatch.setattr(server_module, "get_config", lambda: cfg)
   monkeypatch.setattr(server_module, "_run_task_recovery", _AsyncStub())
@@ -124,33 +118,33 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
   whatever files a mid-flight deploy left under the started server."""
   import asyncio
 
-  from fastapi import FastAPI
+  import fastapi
 
   from src.features.usage import api as usage_api
   server_module = lifespan_env
   calls: list[int] = []
   monkeypatch.setattr(usage_api, "preload_usage_tally_stack", lambda: calls.append(1))
-  async with server_module.lifespan(FastAPI()):
+  async with server_module.lifespan(fastapi.FastAPI()):
     await asyncio.wait_for(usage_api._warmup_task, timeout=10)
   assert calls == [1]
 
 
 @pytest.mark.asyncio
 async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> None:
-  from fastapi import FastAPI
+  import fastapi
   server_module = lifespan_env
   home = server_module.get_config().charliebot_home
-  apply_fence = acquire_home_writer_fence(home, purpose="session-tree preview --add-backend")
+  apply_fence = home_writer_fence.acquire_home_writer_fence(home, purpose="session-tree preview --add-backend")
   try:
-    with pytest.raises(HomeWriterActiveError) as excinfo:
-      async with server_module.lifespan(FastAPI()):
+    with pytest.raises(home_writer_fence.HomeWriterActiveError) as excinfo:
+      async with server_module.lifespan(fastapi.FastAPI()):
         pass
     assert excinfo.value.holder is not None
     assert "add-backend" in excinfo.value.holder.purpose
   finally:
     apply_fence.release()
   # After the apply releases, startup works.
-  async with server_module.lifespan(FastAPI()):
+  async with server_module.lifespan(fastapi.FastAPI()):
     pass
 
 
@@ -159,32 +153,31 @@ async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
+def test_fence_refuses_symlinked_paths(tmp_path: pathlib.Path) -> None:
   """A symlinked state directory, lock, or identity record refuses acquisition
   and probing instead of placing or reading the exclusion outside the home."""
-  from src.runtime.home_writer_fence import FencePathRefusalError
   outside = tmp_path / "outside"
   outside.mkdir()
   # (a) state itself is a symlink.
   home = tmp_path / "home_a"
   home.mkdir()
   (home / "state").symlink_to(outside)
-  with pytest.raises(FencePathRefusalError, match="symlink"):
-    acquire_home_writer_fence(home, purpose="cli")
-  with pytest.raises(FencePathRefusalError, match="symlink"):
-    probe_writer_fence(home)
+  with pytest.raises(home_writer_fence.FencePathRefusalError, match="symlink"):
+    home_writer_fence.acquire_home_writer_fence(home, purpose="cli")
+  with pytest.raises(home_writer_fence.FencePathRefusalError, match="symlink"):
+    home_writer_fence.probe_writer_fence(home)
   assert not (outside / "home_writer.lock").exists()
   # (b) the lock file is a symlink inside a real state dir.
   home = tmp_path / "home_b"
   (home / "state").mkdir(parents=True)
   (home / "state" / "home_writer.lock").symlink_to(outside / "captured.lock")
-  with pytest.raises(FencePathRefusalError, match="symlink"):
-    acquire_home_writer_fence(home, purpose="cli")
-  with pytest.raises(FencePathRefusalError, match="symlink"):
-    probe_writer_fence(home)
+  with pytest.raises(home_writer_fence.FencePathRefusalError, match="symlink"):
+    home_writer_fence.acquire_home_writer_fence(home, purpose="cli")
+  with pytest.raises(home_writer_fence.FencePathRefusalError, match="symlink"):
+    home_writer_fence.probe_writer_fence(home)
   assert not (outside / "captured.lock").exists()
   # (c) a real fence still works after the refusals.
-  fence = acquire_home_writer_fence(tmp_path / "home_c", purpose="real")
+  fence = home_writer_fence.acquire_home_writer_fence(tmp_path / "home_c", purpose="real")
   fence.release()
 
 
@@ -224,12 +217,12 @@ class _LogRecorder:
 async def test_lifespan_shutdown_line_carries_the_step_timings(lifespan_env, monkeypatch) -> None:
   """The charliebot_shutdown line names every shutdown step's wall time in
   integer milliseconds, so a slow stop names its slow step."""
-  from fastapi import FastAPI
+  import fastapi
 
   server_module = lifespan_env
   recorder = _LogRecorder()
   monkeypatch.setattr(server_module, "log", recorder)
-  async with server_module.lifespan(FastAPI()):
+  async with server_module.lifespan(fastapi.FastAPI()):
     pass
   line = next(kwargs for event, kwargs in recorder.events if event == "charliebot_shutdown")
   for name in _SHUTDOWN_TIMING_FIELDS:
@@ -242,7 +235,7 @@ async def test_lifespan_shutdown_line_carries_the_step_timings(lifespan_env, mon
 async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, monkeypatch) -> None:
   """A shutdown exception releases the exclusion; the fence never outlives the
   server's ability to hold it cleanly."""
-  from fastapi import FastAPI
+  import fastapi
 
   from src.features.cron import scheduler as scheduler_module
   server_module = lifespan_env
@@ -255,8 +248,8 @@ async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, 
 
   monkeypatch.setattr(scheduler_module, "Scheduler", _FailingScheduler)
   with pytest.raises(RuntimeError, match="shutdown failed"):
-    async with server_module.lifespan(FastAPI()):
-      assert probe_writer_fence(home)["exclusive_holder_alive"] is True
-  assert probe_writer_fence(home)["exclusive_holder_alive"] is False
-  fence = acquire_home_writer_fence(home, purpose="after-failed-shutdown")
+    async with server_module.lifespan(fastapi.FastAPI()):
+      assert home_writer_fence.probe_writer_fence(home)["exclusive_holder_alive"] is True
+  assert home_writer_fence.probe_writer_fence(home)["exclusive_holder_alive"] is False
+  fence = home_writer_fence.acquire_home_writer_fence(home, purpose="after-failed-shutdown")
   fence.release()

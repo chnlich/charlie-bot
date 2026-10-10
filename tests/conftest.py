@@ -1706,7 +1706,6 @@ def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) ->
 # a separate route.
 CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.runtime.api.chat.run_and_finalize"
 CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.runtime.api.chat.create_logged_task"
-CHAT_CANCEL_MASTER_PATCH_TARGET = "src.runtime.api.chat.cancel_master"
 
 # Import-path patch targets for the CLI HTTP layer's transport. src/runtime/cli/common.py exposes one
 # adapter per verb (`_request_post`/`_request_get`, both over the phase-separated client

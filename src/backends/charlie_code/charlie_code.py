@@ -10,7 +10,7 @@ one error event and nothing is sent.
 import pathlib
 from collections.abc import AsyncIterator
 
-from src.backends.charlie_code import CHARLIE_CODE_API_KEY_ENV
+from src.backends import charlie_code
 from src.infra import event_types as ET
 from src.infra import log_once
 from src.runtime.agent_process import base
@@ -124,7 +124,7 @@ class CharlieCodeBackend(base.AgentBackend):
     charlie_code_env = {**env}
     base.prepend_path_dir(charlie_code_env, base.USER_LOCAL_BIN)
     if self._api_key is not None:
-      charlie_code_env[CHARLIE_CODE_API_KEY_ENV] = self._api_key
+      charlie_code_env[charlie_code.CHARLIE_CODE_API_KEY_ENV] = self._api_key
     if self._proxy_url is not None:
       base.apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env

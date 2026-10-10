@@ -134,7 +134,13 @@ async def _start_improve_sequence(
 
   try:
     child = await create_improve_child(
-        task_mgr, req.session_id, state.loop_id, req.goal, repo_path=req.repo_path, base_branch=req.base_branch)
+        task_mgr,
+        req.session_id,
+        state.loop_id,
+        req.goal,
+        repo_path=req.repo_path,
+        base_branch=req.base_branch,
+        backend=state.backend)
   except Exception as e:
     # The reservation is this live process's: a rejected child creation must
     # not leave a "running" loop stamped with the live pid — no controller is

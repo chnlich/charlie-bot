@@ -349,10 +349,10 @@ class SessionMetadata(BaseModel):
   # never persisted (excluded by session_store.TRANSIENT_METADATA_FIELDS).
   thinking_since: UtcDatetime | None = None
   # Transient display fact: a task-tree node's newest Run's backend, stamped
-  # at read time from thinking_state's display-backend map. The persisted
-  # metadata.backend keeps its inherited creation value; readers prefer
-  # run_backend and fall back to backend. Never persisted (excluded by
-  # session_store.TRANSIENT_METADATA_FIELDS).
+  # at read time from thinking_state's display-backend map. A worker node's
+  # persisted metadata.backend holds the backend its creator resolved for the
+  # first work Run; readers prefer run_backend and fall back to backend. Never
+  # persisted (excluded by session_store.TRANSIENT_METADATA_FIELDS).
   run_backend: str | None = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
   # The sidebar sort key: records the user's last action on the row; server bookkeeping writes keep it.

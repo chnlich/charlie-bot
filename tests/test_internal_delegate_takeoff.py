@@ -1,4 +1,6 @@
-"""Regression tests for /api/internal/delegate takeoff gate behavior."""
+"""Regression tests for the /api/internal delegate and improve entries: the takeoff gate,
+and the worker child record carrying the backend its creator resolved.
+"""
 
 from pathlib import Path
 from typing import Any
@@ -6,18 +8,26 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
+    OPERATOR,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
+    SessionBlocks,
+    build_execution_adapter,
+    build_session_blocks,
+    build_task_tree,
 )
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
 from src.features.improve import api as improve_api
+from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.models import DelegateRequest, SessionMetadata, TaskType
+from src.infra.models import DelegateRequest, SessionMetadata, TaskSpec, TaskType
 from src.runtime import spawner_backends
 from src.runtime.api import internal
 from src.runtime.takeoff_gate import DelegationBlockedError
+from src.runtime.task_execution import TaskExecutionAdapter
+from src.runtime.task_sessions import TaskTreeManager
 
 
 def _stub_task_manager():
@@ -44,9 +54,10 @@ def _build_request(
     repo_path: str | None = "/tmp/repo",
     base_branch: str | None = "main",
     backend: str | None = "codex-o3",
+    session_id: str = "session-id",
 ) -> DelegateRequest:
   return DelegateRequest(
-      session_id="session-id",
+      session_id=session_id,
       description="Do work",
       base_branch=base_branch,
       backend=backend,
@@ -282,3 +293,173 @@ async def test_verify_unknown_explicit_backend_returns_400(monkeypatch: pytest.M
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'nonexistent' is not in backends.options"
+
+
+# --- the worker child record carries the backend its creator resolved ---
+
+
+def _backend_tree_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    preference: list[str],
+) -> tuple[CharlieBotConfig, SessionBlocks, TaskTreeManager, TaskExecutionAdapter]:
+  """A real task tree over a synthetic home, parent backend Y = OPUS_BACKEND_ID, launches disarmed.
+
+  The tests below judge which backend the child record keeps and the
+  dispatcher reserves; no Run ever executes, so the executor's scheduling
+  seam is a no-op.
+  """
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={
+          "options": VERIFY_BACKEND_OPTIONS,
+          "preference": preference
+      },
+  )
+  session_blocks = build_session_blocks(cfg)
+  tree = build_task_tree(cfg, session_blocks)
+  adapter = build_execution_adapter(cfg, session_blocks, tree)
+  monkeypatch.setattr(adapter, "_schedule_launch", lambda *args, **kwargs: None)
+  tree.dispatch.executor = adapter
+  tree.check_task_authorization = AsyncMock()
+  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  return cfg, session_blocks, tree, adapter
+
+
+async def _backend_test_manager(tree: TaskTreeManager) -> SessionMetadata:
+  """The delegating manager, pinned to the parent backend of the backend tests."""
+  return await tree.create_task(
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=OPUS_BACKEND_ID,
+      caller=OPERATOR,
+  )
+
+
+@pytest.mark.asyncio
+async def test_delegate_child_and_its_later_runs_keep_the_requested_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """--backend X pins the child record and the dispatcher's next work Run of it.
+
+  The first work Run already records X; the child record must keep X too, so
+  the run the dispatcher reserves on the next message stays on X.
+  """
+  _cfg, session_blocks, tree, adapter = _backend_tree_env(tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID])
+  manager = await _backend_test_manager(tree)
+
+  result = await internal.delegate_task(
+      _build_request(session_id=manager.id, backend="codex-o3"),
+      session_events=session_blocks.events,
+      store=session_blocks.store,
+      task_mgr=tree,
+      caller=OPERATOR,
+  )
+
+  child_id = result["session_id"]
+  child = await tree.load_meta(child_id)
+  assert child is not None and child.backend == "codex-o3"
+  first = await tree.runs.get_run(child_id, result["run_id"])
+  assert first is not None and first.backend == "codex-o3"
+
+  # The first work Run settled; the parent's message reserves the next one.
+  await tree.runs.record_finish(child_id, first.id, "success")
+  await tree.dispatch.admit_input(
+      child_id, event_type=ET.AGENT_MESSAGE, content="one more tweak", actor="agent", from_session=manager.id)
+  decision = await tree.dispatch.dispatch_pending(child_id)
+
+  assert decision["launch"] is True
+  follow_up = await tree.runs.get_run(child_id, decision["run_id"])
+  assert follow_up is not None and follow_up.id != first.id
+  assert follow_up.kind == "work" and follow_up.backend == "codex-o3"
+
+  # The review Run keeps its own rule: a backends.preference entry that
+  # differs from the reviewed work Run's backend.
+  await tree.runs.record_finish(child_id, follow_up.id, "success")
+  review_id = await adapter._maybe_spawn_review(child_id, follow_up)
+  review_run = await tree.runs.get_run(child_id, review_id)
+  assert review_run is not None and review_run.kind == "review"
+  assert review_run.backend != follow_up.backend
+  assert review_run.backend == OPUS_BACKEND_ID
+
+
+@pytest.mark.asyncio
+async def test_verify_delegate_child_records_the_cross_model_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A verify delegation without --backend: the child record keeps the
+  cross-model backend its first work Run got from backends.preference."""
+  _cfg, session_blocks, tree, _adapter = _backend_tree_env(
+      tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID, "codex-o3"])
+  manager = await _backend_test_manager(tree)
+
+  result = await internal.delegate_task(
+      _build_request(session_id=manager.id, task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=None),
+      session_events=session_blocks.events,
+      store=session_blocks.store,
+      task_mgr=tree,
+      caller=OPERATOR,
+  )
+
+  child = await tree.load_meta(result["session_id"])
+  first = await tree.runs.get_run(result["session_id"], result["run_id"])
+  assert first is not None and first.backend == "codex-o3"
+  assert child is not None and child.backend == first.backend
+
+
+@pytest.mark.asyncio
+async def test_implement_delegate_without_backend_resolves_to_the_parent_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An implement delegation without --backend resolves to the parent
+  backend, and the child record keeps that value."""
+  _cfg, session_blocks, tree, _adapter = _backend_tree_env(tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID])
+  manager = await _backend_test_manager(tree)
+
+  result = await internal.delegate_task(
+      _build_request(session_id=manager.id, backend=None),
+      session_events=session_blocks.events,
+      store=session_blocks.store,
+      task_mgr=tree,
+      caller=OPERATOR,
+  )
+
+  child = await tree.load_meta(result["session_id"])
+  first = await tree.runs.get_run(result["session_id"], result["run_id"])
+  assert first is not None and first.backend == OPUS_BACKEND_ID
+  assert child is not None and child.backend == OPUS_BACKEND_ID
+
+
+@pytest.mark.asyncio
+async def test_improve_child_records_the_requested_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An improve request naming backend X: the loop's worker child record keeps X."""
+  cfg, session_blocks, tree, _adapter = _backend_tree_env(tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID])
+  manager = await _backend_test_manager(tree)
+  spawned: list[str] = []
+
+  def fake_logged_task(coro, *, name: str):
+    # The loop controller is not this test's subject; the request is accepted
+    # once the child exists, so the scheduled coroutine never starts here.
+    coro.close()
+    spawned.append(name)
+
+  monkeypatch.setattr(improve_api, "create_logged_task", fake_logged_task)
+
+  result = await improve_api.start_improve_loop(
+      improve_api.ImproveRequest(
+          session_id=manager.id,
+          repo_path="/tmp/repo",
+          base_branch="main",
+          backend="codex-o3",
+          goal="Improve this",
+      ),
+      cfg=cfg,
+      store=session_blocks.store,
+      task_mgr=tree,
+  )
+
+  child = await tree.load_meta(result["child_session_id"])
+  assert child is not None and child.backend == "codex-o3"
+  assert spawned, "the loop controller was never scheduled on an accepted request"

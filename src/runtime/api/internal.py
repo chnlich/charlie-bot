@@ -160,7 +160,10 @@ async def _delegate_task_tree(
         profile="worker",
         task=task_spec,
         name=None,
-        backend=None,
+        # The dispatcher reserves every later work Run of this node from the
+        # child record's backend, so the record carries the delegation's
+        # resolved backend.
+        backend=resolved_backend,
         caller=caller,
     )
     run_id = stable_run_id(child.id, f"{request_id}:work")

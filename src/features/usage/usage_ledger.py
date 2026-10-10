@@ -18,11 +18,9 @@ deletes a usage row. (The only DELETE in the schema reaps the aggregate's own
 zero-count day rows.)
 
 ``in_unsplit`` holds input tokens whose cache hit/miss split was never logged, and it
-counts toward every total like the other input columns. The one-time schema-2 upgrade
-(run on open while ``ledger_meta`` has no ``schema`` key) moves a ``master:`` or native
-``thread:`` record's input into it when the record's source file is gone -- the one
-case where the split can never be recovered. A record whose file remains keeps its
-input in ``in_fresh``: the file can still be re-parsed with the correct split.
+counts toward every total like the other input columns. A record whose source file
+remains keeps its input in ``in_fresh``: the file can still be re-parsed with the
+correct split.
 
 ``captured_files`` remembers the last signature written per (host, path), so a
 collector can skip files it already ingested by content, not by existence.
@@ -236,11 +234,10 @@ BEGIN
 END;""",
 )
 
-# The five triggers that sum the token columns. The schema-2 upgrade drops these by name
-# before the move: CREATE TRIGGER IF NOT EXISTS never replaces an existing trigger, so a
-# ledger upgraded in place would otherwise keep four-sum trigger bodies forever. The
-# open-time refresh (``_refresh_agg_triggers``) compares stored bodies against this
-# module's for the same reason.
+# The five triggers that sum the token columns. The open-time refresh
+# (``_refresh_agg_triggers``) drops these by name before recreating them: CREATE TRIGGER
+# IF NOT EXISTS never replaces an existing trigger, so a ledger an older release created
+# would otherwise keep that release's trigger bodies forever.
 _AGG_SUM_TRIGGER_NAMES = (
     "usage_agg_after_insert",
     "usage_agg_after_update",
@@ -341,7 +338,7 @@ GROUP BY source, model, account, kind
 """
 
 # The wholesale aggregate replacement, run inside the caller's locked transaction by the
-# one-time backfill, the schema-2 upgrade's re-price, and the trigger refresh: the caller
+# one-time backfill and the trigger refresh: the caller
 # deletes every usage_agg row first (``_AGG_WIPE_SQL``), then this counted-row pass -- the
 # table pass's counted-row rule projected to (group, day) granularity -- rebuilds the
 # aggregate from the table. Increments the triggers wrote before the pass never survive
@@ -355,11 +352,6 @@ FROM usage u
 {_COUNTED_WHERE_SQL}
 GROUP BY source, model, account, kind, day
 """
-
-# The records whose input the schema-2 upgrade may move into in_unsplit once their source
-# file is gone: the manager's master: records and the native thread: ones. codex: records
-# carry their rollout's own hit/miss split, so they never move.
-_UPGRADE_MOVE_RECORDS_SQL = "(record_id GLOB 'master:*' OR (record_id GLOB 'thread:*' AND kind = 'native'))"
 
 
 @dataclass(frozen=True)
@@ -509,10 +501,9 @@ class UsageLedger:
   """SQLite store behind the /token-usage page; see the module docstring.
 
   The schema is created on open (IF NOT EXISTS), so a fresh path yields an empty
-  ledger and an existing one keeps every row. A ledger with no ``schema`` stamp in
-  ``ledger_meta`` upgrades to '2' once on open (``_upgrade_schema``). A ledger whose
-  stored aggregate-trigger bodies differ from this module's gets the five swapped and a
-  backfilled aggregate re-priced on open (``_refresh_agg_triggers``).
+  ledger and an existing one keeps every row. A ledger whose stored aggregate-trigger
+  bodies differ from this module's gets the five swapped and a backfilled aggregate
+  re-priced on open (``_refresh_agg_triggers``).
   """
 
   def __init__(self, path: Path) -> None:
@@ -521,69 +512,11 @@ class UsageLedger:
     self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
     self._conn.row_factory = sqlite3.Row
     self._conn.executescript(_SCHEMA)
-    stamp = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'schema'").fetchone()
-    if stamp is None or stamp["value"] != "2":
-      self._upgrade_schema()  # recreates the aggregate triggers inside its transaction
-    else:
-      self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
+    self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
     self._conn.commit()
     # The open capture batch's SAVEPOINT name; None outside one. record_file and
     # mark_capture_finished leave the commit to the batch (see batch()).
     self._batch_savepoint: str | None = None
-
-  def _upgrade_schema(self) -> None:
-    """The one-time upgrade to schema '2', one transaction: add ``in_unsplit`` to both
-    tables, swap the five token-summing aggregate triggers for bodies that carry it, move
-    the gone-source records' input, re-price a backfilled aggregate from the table
-    wholesale, and stamp.
-
-    The triggers are dropped and recreated before the move so the update trigger
-    subtracts and re-adds every moved row's aggregate contribution; the re-add lands on
-    its (group, day) row (``_agg_contribute_sql``), and the wholesale replacement
-    (``_AGG_WIPE_SQL`` then ``_AGG_BACKFILL_SQL``) re-prices a backfilled aggregate from
-    the table, so after the move the aggregate equals the table pass again. A
-    never-backfilled aggregate is not served yet -- its one-time backfill prices the same
-    ground truth when it runs. Only records whose source file is gone move: a record whose file
-    remains is re-parsed with the correct split, and an old-code process rewriting its
-    row would put the input back into ``in_fresh`` beside a moved ``in_unsplit`` and
-    count the same input twice. BEGIN IMMEDIATE re-checks the stamp under the write
-    lock, so two processes opening an un-stamped ledger upgrade once.
-    """
-    self._conn.execute("BEGIN IMMEDIATE")
-    try:
-      stamp = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'schema'").fetchone()
-      if stamp is not None and stamp["value"] == "2":
-        self._conn.rollback()  # another process upgraded while this one waited on the lock
-        return
-      for table in ("usage", "usage_agg"):
-        columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
-        if "in_unsplit" not in columns:
-          self._conn.execute(f"ALTER TABLE {table} ADD COLUMN in_unsplit INTEGER NOT NULL DEFAULT 0")
-      for name in _AGG_SUM_TRIGGER_NAMES:
-        self._conn.execute(f"DROP TRIGGER IF EXISTS {name}")
-      for statement in _AGG_TRIGGER_STATEMENTS:
-        self._conn.execute(statement)
-      origins = [
-          row["origin"]
-          for row in self._conn.execute(f"SELECT DISTINCT origin FROM usage WHERE {_UPGRADE_MOVE_RECORDS_SQL}")
-      ]
-      gone = [origin for origin in origins if not origin or not Path(origin).exists()]
-      for start in range(0, len(gone), 900):  # SQLite's host-parameter ceiling
-        chunk = gone[start:start + 900]
-        marks = ",".join("?" * len(chunk))
-        self._conn.execute(
-            f"""UPDATE usage SET in_unsplit = in_fresh, in_fresh = 0
-            WHERE {_UPGRADE_MOVE_RECORDS_SQL} AND origin IN ({marks})""", chunk)
-      if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
-        self._conn.execute(_AGG_WIPE_SQL)  # replace the served aggregate wholesale (see the docstring)
-        self._conn.execute(_AGG_BACKFILL_SQL)
-      self._conn.execute(
-          "INSERT INTO ledger_meta (key, value) VALUES ('schema', '2')"
-          " ON CONFLICT(key) DO UPDATE SET value = '2'")
-      self._conn.commit()
-    except BaseException:
-      self._conn.rollback()
-      raise
 
   def _refresh_agg_triggers(self) -> None:
     """Swap this module's aggregate trigger bodies in when a stored one differs, then
@@ -603,8 +536,7 @@ class UsageLedger:
     # The match check reads first, under the read lock every writer leaves open between
     # commits: the matched case -- every open of a current-release ledger -- takes no
     # write lock at all, so an open never queues behind another process's live write
-    # transaction. The unmatched case takes BEGIN IMMEDIATE and re-checks under it, the
-    # same serialize-the-swap discipline the upgrade path runs.
+    # transaction. The unmatched case takes BEGIN IMMEDIATE and re-checks under it.
     stored = {
         row["name"]: row["sql"]
         for row in self._conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")

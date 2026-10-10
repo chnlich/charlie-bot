@@ -20,8 +20,7 @@ import subprocess
 import time
 from typing import Any
 
-from src.backends.claude_code import claude_accounts, login_dirs
-from src.backends.claude_code.claude_config import ClaudeAccount
+from src.backends.claude_code import claude_accounts, claude_config, login_dirs
 from src.infra import config, http, json_utils, log_once, models, timeouts
 from src.runtime.hooks import usage_sources
 
@@ -202,7 +201,7 @@ class ClaudeQuotaAccount(usage_sources.QuotaAccount):
     """
     if self.login_dir is None:
       return
-    if claude_accounts.healthy(ClaudeAccount(label=self.label, config_dir=self.login_dir)):
+    if claude_accounts.healthy(claude_config.ClaudeAccount(label=self.label, config_dir=self.login_dir)):
       entry.pop("login_required", None)
     else:
       entry["login_required"] = self.login_dir

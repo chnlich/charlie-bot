@@ -28,10 +28,10 @@ changed. Evidence (screenshots, assertion JSON, tested commit) lands in
 
 from __future__ import annotations
 
+import pathlib
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -44,38 +44,16 @@ import subprocess  # noqa: E402
 import time  # noqa: E402
 
 from src.app import registrations  # noqa: E402
-from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
-from tools.browser_harness_session_tree import (  # noqa: E402
-    CDP,
-    evaluate,
-    open_evidence_dir,
-    resolve_chrome,
-    stop_child,
-)
-from tools.browser_harness_session_tree_preview import (  # noqa: E402
-    PRODUCTION_PORT,
-    build_source_home,
-    open_authenticated_page,
-    preview_instance_env,
-    preview_invocation,
-    trial_home_root,
-    wait_preview_ready,
-)
-from tools.live_preview_task_tree import (  # noqa: E402
-    DEFAULT_BACKEND,
-    build_synthetic_repo,
-    fail,
-    log,
-    make_record,
-    pick_trial_port,
-    request,
-    snapshot_native_storage,
-    wait_run_terminal,
+from src.infra import identity_env  # noqa: E402
+from tools import (  # noqa: E402
+    browser_harness_session_tree,
+    browser_harness_session_tree_preview,
+    live_preview_task_tree,
 )
 
 PRODUCTION_HOMES = (
-    Path.home() / ".charliebot",
-    Path.home() / ".charliebot-session-task-tree",
+    pathlib.Path.home() / ".charliebot",
+    pathlib.Path.home() / ".charliebot-session-task-tree",
 )
 SLOW_RUN_SECONDS = 65
 WORKER_PHRASE = "SLOW-RUN-MARKER-Q7X2"
@@ -84,27 +62,27 @@ WORKER_PHRASE = "SLOW-RUN-MARKER-Q7X2"
 class Shots:
   """The screenshot sink ``evaluate``'s screenshot helper expects."""
 
-  def __init__(self, evidence_dir: Path) -> None:
+  def __init__(self, evidence_dir: pathlib.Path) -> None:
     self.evidence_dir = evidence_dir
 
 
-async def screenshot(cdp: CDP, session_id: str, shots: Shots, name: str) -> str:
+async def screenshot(cdp: browser_harness_session_tree.CDP, session_id: str, shots: Shots, name: str) -> str:
   res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
   path = shots.evidence_dir / f"{name}.png"
   path.write_bytes(base64.b64decode(res["data"]))
-  log(f"    screenshot: {path.name}")
+  live_preview_task_tree.log(f"    screenshot: {path.name}")
   return path.name
 
 
-def git(repo: Path, *args: str) -> str:
+def git(repo: pathlib.Path, *args: str) -> str:
   proc = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
   return proc.stdout.strip()
 
 
-def build_slow_repo(home: Path) -> Path:
+def build_slow_repo(home: pathlib.Path) -> pathlib.Path:
   """The ~60 s script-run repo: the worker runs slow_report.sh and reports it."""
   repo = home / "workspaces" / "slow-repo"
-  build_synthetic_repo(repo)
+  live_preview_task_tree.build_synthetic_repo(repo)
   (repo / "slow_report.sh").write_text(
       "#!/usr/bin/env bash\n"
       "set -euo pipefail\n"
@@ -117,7 +95,7 @@ def build_slow_repo(home: Path) -> Path:
 
 
 async def create_manager(base: str, key: str, name: str, goal: str, request_id: str) -> str:
-  status, created = request(
+  status, created = live_preview_task_tree.request(
       base, key, "POST", "/api/sessions/", {
           "request_id": request_id,
           "profile": "manager",
@@ -128,36 +106,38 @@ async def create_manager(base: str, key: str, name: str, goal: str, request_id: 
           "backend": None,
       })
   if status != 200:
-    fail(f"manager create failed: {status} {created}")
+    live_preview_task_tree.fail(f"manager create failed: {status} {created}")
   manager_id = created["id"]
-  log(f"  manager {name}: {manager_id}")
+  live_preview_task_tree.log(f"  manager {name}: {manager_id}")
   return manager_id
 
 
 async def takeoff(base: str, key: str, manager_id: str, request_id: str) -> str:
   """A real takeoff turn: the user message the delegation gate reads."""
-  status, msg = request(
+  status, msg = live_preview_task_tree.request(
       base, key, "POST", f"/api/chat/{manager_id}/message", {
           "content": "Take off. Reply with exactly PREVIEW-READY and then stop.",
           "request_id": request_id
       })
   if status not in (200, 202):
-    fail(f"manager message failed: {status} {msg}")
+    live_preview_task_tree.fail(f"manager message failed: {status} {msg}")
   deadline = time.monotonic() + 120
   while time.monotonic() < deadline:
-    status, page = request(base, key, "GET", f"/api/sessions/{manager_id}/runs?order=desc&limit=5")
+    status, page = live_preview_task_tree.request(
+        base, key, "GET", f"/api/sessions/{manager_id}/runs?order=desc&limit=5")
     for row in page.get("items", []):
       if row.get("kind") == "manager_turn" and row.get("state") in ("success", "failed"):
         if row["state"] != "success":
-          fail(f"takeoff turn of {manager_id} ended {row['state']}")
+          live_preview_task_tree.fail(f"takeoff turn of {manager_id} ended {row['state']}")
         return row["id"]
     await asyncio.sleep(1.0)
-  fail(f"takeoff turn of {manager_id} never finished")
+  live_preview_task_tree.fail(f"takeoff turn of {manager_id} never finished")
 
 
-async def delegate(base: str, key: str, manager_id: str, description: str, repo: Path, task_type: str,
-                   request_id: str) -> tuple[str, str]:
-  status, body = request(
+async def delegate(
+    base: str, key: str, manager_id: str, description: str, repo: pathlib.Path, task_type: str,
+    request_id: str) -> tuple[str, str]:
+  status, body = live_preview_task_tree.request(
       base, key, "POST", "/api/internal/delegate", {
           "session_id": manager_id,
           "description": description,
@@ -168,8 +148,8 @@ async def delegate(base: str, key: str, manager_id: str, description: str, repo:
           "request_id": request_id,
       })
   if status != 200:
-    fail(f"delegate failed: {status} {body}")
-  log(f"  worker {body['session_id']} run {body['run_id']}")
+    live_preview_task_tree.fail(f"delegate failed: {status} {body}")
+  live_preview_task_tree.log(f"  worker {body['session_id']} run {body['run_id']}")
   return body["session_id"], body["run_id"]
 
 
@@ -179,24 +159,25 @@ async def wait_status(
   deadline = time.monotonic() + timeout
   last: dict = {}
   while time.monotonic() < deadline:
-    status, payload = request(base, key, "GET", "/api/sessions/status?ids=" + ",".join(ids))
+    status, payload = live_preview_task_tree.request(base, key, "GET", "/api/sessions/status?ids=" + ",".join(ids))
     if status != 200:
-      fail(f"status fetch failed: {status} {payload}")
+      live_preview_task_tree.fail(f"status fetch failed: {status} {payload}")
     last = payload.get(session_id, {})
     if last and predicate(last):
       return last
     await asyncio.sleep(1.0)
-  fail(f"status of {session_id} never satisfied {label}; last={json.dumps(last, default=str)}")
+  live_preview_task_tree.fail(f"status of {session_id} never satisfied {label}; last={json.dumps(last, default=str)}")
 
 
-async def icon_hidden(cdp: CDP, page_id: str, sid: str, kind: str) -> bool:
+async def icon_hidden(cdp: browser_harness_session_tree.CDP, page_id: str, sid: str, kind: str) -> bool:
   """Whether one indicator element carries the hidden class (row may be collapsed)."""
-  value = await evaluate(cdp, page_id, f"document.getElementById('{kind}-{sid}')?.classList.contains('hidden')")
+  value = await browser_harness_session_tree.evaluate(
+      cdp, page_id, f"document.getElementById('{kind}-{sid}')?.classList.contains('hidden')")
   return bool(value)
 
 
 async def assert_icons(
-    cdp: CDP,
+    cdp: browser_harness_session_tree.CDP,
     page_id: str,
     sid: str,
     visible: str | None,
@@ -221,15 +202,16 @@ async def assert_icons(
       return
     last = json.dumps(states)
     await asyncio.sleep(0.5)
-  fail(f"{label}: icons never reached the expected state ({last})\n{await icon_dump(cdp, page_id, sid)}")
+  live_preview_task_tree.fail(
+      f"{label}: icons never reached the expected state ({last})\n{await icon_dump(cdp, page_id, sid)}")
 
 
-async def worker_facing_titles(cdp: CDP, page_id: str) -> list[str]:
+async def worker_facing_titles(cdp: browser_harness_session_tree.CDP, page_id: str) -> list[str]:
   """Every worker-facing title the live view paints: sidebar row names, the
     header session name, the transcript's per-Run header lines, and the
     Delegated cards' live-state lines. None may carry a raw Markdown heading."""
   return list(
-      await evaluate(
+      await browser_harness_session_tree.evaluate(
           cdp, page_id, """
         (() => {
           const texts = [];
@@ -243,11 +225,11 @@ async def worker_facing_titles(cdp: CDP, page_id: str) -> list[str]:
     """))
 
 
-async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
+async def icon_dump(cdp: browser_harness_session_tree.CDP, page_id: str, sid: str) -> str:
   """The row's own words at icon-assertion time: the evidence a failure needs."""
   try:
     return str(
-        await evaluate(
+        await browser_harness_session_tree.evaluate(
             cdp, page_id, f"""
             JSON.stringify({{
               row: !!document.getElementById('session-{sid}'),
@@ -264,23 +246,23 @@ async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-  chrome = resolve_chrome(args.chrome, fail)
+  chrome = browser_harness_session_tree.resolve_chrome(args.chrome, live_preview_task_tree.fail)
 
-  evidence_dir = Path(args.evidence_dir)
-  commit = open_evidence_dir(evidence_dir)
+  evidence_dir = pathlib.Path(args.evidence_dir)
+  commit = browser_harness_session_tree.open_evidence_dir(evidence_dir)
   shots = Shots(evidence_dir)
   checks: list[dict] = []
 
-  record = make_record(checks)
+  record = live_preview_task_tree.make_record(checks)
 
   # Isolation preflight: the production homes are recorded read-only here, never written.
   for home in PRODUCTION_HOMES:
     if home.exists():
       record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
 
-  tmp_path = trial_home_root("charliebot-sidebar-status-", keep=args.keep)
+  tmp_path = browser_harness_session_tree_preview.trial_home_root("charliebot-sidebar-status-", keep=args.keep)
   registrations.register_all()
-  for var in inherited_identity_env_vars():
+  for var in identity_env.inherited_identity_env_vars():
     os.environ.pop(var, None)
 
   # An independent instance's sentinel home: nothing outside the trial changes.
@@ -292,34 +274,35 @@ async def run_harness(args: argparse.Namespace) -> None:
   }
 
   source = tmp_path / "source-home"
-  build_source_home(source, [args.backend])
+  browser_harness_session_tree_preview.build_source_home(source, [args.backend])
   home = tmp_path / "preview-home"
-  port = pick_trial_port(args.port)
-  invocation = preview_invocation(home, port, args.backend, [])
-  env = preview_instance_env(source)
+  port = live_preview_task_tree.pick_trial_port(args.port)
+  invocation = browser_harness_session_tree_preview.preview_invocation(home, port, args.backend, [])
+  env = browser_harness_session_tree_preview.preview_instance_env(source)
   server_console = tmp_path / "server-console.log"
-  log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
+  live_preview_task_tree.log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
   with open(server_console, "w", encoding="utf-8") as server_log_file:
     proc = subprocess.Popen(invocation, cwd=str(REPO_ROOT), env=env, stdout=server_log_file, stderr=subprocess.STDOUT)
     chrome_proc = None
     try:
-      preview_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
+      preview_record = await browser_harness_session_tree_preview.wait_preview_ready(
+          proc, home, server_console, live_preview_task_tree.fail, 120.0)
       base = preview_record["url"]
-      if f"127.0.0.1:{PRODUCTION_PORT}" in base:
-        fail("the preview URL names the production port")
-      log(f"preview ready: {base} (sha {preview_record['source_sha'][:12]})")
+      if f"127.0.0.1:{browser_harness_session_tree_preview.PRODUCTION_PORT}" in base:
+        live_preview_task_tree.fail("the preview URL names the production port")
+      live_preview_task_tree.log(f"preview ready: {base} (sha {preview_record['source_sha'][:12]})")
       access_key = (home / "credentials.yaml").read_text().split("access_key: ")[1].split("\n")[0]
 
       # ---- real Chrome over CDP -----------------------------------
-      cdp, page_id, chrome_proc = await open_authenticated_page(
+      cdp, page_id, chrome_proc = await browser_harness_session_tree_preview.open_authenticated_page(
           chrome,
           tmp_path / "chrome-profile",
           port=port,
           access_key=access_key,
           domains=("Page", "Runtime", "Network"),
-          fail=fail)
+          fail=live_preview_task_tree.fail)
       # ---- scenario A: a real ~60 s worker Run shows as running -----
-      log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
+      live_preview_task_tree.log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
       slow_repo = build_slow_repo(home)
       # The trial manager must stay open and listed through the whole
       # trial (the isolation postflight still reads its Run records). A
@@ -342,12 +325,13 @@ async def run_harness(args: argparse.Namespace) -> None:
       await cdp.send("Page.navigate", {"url": f"{base}/?session={manager_a}"}, session_id=page_id)
       deadline = time.monotonic() + 30
       while time.monotonic() < deadline:
-        if await evaluate(cdp, page_id, f"!!document.getElementById('session-{manager_a}')"):
+        if await browser_harness_session_tree.evaluate(cdp, page_id,
+                                                       f"!!document.getElementById('session-{manager_a}')"):
           break
         if time.monotonic() > deadline - 0.1:
-          fail("sidebar never rendered the trial manager's row")
+          live_preview_task_tree.fail("sidebar never rendered the trial manager's row")
         await asyncio.sleep(0.5)
-      log("browser attached; the manager's row is rendered")
+      live_preview_task_tree.log("browser attached; the manager's row is rendered")
 
       results: dict = {
           "tested_commit": commit,
@@ -363,7 +347,7 @@ async def run_harness(args: argparse.Namespace) -> None:
           "Wait until the script has finished, then reply with the exact contents of report.txt.\n", slow_repo,
           "script-run", "sidebar-status-worker-a")
 
-      status, detail = request(base, access_key, "GET", f"/api/sessions/{worker_a}")
+      status, detail = live_preview_task_tree.request(base, access_key, "GET", f"/api/sessions/{worker_a}")
       name = detail.get("name") if status == 200 else None
       record(
           "worker name is the goal's first content line", status == 200 and name is not None and
@@ -372,7 +356,7 @@ async def run_harness(args: argparse.Namespace) -> None:
       # delegation broadcast), for the names, and for the Run to be live.
       deadline = time.monotonic() + 60
       while time.monotonic() < deadline:
-        rows = await evaluate(
+        rows = await browser_harness_session_tree.evaluate(
             cdp, page_id, """
                     [...document.querySelectorAll('#session-list a[id^=session-]')]
                         .map(el => el.id)
@@ -381,8 +365,8 @@ async def run_harness(args: argparse.Namespace) -> None:
           break
         await asyncio.sleep(1.0)
       else:
-        fail(f"sidebar never rendered the trial rows: {rows}")
-      row_names = await evaluate(
+        live_preview_task_tree.fail(f"sidebar never rendered the trial rows: {rows}")
+      row_names = await browser_harness_session_tree.evaluate(
           cdp, page_id, """
                 [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
             """)
@@ -397,9 +381,9 @@ async def run_harness(args: argparse.Namespace) -> None:
       # verdicts, the same derivation the /status payload serves, so the
       # icons need no poll.
       def _list_rows() -> dict:
-        status, body = request(base, access_key, "GET", "/api/sessions/")
+        status, body = live_preview_task_tree.request(base, access_key, "GET", "/api/sessions/")
         if status != 200:
-          fail(f"list fetch failed: {status}")
+          live_preview_task_tree.fail(f"list fetch failed: {status}")
         return {row.get("id"): row for row in body}
 
       list_rows = _list_rows()
@@ -408,9 +392,10 @@ async def run_harness(args: argparse.Namespace) -> None:
           "the list response carries work_state for the trial's task-tree rows",
           all(list_rows.get(sid, {}).get("work_state") for sid in trial_ids),
           json.dumps({sid: list_rows.get(sid, {}).get("work_state") for sid in trial_ids}))
-      status, scoped = request(base, access_key, "GET", "/api/sessions/status?ids=" + ",".join(trial_ids))
+      status, scoped = live_preview_task_tree.request(
+          base, access_key, "GET", "/api/sessions/status?ids=" + ",".join(trial_ids))
       if status != 200:
-        fail(f"status fetch failed: {status}")
+        live_preview_task_tree.fail(f"status fetch failed: {status}")
       record(
           "the list rows' work_state matches the status payload's derivation",
           all(list_rows[sid].get("work_state") == scoped.get(sid, {}).get("work_state") for sid in trial_ids),
@@ -459,7 +444,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
       # Expanded manager keeps its gear: a parent row's icon reads facts
       # only, never the expansion state.
-      await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
+      await browser_harness_session_tree.evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
       await assert_icons(
           cdp, page_id, manager_a, "worker-indicator", ["spinner", "waiting-indicator", "unread", "subtree-unread"],
           "expanded manager row keeps the gear for its running worker")
@@ -469,14 +454,16 @@ async def run_harness(args: argparse.Namespace) -> None:
       shot = await screenshot(cdp, page_id, shots, "running_expanded")
       results["running_expanded_screenshot"] = shot
       record("DOM: expanded manager keeps its gear", ok=True, detail=manager_a)
-      await evaluate(cdp, page_id, f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
+      await browser_harness_session_tree.evaluate(
+          cdp, page_id, f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
 
-      run_row, outcome = await wait_run_terminal(base, access_key, worker_a, run_a, "slow work run")
+      run_row, outcome = await live_preview_task_tree.wait_run_terminal(
+          base, access_key, worker_a, run_a, "slow work run")
       record("slow run reached terminal success", outcome == "success", f"outcome={outcome}")
       if outcome != "success":
         raw = run_row.get("raw_log_ref") or ""
-        tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
-        fail(f"slow run outcome={outcome}; raw tail:\n{tail}")
+        tail = pathlib.Path(raw).read_text(errors="replace")[-1500:] if raw and pathlib.Path(raw).is_file() else ""
+        live_preview_task_tree.fail(f"slow run outcome={outcome}; raw tail:\n{tail}")
       payload = await wait_status(
           base,
           access_key,
@@ -516,19 +503,19 @@ async def run_harness(args: argparse.Namespace) -> None:
       # dirs (20260925T213047Z) into the check, and two production
       # sessions starting in the same second are common (7 of 470 on
       # 09-25), so that shape produced false "leaked" verdicts.
-      native_after = snapshot_native_storage()
+      native_after = live_preview_task_tree.snapshot_native_storage()
       trial_native_ids: set[str] = set()
       for sid in {manager_a, worker_a}:
-        status, page = request(base, access_key, "GET", f"/api/sessions/{sid}/runs?limit=100")
+        status, page = live_preview_task_tree.request(base, access_key, "GET", f"/api/sessions/{sid}/runs?limit=100")
         if status != 200:
-          fail(f"runs fetch of {sid} failed: {status}")
+          live_preview_task_tree.fail(f"runs fetch of {sid} failed: {status}")
         for row in page.get("items", []):
           native = row.get("native_session_id")
           if native:
             trial_native_ids.add(str(native))
       if not trial_native_ids:
-        fail("no Run record carried a native_session_id; nothing to isolate")
-      host_components = {component for path in native_after for component in Path(path).parts}
+        live_preview_task_tree.fail("no Run record carried a native_session_id; nothing to isolate")
+      host_components = {component for path in native_after for component in pathlib.Path(path).parts}
       leaked_ids = sorted(nid for nid in trial_native_ids if nid in host_components)
       record(
           "the trial's native session ids never reached the host's store", not leaked_ids,
@@ -543,23 +530,28 @@ async def run_harness(args: argparse.Namespace) -> None:
       record(
           "the preview home lives inside the trial's temp directory",
           str(home).startswith(str(tmp_path)) and home.name == "preview-home", str(home))
-      record("the trial port is not the production port", port != PRODUCTION_PORT, f"port={port}")
+      record(
+          "the trial port is not the production port", port != browser_harness_session_tree_preview.PRODUCTION_PORT,
+          f"port={port}")
 
       results["checks"] = checks
       (evidence_dir / "sidebar_status_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-      log(f"results written to {evidence_dir / 'sidebar_status_results.json'}")
-      log("SIDEBAR STATUS LIVE HARNESS PASSED")
+      live_preview_task_tree.log(f"results written to {evidence_dir / 'sidebar_status_results.json'}")
+      live_preview_task_tree.log("SIDEBAR STATUS LIVE HARNESS PASSED")
     finally:
-      stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
-      stop_child(proc, grace_s=60, kill_reap_s=30)
-      log("server console tail:\n" + server_console.read_text()[-800:])
+      browser_harness_session_tree.stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
+      browser_harness_session_tree.stop_child(proc, grace_s=60, kill_reap_s=30)
+      live_preview_task_tree.log("server console tail:\n" + server_console.read_text()[-800:])
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument(
       "--evidence-dir", required=True, help="Where the screenshots, assertion JSON and tested commit land")
-  parser.add_argument("--backend", default=DEFAULT_BACKEND, help="The charlie-code backend id the trial instance runs")
+  parser.add_argument(
+      "--backend",
+      default=live_preview_task_tree.DEFAULT_BACKEND,
+      help="The charlie-code backend id the trial instance runs")
   parser.add_argument(
       "--port", type=int, default=None, help="Fixed preview port (default: a free port; 18498 is refused)")
   parser.add_argument("--keep", action="store_true", help="Keep the preview home for inspection instead of purging it")

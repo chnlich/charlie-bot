@@ -5,12 +5,12 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import pathlib
 import uuid
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
-from src.infra.log_once import LazyStructlogLogger
+from src.infra import log_once
 
 # future-annotations keep the hint unevaluated; the pydantic import rides the one
 # call that needs it, so the worker launch chain imports this module without the
@@ -18,13 +18,13 @@ from src.infra.log_once import LazyStructlogLogger
 # futures cost is the launch chain's single largest import slice, and this
 # module's one async writer is the only reader.
 if TYPE_CHECKING:
-  from pydantic import BaseModel
+  import pydantic
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def load_json_meta(
-    path: Path,
+    path: pathlib.Path,
     log_event: str,
     *,
     catch: tuple[type[BaseException], ...] = (json.JSONDecodeError, OSError),
@@ -39,7 +39,7 @@ def load_json_meta(
     return None
 
 
-def load_json_dict(path: Path) -> dict:
+def load_json_dict(path: pathlib.Path) -> dict:
   """The parsed JSON object at *path*, or ``{}`` when the file does not exist yet.
 
   The callers' documents are machine-written caches (the paired write is
@@ -51,7 +51,7 @@ def load_json_dict(path: Path) -> dict:
   return json.loads(path.read_text(encoding="utf-8"))
 
 
-def atomic_write_text(path: Path, text: str, *, private: bool = False) -> tuple[int, int] | None:
+def atomic_write_text(path: pathlib.Path, text: str, *, private: bool = False) -> tuple[int, int] | None:
   """Write *text* to *path* atomically, UTF-8 encoded; return the published signature.
 
   The tmp-naming, 0600, swap, and mid-write cleanup rules are
@@ -61,7 +61,7 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> tuple[
   return atomic_write_stream(path, lambda stream: stream.write(text.encode("utf-8")), private=private)
 
 
-def atomic_write_stream(path: Path,
+def atomic_write_stream(path: pathlib.Path,
                         write: Callable[[BinaryIO], None],
                         *,
                         private: bool = False) -> tuple[int, int] | None:
@@ -106,7 +106,7 @@ def atomic_write_stream(path: Path,
 
 
 def write_json_atomically(
-    path: Path,
+    path: pathlib.Path,
     value: object,
     *,
     indent: int | None = None,
@@ -130,7 +130,7 @@ def write_json_atomically(
   atomic_write_text(path, text, private=private)
 
 
-async def write_model_json_atomically(path: Path, model: BaseModel) -> None:
+async def write_model_json_atomically(path: pathlib.Path, model: pydantic.BaseModel) -> None:
   """Serialize *model* as indented JSON and publish it at *path* under :func:`atomic_write_text`'s rule.
 
   Creates the parent directory when missing. Callers' readers parse the file

@@ -32,7 +32,7 @@ with gc_off(collect=False):
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
   from src.app import pages, registrations
-  from src.infra import responses, timeouts
+  from src.infra import constants, responses, timeouts
   from src.infra.buildinfo import init_build_info
   from src.infra.config import CharlieBotConfig, get_config, require_backends
   from src.infra.constants import REPO_ROOT
@@ -589,6 +589,7 @@ def main() -> None:
       host=cfg.server.host,
       port=cfg.server.port,
       reload=False,
+      loop=constants.UVICORN_LOOP,
       # uvicorn 0.42 applies this to uvicorn.error, uvicorn.access, and
       # uvicorn.asgi, silencing every uvicorn INFO line (access lines,
       # connection open/closed, startup banner); WARNING+ keeps its own format.

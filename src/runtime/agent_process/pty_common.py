@@ -77,8 +77,9 @@ async def _run_tmux(*args: str, capture: bool = False) -> tuple[int, str]:
   env = _tmux_client_env()
   env.pop("TMUX", None)
   cmd = [tmux, "-L", _TMUX_SOCKET, *args]
-  # tmux new-session can fork a server daemon that inherits stderr; under uvloop,
-  # communicate() waits forever for PIPE EOF, so capture stderr in a regular file.
+  # tmux new-session can fork a server daemon that inherits stderr; communicate()
+  # waits forever for PIPE EOF while the daemon holds the pipe, so capture stderr
+  # in a regular file.
   with tempfile.TemporaryFile() as stderr_f:
     proc = await asyncio.create_subprocess_exec(
         *cmd,

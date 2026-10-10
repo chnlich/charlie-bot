@@ -1,36 +1,36 @@
 """The ``code_server:`` config section model and the values read from the code-server config file it names."""
 
-from pathlib import Path
+import pathlib
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict
+import pydantic
 
-from src.infra.yaml_utils import load_yaml
+from src.infra import yaml_utils
 
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
 
-class CodeServerConfig(BaseModel):
+class CodeServerConfig(pydantic.BaseModel):
   """``code_server:`` section: code-server integration."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # code-server integration
   bin: str | None = None
   config: str = "configs/code-server.yaml"
 
 
-def code_server_config_path(cfg: CharlieBotConfig) -> Path:
-  path = Path(cfg.code_server.config).expanduser()
+def code_server_config_path(cfg: config.CharlieBotConfig) -> pathlib.Path:
+  path = pathlib.Path(cfg.code_server.config).expanduser()
   if path.is_absolute():
     return path
   return cfg.charlie_bot_repo / path
 
 
-def code_server_listen_port(cfg: CharlieBotConfig) -> int:
+def code_server_listen_port(cfg: config.CharlieBotConfig) -> int:
   config_path = code_server_config_path(cfg)
-  data = load_yaml(config_path, default={})
+  data = yaml_utils.load_yaml(config_path, default={})
   if not isinstance(data, dict):
     raise ValueError(f"code-server config must be a YAML mapping: {config_path}")
   bind_addr = data.get("bind-addr")

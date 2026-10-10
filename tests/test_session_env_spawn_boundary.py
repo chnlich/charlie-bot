@@ -16,15 +16,14 @@ against that dump, never against the constructor's return value.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import backend_option, make_work_item
 
-from src.backends.claude_code.claude_code import ClaudeCodeBackend, claude_supervisor_env
+from src.backends.claude_code import claude_code
 from src.infra import config as core_config
-from src.infra import models
-from src.infra.constants import SESSION_ID_ENV_VAR
+from src.infra import constants, models
 from src.runtime import master_cc
 
 _SHIM_TEMPLATE = """#!/bin/sh
@@ -37,7 +36,7 @@ exit 0
 """
 
 
-def _install_env_dump_shim(tmp_path: Path) -> tuple[Path, Path]:
+def _install_env_dump_shim(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
   """Write a claude-shaped shim that dumps its own environment; returns (shim, dump path).
 
   The shim drains stdin (`cat > /dev/null`) before echoing: the backend writes
@@ -54,7 +53,7 @@ def _install_env_dump_shim(tmp_path: Path) -> tuple[Path, Path]:
   return shim, dump
 
 
-def _read_env_dump(dump: Path) -> dict[str, str]:
+def _read_env_dump(dump: pathlib.Path) -> dict[str, str]:
   env: dict[str, str] = {}
   for line in dump.read_text(encoding="utf-8", errors="replace").splitlines():
     name, sep, value = line.partition("=")
@@ -65,7 +64,7 @@ def _read_env_dump(dump: Path) -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_master_child_environment_carries_its_own_session_id(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   shim, dump = _install_env_dump_shim(tmp_path)
@@ -74,7 +73,7 @@ async def test_master_child_environment_carries_its_own_session_id(
       backends={
           "options":
               [
-                  backend_option(
+                  conftest.backend_option(
                       id="fake",
                       label="Fake",
                       type="cc-claude",
@@ -87,31 +86,31 @@ async def test_master_child_environment_carries_its_own_session_id(
   )
   (cfg.sessions_dir / "live-session").mkdir(parents=True)
   # A server started from inside another session's shell hands down a stale id.
-  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
+  monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "stale-session")
 
-  item = make_work_item(
+  item = conftest.make_work_item(
       cfg, models.SessionMetadata(profile="manager", id="live-session", name="Live"), cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item)
 
-  assert _read_env_dump(dump)[SESSION_ID_ENV_VAR] == "live-session"
+  assert _read_env_dump(dump)[constants.SESSION_ID_ENV_VAR] == "live-session"
 
 
 @pytest.mark.asyncio
 async def test_worker_child_environment_carries_no_session_id(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   shim, dump = _install_env_dump_shim(tmp_path)
   cwd = tmp_path / "worktree"
   cwd.mkdir()
-  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
+  monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "stale-session")
 
   # The mapping src/runtime/worker.py hands to the shared constructor.
-  env = claude_supervisor_env({**os.environ, "CHARLIEBOT_TEST_EXTRA": "1"})
-  backend = ClaudeCodeBackend(model="fake-model", cli_binary=str(shim), instructions_content="instructions")
+  env = claude_code.claude_supervisor_env({**os.environ, "CHARLIEBOT_TEST_EXTRA": "1"})
+  backend = claude_code.ClaudeCodeBackend(model="fake-model", cli_binary=str(shim), instructions_content="instructions")
   async for _event in backend.run("prompt", str(cwd), env):
     pass
 
   child_env = _read_env_dump(dump)
-  assert SESSION_ID_ENV_VAR not in child_env
+  assert constants.SESSION_ID_ENV_VAR not in child_env
   assert child_env["CHARLIEBOT_TEST_EXTRA"] == "1"

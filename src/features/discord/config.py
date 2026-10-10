@@ -2,18 +2,18 @@
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_validator
+import pydantic
 
 
-class DiscordConfig(BaseModel):
+class DiscordConfig(pydantic.BaseModel):
   """``discord:`` section: the summon entrypoint's account map."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Discord summon entrypoint
   allowed_users: dict[str, str] = {}  # Discord user id -> the person that account belongs to; empty = nobody
 
-  @model_validator(mode="before")
+  @pydantic.model_validator(mode="before")
   @classmethod
   def _reject_legacy_allow_list(cls, data: Any) -> Any:
     """Reject the retired ``allowed_user_ids`` list, naming its successor.

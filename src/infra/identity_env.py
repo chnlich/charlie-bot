@@ -6,7 +6,7 @@ credential of its own registers that name from its ``register()`` (``register_id
 Read the full list with ``inherited_identity_env_vars()`` after ``register_all()`` has run.
 """
 
-from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
+from src.infra import constants
 
 _registered: list[str] = []
 
@@ -20,4 +20,4 @@ def register_identity_env_var(name: str) -> None:
 
 def inherited_identity_env_vars() -> tuple[str, ...]:
   """The runtime's own names, then every registered name in registration order."""
-  return (SESSION_ID_ENV_VAR, RUN_TOKEN_ENV, *_registered)
+  return (constants.SESSION_ID_ENV_VAR, constants.RUN_TOKEN_ENV, *_registered)

@@ -808,7 +808,8 @@ def _pre_fix_ledger(path: Path, served: list[usage_sources.UsageRecord], late: l
   """Build a ledger as the pre-fix release left it: this schema, the add-arm-guarded
   trigger bodies, *served* records written and the aggregate backfilled over them, then
   *late* records written under the same bodies -- whose adds a served group-day drops.
-  Both stamps are set, so the fixed module's open takes the trigger-refresh path."""
+  The ``agg_backfilled`` stamp arms the open's re-price under the fresh trigger bodies;
+  the ``schema`` stamp row mirrors a real pre-fix ledger and is inert."""
   raw = sqlite3.connect(path)
   try:
     raw.executescript(_SCHEMA)

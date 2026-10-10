@@ -14,13 +14,12 @@ The sweep never compacts on its own: VACUUM is the manual ``--vacuum`` option, w
 """
 
 import os
+import pathlib
 import sqlite3
 import sys
 import time
-from pathlib import Path
 
-from src.infra import home, log_once
-from src.infra.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
+from src.infra import home, log_once, timeouts
 from src.runtime.hooks import usage_sources
 
 log = log_once.LazyStructlogLogger()
@@ -40,7 +39,7 @@ _AGGREGATE_SIZES_SQL = (
 _SESSION_UPDATED_SQL = "select id, time_updated from session"
 
 
-def _opencode_query(db: Path, sql: str, parameters: tuple = ()) -> list[tuple] | None:
+def _opencode_query(db: pathlib.Path, sql: str, parameters: tuple = ()) -> list[tuple] | None:
   """One read-only query against the opencode store; None on failure, [] on an empty result."""
   try:
     connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -53,7 +52,7 @@ def _opencode_query(db: Path, sql: str, parameters: tuple = ()) -> list[tuple] |
     return None
 
 
-def _opencode_candidate_ids(db: Path, backend_session: str | None) -> list[str] | None:
+def _opencode_candidate_ids(db: pathlib.Path, backend_session: str | None) -> list[str] | None:
   """The aggregate ids a sweep may delete: all of them, or the scoped one."""
   if backend_session is None:
     rows = _opencode_query(db, _AGGREGATE_IDS_SQL)
@@ -62,7 +61,7 @@ def _opencode_candidate_ids(db: Path, backend_session: str | None) -> list[str] 
   return [str(row[0]) for row in rows] if rows is not None else None
 
 
-def _opencode_aggregate_sizes(db: Path, aggregate_ids: list[str]) -> dict[str, tuple[int, int]] | None:
+def _opencode_aggregate_sizes(db: pathlib.Path, aggregate_ids: list[str]) -> dict[str, tuple[int, int]] | None:
   """Event counts and byte totals for *aggregate_ids*, from index-driven lookups.
 
   One failed query drops the whole map, so a partially-read scan never reports or
@@ -82,7 +81,7 @@ def _opencode_aggregate_sizes(db: Path, aggregate_ids: list[str]) -> dict[str, t
   return sizes
 
 
-def _opencode_session_updated(db: Path) -> dict[str, int] | None:
+def _opencode_session_updated(db: pathlib.Path) -> dict[str, int] | None:
   """The backend's own last-update timestamp (ms epoch) per aggregate id."""
   rows = _opencode_query(db, _SESSION_UPDATED_SQL)
   if rows is None:
@@ -90,7 +89,7 @@ def _opencode_session_updated(db: Path) -> dict[str, int] | None:
   return {str(row[0]): int(row[1]) for row in rows if row[1] is not None}
 
 
-def _opencode_targets(db: Path, scope: usage_sources.SweepScope) -> dict[str, tuple[int, int]] | None:
+def _opencode_targets(db: pathlib.Path, scope: usage_sources.SweepScope) -> dict[str, tuple[int, int]] | None:
   """Aggregate ids the rule deletes, with their event counts and byte totals.
 
   In a scoped run the named session's own aggregate is the only candidate (the
@@ -134,7 +133,7 @@ def _opencode_targets(db: Path, scope: usage_sources.SweepScope) -> dict[str, tu
   return _opencode_aggregate_sizes(db, referenced_cold + window_ids)
 
 
-def _sweep_opencode(db: Path, scope: usage_sources.SweepScope, counter: usage_sources.SweepCounter) -> None:
+def _sweep_opencode(db: pathlib.Path, scope: usage_sources.SweepScope, counter: usage_sources.SweepCounter) -> None:
   """Delete cold/unreferenced aggregates' event rows in byte-capped chunks, then the sequence row.
 
   ``event`` carries the bytes: per aggregate, its rows go in delete transactions
@@ -159,7 +158,7 @@ def _sweep_opencode(db: Path, scope: usage_sources.SweepScope, counter: usage_so
   if not targets:
     return
   try:
-    connection = sqlite3.connect(db, timeout=SQLITE_LOCK_WAIT_SECONDS)
+    connection = sqlite3.connect(db, timeout=timeouts.SQLITE_LOCK_WAIT_SECONDS)
   except sqlite3.Error as e:
     log.warning("storage_cool_opencode_connect_failed", db=str(db), error=str(e))
     return
@@ -230,10 +229,10 @@ def _delete_event_chunk(connection: sqlite3.Connection, aggregate_id: str, rowid
   return True
 
 
-def _vacuum_opencode_db(connection: sqlite3.Connection, db: Path, *, force: bool) -> None:
+def _vacuum_opencode_db(connection: sqlite3.Connection, db: pathlib.Path, *, force: bool) -> None:
   """Hand the freed pages back to the filesystem; leave them for the next run on a lock loss."""
   try:
-    connection.execute(f"PRAGMA busy_timeout={SQLITE_LOCK_WAIT_MS}")
+    connection.execute(f"PRAGMA busy_timeout={timeouts.SQLITE_LOCK_WAIT_MS}")
     if not force:
       row = connection.execute("PRAGMA freelist_count").fetchone()
       if not row or not row[0]:
@@ -252,7 +251,7 @@ def _count_opencode_writers() -> int:
   """
   my_pid = os.getpid()
   count = 0
-  for entry in Path("/proc").iterdir():
+  for entry in pathlib.Path("/proc").iterdir():
     if not entry.name.isdigit() or int(entry.name) == my_pid:
       continue
     try:
@@ -264,7 +263,7 @@ def _count_opencode_writers() -> int:
   return count
 
 
-def _vacuum_opencode_store(db: Path, *, force: bool) -> None:
+def _vacuum_opencode_store(db: pathlib.Path, *, force: bool) -> None:
   """Manually vacuum the opencode store, refusing past live writers unless *force*.
 
   Silently skipping a requested vacuum would be a silent fallback, so a refusal
@@ -282,7 +281,7 @@ def _vacuum_opencode_store(db: Path, *, force: bool) -> None:
   if not db.exists():
     return
   try:
-    connection = sqlite3.connect(db, timeout=SQLITE_LOCK_WAIT_SECONDS, isolation_level=None)
+    connection = sqlite3.connect(db, timeout=timeouts.SQLITE_LOCK_WAIT_SECONDS, isolation_level=None)
   except sqlite3.Error as e:
     log.warning("storage_cool_opencode_connect_failed", db=str(db), error=str(e))
     return
@@ -292,7 +291,7 @@ def _vacuum_opencode_store(db: Path, *, force: bool) -> None:
     connection.close()
 
 
-def _opencode_freelist_bytes(db: Path) -> int:
+def _opencode_freelist_bytes(db: pathlib.Path) -> int:
   """Free pages the opencode store holds, in bytes; reclaimable by a manual vacuum."""
   if not db.exists():
     return 0

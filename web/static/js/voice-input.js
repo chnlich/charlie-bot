@@ -47,6 +47,7 @@ const VOICE_BACKEND_STORAGE_KEY = 'charliebot-voice-backend';
 const VOICE_WS_OPEN = 1;
 
 const VOICE_HINT_LISTENING = 'Listening...';
+const VOICE_HINT_WAITING = 'Waiting for microphone signal...';
 const VOICE_HINT_UPLOADING = 'Uploading...';
 const VOICE_HINT_DECODING = 'Decoding...';
 const VOICE_HINT_RETRY = 'Upload failed — click to retry';
@@ -263,6 +264,7 @@ function newVoiceRun(sessionId, backend) {
     workletNode: null,
     recording: false,
     stopping: false,
+    signalReady: false,
     phase: 'idle',
     pcmChunks: [],
     totalSamples: 0,
@@ -301,26 +303,34 @@ async function startRecording() {
 
   const run = newVoiceRun(SESSION_ID, selectedVoiceBackend());
   activeVoiceRun = run;
-  setVoiceButtonRecording(true);
+  // Amber from the click on: the mic is not delivering sound yet, so the
+  // user must not speak — red is the speak cue and lights at the first
+  // chunk with a non-zero sample.
+  setVoiceButtonState('starting');
   updateVoiceCaret();
   if (run.backend.livePartials) openVoiceRelay(run);
   run.ui = ensureVoiceOverlay();
   showVoiceHint(run, 'Starting...');
-  try {
-    run.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
 
+  // Parallel startup: both branches launch in this one synchronous step, so
+  // the wait is the longer of the two instead of their sum. Each resource
+  // lands on the run as it opens, which the catch below relies on: one
+  // release path frees whatever a failed startup leaves behind.
+  const micBranch = navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  }).then((stream) => {
+    run.stream = stream;
     // The recording's device facts: collection starts here, at recording
     // start, without delaying it — the end frame and the upload await the
     // settled object instead.
     run.devicesPromise = collectVoiceDevices(run);
-
+  });
+  const graphBranch = (async () => {
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     run.audioContext = new AudioContextCtor();
     const workletUrl = URL.createObjectURL(new Blob([VOICE_WORKLET_SOURCE], {type: 'application/javascript'}));
@@ -329,6 +339,10 @@ async function startRecording() {
     } finally {
       URL.revokeObjectURL(workletUrl);
     }
+  })();
+
+  try {
+    await Promise.all([micBranch, graphBranch]);
     if (activeVoiceRun !== run) {
       abortVoiceRun(run);
       return;
@@ -349,10 +363,21 @@ async function startRecording() {
     run.recording = true;
     run.phase = 'recording';
     updateVoiceLeaveGuard();
-    showVoiceHint(run, run.backend.livePartials ? 'Listening · ' + run.backend.label : VOICE_HINT_LISTENING);
+    // Connected is not yet sounding: a just-opened device can deliver
+    // seconds of digital zero, so the button stays amber and the hint waits
+    // for the first non-zero sample.
+    showVoiceHint(run, VOICE_HINT_WAITING);
     updateVoiceIndicator(run);
   } catch (err) {
-    if (activeVoiceRun !== run) return;
+    // Both branches settle before the release, so the slower branch's
+    // resources are already on the run: the one release path closes the
+    // AudioContext and stops every opened track in either order of success
+    // and failure.
+    await Promise.allSettled([micBranch, graphBranch]);
+    if (activeVoiceRun !== run) {
+      abortVoiceRun(run);
+      return;
+    }
     console.error('Voice input failed:', err);
     showToast('Voice input failed: ' + err.message, true);
     releaseVoiceRun(run);
@@ -426,6 +451,19 @@ function handleVoiceWorkletMessage(run, event) {
   updateVoiceIndicator(run);
   sendVoiceRelayAudio(run, data.buffer);
   if (run.recording) {
+    // The ready signal: sound is arriving, so the button may go red — the
+    // speak cue. One non-zero sample is enough; a level threshold would keep
+    // a quiet room amber forever. The flag ends the inspection for the rest
+    // of the run.
+    if (!run.signalReady) {
+      for (let i = 0; i < samples.length; i++) {
+        if (samples[i] === 0) continue;
+        run.signalReady = true;
+        setVoiceButtonState('recording');
+        showVoiceHint(run, run.backend.livePartials ? 'Listening · ' + run.backend.label : VOICE_HINT_LISTENING);
+        break;
+      }
+    }
     // The probe is the non-live backends' only early words; a live one shows
     // its own partials instead.
     if (!run.backend.livePartials && !run.confirmFired && run.totalSamples >= VOICE_CONFIRM_TRIGGER_SAMPLES) {
@@ -455,7 +493,7 @@ async function stopRecording(run) {
   if (!run.recording) return;
   run.recording = false;
   run.stopping = true;
-  setVoiceButtonRecording(false);
+  setVoiceButtonState('idle');
   updateVoiceLeaveGuard();
   try {
     // The worklet drains its buffered tail into the local buffer — and, live,
@@ -944,7 +982,7 @@ function resetVoiceState() {
   const run = activeVoiceRun;
   activeVoiceRun = null;
   if (run) abortVoiceRun(run);
-  setVoiceButtonRecording(false);
+  setVoiceButtonState('idle');
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
@@ -962,7 +1000,7 @@ function releaseVoiceRun(run) {
   abortVoiceRun(run);
   if (activeVoiceRun === run) activeVoiceRun = null;
   clearVoiceUploadTimer(run);
-  setVoiceButtonRecording(false);
+  setVoiceButtonState('idle');
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
@@ -1012,16 +1050,15 @@ function cleanupVoiceCapture(run) {
   run.flushResolvers.clear();
 }
 
-function setVoiceButtonRecording(recording) {
+// The button's one class pair per run state: amber promises no sound is
+// being recorded yet, red means sound is arriving now.
+function setVoiceButtonState(state) {
   const btn = document.getElementById('voice-btn');
   if (!btn) return;
-  if (recording) {
-    btn.classList.add('bg-red-600', 'border-red-500');
-    btn.classList.remove('bg-slate-800', 'border-slate-600');
-  } else {
-    btn.classList.remove('bg-red-600', 'border-red-500');
-    btn.classList.add('bg-slate-800', 'border-slate-600');
-  }
+  btn.classList.remove('bg-slate-800', 'border-slate-600', 'bg-amber-600', 'border-amber-500', 'bg-red-600', 'border-red-500');
+  if (state === 'starting') btn.classList.add('bg-amber-600', 'border-amber-500');
+  else if (state === 'recording') btn.classList.add('bg-red-600', 'border-red-500');
+  else btn.classList.add('bg-slate-800', 'border-slate-600');
 }
 
 function removeVoiceOverlay() {

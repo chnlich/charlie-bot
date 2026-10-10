@@ -533,6 +533,22 @@ def _backdate_cc_anchor(session_blocks: SessionBlocks, session_id: str, *, start
   session_blocks.store.metadata_cache.pop(session_id)  # the next read re-parses the file
 
 
+# A Sunday: the Saturday 01:00 PT weekly boundary sits one day behind it at
+# any wall-clock run instant. Inside Saturday 00:00-00:59 PT a real-time wake
+# computes the coming 01:00 boundary and the recycle deliberately waits it
+# out (sequence_controller._last_saturday_1am_utc), so an unpinned run of the
+# recycle test skips the recycle one hour per week.
+_RECYCLE_TEST_NOW = datetime(2026, 10, 11, 10, 0, tzinfo=UTC)
+
+
+class _RecycleTestDateTime(datetime):
+  """The sequence controller's clock in the recycle test: ``now`` is the pinned Sunday."""
+
+  @classmethod
+  def now(cls, tz=None):
+    return _RECYCLE_TEST_NOW.astimezone(tz)
+
+
 def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Path:
   """One retained worker-thread directory from before the weekly recycle cutoff."""
   thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
@@ -559,9 +575,11 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   backend = SpawningScriptedBackend([result_event("reviewed: merged")])
   install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
-  # An anchor and worker-thread directory predate the last Saturday 01:00 PT.
+  monkeypatch.setattr("src.features.cron.sequence_controller.datetime", _RecycleTestDateTime)
+
+  # An anchor and worker-thread directory predate the pinned weekly boundary.
   await session_blocks.anchors.persist_cc_session_id(node_id, "cc-old")
-  _backdate_cc_anchor(session_blocks, node_id, started_at=datetime.now(UTC) - timedelta(days=8))
+  _backdate_cc_anchor(session_blocks, node_id, started_at=_RECYCLE_TEST_NOW - timedelta(days=8))
   old_thread = _write_old_thread(cfg, node_id, "legacy-round")
 
   await tree.dispatch.deliver_child_report(

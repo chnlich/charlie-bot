@@ -7,9 +7,9 @@ import of either module in this process would hide a regression.
 """
 
 import os
+import pathlib
 import subprocess
 import sys
-from pathlib import Path
 
 import conftest
 import pytest
@@ -27,7 +27,7 @@ print(sorted(name for name in ("pydantic", "dataclasses") if name in sys.modules
 
 
 @pytest.mark.parametrize("argv", [["--help"], ["usage-ledger", "--help"], ["storage", "--help"]])
-def test_help_imports_no_pydantic_and_no_dataclasses(argv: list[str], tmp_path: Path) -> None:
+def test_help_imports_no_pydantic_and_no_dataclasses(argv: list[str], tmp_path: pathlib.Path) -> None:
   env = {**os.environ, "CHARLIEBOT_HOME": str(tmp_path)}
 
   result = subprocess.run(

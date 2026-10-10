@@ -36,8 +36,7 @@ Known-alive symbols:
   `_stub_headless_renderer` (`tests/conftest.py`) — the renderer pair: the first resets the
   warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the
   suite-wide conftest autouse that reshapes `headless_render.render_height` into the
-  dump-dom drive seam every artifact/plan-height test relies on,
-  `_clear_events_cache` (`tests/test_thread_worker_events.py`)
+  dump-dom drive seam every artifact/plan-height test relies on
   — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Most are single-line
@@ -310,20 +309,15 @@ Known-alive symbols:
   split; the byte framer's docstring (`_ChunkedFramer`, same module) names it the semantics
   home. No production code calls it, so a production-scope vulture scan flags it as an unused
   function.
-- `__getattr__` (`src/backends/opencode/opencode.py`, `src/runtime/worker.py`, `src/runtime/api/chat.py`,
-  `src/runtime/master_trigger.py`)
-  — the PEP 562 lazy-import hooks; same class as the `src/features/artifacts/artifact_wrap.py` hook entry
-  above. All but the opencode hook are one-line delegates to the shared `deferred_module_getattr`
-  (`src/infra/deferred.py`); the opencode hook writes the same match-or-AttributeError shape
-  inline (`if name == "httpx": import httpx`) because it binds one import rather than a loader.
-  Each serves one external string patch target: `src.backends.opencode.opencode.httpx.*`
-  (`tests/test_opencode_backend.py`), the `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling
-  `src.runtime.worker.build_backend` (`tests/conftest.py`), the `CHAT_CANCEL_MASTER_PATCH_TARGET`
-  spelling `src.runtime.api.chat.cancel_master` (`tests/test_chat_cancel.py`, constant defined in
-  `tests/conftest.py`), and the `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling
-  `src.runtime.master_trigger.run_message` (`tests/test_spawner_trigger_master_resume_recovery.py`,
-  constant defined in `tests/conftest.py`).
-  Vulture flags each hook as an unused function at 60% confidence.
+- `__getattr__` (`src/runtime/worker.py`, `src/runtime/autonamer.py`) — the PEP 562 lazy-import
+  hooks; same class as the `src/features/artifacts/artifact_wrap.py` hook entry above. Each is a
+  one-line delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`) serving the
+  module's deferred `build_backend`. The worker hook resolves the
+  `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling `src.runtime.worker.build_backend` (constant defined
+  in `tests/conftest.py`); the autonamer hook resolves the attribute-form patch
+  `monkeypatch.setattr(autonamer, "build_backend", ...)` in `tests/test_master_cc_consumer.py`,
+  whose existence check reads the attribute before the loader runs. Vulture flags each hook as an
+  unused function at 60% confidence.
 - `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
   `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
@@ -431,19 +425,6 @@ Known-alive symbols:
   (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
   field), but the error would no longer name `allowed_users`, the successor the
   operator must move each id into.
-- `cancel_master` (`src/runtime/master_cc_queue.py`) — reached by string: `src/runtime/api/chat.py`'s
-  deferred loader `deferred_import_loader("cancel_master", "src.runtime.master_cc_queue")`
-  imports the part module and reads the attribute on first use; the production cancel path
-  (`cancel_master_agent`) calls the loader's binding directly, and the
-  `CHAT_CANCEL_MASTER_PATCH_TARGET` spelling `src.runtime.api.chat.cancel_master` resolves through
-  the same loader (the `__getattr__` PEP 562 entry above covers the hook; this entry covers
-  the resolution target the hook's loader names). A static grep finds no
-  `master_cc_queue.cancel_master` attribute read and no import-form use — every
-  `cancel_master` match outside the def is the loader's string literals, the patch-target
-  constant, and comment/prose mentions — so vulture flags the def as an unused function.
-  Never delete on that evidence: the cancel tests' `patch(CHAT_CANCEL_MASTER_PATCH_TARGET, ...)`
-  resolves the attribute through the loader and raises AttributeError, and the chat cancel
-  endpoint breaks on its first production call.
 - `src/runtime/v1_sessions.py` (the start refusal for a home that holds v1 sessions) and
   `scripts/v1_session_conversion.py` (the converter that the refusal names) — kept on purpose for
   other CharlieBot homes that still hold v1 sessions. A home on this host holds no v1 session, so

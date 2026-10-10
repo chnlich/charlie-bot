@@ -1693,21 +1693,6 @@ def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) ->
     yield
 
 
-# Import-path patch targets for the chat API's message bootstrap and cancel route.
-# src/runtime/api/chat.py defines run_and_finalize itself and binds create_logged_task
-# (`from src.infra.tasks import create_logged_task`) at import scope; cancel_master
-# binds lazily (PEP 562 __getattr__ + _load_cancel_master's globals-first loader,
-# the M99 server import floor), and the module attribute stays the seam either way —
-# mock and monkeypatch.setattr land the stand-ins on the src.runtime.api.chat module
-# attributes and send_message's fire-and-forget bootstrap, run_and_finalize's
-# auto-name task, and cancel_master_agent read them at call time.
-# src/runtime/api/sessions.py re-imports run_and_finalize at call time, so both reach the
-# same src.runtime.api.chat namespace attributes; src.infra.tasks.create_logged_task stays
-# a separate route.
-CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.runtime.api.chat.run_and_finalize"
-CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.runtime.api.chat.create_logged_task"
-CHAT_CANCEL_MASTER_PATCH_TARGET = "src.runtime.api.chat.cancel_master"
-
 # Import-path patch targets for the CLI HTTP layer's transport. src/runtime/cli/common.py exposes one
 # adapter per verb (`_request_post`/`_request_get`, both over the phase-separated client
 # `_send_request`), and `_request_with_contract` reads the adapter as a module global at

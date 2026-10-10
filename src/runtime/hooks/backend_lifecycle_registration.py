@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.infra.deferred import import_attr
+from src.infra import deferred
 
 if TYPE_CHECKING:
-  from src.runtime.hooks.backend_lifecycle import ContextLimits
+  from src.runtime.hooks import backend_lifecycle
 
 # ---------------------------------------------------------------------------
 # Child-process environment
@@ -36,7 +36,7 @@ def register_child_env(fn: str) -> None:
 def apply_child_env(env: dict[str, str]) -> None:
   """Apply every registered child-env function to ``env``, in registration order."""
   for fn in _child_env_fns:
-    import_attr(fn)(env)
+    deferred.import_attr(fn)(env)
 
 
 # ---------------------------------------------------------------------------
@@ -53,12 +53,12 @@ def register_reading_limits(reading_kind: str, fn: str) -> None:
   _reading_limits_fns[reading_kind] = fn
 
 
-def reading_limits(reading_kind: str) -> ContextLimits | None:
+def reading_limits(reading_kind: str) -> backend_lifecycle.ContextLimits | None:
   """The limits of ``reading_kind``, computed per call; None when no package registered the kind."""
   fn = _reading_limits_fns.get(reading_kind)
   if fn is None:
     return None
-  return import_attr(fn)()
+  return deferred.import_attr(fn)()
 
 
 # ---------------------------------------------------------------------------
@@ -84,4 +84,4 @@ def usage_resolver_for(backend_type: str) -> type | None:
   cls = _usage_resolver_classes.get(backend_type)
   if cls is None:
     return None
-  return import_attr(cls)
+  return deferred.import_attr(cls)

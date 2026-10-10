@@ -3,8 +3,8 @@
 ``SessionLifecycle`` holds the writes that change a session's own metadata or files after it exists. Each write
 runs under the session's metadata lock (through ``SessionStore.update_field`` or directly) and tells the sidebar
 through the events block. The task-tree owner registers ``tree_index_invalidator``; the writes that move a
-tree-projection input call it. The process builds one block (``lifecycle()``); tests build their own and install it
-with ``set_lifecycle()``.
+tree-projection input call it. The process builds one block (``lifecycle()``); tests monkeypatch the
+``_lifecycle`` global.
 """
 
 import asyncio
@@ -212,9 +212,3 @@ def lifecycle() -> SessionLifecycle:
   if _lifecycle is None:
     _lifecycle = SessionLifecycle(get_config(), session_store.store(), session_events.events())
   return _lifecycle
-
-
-def set_lifecycle(replacement: SessionLifecycle | None) -> None:
-  """Replace the process lifecycle singleton (tests); None restores lazy construction."""
-  global _lifecycle
-  _lifecycle = replacement

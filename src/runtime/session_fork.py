@@ -7,7 +7,7 @@ parent, and ``elone_session`` replaces the source in place — the whole subtree
 closes with the archive format, and a scheduled task bound to the source rebinds to the child. The history copy
 streams the parent's lines through an mmap and a chunked numpy scan, so a gigabyte-class corpus never enters the
 Python heap. The task-tree owner registers ``tree_index_invalidator`` and itself. The process builds one block
-(``fork()``); tests build their own and install it with ``set_fork()``.
+(``fork()``); tests monkeypatch the ``_fork`` global.
 """
 
 import asyncio
@@ -521,9 +521,3 @@ def fork() -> SessionFork:
   if _fork is None:
     _fork = SessionFork(get_config(), session_store.store(), session_events.events())
   return _fork
-
-
-def set_fork(replacement: SessionFork | None) -> None:
-  """Replace the process fork singleton (tests); None restores lazy construction."""
-  global _fork
-  _fork = replacement

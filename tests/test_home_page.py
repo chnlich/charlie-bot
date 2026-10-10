@@ -10,8 +10,8 @@ import pytest
 
 from src.app import pages
 from src.infra import config
+from src.runtime import file_urls
 from src.runtime.api import auth
-from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.hooks import page_render
 
 
@@ -86,7 +86,7 @@ async def test_home_page_lists_the_app_cards_then_each_package_card(tmp_path: pa
 def test_the_file_browser_card_links_to_the_file_server_mount() -> None:
   """files.register() spells the URL out to stay import-free; the spelling follows FILE_SERVER_MOUNTS."""
   card = next(card for card in page_render.home_cards() if card["name"] == "File browser")
-  assert card["url"] == FILE_SERVER_MOUNTS[0] + "/"
+  assert card["url"] == file_urls.FILE_SERVER_MOUNTS[0] + "/"
 
 
 @pytest.mark.asyncio

@@ -6,27 +6,27 @@ section of a scheduled task, registered with the loop action.
 
 import os
 
-from pydantic import BaseModel, ConfigDict, model_validator
+import pydantic
 
 
-class BacklogRepoConfig(BaseModel):
+class BacklogRepoConfig(pydantic.BaseModel):
   """A single backlog repo entry: label + path."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   label: str
   path: str
 
 
-class BacklogConfig(BaseModel):
+class BacklogConfig(pydantic.BaseModel):
   """``backlog:`` section: the repos the backlog panel lists."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Backlog panel
   repos: list[BacklogRepoConfig] = []
 
-  @model_validator(mode="after")
+  @pydantic.model_validator(mode="after")
   def _expand_tilde(self) -> BacklogConfig:
     """Expand ``~`` in each backlog repo path."""
     for entry in self.repos:
@@ -34,7 +34,7 @@ class BacklogConfig(BaseModel):
     return self
 
 
-class ImprovementLoopConfig(BaseModel):
+class ImprovementLoopConfig(pydantic.BaseModel):
   """Declarative config for an improvement-loop cron task."""
 
   backlog: str  # relative path within repo, e.g. 'backlog/backlog.yaml'

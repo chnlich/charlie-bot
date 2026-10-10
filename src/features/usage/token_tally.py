@@ -62,7 +62,8 @@ from collections.abc import Iterator
 
 import orjson
 
-from src.features.usage import CHARLIE_BOT_SOURCE, usage_ledger
+from src.features import usage
+from src.features.usage import usage_ledger
 from src.infra import config, ndjson
 from src.infra import event_types as ET
 from src.runtime import runs
@@ -287,12 +288,12 @@ def _iter_run_logs(sessions: str) -> Iterator[tuple[str, os.stat_result]]:
       yield run_log, st
 
 
-def _verdict_counts(usage: dict, verdict: _Verdict) -> tuple[int, int, int, int, int]:
+def _verdict_counts(usage_payload: dict, verdict: _Verdict) -> tuple[int, int, int, int, int]:
   """A thread result row's (in_fresh, cache_write, cache_read, output, in_unsplit), split by the
   thread backend's verdict: the Codex rule subtracts the cached reads from the input; a NATIVE
   backend's result usage logs no cache fields at all, so the split is unknowable and the whole
   input lands in ``in_unsplit``; a plain FALLBACK keeps the Claude envelope's own split."""
-  in_fresh, cache_write, cache_read, output = ET.usage_counts(usage)
+  in_fresh, cache_write, cache_read, output = ET.usage_counts(usage_payload)
   if verdict is _Verdict.CODEX_RULE:
     return in_fresh - cache_read, 0, cache_read, output, 0
   if verdict is _Verdict.NATIVE:
@@ -352,7 +353,7 @@ def _thread_records(path: str, registry: dict, live: _LiveSessions) -> list[usag
         usage_sources.UsageRecord(
             record_id=f"thread:{parts[-5]}/{parts[-3]}/{i}",
             kind=usage_sources.RecordKind.NATIVE if native else usage_sources.RecordKind.FALLBACK,
-            source=CHARLIE_BOT_SOURCE,
+            source=usage.CHARLIE_BOT_SOURCE,
             model=model,
             account=backend,
             ts=result.get("timestamp") or "",
@@ -385,23 +386,23 @@ def _master_records(path: str, registry: dict) -> list[usage_sources.UsageRecord
       last = line
   if model is None or last is None:
     return []
-  usage = last.get("usage") or {}
-  input_tokens = usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0
-  cached = usage.get("cached_tokens", 0) or 0
+  usage_payload = last.get("usage") or {}
+  input_tokens = usage_payload.get(ET.USAGE_INPUT_TOKENS, 0) or 0
+  cached = usage_payload.get("cached_tokens", 0) or 0
   opt = next((o for o in registry.values() if _run_logs_only(o) and o.model == model), None)
   parts = pathlib.Path(path).parts
   return [
       usage_sources.UsageRecord(
           record_id=f"master:{parts[-5]}/{parts[-2]}",
           kind=usage_sources.RecordKind.NATIVE,
-          source=CHARLIE_BOT_SOURCE,
+          source=usage.CHARLIE_BOT_SOURCE,
           model=_bare_model(model),
           account=opt.id if opt is not None else _CLC_MASTER_ACCOUNT,
           ts=parts[-2],  # the master_runs/<started_at> directory name
           in_fresh=input_tokens - cached,
           cache_write=0,
           cache_read=cached,
-          output=usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0)
+          output=usage_payload.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0)
   ]
 
 
@@ -462,11 +463,11 @@ def _turn_sums(objects: list[dict]) -> tuple[int, int, int] | None:
     if obj.get("type") != "turn.completed":
       continue
     seen = True
-    usage = obj.get("usage") or {}
-    cached = usage.get("cached_input_tokens", 0) or 0
-    in_fresh += (usage.get("input_tokens", 0) or 0) - cached
+    usage_payload = obj.get("usage") or {}
+    cached = usage_payload.get("cached_input_tokens", 0) or 0
+    in_fresh += (usage_payload.get("input_tokens", 0) or 0) - cached
     cache_read += cached
-    output += usage.get("output_tokens", 0) or 0
+    output += usage_payload.get("output_tokens", 0) or 0
   return (in_fresh, cache_read, output) if seen else None
 
 
@@ -515,11 +516,11 @@ def _run_record(
     last = _last_run_result(objects)
     if last is None:
       return None
-    usage = last.get("usage") or {}
-    input_tokens = usage.get("input_tokens", 0) or 0
-    cached = usage.get("cached_tokens", 0) or 0
+    usage_payload = last.get("usage") or {}
+    input_tokens = usage_payload.get("input_tokens", 0) or 0
+    cached = usage_payload.get("cached_tokens", 0) or 0
     in_fresh, cache_write, cache_read = input_tokens - cached, 0, cached
-    output = usage.get("output_tokens", 0) or 0
+    output = usage_payload.get("output_tokens", 0) or 0
     kind = usage_sources.RecordKind.NATIVE
   else:
     if verdict is _Verdict.CODEX_RULE:
@@ -541,7 +542,7 @@ def _run_record(
   return usage_sources.UsageRecord(
       record_id=f"run:{run_id}",
       kind=kind,
-      source=CHARLIE_BOT_SOURCE,
+      source=usage.CHARLIE_BOT_SOURCE,
       model=_thread_row_model({
           "backend": backend,
           "model": meta.get("model")
@@ -635,7 +636,7 @@ def capture_usage(ledger: usage_ledger.UsageLedger, *, host: str, sessions_dir: 
     for source in usage_source_registration.sources():
       if source.module is not None:
         written[source.name] = _capture_source(ledger, host, source, captured)
-    written[CHARLIE_BOT_SOURCE] = (
+    written[usage.CHARLIE_BOT_SOURCE] = (
         capture_charliebot(ledger, host, sessions_dir, captured) + capture_runs(ledger, host, sessions_dir, captured))
     ledger.mark_capture_finished(host)
   return written

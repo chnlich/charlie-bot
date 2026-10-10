@@ -2,8 +2,8 @@
 
 ``SessionListing`` reads the store's shared cached metadata and derives each list's sidebar state through the sidebar
 block. The task-tree owner registers its fact-derived archive as ``archive_overlay``; every list applies it after the
-store's stored-status memo. The process builds one block (``listing()``); tests build their own and install it with
-``set_listing()``.
+store's stored-status memo. The process builds one block (``listing()``); tests monkeypatch the ``_listing``
+global.
 """
 
 from collections.abc import Awaitable, Callable
@@ -314,9 +314,3 @@ def listing() -> SessionListing:
   if _listing is None:
     _listing = SessionListing(get_config(), session_store.store(), session_sidebar.sidebar())
   return _listing
-
-
-def set_listing(replacement: SessionListing | None) -> None:
-  """Replace the process listing singleton (tests); None restores lazy construction."""
-  global _listing
-  _listing = replacement

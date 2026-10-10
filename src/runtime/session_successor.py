@@ -3,7 +3,7 @@
 ``SessionSuccessor.resolve_successor_chain`` follows ``successor_session_id`` (written by an elone) from a session to
 the end of its chain; ``deliver_to_successor`` persists an event into that chain end. Both read metadata fresh from
 disk, because a TTL-cached read may predate a concurrent elone. The process builds one block (``successor()``); tests
-build their own and install it with ``set_successor()``.
+monkeypatch the ``_successor`` global.
 """
 
 from src.infra.config import CharlieBotConfig, get_config
@@ -121,9 +121,3 @@ def successor() -> SessionSuccessor:
   if _successor is None:
     _successor = SessionSuccessor(get_config(), session_store.store(), session_events.events())
   return _successor
-
-
-def set_successor(replacement: SessionSuccessor | None) -> None:
-  """Replace the process successor singleton (tests); None restores lazy construction."""
-  global _successor
-  _successor = replacement

@@ -5,7 +5,7 @@
 ``MessageAggregator``); reads serve the events cache (``load_chat_events_sync``) or the disk
 (``load_chat_events_tail``, ``load_chat_events_range``). The message-projection cache and the sidebar broadcast live
 here because ``drop_session_runtime_state`` clears every per-session memory of the stream in one place. The process
-builds one block (``events()``); tests build their own and install it with ``set_events()``.
+builds one block (``events()``); tests monkeypatch the ``_events`` global.
 """
 
 import asyncio
@@ -387,9 +387,3 @@ def events() -> SessionEvents:
   if _events is None:
     _events = SessionEvents(get_config(), session_store.store())
   return _events
-
-
-def set_events(replacement: SessionEvents | None) -> None:
-  """Replace the process events singleton (tests); None restores lazy construction."""
-  global _events
-  _events = replacement

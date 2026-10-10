@@ -3,8 +3,8 @@
 ``SessionStore`` is the one owner of a session's ``metadata.json``. Every write funnels through
 ``save_metadata``; reads serve the TTL cache (``get_session``) or the disk (``read_metadata_fresh``).
 The per-session metadata locks and the single-field updates live here because every block that
-mutates metadata shares them. The process builds one store (``store()``); tests build their own and
-install it with ``set_store()``.
+mutates metadata shares them. The process builds one store (``store()``); tests monkeypatch the
+``_store`` global.
 """
 
 import asyncio
@@ -544,9 +544,3 @@ def store() -> SessionStore:
   if _store is None:
     _store = SessionStore(get_config())
   return _store
-
-
-def set_store(replacement: SessionStore | None) -> None:
-  """Replace the process store singleton (tests); None restores lazy construction."""
-  global _store
-  _store = replacement

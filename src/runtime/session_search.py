@@ -3,8 +3,7 @@
 ``SessionSearch.search_sessions_readonly`` matches names over every status and scans the active sessions' chat files
 for the query. A chat file's proven absence or presence rides a per-file memo, and a query's match result rides a
 per-query memo, so a growing query string re-reads a file only after the file moves. Each row's sidebar state comes
-from the sidebar block. The process builds one block (``search()``); tests build their own and install it with
-``set_search()``.
+from the sidebar block. The process builds one block (``search()``); tests monkeypatch the ``_search`` global.
 """
 
 import asyncio
@@ -432,9 +431,3 @@ def search() -> SessionSearch:
   if _search is None:
     _search = SessionSearch(get_config(), session_store.store(), session_events.events(), session_sidebar.sidebar())
   return _search
-
-
-def set_search(replacement: SessionSearch | None) -> None:
-  """Replace the process search singleton (tests); None restores lazy construction."""
-  global _search
-  _search = replacement

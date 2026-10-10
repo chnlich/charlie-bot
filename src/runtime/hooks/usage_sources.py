@@ -35,26 +35,26 @@ backend id that has left the config attributes through the source's ``id_prefixe
 """
 
 import abc
+import dataclasses
 import datetime
+import enum
 import importlib
+import pathlib
 import re
+import types
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from src.infra import log_once
 from src.runtime.hooks import usage_source_registration
 
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
 log = log_once.LazyStructlogLogger()
 
 
-class RecordKind(StrEnum):
+class RecordKind(enum.StrEnum):
   """How a usage row was learned: from a CLI-kept log (native) or from a charlie-bot
   capture whose underlying CLI log may be pruned (fallback)."""
 
@@ -62,7 +62,7 @@ class RecordKind(StrEnum):
   FALLBACK = "fallback"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class UsageRecord:
   """One API call's usage as extracted from a captured file.
 
@@ -174,7 +174,7 @@ class QuotaAccount(abc.ABC):
 SESSION_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class CategoryResult:
   """One output category of the sweep: what it freed, or in a dry run what it would free."""
 
@@ -184,7 +184,7 @@ class CategoryResult:
   bytes: int
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class FreelistResult:
   """The free pages a source's database holds, in bytes, which a manual vacuum hands back.
 
@@ -195,7 +195,7 @@ class FreelistResult:
   bytes: int
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SourceSweep:
   """What one source's ``sweep`` reports: its categories in report order, and its database's free
   pages, or None for a source that keeps none."""
@@ -204,7 +204,7 @@ class SourceSweep:
   freelist: FreelistResult | None
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SessionFacts:
   """The metadata fields of one CharlieBot session that the sweep judges on.
 
@@ -234,7 +234,7 @@ class SweepCounter:
     """Bytes without a count: the unit belongs to a larger whole (a directory)."""
     self.bytes += size
 
-  def delete_file(self, path: Path, dry_run: bool, *, count: bool = True) -> None:
+  def delete_file(self, path: pathlib.Path, dry_run: bool, *, count: bool = True) -> None:
     """Delete one file (or account for it in a dry run), best effort per file.
 
     ``count=False`` folds the bytes into a category whose unit is larger than a
@@ -260,7 +260,7 @@ class SweepCounter:
     return CategoryResult(self.name, self.unit, self.count, self.bytes)
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SweepScope:
   """Everything a source's ``sweep`` reads; the usage package builds one per sweep.
 
@@ -273,7 +273,7 @@ class SweepScope:
   effect without ``vacuum``. A dry run deletes nothing and issues no SQL that changes a database.
   """
 
-  cfg: CharlieBotConfig
+  cfg: config.CharlieBotConfig
   now: datetime.datetime
   dry_run: bool
   session_id: str | None
@@ -305,7 +305,7 @@ class SweepScope:
     return backend_sessions
 
 
-def sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
+def sorted_scan(root: pathlib.Path, listing: Iterable[pathlib.Path]) -> list[pathlib.Path] | None:
   """Materialize one sweep directory listing sorted, or None once the failure is logged.
 
   ``root`` is the directory the warning names: the listing's own root for
@@ -318,7 +318,8 @@ def sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
     return None
 
 
-def sweep_root_entries(roots: Iterable[Path], listing: Callable[[Path], Iterable[Path]]) -> Iterator[Path]:
+def sweep_root_entries(roots: Iterable[pathlib.Path],
+                       listing: Callable[[pathlib.Path], Iterable[pathlib.Path]]) -> Iterator[pathlib.Path]:
   """Yield each sweep root's sorted entries, skipping a missing root or an unreadable listing.
 
   ``sorted_scan`` already logs a listing failure; the sweep's best-effort
@@ -333,7 +334,7 @@ def sweep_root_entries(roots: Iterable[Path], listing: Callable[[Path], Iterable
     yield from entries
 
 
-def implementation(source: usage_source_registration.UsageSource) -> ModuleType:
+def implementation(source: usage_source_registration.UsageSource) -> types.ModuleType:
   """The module that reads *source*'s logs, imported on first use."""
   if source.module is None:
     raise ValueError(f"usage source {source.name!r} has no implementation module")

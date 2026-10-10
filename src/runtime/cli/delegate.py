@@ -64,7 +64,8 @@ Backend selection (--backend):
   delegation. Omitted: implement / quick-edit / script-run inherit the
   session backend;   verify is routed to the first backends.preference entry
   that differs from it. An explicit --backend replaces that routing for
-  every task type, verify included.
+  every task type, verify included. The resolved backend runs every
+  work Run of the worker session.
 """
 
 

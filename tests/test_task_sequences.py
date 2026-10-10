@@ -97,7 +97,13 @@ async def _start_loop_in_process(
       resolved_backend="fake",
       resolved_model="fake-model")
   child = await improve_sequence.create_improve_child(
-      tree, manager.id, state.loop_id, "improve the thing", repo_path=str(repo), base_branch="main")
+      tree,
+      manager.id,
+      state.loop_id,
+      "improve the thing",
+      repo_path=str(repo),
+      base_branch="main",
+      backend=state.backend)
   task = create_logged_task(
       improve_sequence.run_improve_sequence(
           manager.id,
@@ -125,7 +131,7 @@ async def _ended_loop_shape(
   judged report text or None). Returns the child id."""
   loop_id = 1
   child = await improve_sequence.create_improve_child(
-      tree, manager.id, loop_id, "improve the thing", repo_path=None, base_branch=None)
+      tree, manager.id, loop_id, "improve the thing", repo_path=None, base_branch=None, backend=None)
   await save_loop_state(
       manager.id,
       ImproveState(

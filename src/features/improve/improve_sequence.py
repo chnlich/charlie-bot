@@ -106,13 +106,16 @@ async def create_improve_child(
     *,
     repo_path: str | None,
     base_branch: str | None,
+    backend: str | None,
 ) -> SessionMetadata:
   """Create (or re-admit) the loop's one worker child under the manager.
 
   Stable by request id: a replayed admission returns the original child. The
   child carries the loop goal as its task text and no task_type: the improve
   loop is its own deliverable kind, and the implement delivery policy
-  (review + landing) is the delegate path's contract, not this one.
+  (review + landing) is the delegate path's contract, not this one. It records
+  *backend* (the loop's resolved backend) so a dispatched later Run of this
+  node keeps the loop's backend.
   """
   return await tree.create_task(
       request_id=improve_child_request_id(loop_id),
@@ -125,7 +128,7 @@ async def create_improve_child(
           task_type=None,
       ),
       name=f"Improve loop {loop_id}",
-      backend=None,
+      backend=backend,
       caller="operator",
   )
 

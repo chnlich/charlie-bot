@@ -22,13 +22,12 @@ module.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
-  from src.infra.models import BackendOption, SessionMetadata, ThreadMetadata
+  from src.infra import config, models
 
 
 class LaunchRefused(Exception):  # noqa: N818  (a refusal is a run outcome, named for what the backend did)
@@ -51,9 +50,9 @@ class LaunchContext:
   On a task it writes to the run's event log through its open file descriptor and delivers the event
   to the session's successor chain.
   """
-  cfg: CharlieBotConfig
-  option: BackendOption
-  session_meta: SessionMetadata
+  cfg: config.CharlieBotConfig
+  option: models.BackendOption
+  session_meta: models.SessionMetadata
   kind: Literal["turn", "task"]
   cwd: str
   held_native_id: str | None  # the conversation this run may resume; None starts fresh
@@ -63,7 +62,8 @@ class LaunchContext:
   #   task: write the event to the run's raw log through its fd AND to the session's successor
   #         chain (worker.py binds both).
   record_account: Callable[[str], Awaitable[None]]  # persist the account label on the session
-  context_state: Callable[[], Awaitable[tuple[int | None, datetime | None]]]  # (context tokens, last request time)
+  context_state: Callable[[], Awaitable[tuple[int | None,
+                                              datetime.datetime | None]]]  # (context tokens, last request time)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -107,7 +107,7 @@ class ContextLimits:
 class BackendLifecycle:
   """The default serves a backend type with no login pool: one process per run."""
 
-  def continuation_domain(self, option: BackendOption, cfg: CharlieBotConfig) -> str:
+  def continuation_domain(self, option: models.BackendOption, cfg: config.CharlieBotConfig) -> str:
     """The domain in which backend options continue each other's conversation. One option is its own domain."""
     return option.id
 
@@ -137,7 +137,7 @@ class BackendLifecycle:
     """Clean up after the last process of a round, whether the round succeeded or not."""
     return
 
-  def round_notices(self, option: BackendOption, events: list[dict]) -> list[dict]:
+  def round_notices(self, option: models.BackendOption, events: list[dict]) -> list[dict]:
     """The notice events for the user that the finished round's events call for."""
     return []
 
@@ -147,18 +147,18 @@ class BackendLifecycle:
   account_source = ""  # the name that logs and error events give the account label; "" when the backend keeps none
   account_subject = ""  # the same, as a noun phrase in a message
 
-  def account_label(self, meta: SessionMetadata) -> str | None:
+  def account_label(self, meta: models.SessionMetadata) -> str | None:
     """The label of the pool login whose transcript store holds the session's conversation; None when unrecorded."""
     return None
 
-  def record_account_label(self, meta: SessionMetadata, label: str | None) -> bool:
+  def record_account_label(self, meta: models.SessionMetadata, label: str | None) -> bool:
     """Record ``label`` on ``meta`` in memory. True when the recorded label changed."""
     return False
 
-  def thread_native_id(self, thread: ThreadMetadata) -> str | None:
+  def thread_native_id(self, thread: models.ThreadMetadata) -> str | None:
     """The conversation id the runtime chose for the task before its first process started; None when none."""
     return None
 
-  def assign_thread_native_id(self, thread: ThreadMetadata, native_id: str | None) -> None:
+  def assign_thread_native_id(self, thread: models.ThreadMetadata, native_id: str | None) -> None:
     """Record on ``thread`` the conversation id that the runtime chose for the task."""
     return

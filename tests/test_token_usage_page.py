@@ -3,7 +3,7 @@
 The ledger lives under tmp_path and the page never captures, so no test reads the real
 charliebot home or scans any real log; every number on the page must come out of the seeded
 ledger alone. The row-merge tests go one step further back: they build synthetic
-``LedgerRow`` s and call the page's context builder directly, with no ledger behind them
+``usage_ledger.LedgerRow`` s and call the page's context builder directly, with no ledger behind them
 and an empty registry — the synthetic charlie-bot accounts resolve by their id prefix.
 """
 
@@ -11,17 +11,16 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import pathlib
 import re
 import socket
 import subprocess
 import sys
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import make_page_request
 
-from src.features.usage import api
-from src.features.usage.usage_ledger import LedgerAccount, LedgerRow, UsageLedger
+from src.features.usage import api, usage_ledger
 from src.runtime.hooks import usage_source_registration, usage_sources
 
 CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
@@ -57,9 +56,9 @@ def _record(
   )
 
 
-def _seed(path: Path) -> None:
+def _seed(path: pathlib.Path) -> None:
   """Seed one native record per source plus one counted-fallback Codex row."""
-  with UsageLedger(path) as ledger:
+  with usage_ledger.UsageLedger(path) as ledger:
     ledger.record_file("host", "/logs/cc.jsonl", "sig-cc", [_record("cc-1", CC, "claude-sonnet-4", CC_TS, 100)])
     ledger.record_file(
         "host",
@@ -90,22 +89,22 @@ def _data_rows(body: str) -> list[dict]:
   return json.loads(match.group(1))["rows"]
 
 
-def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, captured: bool = True) -> Path:
+def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, *, captured: bool = True) -> pathlib.Path:
   """Seed the ledger under tmp_path and point the page's ledger read and registry at it; *captured*
   stamps this host's capture time the way a finished capture does."""
   ledger_path = tmp_path / "usage" / "ledger.sqlite3"
   _seed(ledger_path)
   if captured:
-    with UsageLedger(ledger_path) as ledger:
+    with usage_ledger.UsageLedger(ledger_path) as ledger:
       ledger.mark_capture_finished(socket.gethostname())
   monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: ledger_path)
   monkeypatch.setattr("src.features.usage.token_tally.backend_registry", dict)
   return ledger_path
 
 
-async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, captured: bool = True) -> str:
+async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, *, captured: bool = True) -> str:
   _seeded_ledger(monkeypatch, tmp_path, captured=captured)
-  response = await api.token_usage_viewer(make_page_request("/token-usage"))
+  response = await api.token_usage_viewer(conftest.make_page_request("/token-usage"))
   assert response.status_code == 200
   return response.body.decode("utf-8")
 
@@ -123,10 +122,10 @@ def _ledger_row(
     fallback_output: int = 0,
     first: str = "2026-02-01",
     last: str = "2026-02-02",
-    accounts: list[LedgerAccount] | None = None,
-) -> LedgerRow:
+    accounts: list[usage_ledger.LedgerAccount] | None = None,
+) -> usage_ledger.LedgerRow:
   """A synthetic page row; ``total`` is the five token fields, as the ledger keeps it."""
-  return LedgerRow(
+  return usage_ledger.LedgerRow(
       source=source,
       model=model,
       in_fresh=in_fresh,
@@ -144,13 +143,14 @@ def _ledger_row(
   )
 
 
-def _payload_rows(rows: list[LedgerRow]) -> list[dict]:
+def _payload_rows(rows: list[usage_ledger.LedgerRow]) -> list[dict]:
   """The serialized rows the page's JS would feed its charts and table from."""
   return json.loads(api._token_usage_context(rows, {}, None, 0.0, {})["payload"])["rows"]
 
 
 @pytest.mark.asyncio
-async def test_page_lists_seeded_models_with_output_totals(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_page_lists_seeded_models_with_output_totals(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """Every seeded model appears exactly once, with its ledger output total."""
   body = await _get_page(monkeypatch, tmp_path)
   rows = _data_rows(body)
@@ -161,7 +161,7 @@ async def test_page_lists_seeded_models_with_output_totals(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_counted_fallback_row_carries_a_lower_bound_and_native_rows_do_not(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The mark's driver travels only on rows with counted fallback output behind them."""
   rows = {r["model"]: r for r in _data_rows(await _get_page(monkeypatch, tmp_path))}
   assert rows["gpt-5"]["fallback_output"] == 7000
@@ -170,7 +170,7 @@ async def test_counted_fallback_row_carries_a_lower_bound_and_native_rows_do_not
 
 
 @pytest.mark.asyncio
-async def test_each_source_native_start_appears(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_each_source_native_start_appears(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The Retention item names every source's first native date, source beside its date;
   CLC's date is the charlie-bot span, whose native records are all CLC usage."""
   body = await _get_page(monkeypatch, tmp_path)
@@ -185,8 +185,9 @@ def test_spellings_of_one_model_merge_into_one_row() -> None:
   display name is the largest part's spelling, the source · account sub-rows follow its
   total order and sum to the row, and the per-source segments sum to it too."""
   rows = [
-      _ledger_row(OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[LedgerAccount("a", 3, 10, 30)]),
-      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("charlie-code-b", 1, 10, 10)]),
+      _ledger_row(
+          OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[usage_ledger.LedgerAccount("a", 3, 10, 30)]),
+      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[usage_ledger.LedgerAccount("charlie-code-b", 1, 10, 10)]),
   ]
   (row,) = _payload_rows(rows)
   assert row["model"] == "GLM-5.3-Flash"
@@ -219,15 +220,17 @@ def test_per_source_tiles_count_attributed_accounts() -> None:
   show two tile models behind the page's two merged rows, and one charlie-bot row splits
   between the CLC and Codex tiles its accounts attribute to."""
   rows = [
-      _ledger_row(OC, "moonshotai/Kimi-K3", in_fresh=5, accounts=[LedgerAccount("a", 1, 0, 5)]),
-      _ledger_row(OC, "Kimi-K3 (amd-kimi-k3)", output=7, accounts=[LedgerAccount("a", 1, 7, 7)]),
-      _ledger_row(OC, "zai-org/GLM-5.3-Flash", output=4, accounts=[LedgerAccount("a", 1, 4, 4)]),
+      _ledger_row(OC, "moonshotai/Kimi-K3", in_fresh=5, accounts=[usage_ledger.LedgerAccount("a", 1, 0, 5)]),
+      _ledger_row(OC, "Kimi-K3 (amd-kimi-k3)", output=7, accounts=[usage_ledger.LedgerAccount("a", 1, 7, 7)]),
+      _ledger_row(OC, "zai-org/GLM-5.3-Flash", output=4, accounts=[usage_ledger.LedgerAccount("a", 1, 4, 4)]),
       _ledger_row(
           CB,
           "GLM-5.3-Flash",
           output=3,
-          accounts=[LedgerAccount("charlie-code-x", 1, 2, 2),
-                    LedgerAccount("codex-y", 1, 1, 1)]),
+          accounts=[
+              usage_ledger.LedgerAccount("charlie-code-x", 1, 2, 2),
+              usage_ledger.LedgerAccount("codex-y", 1, 1, 1)
+          ]),
   ]
   ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
   assert ctx["per_src"][OC]["models"] == 2
@@ -255,12 +258,13 @@ async def test_rendered_page_has_one_row_per_canonical_model(monkeypatch: pytest
   """End to end over the real template: two sources' spellings of one model render one
   page row, carrying the merged source · account sub-rows and both sources' segments."""
   rows = [
-      _ledger_row(OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[LedgerAccount("a", 3, 10, 30)]),
-      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("charlie-code-b", 1, 10, 10)]),
+      _ledger_row(
+          OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[usage_ledger.LedgerAccount("a", 3, 10, 30)]),
+      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[usage_ledger.LedgerAccount("charlie-code-b", 1, 10, 10)]),
       _ledger_row(CC, "claude-sonnet-4", output=100),
   ]
   monkeypatch.setattr(api, "_read_ledger", lambda: (rows, {}, None, 0.0, {}))
-  response = await api.token_usage_viewer(make_page_request("/token-usage"))
+  response = await api.token_usage_viewer(conftest.make_page_request("/token-usage"))
   assert response.status_code == 200
   data = _data_rows(response.body.decode("utf-8"))
   assert [(r["model"], r["total"]) for r in data] == [("claude-sonnet-4", 100), ("GLM-5.3-Flash", 40)]
@@ -273,7 +277,10 @@ def test_charlie_bot_native_accounts_read_as_clc() -> None:
   """A charlie-bot row's CLC-backend account attributes to CLC: one CLC segment, the
   CLC · account sub-row, the CLC tile — and CLC's native start is the ledger's charlie-bot
   native start, whose native records are all CLC usage."""
-  rows = [_ledger_row(CB, "glm-z", in_unsplit=100, output=40, accounts=[LedgerAccount("charlie-code-x", 2, 40, 140)])]
+  rows = [
+      _ledger_row(
+          CB, "glm-z", in_unsplit=100, output=40, accounts=[usage_ledger.LedgerAccount("charlie-code-x", 2, 40, 140)])
+  ]
   (row,) = _payload_rows(rows)
   assert [(s["slot"], s["total"]) for s in row["segments"]] == [(SLOT[CLC], 140)]
   assert [a["name"] for a in row["accounts"]] == ["CLC · charlie-code-x"]
@@ -288,8 +295,9 @@ def test_charlie_bot_fallback_accounts_join_their_cli_s_source() -> None:
   the CLI's own account unmarked and the fallback account's sub-row marked, and a Codex
   tile of 40."""
   rows = [
-      _ledger_row(CODEX, "gpt-z", output=30, accounts=[LedgerAccount("work", 3, 30, 30)]),
-      _ledger_row(CB, "gpt-z", output=10, fallback_output=10, accounts=[LedgerAccount("codex-y", 1, 10, 10)]),
+      _ledger_row(CODEX, "gpt-z", output=30, accounts=[usage_ledger.LedgerAccount("work", 3, 30, 30)]),
+      _ledger_row(
+          CB, "gpt-z", output=10, fallback_output=10, accounts=[usage_ledger.LedgerAccount("codex-y", 1, 10, 10)]),
   ]
   (row,) = _payload_rows(rows)
   assert row["total"] == 40
@@ -307,11 +315,13 @@ def test_four_tile_totals_sum_to_the_page_total() -> None:
   """Every token lands in exactly one tile: the four attributed tile totals sum to the
   page total across all rows."""
   rows = [
-      _ledger_row(CC, "claude-sonnet-4", in_fresh=7, output=4, accounts=[LedgerAccount("acct-a", 1, 4, 11)]),
-      _ledger_row(CODEX, "gpt-z", output=30, accounts=[LedgerAccount("work", 3, 30, 30)]),
-      _ledger_row(CB, "gpt-z", output=10, accounts=[LedgerAccount("codex-y", 1, 10, 10)]),
-      _ledger_row(CB, "glm-z", in_unsplit=100, output=40, accounts=[LedgerAccount("charlie-code-x", 2, 40, 140)]),
-      _ledger_row(OC, "o3", output=300, accounts=[LedgerAccount("acct-a", 3, 300, 300)]),
+      _ledger_row(
+          CC, "claude-sonnet-4", in_fresh=7, output=4, accounts=[usage_ledger.LedgerAccount("acct-a", 1, 4, 11)]),
+      _ledger_row(CODEX, "gpt-z", output=30, accounts=[usage_ledger.LedgerAccount("work", 3, 30, 30)]),
+      _ledger_row(CB, "gpt-z", output=10, accounts=[usage_ledger.LedgerAccount("codex-y", 1, 10, 10)]),
+      _ledger_row(
+          CB, "glm-z", in_unsplit=100, output=40, accounts=[usage_ledger.LedgerAccount("charlie-code-x", 2, 40, 140)]),
+      _ledger_row(OC, "o3", output=300, accounts=[usage_ledger.LedgerAccount("acct-a", 3, 300, 300)]),
   ]
   ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
   assert sum(ctx["per_src"][src]["total"] for src in (CC, CODEX, OC, CLC)) == sum(r.total for r in rows)
@@ -319,7 +329,7 @@ def test_four_tile_totals_sum_to_the_page_total() -> None:
 
 @pytest.mark.asyncio
 async def test_page_legend_names_the_four_cli_sources_without_charlie_bot(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The rendered legend lists Claude Code, Codex, opencode, CLC in slot order and no
   charlie-bot text reaches the page."""
   body = await _get_page(monkeypatch, tmp_path)
@@ -330,7 +340,7 @@ async def test_page_legend_names_the_four_cli_sources_without_charlie_bot(
 
 @pytest.mark.asyncio
 async def test_cards_follow_registration_order_with_run_log_sources_last(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The cards are the registered sources in registration order — no page-side list of names —
   and a source whose usage lives only in CharlieBot's run logs closes the list wherever it registered."""
   by_name = {s.name: s for s in usage_source_registration.sources()}
@@ -345,7 +355,8 @@ async def test_cards_follow_registration_order_with_run_log_sources_last(
 
 
 @pytest.mark.asyncio
-async def test_page_says_when_the_ledger_was_last_captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_page_says_when_the_ledger_was_last_captured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The page names its ledger's age in local time from the host's ``last_capture_at``, and says
   no capture has run when the host has none; either way the page renders."""
   with_capture = await _get_page(monkeypatch, tmp_path / "captured")
@@ -361,7 +372,7 @@ def test_preload_pins_the_tally_stack_in_a_fresh_process() -> None:
   """The preload imports the lazy tally set and every registered source's implementation into a
   fresh interpreter, and importing the page module alone stays tally-free (the M99 import floor's
   contract)."""
-  repo_root = str(Path(__file__).resolve().parents[1])
+  repo_root = str(pathlib.Path(__file__).resolve().parents[1])
   code = "\n".join(
       [
           "import sys",

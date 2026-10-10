@@ -18,12 +18,18 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from pathlib import Path
+import pathlib
 from typing import Any
 
-from src.backends.claude_code import claude_accounts, claude_code, claude_metadata, claude_relay, master_cc_relay
-from src.backends.claude_code.claude_config import ClaudeAccount
-from src.backends.claude_code.login_dirs import claude_config_dir
+from src.backends.claude_code import (
+    claude_accounts,
+    claude_code,
+    claude_config,
+    claude_metadata,
+    claude_relay,
+    login_dirs,
+    master_cc_relay,
+)
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
 from src.runtime.hooks import backend_lifecycle
@@ -43,12 +49,12 @@ class ClaudeLaunch(backend_lifecycle.Launch):
   ``account`` is the pool login of the process and ``relay_watch`` watches it; both are None
   outside the pool. ``relays`` is the number of relays that led to this process.
   """
-  account: ClaudeAccount | None = None
+  account: claude_config.ClaudeAccount | None = None
   relay_watch: claude_relay.RelayWatch | None = None
   relays: int = 0
 
 
-def cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
+def cc_transcript_exists(config_dir: pathlib.Path, cc_session_id: str) -> bool:
   """True when *config_dir* holds a resumable transcript for *cc_session_id*."""
   return bool(claude_accounts.transcript_matches(config_dir, cc_session_id))
 
@@ -82,7 +88,7 @@ class ClaudeCliLifecycle(backend_lifecycle.BackendLifecycle):
     cc_session_id = ctx.held_native_id
     if not cc_session_id:
       return None
-    config_dir = claude_config_dir()
+    config_dir = login_dirs.claude_config_dir()
     if cc_transcript_exists(config_dir, cc_session_id):
       return cc_session_id
     log.warning(
@@ -181,7 +187,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
       return None
     session_meta = ctx.session_meta
     current = claude_accounts.account_by_label(ctx.cfg, claude_metadata.account_of(session_meta))
-    if current is not None and cc_transcript_exists(Path(current.config_dir), cc_session_id):
+    if current is not None and cc_transcript_exists(pathlib.Path(current.config_dir), cc_session_id):
       return cc_session_id
     found = claude_accounts.find_transcript_account(ctx.cfg, cc_session_id)
     if found is not None:
@@ -206,7 +212,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
   def _pooled_launch(
       self,
       ctx: backend_lifecycle.LaunchContext,
-      account: ClaudeAccount,
+      account: claude_config.ClaudeAccount,
       *,
       resume_id: str | None,
       prompt: str | None,

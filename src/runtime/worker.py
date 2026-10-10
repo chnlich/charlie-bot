@@ -1,47 +1,33 @@
 """Worker Agent — spawns and monitors Claude Code CLI subprocesses."""
 
 import asyncio
+import datetime
 import json
 import os
+import pathlib
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import orjson
 
+from src.infra import config, deferred, log_once, models, ndjson, process
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
-from src.infra.deferred import deferred_module_getattr
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import BackendOption, SessionMetadata, ThreadMetadata, utc_now_iso
-from src.infra.ndjson import append_ndjson
-from src.infra.ndjson import write_all as _write_all
-from src.infra.process import kill_group_escalating
-from src.runtime import launch_loop, runs
-from src.runtime.agent_process.base import (
-    AgentBackend,
-    _capture_proc_diagnostics,
-    _read_stderr_tail,
-    tail_follow_events,
-)
-from src.runtime.agent_process.deferred_build import load_build_backend
+from src.runtime import launch_loop, runs, session_usage, streaming
+from src.runtime.agent_process import base, deferred_build
 from src.runtime.hooks import backend_lifecycle, backend_types
-from src.runtime.session_usage import _prompt_token_sum
-from src.runtime.streaming import handle_compaction_events, streaming_manager
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Directory holding the tracked `git` wrapper every worker/reviewer child runs
 # with first on PATH (src/runtime/git_stash_guard/git). This file sits at
 # src/runtime/, so the guard is the sibling git_stash_guard/ directory - derived
 # from the module location, never a host path literal.
-GIT_STASH_GUARD_DIR = Path(__file__).resolve().parent / "git_stash_guard"
+GIT_STASH_GUARD_DIR = pathlib.Path(__file__).resolve().parent / "git_stash_guard"
 
 
 def __getattr__(name: str) -> Any:
   # The "src.runtime.worker.build_backend" patch target resolves through this hook.
-  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
+  return deferred.deferred_module_getattr(name, __name__, globals(), "build_backend", deferred_build.load_build_backend)
 
 
 # Each entry is a substring catch-all for its family: bare "quota" also matches
@@ -58,14 +44,14 @@ class QuotaExhaustedError(Exception):
   pass
 
 
-def _clamp_ts(clamp_to: datetime | None) -> str:
+def _clamp_ts(clamp_to: datetime.datetime | None) -> str:
   """Timestamp for synthesized (non-raw) events: now, capped at the run's end.
 
   All events of a run must satisfy timestamp <= completed_at, and completed_at
   is the raw log's final mtime; capping synthesized events at that mtime makes
   the invariant hold even when finalization runs long after the run ended.
   """
-  now = datetime.now(UTC)
+  now = datetime.datetime.now(datetime.UTC)
   if clamp_to is not None and clamp_to < now:
     return clamp_to.isoformat()
   return now.isoformat()
@@ -92,7 +78,7 @@ async def _append_event_line(fd: int, line: bytes) -> None:
   # stream, not the fdatasync-durable chat funnel (append_ndjson) — and cost a
   # scheduler round-trip per event whose wakeup under load can spike to
   # milliseconds, the streamed-turn head this append rides.
-  _write_all(fd, line)
+  ndjson.write_all(fd, line)
 
 
 class Worker:
@@ -107,16 +93,16 @@ class Worker:
 
   def __init__(
       self,
-      thread_metadata: ThreadMetadata,
-      working_dir: Path,
-      events_log_path: Path,
+      thread_metadata: models.ThreadMetadata,
+      working_dir: pathlib.Path,
+      events_log_path: pathlib.Path,
       task_description: str,
-      cfg: CharlieBotConfig,
-      backend_option: BackendOption | None = None,
+      cfg: config.CharlieBotConfig,
+      backend_option: models.BackendOption | None = None,
       extra_env: dict[str, str] | None = None,
       on_spawned: Callable | None = None,
       instructions_content: str | None = None,
-      session_meta: SessionMetadata | None = None,
+      session_meta: models.SessionMetadata | None = None,
   ) -> None:
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -128,7 +114,7 @@ class Worker:
     self._on_spawned = on_spawned
     self._instructions_content = instructions_content
     self._session_meta = session_meta
-    self._backend: AgentBackend | None = None
+    self._backend: base.AgentBackend | None = None
     # The plan and the watch of the process now running; None outside a launched run.
     self._launch: backend_lifecycle.Launch | None = None
     self._watch: backend_lifecycle.LaunchWatch | None = None
@@ -147,7 +133,7 @@ class Worker:
       self,
       on_spawn: Callable[[int], Awaitable[None]] | None,
       launch: backend_lifecycle.Launch | None = None,
-  ) -> AgentBackend:
+  ) -> base.AgentBackend:
     """Build the backend for this task; *on_spawn* is None for translate-only instances.
 
     *launch* is the lifecycle's plan for the process; a translate-only build has none.
@@ -177,7 +163,7 @@ class Worker:
       if extra_flags:
         backend_kwargs["extra_flags"] = extra_flags
       try:
-        backend = load_build_backend(globals())
+        backend = deferred_build.load_build_backend(globals())
         return backend(self._backend_option, self._cfg, **backend_kwargs)
       except Exception as e:
         if on_spawn is not None:
@@ -211,7 +197,7 @@ class Worker:
     async def record_account(label: str) -> None:
       """A task keeps no account label: the label is a master turn's session field."""
 
-    async def context_state() -> tuple[int | None, datetime | None]:
+    async def context_state() -> tuple[int | None, datetime.datetime | None]:
       return self._context_tokens, None
 
     return backend_lifecycle.LaunchContext(
@@ -344,7 +330,7 @@ class Worker:
     self._events_log.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(self._events_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
     try:
-      async for event in tail_follow_events(
+      async for event in base.tail_follow_events(
           raw_path,
           translate=stream_backend.translate_event,
           is_alive=is_alive,
@@ -366,14 +352,14 @@ class Worker:
     # that one keeps following until the process truly exits).
     hang_diagnostics = None
     if is_alive():
-      hang_diagnostics = await _capture_proc_diagnostics(self._thread.pid)
+      hang_diagnostics = await base._capture_proc_diagnostics(self._thread.pid)
       if self._thread.pid is not None:
-        await kill_group_escalating(self._thread.pid, is_alive)
+        await process.kill_group_escalating(self._thread.pid, is_alive)
 
     completion = runs.raw_completion_time(raw_path)
     await self._emit_terminal_events(
         exit_code,
-        await asyncio.to_thread(_read_stderr_tail, stderr_path),
+        await asyncio.to_thread(base._read_stderr_tail, stderr_path),
         hang_diagnostics,
         clamp_to=completion,
     )
@@ -382,11 +368,11 @@ class Worker:
 
   async def _persist_and_broadcast(self, fd: int, event: dict) -> None:
     if not event.get("timestamp"):
-      event["timestamp"] = utc_now_iso()
+      event["timestamp"] = models.utc_now_iso()
     await _append_event_line(fd, _event_line(event))
-    await streaming_manager.broadcast(self._thread.id, event)
+    await streaming.streaming_manager.broadcast(self._thread.id, event)
 
-  def _raw_log_path(self) -> Path:
+  def _raw_log_path(self) -> pathlib.Path:
     # The events log lives in <thread>/data/, which is also the backend's
     # log_dir, so the raw name joins onto the dir the worker already holds.
     return self._events_log.parent / runs.RAW_LOG_NAME
@@ -398,7 +384,7 @@ class Worker:
       hang_diagnostics: dict | None,
       *,
       cgroup_report: str | None = None,
-      clamp_to: datetime | None,
+      clamp_to: datetime.datetime | None,
   ) -> None:
     """Persist/broadcast the synthesized post-run events shared by run() and resume()."""
     if hang_diagnostics:
@@ -415,8 +401,8 @@ class Worker:
           "exit_code": exit_code,
           "timestamp": _clamp_ts(clamp_to),
       }
-      await append_ndjson(self._events_log, diag_event)
-      await streaming_manager.broadcast(self._thread.id, diag_event)
+      await ndjson.append_ndjson(self._events_log, diag_event)
+      await streaming.streaming_manager.broadcast(self._thread.id, diag_event)
 
     if stderr_text:
       stderr_event_type = ET.ERROR if exit_code != 0 else ET.SYSTEM
@@ -427,8 +413,8 @@ class Worker:
       }
       if stderr_event_type == ET.SYSTEM:
         stderr_event["subtype"] = "stderr"
-      await append_ndjson(self._events_log, stderr_event)
-      await streaming_manager.broadcast(self._thread.id, stderr_event)
+      await ndjson.append_ndjson(self._events_log, stderr_event)
+      await streaming.streaming_manager.broadcast(self._thread.id, stderr_event)
       log.warning("worker_stderr", thread=self._thread.id, stderr=stderr_text[:500])
 
     if cgroup_report:
@@ -436,8 +422,8 @@ class Worker:
       # worker failure message channel, so the report reaches the session chat
       # through the same events log the finalize path reads.
       cap_event = {"type": ET.ERROR, "content": cgroup_report, "timestamp": _clamp_ts(clamp_to)}
-      await append_ndjson(self._events_log, cap_event)
-      await streaming_manager.broadcast(self._thread.id, cap_event)
+      await ndjson.append_ndjson(self._events_log, cap_event)
+      await streaming.streaming_manager.broadcast(self._thread.id, cap_event)
       log.warning("worker_cgroup_exit_report", thread=self._thread.id, report=cgroup_report)
 
     # Emit final completion event
@@ -447,7 +433,7 @@ class Worker:
         "exit_code": exit_code,
         "timestamp": _clamp_ts(clamp_to),
     }
-    await streaming_manager.broadcast(self._thread.id, final_event)
+    await streaming.streaming_manager.broadcast(self._thread.id, final_event)
 
   async def terminate(self) -> None:
     """Terminate the Worker subprocess if still running."""
@@ -467,7 +453,7 @@ class Worker:
     # subscriber reads it, so the broadcast frame is pure waste.
     if event_data.get("type") == ET.SESSION_ATTACHED:
       if not event_data.get("timestamp"):
-        event_data["timestamp"] = utc_now_iso()
+        event_data["timestamp"] = models.utc_now_iso()
       await _append_event_line(fd, _event_line(event_data))
       return
     # Detect quota exhaustion errors. The payload copies ride only the type the
@@ -481,7 +467,7 @@ class Worker:
 
     # Ensure all persisted events carry a stable event-time.
     if not event_data.get("timestamp"):
-      event_data["timestamp"] = utc_now_iso()
+      event_data["timestamp"] = models.utc_now_iso()
 
     # A task whose lifecycle relays folds every event into its watch; a rejection ends
     # the process on its own and the relay follows in run(), so the event is
@@ -507,8 +493,8 @@ class Worker:
     if event_type == ET.ASSISTANT:
       message = event_data.get("message")
       usage = message.get("usage") if isinstance(message, dict) else None
-      if isinstance(usage, dict) and _prompt_token_sum(usage) > 0:
-        self._context_tokens = _prompt_token_sum(usage)
+      if isinstance(usage, dict) and session_usage._prompt_token_sum(usage) > 0:
+        self._context_tokens = session_usage._prompt_token_sum(usage)
 
     if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
       await _append_event_line(fd, _event_line(event_data))
@@ -518,13 +504,13 @@ class Worker:
     await _append_event_line(fd, _event_line(event_data))
 
     # Broadcast to WebSocket subscribers
-    await streaming_manager.broadcast(self._thread.id, event_data)
+    await streaming.streaming_manager.broadcast(self._thread.id, event_data)
 
     async def _persist_and_broadcast(evt: dict) -> None:
       await _append_event_line(fd, _event_line(evt))
-      await streaming_manager.broadcast(self._thread.id, evt)
+      await streaming.streaming_manager.broadcast(self._thread.id, evt)
 
-    await handle_compaction_events(
+    await streaming.handle_compaction_events(
         event_data,
         persist_and_broadcast=_persist_and_broadcast,
         log_context={"thread": self._thread.id},

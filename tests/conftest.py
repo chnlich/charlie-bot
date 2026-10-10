@@ -2833,7 +2833,7 @@ async def process_worker_event(worker: Worker, tmp_path: Path, event: dict, monk
   event raises (the quota scan path); returns the log text so callers assert on
   the persisted lines without re-reading the file.
   """
-  monkeypatch.setattr(worker_module.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(worker_module.streaming.streaming_manager, "broadcast", AsyncMock())
   fd = os.open(tmp_path / "events.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
   try:
     await worker._process_event(event, fd)

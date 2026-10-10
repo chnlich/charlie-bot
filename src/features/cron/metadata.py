@@ -1,12 +1,12 @@
 """Metadata fields owned by the cron package."""
 
-from pydantic import BaseModel
+import pydantic
 
-from src.infra.models import LastRunStatus
+from src.infra import models
 
 
-class CronMetadata(BaseModel):
+class CronMetadata(pydantic.BaseModel):
   scheduled_task: str | None = None
   last_scheduled_run: str | None = None
-  last_run_status: LastRunStatus | None = None
+  last_run_status: models.LastRunStatus | None = None
   last_scheduled_cron: str | None = None

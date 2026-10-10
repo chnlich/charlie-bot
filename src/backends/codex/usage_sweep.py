@@ -6,9 +6,9 @@
 the backend session id that CharlieBot metadata references.
 """
 
-from pathlib import Path
+import pathlib
 
-from src.backends.codex.codex_usage import default_codex_home
+from src.backends.codex import codex_usage
 from src.infra import log_once
 from src.runtime.hooks import usage_sources
 
@@ -17,12 +17,12 @@ log = log_once.LazyStructlogLogger()
 _CODEX_ROLLOUT_PREFIX = "rollout-"
 
 
-def codex_session_trees() -> list[Path]:
+def codex_session_trees() -> list[pathlib.Path]:
   """The rollout tree codex writes into; codex runs from the default home."""
-  return [default_codex_home() / "sessions"]
+  return [codex_usage.default_codex_home() / "sessions"]
 
 
-def codex_rollout_session_id(path: Path) -> str | None:
+def codex_rollout_session_id(path: pathlib.Path) -> str | None:
   """The codex thread id embedded in ``rollout-<iso timestamp>-<uuid>.jsonl``.
 
   The timestamp itself contains hyphens, so the id is the last five

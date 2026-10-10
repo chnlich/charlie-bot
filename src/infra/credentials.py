@@ -8,18 +8,15 @@ config.py re-exports the public names, so every established import path keeps
 working; new CLI-side readers import from here.
 """
 
+import pathlib
 from collections.abc import Callable
-from pathlib import Path
 from typing import Generic, TypeVar
 
-from src.infra import home
-from src.infra.home import charliebot_home_dir
-from src.infra.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.infra.yaml_utils import load_yaml
+from src.infra import home, log_once, yaml_utils
 
 T = TypeVar("T")
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # The profile's secrets file, named once so the archive exclusion of this file
 # cannot drift from the loader's path.
@@ -61,7 +58,7 @@ class _HotReloadCache(Generic[T]):
     self.value: T | None = None
     self._mtime: tuple[float, int] | None = None
     self.failed_mtime: tuple[float, int] | None = None
-    self.seen = WarnOnceRegistry()
+    self.seen = log_once.WarnOnceRegistry()
 
   def reset(self) -> None:
     """Forget the cached value and every fingerprint and warning state."""
@@ -114,7 +111,7 @@ class Credentials:
 
   __slots__ = ("path", "sections")
 
-  def __init__(self, path: Path, sections: dict[str, dict[str, str | int]]) -> None:
+  def __init__(self, path: pathlib.Path, sections: dict[str, dict[str, str | int]]) -> None:
     self.path = path
     self.sections = sections
 
@@ -140,8 +137,8 @@ def load_credentials() -> Credentials:
   ``credentials.<section>.<key>``. Section and key names are never validated:
   any name loads.
   """
-  path = charliebot_home_dir() / CREDENTIALS_FILENAME
-  data = load_yaml(path, default={})
+  path = home.charliebot_home_dir() / CREDENTIALS_FILENAME
+  data = yaml_utils.load_yaml(path, default={})
   if data is None:
     data = {}
   if not isinstance(data, dict):

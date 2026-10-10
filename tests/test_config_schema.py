@@ -2,53 +2,53 @@
 
 import asyncio
 import json
-from pathlib import Path
+import pathlib
 
+import conftest
+import pydantic
 import pytest
 import yaml
-from conftest import ROOT, backend_option
-from pydantic import ValidationError
 
 from src.app import registrations
 from src.features.cron import loader as cron_loader
-from src.infra import config as config_module
-from src.infra.config import CHARLIEBOT_HOME_ENV, CharlieBotConfig, require_backends
+from src.infra import config
+from src.runtime import init_seed
 from src.runtime.hooks import wiring
-from src.runtime.init_seed import init_charliebot_home
 
 
 @pytest.mark.parametrize("fragment_name", ["x.yaml", "cron.yaml"])
-def test_config_d_fragments_are_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fragment_name: str) -> None:
+def test_config_d_fragments_are_rejected(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, fragment_name: str) -> None:
   home = tmp_path / "home"
   (home / "config.d").mkdir(parents=True)
   (home / "config.yaml").write_text("server:\n  host: 127.0.0.1\n", encoding="utf-8")
   (home / "config.d" / fragment_name).write_text("voice:\n  engine: sherpa\n", encoding="utf-8")
-  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(home))
   with pytest.raises(ValueError) as excinfo:
-    config_module.load_config()
+    config.load_config()
   assert f"config.d/{fragment_name}" in str(excinfo.value)
 
 
-def _credentials_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _credentials_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """A temp CHARLIEBOT_HOME with a minimal valid sectioned config.yaml; returns the home path."""
   home = tmp_path / "home"
   home.mkdir()
   (home / "config.yaml").write_text("server:\n  port: 2001\n", encoding="utf-8")
-  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(home))
   return home
 
 
 def test_ui_backlog_repos_is_an_unknown_key_since_the_backlog_section_owns_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   (home / "config.yaml").write_text("ui:\n  backlog_repos: []\n", encoding="utf-8")
-  with pytest.raises(ValidationError) as excinfo:
-    config_module.load_config()
+  with pytest.raises(pydantic.ValidationError) as excinfo:
+    config.load_config()
   assert [(err["type"], err["loc"]) for err in excinfo.value.errors()] == [("extra_forbidden", ("ui", "backlog_repos"))]
 
 
 def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   sections = {
       "alpha": {
@@ -61,8 +61,8 @@ def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(
       },
   }
   (home / "credentials.yaml").write_text(yaml.safe_dump(sections), encoding="utf-8")
-  dumped = json.dumps(config_module.load_config().model_dump(mode="json"))
-  credentials = config_module.load_credentials()
+  dumped = json.dumps(config.load_config().model_dump(mode="json"))
+  credentials = config.load_credentials()
   for section, keys in sections.items():
     for key, sentinel in keys.items():
       assert sentinel not in dumped
@@ -81,20 +81,20 @@ def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(
     ],
 )
 def test_credentials_shape_errors_name_the_offending_depth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str, fragment: str) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, body: str, fragment: str) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   (home / "credentials.yaml").write_text(body, encoding="utf-8")
   with pytest.raises(ValueError) as excinfo:
-    config_module.load_credentials()
+    config.load_credentials()
   assert fragment in str(excinfo.value)
 
 
 def test_retired_slack_credential_keys_name_their_credentials_location(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   (home / "config.yaml").write_text("slack_bot_token: x\nslack_app_token: y\nslack_user_token: z\n", encoding="utf-8")
   with pytest.raises(ValueError) as excinfo:
-    config_module.load_config()
+    config.load_config()
   assert str(excinfo.value) == (
       f"{home / 'config.yaml'} still uses retired top-level keys; move each one:\n"
       "  slack_bot_token -> credentials.yaml slack.bot_token\n"
@@ -102,48 +102,49 @@ def test_retired_slack_credential_keys_name_their_credentials_location(
       "  slack_user_token -> credentials.yaml slack.user_token")
 
 
-EXAMPLE_PATH = ROOT / "configs" / "config.example.yaml"
+EXAMPLE_PATH = conftest.ROOT / "configs" / "config.example.yaml"
 
 STARTER_BACKEND_IDS = ["claude-fable", "claude-opus", "claude-sonnet"]
 
 
-def test_example_config_loads_to_the_model_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_example_config_loads_to_the_model_default(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The shipped example is the default config: loading it equals constructing
   CharlieBotConfig, modulo backends.options (the example ships the three starter
   entries where the model default is empty)."""
   home = tmp_path / "home"
   home.mkdir()
   (home / "config.yaml").write_bytes(EXAMPLE_PATH.read_bytes())
-  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
-  loaded = config_module.load_config()
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(home))
+  loaded = config.load_config()
   loaded_dump = loaded.model_dump()
-  default_dump = CharlieBotConfig(charliebot_home=home).model_dump()
+  default_dump = config.CharlieBotConfig(charliebot_home=home).model_dump()
   loaded_dump["backends"]["options"] = None
   default_dump["backends"]["options"] = None
   assert loaded_dump == default_dump
   assert [option.id for option in loaded.backends.options] == STARTER_BACKEND_IDS
 
 
-def test_init_charliebot_home_seeds_config_and_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_charliebot_home_seeds_config_and_credentials(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A fresh home gets config.yaml byte-equal to the example and credentials.yaml
   from the repo template, owner-readable only, loading as empty sections."""
   home = tmp_path / "home"
   home.mkdir()
-  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
-  fake_cfg = CharlieBotConfig(charliebot_home=home)
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(home))
+  fake_cfg = config.CharlieBotConfig(charliebot_home=home)
   monkeypatch.setattr("src.infra.config.get_config", lambda: fake_cfg)
-  asyncio.run(init_charliebot_home())
+  asyncio.run(init_seed.init_charliebot_home())
   credentials_path = home / "credentials.yaml"
   assert credentials_path.exists()
   assert credentials_path.stat().st_mode & 0o777 == 0o600
-  assert config_module.load_credentials().sections == {}
+  assert config.load_credentials().sections == {}
   assert (home / "config.yaml").read_bytes() == EXAMPLE_PATH.read_bytes()
 
 
 def test_require_backends_rejects_empty_list() -> None:
   """An empty backends.options raises ValueError naming the key and the example file."""
   with pytest.raises(ValueError) as exc_info:
-    require_backends(CharlieBotConfig())
+    config.require_backends(config.CharlieBotConfig())
   message = str(exc_info.value)
   assert "backends.options" in message
   assert "config.example.yaml" in message
@@ -154,10 +155,14 @@ def test_require_backends_rejects_empty_list() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _pooled_config(pools: dict[str, list[str]], *options: dict) -> CharlieBotConfig:
+def _pooled_config(pools: dict[str, list[str]], *options: dict) -> config.CharlieBotConfig:
   """A config with accounts.claude entries a-e and the given pools and raw backend options."""
   accounts = [{"label": label, "config_dir": f"/tmp/claude-{label}"} for label in "abcde"]
-  return CharlieBotConfig(accounts={"claude": accounts, "claude_pools": pools}, backends={"options": list(options)})
+  return config.CharlieBotConfig(
+      accounts={
+          "claude": accounts,
+          "claude_pools": pools
+      }, backends={"options": list(options)})
 
 
 def _cc_claude(option_id: str, **extra: str) -> dict:
@@ -233,29 +238,31 @@ def test_empty_claude_pools_keep_the_unpooled_schema() -> None:
   assert cfg.get_backend_option("claude-a").account_pool is None
 
 
-def _family_backends(tmp_path: Path, preference: list[str], *ids: str) -> CharlieBotConfig:
+def _family_backends(tmp_path: pathlib.Path, preference: list[str], *ids: str) -> config.CharlieBotConfig:
   """A config at *tmp_path* whose options carry *ids* (cc-claude) and the given preference."""
-  options = [backend_option(id=backend_id, label=backend_id, type="cc-claude", model="m") for backend_id in ids]
-  return CharlieBotConfig(charliebot_home=tmp_path, backends={"preference": preference, "options": options})
+  options = [
+      conftest.backend_option(id=backend_id, label=backend_id, type="cc-claude", model="m") for backend_id in ids
+  ]
+  return config.CharlieBotConfig(charliebot_home=tmp_path, backends={"preference": preference, "options": options})
 
 
-def test_require_backends_accepts_known_preference_entries(tmp_path: Path) -> None:
+def test_require_backends_accepts_known_preference_entries(tmp_path: pathlib.Path) -> None:
   cfg = _family_backends(tmp_path, ["claude-sonnet", "claude-opus"], "claude-opus", "claude-sonnet")
-  assert require_backends(cfg) is None
+  assert config.require_backends(cfg) is None
 
 
-def test_require_backends_rejects_unknown_preference_entry(tmp_path: Path) -> None:
+def test_require_backends_rejects_unknown_preference_entry(tmp_path: pathlib.Path) -> None:
   """A preference entry naming no option id stops startup; the error names the file, the entry
   and the id."""
   cfg = _family_backends(tmp_path, ["claude-opus", "codex-gpt-5.6-luna"], "claude-opus")
   with pytest.raises(ValueError) as exc_info:
-    require_backends(cfg)
+    config.require_backends(cfg)
   message = str(exc_info.value)
   assert f"{tmp_path / 'config.yaml'}: backends.preference[1] names unknown backend 'codex-gpt-5.6-luna'" in message
   assert "claude-opus'" not in message
 
 
-def _home_with_cron_tasks(home: Path, cron_tasks: dict[str, dict]) -> CharlieBotConfig:
+def _home_with_cron_tasks(home: pathlib.Path, cron_tasks: dict[str, dict]) -> config.CharlieBotConfig:
   """Write a config.yaml whose only backend option is claude-opus plus one cron.d file per task
   in *cron_tasks*, point CHARLIEBOT_HOME at it (the profile_home fixture), and load the config.
 
@@ -275,18 +282,18 @@ def _home_with_cron_tasks(home: Path, cron_tasks: dict[str, dict]) -> CharlieBot
     else:
       task["prompt_file"] = str(prompt_file)
     (cron_d / f"{name}.yaml").write_text(yaml.safe_dump(task), encoding="utf-8")
-  cfg = config_module.load_config()
+  cfg = config.load_config()
   assert {task.name for task in cron_loader.get_scheduled_tasks()} == set(cron_tasks)
   return cfg
 
 
-def _run_startup_checks(cfg: CharlieBotConfig) -> None:
+def _run_startup_checks(cfg: config.CharlieBotConfig) -> None:
   registrations.register_all()
   for check in wiring.startup_checks():
     check(cfg)
 
 
-def test_cron_backend_references_that_name_option_ids_pass_the_startup_checks(profile_home: Path) -> None:
+def test_cron_backend_references_that_name_option_ids_pass_the_startup_checks(profile_home: pathlib.Path) -> None:
   """A cron task or step backend naming an option id passes, and a task or step without a
   backend stays valid."""
   cfg = _home_with_cron_tasks(
@@ -304,7 +311,7 @@ def test_cron_backend_references_that_name_option_ids_pass_the_startup_checks(pr
               }]
           },
       })
-  require_backends(cfg)
+  config.require_backends(cfg)
   _run_startup_checks(cfg)
 
 
@@ -322,20 +329,20 @@ def test_cron_backend_references_that_name_option_ids_pass_the_startup_checks(pr
             }, "steps 'build' backend names unknown backend 'claude-opus-5'"),
     ])
 def test_cron_backend_naming_no_option_id_stops_the_startup_checks_not_the_load(
-    profile_home: Path, body: dict, line: str) -> None:
+    profile_home: pathlib.Path, body: dict, line: str) -> None:
   """load_config and require_backends accept the cron task, and the registered startup checks
   stop the start; the error line names the task's cron.d file, the entry and the id."""
   cfg = _home_with_cron_tasks(profile_home, {"nightly": body})
-  require_backends(cfg)
+  config.require_backends(cfg)
   with pytest.raises(ValueError) as exc_info:
     _run_startup_checks(cfg)
   assert f"{profile_home / 'config.d' / 'cron.d' / 'nightly.yaml'}: {line}" in str(exc_info.value)
 
 
-def test_require_backends_rejects_duplicate_option_id(tmp_path: Path) -> None:
+def test_require_backends_rejects_duplicate_option_id(tmp_path: pathlib.Path) -> None:
   """An option id listed twice stops startup; the error names the file, the repeated entry and
   the id."""
   cfg = _family_backends(tmp_path, [], "claude-opus", "claude-sonnet", "claude-opus")
   with pytest.raises(ValueError) as exc_info:
-    require_backends(cfg)
+    config.require_backends(cfg)
   assert f"{tmp_path / 'config.yaml'}: backends.options[2] repeats id 'claude-opus'" in str(exc_info.value)

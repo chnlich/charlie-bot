@@ -448,3 +448,9 @@ Known-alive symbols:
   `scripts/v1_session_conversion.py` (the converter that the refusal names) — kept on purpose for
   other CharlieBot homes that still hold v1 sessions. A home on this host holds no v1 session, so
   the migration-code kind of Step 1 seems to match them. Never delete either file or its tests.
+- `_get_close_waiter` (`_StdinPipeProtocol` in `src/runtime/agent_process/spawn.py`) — reached by
+  attribute name from the stdlib: `asyncio.StreamWriter.wait_closed()` awaits
+  `self._protocol._get_close_waiter(self)`, and the bare `asyncio.FlowControlMixin` raises
+  NotImplementedError without the override. The subprocess-stdin close path
+  (`src/runtime/agent_process/base.py` awaits `stdin.wait_closed()`) dispatches through it.
+  A whole-repo grep finds only the definition, so vulture flags it as an unused method.

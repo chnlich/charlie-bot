@@ -34,32 +34,18 @@ without deleting anything if that capture raises; a dry run never captures.
 """
 
 import asyncio
+import dataclasses
+import datetime
 import functools
 import os
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+import pathlib
 
 from src.features.usage import token_tally, usage_ledger
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.constants import MIN_IDLE_DAYS
-from src.infra.json_utils import load_json_meta
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionStatus, parse_utc_datetime
+from src.infra import config, constants, json_utils, log_once, models
+from src.runtime import run_identity, runs
 from src.runtime.hooks import usage_sources
-from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME
-from src.runtime.runs import (
-    CURSOR_NAME,
-    DATA_DIR_NAME,
-    MASTER_RUNS_DIR_NAME,
-    RAW_LOG_NAME,
-    RUN_METADATA_NAME,
-    RUNS_DIR_NAME,
-    STDERR_LOG_NAME,
-    THREADS_DIR_NAME,
-)
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Unreferenced backend records only have to outlive a backend session that is
 # running right now; such a session refreshes its timestamp every few minutes.
@@ -72,16 +58,17 @@ ORPHAN_IDLE_DAYS = 2
 # transport contract; the two tee names stay literals because their writers are
 # backend modules (opencode.py, antigravity_cli.py) and core must not import
 # backends.
-RAW_TRANSPORT_NAMES = frozenset({
-    RAW_LOG_NAME,
-    STDERR_LOG_NAME,
-    CURSOR_NAME,
-    "stdout.log",
-    "stderr.log",
-})
+RAW_TRANSPORT_NAMES = frozenset(
+    {
+        runs.RAW_LOG_NAME,
+        runs.STDERR_LOG_NAME,
+        runs.CURSOR_NAME,
+        "stdout.log",
+        "stderr.log",
+    })
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SweepResult:
   """Per-category results of one sweep pass, plus the free pages of the databases that report them."""
 
@@ -104,25 +91,26 @@ class SweepResult:
 # ---------------------------------------------------------------------------
 
 
-def is_cold_session(meta: dict, *, now: datetime, min_idle_days: int) -> bool:
+def is_cold_session(meta: dict, *, now: datetime.datetime, min_idle_days: int) -> bool:
   """The one cold rule: archived, and idle at least *min_idle_days*.
 
   Reads only fields session metadata already persists. A session whose metadata is
   missing or unreadable never qualifies.
   """
-  if str(meta.get("status")) != SessionStatus.ARCHIVED.value:
+  if str(meta.get("status")) != models.SessionStatus.ARCHIVED.value:
     return False
   raw_updated = meta.get("updated_at")
   if not raw_updated:
     return False
   try:
-    updated_at = parse_utc_datetime(str(raw_updated))
+    updated_at = models.parse_utc_datetime(str(raw_updated))
   except ValueError:
     return False
-  return now - updated_at >= timedelta(days=min_idle_days)
+  return now - updated_at >= datetime.timedelta(days=min_idle_days)
 
 
-def _scan_sessions(cfg: CharlieBotConfig, now: datetime, min_idle_days: int) -> dict[str, usage_sources.SessionFacts]:
+def _scan_sessions(cfg: config.CharlieBotConfig, now: datetime.datetime,
+                   min_idle_days: int) -> dict[str, usage_sources.SessionFacts]:
   """Read every session's metadata into the facts the sweep judges on."""
   facts: dict[str, usage_sources.SessionFacts] = {}
   sessions_dir = cfg.sessions_dir
@@ -131,7 +119,7 @@ def _scan_sessions(cfg: CharlieBotConfig, now: datetime, min_idle_days: int) -> 
   for session_dir in sorted(sessions_dir.iterdir()):
     if not session_dir.is_dir():
       continue
-    meta = load_json_meta(session_dir / METADATA_NAME, "storage_cool_meta_read_failed")
+    meta = json_utils.load_json_meta(session_dir / run_identity.SESSION_METADATA_NAME, "storage_cool_meta_read_failed")
     if meta is None:
       continue
     facts[session_dir.name] = usage_sources.SessionFacts(
@@ -142,7 +130,7 @@ def _scan_sessions(cfg: CharlieBotConfig, now: datetime, min_idle_days: int) -> 
   return facts
 
 
-def _scan_references(cfg: CharlieBotConfig,
+def _scan_references(cfg: config.CharlieBotConfig,
                      facts: dict[str, usage_sources.SessionFacts]) -> dict[str, list[usage_sources.SessionFacts]]:
   """Backend session ids CharlieBot metadata references, mapped to their referencing sessions.
 
@@ -155,10 +143,11 @@ def _scan_references(cfg: CharlieBotConfig,
   for owner in facts.values():
     if owner.cc_session_id is not None:
       references.setdefault(owner.cc_session_id, []).append(owner)
-  for thread_dir in sorted(cfg.sessions_dir.glob(f"*/{THREADS_DIR_NAME}/*")):
+  for thread_dir in sorted(cfg.sessions_dir.glob(f"*/{runs.THREADS_DIR_NAME}/*")):
     if not thread_dir.is_dir():
       continue
-    meta = load_json_meta(thread_dir / METADATA_NAME, "storage_cool_thread_meta_read_failed")
+    meta = json_utils.load_json_meta(
+        thread_dir / run_identity.SESSION_METADATA_NAME, "storage_cool_thread_meta_read_failed")
     referenced_id = _optional_str((meta or {}).get("cc_session_id"))
     if referenced_id is None:
       continue
@@ -190,28 +179,28 @@ def _is_transport_name(name: str) -> bool:
   return bool(separator) and base in RAW_TRANSPORT_NAMES and suffix.isdigit()
 
 
-def _managed_transport_dirs(session_dir: Path) -> list[Path]:
+def _managed_transport_dirs(session_dir: pathlib.Path) -> list[pathlib.Path]:
   """The two directory shapes whose direct children the transport rule governs."""
-  managed: list[Path] = []
-  data_root = session_dir / DATA_DIR_NAME
-  master_runs = data_root / MASTER_RUNS_DIR_NAME
+  managed: list[pathlib.Path] = []
+  data_root = session_dir / runs.DATA_DIR_NAME
+  master_runs = data_root / runs.MASTER_RUNS_DIR_NAME
   if data_root.is_dir() and not data_root.is_symlink() and master_runs.is_dir() and not master_runs.is_symlink():
     run_dirs = usage_sources.sorted_scan(master_runs, master_runs.iterdir())
     if run_dirs is not None:
       managed.extend(child for child in run_dirs if child.is_dir() and not child.is_symlink())
-  threads_dir = session_dir / THREADS_DIR_NAME
+  threads_dir = session_dir / runs.THREADS_DIR_NAME
   if threads_dir.is_dir() and not threads_dir.is_symlink():
     thread_dirs = usage_sources.sorted_scan(threads_dir, threads_dir.iterdir()) or []
     for thread_dir in thread_dirs:
       if not thread_dir.is_dir() or thread_dir.is_symlink():
         continue
-      data_dir = thread_dir / DATA_DIR_NAME
+      data_dir = thread_dir / runs.DATA_DIR_NAME
       if data_dir.is_dir() and not data_dir.is_symlink():
         managed.append(data_dir)
   return managed
 
 
-def _run_referenced_transport(session_dir: Path) -> set[Path]:
+def _run_referenced_transport(session_dir: pathlib.Path) -> set[pathlib.Path]:
   """Transport files a v2 Run record of this session references.
 
   Migrated task-tree runs point at their original evidence
@@ -220,14 +209,14 @@ def _run_referenced_transport(session_dir: Path) -> set[Path]:
   must not reclaim them. Unreferenced transport files keep the existing
   contract.
   """
-  runs_dir = session_dir / DATA_DIR_NAME / RUNS_DIR_NAME
+  runs_dir = session_dir / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME
   if not runs_dir.is_dir() or runs_dir.is_symlink():
     return set()
   referenced: set[str] = set()
   for run_dir in usage_sources.sorted_scan(runs_dir, runs_dir.iterdir()) or []:
     if not run_dir.is_dir() or run_dir.is_symlink():
       continue
-    meta = load_json_meta(run_dir / RUN_METADATA_NAME, "storage_cool_run_meta_read_failed")
+    meta = json_utils.load_json_meta(run_dir / runs.RUN_METADATA_NAME, "storage_cool_run_meta_read_failed")
     if not isinstance(meta, dict):
       continue
     for key in ("raw_log_ref", "events_ref", "result_ref"):
@@ -237,7 +226,7 @@ def _run_referenced_transport(session_dir: Path) -> set[Path]:
   return referenced
 
 
-def _sweep_raw_transport(session_dir: Path, counter: usage_sources.SweepCounter, dry_run: bool) -> None:
+def _sweep_raw_transport(session_dir: pathlib.Path, counter: usage_sources.SweepCounter, dry_run: bool) -> None:
   """Delete the reserved transport names inside the session's managed run directories.
 
   Files a v2 Run record references are retention-protected: they are the
@@ -268,12 +257,12 @@ def _capture_usage_before_sweep() -> dict[str, int]:
 def run_cool_sweep(
     *,
     dry_run: bool = False,
-    min_idle_days: int = MIN_IDLE_DAYS,
+    min_idle_days: int = constants.MIN_IDLE_DAYS,
     session_id: str | None = None,
     vacuum: bool = False,
     force: bool = False,
-    cfg: CharlieBotConfig,
-    now: datetime | None = None,
+    cfg: config.CharlieBotConfig,
+    now: datetime.datetime | None = None,
 ) -> SweepResult:
   """Run one storage sweep over cold sessions and unreferenced backend records.
 
@@ -296,7 +285,7 @@ def run_cool_sweep(
     Per-category counts and freed bytes in report order, plus the free pages of each database
     that a source reports.
   """
-  now = now or datetime.now(UTC)
+  now = now or datetime.datetime.now(datetime.UTC)
   if not dry_run:
     # The ledger capture guards every deletion: it runs before the scan and any
     # sweep step, and a failure propagates so the round reports an error and
@@ -357,7 +346,7 @@ async def run_scheduled_cool_storage() -> str:
   # handler fires, so the M99 server import floor carries no cold-sweep stack for
   # a handler that may never fire.
   loop = asyncio.get_running_loop()
-  result = await loop.run_in_executor(None, functools.partial(run_cool_sweep, cfg=get_config()))
+  result = await loop.run_in_executor(None, functools.partial(run_cool_sweep, cfg=config.get_config()))
   summary = format_sweep_line(result)
   log.info('cool_storage_handler_done', total_bytes=result.total_bytes)
   return summary

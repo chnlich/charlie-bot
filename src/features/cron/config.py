@@ -2,19 +2,19 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+import pydantic
 
-from src.infra.config import HOUSE_TIMEZONE
+from src.infra import config
 from src.runtime.hooks import scheduled_handlers
 
 # The API request model TaskCreate (src/features/cron/api.py) inherits this default through
 # ScheduledTaskFields; the web UI re-pins the value in literals (index.html and
 # fallbacks in sidebar/modals.js) that cannot import from Python — a change moves
 # every re-pinning site.
-DEFAULT_TIMEZONE = HOUSE_TIMEZONE
+DEFAULT_TIMEZONE = config.HOUSE_TIMEZONE
 
 
-class StepConfig(BaseModel):
+class StepConfig(pydantic.BaseModel):
   """One step of a ``steps`` cron task: a named worker in an ordered chain.
 
   ``prompt_file`` is the pre-resolution path string the host cron.d file
@@ -23,9 +23,9 @@ class StepConfig(BaseModel):
   resolved from it on this load.
   """
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
-  name: str = Field(min_length=1)
+  name: str = pydantic.Field(min_length=1)
   prompt_file: str | None = None
   prompt: str | None = None
   backend: str | None = None
@@ -37,7 +37,7 @@ class StepConfig(BaseModel):
   distinct_backend_from: str | None = None
 
 
-class ScheduledTaskFields(BaseModel):
+class ScheduledTaskFields(pydantic.BaseModel):
   """Field block every scheduled task carries, shared by the loader's task model
   and the API's create-request model so a new task field ships to both with one edit.
 
@@ -79,7 +79,7 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   instead of silently dropping it.
   """
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   prompt: str | None = None
   handler: str | None = None
@@ -91,7 +91,7 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   # woken once at the end (src/features/cron/cron_sequence.py).
   steps: list[StepConfig] | None = None
 
-  @field_validator('loop', mode='before')
+  @pydantic.field_validator('loop', mode='before')
   @classmethod
   def validate_loop_section(cls, value: Any) -> Any:
     """Validate the `loop:` mapping against the registered loop model."""
@@ -103,7 +103,7 @@ class ScheduledTaskConfig(ScheduledTaskFields):
       raise ValueError("no package registered a loop section") from e
     return model.model_validate(value)
 
-  @model_validator(mode='after')
+  @pydantic.model_validator(mode='after')
   def check_sources_and_mode(self) -> ScheduledTaskConfig:
     sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
     if sources != 1:
@@ -163,7 +163,7 @@ class ScheduledTaskConfig(ScheduledTaskFields):
             f"both declare backend '{own}'; the two steps must name different backends")
 
 
-class ScheduledTaskError(BaseModel):
+class ScheduledTaskError(pydantic.BaseModel):
   """A per-file cron load failure surfaced through the API without raising.
 
   ``enabled`` is the failing file's own raw ``enabled`` value, read best-effort

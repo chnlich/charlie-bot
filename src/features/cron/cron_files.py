@@ -1,7 +1,7 @@
 """Small writes to per-task cron configuration files."""
 
-from src.features.cron.loader import cron_path
-from src.infra.yaml_utils import load_yaml, save_yaml
+from src.features.cron import loader
+from src.infra import yaml_utils
 
 
 def write_cron_key(task_name: str, key: str, value: str | bool) -> None:
@@ -13,9 +13,9 @@ def write_cron_key(task_name: str, key: str, value: str | bool) -> None:
   missing, empty, or non-mapping task file fails loud instead of silently
   recreating one.
   """
-  path = cron_path(task_name)
-  data = load_yaml(path, default=None)
+  path = loader.cron_path(task_name)
+  data = yaml_utils.load_yaml(path, default=None)
   if not isinstance(data, dict):
     raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
   data[key] = value
-  save_yaml(path, data)
+  yaml_utils.save_yaml(path, data)

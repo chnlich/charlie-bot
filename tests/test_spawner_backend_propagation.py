@@ -1,33 +1,28 @@
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    AGY_BACKEND_OPTION,
-    CODEX_BACKEND_OPTION,
-    OPUS_BACKEND_ID,
-    backend_option,
-)
 
-from src.infra.config import CharlieBotConfig
+from src.infra import config
 from src.runtime import spawner
 
 
-def _build_cfg() -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=Path("/tmp/charliebot-test"),
+def _build_cfg() -> config.CharlieBotConfig:
+  return config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
       backends={
           "options":
               [
-                  backend_option(
-                      id=OPUS_BACKEND_ID,
+                  conftest.backend_option(
+                      id=conftest.OPUS_BACKEND_ID,
                       label="Opus",
                       type="cc-claude",
                       model="claude-opus-4-6",
                       effort="max",
                       cli_binary="claude-alt",
                   ),
-                  CODEX_BACKEND_OPTION,
+                  conftest.CODEX_BACKEND_OPTION,
               ]
       },
   )
@@ -35,8 +30,8 @@ def _build_cfg() -> CharlieBotConfig:
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   cfg = _build_cfg()
-  opt = spawner.spawner_backends.resolve_backend_option(cfg, OPUS_BACKEND_ID, "claude-opus-4-6")
-  assert opt.id == OPUS_BACKEND_ID
+  opt = spawner.spawner_backends.resolve_backend_option(cfg, conftest.OPUS_BACKEND_ID, "claude-opus-4-6")
+  assert opt.id == conftest.OPUS_BACKEND_ID
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
   assert opt.cli_binary == "claude-alt"
@@ -49,10 +44,10 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
 
 
 def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=Path("/tmp/charliebot-test"),
+  cfg = config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": [AGY_BACKEND_OPTION,]},
+      backends={"options": [conftest.AGY_BACKEND_OPTION,]},
   )
 
   opt = spawner.spawner_backends.resolve_backend_option(cfg, "agy", None)
@@ -82,13 +77,13 @@ def test_resolve_backend_option_rejects_missing_model_for_model_required_backend
   # The sectioned schema rejects a model-less model-required entry outright, so
   # each config entry carries a model and the resolver's own None rejection is
   # what the test drives.
-  cfg = CharlieBotConfig(
-      charliebot_home=Path("/tmp/charliebot-test"),
+  cfg = config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
       backends={
           "options":
               [
-                  backend_option(
+                  conftest.backend_option(
                       id=backend_type, label=backend_type, type=backend_type, model="fake-model", **entry_kwargs),
               ]
       },

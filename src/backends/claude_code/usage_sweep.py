@@ -10,14 +10,13 @@ cwd that CharlieBot never handed a claude process, and the sweep never touches i
 """
 
 import os
+import pathlib
 import shutil
-from pathlib import Path
 
 from src.backends.claude_code import login_dirs
-from src.infra import log_once
-from src.infra.config import CharlieBotConfig
+from src.infra import config, log_once
+from src.runtime import worktree_trash
 from src.runtime.hooks import usage_sources
-from src.runtime.worktree_trash import TRASH_DIR_NAME
 
 log = log_once.LazyStructlogLogger()
 
@@ -28,7 +27,7 @@ log = log_once.LazyStructlogLogger()
 _SESSIONS_SEGMENT = "-sessions-"
 
 
-def claude_project_dir_name(cwd: Path) -> str:
+def claude_project_dir_name(cwd: pathlib.Path) -> str:
   """The transcript directory name Claude Code derives from a process cwd.
 
   Path separators, dots and underscores each become a hyphen; every other
@@ -37,7 +36,7 @@ def claude_project_dir_name(cwd: Path) -> str:
   return str(cwd).replace("/", "-").replace(".", "-").replace("_", "-")
 
 
-def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
+def claude_projects_roots(cfg: config.CharlieBotConfig) -> list[pathlib.Path]:
   """Every ``projects`` tree a cc-claude backend may have written transcripts into.
 
   A transcript tree outlives the environment that created it, so the search set
@@ -50,7 +49,7 @@ def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
   """
   homes = {login_dirs.default_claude_dir(), login_dirs.claude_config_dir()}
   for account in cfg.accounts.claude:
-    homes.add(Path(account.config_dir).expanduser())
+    homes.add(pathlib.Path(account.config_dir).expanduser())
   return sorted(home / "projects" for home in homes)
 
 
@@ -75,7 +74,7 @@ def _encoded_session_id(dir_name: str) -> str | None:
   return match.group(0)
 
 
-def _newest_mtime(path: Path) -> float | None:
+def _newest_mtime(path: pathlib.Path) -> float | None:
   """Newest file mtime under *path*, or the directory's own when it holds none."""
   newest: float | None = None
   for dirpath, _, filenames in os.walk(path):
@@ -93,7 +92,7 @@ def _newest_mtime(path: Path) -> float | None:
   return newest
 
 
-def _idle_past_window(path: Path, scope: usage_sources.SweepScope) -> bool:
+def _idle_past_window(path: pathlib.Path, scope: usage_sources.SweepScope) -> bool:
   """Newest-mtime form of the idle judgment for a transcript directory; False (logged) on probe failure."""
   newest = _newest_mtime(path)
   if newest is None:
@@ -102,19 +101,19 @@ def _idle_past_window(path: Path, scope: usage_sources.SweepScope) -> bool:
   return scope.idle_past(newest)
 
 
-def _live_worktree_dir_names(cfg: CharlieBotConfig) -> set[str]:
+def _live_worktree_dir_names(cfg: config.CharlieBotConfig) -> set[str]:
   """Encoded cwd names of the worktrees currently on disk (their runs may still write)."""
-  worktree_dir = Path(cfg.paths.worktree_dir)
+  worktree_dir = pathlib.Path(cfg.paths.worktree_dir)
   if not worktree_dir.is_dir():
     return set()
   return {
       claude_project_dir_name(child)
       for child in worktree_dir.iterdir()
-      if child.is_dir() and child.name != TRASH_DIR_NAME
+      if child.is_dir() and child.name != worktree_trash.TRASH_DIR_NAME
   }
 
 
-def _delete_claude_project_dir(path: Path, counter: usage_sources.SweepCounter, dry_run: bool) -> None:
+def _delete_claude_project_dir(path: pathlib.Path, counter: usage_sources.SweepCounter, dry_run: bool) -> None:
   """Delete a transcript directory file by file, then its empty skeleton."""
   for file_path in sorted(path.rglob("*")):
     if file_path.is_file():
@@ -146,7 +145,7 @@ def _sweep_claude_transcripts(scope: usage_sources.SweepScope, counter: usage_so
   transcript), so neither can delete what the other protects.
   """
   cfg = scope.cfg
-  worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
+  worktree_prefix = claude_project_dir_name(pathlib.Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if scope.session_id is None else set()
   for entry in usage_sources.sweep_root_entries(claude_projects_roots(cfg), lambda root: root.iterdir()):
     if not entry.is_dir():

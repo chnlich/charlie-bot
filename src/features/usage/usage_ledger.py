@@ -512,8 +512,7 @@ class UsageLedger:
   ledger and an existing one keeps every row. A ledger with no ``schema`` stamp in
   ``ledger_meta`` upgrades to '2' once on open (``_upgrade_schema``). A ledger whose
   stored aggregate-trigger bodies differ from this module's gets the five swapped and a
-  backfilled aggregate re-priced on open (``_refresh_agg_triggers``). A ledger that still
-  holds the probe-gate table an older release kept drops it on open (``_drop_capture_gates``).
+  backfilled aggregate re-priced on open (``_refresh_agg_triggers``).
   """
 
   def __init__(self, path: Path) -> None:
@@ -527,7 +526,6 @@ class UsageLedger:
       self._upgrade_schema()  # recreates the aggregate triggers inside its transaction
     else:
       self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
-    self._drop_capture_gates()
     self._conn.commit()
     # The open capture batch's SAVEPOINT name; None outside one. record_file and
     # mark_capture_finished leave the commit to the batch (see batch()).
@@ -629,24 +627,6 @@ class UsageLedger:
       if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
         self._conn.execute(_AGG_WIPE_SQL)  # re-price the served aggregate under the fresh bodies
         self._conn.execute(_AGG_BACKFILL_SQL)
-      self._conn.commit()
-    except BaseException:
-      self._conn.rollback()
-      raise
-
-  def _drop_capture_gates(self) -> None:
-    """Drop the ``capture_gates`` table an older release kept; nothing reads or writes it now.
-
-    The presence check reads first, so an open of a ledger without the table takes no write
-    lock. The stamp stays '2': a process still running the older release opens the same
-    ledger, and a newer stamp would send it through the schema-2 upgrade again.
-    """
-    present = self._conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_gates'")
-    if present.fetchone() is None:
-      return
-    self._conn.execute("BEGIN IMMEDIATE")
-    try:
-      self._conn.execute("DROP TABLE IF EXISTS capture_gates")
       self._conn.commit()
     except BaseException:
       self._conn.rollback()

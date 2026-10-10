@@ -425,30 +425,6 @@ def test_model_rows_plan_scans_the_cover_index_without_analyze(tmp_path):
   assert not any("MULTI-INDEX OR" in detail for detail in plan)
 
 
-def test_open_drops_the_capture_gates_table_an_older_release_kept(tmp_path) -> None:
-  """A ledger an older release stamped with a ``capture_gates`` table loses it on the first open,
-  keeps every usage row and file signature, and keeps schema stamp '2' (a process still running
-  the older release opens the same ledger and must not re-run its schema-2 upgrade)."""
-  path = tmp_path / "ledger.sqlite3"
-  with UsageLedger(path) as ledger:
-    ledger.record_file(
-        HOST, "/logs/a.jsonl", "sig-a", [_record("rec-1", usage_sources.RecordKind.NATIVE, sessions=("sess-a",))])
-  con = sqlite3.connect(path)
-  try:
-    con.execute("CREATE TABLE capture_gates (host TEXT, path TEXT, files TEXT, sig TEXT)")
-    con.execute("INSERT INTO capture_gates VALUES ('host-a', '/data/db.sqlite', '[]', 'sig-1')")
-    con.commit()
-  finally:
-    con.close()
-  with UsageLedger(path) as ledger:
-    tables = {row["name"] for row in ledger._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert "capture_gates" not in tables
-    assert ledger.captured_sigs(HOST) == {"/logs/a.jsonl": "sig-a"}
-    assert [row.calls for row in ledger.model_rows()] == [1]
-    stamp = ledger._conn.execute("SELECT value FROM ledger_meta WHERE key = 'schema'").fetchone()[0]
-  assert stamp == "2"
-
-
 def test_last_capture_at_is_per_host_and_none_before_the_first_capture(tmp_path) -> None:
   """``mark_capture_finished`` stamps one host's key in ``ledger_meta`` with the current UTC time; a
   host that never captured, and a ledger no capture touched, read None."""

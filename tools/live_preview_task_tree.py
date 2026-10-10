@@ -25,10 +25,10 @@ explicit failed run, never a scripted pass. Evidence lands in --evidence-dir
 
 from __future__ import annotations
 
+import pathlib
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -43,13 +43,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
-from tools.browser_harness_session_tree import (  # noqa: E402
-    EVIDENCE_ROOT_DEFAULT,
-    open_evidence_dir,
-    pick_free_port,
-    stop_child,
-)
-from tools.browser_harness_session_tree_preview import PRODUCTION_PORT  # noqa: E402
+from tools import browser_harness_session_tree, browser_harness_session_tree_preview  # noqa: E402
 
 DEFAULT_BACKEND = "charlie-code-glm-flash"
 MANAGER_PHRASE = "LIVE-PREVIEW-MANAGER-OK-7Q4F"
@@ -67,10 +61,10 @@ def fail(message: str) -> None:
 
 def pick_trial_port(requested: int | None) -> int:
   """The trial instance's port: the operator-requested one, else a free one; never PRODUCTION_PORT."""
-  if requested is not None and requested == PRODUCTION_PORT:
+  if requested is not None and requested == browser_harness_session_tree_preview.PRODUCTION_PORT:
     fail("the requested port is the production port 18498")
-  port = requested or pick_free_port()
-  if port == PRODUCTION_PORT:
+  port = requested or browser_harness_session_tree.pick_free_port()
+  if port == browser_harness_session_tree_preview.PRODUCTION_PORT:
     fail("the picked free port collided with the production port; refusing")
   return port
 
@@ -112,13 +106,13 @@ def request(base: str, key: str, method: str, path: str, payload: dict | None = 
 
 def snapshot_native_storage() -> dict[str, tuple[float, int]]:
   """The host's production native CLC session directory, hashed for the isolation proof."""
-  native = Path.home() / ".charlie-code" / "sessions"
+  native = pathlib.Path.home() / ".charlie-code" / "sessions"
   if not native.is_dir():
     return {}
   return {str(p): (p.stat().st_mtime, p.stat().st_size) for p in sorted(native.rglob("*")) if p.is_file()}
 
 
-def snapshot_tree(root: Path) -> dict[str, str]:
+def snapshot_tree(root: pathlib.Path) -> dict[str, str]:
   return {
       str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
       for p in sorted(root.rglob("*"))
@@ -126,7 +120,7 @@ def snapshot_tree(root: Path) -> dict[str, str]:
   }
 
 
-def build_synthetic_repo(repo: Path) -> None:
+def build_synthetic_repo(repo: pathlib.Path) -> None:
   repo.mkdir(parents=True)
   subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
   subprocess.run(["git", "-C", str(repo), "config", "user.email", "preview@example.com"], check=True)
@@ -173,25 +167,18 @@ async def run_harness(args: argparse.Namespace) -> None:
   import yaml
 
   from src.app import registrations
-  from src.infra.identity_env import inherited_identity_env_vars
-  from tools.browser_harness_session_tree_preview import (
-      build_source_home,
-      preview_instance_env,
-      preview_invocation,
-      trial_home_root,
-      wait_preview_ready,
-  )
+  from src.infra import identity_env
 
-  evidence_dir = Path(args.evidence_dir)
-  commit = open_evidence_dir(evidence_dir)
+  evidence_dir = pathlib.Path(args.evidence_dir)
+  commit = browser_harness_session_tree.open_evidence_dir(evidence_dir)
 
-  tmp_path = trial_home_root("charliebot-live-preview-", keep=args.keep)
+  tmp_path = browser_harness_session_tree_preview.trial_home_root("charliebot-live-preview-", keep=args.keep)
   source = tmp_path / "source-home"
   # build_source_home takes the selected backend ids as a list (the shared
   # harness helper's contract); a bare string would iterate per character.
-  build_source_home(source, [args.backend])
+  browser_harness_session_tree_preview.build_source_home(source, [args.backend])
   registrations.register_all()
-  for var in inherited_identity_env_vars():
+  for var in identity_env.inherited_identity_env_vars():
     os.environ.pop(var, None)
 
   # The independent second instance: its own home, its own live writer
@@ -201,28 +188,28 @@ async def run_harness(args: argparse.Namespace) -> None:
   (independent / "workspaces").mkdir(parents=True)
   (independent / "state").mkdir(parents=True)
   (independent / "state" / "independent_sentinel.json").write_text('{"independent": true}')
-  from src.runtime.home_writer_fence import acquire_home_writer_fence, probe_writer_fence
+  from src.runtime import home_writer_fence
 
-  independent_fence = acquire_home_writer_fence(independent, purpose="independent service")
+  independent_fence = home_writer_fence.acquire_home_writer_fence(independent, purpose="independent service")
 
   # The fence's own state files are its identity bookkeeping; the sentinel
   # and everything else must stay byte-identical for the whole trial.
-  def sentinel_snapshot(root: Path) -> dict[str, str]:
+  def sentinel_snapshot(root: pathlib.Path) -> dict[str, str]:
     fence_files = {"state/home_writer.lock", "state/writer_identity.json"}
     return {k: v for k, v in snapshot_tree(root).items() if k not in fence_files}
 
   independent_before = sentinel_snapshot(independent)
 
   home = tmp_path / "preview-home"
-  port = pick_free_port()
-  invocation = preview_invocation(home, port, args.backend, [])
-  env = preview_instance_env(source)
+  port = browser_harness_session_tree.pick_free_port()
+  invocation = browser_harness_session_tree_preview.preview_invocation(home, port, args.backend, [])
+  env = browser_harness_session_tree_preview.preview_instance_env(source)
   server_console = tmp_path / "server-console.log"
   log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
   with open(server_console, "w", encoding="utf-8") as server_log_file:
     proc = subprocess.Popen(invocation, cwd=str(REPO_ROOT), env=env, stdout=server_log_file, stderr=subprocess.STDOUT)
     try:
-      record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
+      record = await browser_harness_session_tree_preview.wait_preview_ready(proc, home, server_console, fail, 120.0)
       base = record["url"]
       log(f"preview ready: {base} (branch {record['source_branch']}, "
           f"sha {record['source_sha'][:12]})")
@@ -282,7 +269,7 @@ async def run_harness(args: argparse.Namespace) -> None:
           base, access_key, manager_id, manager_run_id, "manager takeoff turn")
       if outcome != "success":
         raw = manager_run.get("raw_log_ref") or ""
-        tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
+        tail = pathlib.Path(raw).read_text(errors="replace")[-1500:] if raw and pathlib.Path(raw).is_file() else ""
         fail(f"manager turn outcome={outcome}; raw tail:\n{tail}")
       if manager_run.get("backend") != args.backend:
         fail(f"manager run backend {manager_run.get('backend')!r} != configured {args.backend!r}")
@@ -292,7 +279,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         fail(f"manager run {manager_run_id} did not persist a native session id")
       if not manager_run.get("input_event_ids"):
         fail(f"manager run {manager_run_id} did not record its input batch")
-      if not manager_run.get("raw_log_ref") or not Path(manager_run["raw_log_ref"]).is_file():
+      if not manager_run.get("raw_log_ref") or not pathlib.Path(manager_run["raw_log_ref"]).is_file():
         fail(f"manager run {manager_run_id} raw log missing: {manager_run.get('raw_log_ref')}")
       results["manager_run"] = {
           "id": manager_run_id,
@@ -307,9 +294,9 @@ async def run_harness(args: argparse.Namespace) -> None:
 
       # -- snapshot integrity, provenance, preview parity --------------
       snap_ref = manager_run.get("prompt_snapshot_ref")
-      if not snap_ref or not Path(snap_ref).is_file():
+      if not snap_ref or not pathlib.Path(snap_ref).is_file():
         fail(f"manager run has no durable snapshot reference: {snap_ref}")
-      stored = json.loads(Path(snap_ref).read_text(encoding="utf-8"))
+      stored = json.loads(pathlib.Path(snap_ref).read_text(encoding="utf-8"))
       check_snapshot_integrity(stored, "manager")
       sources = block_sources(stored)
       if ("base", "prompts/task_base.md") not in sources or \
@@ -327,7 +314,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         fail("run-context snapshot differs from the stored prompt_snapshot.json")
       if ctx.get("legacy_prompt") is not None:
         fail("a fresh v2 run must not carry legacy raw-prompt evidence")
-      launch_text = Path(home, "sessions", manager_id, "data", "runs", manager_run_id, "launch_prompt.md")
+      launch_text = pathlib.Path(home, "sessions", manager_id, "data", "runs", manager_run_id, "launch_prompt.md")
       if not launch_text.is_file():
         fail(f"manager launch text evidence missing at {launch_text}")
       log(
@@ -365,14 +352,14 @@ async def run_harness(args: argparse.Namespace) -> None:
       worker_run, worker_outcome = await wait_run_terminal(base, access_key, child_id, worker_run_id, "worker run")
       if worker_outcome != "success":
         raw = worker_run.get("raw_log_ref") or ""
-        tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
+        tail = pathlib.Path(raw).read_text(errors="replace")[-1500:] if raw and pathlib.Path(raw).is_file() else ""
         fail(f"worker run outcome={worker_outcome}; raw tail:\n{tail}")
       if not worker_run.get("native_session_id"):
         fail(f"worker run {worker_run_id} did not persist a native session id")
       w_snap_ref = worker_run.get("prompt_snapshot_ref")
-      if not w_snap_ref or not Path(w_snap_ref).is_file():
+      if not w_snap_ref or not pathlib.Path(w_snap_ref).is_file():
         fail("worker run has no durable snapshot reference")
-      w_stored = json.loads(Path(w_snap_ref).read_text(encoding="utf-8"))
+      w_stored = json.loads(pathlib.Path(w_snap_ref).read_text(encoding="utf-8"))
       check_snapshot_integrity(w_stored, "worker")
       w_sources = block_sources(w_stored)
       # A repo-less verify worker carries the verify contract, never the
@@ -411,7 +398,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         fail(f"the manager never received the worker's completed report: {reports}")
       if not archived:
         fail(f"worker task {child_id} was not archived after its delivered report")
-      raw_tail = Path(worker_run["raw_log_ref"]).read_text(errors="replace")[-6000:]
+      raw_tail = pathlib.Path(worker_run["raw_log_ref"]).read_text(errors="replace")[-6000:]
       if WORKER_PHRASE not in raw_tail and WORKER_PHRASE not in json.dumps(reports[-1]):
         fail("the worker's real output did not contain the synthetic phrase")
       log("worker archived after delivery; the manager received the child report")
@@ -444,14 +431,14 @@ async def run_harness(args: argparse.Namespace) -> None:
       impl_run, impl_outcome = await wait_run_terminal(base, access_key, impl_id, impl_run_id, "implement work run")
       if impl_outcome != "success":
         raw = impl_run.get("raw_log_ref") or ""
-        tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
+        tail = pathlib.Path(raw).read_text(errors="replace")[-1500:] if raw and pathlib.Path(raw).is_file() else ""
         fail(f"implement work run outcome={impl_outcome}; raw tail:\n{tail}")
       worktree = impl_run.get("worktree_path")
       if not worktree:
         fail("the implement work run did not record its worktree")
       if not str(worktree).startswith(str(home)):
         fail(f"the worktree escaped the preview home: {worktree}")
-      if not Path(worktree).is_dir():
+      if not pathlib.Path(worktree).is_dir():
         fail(f"the recorded worktree does not exist: {worktree}")
       log(f"implement work run {impl_run_id}: worktree inside the preview home "
           f"({str(worktree)[:60]}...)")
@@ -471,7 +458,7 @@ async def run_harness(args: argparse.Namespace) -> None:
       review_run, review_outcome = await wait_run_terminal(base, access_key, impl_id, review_id, "review run")
       if review_outcome != "success":
         raw = review_run.get("raw_log_ref") or ""
-        tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
+        tail = pathlib.Path(raw).read_text(errors="replace")[-1500:] if raw and pathlib.Path(raw).is_file() else ""
         fail(f"review run outcome={review_outcome}; raw tail:\n{tail}")
       results["implement_run"] = {"task": impl_id, "work": impl_run_id, "review": review_id, "worktree": worktree}
       log(f"review run {review_id}: state=success of work {impl_run_id} "
@@ -513,8 +500,8 @@ async def run_harness(args: argparse.Namespace) -> None:
       if outside_row.get("pid") is not None:
         fail("the outside-repo launch pinned a process identity")
       events_ref = outside_row.get("events_ref") or ""
-      if not events_ref or not Path(events_ref).is_file() or \
-              "preview workspace boundary" not in Path(events_ref).read_text(errors="replace"):
+      if not events_ref or not pathlib.Path(events_ref).is_file() or \
+              "preview workspace boundary" not in pathlib.Path(events_ref).read_text(errors="replace"):
         fail("the refused run's events log never recorded the workspace-boundary error")
       instance_log_text = "\n".join(
           pth.read_text(encoding="utf-8", errors="replace") for pth in sorted((home / "logs").glob("*.log")))
@@ -587,19 +574,20 @@ async def run_harness(args: argparse.Namespace) -> None:
           f"restart phase: {len(reviews_before)} review run(s) on the implement node before "
           f"the restart: {[(r['id'][:8], r.get('state')) for r in reviews_before]}")
 
-      stop_child(proc, grace_s=60, kill_reap_s=30)
-      stopped_fence = probe_writer_fence(home)
+      browser_harness_session_tree.stop_child(proc, grace_s=60, kill_reap_s=30)
+      stopped_fence = home_writer_fence.probe_writer_fence(home)
       if stopped_fence["exclusive_holder_alive"]:
         fail("the preview writer fence is still held after the restart-phase shutdown")
       log("preview instance stopped; restarting the same home")
 
-      restart_port = pick_free_port()
-      restart_invocation = preview_invocation(home, restart_port, args.backend, [])
+      restart_port = browser_harness_session_tree.pick_free_port()
+      restart_invocation = browser_harness_session_tree_preview.preview_invocation(home, restart_port, args.backend, [])
       results["restart"] = {"invocation": restart_invocation}
       with open(server_console, "a", encoding="utf-8") as server_log_file:
         proc = subprocess.Popen(
             restart_invocation, cwd=str(REPO_ROOT), env=env, stdout=server_log_file, stderr=subprocess.STDOUT)
-        restart_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
+        restart_record = await browser_harness_session_tree_preview.wait_preview_ready(
+            proc, home, server_console, fail, 120.0)
       # wait_preview_ready returns only after the lifespan's recovery pass
       # (reconcile_task_tree) completed, so the durable Run set is final.
       base = restart_record["url"]
@@ -631,15 +619,15 @@ async def run_harness(args: argparse.Namespace) -> None:
           f"restart phase: the implement node's review count stayed {len(reviews_after)} "
           f"across the restart and no review is queued")
 
-      holder = probe_writer_fence(home)
+      holder = home_writer_fence.probe_writer_fence(home)
       results["fence_while_serving"] = holder["exclusive_holder_alive"]
 
       (evidence_dir / "preview_live_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
       log(f"results written to {evidence_dir / 'preview_live_results.json'}")
       log("LIVE PREVIEW HARNESS PASSED")
     finally:
-      stop_child(proc, grace_s=60, kill_reap_s=30)
-      holder = probe_writer_fence(home)
+      browser_harness_session_tree.stop_child(proc, grace_s=60, kill_reap_s=30)
+      holder = home_writer_fence.probe_writer_fence(home)
       if holder["exclusive_holder_alive"]:
         fail("the preview writer fence is still held after shutdown")
       else:
@@ -652,7 +640,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument(
       "--evidence-dir",
-      default=str(EVIDENCE_ROOT_DEFAULT / "preview_live_evidence"),
+      default=str(browser_harness_session_tree.EVIDENCE_ROOT_DEFAULT / "preview_live_evidence"),
       help="Where the results JSON lands")
   parser.add_argument("--backend", default=DEFAULT_BACKEND, help="The charlie-code backend id the trial instance runs")
   parser.add_argument("--keep", action="store_true", help="Keep the preview home for inspection instead of purging it")

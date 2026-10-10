@@ -1,20 +1,18 @@
 """The artifacts package's sidebar contribution: the pending-approval flag and the plan copy on fork."""
 
 import json
+import pathlib
 import shutil
-from pathlib import Path
 
-from src.features.artifacts import plan_paths
-from src.features.artifacts.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
-from src.infra.json_utils import write_json_atomically
-from src.infra.log_once import LazyStructlogLogger
+from src.features.artifacts import plan_paths, plans
+from src.infra import json_utils, log_once
 from src.runtime import sidebar_state
-from src.runtime.hooks.sidebar_contributions import SidebarContribution
+from src.runtime.hooks import sidebar_contributions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
-def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
+def has_pending_plan_approval_sync(plans_path: pathlib.Path, session_id: str) -> bool:
   """True if any lineage in the plans.json at *plans_path* is 'awaiting approval'.
 
   Delegates to the tolerant read in src.features.artifacts.plans (single authority for
@@ -22,17 +20,17 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
   and contributes no pending approval. The probe must never raise — a corrupt
   single-session file cannot 5xx the sidebar poll for all sessions.
   """
-  result = read_plans_tolerant(plans_path, session_id)
+  result = plans.read_plans_tolerant(plans_path, session_id)
   for error in result["errors"]:
     log.warning(
         "plan_registry_read_failed",
         session_id=error.get("session_id"),
         error=error.get("error"),
     )
-  return any(plan.get("state") == AWAITING_APPROVAL_STATE for plan in result["plans"])
+  return any(plan.get("state") == plans.AWAITING_APPROVAL_STATE for plan in result["plans"])
 
 
-def _copy_plans_to_child(parent_dir: Path, child_session_dir: Path) -> None:
+def _copy_plans_to_child(parent_dir: pathlib.Path, child_session_dir: pathlib.Path) -> None:
   """Copy parent plans.json and every referenced artifact file into the child.
 
   The child registry rewrites each ``versions[].file`` to a POSIX path
@@ -47,13 +45,13 @@ def _copy_plans_to_child(parent_dir: Path, child_session_dir: Path) -> None:
   _copy_plans_sync(parent_plans_path, parent_dir, child_session_dir.resolve())
 
 
-def _copy_plans_sync(parent_plans_path: Path, parent_dir: Path, child_dir: Path) -> None:
+def _copy_plans_sync(parent_plans_path: pathlib.Path, parent_dir: pathlib.Path, child_dir: pathlib.Path) -> None:
   raw = parent_plans_path.read_text(encoding="utf-8")
   data = json.loads(raw)
   # Every in-parent relative path must be reserved before any outside-parent
   # fallback is chosen, so a fallback can never alias an artifact a later
   # version copies.
-  resolved: list[tuple[dict, dict, Path, Path | None]] = []
+  resolved: list[tuple[dict, dict, pathlib.Path, pathlib.Path | None]] = []
   reserved_relative_paths = {"plans.json"}
   for plan in data.get("plans", []):
     for ver in plan.get("versions", []):
@@ -95,19 +93,19 @@ def _copy_plans_sync(parent_plans_path: Path, parent_dir: Path, child_dir: Path)
     shutil.copy2(src, dst)
   child_plans_path = child_dir / "plans.json"
   child_plans_path.parent.mkdir(parents=True, exist_ok=True)
-  write_json_atomically(child_plans_path, data, indent=2)
+  json_utils.write_json_atomically(child_plans_path, data, indent=2)
 
 
-class ArtifactsSidebar(SidebarContribution):
+class ArtifactsSidebar(sidebar_contributions.SidebarContribution):
   """The pending-plan-approval flag of a row, and the plan registry a fork carries over."""
 
   watched_files = ("plans.json",)
 
-  def row_flags(self, session_dir: Path, session_id: str) -> dict[str, bool]:
+  def row_flags(self, session_dir: pathlib.Path, session_id: str) -> dict[str, bool]:
     pending = has_pending_plan_approval_sync(session_dir / "plans.json", session_id)
     return {sidebar_state.HAS_PENDING_PLAN_APPROVAL: pending}
 
-  def copy_on_fork(self, parent_dir: Path, child_dir: Path) -> None:
+  def copy_on_fork(self, parent_dir: pathlib.Path, child_dir: pathlib.Path) -> None:
     _copy_plans_to_child(parent_dir, child_dir)
 
 

@@ -1,33 +1,17 @@
 import asyncio
 import json
+import pathlib
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any, Self
-from unittest.mock import AsyncMock, MagicMock
+from unittest import mock
 
+import conftest
 import httpx
 import pytest
-from conftest import (
-    OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET,
-    FakeChunkedResponse,
-    assistant_text_event,
-    build_cli_backend_rig,
-    fresh_state_fixture,
-    stub_subprocess_spawn,
-)
 
-import src.backends.opencode.opencode as opencode_mod
-from src.backends.opencode.opencode import (
-    SSE_EVENT_MESSAGE_PART_UPDATED,
-    SSE_EVENT_MESSAGE_UPDATED,
-    SSE_EVENT_PERMISSION_ASKED,
-    SSE_EVENT_SERVER_CONNECTED,
-    SSE_EVENT_SESSION_ERROR,
-    SSE_EVENT_SESSION_IDLE,
-    OpenCodeBackend,
-)
+from src.backends.opencode import opencode
 from src.infra import event_types as ET
-from src.runtime.agent_process.base import make_text_event
+from src.runtime.agent_process import base
 
 # The opencode backend's httpx seam: the module imports httpx at top level, so the
 # string target resolves through its `httpx` global onto the shared httpx module,
@@ -35,27 +19,27 @@ from src.runtime.agent_process.base import make_text_event
 _OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.backends.opencode.opencode.httpx.AsyncClient"
 
 
-def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBackend:
-  return build_cli_backend_rig(monkeypatch, OpenCodeBackend, **kwargs)
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> opencode.OpenCodeBackend:
+  return conftest.build_cli_backend_rig(monkeypatch, opencode.OpenCodeBackend, **kwargs)
 
 
 def _rig_end_to_end_run(
     monkeypatch: pytest.MonkeyPatch,
-    backend: OpenCodeBackend,
-    response: _FakeDelayedStreamResponse | FakeChunkedResponse,
-) -> MagicMock:
+    backend: opencode.OpenCodeBackend,
+    response: _FakeDelayedStreamResponse | conftest.FakeChunkedResponse,
+) -> mock.MagicMock:
   """Mock the serve-and-connect path so backend.run() consumes `response` as the
   /event stream end-to-end; returns the spawned process mock for spawn assertions."""
-  process = stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 4321)
+  process = conftest.stub_subprocess_spawn(monkeypatch, conftest.OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 4321)
   process.returncode = 0
-  process.wait = AsyncMock(return_value=0)
-  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
-  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
-  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
-  monkeypatch.setattr(backend, "_check_health", AsyncMock())
-  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
-  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
-  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
+  process.wait = mock.AsyncMock(return_value=0)
+  monkeypatch.setattr(backend, "_read_server_url", mock.AsyncMock(return_value="http://127.0.0.1:4242"))
+  monkeypatch.setattr(backend, "_stream_stderr", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_stream_stdout", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_check_health", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_fetch_model_limit", mock.AsyncMock(return_value=None))
+  monkeypatch.setattr(backend, "_create_session", mock.AsyncMock(return_value="session-1"))
+  monkeypatch.setattr(backend, "_send_prompt", mock.AsyncMock())
   monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _FakeRunHttpClient(response))
   return process
 
@@ -75,14 +59,14 @@ def _message_updated(info: dict, session_id: str | None = None) -> dict:
   properties: dict = {"info": info}
   if session_id is not None:
     properties["sessionID"] = session_id
-  return {"type": SSE_EVENT_MESSAGE_UPDATED, "properties": properties}
+  return {"type": opencode.SSE_EVENT_MESSAGE_UPDATED, "properties": properties}
 
 
 def _part_updated(part: dict, session_id: str | None = None) -> dict:
   properties: dict = {"part": part}
   if session_id is not None:
     properties["sessionID"] = session_id
-  return {"type": SSE_EVENT_MESSAGE_PART_UPDATED, "properties": properties}
+  return {"type": opencode.SSE_EVENT_MESSAGE_PART_UPDATED, "properties": properties}
 
 
 def _text_part(message_id: str, part_id: str, part_type: str, text: str) -> dict:
@@ -96,7 +80,8 @@ def _session_attached(session_id: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_run_opens_with_the_typed_session_attach_signal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The run's first event is the typed adoption signal carrying the attached
   session id — never a bare session_id dict the persist funnels would write."""
   backend = _build_backend(monkeypatch, model="provider/model")
@@ -106,7 +91,7 @@ async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch: pytes
       b'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}\n',
       b"\n",
   ]
-  _rig_end_to_end_run(monkeypatch, backend, FakeChunkedResponse(chunks))
+  _rig_end_to_end_run(monkeypatch, backend, conftest.FakeChunkedResponse(chunks))
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
@@ -122,7 +107,7 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch: 
 
   translated = backend._translate_sse_event(_message_updated({"id": "message-1", "role": "assistant"}))
 
-  assert translated == [assistant_text_event("Hello"), assistant_text_event(" world")]
+  assert translated == [conftest.assistant_text_event("Hello"), conftest.assistant_text_event(" world")]
 
 
 async def _drain(events: AsyncIterator[dict]) -> list[dict]:
@@ -140,7 +125,7 @@ async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch: 
           _FakeEventStream(
               [
                   {
-                      "type": SSE_EVENT_PERMISSION_ASKED,
+                      "type": opencode.SSE_EVENT_PERMISSION_ASKED,
                       "properties":
                           {
                               "id": "perm-1",
@@ -150,7 +135,7 @@ async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch: 
                           },
                   },
                   {
-                      "type": SSE_EVENT_SESSION_IDLE,
+                      "type": opencode.SSE_EVENT_SESSION_IDLE,
                       "properties": {
                           "sessionID": "parent-session"
                       },
@@ -320,7 +305,7 @@ class _FakeRunHttpClient(_ClientContextDouble):
 
 @pytest.mark.asyncio
 async def test_sse_watchdog_timeout_fails_run_end_to_end(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Acceptance 4: silence after server.connected yields an error event, a non-zero
   exit_code, and serve cleanup through the existing failure path."""
   _patch_watchdog_timeout(monkeypatch)
@@ -331,7 +316,7 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(
     lines.extend([(0.02, heartbeat_line), (0.0, "")])
   stream_response = _FakeDelayedStreamResponse(lines)
   process = _rig_end_to_end_run(monkeypatch, backend, stream_response)
-  abort_session = AsyncMock()
+  abort_session = mock.AsyncMock()
   monkeypatch.setattr(backend, "_abort_session", abort_session)
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
@@ -348,11 +333,11 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(
 
 def _clear_unhandled_part_registries() -> None:
   """Keep the process-wide warn-once registries from leaking across tests."""
-  opencode_mod._UNHANDLED_PART_TYPES.clear()
-  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
+  opencode._UNHANDLED_PART_TYPES.clear()
+  opencode._UNHANDLED_SSE_EVENT_TYPES.clear()
 
 
-_fresh_unhandled_part_type_registry = fresh_state_fixture(_clear_unhandled_part_registries)
+_fresh_unhandled_part_type_registry = conftest.fresh_state_fixture(_clear_unhandled_part_registries)
 
 # --- SQLite lock-retry harness: a stub `opencode serve` (fake process + fake
 # HTTP/SSE endpoints; no real opencode binary) driving run() end to end. ---
@@ -372,12 +357,12 @@ class _StubServeProcess:
     self.pid = 4242
     self.returncode = 0
     self._stderr_chunks = list(stderr_chunks)
-    self.stdout = MagicMock()
-    self.stdout.readline = AsyncMock(return_value=b"opencode server listening on http://127.0.0.1:15331\n")
-    self.stdout.read = AsyncMock(return_value=b"")
-    self.stderr = MagicMock()
+    self.stdout = mock.MagicMock()
+    self.stdout.readline = mock.AsyncMock(return_value=b"opencode server listening on http://127.0.0.1:15331\n")
+    self.stdout.read = mock.AsyncMock(return_value=b"")
+    self.stderr = mock.MagicMock()
     self.stderr.read = self._read_stderr
-    self.wait = AsyncMock(return_value=0)
+    self.wait = mock.AsyncMock(return_value=0)
 
   async def _read_stderr(self, _size: int) -> bytes:
     return self._stderr_chunks.pop(0) if self._stderr_chunks else b""
@@ -472,10 +457,10 @@ class _StubServeHttpClient(_ClientContextDouble):
 
 def _rig_stub_serve_run(
     monkeypatch: pytest.MonkeyPatch,
-    backend: OpenCodeBackend,
+    backend: opencode.OpenCodeBackend,
     script: _StubServeScript,
     stderr_chunks_per_attempt: list[list[bytes]],
-) -> tuple[AsyncMock, list[float]]:
+) -> tuple[mock.AsyncMock, list[float]]:
   """Patch spawn + httpx so run() drives the stub-serve script; return (spawn mock, sleep record).
 
   Attempt N spawns the Nth fake serve process (fed the Nth stderr chunk list),
@@ -483,8 +468,8 @@ def _rig_stub_serve_run(
   retry backoff seam is replaced by a recorder — no test sleeps real seconds.
   """
   processes = [_StubServeProcess(chunks) for chunks in stderr_chunks_per_attempt]
-  create_process = AsyncMock(side_effect=processes)
-  monkeypatch.setattr(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, create_process)
+  create_process = mock.AsyncMock(side_effect=processes)
+  monkeypatch.setattr(conftest.OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, create_process)
   monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _StubServeHttpClient(script))
   sleep_calls: list[float] = []
 
@@ -496,16 +481,16 @@ def _rig_stub_serve_run(
 
 
 def _sse_connected() -> dict:
-  return {"type": SSE_EVENT_SERVER_CONNECTED, "properties": {}}
+  return {"type": opencode.SSE_EVENT_SERVER_CONNECTED, "properties": {}}
 
 
 def _sse_session_idle(session_id: str) -> dict:
-  return {"type": SSE_EVENT_SESSION_IDLE, "properties": {"sessionID": session_id}}
+  return {"type": opencode.SSE_EVENT_SESSION_IDLE, "properties": {"sessionID": session_id}}
 
 
 def _sse_session_error(session_id: str, message: str) -> dict:
   return {
-      "type": SSE_EVENT_SESSION_ERROR,
+      "type": opencode.SSE_EVENT_SESSION_ERROR,
       "properties": {
           "sessionID": session_id,
           "error": {
@@ -543,7 +528,7 @@ def _assert_resumed_same_session(script: _StubServeScript, sid: str, prompt: str
 
 @pytest.mark.asyncio
 async def test_run_lock_failure_retries_same_session_mid_stream(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Lock retry 1: an attempt dying on session.error with the lock stderr signature
   retries once, resuming the SAME opencode session with a byte-identical prompt.
   The run yields attempt-1 partial events + attempt-2 events; the held
@@ -575,9 +560,9 @@ async def test_run_lock_failure_retries_same_session_mid_stream(
   _assert_resumed_same_session(script, sid, prompt)
   assert events == [
       _session_attached(sid),
-      make_text_event("hello "),
+      base.make_text_event("hello "),
       _session_attached(sid),
-      make_text_event("world"),
+      base.make_text_event("world"),
       backend._make_accumulated_result(),
   ]
   assert backend.exit_code == 0

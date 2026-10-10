@@ -41,14 +41,12 @@ bar). ``None`` for any context field means "unknown" — the bar is hidden.
 """
 
 import asyncio
+import dataclasses
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
+from src.infra import config, memo, models
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
-from src.infra.memo import BoundedMemo
-from src.infra.models import SessionMetadata
 from src.runtime.hooks import backend_lifecycle_registration, backend_types
 
 
@@ -73,7 +71,7 @@ def _int_field(value: object) -> int | None:
   return value
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class _UsageFacts:
   """One scan's harvest of everything the usage tiers read from the event list.
 
@@ -402,7 +400,7 @@ class SessionUsageResolver:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       events_cache: dict[str, list[dict]],
       chat_events_path_fn: Callable[[str], object],
       load_chat_events_sync_fn: Callable[[str], list[dict]],
@@ -420,7 +418,7 @@ class SessionUsageResolver:
     # a replacement is a new object. _load_and_scan runs off the event loop
     # (asyncio.to_thread), so the memo mechanics are BoundedMemo's locked
     # ones, not a bare OrderedDict's.
-    self._facts_memo: BoundedMemo[str, tuple[list[dict], int, _UsageFold]] = BoundedMemo(_FACTS_MEMO_CAP)
+    self._facts_memo: memo.BoundedMemo[str, tuple[list[dict], int, _UsageFold]] = memo.BoundedMemo(_FACTS_MEMO_CAP)
 
   def _usage_resolver(self, backend_id: str) -> Any:
     """The usage resolver the backend id's type registered, built once; None when the type has none."""
@@ -438,7 +436,7 @@ class SessionUsageResolver:
   async def resolve_session_usage(
       self,
       session_id: str,
-      session_meta: SessionMetadata,
+      session_meta: models.SessionMetadata,
   ) -> dict | None:
     """Resolve display usage for a session view.
 

@@ -5,7 +5,7 @@ and the routes that translate their refusals share these names, so they live bel
 all of them and import only ``run_token``.
 """
 
-from src.runtime.run_token import CallerIdentity
+from src.runtime import run_token
 
 # Bound on the ancestor walk: open-ancestor checks and ancestor paths must
 # never spin on a corrupted relation.
@@ -50,5 +50,5 @@ class TaskArchivedError(TaskConflictError):
 
 def require_operator(caller: object, message: str) -> None:
   """Refuse *caller* with TaskForbiddenError(*message*) unless it carries operator credentials."""
-  if not isinstance(caller, CallerIdentity) or not caller.is_operator:
+  if not isinstance(caller, run_token.CallerIdentity) or not caller.is_operator:
     raise TaskForbiddenError(message)

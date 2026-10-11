@@ -345,6 +345,34 @@ async def test_read_does_not_flag_a_summon_a_master_done_names(tmp_path: pathlib
 
 
 @pytest.mark.asyncio
+async def test_read_does_not_flag_a_summon_a_backfill_marker_names(tmp_path: pathlib.Path) -> None:
+  """A summon the boot backfill marked lost never gets a master_done, so the
+  marker alone must retire it: no flag, and the window start stays with the
+  unread instead of dragging back to the dead mention on every later read."""
+  cfg, session_blocks, client = _rig(
+      tmp_path, channels={_THREAD: [_message(1, "the question"), _message(2, "a later follow up")]})
+  session_id = await _make_session(session_blocks, watermark=_mid(1))
+  summon = _summon_event(_mid(1))
+  await session_blocks.events.save_chat_event(session_id, summon)
+  await session_blocks.events.save_chat_event(
+      session_id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": "这条 Discord 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
+          discord_listener.DISCORD.backfill_key: {
+              ET.INPUT_EVENT_ID: summon["id"]
+          },
+      })
+
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_blocks.store, session_blocks.events)
+
+  # Not pending: the window starts at the oldest unread, so the lost mention
+  # stays out of the readback entirely and nothing carries the summon flag.
+  assert [(m["id"], m["summon"], m["unread"]) for m in result["messages"]] == [(_mid(2), False, True)]
+  assert result["more_unread"] == 0
+
+
+@pytest.mark.asyncio
 async def test_read_flags_a_starter_message_mention(tmp_path: pathlib.Path) -> None:
   """A mention that started the thread names the starter: the prepended starter
   view carries the summon flag."""

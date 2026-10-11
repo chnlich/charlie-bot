@@ -60,19 +60,25 @@ def _pending_summon_mention_ids(events: list[dict]) -> set[str]:
 
   A summon is pending while its event carries the discord block, no
   ``nudge_of``, and no master_done names its id (a nudge carries the block
-  with ``nudge_of``, so it never counts). A block without a mention id names
-  no message to flag.
+  with ``nudge_of``, so it never counts); a lost summon the boot backfill
+  marked is not pending either — the marker names its event id, and a lost
+  summon never gets a master_done. A block without a mention id names no
+  message to flag.
   """
   answered: set[str] = set()
+  marked: set[str] = set()
+  backfill_key = discord_listener.DISCORD.backfill_key
   for ev in events:
     if ev.get("type") == ET.MASTER_DONE:
       answered.update(master_done_input_event_ids(ev))
+    elif backfill_key in ev:
+      marked.add(ev[backfill_key].get(ET.INPUT_EVENT_ID))
   pending: set[str] = set()
   for ev in events:
     if ev.get("type") != ET.AGENT_MESSAGE or not isinstance(ev.get("discord"), dict):
       continue
     block = ev["discord"]
-    if "nudge_of" in block or ev["id"] in answered or block.get("mention_id") is None:
+    if "nudge_of" in block or ev["id"] in answered or ev["id"] in marked or block.get("mention_id") is None:
       continue
     pending.add(str(block["mention_id"]))
   return pending
@@ -111,7 +117,8 @@ async def _read_own_thread(
   summon's mention — or the newest *limit* when neither exists — so the read
   always shows the summon this round answers even though the summon step
   marked it read. A pending summon is a summon event in the session log that
-  no master_done names yet (:func:`_pending_summon_mention_ids`); its mention
+  no master_done names yet and no lost-summon backfill marker marks
+  (:func:`_pending_summon_mention_ids`); its mention
   message carries ``summon: true``, every other message ``summon: false``
   (the starter included when the mention is the starter). The unread messages
   inside the window are acked through ``thread_entry.ack_messages``, which

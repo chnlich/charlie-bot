@@ -208,6 +208,23 @@ async def test_final_after_end_archives_the_pair_then_pushes_the_final(
 
 
 @pytest.mark.asyncio
+async def test_a_normal_relay_end_logs_end_to_final_s(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  socket = FakePreviewSocket([FRAME_A, FRAME_B, _END_FRAME], hang_when_script_ends=True)
+  backend = FakeLiveBackend(FINAL_TEXT)
+  relay = _start_relay(monkeypatch, tmp_path, socket, backend)
+  with testing.capture_logs() as logs:
+    await asyncio.wait_for(relay, timeout=2)
+
+  transcribed = [entry for entry in logs if entry["event"] == "voice_transcribed"]
+  assert len(transcribed) == 1
+  # Monotonic seconds from the relay's end frame to the final's push: a float
+  # that cannot go negative and stays far under any real budget.
+  end_to_final_s = transcribed[0]["end_to_final_s"]
+  assert isinstance(end_to_final_s, float)
+  assert 0.0 <= end_to_final_s < 2.0
+
+
+@pytest.mark.asyncio
 async def test_an_end_frame_with_devices_logs_the_five_device_fields(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   socket = FakePreviewSocket([FRAME_A, _END_FRAME_WITH_DEVICES], hang_when_script_ends=True)
@@ -319,6 +336,30 @@ async def test_a_disconnect_after_the_end_frame_cancels_the_backend_and_archives
 
   assert socket.sent == []
   assert backend.closed
+  assert list(_voice_dir(tmp_path).glob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_browser_leaving_before_the_final_logs_voice_preview_abandoned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  gate = asyncio.Event()  # never set: the final never arrives before the leaving
+  socket = FakePreviewSocket([FRAME_A, _END_FRAME])  # the script then disconnects
+  backend = FakeLiveBackend(FINAL_TEXT, gate=gate)
+  relay = _start_relay(monkeypatch, tmp_path, socket, backend)
+  with testing.capture_logs() as logs:
+    await asyncio.wait_for(relay, timeout=2)
+
+  abandoned = [entry for entry in logs if entry["event"] == "voice_preview_abandoned"]
+  assert len(abandoned) == 1
+  assert abandoned[0]["session_id"] == SESSION_ID
+  assert abandoned[0]["backend"] == BACKEND_ID
+  # recording_s is the received audio in seconds: 2048 PCM16 bytes at 16 kHz.
+  assert abandoned[0]["recording_s"] == pytest.approx(len(FRAME_A) / 2 / base.SAMPLE_RATE)
+  assert isinstance(abandoned[0]["recording_s"], float)
+  assert isinstance(abandoned[0]["waited_s"], float)
+  assert 0.0 <= abandoned[0]["waited_s"] < 2.0
+  # The abandoned recording is neither archived nor transcribed.
+  assert not [entry for entry in logs if entry["event"] == "voice_transcribed"]
   assert list(_voice_dir(tmp_path).glob("*")) == []
 
 

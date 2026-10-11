@@ -6,18 +6,22 @@ backend and keeps it. After the browser seals the recording, the relay archives
 the copy it already received: sessions/{id}/voice/, a 16 kHz mono PCM16 WAV
 plus a .txt carrying the final text. The final is pushed only once that pair is
 on disk, so a browser that receives it ends the recording with no upload. The
-full-upload endpoint (POST /api/voice/{session_id}) is the fallback — no final
-inside the browser's 2 s budget, a relay failure, or a non-live backend — and
-it persists the recording BEFORE decoding it, so a decode failure or an
-abandoned request never loses the audio. Its form's backend field dispatches: a
+browser's wait for that final is a budget that grows with the recording's
+length, no longer a fixed 2 s; past the budget it keeps the relay open and
+still adopts a late final. A missed final or a relay failure leaves the
+recording in the browser, and the full-upload endpoint
+(POST /api/voice/{session_id}) runs when the user clicks; a non-live backend
+reaches the same endpoint directly. It persists the recording BEFORE decoding
+it, so a decode failure or an abandoned request never loses the audio. Its
+form's backend field dispatches: a
 registered non-live backend other than the local one decodes the upload itself
 (persist first, then that backend's transcribe over the whole recording), while
 an absent field, an unknown id, a live backend id, or the local id keeps the
 local decode behind the speech-bundle readiness gate (503) — an unavailable
 non-live selection is an error, never a local fallback. The confirm probe (POST
 /api/voice/{session_id}/confirm) decodes the opening clip through the local
-model and persists nothing. The relay never falls back: its failures hand the
-recording to the upload endpoint.
+model and persists nothing. The relay never falls back: its failures leave the
+recording in the browser, where the user's click drives the upload endpoint.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import asyncio
 import io
 import json
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -227,30 +232,35 @@ def _log_voice_transcribed(
     produced_by: str,
     selected_backend: str | None,
     devices: dict | None,
+    end_to_final_s: float | None = None,
 ) -> None:
   """The voice_transcribed line both archive paths write; its fields are the log's contract.
 
   ``devices`` is the recording's device object; None — every device field
   logged as None — is the request from a page loaded before the devices
-  existed, still open across a server restart.
+  existed, still open across a server restart. ``end_to_final_s`` rides only on
+  the relay path — monotonic seconds from the browser's end frame to the
+  final push — so the upload path's line keeps its field set.
   """
   if devices is None:
     devices = dict.fromkeys(_VOICE_DEVICE_FIELDS)
-  log.info(
-      "voice_transcribed",
-      session_id=session_id,
-      audio_path=str(audio_path),
-      audio_bytes_size=len(pcm_bytes),
-      transcription_length=len(text),
-      transcription_preview=text[:80],
-      backend=produced_by,
-      selected_backend=selected_backend,
-      input_device=devices["input_device"],
-      capture_settings=devices["capture_settings"],
-      output_device=devices["output_device"],
-      communications_output_device=devices["communications_output_device"],
-      device_error=devices["device_error"],
-  )
+  fields = {
+      "session_id": session_id,
+      "audio_path": str(audio_path),
+      "audio_bytes_size": len(pcm_bytes),
+      "transcription_length": len(text),
+      "transcription_preview": text[:80],
+      "backend": produced_by,
+      "selected_backend": selected_backend,
+      "input_device": devices["input_device"],
+      "capture_settings": devices["capture_settings"],
+      "output_device": devices["output_device"],
+      "communications_output_device": devices["communications_output_device"],
+      "device_error": devices["device_error"],
+  }
+  if end_to_final_s is not None:
+    fields["end_to_final_s"] = end_to_final_s
+  log.info("voice_transcribed", **fields)
 
 
 def _confirm_max_samples() -> int:
@@ -329,6 +339,7 @@ class _PreviewQueue:
     self._max_bytes = max_bytes
     self._queued_bytes = 0
     self._ended = False
+    self._end_frame_monotonic: float | None = None
     self._devices: dict | None = None
     self._recording = bytearray()
     self._recording_budget_bytes = recording_budget_bytes
@@ -360,8 +371,17 @@ class _PreviewQueue:
     """The audio accepted so far: 16 kHz mono PCM16, cut at the recording cap."""
     return bytes(self._recording)
 
+  def seconds_since_end_frame(self) -> float:
+    """Monotonic seconds from the browser's end frame to now; a sealed recording only."""
+    if self._end_frame_monotonic is None:
+      raise RuntimeError("seconds_since_end_frame before any end frame sealed the recording")
+    return time.monotonic() - self._end_frame_monotonic
+
   def end_audio(self, devices: dict | None) -> None:
     """Seal the recording: the audio iterator ends after the buffered frames."""
+    # Taken the moment the relay receives the end frame: end_to_final_s and
+    # voice_preview_abandoned's waited_s both measure from this reading.
+    self._end_frame_monotonic = time.monotonic()
     self._frames.put_nowait(None)
     self._ended = True
     self._devices = devices
@@ -407,9 +427,10 @@ async def voice_preview_relay(websocket: WebSocket, session_id: str, backend_id:
   never the credential. After the end frame the relay archives the recording it
   already received and pushes the final only once the pair is on disk, so
   receiving the final tells the browser its recording is archived; a browser
-  that leaves first, or a final that arrives before the end frame, archives
-  nothing. An overflow ends the preview with an error while the socket keeps
-  draining until the browser closes. Closing the socket from either side closes
+  that leaves before the final archives nothing and logs
+  voice_preview_abandoned, and a final that arrives before the end frame
+  archives nothing. An overflow ends the preview with an error while the
+  socket keeps draining until the browser closes. Closing the socket from either side closes
   the backend iterator, which closes the backend's own connection.
   """
   cfg = get_config()
@@ -437,7 +458,7 @@ async def voice_preview_relay(websocket: WebSocket, session_id: str, backend_id:
       outcome, error_message = "protocol", str(exc)
     if outcome == "ended":
       # The final rides out through the streamer; the socket closes after it.
-      await _settle_sealed_recording(websocket, streamer)
+      await _settle_sealed_recording(websocket, streamer, queue, session_id=session_id, backend_id=backend_id)
       await _close_preview_socket(websocket)
       return
     if outcome == "disconnect":
@@ -567,7 +588,9 @@ async def _archive_then_push_final(
   follows, so the archive runs first and a failed archive replaces the final
   with an error frame — the browser's fallback upload then archives the
   recording. A final that outruns the browser's end frame leaves the recording
-  incomplete: that is a backend failure, not an archive.
+  incomplete: that is a backend failure, not an archive. The voice_transcribed
+  line carries end_to_final_s, the monotonic seconds from the browser's end
+  frame to this final's push.
   """
   if not queue.ended:
     raise _PreviewEarlyFinalError("backend produced its final before the recording's end frame")
@@ -580,7 +603,15 @@ async def _archive_then_push_final(
     with suppress(_PreviewSocketLost):
       await _push_preview_frame(websocket, {"type": "error", "message": "recording archive failed"})
     return
-  _log_voice_transcribed(session_id, audio_path, pcm_bytes, event.text, backend_id, backend_id, queue.devices)
+  _log_voice_transcribed(
+      session_id,
+      audio_path,
+      pcm_bytes,
+      event.text,
+      backend_id,
+      backend_id,
+      queue.devices,
+      end_to_final_s=queue.seconds_since_end_frame())
   await _push_preview_frame(websocket, {"type": "final", "text": event.text})
 
 
@@ -598,12 +629,22 @@ async def _await_cancelled_streamer(streamer: asyncio.Task) -> None:
     await streamer
 
 
-async def _settle_sealed_recording(websocket: WebSocket, streamer: asyncio.Task) -> None:
+async def _settle_sealed_recording(
+    websocket: WebSocket,
+    streamer: asyncio.Task,
+    queue: _PreviewQueue,
+    *,
+    session_id: str,
+    backend_id: str,
+) -> None:
   """Wait for the backend's final and the browser's leaving at once.
 
   The browser leaving first — or sending any frame past its end frame — cancels
   the streamer: a recording nobody waits for is never archived, and the
-  cancellation closes the backend iterator.
+  cancellation closes the backend iterator. A plain leave — the browser went
+  away — logs voice_preview_abandoned, so a final that never came still leaves
+  the wait's evidence in the server log; a protocol violation is not a leave
+  and does not.
   """
   watcher = asyncio.create_task(_watch_sealed_socket(websocket))
   done, _ = await asyncio.wait({streamer, watcher}, return_when=asyncio.FIRST_COMPLETED)
@@ -619,6 +660,24 @@ async def _settle_sealed_recording(websocket: WebSocket, streamer: asyncio.Task)
     with suppress(_PreviewSocketLost):
       await _push_preview_frame(websocket, {"type": "error", "message": "unexpected frame after the recording's end"})
     await _drain_preview_socket(websocket)
+    return
+  _log_voice_preview_abandoned(queue, session_id=session_id, backend_id=backend_id)
+
+
+def _log_voice_preview_abandoned(queue: _PreviewQueue, *, session_id: str, backend_id: str) -> None:
+  """The browser left before the final: the wait's one trace in the server log.
+
+  recording_s is the seconds of audio the relay received; waited_s is the
+  seconds it had waited since the end frame when the leaving was noticed. The
+  recording is never archived on this path — no files, no voice_transcribed.
+  """
+  log.info(
+      "voice_preview_abandoned",
+      session_id=session_id,
+      backend=backend_id,
+      recording_s=len(queue.recording_pcm()) / 2 / base.SAMPLE_RATE,
+      waited_s=queue.seconds_since_end_frame(),
+  )
 
 
 async def _watch_sealed_socket(websocket: WebSocket) -> str:

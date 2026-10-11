@@ -55,6 +55,12 @@ import time  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
+from typing import TYPE_CHECKING  # noqa: E402
+
+if TYPE_CHECKING:
+  # The annotation names BaseModel; the runtime import stays function-local so
+  # the harness does not pay pydantic's import cost at module load.
+  from pydantic import BaseModel
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.

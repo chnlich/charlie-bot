@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.infra.models import SessionMetadata
+from src.infra import models
 from src.runtime.hooks import turn_contributions
 
 # The ``input_mode`` value that the web client sends and the user event stores for a dictated message.
@@ -17,7 +17,7 @@ VOICE_NOTE = (
 class VoiceTurnContribution(turn_contributions.TurnContribution):
   """Opens each dictated user input with ``VOICE_NOTE``; the chat view shows the message verbatim."""
 
-  def input_preamble(self, meta: SessionMetadata, input_event: dict) -> str | None:
+  def input_preamble(self, meta: models.SessionMetadata, input_event: dict) -> str | None:
     return VOICE_NOTE if input_event.get("input_mode") == VOICE_INPUT_MODE else None
 
 

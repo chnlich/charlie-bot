@@ -37,7 +37,6 @@ from src.infra.models import CreateSessionRequest
 _TS = "1700000000.000100"
 
 
-
 def _spawn_round_tasks() -> list[asyncio.Task]:
   """Reset the task sink used by the patched create_logged_task."""
   _spawn_round_tasks.tasks = []

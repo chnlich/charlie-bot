@@ -126,8 +126,8 @@ def test_thread_session_manager_instructions_carry_the_reply_contract_once(
   # One segment carries the contract; its sources name the three prompt files.
   contract = [segment for segment in segments if scope in segment.text]
   assert len(contract) == 1
-  assert [source.source_ref for source in contract[0].sources] == [
-      f"prompts/{scope_doc}", "prompts/thread_reply_redline.md", "prompts/thread_reply_format.md"]
+  assert [source.source_ref for source in contract[0].sources
+         ] == [f"prompts/{scope_doc}", "prompts/thread_reply_redline.md", "prompts/thread_reply_format.md"]
   # The platform part rides the same segment, ahead of the docs.
   assert contract[0].text.index("Platform:") < contract[0].text.index(scope)
   # The contract segment holds rules only: the summon line stays the input's
@@ -140,7 +140,8 @@ def test_slack_contract_part_carries_the_thread_address(tmp_path: Path) -> None:
   _, origin = SESSION_KINDS["slack"]
   meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
 
-  segments, _ = build_segments(real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  segments, _ = build_segments(
+      real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
   joined = "\n\n".join(segment.text for segment in segments)
 
   assert "channel `C1`、thread_ts `1700000000.000100`" in joined
@@ -155,7 +156,8 @@ def test_discord_contract_part_carries_the_summon_mark(tmp_path: Path) -> None:
   _, origin = SESSION_KINDS["discord"]
   meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
 
-  segments, _ = build_segments(real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  segments, _ = build_segments(
+      real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
   joined = "\n\n".join(segment.text for segment in segments)
 
   assert "`charliebot discord read`" in joined
@@ -177,8 +179,8 @@ def test_main_session_instructions_carry_no_reply_contract(tmp_path: Path) -> No
     assert f"prompts/{name}" not in refs
 
 
-@pytest.mark.parametrize("contribution, kind", [(SlackTurnContribution(), "slack"),
-                                                (DiscordTurnContribution(), "discord")])
+@pytest.mark.parametrize(
+    "contribution, kind", [(SlackTurnContribution(), "slack"), (DiscordTurnContribution(), "discord")])
 def test_contract_segment_goes_to_manager_rounds_only(contribution, kind: str) -> None:
   """A worker-kind run of the same thread session gets no contract."""
   _, origin = SESSION_KINDS[kind]

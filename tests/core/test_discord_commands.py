@@ -290,7 +290,8 @@ async def test_read_flags_the_pending_summon_and_starts_the_window_at_it(tmp_pat
   later unread message and hide the question; the readback starts at the
   pending summon's mention instead and flags it ``summon: true``."""
   cfg, session_blocks, client = _rig(
-      tmp_path, channels={_THREAD: [_message(1, "the question"), _message(2, "a later follow up")]})
+      tmp_path, channels={_THREAD: [_message(1, "the question"),
+                                    _message(2, "a later follow up")]})
   session_id = await _make_session(session_blocks, watermark=_mid(1))  # the summon step consumed its own mention
   await session_blocks.events.save_chat_event(session_id, _summon_event(_mid(1)))
 
@@ -314,7 +315,8 @@ async def test_read_does_not_flag_a_summon_a_master_done_names(tmp_path: pathlib
   """A summon whose round finished (a master_done names it) is answered history,
   not a pending ask: no flag, and the window start stays with the unread."""
   cfg, session_blocks, client = _rig(
-      tmp_path, channels={_THREAD: [_message(1, "the question"), _message(2, "a later follow up")]})
+      tmp_path, channels={_THREAD: [_message(1, "the question"),
+                                    _message(2, "a later follow up")]})
   session_id = await _make_session(session_blocks, watermark=_mid(1))
   summon = _summon_event(_mid(1))
   await session_blocks.events.save_chat_event(session_id, summon)
@@ -331,17 +333,19 @@ async def test_read_does_not_flag_a_summon_a_master_done_names(tmp_path: pathlib
 
   # Not pending: the window keeps its old start (the oldest unread), so the
   # answered mention stays out of the readback entirely.
-  assert result["messages"] == [{
-      "id": _mid(2),
-      "author_id": _USER,
-      "author": "plain-name",
-      "person": _PERSON,
-      "timestamp": "2026-08-26T00:00:02Z",
-      "content": "a later follow up",
-      "attachments": [],
-      "unread": True,
-      "summon": False,
-  }]
+  assert result["messages"] == [
+      {
+          "id": _mid(2),
+          "author_id": _USER,
+          "author": "plain-name",
+          "person": _PERSON,
+          "timestamp": "2026-08-26T00:00:02Z",
+          "content": "a later follow up",
+          "attachments": [],
+          "unread": True,
+          "summon": False,
+      }
+  ]
 
 
 @pytest.mark.asyncio

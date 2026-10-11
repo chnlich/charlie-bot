@@ -19,7 +19,6 @@ from src.infra import event_types as ET
 from src.infra.models import RunRecord
 
 KEY = "op-secret"
-ORIGINAL_REQUEST = migration._request
 
 
 @pytest.fixture()

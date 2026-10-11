@@ -4,26 +4,23 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from src.infra import config, log_once
-from src.runtime.session_events import SessionEvents
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_store import SessionStore
-from src.runtime.session_successor import SessionSuccessor
+from src.runtime import session_events, session_lifecycle, session_listing, session_store, session_successor
 
 log = log_once.LazyStructlogLogger()
 
 
 async def run_backfill(
     cfg: config.CharlieBotConfig,
-    listing: SessionListing,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
-    events: SessionEvents,
-    successor: SessionSuccessor,
+    listing: session_listing.SessionListing,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents,
+    successor: session_successor.SessionSuccessor,
     recovery_task: asyncio.Task,
-    backfill_lost_summons: Callable[
-        [config.CharlieBotConfig, SessionListing, SessionStore, SessionLifecycle, SessionEvents, SessionSuccessor],
-        Awaitable[int]],
+    backfill_lost_summons: Callable[[
+        config.CharlieBotConfig, session_listing.SessionListing, session_store.SessionStore, session_lifecycle.
+        SessionLifecycle, session_events.SessionEvents, session_successor.SessionSuccessor
+    ], Awaitable[int]],
     platform: str,
 ) -> None:
   """Report one platform's summons lost across the restart, once recovery has had its chance.

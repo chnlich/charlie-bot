@@ -2221,10 +2221,10 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   real_prepare_relay = master_cc_relay.prepare_relay
   relay_run_id: str | None = None
 
-  async def stop_then_relay(ctx, current, cc_session_id, reason, relays):
+  async def stop_then_relay(ctx, current, cc_session_id, reason, relays, **kwargs):
     assert relay_run_id is not None
     await tree.runs.request_stop(manager.id, relay_run_id, "stop-in-relay-gap")
-    return await real_prepare_relay(ctx, current, cc_session_id, reason, relays)
+    return await real_prepare_relay(ctx, current, cc_session_id, reason, relays, **kwargs)
 
   monkeypatch.setattr(master_cc_relay, "prepare_relay", stop_then_relay)
 

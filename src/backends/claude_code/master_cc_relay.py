@@ -264,8 +264,13 @@ async def prepare_relay(
     cc_session_id: str | None,
     reason: str | None,
     relays: int,
+    min_headroom: float = 0.0,
 ) -> claude_config.ClaudeAccount:
   """Move the run to the next account and compact a large Fable context there.
+
+  A *min_headroom* above zero (the warning relay's strictly-below-the-line bar)
+  raises the destination bar; ``relay_move`` falls back to the regular select
+  when nothing qualifies.
 
   Returns the account the run continues on. Raises ``LaunchRefused`` when the
   pool is exhausted (a spent quota), the transcript has no id yet, or the copy
@@ -278,7 +283,13 @@ async def prepare_relay(
   """
   cfg, option, session_meta = ctx.cfg, ctx.option, ctx.session_meta
   move = claude_relay.relay_move(
-      cfg, option.model, current, cc_session_id, None, account_pool=claude_accounts.option_pool(option))
+      cfg,
+      option.model,
+      current,
+      cc_session_id,
+      None,
+      account_pool=claude_accounts.option_pool(option),
+      min_headroom=min_headroom)
   if move.account is None:
     assert move.error is not None
     if move.refused_holder is None or ctx.kind == "task":

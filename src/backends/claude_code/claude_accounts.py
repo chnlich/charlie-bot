@@ -451,6 +451,7 @@ def select(
     busy_accounts: AbstractSet[str] | None = None,
     now: datetime | None = None,
     account_pool: str | None = None,
+    min_headroom: float = 0.0,
 ) -> ClaudeAccount | None:
   """The healthy account with the most headroom for *model*, ranked statelessly.
 
@@ -464,10 +465,11 @@ def select(
   *busy_accounts* names accounts another running session holds: an idle account
   wins outright, and only when every healthy account is busy does the choice
   fall back to all of them. *exclude* names accounts a relay is leaving. An
-  account with no headroom (a rejection whose reset is still ahead) is
-  unavailable rather than a last resort: running there would only be rejected
-  again. None when no account qualifies, which the caller reports loudly
-  together with ``earliest_reset``.
+  account whose headroom is not strictly above *min_headroom* (zero headroom at
+  the default: a rejection whose reset is still ahead) is unavailable rather
+  than a last resort: running there would only be rejected again. None when no
+  account qualifies, which the caller reports loudly together with
+  ``earliest_reset``.
   """
   moment = now_or(now)
   excluded = set(exclude)
@@ -475,7 +477,7 @@ def select(
   for account in pool_accounts(cfg, account_pool):
     if account.label in excluded or not healthy(account, moment):
       continue
-    if (hr := headroom(account.label, model, moment)) > 0.0:
+    if (hr := headroom(account.label, model, moment)) > min_headroom:
       available.append((account, hr))
   if not available:
     return None
@@ -485,6 +487,24 @@ def select(
   best = max(score for score, _account in scored)
   tied = [account for score, account in scored if best - score <= _SCORE_TIE]
   return min(tied, key=lambda account: _last_active_at(account.label))
+
+
+def cool_destination(
+    cfg: CharlieBotConfig,
+    model: str | None,
+    account_pool: str | None = None,
+    now: datetime | None = None,
+) -> ClaudeAccount | None:
+  """The best account strictly below the warning line for *model*, or None.
+
+  ``select`` at the armed-safe-point bar (headroom above ``1 - WARNING_UTILIZATION``),
+  nothing excluded, same pool: the relay move's scoring over the accounts that still
+  have more than the warning line's share. This is the gate an armed safe point reads.
+  The account the run sits on is at or above the warning line there, so it never
+  qualifies and "the destination is the account already running" cannot happen at a
+  safe point -- though this wrapper itself excludes nothing.
+  """
+  return select(cfg, model, now=now, account_pool=account_pool, min_headroom=1.0 - WARNING_UTILIZATION)
 
 
 def _last_active_at(label: str) -> datetime:
@@ -534,6 +554,39 @@ def earliest_reset(cfg: CharlieBotConfig, now: datetime | None, account_pool: st
       reading.rejected_until > moment
   ]
   return min(resets) if resets else None
+
+
+def unavailable_detail(cfg: CharlieBotConfig, now: datetime | None, account_pool: str | None = None) -> str:
+  """Every unavailable pool account as ``<label>: <reason>``, joined for an error message.
+
+  The reasons: an authentication-failure cooldown names when it lifts; missing
+  credentials and zero headroom name no time -- the first clears only through an
+  interactive login, and the second's reading carries no future reset (otherwise
+  ``earliest_reset`` would have answered). An account with credentials and headroom
+  renders nothing. The headroom reads the model-free reading: the relay error messages
+  that render this carry no model, and the event readings that put an account out are
+  not model-scoped.
+  """
+  moment = now_or(now)
+  entries = []
+  for account in pool_accounts(cfg, account_pool):
+    reason = _unavailable_reason(account, moment)
+    if reason is not None:
+      entries.append(f"{account.label}: {reason}")
+  return "; ".join(entries)
+
+
+def _unavailable_reason(account: ClaudeAccount, moment: datetime) -> str | None:
+  """Why *account* cannot take a run at *moment*, or None when it can."""
+  if not credentials_present(account):
+    return "missing credentials"
+  failed_at = _auth_failures.get(account.label)
+  if failed_at is not None and moment - failed_at < AUTH_FAILURE_COOLDOWN:
+    until = (failed_at + AUTH_FAILURE_COOLDOWN).astimezone(UTC).strftime("%H:%M")
+    return f"auth-failure cooldown until {until} UTC"
+  if headroom(account.label, None, moment) <= 0.0:
+    return "zero headroom"
+  return None
 
 
 # ---------------------------------------------------------------------------

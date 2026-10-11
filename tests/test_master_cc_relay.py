@@ -183,3 +183,207 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
   notices = _events_of(item.callbacks, claude_relay.CLAUDE_ACCOUNT_LOGIN_REQUIRED)
   assert sorted(n["account"] for n in notices) == ["ext-1", "ext-2"]
   assert {n["reason"] for n in notices} == {"empty_credentials"}
+
+
+# ---------------------------------------------------------------------------
+# The armed safe point's stay rule
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_cc_stays_armed_without_a_below_line_account_and_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A pool with no account strictly below the warning line keeps the run going at the
+  safe point: no termination, no relay, and both safe points let the turn complete on
+  the same account."""
+  cfg = fable_pool_cfg(tmp_path, labels=("main",))
+  make_transcript(tmp_path / "claude-main", UUID)
+  meta = _session_on("main")
+  first = ScriptedRelayBackend(
+      [
+          rate_limit_event("allowed_warning", 0.92),
+          assistant_text_event("step 1"),
+          user_tool_result_event(),
+          assistant_text_event("step 2"),
+          user_tool_result_event(),
+          assistant_text_event("done"),
+          backend_base.make_result_event(),
+      ],
+      exit_code=0)
+  builds = _install_backends(monkeypatch, [first])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
+
+  assert first.terminated is False
+  assert (exit_code, error_msg, extras.get("account_relays", 0)) == (0, None, 0)
+  assert len(builds) == 1
+  assert meta.claude_account == "main"
+
+
+@pytest.mark.asyncio
+async def test_run_cc_warning_relay_lands_strictly_below_the_line_in_the_tie_band(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The gate and the move share the below-line bar: an at-line account that an
+  unrestricted select would reach through the tie band -- its score sits within
+  ``_SCORE_TIE`` of the best and its reading is the older -- stays out, and the
+  landing is strictly below the line."""
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", UUID)
+  meta = _session_on("main")
+  # ext-1 sits below the line (headroom 0.11); ext-2 sits at the line (headroom 0.095)
+  # with the older reading: a min_headroom=0 select ties the two (0.015 apart) and would
+  # land ext-2, re-arming at the next safe point.
+  claude_accounts.observe_rate_limit(
+      "ext-1", rate_limit_event("allowed", 0.89)["rate_limit_info"], now=NOW - timedelta(minutes=5))
+  claude_accounts.observe_rate_limit(
+      "ext-2", rate_limit_event("allowed", 0.905)["rate_limit_info"], now=NOW - timedelta(minutes=30))
+  first = ScriptedRelayBackend(
+      [
+          rate_limit_event("allowed_warning", 0.92),
+          assistant_text_event("step 1"),
+          user_tool_result_event(),
+      ],
+      exit_code=0)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  builds = _install_backends(monkeypatch, [first, second])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
+
+  assert first.terminated is True
+  assert (exit_code, error_msg, extras["account_relays"]) == (0, None, 1)
+  assert builds[1]["kwargs"]["claude_account"].label == "ext-1"
+
+
+@pytest.mark.asyncio
+async def test_run_cc_falls_back_to_the_regular_select_when_the_below_line_target_vanishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The gate and the move read the pool at different moments: a target that rose to the
+  line in between lands the regular select -- possibly at or above the line -- and the
+  run continues instead of refusing."""
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", UUID)
+  meta = _session_on("main")
+  # ext-1 is the gate's below-line destination; ext-2 already sits at the line.
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.85)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.92)["rate_limit_info"], now=NOW)
+  real_select = claude_accounts.select
+
+  def select_with_transient(cfg, model, exclude=(), busy_accounts=None, now=None, account_pool=None, min_headroom=0.0):
+    if min_headroom > 0 and exclude:
+      # The move's below-line select: the target's reading crosses the line first.
+      claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
+    return real_select(
+        cfg,
+        model,
+        exclude=exclude,
+        busy_accounts=busy_accounts,
+        now=now,
+        account_pool=account_pool,
+        min_headroom=min_headroom)
+
+  monkeypatch.setattr(claude_accounts, "select", select_with_transient)
+  first = ScriptedRelayBackend(
+      [
+          rate_limit_event("allowed_warning", 0.92),
+          assistant_text_event("step 1"),
+          user_tool_result_event(),
+      ],
+      exit_code=0)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  builds = _install_backends(monkeypatch, [first, second])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
+
+  assert first.terminated is True
+  assert (exit_code, error_msg, extras["account_relays"]) == (0, None, 1)
+  # The regular select lands ext-2 -- at the line, headroom 0.08 over ext-1's 0.05.
+  assert builds[1]["kwargs"]["claude_account"].label == "ext-2"
+
+
+@pytest.mark.asyncio
+async def test_run_cc_warning_relays_past_the_cap_with_below_line_destinations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A warning relay with a strictly-below-line destination is exempt from the relay cap:
+  the fourth relay proceeds and the turn completes on the fifth account."""
+  cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
+  make_transcript(tmp_path / "claude-main", UUID)
+  meta = _session_on("main")
+  warning = ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92), user_tool_result_event()], exit_code=0)
+  backends = [warning] + [
+      ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92), user_tool_result_event()], exit_code=0)
+      for _ in range(3)
+  ]
+  last = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  builds = _install_backends(monkeypatch, [*backends, last])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
+
+  assert (exit_code, error_msg, extras["account_relays"]) == (0, None, claude_relay.MAX_RELAYS_PER_TURN + 1)
+  assert [b["kwargs"]["claude_account"].label for b in builds] == ["main", "a", "b", "c", "d"]
+
+
+@pytest.mark.asyncio
+async def test_run_cc_relay_limit_names_each_unavailable_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """With the relay count exhausted and no below-line destination -- every login
+  authentication-failed, so no rejection reset exists either -- the cap error lists each
+  account's cooldown."""
+  cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
+  make_transcript(tmp_path / "claude-main", UUID)
+  meta = _session_on("main")
+  failed = [
+      ScriptedRelayBackend([assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1)
+      for _ in range(4)
+  ]
+  builds = _install_backends(monkeypatch, failed)
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 1
+  assert error_msg.startswith("Claude account relay limit reached (3 relays in one run; ")
+  assert error_msg.endswith("this run did not complete.")
+  for label in ("main", "a", "b", "c"):
+    assert f"{label}: auth-failure cooldown until" in error_msg
+  assert "UTC" in error_msg
+  assert len(builds) == 1 + claude_relay.MAX_RELAYS_PER_TURN
+
+
+# ---------------------------------------------------------------------------
+# The watch's recompute and the cap message's empty pool state
+# ---------------------------------------------------------------------------
+
+
+def test_watch_stays_armed_without_a_below_line_destination_and_fires_when_one_appears(tmp_path: Path) -> None:
+  """At an armed safe point with no strictly-below-line account the watch keeps the run
+  going (armed, reason None); a target that appears by the next safe point fires once."""
+  cfg = fable_pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.95)["rate_limit_info"], now=NOW)
+  watch = claude_relay.RelayWatch("main", FABLE_MODEL, cfg=cfg, account_pool=None, now=NOW)
+
+  assert watch.observe(rate_limit_event("allowed_warning", 0.92)) is False
+  assert watch.armed is True
+  assert watch.observe(user_tool_result_event()) is False
+  assert watch.reason is None
+
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  assert watch.observe(user_tool_result_event()) is True
+  assert watch.reason == claude_relay.RELAY_WARNING
+
+
+def test_relay_limit_message_without_unavailability_falls_back_to_a_named_slot(tmp_path: Path) -> None:
+  """Accounts healthy at or above the line carry no unavailability: the cap message says
+  so instead of rendering an empty slot."""
+  cfg = fable_pool_cfg(tmp_path)
+  for label in ("main", "ext-1", "ext-2"):
+    claude_accounts.observe_rate_limit(label, rate_limit_event("allowed_warning", 0.92)["rate_limit_info"], now=NOW)
+
+  message = claude_relay.relay_limit_message(cfg)
+
+  assert message == (
+      "Claude account relay limit reached (3 relays in one run; no unavailability recorded); "
+      "this run did not complete.")

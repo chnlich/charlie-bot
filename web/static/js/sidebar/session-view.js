@@ -614,9 +614,7 @@ function renderSessionView(data) {
   globalThis.renderPendingTriggersTray(session.id);
 
   // Restore whichever tab was active before the session switch
-  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
-  const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
-  switchTab(activeTab);
+  switchTab(tabAfterSessionSwitch());
 
   // A tail page shorter than the viewport leaves the container unscrollable, so
   // no scroll event ever fires and the idle sentinel would wait forever. This

@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 
 function fakeEl(id, width) {
   const listeners = new Map();
@@ -58,10 +58,13 @@ function loadPanelContext() {
       setItem: (k, v) => store.set(k, String(v)),
     },
     _store: store,
+    // The latex package registers its tab and its event type at load; the core entries are not under test here.
+    registerTab: () => {},
+    registerWsMessageHandler: () => {},
   };
   vm.createContext(context);
   vm.runInContext(readStatic('utils.js'), context, { filename: 'utils.js' });
-  vm.runInContext(readStatic('latex-panel.js'), context, { filename: 'latex-panel.js' });
+  vm.runInContext(readPackageStatic('features', 'latex', 'latex-panel.js'), context, { filename: 'latex-panel.js' });
   vm.runInContext(readStatic('backlog-panel.js'), context, { filename: 'backlog-panel.js' });
   return context;
 }

@@ -4,7 +4,6 @@
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initSidebarResize();
-  initLatexResize();
   initBacklogResize();
   restoreSidebarFromUrl();
   updateRelativeTimes();
@@ -39,18 +38,6 @@ document.addEventListener('DOMContentLoaded', () => {
       inp.value = draft;
       autoResize(inp);
     }
-  }
-
-  // LaTeX editor: track dirty state + Ctrl+S to compile
-  const latexEditor = document.getElementById('latex-editor');
-  if (latexEditor) {
-    latexEditor.addEventListener('input', () => { latexEditorDirty = true; });
-    latexEditor.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        compileLatex();
-      }
-    });
   }
 
   // Re-evaluate mobile layout on platform mode change

@@ -232,3 +232,56 @@ function initLatexResize() {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Registration: the Chat w/ TeX tab, the proposed-edit event, the sidebar
+// resize, and the editor's dirty flag and Ctrl+S compile.
+// ---------------------------------------------------------------------------
+function setLatexPanelVisible(visible) {
+  const latexPanel = document.getElementById('latex-panel');
+  if (latexPanel) latexPanel.classList.toggle('hidden', !visible);
+  const latexHandle = document.getElementById('latex-resize-handle');
+  if (latexHandle) latexHandle.style.display = visible ? '' : 'none';
+}
+
+registerTab({
+  id: 'chat-tex',
+  showsChat: true,
+  fullScreenOnMobile: true,
+  keepOnSessionSwitch: true,
+  onShow() {
+    setLatexPanelVisible(true);
+    latexPanelOpen = true;
+    loadLatexPdf();
+    loadLatexGitInfo();
+  },
+  onHide() {
+    setLatexPanelVisible(false);
+    latexPanelOpen = false;
+  },
+});
+
+registerWsMessageHandler('tex_edit_proposed', () => showDiffModal());
+
+// The PDF canvas renders at the panel's width, so a sidebar resize re-renders an open panel.
+document.addEventListener('charliebot:sidebar-resized', () => {
+  if (latexPanelOpen) {
+    loadLatexPdf(true);
+  } else {
+    pdfNeedsReload = true;
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  initLatexResize();
+  const latexEditor = document.getElementById('latex-editor');
+  if (latexEditor) {
+    latexEditor.addEventListener('input', () => { latexEditorDirty = true; });
+    latexEditor.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        compileLatex();
+      }
+    });
+  }
+});

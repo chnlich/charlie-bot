@@ -25,9 +25,16 @@ directory: those URL prefixes belong to package static files.
 A package learns core's facts through a registration entry: a function core provides, and the
 package's script registers a handler with it at load time. The core registration entries today:
 
-    registerSidebarFilter    web/static/js/sidebar/filters.js (a sidebar filter button)
+    registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
+    registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
+    registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)
 
-A landing that adds a registration entry extends this list.
+Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
+for it. The core page events today:
+
+    charliebot:sidebar-resized  web/static/js/sidebar/modals.js (the end of a sidebar drag)
+
+A landing that adds a registration entry or a page event extends these lists.
 
 An upward use — a file using a name that only a higher file defines — has three fixes. Move the
 shared constant or function to the lower file. The higher file registers a handler through a

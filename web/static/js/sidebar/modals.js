@@ -86,11 +86,7 @@ function initSidebarResize() {
       localStorage.setItem('sidebar-width', sidebar.offsetWidth);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      if (latexPanelOpen) {
-        loadLatexPdf(true);
-      } else if (typeof pdfNeedsReload !== 'undefined') {
-        pdfNeedsReload = true;
-      }
+      document.dispatchEvent(new CustomEvent('charliebot:sidebar-resized'));
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);

@@ -249,7 +249,6 @@ function buildAppContext() {
     console: {error() {}, warn() {}, log() {}},
     initAuth: noop('initAuth'),
     initSidebarResize: noop('initSidebarResize'),
-    initLatexResize: noop('initLatexResize'),
     initBacklogResize: noop('initBacklogResize'),
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
     updateRelativeTimes: noop('updateRelativeTimes'),

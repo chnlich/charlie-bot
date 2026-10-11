@@ -124,7 +124,10 @@ def direction_breaks(pages: dict[str, dict]) -> dict[str, dict[tuple[str, str], 
   """The (user, definer) pairs that break a direction, per rule, with the used names per pair. A node
   in no group is left to the group check."""
   breaks: dict[str, dict[tuple[str, str], set[str]]] = {
-      "core-uses-package": {}, "package-uses-other-group": {}, "core-loads-late": {}}
+      "core-uses-package": {},
+      "package-uses-other-group": {},
+      "core-loads-late": {}
+  }
   for page_name in PAGE_NAMES:
     page = pages[page_name]
     position = {node: index for index, node in enumerate(page["nodes"])}
@@ -146,12 +149,14 @@ def direction_breaks(pages: dict[str, dict]) -> dict[str, dict[tuple[str, str], 
   return breaks
 
 
-def unrecorded_failures(breaks: dict[tuple[str, str], set[str]], recorded: set[tuple[str, str]],
-                        message: Callable[[str, str, str], str]) -> list[str]:
+def unrecorded_failures(
+    breaks: dict[tuple[str, str], set[str]], recorded: set[tuple[str, str]], message: Callable[[str, str, str],
+                                                                                               str]) -> list[str]:
   """One failure line per violating pair the exceptions table does not record."""
   return [
       message(user, definer, ", ".join(sorted(names)))
-      for (user, definer), names in sorted(breaks.items()) if (user, definer) not in recorded
+      for (user, definer), names in sorted(breaks.items())
+      if (user, definer) not in recorded
   ]
 
 
@@ -159,7 +164,9 @@ def unrecorded_failures(breaks: dict[tuple[str, str], set[str]], recorded: set[t
 def test_every_frontend_file_is_in_a_group(page_graphs: dict[str, dict]) -> None:
   failures = [
       f"{node}: outside the groups web/ (core) and src/<kind>/<name> (package); move it into one."
-      for page_name in PAGE_NAMES for node in page_graphs[page_name]["nodes"] if group_of(node) is None
+      for page_name in PAGE_NAMES
+      for node in page_graphs[page_name]["nodes"]
+      if group_of(node) is None
   ]
   assert not failures, "\n".join(failures)
 
@@ -167,8 +174,7 @@ def test_every_frontend_file_is_in_a_group(page_graphs: dict[str, dict]) -> None
 @pytest.mark.integration
 def test_core_uses_no_name_a_package_defines(page_graphs: dict[str, dict]) -> None:
   failures = unrecorded_failures(
-      direction_breaks(page_graphs)["core-uses-package"], recorded_pairs(),
-      lambda user, definer, names:
+      direction_breaks(page_graphs)["core-uses-package"], recorded_pairs(), lambda user, definer, names:
       f"{user} uses {names}, defined by {definer} (group {group_of(definer)}); core uses no name a "
       f"package defines. {FIX_THE_UPWARD_USE}")
   assert not failures, "\n".join(failures)
@@ -176,22 +182,21 @@ def test_core_uses_no_name_a_package_defines(page_graphs: dict[str, dict]) -> No
 
 @pytest.mark.integration
 def test_a_package_uses_only_core_itself_and_its_exception(page_graphs: dict[str, dict]) -> None:
+
   def message(user: str, definer: str, names: str) -> str:
     may = ", ".join(sorted(allowed_groups(group_of(user))))
     return (
         f"{user} (group {group_of(user)}) uses {names}, defined by {definer} "
         f"(group {group_of(definer)}); {group_of(user)} may use names of {may} only.")
 
-  failures = unrecorded_failures(
-      direction_breaks(page_graphs)["package-uses-other-group"], recorded_pairs(), message)
+  failures = unrecorded_failures(direction_breaks(page_graphs)["package-uses-other-group"], recorded_pairs(), message)
   assert not failures, "\n".join(failures)
 
 
 @pytest.mark.integration
 def test_a_core_file_uses_only_core_names_defined_before_it_loads(page_graphs: dict[str, dict]) -> None:
   failures = unrecorded_failures(
-      direction_breaks(page_graphs)["core-loads-late"], recorded_pairs(),
-      lambda user, definer, names:
+      direction_breaks(page_graphs)["core-loads-late"], recorded_pairs(), lambda user, definer, names:
       f"{user} uses {names}, defined by {definer}, which loads later; a core file uses only names "
       f"that core files loaded before it define. {FIX_THE_UPWARD_USE}")
   assert not failures, "\n".join(failures)
@@ -200,8 +205,8 @@ def test_a_core_file_uses_only_core_names_defined_before_it_loads(page_graphs: d
 @pytest.mark.integration
 def test_one_global_name_is_defined_in_one_file_only(page_graphs: dict[str, dict]) -> None:
   failures = [
-      f"{name}: defined by {', '.join(nodes)}; one global name is defined in one file only."
-      for page_name in PAGE_NAMES for name, nodes in sorted(page_graphs[page_name]["multiDefs"].items())
+      f"{name}: defined by {', '.join(nodes)}; one global name is defined in one file only." for page_name in PAGE_NAMES
+      for name, nodes in sorted(page_graphs[page_name]["multiDefs"].items())
   ]
   assert not failures, "\n".join(failures)
 
@@ -210,7 +215,8 @@ def test_web_static_has_no_package_static_directory() -> None:
   failures = [
       f"web/static/{kind}/: this URL prefix belongs to package static files, served from "
       f"src/{kind}/<name>/static/; remove the directory."
-      for kind in ("features", "backends") if (conftest.ROOT / "web" / "static" / kind).exists()
+      for kind in ("features", "backends")
+      if (conftest.ROOT / "web" / "static" / kind).exists()
   ]
   assert not failures, "\n".join(failures)
 

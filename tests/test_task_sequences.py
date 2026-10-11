@@ -981,6 +981,124 @@ async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_comp
 
 
 @pytest.mark.asyncio
+async def test_ff_push_rejection_reports_the_landing_error_and_the_pushed_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The fast-forward push is rejected but the work branch push succeeds: the
+  loop ends blocked and the final report names both facts (the old report
+  always claimed the work branch was pushed)."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  _worker_backends(monkeypatch, ["iter one words", "iter two words"])
+
+  async def rejected_refspec(*args, **kwargs):
+    return False, "rejected: non-fast-forward"
+
+  async def pushed_branch(*args, **kwargs):
+    return True, ""
+
+  monkeypatch.setattr(improve_command.git, "git_push_refspec", rejected_refspec)
+  monkeypatch.setattr(improve_command.git, "git_push_branch", pushed_branch)
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      payload_overrides={"merge_back": True},
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "blocked"
+  assert state.end_error == (
+      "The fast-forward landing onto main failed (rejected: non-fast-forward); "
+      "the work branch was pushed to origin.")
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+  assert "The fast-forward landing onto" in finals[0]["summary"]
+  assert "failed (rejected: non-fast-forward); the work branch was pushed to origin." in finals[0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_both_landing_pushes_failing_names_the_branch_push_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The fast-forward push AND the work branch push both fail: the final
+  report no longer claims the work branch was pushed to origin."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  _worker_backends(monkeypatch, ["iter one words", "iter two words"])
+
+  async def failing_push(*args, **kwargs):
+    return False, "auth expired"
+
+  monkeypatch.setattr(improve_command.git, "git_push_refspec", failing_push)
+  monkeypatch.setattr(improve_command.git, "git_push_branch", failing_push)
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      payload_overrides={"merge_back": True},
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "blocked"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+  assert "pushing the work branch to origin also failed (auth expired)." in finals[0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_best_effort_branch_push_failure_is_reported_without_merge_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """Without merge-back the loop still pushes the work branch best-effort; a
+  failed push rides the final report so the manager knows origin holds
+  nothing to land."""
+  claude_accounts.reset_for_tests()
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  _worker_backends(monkeypatch, ["iter one words", "iter two words"])
+
+  async def failing_push(*args, **kwargs):
+    return False, "auth expired"
+
+  monkeypatch.setattr(improve_command.git, "git_push_branch", failing_push)
+
+  await _admit_takeoff(tree, manager)
+  body, child_id = await _start_loop(
+      cfg,
+      session_blocks,
+      tree,
+      manager,
+      repo,
+      monkeypatch,
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "blocked"
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
+  assert "Pushing the work branch to origin failed (auth expired)." in finals[0]["summary"]
+
+
+@pytest.mark.asyncio
 async def test_controller_exception_closes_the_child_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """A controller failure after the iterations closes the child cancelled with

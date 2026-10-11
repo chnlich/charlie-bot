@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// External tool usage strip (multi-provider, multi-account: Claude, Codex).
+// External tool usage strip (multi-provider, multi-account).
 // The strip DOM is built dynamically from the payload: one self-describing row
 // per account, with a provider pill on each row. A quota bar is identified by
 // the window length the provider reported, never by the position the limit
@@ -67,9 +67,9 @@ function _parseTimestampMs(isoString) {
   return new Date(isoString).getTime();
 }
 
-// When a provider's numbers were sampled. Claude answers a live query, so its
-// fetch time is the sample time; Codex is scraped from a rollout log whose last
-// token_count event can be days old.
+// When a provider's numbers were sampled: the time of the event the reading
+// came from (token_count_observed_at) when the payload carries one, otherwise
+// the fetch time.
 function _sampledAtMs(providerData) {
   const observed = _parseTimestampMs(providerData.token_count_observed_at);
   if (Number.isFinite(observed)) return observed;
@@ -83,26 +83,10 @@ function _windowLabel(windowMinutes) {
   return windowMinutes + 'm';
 }
 
-// A scraped reading can outlive the window it describes. Either the window's
-// reset has already passed while the sample predates it, or — decidable without
-// any reset timestamp — the reading is older than the window is long.
-// Claude readings are live queries whose samples can freeze, so the server owns
-// the judgement: each emitted claude window carries `expired: true` exactly when
-// the shared backend predicate fired at emit time, and fetched_at age alone
-// never expires a claude window here.
-function _isExpiredReading(providerData, win) {
-  if (providerData.provider === 'claude') return win.expired === true;
-  if (providerData.provider !== 'codex') return false;
-  const sampled = _sampledAtMs(providerData);
-  if (!Number.isFinite(sampled)) return false;
-
-  const reset = _parseTimestampMs(win.resets_at);
-  if (Number.isFinite(reset) && reset <= Date.now() && sampled < reset) return true;
-
-  if (Number.isFinite(win.window_minutes)) {
-    return Date.now() - sampled > win.window_minutes * 60000;
-  }
-  return false;
+// The server judges expiry at each emit for every provider: a window carries
+// `expired: true` exactly when the shared backend predicate fired.
+function _isExpiredReading(win) {
+  return win.expired === true;
 }
 
 function _formatLocalHMS(ms) {
@@ -184,27 +168,16 @@ function _formatSpendUsd(value) {
   return '$' + value.toFixed(2);
 }
 
-function _providerGroupLabel(provider) {
-  if (provider === 'claude') return 'Claude';
-  if (provider === 'codex') return 'Codex';
-  throw new Error('unknown usage provider: ' + provider);
-}
-
-function _providerStateLabel(state) {
-  if (state === 'business-unlimited') return 'business / unlimited';
-  return '';
-}
-
 function _el(tag, className) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   return node;
 }
 
-function _providerPill(provider) {
-  const cls = provider === 'claude' ? 'provider-claude' : 'provider-codex';
-  const pill = _el('span', 'provider-pill ' + cls);
-  pill.textContent = _providerGroupLabel(provider);
+// The pill colour rule .provider-<provider> lives in the provider's backend package.
+function _providerPill(providerData) {
+  const pill = _el('span', 'provider-pill provider-' + providerData.provider);
+  pill.textContent = providerData.provider_label;
   return pill;
 }
 
@@ -216,7 +189,7 @@ function _blankBar(bar) {
 // Precedence: expired beats unknown beats a live number. Neither of the first
 // two reaches the colour thresholds, because neither is a quota reading.
 function _paintBucket(refs, win, providerData) {
-  if (_isExpiredReading(providerData, win)) {
+  if (_isExpiredReading(win)) {
     _blankBar(refs.bar);
     refs.pctEl.textContent = '—';
     if (refs.resetEl) refs.resetEl.textContent = 'window reset — reading expired';
@@ -304,7 +277,7 @@ function _buildCreditsGroup(row, credits) {
 function _buildStatusRow(key, providerData, field, text) {
   const row = _el('div', 'flex items-center gap-1.5 text-slate-600 opacity-60');
   row.setAttribute('data-key', key);
-  row.appendChild(_providerPill(providerData.provider));
+  row.appendChild(_providerPill(providerData));
   const label = _el('span', 'text-slate-500 font-medium');
   label.textContent = providerData.account || key;
   row.appendChild(label);
@@ -321,7 +294,7 @@ function _buildRow(key, providerData) {
 
   const row = _el('div', 'flex items-center gap-1.5');
   row.setAttribute('data-key', key);
-  row.appendChild(_providerPill(providerData.provider));
+  row.appendChild(_providerPill(providerData));
   const label = _el('span', 'text-slate-300 font-medium');
   label.textContent = providerData.account || key;
   row.appendChild(label);
@@ -348,15 +321,16 @@ function _buildRow(key, providerData) {
     _buildCreditsGroup(row, providerData.credits);
   }
 
+  // The state badge, the reading age and the spend each show when the payload
+  // carries their field.
   let asOfEl = null;
-  if (providerData.provider === 'codex') {
-    const state = providerData.rate_limits_state || '';
-    if (state) {
-      const badge = _el('span', 'px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-300');
-      badge.setAttribute('data-field', 'state');
-      badge.textContent = _providerStateLabel(state);
-      row.appendChild(badge);
-    }
+  if (providerData.state_label) {
+    const badge = _el('span', 'px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-300');
+    badge.setAttribute('data-field', 'state');
+    badge.textContent = providerData.state_label;
+    row.appendChild(badge);
+  }
+  if ('token_count_observed_at' in providerData) {
     const asOf = _asOfText(providerData);
     if (asOf) {
       asOfEl = _el('span', 'text-slate-500');
@@ -364,6 +338,8 @@ function _buildRow(key, providerData) {
       asOfEl.textContent = asOf;
       row.appendChild(asOfEl);
     }
+  }
+  if ('spend' in providerData) {
     const spend = providerData.spend || {};
     const spendGroup = _el('div', 'flex items-center gap-1.5 text-slate-400');
     const l24 = _el('span', '');
@@ -384,8 +360,6 @@ function _buildRow(key, providerData) {
     spendGroup.appendChild(l7);
     spendGroup.appendChild(s7);
     row.appendChild(spendGroup);
-  } else if (providerData.provider !== 'claude') {
-    throw new Error('unknown usage provider: ' + providerData.provider);
   }
   return {row: row, buckets: buckets, asOfEl: asOfEl};
 }
@@ -407,7 +381,7 @@ function _summaryReading(providerData) {
   }
   let worst = null;
   for (const win of windows) {
-    if (_isExpiredReading(providerData, win)) continue;
+    if (_isExpiredReading(win)) continue;
     if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) continue;
     if (worst === null || win.utilization > worst) worst = win.utilization;
   }
@@ -436,7 +410,7 @@ function _buildSummaryRow(providers) {
     first = false;
     const seg = _el('span', 'inline-flex items-center gap-1.5');
     seg.setAttribute('data-summary-account', key);
-    seg.appendChild(_providerPill(providerData.provider));
+    seg.appendChild(_providerPill(providerData));
     const name = _el('span', 'text-slate-300 font-medium');
     name.textContent = providerData.account || key;
     seg.appendChild(name);
@@ -482,8 +456,8 @@ function renderExtUsage(data) {
 
 registerWsMessageHandler('ext_usage', renderExtUsage);
 
-// Repaint rather than patch text: a reading can cross into "expired" purely by
-// the passage of time, which changes the bar as well as the label.
+// The 60s repaint recomputes each countdown and reading age from the clock; an
+// expiry change arrives with the server's next emit.
 function _refreshResetTimers() {
   for (const entry of _extUsageRows) {
     for (const bucket of entry.buckets) {

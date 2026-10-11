@@ -455,6 +455,5 @@ def _transform_codex_response(
   if ("primary" in rate_limits and "secondary" in rate_limits and primary is None and secondary is None and
       ((credits_reading is not None and credits_reading["unlimited"] is True) or
        ("credits" not in rate_limits and rate_limits.get("plan_type") == "business"))):
-    usage["rate_limits_state"] = "business-unlimited"
     usage[usage_sources.PANEL_STATE_LABEL] = "business / unlimited"
   return usage

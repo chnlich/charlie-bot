@@ -124,7 +124,7 @@ def test_codex_usage_transform_adds_token_count_observed_at() -> None:
       "provider": "codex",
       "token_count_observed_at": "2026-03-27T18:29:35.694Z",
   }
-  assert "rate_limits_state" not in usage
+  assert "state_label" not in usage
 
 
 # One row per raw rate_limits payload shape a Codex token_count event can
@@ -161,10 +161,10 @@ def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: p
   for unreadable in ("yes", {"unlimited": "false"}):
     usage = transform(unreadable)
     assert "credits" not in usage
-    assert "rate_limits_state" not in usage
+    assert "state_label" not in usage
   metered = transform({"unlimited": False, "balance": "n/a"})
   assert metered["credits"] == {"unlimited": False}
-  assert "rate_limits_state" not in metered
+  assert "state_label" not in metered
 
   reasons = [w["reason"] for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
   assert reasons == ["credits is not an object", "unlimited is not a bool", "missing or unparseable balance"]

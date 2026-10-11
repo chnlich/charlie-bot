@@ -293,8 +293,6 @@ def _legacy_home_evidence(home: Path) -> list[str]:
     evidence.append("config.d/ exists (scheduled task configuration)")
   if (home / "triggers").is_dir():
     evidence.append("triggers/ exists")
-  if (home / "session_aliases.json").is_file():
-    evidence.append("session_aliases.json exists")
   if (home / "sessions").is_dir():
     evidence.append("sessions/ exists")
   return evidence

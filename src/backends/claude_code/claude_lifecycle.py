@@ -228,10 +228,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
         account_label=account.label,
         account=account,
         relay_watch=claude_relay.RelayWatch(
-            account.label,
-            ctx.option.model,
-            cfg=ctx.cfg,
-            account_pool=claude_accounts.option_pool(ctx.option)),
+            account.label, ctx.option.model, cfg=ctx.cfg, account_pool=claude_accounts.option_pool(ctx.option)),
         relays=relays)
 
   def watch(

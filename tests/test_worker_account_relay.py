@@ -235,7 +235,8 @@ async def test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_ban
   claude_accounts.observe_rate_limit(
       "ext-2", conftest.rate_limit_event("allowed", 0.905)["rate_limit_info"], now=NOW - timedelta(minutes=30))
   first = conftest.ScriptedRelayBackend(
-      [conftest.rate_limit_event("allowed_warning", 0.92), conftest.user_tool_result_event()], exit_code=0)
+      [conftest.rate_limit_event("allowed_warning", 0.92),
+       conftest.user_tool_result_event()], exit_code=0)
   second = conftest.ScriptedRelayBackend([_result()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   task_worker = _worker(tmp_path, cfg)
@@ -276,7 +277,8 @@ async def test_worker_falls_back_to_the_regular_select_when_the_below_line_targe
 
   monkeypatch.setattr(claude_accounts, "select", select_with_transient)
   first = conftest.ScriptedRelayBackend(
-      [conftest.rate_limit_event("allowed_warning", 0.92), conftest.user_tool_result_event()], exit_code=0)
+      [conftest.rate_limit_event("allowed_warning", 0.92),
+       conftest.user_tool_result_event()], exit_code=0)
   second = conftest.ScriptedRelayBackend([_result()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   task_worker = _worker(tmp_path, cfg)
@@ -298,8 +300,8 @@ async def test_worker_warning_relays_past_the_cap_with_below_line_destinations(
   conftest.make_transcript(tmp_path / "claude-main", CC_ID)
   backends = [
       conftest.ScriptedRelayBackend(
-          [conftest.rate_limit_event("allowed_warning", 0.92), conftest.user_tool_result_event()], exit_code=0)
-      for _ in range(4)
+          [conftest.rate_limit_event("allowed_warning", 0.92),
+           conftest.user_tool_result_event()], exit_code=0) for _ in range(4)
   ]
   last = conftest.ScriptedRelayBackend([_result()], exit_code=0)
   builds = _install_backends(monkeypatch, [*backends, last])
@@ -322,8 +324,7 @@ async def test_worker_relay_limit_names_each_unavailable_account(
   conftest.make_transcript(tmp_path / "claude-main", CC_ID)
   failed = [
       conftest.ScriptedRelayBackend(
-          [conftest.assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1)
-      for _ in range(4)
+          [conftest.assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1) for _ in range(4)
   ]
   builds = _install_backends(monkeypatch, failed)
   task_worker = _worker(tmp_path, cfg)

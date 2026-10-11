@@ -82,31 +82,31 @@ function fireClick(btn, handler) {
 // ---------------------------------------------------------------------------
 // 1. Gate is exhaustive over the backend-type enumeration.
 // ---------------------------------------------------------------------------
-test('updateBackendHeaderControls gates #compact-btn to exactly cc-claude, for every type in the BACKEND_TYPES fixture', () => {
-  const BACKEND_TYPES = {
-    'claude-opus-4.6': 'cc-claude',
-    'claude-sonnet-5': 'cc-claude',
-    'codex-o3': 'codex',
-    'opencode-glm': 'opencode',
+test('updateBackendHeaderControls reads #compact-btn state and title from BACKEND_COMPACT, unlisted types included', () => {
+  const BACKEND_COMPACT = {
+    'cc-claude': {manual: true, hint: null},
+    codex: {manual: false, hint: 'codex only compacts automatically — tune model_auto_compact_token_limit'},
+    opencode: {manual: false, hint: null},
   };
   const compactBtn = fakeHeaderButton();
   const elements = new Map([['compact-btn', compactBtn]]);
   const context = loadSidebarStatusContext({
     document: { getElementById: (id) => elements.get(id) || null },
+    BACKEND_COMPACT,
   });
 
-  const uniqueTypes = Array.from(new Set(Object.values(BACKEND_TYPES)));
-  assert.ok(uniqueTypes.length >= 3, 'fixture should exercise more than one non-cc-claude type');
-
-  for (const type of uniqueTypes) {
+  const expected = [
+    ['cc-claude', false, ''],
+    ['codex', true, 'codex only compacts automatically — tune model_auto_compact_token_limit'],
+    ['opencode', true, 'Manual compaction is not supported on this backend'],
+    // A session whose type the configuration no longer lists, and one with no type.
+    ['gemini', true, 'Manual compaction is not supported on this backend'],
+    ['', true, 'Manual compaction is not supported on this backend'],
+  ];
+  for (const [type, disabled, title] of expected) {
     context.updateBackendHeaderControls(type);
-    assert.equal(compactBtn.disabled, type !== 'cc-claude', `type ${type}`);
-    const expectedTitle = type === 'cc-claude'
-      ? ''
-      : type === 'codex'
-        ? 'codex only compacts automatically — tune model_auto_compact_token_limit'
-        : 'Manual compaction is not supported on this backend';
-    assert.equal(compactBtn.title, expectedTitle, `title for type ${type}`);
+    assert.equal(compactBtn.disabled, disabled, `type ${type}`);
+    assert.equal(compactBtn.title, title, `title for type ${type}`);
   }
 });
 

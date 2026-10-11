@@ -14,8 +14,7 @@ let viewportFillCount = 0;
 let triggerZoneFillCount = 0;
 let lazySessionDataTimer = null;
 function getDefaultBackendId() {
-  const backendIds = Object.keys(BACKEND_OPTIONS || {});
-  return backendIds.length ? backendIds[0] : 'claude-opus-4.6';
+  return DEFAULT_BACKEND_ID;
 }
 
 function getActiveBackendId() {

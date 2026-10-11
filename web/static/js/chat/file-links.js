@@ -6,8 +6,8 @@
 // normalized to the page origin, and a link whose target the server has
 // nothing at is marked where it appears.
 // ---------------------------------------------------------------------------
-// The one prefix the file server answers on (the files package mounts its router under the
-// single element of FILE_SERVER_MOUNTS in src/runtime/file_urls.py): "/absolute_filepath/", the
+// The one prefix the file server answers on (the single element of FILE_SERVER_MOUNTS in
+// src/runtime/file_urls.py, the core module that owns the prefix): "/absolute_filepath/", the
 // form written into chat text. The legacy "/files/" alias is unmounted server-side, so it is
 // not a file-server prefix here either. Every link is normalized to the absolute path it names
 // before anything else looks at it, so every reader of a link sees one path per file.
@@ -40,8 +40,8 @@ function parseLinkUrl(href) {
 
 // A link naming this page's hostname with a different scheme or port is pulled back to the
 // page origin only when its path sits under a file-server prefix: those are routes the page
-// origin itself serves (the files package mounts its router under the single prefix of
-// FILE_SERVER_MOUNTS in src/runtime/file_urls.py), so a link there whose scheme or port was
+// origin itself serves (the single prefix of FILE_SERVER_MOUNTS in
+// src/runtime/file_urls.py), so a link there whose scheme or port was
 // written from memory is still unambiguous. Any other path names another frontend on this
 // host (the publish lane and each neighboring port serve their own server), and is left
 // exactly as written. Another hostname is another server, and is returned as written.

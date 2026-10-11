@@ -160,8 +160,8 @@ function toolNameChipHtml(name) {
 // One-line summary of a tool call's input: the argument that names what the tool
 // acts on (command, file path, pattern), else the first input value. `limit` caps
 // the visible text (0 = never truncated) and both consumers truncate on it. Tool
-// names arrive in both cases — 'Bash' from Claude Code transcripts, 'bash' from
-// opencode events — so both spellings map to the command line.
+// names arrive in either case, depending on the backend, so both 'Bash' and 'bash'
+// map to the command line.
 function toolInputSummary(toolName, input) {
   input = input || {};
   const name = String(toolName || '');

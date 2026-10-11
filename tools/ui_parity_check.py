@@ -44,9 +44,9 @@ How it works:
 - Script errors. Per side and view the check collects uncaught exceptions
   (Runtime.exceptionThrown), console errors (Runtime.consoleAPICalled with
   type error) and log errors (Log.entryAdded with level error), normalized so
-  the side's own port and stack positions do not register. The check fails
-  when the branch side has an error message the main side lacks; the report
-  lists the errors of both sides.
+  the side's own port, stack positions and asset version stamps (?v=, ?t=) do
+  not register. The check fails when the branch side has an error message the
+  main side lacks; the report lists the errors of both sides.
 
 Whitelist (the tree-UI nodes the outline drops on both sides):
 
@@ -123,7 +123,10 @@ VFKSPAWN_C = pathlib.Path("src/runtime/agent_process/_vfkspawn.c")
 # Stack frames and code positions inside an error message: the same error on
 # both sides must compare equal, so its location does not register.
 LINE_COL = re.compile(r":\d+:\d+")
-CACHE_BUSTER = re.compile(r"([?&])t=\d+")
+# Query stamps that differ between any two loads or commits: the TeX panel's
+# /api/latex/pdf?t=<millis>, and the ?v=<commit>-<date>-<hash> that every static
+# asset URL (so every stack frame) carries.
+CACHE_BUSTER = re.compile(r"([?&][tv])=[^\s&:)\"'\\]+")
 
 # Placeholder rules: each entry names one node whose own text changes between
 # two loads of the same tree, with the reason; outline_lines rewrites the
@@ -444,7 +447,8 @@ def collect_errors(events: list[dict], mark: int, session_id: str, side: Side) -
       exception = details.get("exception", {})
       text = f"{details.get('text', '')} {exception.get('description') or exception.get('value') or ''}"
     elif method == "Runtime.consoleAPICalled" and params.get("type") == "error":
-      text = json.dumps(params.get("args", []))
+      # An argument's objectId is a per-page handle; its value or description is the message.
+      text = " ".join(str(arg["value"] if "value" in arg else arg.get("description", "")) for arg in params["args"])
     elif method == "Log.entryAdded" and params.get("entry", {}).get("level") == "error":
       entry = params["entry"]
       text = f"{entry.get('text', '')} {entry.get('url', '')}"
@@ -452,9 +456,7 @@ def collect_errors(events: list[dict], mark: int, session_id: str, side: Side) -
       continue
     text = text.replace(side.base, "<side>").replace(str(side.port), "<port>")
     text = LINE_COL.sub(":<line>", text)
-    # Cache-busting query stamps (the TeX panel's /api/latex/pdf?t=<millis>)
-    # differ between any two loads.
-    text = CACHE_BUSTER.sub(r"\1t=<nonce>", text)
+    text = CACHE_BUSTER.sub(r"\1=<stamp>", text)
     messages.add(re.sub(r"\s+", " ", text).strip()[:400])
   return sorted(messages)
 

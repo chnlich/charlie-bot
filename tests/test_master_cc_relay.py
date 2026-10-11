@@ -313,8 +313,8 @@ async def test_run_cc_warning_relays_past_the_cap_with_below_line_destinations(
   meta = _session_on("main")
   warning = ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92), user_tool_result_event()], exit_code=0)
   backends = [warning] + [
-      ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92), user_tool_result_event()], exit_code=0)
-      for _ in range(3)
+      ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92),
+                            user_tool_result_event()], exit_code=0) for _ in range(3)
   ]
   last = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [*backends, last])

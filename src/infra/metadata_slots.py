@@ -34,17 +34,15 @@ import dataclasses
 import threading
 from typing import Any
 
-from pydantic import BaseModel, SerializationInfo, ValidationError
+import pydantic
 
-from src.infra import metadata_slot_registration
-from src.infra.deferred import import_attr
-from src.infra.metadata_slot_registration import FILES, ON_SESSION, ON_THREAD
+from src.infra import deferred, metadata_slot_registration
 
 
 @dataclasses.dataclass(frozen=True)
 class _Slot:
   owner: str
-  model: type[BaseModel]
+  model: type[pydantic.BaseModel]
   after: str | None
   defaults_python: dict[str, Any]
   defaults_json: dict[str, Any]
@@ -55,22 +53,22 @@ class _Slot:
 
 
 # file ("session" | "thread") -> owner -> slot, in registration order
-_slots: dict[str, dict[str, _Slot]] = {on: {} for on in FILES}
+_slots: dict[str, dict[str, _Slot]] = {on: {} for on in metadata_slot_registration.FILES}
 # How many registrations (``metadata_slot_registration.registered()``) the slots cover. A registration that fails to
 # resolve stays uncounted, so every later call raises its error again.
 _resolved = 0
 _resolve_lock = threading.Lock()
 # file ("session" | "thread") -> the metadata model, set once by ``provide_metadata_models``
-_metadata_classes: dict[str, type[BaseModel]] = {}
+_metadata_classes: dict[str, type[pydantic.BaseModel]] = {}
 
 
-def provide_metadata_models(session: type[BaseModel], thread: type[BaseModel]) -> None:
+def provide_metadata_models(session: type[pydantic.BaseModel], thread: type[pydantic.BaseModel]) -> None:
   """Receive ``SessionMetadata`` and ``ThreadMetadata`` from ``models.py``, which calls this once."""
-  _metadata_classes[ON_SESSION] = session
-  _metadata_classes[ON_THREAD] = thread
+  _metadata_classes[metadata_slot_registration.ON_SESSION] = session
+  _metadata_classes[metadata_slot_registration.ON_THREAD] = thread
 
 
-def _file_of(meta: BaseModel) -> str:
+def _file_of(meta: pydantic.BaseModel) -> str:
   for on, metadata in _metadata_classes.items():
     if isinstance(meta, metadata):
       return on
@@ -83,7 +81,7 @@ def _resolve(registration: metadata_slot_registration.Registration) -> _Slot:
   metadata = _metadata_classes[on]
   if after is not None and after not in metadata.model_fields:
     raise ValueError(f"{after!r} is not a declared field of {metadata.__name__}")
-  model_cls = import_attr(registration.model)
+  model_cls = deferred.import_attr(registration.model)
   for name in model_cls.model_fields:
     if name in metadata.model_fields:
       raise ValueError(f"{owner!r} field {name!r} collides with a field of {metadata.__name__}")
@@ -114,7 +112,7 @@ def _resolve_pending() -> None:
       _resolved += 1
 
 
-def _slot(meta: BaseModel, owner: str) -> _Slot:
+def _slot(meta: pydantic.BaseModel, owner: str) -> _Slot:
   on = _file_of(meta)
   slot = _slots[on].get(owner)
   if slot is None:
@@ -122,12 +120,12 @@ def _slot(meta: BaseModel, owner: str) -> _Slot:
   return slot
 
 
-def _held(meta: BaseModel, slot: _Slot) -> dict[str, Any]:
+def _held(meta: pydantic.BaseModel, slot: _Slot) -> dict[str, Any]:
   extra = meta.model_extra or {}
   return {name: extra[name] for name in slot.names if name in extra}
 
 
-def fields_of(meta: BaseModel, owner: str) -> BaseModel:
+def fields_of(meta: pydantic.BaseModel, owner: str) -> pydantic.BaseModel:
   """The validated view over ``owner``'s keys in ``meta``; a key the file lacks reads as its default.
 
   A stored value of the wrong type raises ValidationError.
@@ -137,7 +135,7 @@ def fields_of(meta: BaseModel, owner: str) -> BaseModel:
   return slot.model.model_validate(_held(meta, slot))
 
 
-def set_fields(meta: BaseModel, owner: str, **values: Any) -> None:
+def set_fields(meta: pydantic.BaseModel, owner: str, **values: Any) -> None:
   """Validate ``values`` against ``owner``'s model, then write those keys into ``meta``.
 
   A name that is not a field of the owner's model raises ValueError; a value of the wrong type raises
@@ -154,8 +152,8 @@ def set_fields(meta: BaseModel, owner: str, **values: Any) -> None:
 
 
 def copy_fields(
-    source: BaseModel,
-    target: BaseModel,
+    source: pydantic.BaseModel,
+    target: pydantic.BaseModel,
     owner: str,
     *,
     names: tuple[str, ...] | None = None,
@@ -171,7 +169,7 @@ def _owned_names(on: str) -> dict[str, str]:
   return {name: owner for owner, slot in _slots[on].items() for name in slot.names}
 
 
-def set_registered(meta: BaseModel, values: dict[str, Any]) -> None:
+def set_registered(meta: pydantic.BaseModel, values: dict[str, Any]) -> None:
   """Write ``values``, keys of any owner registered on ``meta``'s file, through ``set_fields``, one call per owner.
 
   A key that no owner registers raises ValueError.
@@ -199,11 +197,12 @@ def check_registered(on: str, values: dict[str, Any]) -> None:
     held = {name: values[name] for name in slot.names if name in values}
     try:
       slot.model.model_validate(held)
-    except ValidationError as exc:
+    except pydantic.ValidationError as exc:
       raise ValueError(f"invalid value for the keys of {owner!r}: {exc}") from exc
 
 
-def arrange(on: str, declared: dict[str, Any], data: dict[str, Any], info: SerializationInfo) -> dict[str, Any]:
+def arrange(on: str, declared: dict[str, Any], data: dict[str, Any],
+            info: pydantic.SerializationInfo) -> dict[str, Any]:
   """The saved or served form of one metadata dump: the dump's keys in file order with every slot key present.
 
   ``declared`` is the metadata model's field table and ``data`` the dump as pydantic produced it: declared

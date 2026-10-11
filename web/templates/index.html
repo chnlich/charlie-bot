@@ -9,9 +9,6 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <link rel="stylesheet" href="/static/css/styles.css?v={{ static_asset_version|urlencode }}">
   {% for part in page_parts('head') %}{% include part %}{% endfor %}
   <!-- Loaded after styles.css so Tailwind's `.hidden` utility (display:none) wins the
@@ -196,10 +193,6 @@
           </svg>
         </a>
         <div id="tab-buttons" class="flex gap-1">
-          {% if preview_mode is not defined or not preview_mode() %}
-          <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
-          {% endif %}
-          <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
           {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
@@ -207,17 +200,8 @@
       </header>
       {% for part in page_parts('below_header') %}{% include part %}{% endfor %}
 
-      <div class="relative">
-      <div id='ext-usage-strip' class='hidden flex flex-col gap-1.5 px-4 py-1.5 bg-slate-800/80 border-b border-slate-700/50 text-xs text-slate-400'>
-      </div>
-        <button id="ext-usage-toggle"
-                class="hidden absolute z-10 p-2 rounded-full bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 hover:text-white shadow-lg transition-all"
-                title="Hide quota details">▾</button>
-      </div>
-
-      <!-- Tab content wrapper (terminal + chat + worker leaf + side panels) -->
+      <!-- Tab content wrapper (chat + worker leaf + plans + package tab panels) -->
       <div class="flex-1 flex min-h-0">
-        <div id="tab-terminal" class="hidden flex-1 min-h-0 min-w-0 bg-black"></div>
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
         <!-- Messages -->
@@ -294,31 +278,6 @@
             </div>
           </div>
         </div>
-      </div>
-
-
-      <div id="backlog-resize-handle" class="resize-handle" style="display:none"></div>
-
-      <!-- ===== BACKLOG PANEL ===== -->
-      <div id="backlog-panel" class="hidden flex flex-col bg-gray-900 border-l border-gray-700 overflow-hidden" style="width: 40%">
-        <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800">
-          <select id="backlog-repo-selector" onchange="backlogPanel.switchRepo(this.value)"
-                  class="text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
-          <div class="flex gap-2 items-center">
-            <button onclick="backlogPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
-            <select id="backlog-module-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
-              <option value="all">All modules</option>
-            </select>
-            <select id="backlog-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
-              <option value="pending">Active</option>
-              <option value="all">All</option>
-              <option value="done">Done</option>
-              <option value="rejected">Rejected</option>
-              <option value="failed">Failed</option>
-            </select>
-          </div>
-        </div>
-        <div id="backlog-list" class="flex-1 overflow-y-auto p-3 space-y-3"></div>
       </div>
       <!-- ===== PLANS TAB (full-area, workers-pattern) ===== -->
       <div id="tab-plans" class="flex-1 flex flex-col min-h-0 min-w-0 bg-gray-900 overflow-hidden hidden">
@@ -415,10 +374,6 @@
   <script src="/static/js/chat/turn-engine.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/input.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/triggers-tray.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_b64.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_clipboard.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_mount.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/namespace.js?v={{ static_asset_version|urlencode }}"></script>
@@ -430,9 +385,7 @@
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/backlog-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/plan-panel.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/ext_usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
   {% for part in page_parts('scripts') %}{% include part %}{% endfor %}
 

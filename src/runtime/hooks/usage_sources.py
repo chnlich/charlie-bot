@@ -92,7 +92,7 @@ class UsageRecord:
 
 # Keys of the quota panel payload and of one window entry in it. A source's accounts build the payload
 # from their provider's quota data, src/backends/claude_code/claude_accounts.py folds it into the
-# account readings, and web/static/js/ext_usage.js renders it: one home per key keeps the producers,
+# account readings, and src/features/usage/static/ext_usage.js renders it: one home per key keeps the producers,
 # the consumer and the browser in step. A window's ``utilization`` is a percentage as reported;
 # ``resets_at`` is an ISO-8601 UTC string, empty when upstream reported none; ``scope_label`` names a
 # model-scoped window and is absent on plan-wide ones; ``expired`` is true on a window whose reading

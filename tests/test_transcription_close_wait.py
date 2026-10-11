@@ -34,7 +34,7 @@ _GEMINI_CASE = (
         "setupComplete": {}
     }])
 _MUSE_CASE = (
-    muse, muse.MuseTranscriptionBackend, {
+    credentials, muse.MuseTranscriptionBackend, {
         "meta": {
             "model_api_key": "test-key"
         }

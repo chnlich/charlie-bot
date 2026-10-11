@@ -20,7 +20,9 @@ How it works:
 - Servers. Each side serves its own ``server.app`` from its own checkout in a
   child process (``serve`` mode below) with uvicorn ``lifespan="off"`` (no
   scheduler, recovery or trigger scans) on a free local port, against a fresh
-  temporary CHARLIEBOT_HOME with a synthetic access key. Neither side runs in
+  temporary CHARLIEBOT_HOME with a synthetic access key; the tmux server that
+  the Terminal tab starts keeps its socket in a directory of the side's own
+  (TMUX_TMPDIR) and is killed when the side stops. Neither side runs in
   preview mode, so the preview-only differences (the preview marker, the hidden
   Terminal tab and the hidden scheduled-task "+") stay out of the comparison
   and are checked by eye on the trial instance.
@@ -247,6 +249,11 @@ class Side:
     self.home = tmp / f"home-{name}"
     write_home(self.home, self.port, self.access_key, sessions)
     self.log_path = tmp / f"serve-{name}.log"
+    # The Terminal tab starts a login shell in a tmux server that outlives the
+    # web server. A socket directory of the side's own keeps that server off the
+    # host's shared one, and stop() kills it with the side.
+    self.tmux_dir = tmp / f"tmux-{name}"
+    self.tmux_dir.mkdir()
     self.proc: subprocess.Popen | None = None
 
   @property
@@ -259,7 +266,7 @@ class Side:
         for k, v in os.environ.items()
         if k not in (constants.SESSION_ID_ENV_VAR, "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")
     }
-    env.update({"CHARLIEBOT_HOME": str(self.home), "PYTHONPATH": str(self.repo)})
+    env.update({"CHARLIEBOT_HOME": str(self.home), "PYTHONPATH": str(self.repo), "TMUX_TMPDIR": str(self.tmux_dir)})
     log = self.log_path.open("w", encoding="utf-8")
     self.proc = subprocess.Popen(
         [
@@ -277,7 +284,7 @@ class Side:
     if not line.startswith(READY_PREFIX):
       # The side's own error travels in the message: a copied log is evidence,
       # not the only place the failure shows.
-      tail = self.log_path.read_text(encoding="utf-8", errors="replace")[-1500:] if self.log_path.exists() else ""
+      tail = self.log_path.read_text(encoding="utf-8", errors="replace")[-1500:]
       fail(f"{self.name} server did not start; log {self.log_path}: {line.strip()}\n{tail}")
     modules = json.loads(line[len(READY_PREFIX):])
     paths = [modules["server"], *modules["src"]]
@@ -295,6 +302,8 @@ class Side:
 
   def stop(self) -> None:
     browser_harness_session_tree.stop_child(self.proc, grace_s=10, kill_reap_s=10)
+    for socket_path in self.tmux_dir.glob("tmux-*/*"):
+      subprocess.run(["tmux", "-S", str(socket_path), "kill-server"], check=True)
 
 
 def provision_main_extension(main_tree: pathlib.Path) -> None:
@@ -351,6 +360,8 @@ OUTLINE_JS = r"""
     if (onclick.includes('createChildSession(')) return 'new-child-action';
     if (onclick.includes('openTaskContextModal(')) return 'task-context-action';
     if (tag === 'svg' && (el.getAttribute('title') || '').startsWith('Worker (')) return 'worker-icon';
+    // .xterm-rows: the terminal's live screen. Its row count and text follow a
+    // real shell and the tmux status clock, so two loads of one tree differ.
     if (el.classList.contains('xterm-rows')) return 'xterm-screen';
     return null;
   }

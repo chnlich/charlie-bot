@@ -8,15 +8,15 @@ instead and names the conversion commands.
 
 import json
 import os
-from pathlib import Path
+import pathlib
 
-from src.infra.config import CharlieBotConfig
-from src.runtime.run_identity import SESSION_METADATA_NAME
+from src.infra import config
+from src.runtime import run_identity
 
 CONVERSION_SCRIPT = "scripts/v1_session_conversion.py"
 
 
-def count_v1_sessions(sessions_dir: Path) -> int:
+def count_v1_sessions(sessions_dir: pathlib.Path) -> int:
   """Count the session directories whose ``metadata.json`` has no ``profile`` or a null one.
 
   The scan lists *sessions_dir* once and reads only the ``profile`` key of each file, with no
@@ -32,7 +32,7 @@ def count_v1_sessions(sessions_dir: Path) -> int:
     for entry in entries:
       if not entry.is_dir() or (entry.name.startswith(".task-") and entry.name.endswith(".tmp")):
         continue
-      path = Path(entry.path) / SESSION_METADATA_NAME
+      path = pathlib.Path(entry.path) / run_identity.SESSION_METADATA_NAME
       try:
         raw = path.read_bytes()
       except FileNotFoundError:
@@ -48,7 +48,7 @@ def count_v1_sessions(sessions_dir: Path) -> int:
   return count
 
 
-def require_no_v1_sessions(cfg: CharlieBotConfig) -> None:
+def require_no_v1_sessions(cfg: config.CharlieBotConfig) -> None:
   """Raise ValueError when the home holds a v1 session.
 
   The server calls this once at start, before it serves. The error names the home, the

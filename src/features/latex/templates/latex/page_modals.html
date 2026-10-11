@@ -1,0 +1,13 @@
+  <div id="diff-modal" class="diff-modal-overlay hidden">
+    <div class="diff-modal">
+      <div class="diff-modal-header">
+        <span class="text-sm font-semibold text-slate-200">AI proposed changes to TeX source</span>
+        {{ close_button('rejectTexEdit()', 'Close', close_btn_class) }}
+      </div>
+      <div class="diff-modal-body" id="diff-modal-body"></div>
+      <div class="diff-modal-footer">
+        <button onclick="rejectTexEdit()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 font-medium transition-colors">Reject</button>
+        <button onclick="acceptTexEdit()" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Accept</button>
+      </div>
+    </div>
+  </div>

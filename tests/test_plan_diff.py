@@ -1,46 +1,45 @@
 import re
 from html import unescape
 
-from conftest import ROOT
+import conftest
 
-from src.features.artifacts.artifact_check import _descendants, _Element, _parse_dom
-from src.features.artifacts.plan_diff import _BLOCK_TAGS, _IGNORED_TAGS, annotate
-
-
-def _parse(html: str) -> _Element:
-  root = _parse_dom(html)
-  return next((node for node in _descendants(root) if node.tag == "body"), root)
+from src.features.artifacts import artifact_check, plan_diff
 
 
-def _text(node: _Element) -> str:
+def _parse(html: str) -> artifact_check._Element:
+  root = artifact_check._parse_dom(html)
+  return next((node for node in artifact_check._descendants(root) if node.tag == "body"), root)
+
+
+def _text(node: artifact_check._Element) -> str:
   """The node's text with the ignored-tag subtrees (head, style, script, ...) dropped.
 
   The plan-differ invariants compare annotated pages against their sources;
   the pages the differ injects carry a CBD <style> whose CSS text must not
   count as document text, so the walk skips every _IGNORED_TAGS subtree.
   """
-  if node.tag in _IGNORED_TAGS:
+  if node.tag in plan_diff._IGNORED_TAGS:
     return ""
   return "".join(child if isinstance(child, str) else _text(child) for child in node.children)
 
 
-def _direct_text(node: _Element) -> str:
+def _direct_text(node: artifact_check._Element) -> str:
   return "".join(child for child in node.children if isinstance(child, str))
 
 
-def _commentable(node: _Element) -> bool:
-  if node.tag not in _BLOCK_TAGS:
+def _commentable(node: artifact_check._Element) -> bool:
+  if node.tag not in plan_diff._BLOCK_TAGS:
     return False
   if re.search(r"\S", _direct_text(node)):
     return True
   return node.tag in {"pre", "td", "th"} and bool(_text(node).strip())
 
 
-def _commentable_blocks(html: str) -> list[_Element]:
-  return [node for node in _descendants(_parse(html)) if _commentable(node)]
+def _commentable_blocks(html: str) -> list[artifact_check._Element]:
+  return [node for node in artifact_check._descendants(_parse(html)) if _commentable(node)]
 
 
-def _quote(node: _Element) -> str:
+def _quote(node: artifact_check._Element) -> str:
   return re.sub(r"\s+", " ", _text(node)).strip()[:400]
 
 
@@ -92,7 +91,7 @@ def _restore(html: str) -> str:
 
 
 def _assert_invariants(base: str, new: str) -> str:
-  annotated = annotate(base, new)
+  annotated = plan_diff.annotate(base, new)
   clean_blocks = _commentable_blocks(new)
   marked_blocks = _commentable_blocks(annotated)
   assert len(clean_blocks) == len(marked_blocks)
@@ -112,7 +111,7 @@ def _assert_invariants(base: str, new: str) -> str:
 
 def _fixture_pair() -> tuple[str, str]:
   """The real captured plan page pair the whole-pipeline tests annotate: v10 base, v11 new."""
-  data = ROOT / "tests/data"
+  data = conftest.ROOT / "tests/data"
   base = (data / "plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
   new = (data / "plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
   return base, new
@@ -128,7 +127,7 @@ def test_four_invariants_hold_for_real_fixture_pair() -> None:
 def test_entirely_new_block_is_commentable_without_an_ins_wrapper() -> None:
   base = "<html><body><p>unchanged</p></body></html>"
   new = "<html><body><p>unchanged</p><p>new passage to comment</p></body></html>"
-  annotated = annotate(base, new)
+  annotated = plan_diff.annotate(base, new)
   assert '<p class="cbd-new">new passage to comment</p>' in annotated
   assert _quote(_commentable_blocks(annotated)[-1]) == "new passage to comment"
   assert '<ins class="cbd-ins">new passage to comment</ins>' not in annotated

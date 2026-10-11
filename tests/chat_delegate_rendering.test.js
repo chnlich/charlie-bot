@@ -306,9 +306,10 @@ test('historical task_delegated fallback omits full description', () => {
   assert.match(html, /codex-o3 \/ o3/);
   assert.doesNotMatch(html, /Workers panel/);
   assert.doesNotMatch(html, /Old full task spec/);
-  // The legacy delegation links the thread URL (the 4.1 addressing) and the
-  // live-state span rides the owning session's status poll.
-  assert.match(html, /href="\/\?session=session-a&amp;thread=old-thread"/);
+  // The legacy delegation renders no child link — its thread id no longer
+  // resolves to a view — and the live-state span rides the owning session's
+  // status poll.
+  assert.doesNotMatch(html, /thread=old-thread/);
   assert.match(html, /data-delegate-parent-session="session-a"/);
 });
 

@@ -3,8 +3,8 @@
 // parent row, collapsed by default behind an in-memory expand state; the
 // five-row preview cap counts root rows only; a worker leaf carries the leaf
 // icon and the archive action alone. The Scheduled tab nests the same way:
-// its cron rows group by project at root level with the projected worker
-// leaves collapsed under them. Harness: session_context_stub's
+// its cron rows group by project at root level with the worker leaves
+// collapsed under them. Harness: session_context_stub's
 // buildSidebarIndicatorContext.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
@@ -25,15 +25,6 @@ function manager(id, parent, hour, overrides = {}) {
 
 function worker(id, parent, hour, overrides = {}) {
   return meta(id, {profile: 'worker', task_parent_id: parent, updated_at: at(hour), ...overrides});
-}
-
-// A projected legacy worker-thread row: profile worker, parent session, and
-// the worker_thread origin pair (no session exists behind the row id).
-function projectedLeaf(threadId, sessionId, hour, overrides = {}) {
-  return worker(threadId, sessionId, hour, {
-    worker_thread: {session_id: sessionId, thread_id: threadId},
-    ...overrides,
-  });
 }
 
 function legacy(id, hour, overrides = {}) {
@@ -207,7 +198,7 @@ test('a childless logical row and a worker row draw no count element', () => {
 test('a bound node counts its firing leaves', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [boundNode('cron1', 10)];
-  for (let i = 1; i <= 5; i++) rows.push(projectedLeaf(`t${i}`, 'cron1', i));
+  for (let i = 1; i <= 5; i++) rows.push(worker(`t${i}`, 'cron1', i));
 
   context.renderSessionList(rows, 'all');
 
@@ -544,13 +535,13 @@ test('an archived worker row shows the delivered check in place of the leaf icon
   assert.doesNotMatch(doneRow, /title="Worker \(implementation leaf\)"/);
 });
 
-test('the projected worker threads of a legacy session nest under it, collapsed by default', () => {
+test('the worker sessions of a legacy session nest under it, collapsed by default', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([
     legacy('old1', 10),
-    projectedLeaf('t1', 'old1', 9),
-    projectedLeaf('t2', 'old1', 8),
+    worker('t1', 'old1', 9),
+    worker('t2', 'old1', 8),
   ], 'all');
 
   const html = nav.innerHTML;
@@ -564,20 +555,6 @@ test('the projected worker threads of a legacy session nest under it, collapsed 
   assert.match(rowHtml(html, 't1'), /title="Worker \(implementation leaf\)"/);
   assert.match(rowHtml(html, 't2'), /title="Worker \(implementation leaf\)"/);
   assert.deepEqual(anchorIdsInOrder(html), ['old1', 't1', 't2']);
-});
-
-test('a projected leaf click opens the thread view and never switches sessions', () => {
-  const {context, nav} = buildSidebarIndicatorContext([]);
-
-  context.renderSessionList([legacy('old1', 10), projectedLeaf('t1', 'old1', 9)], 'all');
-
-  const tag = anchorOpenTag(nav.innerHTML, 't1');
-  assert.match(tag, /openThreadView\('old1', 't1'\)/);
-  assert.doesNotMatch(tag, /switchSession\('t1'\)/);
-  // A projected leaf is read-only: no actions, and a double click never renames.
-  const row = rowHtml(nav.innerHTML, 't1');
-  assert.doesNotMatch(row, /title="Archive"|star-btn|title="Rename"|title="Set group"/);
-  assert.doesNotMatch(tag, /ondblclick/);
 });
 
 test('a legacy session row keeps its actions but shows no Task & context button', () => {
@@ -605,9 +582,9 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
 
   context.renderSessionList([
     boundNode('cron1', 10),
-    projectedLeaf('t1', 'cron1', 9),
-    projectedLeaf('t2', 'cron1', 8),
-    projectedLeaf('t3', 'cron1', 7),
+    worker('t1', 'cron1', 9),
+    worker('t2', 'cron1', 8),
+    worker('t3', 'cron1', 7),
   ], 'all');
 
   const html = nav.innerHTML;
@@ -625,12 +602,13 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
   assert.match(rowHtml(html, 'cron1'), /Scheduled: task-cron1/);
   assert.match(rowHtml(html, 'cron1'), /title="Settings"/);
   assert.match(rowHtml(html, 'cron1'), /data-schedule-task="task-cron1"/);
-  // A projected leaf stays read-only: no star, rename, archive or schedule
-  // button, and its click opens that thread's transcript in the main chat view.
+  // A worker leaf carries the archive action alone: no star, rename or
+  // schedule button, and its click switches sessions.
   for (const t of ['t1', 't2', 't3']) {
     const row = rowHtml(html, t);
-    assert.doesNotMatch(row, /star-btn|title="Rename"|title="Archive"|title="Edit schedule"|title="Add schedule"/);
-    assert.match(anchorOpenTag(html, t), /openThreadView\('cron1',/);
+    assert.doesNotMatch(row, /star-btn|title="Rename"|title="Edit schedule"|title="Add schedule"/);
+    assert.match(row, /title="Archive"/);
+    assert.match(anchorOpenTag(html, t), /switchSession\('t/);
   }
   // The group header counts every rendered row, roots and descendants.
   assert.match(html, /<span class="text-xs text-slate-500 ml-auto">4<\/span>/);
@@ -668,7 +646,7 @@ test('a bound row\u2019s Settings names its schedule task; an unbound manager ro
 
 test('a grouped paint records the tree maps, refreshes tree indicators, and keeps expand state across repaints', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
-  const rows = [boundNode('cron1', 10), projectedLeaf('t1', 'cron1', 9)];
+  const rows = [boundNode('cron1', 10), worker('t1', 'cron1', 9)];
   let indicatorRefreshes = 0;
   context.Sidebar.refreshTreeIndicators = () => { indicatorRefreshes += 1; };
 
@@ -687,9 +665,9 @@ test('a collapsed bound row\u2019s gear and subtree mark survive expand and coll
   const {context, shown} = buildSidebarIndicatorContext(['cron1', 'cron2', 'leaf1', 'leaf2']);
   context.renderSessionList([
     boundNode('cron1', 10),
-    projectedLeaf('leaf1', 'cron1', 9, {has_running_tasks: true}),
+    worker('leaf1', 'cron1', 9, {has_running_tasks: true}),
     boundNode('cron2', 8),
-    projectedLeaf('leaf2', 'cron2', 7, {has_unread: true}),
+    worker('leaf2', 'cron2', 7, {has_unread: true}),
   ], 'all');
   context.setSessionIndicator('cron1', 'idle');
   context.setSessionIndicator('cron2', 'idle');

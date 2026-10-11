@@ -586,22 +586,17 @@ function delegateBackendModel(invocation, msg) {
 }
 
 // Where the delegated child lives: new-style delegations name the child
-// session; legacy ones left only a thread under the parent session, addressed
-// by the projected thread URL.
-function delegateChildHref(msg, sessionId) {
-  if (msg.child_session_id) return '/?session=' + encodeURIComponent(msg.child_session_id);
-  if (msg.thread_id && sessionId) {
-    return '/?session=' + encodeURIComponent(sessionId) + '&thread=' + encodeURIComponent(msg.thread_id);
-  }
-  return null;
+// session. A legacy delegation left only a thread id, which no longer resolves
+// to a view, so it renders no link.
+function delegateChildHref(msg) {
+  return msg.child_session_id ? '/?session=' + encodeURIComponent(msg.child_session_id) : null;
 }
 
-function delegateChildLinkHtml(msg, sessionId) {
-  const href = delegateChildHref(msg, sessionId);
+function delegateChildLinkHtml(msg) {
+  const href = delegateChildHref(msg);
   if (!href) return '';
-  const label = msg.child_session_id || ('thread ' + msg.thread_id);
   return '<a class="text-blue-400 hover:underline break-all" href="' + escapeHtmlAttr(href) + '">'
-    + escapeHtml(label) + '</a>';
+    + escapeHtml(msg.child_session_id) + '</a>';
 }
 
 // The display label for a backend id (the config-authored text, family prefix
@@ -615,8 +610,7 @@ function delegateBackendLabelText(backendId) {
 
 // The live line the 3 s status poll paints into the card. A new-style card
 // reads the child session's own status; a legacy delegation has no session id
-// for the poll to resolve, so its line follows the owning session's status —
-// the same coarseness the projected sidebar row carries.
+// for the poll to resolve, so its line follows the owning session's status.
 function delegateLiveStateHtml(msg, sessionId) {
   const child = msg.child_session_id || '';
   const tracked = child || sessionId || '';
@@ -630,11 +624,11 @@ function delegateLiveStateHtml(msg, sessionId) {
 
 function renderDelegateMetadata(msg, sessionId) {
   var invocation = msg.delegate_invocation;
-  // The rendered session owns the message: its id addresses a legacy child's
-  // thread URL and anchors the live-state line's poll scope.
+  // The rendered session owns the message: its id anchors the live-state
+  // line's poll scope.
   sessionId = sessionId || (typeof SESSION_ID !== 'undefined' ? SESSION_ID : '');
   var liveState = delegateLiveStateHtml(msg, sessionId);
-  var childLink = delegateChildLinkHtml(msg, sessionId);
+  var childLink = delegateChildLinkHtml(msg);
   var rows = [];
   if (invocation) {
     var taskType = displayMetadataValue(invocation.task_type || msg.task_type, '(unknown)');

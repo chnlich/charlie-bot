@@ -18,16 +18,13 @@ const renderedSessionStatuses = {};
 // Rows painted with profile=worker: a leaf runs its own work, so its running
 // state paints as the spinner rather than the delegated-work gear.
 const renderedWorkerRows = new Set();
-// Rows painted as task-tree nodes (profile not null, not a projected legacy
-// worker-thread leaf): their own running state is a live Run of their own and
-// paints as the spinner too — the gear is exclusively a parent row's stand-in
-// for a running descendant.
+// Rows painted as task-tree nodes (profile not null): their own running state
+// is a live Run of their own and paints as the spinner too — the gear is
+// exclusively a parent row's stand-in for a running descendant.
 const renderedTaskTreeRows = new Set();
 
-// A projected legacy worker-thread leaf (profile 'worker' plus worker_thread)
-// is a legacy row: it keeps the legacy derivation and the legacy mapping.
 function isTaskTreeRow(session) {
-  return !!session && session.profile != null && !session.worker_thread;
+  return !!session && session.profile != null;
 }
 
 function recordRenderedSessionStatus(session) {
@@ -556,8 +553,8 @@ function updateThinkingTime() {
 }
 
 async function cancelMaster() {
-  // A worker node's or legacy thread view's stop button signals the active
-  // Run through its own cancel route (session-view.js), not the chat cancel.
+  // A worker node's stop button signals the active Run through its own
+  // cancel route (session-view.js), not the chat cancel.
   if (typeof transcriptTarget === 'function' && transcriptTarget()) {
     return cancelTranscriptTarget();
   }

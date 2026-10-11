@@ -354,7 +354,8 @@ async def test_read_does_not_flag_a_summon_a_backfill_marker_names(tmp_path: pat
   marker alone must retire it: no flag, and the window start stays with the
   unread instead of dragging back to the dead mention on every later read."""
   cfg, session_blocks, client = _rig(
-      tmp_path, channels={_THREAD: [_message(1, "the question"), _message(2, "a later follow up")]})
+      tmp_path, channels={_THREAD: [_message(1, "the question"),
+                                    _message(2, "a later follow up")]})
   session_id = await _make_session(session_blocks, watermark=_mid(1))
   summon = _summon_event(_mid(1))
   await session_blocks.events.save_chat_event(session_id, summon)

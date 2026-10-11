@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from src.features.trace import api as trace_api
-from src.features.trace import trace_merge, trace_merge_child
+from src.features.trace import direct_pass_child, trace_merge, trace_merge_child
 from tests.core import test_multi_trace_merge
 
 REPO_ROOT = str(pathlib.Path(trace_api.__file__).resolve().parents[3])
@@ -104,10 +104,10 @@ def test_chunked_build_serves_the_sequential_bytes(tmp_path: pathlib.Path, monke
       tmp_path / n
       for n in ("chunked.json.gz", "sequential.json.gz", "chunked-slim.json.gz", "sequential-slim.json.gz"))
 
-  monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
+  monkeypatch.setattr(direct_pass_child, "_MIN_CHUNK_BYTES", 256)
   trace_merge.merge_traces([trace], plain, slim=False)
   trace_merge.merge_traces([trace], slim, slim=True)
-  monkeypatch.setattr(trace_merge, "_split_chunks", lambda *args: None)
+  monkeypatch.setattr(direct_pass_child, "_split_chunks", lambda *args: None)
   trace_merge.merge_traces([trace], sequential, slim=False)
   trace_merge.merge_traces([trace], slim_sequential, slim=True)
   assert plain.read_bytes() == sequential.read_bytes()

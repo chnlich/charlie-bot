@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 
-const DIFF_COMMENTS_JS = readStatic('diff_comments.js');
+const DIFF_COMMENTS_JS = readPackageStatic('features', 'diff_view', 'diff_comments.js');
 const COMMENT_POST_JS = readStatic('comment_post.js');
 
 function makeElement() {

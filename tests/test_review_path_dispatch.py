@@ -29,7 +29,13 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
     against the scripted review's finish. The review itself succeeds; what
     blocks delivery is the work branch's commit not landing on main (an empty
     commit on the branch, made while the review runs), so the chain reports
-    "passed review but its branch did not land" and the child stays open.
+    "passed review but its branch did not land". The next dispatch's backend
+    is GATED too: the child-open assertion runs while that dispatch provably
+    has not finished, the one point the contract pins the child open (a node
+    with an unfinished dispatch cannot close — its pending input, then its
+    active Run, blocks the close). Waiting for the parent report instead
+    races the next dispatch's whole delivery chain, whose successful close
+    of the child is legal once the dispatch has finished.
     """
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -37,7 +43,15 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   conftest.install_scripted_backends(
-      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("taken off")])],
+      monkeypatch,
+      [
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("taken off")]),
+          # The blocked-delivery report wakes the parent's own turn...
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("blocked report noted")]),
+          # ...and so does the delivery report when the tweak's chain closes
+          # the child.
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("delivery report noted")]),
+      ],
       conftest.BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
@@ -53,10 +67,16 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
       caller="operator")
   review_started = asyncio.Event()
   review_gate = asyncio.Event()
+  tweak_started = asyncio.Event()
+  tweak_gate = asyncio.Event()
 
   async def review_gate_wait() -> None:
     review_started.set()
     await review_gate.wait()
+
+  async def tweak_gate_wait() -> None:
+    tweak_started.set()
+    await tweak_gate.wait()
 
   conftest.install_scripted_backends(
       monkeypatch,
@@ -66,7 +86,10 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
           # actions below, so they are provably "during the review Run".
           test_task_execution.SpawningScriptedBackend(
               [test_task_execution.result_event("review approved")], gate=review_gate_wait),
-          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak done")]),
+          # The stranded input's next dispatch, gated so the child-open
+          # assertion below runs while it provably has not finished.
+          test_task_execution.SpawningScriptedBackend(
+              [test_task_execution.result_event("tweak done")], gate=tweak_gate_wait),
           # The tweak's own delivery chain spawns its review of the tweak run.
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak review approved")]),
       ],
@@ -118,17 +141,21 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
       break
     await asyncio.sleep(0.1)
   assert any("review" in str(e.get("summary", "")).lower() for e in reports), reports
-  assert tree.task_state(child.id) == "open"
+
   # ...and the stranded input got the next permitted serialized dispatch: a
-  # fresh work Run claimed and consumed it.
-  deadline = asyncio.get_event_loop().time() + 15
-  while asyncio.get_event_loop().time() < deadline:
-    next_runs = [r for r in tree.runs.list_run_records_sync(child.id) if r.kind == "work" and r.id != work_run_id]
-    if next_runs and tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), next_runs[0].id) is not None:
-      break
-    await asyncio.sleep(0.1)
+  # fresh work Run claimed it. That dispatch is parked at its gate, so it
+  # provably has not finished — the point where the contract pins the child
+  # open. Reading the state earlier or later races the delivery chain: once
+  # this dispatch finishes, its chain's close of the child is legal.
+  await asyncio.wait_for(tweak_started.wait(), timeout=15)
   records = tree.runs.list_run_records_sync(child.id)
   next_runs = [r for r in records if r.kind == "work" and r.id != work_run_id]
-  assert next_runs, f"the input admitted during the review was stranded: {records}"
+  assert len(next_runs) == 1, f"the input admitted during the review was stranded: {records}"
   assert next_runs[0].input_event_ids, "the next dispatch did not claim the admitted input"
-  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), next_runs[0].id) == "success"
+  assert tree.task_state(child.id) == "open"
+  tweak_gate.set()
+
+  # Released, the next dispatch finishes successfully.
+  _tweak_record, tweak_outcome = await test_task_execution.wait_for_terminal_run(
+      tree, child.id, next_runs[0].id, timeout=10.0)
+  assert tweak_outcome == "success"

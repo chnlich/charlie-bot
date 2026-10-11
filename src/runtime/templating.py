@@ -7,34 +7,31 @@ The engine's search path and template globals come from the page-render registry
 import hashlib
 import importlib
 import os
+import pathlib
 import subprocess
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.infra.buildinfo import read_repo_head_sha
-from src.infra.constants import REPO_ROOT
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
+from src.infra import buildinfo, constants, log_once, timeouts
 from src.runtime.hooks import page_render
 
 if TYPE_CHECKING:
-  from fastapi.templating import Jinja2Templates
+  from fastapi import templating
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def _get_git_version() -> str:
   """Return git short hash + commit date (e.g. 'bc6b882 · 03-24'), or '' on failure."""
-  short_hash = read_repo_head_sha(SUBPROCESS_GIT_VERSION_TIMEOUT)
+  short_hash = buildinfo.read_repo_head_sha(timeouts.SUBPROCESS_GIT_VERSION_TIMEOUT)
   if short_hash is None:
     log.warning("git_version_failed")
     return ""
   try:
     commit_date = subprocess.check_output(
         ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
-        cwd=REPO_ROOT,
+        cwd=constants.REPO_ROOT,
         text=True,
-        timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
+        timeout=timeouts.SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
   except (OSError, subprocess.SubprocessError):
     log.warning("git_version_failed")
@@ -78,17 +75,17 @@ def _asset_tree_digest() -> str:
   os.scandir so each entry answers is_file from the directory record and
   stats once.
   """
-  static_root = REPO_ROOT / "web" / "static"
+  static_root = constants.REPO_ROOT / "web" / "static"
   if not static_root.is_dir():
     return ""
   pairs: list[tuple[str, int, int]] = []
 
-  def walk(dir_path: Path, prefix: str) -> None:
+  def walk(dir_path: pathlib.Path, prefix: str) -> None:
     with os.scandir(dir_path) as entries:
       for entry in entries:
         rel = f"{prefix}{entry.name}"
         if entry.is_dir():
-          walk(Path(entry.path), f"{rel}/")
+          walk(pathlib.Path(entry.path), f"{rel}/")
         elif entry.is_file():
           st = entry.stat()
           pairs.append((rel, st.st_mtime_ns, st.st_size))
@@ -125,21 +122,21 @@ def static_asset_version() -> str:
 # jinja2 + fastapi.templating ride every page render (~19 ms of the M99 server
 # import floor, marginal over the already-loaded fastapi) and no import-time
 # path touches a template, so the engine builds on first render.
-_templates_instance: Jinja2Templates | None = None
+_templates_instance: templating.Jinja2Templates | None = None
 
 
-def _template_directories() -> list[Path]:
+def _template_directories() -> list[pathlib.Path]:
   """web/templates, then the `templates/` directory of each registered package, in registration order."""
-  directories = [REPO_ROOT / "web" / "templates"]
+  directories = [constants.REPO_ROOT / "web" / "templates"]
   directories.extend(
-      Path(importlib.import_module(package).__file__).parent / "templates"
+      pathlib.Path(importlib.import_module(package).__file__).parent / "templates"
       for package in page_render.template_packages())
   return directories
 
 
-def _assert_unique_template_names(directories: list[Path]) -> None:
+def _assert_unique_template_names(directories: list[pathlib.Path]) -> None:
   """Raise when two directories hold one template name: the loader would serve the first and hide the second."""
-  holder: dict[str, Path] = {}
+  holder: dict[str, pathlib.Path] = {}
   for directory in directories:
     for path in sorted(directory.rglob("*.html")):
       name = path.relative_to(directory).as_posix()
@@ -148,7 +145,7 @@ def _assert_unique_template_names(directories: list[Path]) -> None:
       holder[name] = directory
 
 
-def templates() -> Jinja2Templates:
+def templates() -> templating.Jinja2Templates:
   """The request-time template engine, built on first use and reused after."""
   global _templates_instance
   if _templates_instance is None:

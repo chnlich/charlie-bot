@@ -12,7 +12,7 @@ import subprocess
 import conftest
 import pytest
 
-from src.features.memory.store_root import memory_dir as store_memory_dir
+from src.features.memory import store_root
 from src.infra import constants, models
 from src.runtime import run_token, task_sessions
 
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 
 def _write_store(cfg) -> None:
-  memory_dir = store_memory_dir(cfg)
+  memory_dir = store_root.memory_dir(cfg)
   memory_dir.mkdir(parents=True, exist_ok=True)
   (memory_dir / "topics").write_text("alpha resident\nbeta\n", encoding="utf-8")
   for topic, slug, audience, title, body in [

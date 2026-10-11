@@ -127,8 +127,7 @@ CACHE_BUSTER = re.compile(r"([?&])t=\d+")
 PLACEHOLDER_RULES = (
     # The logo's build label names the served commit and its date, so it
     # differs between any two commits.
-    ("BUILD_LABEL", re.compile(r"\b[0-9a-f]{7,40} · \d{2}-\d{2}\b"), "<build label>"),
-)
+    ("BUILD_LABEL", re.compile(r"\b[0-9a-f]{7,40} · \d{2}-\d{2}\b"), "<build label>"),)
 
 
 def fail(message: str) -> None:
@@ -316,9 +315,8 @@ def provision_main_extension(main_tree: pathlib.Path) -> None:
   main_c = (main_tree / VFKSPAWN_C).read_text(encoding="utf-8")
   branch_c = (SCRIPT_REPO / VFKSPAWN_C).read_text(encoding="utf-8")
   if main_c != branch_c:
-    diff = list(
-        difflib.unified_diff(
-            branch_c.splitlines(), main_c.splitlines(), "branch", "main", lineterm="", n=1))[:30]
+    diff = list(difflib.unified_diff(branch_c.splitlines(), main_c.splitlines(), "branch", "main", lineterm="",
+                                     n=1))[:30]
     fail(
         f"{VFKSPAWN_C} differs between the branch and the main checkout, so the main side cannot "
         "borrow the branch's built extension; pass a --main-ref whose _vfkspawn.c matches the "
@@ -453,8 +451,7 @@ def collect_errors(events: list[dict], mark: int, session_id: str, side: Side) -
   return sorted(messages)
 
 
-async def snap(cdp: browser_harness_session_tree.CDP, session_id: str, side: Side, mark: int,
-               parent_of: dict) -> dict:
+async def snap(cdp: browser_harness_session_tree.CDP, session_id: str, side: Side, mark: int, parent_of: dict) -> dict:
   """One view's outline, whitelist hits and script errors since *mark*."""
   capture = await evaluate(cdp, session_id, OUTLINE_JS + f"({json.dumps(parent_of)})")
   capture["errors"] = collect_errors(cdp.events, mark, session_id, side)
@@ -558,8 +555,7 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> tuple[
                           f"{json.dumps(side.access_key)}); }} catch (e) {{}}")
               },
               session_id=session_id)
-          views, buttons = await capture_width(
-              cdp, session_id, side, width, height, mobile, parent_of, tab_buttons)
+          views, buttons = await capture_width(cdp, session_id, side, width, height, mobile, parent_of, tab_buttons)
           if side.name == "main" and tab_buttons is None:
             tab_buttons = buttons
           for view, capture in views.items():

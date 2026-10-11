@@ -6,8 +6,7 @@ import conftest
 import pydantic
 import pytest
 
-from src.features.discord.event_types import DISCORD_REPLY
-from src.features.discord.metadata import DiscordOrigin
+from src.features.discord import event_types, metadata
 from src.infra import config, metadata_slots, models
 from src.runtime import message_aggregator
 
@@ -46,7 +45,7 @@ def test_session_metadata_discord_fields_round_trip_through_json() -> None:
   meta = models.SessionMetadata(
       profile="manager",
       name="t",
-      discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD),
+      discord_origin=metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD),
       discord_watermark_id=_WATERMARK)
   loaded = models.SessionMetadata.model_validate_json(meta.model_dump_json())
   fields = metadata_slots.fields_of(loaded, "discord")
@@ -65,7 +64,7 @@ def test_session_metadata_without_discord_fields_parses() -> None:
 @pytest.mark.asyncio
 async def test_create_session_persists_discord_origin(tmp_path) -> None:
   _, session_blocks, _ = conftest.build_env(tmp_path)
-  origin = DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
+  origin = metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   meta = await conftest.create_root_session(
       session_blocks, models.CreateSessionRequest(name="d", discord_origin=origin))
   reloaded = await session_blocks.store.read_metadata_fresh(meta.id)
@@ -79,7 +78,7 @@ def test_discord_reply_renders_as_system_row() -> None:
   deltas = list(
       agg.feed(
           {
-              "type": DISCORD_REPLY,
+              "type": event_types.DISCORD_REPLY,
               "content": "hi there",
               "discord_reply": {
                   "answers": None,

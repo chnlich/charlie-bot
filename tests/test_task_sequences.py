@@ -125,6 +125,7 @@ async def _ended_loop_shape(
     status: str,
     iterations: list[tuple[str | None, str | None]],
     server_pid: int | None = None,
+    end_error: str | None = None,
 ) -> str:
   """One improve loop's durable after-crash shape: the worker child, the loop
   state, and each iteration as (terminal outcome or None for still-queued,
@@ -143,6 +144,7 @@ async def _ended_loop_shape(
           repo_path=str(cfg.charliebot_home),
           created_at="2026-10-08T00:00:00+00:00",
           server_pid=os.getpid() if server_pid is None else server_pid,
+          end_error=end_error,
       ), cfg)
   loop_dir = cfg.sessions_dir / manager.id / "loops" / str(loop_id)
   for position, (outcome, report_text) in enumerate(iterations, start=1):
@@ -1514,6 +1516,70 @@ async def test_startup_closes_a_loop_that_crashed_between_final_state_and_close(
   assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop ran 2 iteration(s)")
   assert "iter one report" in finals[0]["summary"] and "iter two report" in finals[0]["summary"]
   assert finals[0]["result_refs"] == ["loop:1"]
+
+
+@pytest.mark.asyncio
+async def test_startup_closes_a_failed_loop_and_reports_its_end_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Crash window after the final failed state (already carrying its end
+  error) and before the close: the startup pass closes the child and the
+  parent's one final report carries the error text the controller wrote."""
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg,
+      tree,
+      manager,
+      status="failed",
+      end_error="Controller error: boom",
+      iterations=[("success", "## Iter 1\n\niter one report\n"), ("success", "## Iter 2\n\niter two report\n")])
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await reconcile_task_tree(cfg, tree)
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop failed. Controller error: boom")
+  assert "iter one report" in finals[0]["summary"] and "iter two report" in finals[0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_state_without_end_error_loads_and_reports_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A state.json written before end_error existed loads with end_error None,
+  and its final report holds nothing between the sentence and the summaries."""
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  child_id = await _ended_loop_shape(
+      cfg,
+      tree,
+      manager,
+      status="failed",
+      iterations=[("success", "## Iter 1\n\niter one report\n"), ("success", "## Iter 2\n\niter two report\n")])
+  # Simulate the pre-end_error writer: the key is absent, not present as null.
+  state_path = cfg.sessions_dir / manager.id / "loops" / "1" / "state.json"
+  raw = json.loads(state_path.read_text())
+  raw.pop("end_error", None)
+  state_path.write_text(json.dumps(raw))
+  state = await load_loop_state(manager.id, 1, cfg)
+  assert state is not None and state.end_error is None
+  _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await reconcile_task_tree(cfg, tree)
+
+  assert tree.task_state(child_id) == "cancelled"
+  _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
+  finals = _final_reports(tree, manager.id)
+  assert len(finals) == 1 and finals[0]["outcome"] == "failed"
+  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop failed.\n\nIteration summaries:")
 
 
 @pytest.mark.asyncio

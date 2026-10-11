@@ -290,7 +290,7 @@ async def seed_scenario(home: Path) -> dict:
   from src.app import registrations
   from src.infra import event_types as ET
   from src.infra.config import get_config
-  from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
+  from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec
   from src.runtime.run_token import CallerIdentity
   from src.runtime.session_anchors import SessionAnchors
   from src.runtime.session_events import SessionEvents
@@ -735,10 +735,9 @@ async def seed_scenario(home: Path) -> dict:
                     }
             }))
 
-    # --- the legacy worker thread: the 4.1 thread view --------------------
-    # A pre-task-tree delegation lives in the parent session's threads/
-    # directory; the sidebar projects it as a read-only row and the thread
-    # URL opens its transcript in the main chat.
+    # --- the legacy operator session: S30's minimal-menu row --------------
+    # A manager session with no task spec: S30 expects its row menu to hold
+    # only Rename and Move to group.
     legacy = await tree.create_task(
         request_id="seed-legacy-operator",
         task_parent_id=None,
@@ -747,34 +746,6 @@ async def seed_scenario(home: Path) -> dict:
         name="Legacy operator",
         backend="fake-scripted",
         caller=OP)
-    legacy_thread_id = "thread-legacy-1"
-    thread_dir = home / "sessions" / legacy.id / "threads" / legacy_thread_id
-    (thread_dir / "data").mkdir(parents=True)
-    started = base + timedelta(minutes=800)
-    thread_meta = ThreadMetadata(
-        id=legacy_thread_id,
-        session_id=legacy.id,
-        description="Review: ## Goal",
-        status="completed",
-        started_at=started,
-        completed_at=started + timedelta(minutes=9),
-        backend="fake-scripted",
-        pid=424050,
-        pid_start="1-424050",
-        exit_code=0)
-    (thread_dir / "metadata.json").write_text(thread_meta.model_dump_json(indent=2), encoding="utf-8")
-    thread_events = []
-    for i, (kind, text) in enumerate([(ET.USER, "review the delivered diff"),
-                                      (ET.ASSISTANT, "review verdict: approve")]):
-      event = {"type": kind, "timestamp": (started + timedelta(minutes=i)).isoformat()}
-      if kind == ET.USER:
-        event["content"] = text
-      else:
-        event["message"] = {"content": [{"type": "text", "text": text}]}
-      thread_events.append(event)
-    thread_events.append({"type": "master_done", "timestamp": (started + timedelta(minutes=5)).isoformat()})
-    (thread_dir / "data" / "events.jsonl").write_text(
-        "".join(json.dumps(e) + "\n" for e in thread_events), encoding="utf-8")
 
     # --- the withheld launch and the legacy cron session (S24) -----------
     # A cancelled task's queued Run carries its durable run_launch_withheld
@@ -1000,7 +971,6 @@ async def seed_scenario(home: Path) -> dict:
         "live": live.id,
         "live_parent": live_parent.id,
         "legacy": legacy.id,
-        "legacy_thread": legacy_thread_id,
         "withhold_parent": withhold_parent.id,
         "withhold_worker": withhold_worker.id,
         "bound_node": bound_node.id,
@@ -2171,58 +2141,6 @@ async def run_harness(args: argparse.Namespace) -> None:
         # state the spinner renders from.
         shot = await screenshot(cdp, session_id, results, "s21_FAILED")
         results.record("(a)-(e) live worker transcript cycle", ok=False, detail=repr(exc), screenshot=shot)
-
-      # ---- S22: the legacy thread opens in the main chat ------------------
-      try:
-        log("  s22: legacy thread view")
-        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['legacy']}"}, session_id=session_id)
-        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-        row = await evaluate(
-            cdp, session_id, f"""
-                    (() => {{
-                      const row = document.getElementById('session-{ids['legacy_thread']}');
-                      if (!row) return null;
-                      return {{onclick: row.getAttribute('onclick') || '', text: row.textContent.slice(0, 80)}};
-                    }})()
-                """)
-        assert_true(
-            row and "openThreadView" in row["onclick"],
-            f"the projected thread row navigates to the thread view ({row})")
-        await evaluate(cdp, session_id, f"document.getElementById('session-{ids['legacy_thread']}').click()")
-        await wait_for(
-            cdp,
-            session_id,
-            f"location.search === '?session={ids['legacy']}&thread={ids['legacy_thread']}'",
-            timeout=12,
-            label="the row landed on the thread URL")
-        await wait_for(
-            cdp,
-            session_id,
-            "document.getElementById('header-session-name').textContent === 'Review: ## Goal'",
-            timeout=12,
-            label="the header names the thread")
-        await wait_for(
-            cdp,
-            session_id,
-            "document.getElementById('messages').textContent.includes('review verdict: approve')",
-            timeout=12,
-            label="the thread events render in the main chat")
-        hidden_input = await evaluate(
-            cdp, session_id, "document.getElementById('input-area').classList.contains('hidden')")
-        assert_true(hidden_input, "the thread view takes no message input")
-        shot = await screenshot(cdp, session_id, results, "s22_legacy_thread_view")
-        results.record(
-            "(d) a legacy thread row opens in the main chat at the thread URL",
-            ok=True,
-            detail="row click navigates to /?session=<parent>&thread=<id>; transcript renders read-only, no input",
-            screenshot=shot)
-      except Exception as exc:
-        shot = await screenshot(cdp, session_id, results, "s22_FAILED")
-        results.record(
-            "(d) a legacy thread row opens in the main chat at the thread URL",
-            ok=False,
-            detail=repr(exc),
-            screenshot=shot)
 
       # ---- S23: an unread reply in a child manager (the subtree mark) --
       # The reply is seeded through the same in-process owner the scenario

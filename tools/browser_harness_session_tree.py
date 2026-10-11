@@ -136,6 +136,13 @@ class CDP:
     self.mutations: list[dict] = []
     self._reader = asyncio.create_task(self._read_loop())
 
+  @property
+  def events(self) -> list[dict]:
+    """The raw protocol events received so far, for harnesses that filter by
+    sessionId and method themselves. The live list: a length taken earlier is
+    a mark, and events[mark:] is what arrived since."""
+    return self._events
+
   async def close(self) -> None:
     """Close the browser websocket; the reader loop ends with it."""
     await self._ws.close()

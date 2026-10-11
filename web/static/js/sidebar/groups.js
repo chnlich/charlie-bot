@@ -454,13 +454,6 @@ function sessionRowActiveClass(isActive) {
   return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
 }
 
-// A projected legacy worker-thread row's target: the thread's transcript
-// opened in the main chat view, read-only, addressed by the owning session.
-function openThreadView(sessionId, threadId) {
-  window.location.href = '/?session=' + encodeURIComponent(sessionId)
-    + '&thread=' + encodeURIComponent(threadId);
-}
-
 // The one session-row frame: the anchor open tag, the name span, and the
 // closing tag.
 // A markup change to the row frame lands here, not in one renderer.
@@ -471,16 +464,9 @@ function openThreadView(sessionId, threadId) {
 function renderSessionRowShell(s, {filter, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  // A projected legacy worker-thread row has no session behind its id: the
-  // click opens the thread's transcript in the main chat view (the 4.1 URL)
-  // instead of switching sessions, and a double click never starts a rename.
-  const click = s.worker_thread
-    ? `openThreadView('${s.worker_thread.session_id}', '${s.worker_thread.thread_id}')`
-    : `switchSession('${s.id}')`;
-  const dblclick = s.worker_thread ? '' : ` ondblclick="startRename(event, '${s.id}')"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
-     class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"${dblclick}
-     onclick="event.preventDefault(); ${click}"
+     class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="startRename(event, '${s.id}')"
+     onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
@@ -839,12 +825,8 @@ function renderSessionItem(s, filter, options = {}) {
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
   const timeIso = s.updated_at || '';
-  // A projected legacy worker-thread row is read-only: no archive, star,
-  // rename, group, create-child or Task & context action.
   let actions = '';
-  if (s.worker_thread) {
-    actions = '';
-  } else if (isContextRow) {
+  if (isContextRow) {
     actions = renderStarButton(s, activeBtnClass);
   } else if (isArchivedRow) {
     // The archived row: three direct buttons; the group move and the delete
@@ -948,8 +930,8 @@ function renderSessionList(sessions, filter, options = {}) {
 }
 
 // The rows an inline delete takes with it: the session plus every row whose
-// task_parent_id chain within this list reaches it — projected worker-thread
-// leaves (task_parent_id = parent id) and task-node descendants at any depth.
+// task_parent_id chain within this list reaches it — worker leaves and
+// task-node descendants at any depth.
 // Dropping only the clicked row would let buildSessionTree promote those
 // children to top-level roots until the next list fetch, so the repaint walks
 // buildSessionTree's own parent relation rather than a second definition. A
@@ -989,7 +971,6 @@ function removeSessionFromRenderedList(sessionId) {
 
 const GLOBALS = {
   renderEmptyNote,
-  openThreadView,
   paintWorkspaceBadge,
   resetGroupLimitState,
   toggleSessionGroupLimit,

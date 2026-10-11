@@ -304,9 +304,6 @@ test('openMountOptions anchors the last assistant message and defaults otherwise
   assert.equal(options && options.readingAnchor && options.readingAnchor.offset, 0, 'anchor offset');
 
   assert.equal(openMountOptions({profile: 'worker'}, data, messages), null, 'worker session');
-  assert.equal(
-      openMountOptions(session, {thread_view: {session_id: 'session-a', thread_id: 't'}}, messages),
-      null, 'thread view');
   rig.context.THINKING_SINCE = '2026-04-02T10:00:00.000Z';
   assert.equal(openMountOptions(session, data, messages), null, 'turn in flight');
   rig.context.THINKING_SINCE = null;

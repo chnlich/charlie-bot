@@ -2,8 +2,8 @@
 // The chat column's pending-triggers tray (chat/triggers-tray.js): collapsed
 // and expanded render, the four watch-target labels, pure-delay vs watch
 // condition text, the (count, next)-driven refetch, the two-step cancel with
-// its 3 s revert, the visible cancel failure, hidden at zero pending and in a
-// legacy thread view, and the bell's open-and-expand + title.
+// its 3 s revert, the visible cancel failure, hidden at zero pending, and the
+// bell's open-and-expand + title.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -93,7 +93,7 @@ test('collapsed tray shows the next trigger line, target, message and +N more', 
     trigger('t2', at(16, 17), 'check the eval sweep results'),
     trigger('t3', at(19, 17), 'summarize the training run'),
   ]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
 
   assert.equal(calls.length, 1);
@@ -117,7 +117,7 @@ test('collapsed tray shows the next trigger line, target, message and +N more', 
 test('collapsed tray with one trigger shows no +N more', async () => {
   const {context, tray} = buildTrayContext();
   context.setTriggers([trigger('t1', at(1, 0), 'only one')]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
 
   assert.equal(tray.classList.contains('hidden'), false);
@@ -133,7 +133,7 @@ test('expanded tray lists every trigger in fire_at order with header and conditi
     trigger('t3', at(19, 17), 'summarize the training run',
         [{kind: 'slurm_job', host: 'cluster-a', job_id: 48213}]),
   ]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -160,7 +160,7 @@ test('the four watch-target labels render as the --watch spellings', async () =>
     trigger('t3', at(3, 0), 'slurm local', [{kind: 'slurm_job', host: null, job_id: 98765}]),
     trigger('t4', at(4, 0), 'slurm remote', [{kind: 'slurm_job', host: 'neptune', job_id: 122111}]),
   ]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -177,7 +177,7 @@ test('two watch targets read "exit", one reads "exits"', async () => {
     trigger('t1', at(1, 0), 'two targets',
         [{kind: 'local_pid', pid: 123}, {kind: 'local_pid', pid: 456}]),
   ]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -191,7 +191,7 @@ test('a changed (count, next) pair refetches; an unchanged pair does not', async
     trigger('t1', nextIso, 'first'),
     trigger('t2', at(8, 0), 'second'),
   ]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   assert.equal(calls.length, 1);
 
@@ -221,7 +221,7 @@ test('a changed (count, next) pair refetches; an unchanged pair does not', async
 test('a zero-pending poll hides the tray and an empty session stays hidden', async () => {
   const {context, tray, calls} = buildTrayContext();
   context.setTriggers([]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
 
   assert.equal(tray.classList.contains('hidden'), true);
@@ -233,24 +233,10 @@ test('a zero-pending poll hides the tray and an empty session stays hidden', asy
   assert.equal(tray.classList.contains('hidden'), true);
 });
 
-test('a legacy thread view shows no tray and answers no status', async () => {
-  const {context, tray, calls} = buildTrayContext();
-  context.setTriggers([trigger('t1', at(1, 0), 'hidden here')]);
-  await context.renderPendingTriggersTray('session-a', true);
-  await tick();
-
-  assert.equal(calls.length, 0);
-  assert.equal(tray.classList.contains('hidden'), true);
-
-  context.setSessionPendingTriggerTrayStatus('session-a', {pending_trigger_count: 1, next_trigger_at: at(1, 0)});
-  await tick();
-  assert.equal(calls.length, 0);
-});
-
 test('cancel arms with Cancel? for 3 seconds, reverts, and fires on the second click', async () => {
   const {context, tray, calls, timeouts, cleared} = buildTrayContext();
   context.setTriggers([trigger('t1', at(1, 0), 'cancel me')]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -276,7 +262,7 @@ test('cancel arms with Cancel? for 3 seconds, reverts, and fires on the second c
 test('an armed cancel reverts to the X button after 3 seconds without a second click', async () => {
   const {context, tray, timeouts} = buildTrayContext();
   context.setTriggers([trigger('t1', at(1, 0), 'cancel me')]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -301,7 +287,7 @@ test('a failed cancel keeps the row and shows the HTTP status and detail', async
     return {ok: false, status: cancelStatus, headers: {get: () => 'application/json'},
       json: async () => ({detail: 'Trigger not found'})};
   };
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -326,7 +312,7 @@ test('a network-failed cancel keeps the row and shows the error', async () => {
     }
     throw new TypeError('Failed to fetch');
   };
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   context.togglePendingTriggersTray(true);
 
@@ -342,7 +328,7 @@ test('a network-failed cancel keeps the row and shows the error', async () => {
 test('the bell opens another session and expands the tray it lands on', async () => {
   const {context, tray, switchedTo} = buildTrayContext();
   context.setTriggers([trigger('t1', at(1, 0), 'bell target')]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
 
   context.expandPendingTriggersTray('session-b');
@@ -350,7 +336,7 @@ test('the bell opens another session and expands the tray it lands on', async ()
 
   // The switch lands: renderSessionView opens the new session's tray expanded.
   context.SESSION_ID = 'session-b';
-  await context.renderPendingTriggersTray('session-b', false);
+  await context.renderPendingTriggersTray('session-b');
   await tick();
   assert.match(tray.innerHTML, /1 pending trigger\b/);
   assert.match(tray.innerHTML, /· next/, 'the tray opened expanded');
@@ -359,7 +345,7 @@ test('the bell opens another session and expands the tray it lands on', async ()
 test('the bell on the open session expands the tray in place', async () => {
   const {context, tray} = buildTrayContext();
   context.setTriggers([trigger('t1', at(1, 0), 'already open')]);
-  await context.renderPendingTriggersTray('session-a', false);
+  await context.renderPendingTriggersTray('session-a');
   await tick();
   assert.ok(!tray.innerHTML.includes('· next'), 'collapsed by default');
 

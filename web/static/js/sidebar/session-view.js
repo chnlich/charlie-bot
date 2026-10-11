@@ -153,16 +153,16 @@ function scheduleLazySessionDataLoad() {
 }
 
 // ---------------------------------------------------------------------------
-// Worker / thread transcript mode (the live record in the main chat column)
+// Worker transcript mode (the live record in the main chat column)
 // ---------------------------------------------------------------------------
-// A task-tree worker node's messages are its Runs' transcript, and a projected
-// legacy thread row's are its thread events; both render through the main chat
-// column and stay live through the transcript poll (the server's memoized
+// A task-tree worker node's messages are its Runs' transcript; they render
+// through the main chat column and stay live through the transcript poll (the
+// server's memoized
 // projection answers an unchanged read with one stat pass). The poll carries
 // thinking_since (the header timer), the signallable run (the stop control),
 // and the streaming draft, so a worker page needs no other live channel.
 const TRANSCRIPT_POLL_MS = 2000;
-let transcriptMode = null;       // {sessionId, threadId?} while the view shows one
+let transcriptMode = null;       // {sessionId} while the view shows one
 let transcriptRevision = '';
 let transcriptMessageCount = 0;
 let transcriptInflight = false;
@@ -202,7 +202,7 @@ function transcriptTarget() {
 async function pollTranscript(opts) {
   const target = transcriptTarget();
   if (!target || transcriptInflight) return;
-  if (target.threadId ? SESSION_ID !== target.session_id : SESSION_ID !== target.sessionId) return;
+  if (SESSION_ID !== target.sessionId) return;
   if (!(opts && opts.force) && document.hidden) return;
   transcriptInflight = true;
   try {
@@ -210,11 +210,10 @@ async function pollTranscript(opts) {
       after: String(transcriptMessageCount),
       revision: transcriptRevision,
     });
-    if (target.threadId) params.set('thread', target.threadId);
     const res = await fetch('/api/sessions/' + target.sessionId + '/transcript?' + params.toString());
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
-    if (target.threadId ? SESSION_ID !== target.session_id : SESSION_ID !== target.sessionId) return;
+    if (SESSION_ID !== target.sessionId) return;
     applyTranscriptUpdate(data);
   } catch (err) {
     console.error('Transcript poll failed:', err);
@@ -289,18 +288,13 @@ function applyTranscriptUpdate(data) {
   }
 }
 
-// The stop control on a worker node / thread view stops the active Run through
-// its own cancel route; the chat stop button (cancelMaster) dispatches here.
+// The stop control on a worker node stops the active Run through its own
+// cancel route; the chat stop button (cancelMaster) dispatches here.
 async function cancelTranscriptTarget() {
   const target = transcriptTarget();
   if (!target) return false;
-  let url;
-  if (target.threadId) {
-    url = '/api/sessions/' + target.sessionId + '/threads/' + target.threadId + '/cancel';
-  } else {
-    if (!transcriptActiveRunId) return true;  // nothing signallable: the state will clear on its own
-    url = '/api/sessions/' + target.sessionId + '/runs/' + transcriptActiveRunId + '/cancel';
-  }
+  if (!transcriptActiveRunId) return true;  // nothing signallable: the state will clear on its own
+  const url = '/api/sessions/' + target.sessionId + '/runs/' + transcriptActiveRunId + '/cancel';
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -542,7 +536,6 @@ async function switchSession(sessionId) {
 // is the page global every open path sets from its payload before rendering.
 function openMountOptions(session, data, messages) {
   if (session.profile === 'worker') return null;
-  if (data.thread_view) return null;
   if (THINKING_SINCE) return null;
   if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) return null;
   const lastAssistant = messages.filter((msg) => msg.role === 'assistant').pop();
@@ -610,22 +603,15 @@ function renderSessionView(data) {
   if (!turnEngine) container.scrollTop = container.scrollHeight;
 
   // A worker node renders its Run transcript through the main chat column
-  // (this file's transcript poll keeps it live); so does a projected legacy
-  // thread view, read-only. Neither takes a message input.
+  // (this file's transcript poll keeps it live) and takes no message input.
   const isWorker = session.profile === 'worker';
-  if (data.thread_view) {
-    setWorkerTranscriptMode(
-        {sessionId: data.thread_view.session_id, threadId: data.thread_view.thread_id});
-    setInputAreaVisible(false);
-  } else {
-    setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
-    setInputAreaVisible(!isWorker);
-  }
+  setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
+  setInputAreaVisible(!isWorker);
 
   // The pending-triggers tray opens for this session (a worker session's
-  // hidden input area does not hide it; a legacy thread projection shows
-  // none). The tray owns its endpoint fetch; the status poll drives refetches.
-  globalThis.renderPendingTriggersTray(session.id, !!data.thread_view);
+  // hidden input area does not hide it). The tray owns its endpoint fetch;
+  // the status poll drives refetches.
+  globalThis.renderPendingTriggersTray(session.id);
 
   // Restore whichever tab was active before the session switch
   const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
@@ -1038,7 +1024,7 @@ function renderNoActiveSessionView() {
   pendingUserEchoes = 0;
 
   SESSION_ID = null;
-  globalThis.renderPendingTriggersTray(null, false);
+  globalThis.renderPendingTriggersTray(null);
   if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
   DRAFT_KEY = null;
   THINKING_SINCE = null;

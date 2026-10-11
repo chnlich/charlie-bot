@@ -6,8 +6,8 @@
 // the schedule_trigger records GET /api/sessions/{id}/pending-triggers
 // returns (pending only, fire_at ascending) with an inline two-step cancel
 // through POST /api/internal/triggers/{sid}/{tid}/cancel. A worker session
-// (no input area) shows it too; the legacy ?thread= projection shows none; a
-// session with zero pending triggers shows nothing at all.
+// (no input area) shows it too; a session with zero pending triggers shows
+// nothing at all.
 //
 // The sidebar bell and this tray are the same signal — the same amber, the
 // same bell glyph — so the status poll is the only refetch signal here: the
@@ -31,7 +31,6 @@
   // records belong to; the poll handoff and the bell only act on a session
   // the tray has opened.
   let traySessionId = null;
-  let trayThreadView = false;
   let trayTriggers = [];
   let trayExpanded = false;
   let trayExpandOnNextOpen = false;
@@ -158,7 +157,7 @@
   function renderTray() {
     const tray = trayElement();
     if (!tray) return;
-    if (trayThreadView || !trayTriggers.length) {
+    if (!trayTriggers.length) {
       tray.classList.add('hidden');
       tray.innerHTML = '';
       return;
@@ -201,14 +200,12 @@
 
   // Session open (first page load and SPA switch ride renderSessionView). A
   // fresh session resets the tray to its collapsed default unless the bell's
-  // open-and-expand intent is pending; the legacy thread projection shows
-  // none.
-  function renderPendingTriggersTray(sessionId, threadView) {
+  // open-and-expand intent is pending.
+  function renderPendingTriggersTray(sessionId) {
     const tray = trayElement();
     if (!tray) return;
-    if (!sessionId || threadView) {
-      traySessionId = sessionId || null;
-      trayThreadView = true;
+    if (!sessionId) {
+      traySessionId = null;
       trayTriggers = [];
       trayExpanded = false;
       trayExpandOnNextOpen = false;
@@ -219,7 +216,6 @@
     }
     if (traySessionId !== sessionId) {
       traySessionId = sessionId;
-      trayThreadView = false;
       trayTriggers = [];
       trayExpanded = trayExpandOnNextOpen;
       trayExpandOnNextOpen = false;
@@ -233,7 +229,7 @@
   // session's (pending_trigger_count, next_trigger_at) pair moved against what
   // the tray last rendered.
   function setSessionPendingTriggerTrayStatus(sid, status) {
-    if (sid !== SESSION_ID || traySessionId !== sid || trayThreadView) return;
+    if (sid !== SESSION_ID || traySessionId !== sid) return;
     const count = Number(status && status.pending_trigger_count) || 0;
     const nextMs = status && status.next_trigger_at ? Date.parse(status.next_trigger_at) : null;
     const known = trayKnownStatus;
@@ -251,15 +247,9 @@
   // tray once it lands. On the already-open session switchSession would
   // return early, so the tray expands in place.
   function expandPendingTriggersTray(sid) {
-    if (sid === SESSION_ID && traySessionId === sid && !trayThreadView) {
+    if (sid === SESSION_ID && traySessionId === sid) {
       trayExpanded = true;
       renderTray();
-      return;
-    }
-    if (sid === SESSION_ID) {
-      // The active session viewed through its legacy thread projection: a row
-      // click would early-return, so reload onto the session's own URL.
-      window.location.href = '/?session=' + encodeURIComponent(sid);
       return;
     }
     trayExpandOnNextOpen = true;

@@ -147,14 +147,11 @@ class ScheduledTaskConfig(ScheduledTaskFields):
       if step.distinct_backend_from is None:
         continue
       source = positions.get(step.distinct_backend_from)
+      declaration = (f"step '{step.name}' declares distinct_backend_from '{step.distinct_backend_from}', ")
       if source is None:
-        raise ValueError(
-            f"step '{step.name}' declares distinct_backend_from '{step.distinct_backend_from}', "
-            "which is not a step of this task")
+        raise ValueError(declaration + "which is not a step of this task")
       if source >= i:
-        raise ValueError(
-            f"step '{step.name}' declares distinct_backend_from '{step.distinct_backend_from}', "
-            "which must name a step listed earlier in the same task")
+        raise ValueError(declaration + "which must name a step listed earlier in the same task")
       own = step.backend or self.backend
       prior = self.steps[source].backend or self.backend
       if own is not None and prior is not None and own == prior:

@@ -16,18 +16,11 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from typing import Protocol
 
-from src.features.voice.transcription.base import (
-    SAMPLE_RATE,
-    TranscriptEvent,
-    TranscriptionBackend,
-    TranscriptionRejected,
-)
-from src.infra import timeouts
-from src.infra.config import CharlieBotConfig
-from src.infra.credentials import get_credentials
+from src.features.voice.transcription import base
+from src.infra import config, credentials, timeouts
 
 MODEL = "muse-voice-transcribe-1.0"
-BYTES_PER_SECOND = SAMPLE_RATE * 2  # mono PCM16
+BYTES_PER_SECOND = base.SAMPLE_RATE * 2  # mono PCM16
 DEFAULT_ENDPOINT_URL = "wss://api.meta.ai/v1/asr/realtime"
 # Meta's disconnect sits at a 5 s lead; the schedule caps the lead one second
 # below it, so a slow handshake (D s) still lands the final inside the 2 s
@@ -59,20 +52,20 @@ class _EventLoopClock:
     await asyncio.sleep(seconds)
 
 
-class MuseTranscriptionBackend(TranscriptionBackend):
+class MuseTranscriptionBackend(base.TranscriptionBackend):
   id = "muse"
   label = "Muse Voice Transcribe"
   live_partials = True
 
   def __init__(
-      self, cfg: CharlieBotConfig, endpoint_url: str = DEFAULT_ENDPOINT_URL, clock: Clock | None = None) -> None:
+      self, cfg: config.CharlieBotConfig, endpoint_url: str = DEFAULT_ENDPOINT_URL, clock: Clock | None = None) -> None:
     self._cfg = cfg
     # Constructor argument, not config: tests point it at a loopback fake server.
     self._endpoint_url = endpoint_url
     self._clock: Clock = clock if clock is not None else _EventLoopClock()
 
   def unavailable_reason(self) -> str | None:
-    if not get_credentials().get("meta", "model_api_key"):
+    if not credentials.get_credentials().get("meta", "model_api_key"):
       return "needs meta.model_api_key"
     return None
 
@@ -82,23 +75,23 @@ class MuseTranscriptionBackend(TranscriptionBackend):
       *,
       vocabulary: Sequence[str],
       languages: Sequence[str],
-  ) -> AsyncIterator[TranscriptEvent]:
-    access_token = str(get_credentials().get("meta", "model_api_key") or "")
+  ) -> AsyncIterator[base.TranscriptEvent]:
+    access_token = str(credentials.get_credentials().get("meta", "model_api_key") or "")
     if not access_token:
-      raise TranscriptionRejected("meta.model_api_key is not set in credentials.yaml")
-    from websockets.asyncio.client import connect
-    from websockets.exceptions import ConnectionClosed
+      raise base.TranscriptionRejected("meta.model_api_key is not set in credentials.yaml")
+    from websockets import exceptions
+    from websockets.asyncio import client
 
-    async with connect(self._endpoint_url, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT) as socket:
+    async with client.connect(self._endpoint_url, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT) as socket:
       # Never logs or returns the handshake, so the access token cannot reach
       # any output.
       await socket.send(json.dumps(self._handshake(access_token, vocabulary, languages)))
       try:
         reply = json.loads(await socket.recv())
       except (json.JSONDecodeError, TypeError) as exc:
-        raise TranscriptionRejected(f"handshake reply is not JSON: {exc}") from exc
+        raise base.TranscriptionRejected(f"handshake reply is not JSON: {exc}") from exc
       if reply.get("type") == "error" or "error" in reply:
-        raise TranscriptionRejected(f"handshake rejected: {reply.get('message', reply)}")
+        raise base.TranscriptionRejected(f"handshake rejected: {reply.get('message', reply)}")
 
       # Reader and sender run concurrently: partials must reach the caller while
       # the audio is still going out. Every event (and the close) rides one
@@ -109,7 +102,7 @@ class MuseTranscriptionBackend(TranscriptionBackend):
         try:
           async for message in socket:
             events.put_nowait(json.loads(message))
-        except ConnectionClosed as exc:
+        except exceptions.ConnectionClosed as exc:
           # The server's close (clean or not) ends the event stream; the main
           # loop turns an abnormal one into an error unless a final arrived.
           events.put_nowait(exc)
@@ -155,7 +148,7 @@ class MuseTranscriptionBackend(TranscriptionBackend):
           event = await events.get()
           if event is None:
             break
-          if isinstance(event, ConnectionClosed):
+          if isinstance(event, exceptions.ConnectionClosed):
             code = event.rcvd.code if event.rcvd is not None else None
             reason = event.rcvd.reason if event.rcvd is not None else ""
             raise RuntimeError(f"connection closed mid-stream (code {code}: {reason})")
@@ -166,11 +159,11 @@ class MuseTranscriptionBackend(TranscriptionBackend):
             if event.get("final"):
               pending_final = event.get("text", "")
             else:
-              yield TranscriptEvent(kind="partial", text=event.get("text", ""))
+              yield base.TranscriptEvent(kind="partial", text=event.get("text", ""))
           elif kind == "speechComplete":
             # speechComplete carries the authoritative cumulative text; the
             # final transcript event is the fallback.
-            yield TranscriptEvent(kind="final", text=event.get("transcript") or pending_final or "")
+            yield base.TranscriptEvent(kind="final", text=event.get("transcript") or pending_final or "")
             return
       finally:
         # Reap both tasks so their close exceptions are not lost to the GC.
@@ -182,7 +175,7 @@ class MuseTranscriptionBackend(TranscriptionBackend):
       # the recording's text. Without one the stream produced nothing usable.
       if pending_final is None:
         raise RuntimeError("stream closed without a final transcript")
-      yield TranscriptEvent(kind="final", text=pending_final)
+      yield base.TranscriptEvent(kind="final", text=pending_final)
 
   def _handshake(self, access_token: str, vocabulary: Sequence[str], languages: Sequence[str]) -> dict:
     """The first frame on the socket; keywords/languageBias only when non-empty."""

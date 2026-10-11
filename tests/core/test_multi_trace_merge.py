@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from src.features.trace import trace_merge
+from src.features.trace import direct_pass_child, trace_merge
 
 
 def _write_trace(path: Path, rank: int, events: int) -> None:
@@ -90,8 +90,8 @@ def test_chunked_member_serves_the_sequential_bytes(
     paths.append(path)
   chunked, sequential = tmp_path / "chunked.json.gz", tmp_path / "sequential.json.gz"
 
-  monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
+  monkeypatch.setattr(direct_pass_child, "_MIN_CHUNK_BYTES", 256)
   _build(paths, chunked, slim=slim)
-  monkeypatch.setattr(trace_merge, "_split_chunks", lambda *args: None)
+  monkeypatch.setattr(direct_pass_child, "_split_chunks", lambda *args: None)
   _build(paths, sequential, slim=slim)
   assert chunked.read_bytes() == sequential.read_bytes()

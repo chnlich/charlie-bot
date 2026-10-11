@@ -5,22 +5,21 @@ import contextlib
 import fcntl
 import mmap
 import os
+import pathlib
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from typing import BinaryIO
 
 import orjson
 
-from src.features.trace.direct_pass_child import _MAX_CHUNKS, _MIN_CHUNK_BYTES, _chunk_parse_input, _split_chunks
-from src.infra.gc_control import gc_off
-from src.infra.log_once import LazyStructlogLogger
+from src.features.trace import direct_pass_child
+from src.infra import gc_control, log_once
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Compression level for the merged gzip output. Measured on a 191.2 MB /
 # 496,099-event input: level 1 builds in 0.57 s / 15.5 MB against level 6's
@@ -71,7 +70,7 @@ class NotATraceError(ValueError):
   """
 
 
-def _trace_events_or_raise(trace: object, path: Path) -> list[dict]:
+def _trace_events_or_raise(trace: object, path: pathlib.Path) -> list[dict]:
   """Return a Chrome trace's event list; raise on JSON that parses but is not a trace.
 
   A Chrome-JSON trace is a bare event array or an object carrying a ``traceEvents``
@@ -114,7 +113,7 @@ def igzip_command(*extra_args: str) -> list[str]:
   return [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-n", *extra_args]
 
 
-def _rank_label(path: Path) -> str:
+def _rank_label(path: pathlib.Path) -> str:
   match = re.search(r"rank(\d+)", path.name, flags=re.IGNORECASE)
   if match:
     return f"rank{match.group(1)}"
@@ -183,7 +182,7 @@ class _IdSequencer:
     return mapped
 
 
-def _parse_trace_document(path: Path) -> object:
+def _parse_trace_document(path: pathlib.Path) -> object:
   """The trace's parsed document, read through a mapped view instead of a bytes copy.
 
   The parse peak holds the raw bytes beside the object tree they become, and
@@ -237,7 +236,7 @@ def _walk_drops(event: dict, ph: object, slim: bool) -> bool:
 
 def _merge_one_trace(
     trace: object,
-    path: Path,
+    path: pathlib.Path,
     file_index: int,
     batcher: _EventBatcher,
     tid_seq: _IdSequencer,
@@ -350,7 +349,7 @@ def _merge_one_trace(
 
 
 @contextlib.contextmanager
-def _gzip_output_stream(out_path: Path) -> Iterator[BinaryIO]:
+def _gzip_output_stream(out_path: pathlib.Path) -> Iterator[BinaryIO]:
   """Yield the stdin of an igzip run (igzip_command) compressing into ``out_path``.
 
   The compress must leave the process to overlap the GIL-bound walk; the pipe
@@ -377,7 +376,7 @@ def _gzip_output_stream(out_path: Path) -> Iterator[BinaryIO]:
       raise
 
 
-def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
+def merge_traces(paths: list[pathlib.Path], out_path: pathlib.Path, slim: bool) -> None:
   """Merge Chrome JSON traces into one gzip-compressed Chrome trace."""
   # A build allocates ~1M dicts per 500k input events and mutates every one;
   # the generational passes over that churn measured 0.3-0.6 s per 1.07M-event
@@ -385,11 +384,11 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   # trace_merge_child) or a pool worker that runs nothing else, so the disable
   # is scoped to this build; collect reclaims the build's cyclic leftovers so
   # they never accumulate across builds in a long-lived worker.
-  with gc_off(collect=True):
+  with gc_control.gc_off(collect=True):
     _merge_all(paths, out_path, slim)
 
 
-def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
+def _merge_all(paths: list[pathlib.Path], out_path: pathlib.Path, slim: bool) -> None:
   if len(paths) == 1 and _merge_single_trace_chunked(paths[0], out_path, slim):
     return
   tid_seq, flow_seq = _IdSequencer(1), _IdSequencer(1)
@@ -409,8 +408,8 @@ class _ChunkHelperError(RuntimeError):
 
 
 def _merge_chunked_build(
-    path: Path, file_index: int, id_base: int, slim: bool, assemble: Callable[[list[Path], int, int, int], bool | int],
-    parse_wave: int) -> bool | int | None:
+    path: pathlib.Path, file_index: int, id_base: int, slim: bool,
+    assemble: Callable[[list[pathlib.Path], int, int, int], bool | int], parse_wave: int) -> bool | int | None:
   """Run the chunk helpers over *path* and hand their fragments to *assemble*.
 
   *parse_wave* is the spawn wave: how many chunk helpers parse concurrently before the
@@ -424,7 +423,7 @@ def _merge_chunked_build(
   through; it runs inside the helper lifecycle, before the fragment directory dies.
   """
   size = path.stat().st_size
-  split = _split_chunks(path, size, _MIN_CHUNK_BYTES)
+  split = direct_pass_child._split_chunks(path, size, direct_pass_child._MIN_CHUNK_BYTES)
   if split is None:
     return None
   object_form, indent, starts = split
@@ -433,9 +432,9 @@ def _merge_chunked_build(
   member_dir = None
   helpers: list[subprocess.Popen] = []
   # PYTHONPATH pins the helper's src.* imports to this build's checkout, not the venv's editable install.
-  helper_env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[3])}
+  helper_env = {**os.environ, "PYTHONPATH": str(pathlib.Path(__file__).resolve().parents[3])}
   try:
-    member_dir = Path(tempfile.mkdtemp(prefix="merge-chunks-"))
+    member_dir = pathlib.Path(tempfile.mkdtemp(prefix="merge-chunks-"))
     fragments = [member_dir / f"{index}.jsonl" for index in range(count)]
     reports = []
     for wave_start in range(0, count, parse_wave):
@@ -446,7 +445,7 @@ def _merge_chunked_build(
             indent.decode(), slim, index == count - 1,
             str(fragments[index]), file_index, id_base
         ]
-        argv = [sys.executable, str(Path(__file__).resolve()), "--merge-chunk", orjson.dumps(spec).decode()]
+        argv = [sys.executable, str(pathlib.Path(__file__).resolve()), "--merge-chunk", orjson.dumps(spec).decode()]
         helpers.append(
             subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=helper_env))
@@ -498,10 +497,10 @@ def _merge_chunked_build(
       shutil.rmtree(member_dir, ignore_errors=True)
 
 
-def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
+def _merge_single_trace_chunked(path: pathlib.Path, out_path: pathlib.Path, slim: bool) -> bool:
   """Build one trace's merged artifact with chunk-parallel helpers; False falls back."""
 
-  def assemble(fragments: list[Path], _emitted: int, _tids: int, _flows: int) -> bool:
+  def assemble(fragments: list[pathlib.Path], _emitted: int, _tids: int, _flows: int) -> bool:
     with _gzip_output_stream(out_path) as output:
       output.write(b'{"traceEvents":[')
       emitted = False
@@ -514,7 +513,7 @@ def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
       output.write(b"]}")
     return True
 
-  return _merge_chunked_build(path, 0, 1, slim, assemble, parse_wave=_MAX_CHUNKS) is True
+  return _merge_chunked_build(path, 0, 1, slim, assemble, parse_wave=direct_pass_child._MAX_CHUNKS) is True
 
 
 def _merge_chunk_main(argv: list[str]) -> int:
@@ -524,10 +523,10 @@ def _merge_chunk_main(argv: list[str]) -> int:
   import gc
 
   path, start, end, index, count, object_form, indent, slim, last, fragment, file_index, id_base = orjson.loads(argv[0])
-  path, fragment_path, indent = Path(path), Path(fragment), indent.encode()
+  path, fragment_path, indent = pathlib.Path(path), pathlib.Path(fragment), indent.encode()
   try:
     gc.disable()
-    doc = orjson.loads(_chunk_parse_input(path, start, end, index, count, object_form, indent))
+    doc = orjson.loads(direct_pass_child._chunk_parse_input(path, start, end, index, count, object_form, indent))
     events = _trace_events_or_raise(doc, path)
   except ValueError as error:  # orjson decode errors and NotATraceError are ValueError subclasses
     print(f"chunk {index} failed to parse: {error}", file=sys.stderr)
@@ -572,7 +571,8 @@ def _merge_chunk_main(argv: list[str]) -> int:
 
 
 def _build_member_chunked(
-    path: Path, fragment_path: Path, file_index: int, id_start: int, id_bound: int, slim: bool) -> int | None:
+    path: pathlib.Path, fragment_path: pathlib.Path, file_index: int, id_start: int, id_bound: int,
+    slim: bool) -> int | None:
   """Build one merge member with chunk-parallel helpers; None falls back to the sequential walk.
 
   The helper protocol is the single-trace build's (:func:`_merge_chunked_build`); the member's id
@@ -581,7 +581,7 @@ def _build_member_chunked(
   Returns the member's emitted event count.
   """
 
-  def assemble(fragments: list[Path], emitted: int, tid_count: int, flow_count: int) -> int:
+  def assemble(fragments: list[pathlib.Path], emitted: int, tid_count: int, flow_count: int) -> int:
     # The sequential walk's loud failure at the stride bound: the meta tid is the tid space's one
     # allocation past the walked forms.
     if id_start + tid_count + 1 >= id_bound or id_start + flow_count >= id_bound:
@@ -604,7 +604,7 @@ def _build_member_chunked(
   return built if isinstance(built, int) else None
 
 
-def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) -> int:
+def build_trace_member(path: pathlib.Path, out_path: pathlib.Path, file_index: int, slim: bool) -> int:
   """Write one trace's remapped events as an uncompressed comma-joined fragment; return the count.
 
   ``file_index`` is the trace's position in the merge order and keeps the
@@ -620,7 +620,7 @@ def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) 
   chunked = _build_member_chunked(path, out_path, file_index, id_start, id_bound, slim)
   if chunked is not None:
     return chunked
-  with gc_off(collect=True), out_path.open("wb") as output:
+  with gc_control.gc_off(collect=True), out_path.open("wb") as output:
     tid_seq = _IdSequencer(id_start)
     flow_seq = _IdSequencer(id_start)
     batcher = _EventBatcher(output)
@@ -633,7 +633,7 @@ def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) 
     return batcher.emitted
 
 
-def _member_outcome(path: Path, fragment: Path, file_index: int, slim: bool) -> int | None:
+def _member_outcome(path: pathlib.Path, fragment: pathlib.Path, file_index: int, slim: bool) -> int | None:
   """Build one merge member; return its event count, or None for a skipped member.
 
   The dir shape's ``*.json`` discovery cannot tell an analysis sidecar from a
@@ -651,7 +651,8 @@ def _member_outcome(path: Path, fragment: Path, file_index: int, slim: bool) -> 
 
 
 def build_multi_trace_merge(
-    paths: list[Path], out_path: Path, slim: bool, executor: concurrent.futures.Executor | None) -> None:
+    paths: list[pathlib.Path], out_path: pathlib.Path, slim: bool,
+    executor: concurrent.futures.Executor | None) -> None:
   """Build the multi-trace merged artifact: one pool task per trace, streamed as each completes.
 
   Each walk runs on ``executor`` (``None`` builds inline, the tests' shape) and
@@ -664,7 +665,7 @@ def build_multi_trace_merge(
   failure raises out of the walk order and kills the gzip run; the caller owns
   artifact atomicity.
   """
-  member_dir = Path(tempfile.mkdtemp(prefix="merge-members-"))
+  member_dir = pathlib.Path(tempfile.mkdtemp(prefix="merge-members-"))
   try:
     fragments = [member_dir / f"{index}.jsonl" for index in range(len(paths))]
     if executor is None:

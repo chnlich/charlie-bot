@@ -79,6 +79,27 @@ async def test_cron_editor_enable_restores_the_bound_archived_node(cron_env) -> 
 
 
 @pytest.mark.asyncio
+async def test_archive_disables_every_task_bound_to_the_node(cron_env) -> None:
+  """Two tasks bound to one node both stop: a task left enabled on an archived
+  node fails its binding check on every scheduler tick."""
+  _, _, tree, home, _ = cron_env
+  write_nightly_task(home, backend=OPUS_BACKEND_ID)
+  weekly = {**_read_task_yaml(home), "cron": "0 3 * * 0"}
+  (home / ".charliebot" / "config.d" / "cron.d" / "weekly.yaml").write_text(yaml.safe_dump(weekly), encoding="utf-8")
+  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
+  from src.features.cron.cron_files import write_cron_key
+  write_cron_key("nightly", "session_id", node.id)
+  write_cron_key("weekly", "session_id", node.id)
+
+  await tree.archive_subtree(node.id, caller=OPERATOR)
+
+  assert tree.task_state(node.id) == "archived"
+  for name in ("nightly", "weekly"):
+    body = _read_task_yaml(home, name)
+    assert body["session_id"] == node.id and body["enabled"] is False, name
+
+
+@pytest.mark.asyncio
 async def test_auto_bind_restore_leaves_the_legacy_status_branch_alone(cron_env) -> None:
   """The legacy stored-status branch of auto-bind still unarchives a
   status-archived node without any task fact."""

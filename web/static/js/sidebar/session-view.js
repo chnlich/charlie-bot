@@ -477,7 +477,7 @@ async function switchSession(sessionId) {
 
   // Update globals
   SESSION_ID = sessionId;
-  if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
+  document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
   DRAFT_KEY = 'charliebot-draft-' + sessionId;
   THINKING_SINCE = data.session.thinking_since || null;
   eventCursor = data.event_count;
@@ -985,7 +985,7 @@ async function createTaskNode(taskParentId, group) {
 
     const bootstrap = buildEmptySessionBootstrap(data);
     SESSION_ID = data.id;
-    if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
+    document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
     DRAFT_KEY = 'charliebot-draft-' + data.id;
     THINKING_SINCE = data.thinking_since || null;
     eventCursor = bootstrap.event_count;
@@ -1023,7 +1023,7 @@ function renderNoActiveSessionView() {
 
   SESSION_ID = null;
   globalThis.renderPendingTriggersTray(null);
-  if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
+  document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
   DRAFT_KEY = null;
   THINKING_SINCE = null;
   eventCursor = 0;

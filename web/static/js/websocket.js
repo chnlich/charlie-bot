@@ -30,6 +30,17 @@ function registerWsMessageHandler(type, handler) {
   wsMessageHandlers.set(type, handler);
 }
 
+// Handlers that run on every (re)connect of this session's socket, after the
+// cursor is sent, so a package re-syncs the state it derives from the event
+// stream. A package registers its handler when its script loads.
+const wsConnectHandlers = [];
+
+function registerWsConnectHandler(handler) {
+  if (typeof handler !== 'function') throw new Error('Invalid WebSocket connect handler registration');
+  if (wsConnectHandlers.includes(handler)) throw new Error('Duplicate WebSocket connect handler');
+  wsConnectHandlers.push(handler);
+}
+
 function isStaleSocket(socket, targetSession, generation) {
   return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
 }
@@ -78,9 +89,7 @@ function connectWS() {
     reconnectDelay = 1000;
     // Send cursor so the server only replays events beyond this index.
     socket.send(JSON.stringify({type: 'cursor', index: eventCursor}));
-    // Re-sync plan panel state on (re)connect.
-    if (typeof planPanel !== 'undefined') planPanel.invalidate();
-    if (typeof planPanel !== 'undefined') planPanel.onReconnect();
+    wsConnectHandlers.forEach((handler) => handler());
   };
 
   socket.onmessage = (e) => {
@@ -255,7 +264,5 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     // The usage header is a projection over the full event list, so the forced
     // poll is what updates it — the WebSocket handler must not write the header.
     pollActiveSessionView({force: true});
-  } else if (t === 'plan_updated') {
-    if (typeof planPanel !== 'undefined') planPanel.onPlanUpdated(ev.plan_id);
   }
 }

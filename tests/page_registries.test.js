@@ -30,12 +30,11 @@ function fakeElement(id) {
 
 function loadTabsContext({isMobile = false} = {}) {
   const elements = new Map(
-      ['tab-chat', 'tab-plans', 'btn-chat', 'btn-chat-plans', 'btn-pkg'].map((id) => [id, fakeElement(id)]));
+      ['tab-chat', 'btn-chat', 'btn-pkg'].map((id) => [id, fakeElement(id)]));
   const calls = [];
   const context = {
     document: {getElementById: (id) => elements.get(id) || null},
     platform: {isMobile},
-    planPanel: {onTabShown: () => calls.push('plans.onTabShown')},
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -75,7 +74,6 @@ test('switchTab shows the chosen tab, hides every other, and marks its button', 
   assert.deepEqual(afterShow, ['pkg.onShow']);
   assert.ok(calls.includes('pkg.onHide'));
   assert.equal(elements.get('tab-chat').classList.contains('hidden'), false);
-  assert.ok(elements.get('tab-plans').classList.contains('hidden'));
   assert.ok(elements.get('btn-chat').classList.contains('bg-blue-600/20'));
   assert.ok(elements.get('btn-pkg').classList.contains('text-slate-400'));
 });
@@ -93,18 +91,18 @@ test('a full-screen tab hides the chat column on a phone and keeps it on a deskt
   assert.ok(phone.elements.get('tab-chat').classList.contains('hidden'));
 });
 
-test('a session switch keeps a tab that keeps, and returns to chat from plans', () => {
+test('a session switch keeps a tab that keeps, and returns to chat from one that does not', () => {
   const {context, calls} = loadTabsContext();
   context.registerTab(packageTab(calls));
+  context.registerTab(packageTab(calls, {id: 'full-area', keepOnSessionSwitch: false}));
 
   context.switchTab('pkg');
-  const fromPackageTab = context.tabAfterSessionSwitch();
-  context.switchTab('chat-plans');
-  const fromPlans = context.tabAfterSessionSwitch();
+  const fromKeepingTab = context.tabAfterSessionSwitch();
+  context.switchTab('full-area');
+  const fromFullAreaTab = context.tabAfterSessionSwitch();
 
-  assert.equal(fromPackageTab, 'pkg');
-  assert.equal(fromPlans, 'chat');
-  assert.ok(calls.includes('plans.onTabShown'));
+  assert.equal(fromKeepingTab, 'pkg');
+  assert.equal(fromFullAreaTab, 'chat');
 });
 
 test('a registered message handler runs for its event type after the event cursor advances', () => {
@@ -119,6 +117,20 @@ test('a registered message handler runs for its event type after the event curso
   assert.throws(() => context.registerWsMessageHandler('', () => {}), /Invalid WebSocket message handler/);
 });
 
+test('registered connect handlers run on every socket open, after the cursor is sent', () => {
+  const {context, FakeWebSocket} = loadWebsocketContext({SESSION_ID: 'session-a'});
+  const sentBeforeHandler = [];
+  const handler = () => sentBeforeHandler.push(FakeWebSocket.instances.at(-1).sent.length);
+  context.registerWsConnectHandler(handler);
+
+  context.connectWS();
+  FakeWebSocket.instances.at(-1).emitOpen();
+
+  assert.deepEqual(sentBeforeHandler, [1]);
+  assert.throws(() => context.registerWsConnectHandler(handler), /Duplicate WebSocket connect handler/);
+  assert.throws(() => context.registerWsConnectHandler(null), /Invalid WebSocket connect handler/);
+});
+
 // A package's scripts loaded in page order, with the core entries recording what they register.
 function loadPackageScripts(name, files, extra = {}) {
   const tabs = [];
@@ -128,6 +140,7 @@ function loadPackageScripts(name, files, extra = {}) {
     registerTab: (tab) => tabs.push(tab),
     registerWsMessageHandler: (type, handler) => handlers.set(type, handler),
     document: {
+      readyState: 'loading',
       addEventListener: (type, listener) => listeners.set(type, listener),
       getElementById: () => null,
     },
@@ -174,6 +187,25 @@ test('the terminal package registers its tab', () => {
       'terminal', ['terminal_b64.js', 'terminal_clipboard.js', 'terminal_mount.js', 'terminal_panel.js']);
 
   assert.deepEqual(tabLayouts(tabs), [{id: 'terminal', showsChat: false, fullScreenOnMobile: false, keepOnSessionSwitch: true}]);
+});
+
+test('the artifacts package registers the Plans tab, its plan events and its session listener', () => {
+  const connectHandlers = [];
+  const {context, tabs, handlers, listeners} = loadPackageScripts('artifacts', ['plan-panel.js'], {
+    registerWsConnectHandler: (handler) => connectHandlers.push(handler),
+  });
+  const panel = vm.runInContext('planPanel', context);
+  const calls = [];
+  for (const name of ['invalidate', 'onReconnect', 'onPlanUpdated', 'onActiveSessionChanged']) {
+    panel[name] = (...args) => calls.push([name, ...args]);
+  }
+
+  connectHandlers.forEach((handler) => handler());
+  handlers.get('plan_updated')({plan_id: 7});
+  listeners.get('charliebot:active-session-changed')();
+
+  assert.deepEqual(tabLayouts(tabs), [{id: 'chat-plans', showsChat: false, fullScreenOnMobile: false, keepOnSessionSwitch: false}]);
+  assert.deepEqual(calls, [['invalidate'], ['onReconnect'], ['onPlanUpdated', 7], ['onActiveSessionChanged']]);
 });
 
 test('the usage package renders its strip from its event type', () => {

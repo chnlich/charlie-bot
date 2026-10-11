@@ -30,11 +30,14 @@ package's script registers a handler with it at load time. The core registration
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)
     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
+    registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)
 
 Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
 for it. The core page events today:
 
+    charliebot:active-session-changed
+                                web/static/js/sidebar/session-view.js (SESSION_ID names another session)
     charliebot:session-switched web/static/js/sidebar/session-view.js (the end of a session switch)
     charliebot:sidebar-resized  web/static/js/sidebar/modals.js (the end of a sidebar drag)
 

@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 
 from src.features.artifacts import artifact_shared, plan_diff
 from src.features.artifacts.constants import ARTIFACT_GENRES
-from src.infra import constants
+from src.infra import constants, text_length
 from src.runtime.hooks import backend_types
 
 if TYPE_CHECKING:
@@ -85,13 +85,6 @@ def _revision_mark_re(tag: str, cls: str) -> re.Pattern[str]:
 
 _REVNOTE_RE = _revision_mark_re("div", "revnote")
 _REVBADGE_RE = _revision_mark_re("span", "revbadge")
-# CJK ideographs, CJK punctuation, and fullwidth forms count double, so the same
-# information density spends the same budget in Chinese and English.
-_CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))
-
-
-def _weighted_goal_length(text: str) -> int:
-  return len(text) + sum(1 for c in text if any(lo <= ord(c) <= hi for lo, hi in _CJK_RANGES))
 
 
 def _measure_goal_weighted(artifact: pathlib.Path) -> int:
@@ -103,7 +96,7 @@ def _measure_goal_weighted(artifact: pathlib.Path) -> int:
   for mark in (_REVNOTE_RE, _REVBADGE_RE):
     body = mark.sub("", body)
   text = html.unescape(_TAG_RE.sub("", body))
-  return _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
+  return text_length.weighted_length(re.sub(r"\s+", " ", text).strip())
 
 
 PAGE_HEIGHT_TARGET = 2000

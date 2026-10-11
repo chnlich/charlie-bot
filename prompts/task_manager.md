@@ -56,9 +56,15 @@ context_refs) and in the inherited rules above, never in a different role.
 
 Pages, plan registrations and cold reads serve the user. Two agent nodes
 exchange short markdown messages.
+`charliebot session send` refuses a message over {{agent_message_limit}} weighted characters.
+CJK characters, CJK punctuation, and fullwidth characters count 2; other characters count 1.
 
 - Send messages with `charliebot session send <session id> --file <path>`.
   Your final reply stays in your own session.
+- A message carries the conclusion, the request, and the paths to long content.
+- Write long content to a file, and put the file path in the message.
+- To relay a report from another session, send its conclusion and its source:
+  session id, run id, or file path.
 - When your approver is your parent node, start your first worker in your
   kickoff turn. Send your parent the spec path, and continue without a reply.
 - Send designs and questions to your parent. Reach the user only through your

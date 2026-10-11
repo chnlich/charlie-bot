@@ -33,7 +33,11 @@ exact input ids, idempotent replay; later arrivals keep blocking closure.
 
 ``send`` relays a message into the target session as an ``agent_message``
 event (never a ``user`` event), so it neither mints nor revokes a takeoff
-authorization window. The caller session resolves per ``resolve_session_id``.
+authorization window. The server refuses a message over
+MAX_AGENT_MESSAGE_WEIGHTED_CHARS weighted characters (CJK characters, CJK
+punctuation, and fullwidth characters count 2) with exit code 2 and no
+effect; long content belongs in a file the message points at. The caller
+session resolves per ``resolve_session_id``.
 
 ``dialog`` prints one session's chat-visible messages as plain text, oldest
 first, for piping into ``rg`` — the post-compaction search path the master
@@ -51,8 +55,12 @@ import argparse
 import json
 import uuid
 
-from src.infra import help_formatter
+from src.infra import constants, help_formatter
 from src.runtime.cli import common
+
+# Exit code when the server refuses the send (over-limit message): mirrors
+# argparse's usage-error exit code, matching schedule-trigger's 422 mapping.
+EXIT_SEND_REFUSED = 2
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -130,8 +138,21 @@ def _build_parser() -> argparse.ArgumentParser:
       formatter_class=help_formatter.CliHelpFormatter)
   send.add_argument("target", help="Target session id")
   source = send.add_mutually_exclusive_group(required=True)
-  source.add_argument("--message", default=None, help="Message text")
-  source.add_argument("--file", default=None, help="Read the message text from this file")
+  source.add_argument(
+      "--message",
+      default=None,
+      help=(
+          "Message text, at most "
+          f"{constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS} weighted characters "
+          "(CJK characters, CJK punctuation, and fullwidth characters count 2; "
+          "long content belongs in a file)"))
+  source.add_argument(
+      "--file",
+      default=None,
+      help=(
+          "Read the message text from this file; the same "
+          f"{constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS} weighted-character "
+          "limit applies to its content"))
   common.add_session_arg(send)
 
   dialog = sub.add_parser("dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
@@ -226,7 +247,8 @@ def _cmd_send(args: argparse.Namespace) -> None:
           "session_id": session_id,
           "target_session_id": args.target,
           "content": content,
-      })
+      },
+      rejection_exit_codes={422: EXIT_SEND_REFUSED})
   print(json.dumps(result, indent=2))
 
 

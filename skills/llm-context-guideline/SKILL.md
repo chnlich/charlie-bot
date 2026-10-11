@@ -89,6 +89,7 @@ outside the originating session; a fixable obstruction is fixed instead of recor
 
 Data cheap to re-obtain on demand lives in session reports and run dirs; the store keeps the
 takeaway that tells the reader where to look.
+Measured figures, benchmark scores, and one-off measurements count as data cheap to re-obtain on demand.
 
 ## Admission is merge-first and strict
 

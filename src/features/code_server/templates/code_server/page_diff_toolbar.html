@@ -1,6 +1,7 @@
-      {% if code_server_enabled is defined and code_server_enabled() %}
+      {% if code_server_enabled() %}
       <button id="open-codeserver" type="button"
               class="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium transition-colors">
         Open in code-server
       </button>
+      <script src="/static/features/code_server/open-in-code-server.js?v={{ static_asset_version|urlencode }}" defer></script>
       {% endif %}

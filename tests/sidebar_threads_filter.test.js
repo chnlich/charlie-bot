@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
-// The Threads sidebar filter (filters.js + groups.js): the pill registers
-// between Workspace and Later and restores from ?filter=threads; its view
+// The Threads sidebar filter (the chat_threads package's threads-filter.js,
+// filters.js and groups.js): the pill registers between Workspace and Later
+// and restores from ?filter=threads; its view
 // fetches /api/sessions/chat-threads, renders through the grouped renderer
 // (children nested under their parent), shows "No chat threads" when empty,
 // and hides the group header's New-session-in-group button across the in-place
@@ -10,6 +11,7 @@
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const {
   baseSessionContext,
@@ -19,6 +21,7 @@ const {
   makeSessionMeta,
 } = require('./session_context_stub');
 const { createElement } = require('./dom_element_stub');
+const { readPackageStatic } = require('./read_static');
 
 const PILL_IDS = ['filter-all', 'filter-threads', 'filter-starred', 'filter-archived'];
 
@@ -45,6 +48,8 @@ function buildContext({search = '', sessions = []} = {}) {
     return {ok: true, json: async () => sessions};
   };
   createChatSidebarContext(context);
+  vm.runInContext(readPackageStatic('features', 'chat_threads', 'threads-filter.js'), context,
+                  {filename: 'threads-filter.js'});
   return {context, nav, pillsContainer, fetchRequests};
 }
 

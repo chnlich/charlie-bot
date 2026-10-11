@@ -12,7 +12,6 @@
   const modeSelect = document.getElementById('mode-select');
   const formatSelect = document.getElementById('format-select');
   const form = document.getElementById('diff-form');
-  const openCodeServerButton = document.getElementById('open-codeserver');
   const statusEl = document.getElementById('status');
   const loadingEl = document.getElementById('loading');
   const errorEl = document.getElementById('error');
@@ -340,36 +339,6 @@
     writeQuery(params);
     compare(params);
   });
-
-  async function openCodeServer() {
-    clearError();
-    const repo = repoInput.value.trim();
-    if (!repo) {
-      setError('repo is required to open code-server');
-      return;
-    }
-    statusEl.textContent = 'preparing code-server…';
-
-    const fetched = await fetchJson(`/api/code-server/open?folder=${encodeURIComponent(repo)}`, () => {
-      statusEl.textContent = '';
-    });
-    if (!fetched) return;
-    const { resp, data } = fetched;
-
-    if (!resp.ok) {
-      setError(responseDetail(data, resp.status));
-      statusEl.textContent = '';
-      return;
-    }
-
-    const url = `${location.protocol}//${location.hostname}:${data.port}/?folder=${encodeURIComponent(data.folder)}`;
-    window.open(url, '_blank');
-    statusEl.textContent = '';
-  }
-
-  if (openCodeServerButton) {
-    openCodeServerButton.addEventListener('click', openCodeServer);
-  }
 
   repoInput.addEventListener('change', () => {
     loadBranches(repoInput.value.trim());

@@ -119,10 +119,6 @@ function createChatSidebarContext(context) {
   runStaticModules(context, sidebarModules());
 }
 
-// The wire path web/static/js/sidebar/session-view.js posts switch telemetry
-// to (reportSwitchEvent); an endpoint move on either side breaks the pin.
-const SWITCH_TELEMETRY_URL = '/api/diag/switch-events';
-
 // One sidebar row as the harnesses mount it: querySelector answers only
 // '.session-name' (the selector the row rendering resolves); sidebar callers
 // resolving other selectors against a row (archived.js's group move)
@@ -327,7 +323,6 @@ module.exports = {
   buildSidebarFilterElements,
   buildUsageElements,
   buildSwitchFlowHarness,
-  SWITCH_TELEMETRY_URL,
   makeSidebarRow,
   makeSessionMeta,
   bootstrapPayload,

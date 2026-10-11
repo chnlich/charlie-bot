@@ -3,8 +3,29 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups, makeSidebarRow,
-  stubPageTimers, SWITCH_TELEMETRY_URL} = require('./session_context_stub');
+  stubPageTimers} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
+const {readPackageStatic} = require('./read_static');
+
+// The wire path the diag package's switch-events.js posts each switch phase
+// to; an endpoint move on either side breaks the pin.
+const SWITCH_TELEMETRY_URL = '/api/diag/switch-events';
+
+// Core announces each switch phase as a page event, and the diag package's
+// listener posts it: the harness document calls each listener of an event's
+// type in registration order, as the page's document does.
+function loadSwitchTelemetry(context) {
+  const listeners = new Map();
+  context.document.addEventListener = (type, listener) => {
+    if (!listeners.has(type)) listeners.set(type, []);
+    listeners.get(type).push(listener);
+  };
+  context.document.dispatchEvent = (event) => {
+    for (const listener of listeners.get(event.type) || []) listener(event);
+    return true;
+  };
+  vm.runInContext(readPackageStatic('features', 'diag', 'switch-events.js'), context, {filename: 'switch-events.js'});
+}
 
 // vm harness for switchSession: bootstrap fetches resolve through manual
 // promises (pendingSwitches[i].resolve()), telemetry posts are recorded and
@@ -82,6 +103,7 @@ function buildSwitchHarness() {
   stubPageTimers(context);
 
   createChatSidebarContext(context);
+  loadSwitchTelemetry(context);
   return {
     context,
     messages,

@@ -25,6 +25,7 @@ directory: those URL prefixes belong to package static files.
 A package learns core's facts through a registration entry: a function core provides, and the
 package's script registers a handler with it at load time. The core registration entries today:
 
+    Chat.registerDeliveryLink   web/static/js/chat/rendering.js (a link on the worker delivery banner)
     Chat.registerFileLinkFamily web/static/js/chat/file-links.js (a family of file links the package owns)
     Chat.registerMessagePostProcessor
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)
@@ -38,6 +39,8 @@ for it. The core page events today:
 
     charliebot:active-session-changed
                                 web/static/js/sidebar/session-view.js (SESSION_ID names another session)
+    charliebot:session-switch-phase
+                                web/static/js/sidebar/session-view.js (one phase of a session switch, with its timing)
     charliebot:session-switched web/static/js/sidebar/session-view.js (the end of a session switch)
     charliebot:sidebar-resized  web/static/js/sidebar/modals.js (the end of a sidebar drag)
 

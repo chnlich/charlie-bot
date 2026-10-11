@@ -6,7 +6,7 @@ const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
 const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
-  makeSessionMeta, SWITCH_TELEMETRY_URL } = require('./session_context_stub');
+  makeSessionMeta } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 
@@ -1052,10 +1052,6 @@ test('archiveSession removes the row inline and switches to the next rendered se
       assert.equal(opts.method, 'DELETE');
       return {ok: true, async json() { return {}; }};
     }
-    if (url === SWITCH_TELEMETRY_URL) {
-      assert.equal(opts.method, 'POST');
-      return {ok: true, async json() { return {ok: true}; }};
-    }
     if (url === '/api/sessions/session-b/bootstrap') {
       return {
         ok: true,
@@ -1086,10 +1082,8 @@ test('archiveSession removes the row inline and switches to the next rendered se
 
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a',
-    SWITCH_TELEMETRY_URL,
     '/api/sessions/session-b/bootstrap',
     '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
-    SWITCH_TELEMETRY_URL,
   ]);
   assert.equal(rowA.removed, true);
   assert.equal(context.location.href, '');

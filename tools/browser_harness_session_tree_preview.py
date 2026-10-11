@@ -49,10 +49,10 @@ with the exact tested commit, the invocation and the console-error list.
 
 from __future__ import annotations
 
+import pathlib
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -71,7 +71,7 @@ import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
 from src.app import registrations  # noqa: E402
-from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
+from src.infra import identity_env  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     DESKTOP_CAPTURE_FLAGS,
@@ -350,7 +350,7 @@ def motion_timeline_verdict(samples: list[list[dict]],
 PRODUCTION_PORT = 18498
 
 
-def build_source_home(source: Path, backend_ids: list[str]) -> None:
+def build_source_home(source: pathlib.Path, backend_ids: list[str]) -> None:
   """The trial's private configuration source: the selected backend entries of the current profile.
 
     The source read is scoped to the entries the trial consumes: the profile's raw
@@ -365,10 +365,10 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
   import yaml
 
   from src.app import registrations
-  from src.infra.config import CharlieBotConfig, charliebot_home_dir, load_credentials
+  from src.infra import config
 
   registrations.register_all()
-  config_path = charliebot_home_dir() / "config.yaml"
+  config_path = config.charliebot_home_dir() / "config.yaml"
   raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
   entries = []
   written_sections: set[str] = set()
@@ -379,7 +379,7 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
       raise SystemExit(f"backend {backend_id!r} is not configured in the current profile {config_path}")
     try:
       # Schema-strict validation of exactly the entry the trial copies.
-      option = CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
+      option = config.CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
     except Exception as e:
       raise SystemExit(
           f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
@@ -392,14 +392,14 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     entries.append(json.loads(option.model_dump_json()))
     if getattr(option, "credential", None):
       section = str(option.credential)
-      api_key = load_credentials().get(section, "api_key")
+      api_key = config.load_credentials().get(section, "api_key")
       if api_key is None:
         raise SystemExit(f"backend {backend_id!r} needs credentials.{section}.api_key; it is unset")
       if section not in written_sections:
         written_sections.add(section)
         credential_lines.append(f"{section}:\n  api_key: {api_key}\n")
   source.mkdir(parents=True, exist_ok=True)
-  config = {
+  source_config = {
       "server": {
           "host": "127.0.0.1",
           "port": PRODUCTION_PORT
@@ -413,7 +413,7 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
           "preference": [backend_ids[0]]
       },
   }
-  (source / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+  (source / "config.yaml").write_text(yaml.safe_dump(source_config), encoding="utf-8")
   creds = "charliebot:\n  access_key: source-operator-key-not-used\n" + "".join(credential_lines)
   (source / "credentials.yaml").write_text(creds, encoding="utf-8")
 
@@ -422,7 +422,7 @@ def fail(message: str) -> None:
   raise SystemExit(message)
 
 
-def preview_invocation(home: Path, port: int, backend: str, extra_backends: list[str]) -> list[str]:
+def preview_invocation(home: pathlib.Path, port: int, backend: str, extra_backends: list[str]) -> list[str]:
   """The preview instance's argv: the real CLI as its own foreground process.
 
     Every harness starts ``charliebot session-tree preview`` rather than an
@@ -440,7 +440,7 @@ def preview_invocation(home: Path, port: int, backend: str, extra_backends: list
   return invocation
 
 
-def preview_instance_env(source_home: Path) -> dict[str, str]:
+def preview_instance_env(source_home: pathlib.Path) -> dict[str, str]:
   """The preview child's env: the trial's source home and an unbuffered console.
 
     The copy is taken at call time, so callers must scrub production identity
@@ -452,13 +452,13 @@ def preview_instance_env(source_home: Path) -> dict[str, str]:
   return env
 
 
-def trial_home_root(prefix: str, *, keep: bool) -> Path:
+def trial_home_root(prefix: str, *, keep: bool) -> pathlib.Path:
   """The trial's temp root, purged at process exit unless *keep*.
 
     Every trial artifact (source home, trial home, chrome profile, console
     logs) lives inside the returned directory, so one purge clears the trial.
     """
-  tmp_path = Path(tempfile.mkdtemp(prefix=prefix))
+  tmp_path = pathlib.Path(tempfile.mkdtemp(prefix=prefix))
   if keep:
     log(f"kept for inspection: {tmp_path}")
   else:
@@ -468,7 +468,7 @@ def trial_home_root(prefix: str, *, keep: bool) -> Path:
 
 async def open_authenticated_page(
     chrome: str,
-    profile: Path,
+    profile: pathlib.Path,
     *,
     port: int,
     access_key: str,
@@ -522,7 +522,8 @@ async def open_authenticated_page(
 
 
 async def wait_preview_ready(
-    proc: subprocess.Popen, home: Path, server_console: Path, fail: Callable[[str], None], timeout_s: float) -> dict:
+    proc: subprocess.Popen, home: pathlib.Path, server_console: pathlib.Path, fail: Callable[[str], None],
+    timeout_s: float) -> dict:
   """Poll the preview instance's ready record; return it once ready.
 
     The record is ``<home>/state/preview_instance.json`` and ``ready: true``
@@ -549,11 +550,11 @@ async def wait_preview_ready(
 async def run_harness(args: argparse.Namespace) -> None:
   chrome = resolve_chrome(args.chrome, fail)
 
-  evidence_dir = Path(args.evidence_dir)
+  evidence_dir = pathlib.Path(args.evidence_dir)
   commit = open_evidence_dir(evidence_dir)
 
   with tempfile.TemporaryDirectory(prefix="charliebot-preview-harness-") as tmp:
-    tmp_path = Path(tmp)
+    tmp_path = pathlib.Path(tmp)
     source = tmp_path / "source-home"
     backends = [b.strip() for b in args.backends.split(",") if b.strip()]
     if not backends:
@@ -562,7 +563,7 @@ async def run_harness(args: argparse.Namespace) -> None:
     # The harness process itself must keep production identities out of any
     # child it spawns; the preview CLI clears its own in addition.
     registrations.register_all()
-    for var in inherited_identity_env_vars():
+    for var in identity_env.inherited_identity_env_vars():
       os.environ.pop(var, None)
     home = tmp_path / "preview-home"
     port = pick_free_port()
@@ -603,10 +604,10 @@ async def run_harness(args: argparse.Namespace) -> None:
       finally:
         stop_child(chrome_proc, grace_s=15, kill_reap_s=10)
     finally:
-      from src.runtime.home_writer_fence import probe_writer_fence
+      from src.runtime import home_writer_fence
 
       stop_child(proc, grace_s=60, kill_reap_s=30)
-      holder = probe_writer_fence(home)
+      holder = home_writer_fence.probe_writer_fence(home)
       results.record(
           "server-fence-released-on-stop", holder["exclusive_holder_alive"] is False,
           f"writer fence holder alive: {holder['exclusive_holder_alive']}", None)
@@ -617,7 +618,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         raise SystemExit(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
 
 
-async def drive_browser(debug_port: int, base: str, access_key: str, results: Results, home: Path) -> None:
+async def drive_browser(debug_port: int, base: str, access_key: str, results: Results, home: pathlib.Path) -> None:
   deadline = time.monotonic() + 20
   ws_url = None
   while time.monotonic() < deadline and ws_url is None:

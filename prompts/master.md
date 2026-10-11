@@ -52,9 +52,15 @@ The status block lets the user resume from the latest message alone.
 
 - Open the last message of each turn with the status block, a three-item markdown list:
   - **Goal**: the session's current overall goal, in one sentence.
-  - **Now**: the state this turn read back, and the job or trigger it waits on.
-  - **Waiting on you**: the decision or action the user owes, or "nothing".
+  - **Now**: the state this turn read back, what remains before the next milestone, and the job or trigger it waits on.
+  - **Waiting on you**: each decision or action from the user that the next milestone waits on, or "nothing".
+- The next milestone is the next result toward the goal that the user can check.
+- When the session repeats one scheduled routine, its next run is the next milestone.
+- Make the **Goal** item the first line of the message. Put the turn's one-line result into **Now**.
+- Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.
+- The chat renderer and the acceptance checks find the block by these labels.
 - Start each item's line with `- `.
+- Put an optional offer or a non-blocking approval in the body, after the status block.
 - In **Now**, apply the Evidence rule on instructions to an asynchronous system.
 - When nothing will report the next change, write that in **Now** in place of a time estimate.
 - When another rule asks for opening sentences, write them after the status block.

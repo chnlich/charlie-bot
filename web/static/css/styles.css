@@ -331,9 +331,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .input-buttons { position: relative; }
 .sidebar-overlay { display: none; }
 .hamburger-btn { display: none !important; }
-.provider-pill { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
-.provider-claude { background: #1e3a5f; color: #93c5fd; }
-.provider-codex { background: #14532d; color: #86efac; }
 @media (max-width: 768px) {
   .input-row { flex-wrap: wrap; }
   .input-row textarea { width: 100% !important; min-width: 100% !important; flex-basis: 100%; }
@@ -346,57 +343,12 @@ body.resizing { cursor: col-resize; user-select: none; }
   #resize-handle { display: none; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
-  #backlog-panel:not(.hidden) { width: 100% !important; }
   /* Tabs on their own row on mobile */
   main > header { flex-wrap: wrap; }
   #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
   #usage-indicator { display: none !important; }
   .input-buttons button { min-width: 44px; min-height: 44px; }
-  #ext-usage-strip [data-field$="-reset"] { display: none; }  /* hide verbose reset timestamps */
-  #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */
-}
-/* Account rows are single-line flex and can exceed a narrow viewport, and body is
-   overflow:hidden — without a scroll container here the row tail is clipped and
-   unreachable. */
-#ext-usage-strip { overflow-x: auto; }
-/* Quota-strip collapse chip: floats over the strip's top-right corner from a
-   position:relative wrapper, so the strip's horizontal scrolling never drags
-   it along (same pattern as #scroll-to-bottom inside #tab-chat). The template
-   reuses #scroll-to-bottom's class list for look and feel; the geometry that
-   has no existing utility class lives here. */
-#ext-usage-toggle {
-  top: 2px;
-  right: 2px;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-/* Specificity: plain .hidden cannot beat the id selector above. */
-#ext-usage-toggle.hidden { display: none; }
-/* Collapsed hides the detail rows, expanded hides the summary row; both key
-   off the strip's .collapsed class, which renderExtUsage reapplies from the
-   in-memory boolean on every render (initial load, websocket push, 10-minute
-   poll). The 60s repaint never rebuilds children and stays unaware of it. */
-#ext-usage-strip.collapsed [data-key] { display: none; }
-#ext-usage-strip:not(.collapsed) [data-field="summary"] { display: none; }
-/* Reserve the chip's corner on every row so resting content never sits under
-   it; horizontally scrolled content may briefly pass beneath the chip — the
-   accepted trade-off for any control that does not scroll with the content. */
-#ext-usage-strip [data-key],
-#ext-usage-strip [data-field="summary"] { padding-right: 44px; }
-/* The summary row is the collapsed-state expand affordance: whole-row click
-   on a 44px touch target. */
-#ext-usage-strip [data-field="summary"] {
-  min-height: 44px;
-  cursor: pointer;
-  user-select: none;
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -521,9 +473,6 @@ body { overscroll-behavior: none; }
   .tab-btn { font-size: 0.7rem; padding: 0.375rem 0.5rem; }
   #session-list a { min-height: 44px; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
-  /* ext-usage-strip: hide 7d bars, shrink further */
-  #ext-usage-strip div:has(> [data-field^="7d-"]) { display: none; }
-  #ext-usage-strip .w-24 { width: 3rem; }
 }
 /* Voice input overlay: client-side level bar + timer above the message input.
    The bar/fill/hint elements are built by voice-input.js's ensureVoiceOverlay. */

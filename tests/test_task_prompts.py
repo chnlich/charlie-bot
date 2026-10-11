@@ -11,29 +11,26 @@ snapshot/prompt_hash/char_count semantics.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
 import conftest
 import pytest
-from conftest import OPERATOR, OPUS_BACKEND_ID, build_env
 
-from src.features.memory.memory import select_master_memory, select_worker_memory
-from src.features.memory.store_root import memory_dir
-from src.infra.models import PatchSessionTaskRequest, TaskSpec, TaskType
-from src.runtime.task_prompts import PromptSnapshot, assemble_snapshot, build_segments, prompt_task_type
-from src.runtime.task_sessions import TaskTreeManager
+from src.features.memory import memory, store_root
+from src.infra import models
+from src.runtime import task_prompts, task_sessions
 
 pytestmark = pytest.mark.asyncio
 
 
 async def create_task(
-    mgr: TaskTreeManager,
+    mgr: task_sessions.TaskTreeManager,
     *,
     parent: str | None,
     profile: str = "manager",
     request_id: str,
     name: str | None = None,
-    task: TaskSpec | None = None,
+    task: models.TaskSpec | None = None,
     **kwargs: object):
   return await mgr.create_task(
       request_id=request_id,
@@ -41,12 +38,12 @@ async def create_task(
       profile=profile,
       task=task,
       name=name,
-      backend=OPUS_BACKEND_ID,
-      caller=OPERATOR,
+      backend=conftest.OPUS_BACKEND_ID,
+      caller=conftest.OPERATOR,
       **kwargs)
 
 
-async def build_three_levels(mgr: TaskTreeManager) -> dict[str, str]:
+async def build_three_levels(mgr: task_sessions.TaskTreeManager) -> dict[str, str]:
   root = await create_task(mgr, parent=None, request_id="root", name="Root")
   mid = await create_task(mgr, parent=root.id, request_id="mid", name="Mid")
   low = await create_task(mgr, parent=mid.id, request_id="low", name="Low")
@@ -56,23 +53,23 @@ async def build_three_levels(mgr: TaskTreeManager) -> dict[str, str]:
       request_id="w1",
       profile="worker",
       name="W1",
-      task=TaskSpec(goal="worker goal", repo_path="/tmp/repo-w"))
+      task=models.TaskSpec(goal="worker goal", repo_path="/tmp/repo-w"))
   worker2 = await create_task(
-      mgr, parent=low.id, request_id="w2", profile="worker", name="W2", task=TaskSpec(goal="sibling goal"))
+      mgr, parent=low.id, request_id="w2", profile="worker", name="W2", task=models.TaskSpec(goal="sibling goal"))
   return {"root": root.id, "mid": mid.id, "low": low.id, "worker1": worker1.id, "worker2": worker2.id}
 
 
-def sources_of(snapshot: PromptSnapshot) -> list[tuple[str, str, str | None]]:
+def sources_of(snapshot: task_prompts.PromptSnapshot) -> list[tuple[str, str, str | None]]:
   return [(s.scope, s.source_ref, s.source_session_id) for b in snapshot.blocks for s in b.sources]
 
 
-def segment_texts(snapshot: PromptSnapshot) -> list[str]:
+def segment_texts(snapshot: task_prompts.PromptSnapshot) -> list[str]:
   return [b.text for b in snapshot.blocks]
 
 
-async def patched_refs(mgr: TaskTreeManager, session_id: str, subtree: str | None, node: str | None):
+async def patched_refs(mgr: task_sessions.TaskTreeManager, session_id: str, subtree: str | None, node: str | None):
   return await mgr.patch_task(
-      session_id, PatchSessionTaskRequest(subtree_prompt=subtree, node_prompt=node), caller=OPERATOR)
+      session_id, models.PatchSessionTaskRequest(subtree_prompt=subtree, node_prompt=node), caller=conftest.OPERATOR)
 
 
 # ---------------------------------------------------------------------------
@@ -80,14 +77,14 @@ async def patched_refs(mgr: TaskTreeManager, session_id: str, subtree: str | Non
 # ---------------------------------------------------------------------------
 
 
-async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path: Path) -> None:
-  cfg, _sm, mgr = build_env(tmp_path)
+async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path: pathlib.Path) -> None:
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   snapshots = {}
   for label in ("root", "mid", "low"):
     meta = await mgr.load_meta(ids[label])
-    segments, _err = build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
-    snapshot = assemble_snapshot(segments)
+    segments, _err = task_prompts.build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    snapshot = task_prompts.assemble_snapshot(segments)
     snapshots[label] = snapshot
   for label, snapshot in snapshots.items():
     # The one manager contract from the shared template, at every depth.
@@ -102,15 +99,15 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
   assert "PM identity" not in joined
 
 
-async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) -> None:
+async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: pathlib.Path) -> None:
   """One division of work for both manager kinds: the snapshot holds master.md
   followed by manager_workflows.md between the shared base and the task-tree
   template, and the rules master.md no longer carries ride in the second file."""
-  cfg, _sm, mgr = build_env(tmp_path)
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["root"])
-  segments, _err = build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
-  snapshot = assemble_snapshot(segments)
+  segments, _err = task_prompts.build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+  snapshot = task_prompts.assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/master.md" in refs
   assert "prompts/manager_workflows.md" in refs
@@ -132,26 +129,26 @@ async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) ->
         assert line in joined, line
 
 
-async def test_default_empty_local_rules_launch_cleanly(tmp_path: Path) -> None:
-  cfg, _sm, mgr = build_env(tmp_path)
+async def test_default_empty_local_rules_launch_cleanly(tmp_path: pathlib.Path) -> None:
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   for label in ("root", "worker1"):
     meta = await mgr.load_meta(ids[label])
     assert meta.subtree_prompt_ref is None and meta.node_prompt_ref is None
-    segments, _err = build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
-    snapshot = assemble_snapshot(segments)
+    segments, _err = task_prompts.build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    snapshot = task_prompts.assemble_snapshot(segments)
     assert snapshot.blocks  # rules and common blocks exist without any local rule
     assert not [s for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
 
 
 @pytest.mark.parametrize("kind", ["work", "review", "iteration", "scheduled_step"])
-async def test_worker_kinds_get_their_applicable_contracts(tmp_path: Path, kind: str) -> None:
-  cfg, _sm, mgr = build_env(tmp_path)
+async def test_worker_kinds_get_their_applicable_contracts(tmp_path: pathlib.Path, kind: str) -> None:
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["worker1"])
   assert meta is not None and meta.task is not None
-  segments, _err = build_segments(cfg, meta, kind, chain=(), node_ref=None, overlay=None)
-  snapshot = assemble_snapshot(segments)
+  segments, _err = task_prompts.build_segments(cfg, meta, kind, chain=(), node_ref=None, overlay=None)
+  snapshot = task_prompts.assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/task_base.md" in refs
   if kind == "review":
@@ -161,8 +158,8 @@ async def test_worker_kinds_get_their_applicable_contracts(tmp_path: Path, kind:
   assert "prompts/verify.md" not in refs  # a verify contract only on verify tasks
 
 
-async def test_verify_task_gets_the_verify_contract(tmp_path: Path) -> None:
-  cfg, _sm, mgr = build_env(tmp_path)
+async def test_verify_task_gets_the_verify_contract(tmp_path: pathlib.Path) -> None:
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   task = await create_task(
       mgr,
@@ -170,19 +167,20 @@ async def test_verify_task_gets_the_verify_contract(tmp_path: Path) -> None:
       profile="worker",
       request_id="verify-leaf",
       name="V",
-      task=TaskSpec(goal="verify goal", task_type="verify"))
+      task=models.TaskSpec(goal="verify goal", task_type="verify"))
   meta = await mgr.load_meta(task.id)
-  segments, _err = build_segments(cfg, meta, "work", chain=(), node_ref=None, overlay=None)
-  snapshot = assemble_snapshot(segments)
+  segments, _err = task_prompts.build_segments(cfg, meta, "work", chain=(), node_ref=None, overlay=None)
+  snapshot = task_prompts.assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/verify.md" in refs
   assert "prompts/worker.md" not in refs
 
 
 async def test_type_less_task_renders_the_implement_contract() -> None:
-  assert prompt_task_type(None) == TaskType.IMPLEMENT
-  assert prompt_task_type(TaskSpec(goal="sweep")) == TaskType.IMPLEMENT
-  assert prompt_task_type(TaskSpec(goal="bump", task_type="quick-edit")) == TaskType.QUICK_EDIT
+  assert task_prompts.prompt_task_type(None) == models.TaskType.IMPLEMENT
+  assert task_prompts.prompt_task_type(models.TaskSpec(goal="sweep")) == models.TaskType.IMPLEMENT
+  assert task_prompts.prompt_task_type(
+      models.TaskSpec(goal="bump", task_type="quick-edit")) == models.TaskType.QUICK_EDIT
 
 
 # ---------------------------------------------------------------------------
@@ -190,20 +188,20 @@ async def test_type_less_task_renders_the_implement_contract() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_path: Path) -> None:
-  cfg, _sm, mgr = build_env(tmp_path)
+async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_path: pathlib.Path) -> None:
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   await patched_refs(mgr, ids["root"], subtree="root subtree rule", node="root node rule")
   await patched_refs(mgr, ids["mid"], subtree="mid subtree rule", node="mid node rule")
   await patched_refs(mgr, ids["low"], subtree=None, node="low node rule")
 
-  async def snapshot_for(label: str, kind: str = "manager_turn") -> PromptSnapshot:
+  async def snapshot_for(label: str, kind: str = "manager_turn") -> task_prompts.PromptSnapshot:
     meta = await mgr.load_meta(ids[label])
     index = await mgr._get_index()
-    from src.runtime.task_execution import capture_prompt_chain
-    chain, node_ref = capture_prompt_chain(mgr, index, meta)
-    segments, _err = build_segments(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
-    return assemble_snapshot(segments)
+    from src.runtime import task_execution
+    chain, node_ref = task_execution.capture_prompt_chain(mgr, index, meta)
+    segments, _err = task_prompts.build_segments(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
+    return task_prompts.assemble_snapshot(segments)
 
   # The worker sees exactly root+mid subtree rules then its own node rule.
   worker_snapshot = await snapshot_for("worker1")
@@ -234,16 +232,16 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
 # ---------------------------------------------------------------------------
 
 
-async def test_staged_candidates_never_enter_startup_or_query(tmp_path: Path) -> None:
+async def test_staged_candidates_never_enter_startup_or_query(tmp_path: pathlib.Path) -> None:
   """A store holding only a staged candidate selects nothing: staging never launches."""
-  cfg, _sm, _mgr = build_env(tmp_path)
-  store = memory_dir(cfg)
+  cfg, _sm, _mgr = conftest.build_env(tmp_path)
+  store = store_root.memory_dir(cfg)
   staged_dir = store / "staging"
   staged_dir.mkdir(parents=True)
   (staged_dir / "candidate.md").write_text(
       "---\nscope: user\ntopic: staged\ntitle: Candidate\n---\nstaged body\n", encoding="utf-8")
   (store / "topics").write_text("", encoding="utf-8")
-  assert select_master_memory(store) is None
-  worker_selection = select_worker_memory(store, "")
+  assert memory.select_master_memory(store) is None
+  worker_selection = memory.select_worker_memory(store, "")
   assert worker_selection is not None
   assert all(not sources for _d, _t, sources in worker_selection.segments)

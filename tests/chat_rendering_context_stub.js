@@ -3,7 +3,7 @@
 // then rendering.js. The stubs must land before rendering.js loads:
 // rendering.js is an IIFE that binds Chat.renderRoundRatingButtons and
 // Chat.renderExplainButton (both defined in chat/ratings-explain.js) and
-// Chat.embedLinkedHtmlArtifacts (chat/artifacts.js) into module-scope consts at
+// Chat.markFileLinks (chat/file-links.js) into module-scope consts at
 // load, and these harnesses load none of the defining modules. A harness that
 // needs another module between shared.js and the stubs, or a non-empty
 // button stub, keeps its own sequence (tailwind_class_coverage.test.js).
@@ -22,7 +22,7 @@ function loadChatRenderingModules(context) {
   vm.runInContext(SHARED_JS, context, {filename: 'chat/shared.js'});
   context.Chat.renderRoundRatingButtons = () => '';
   context.Chat.renderExplainButton = () => '';
-  context.Chat.embedLinkedHtmlArtifacts = () => {};
+  context.Chat.markFileLinks = () => {};
   vm.runInContext(RENDERING_JS, context, {filename: 'chat/rendering.js'});
 }
 

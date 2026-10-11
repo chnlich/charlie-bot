@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Shared comment-tray client helpers (diff page, artifact pages). The request
+// Shared comment-tray client helpers (the diff page and package pages). The request
 // shape and the thrown messages are one contract: each tray catches the errors
 // and surfaces `err.message` in its own toast.
 // ---------------------------------------------------------------------------
@@ -15,8 +15,8 @@ async function postCommentMessage(sessionId, content) {
 }
 
 // One tray toast at a time: showing a new one removes the previous. Each tray
-// passes its own CSS class prefix, mount (the artifact layer marks nodes
-// through injectRoot; the diff page appends straight to body) and removal
+// passes its own CSS class prefix, mount (a page layer marks nodes through
+// injectRoot; the diff page appends straight to body) and removal
 // timeout.
 function createCommentToast(prefix, mount, timeoutMs) {
   let toast = null;

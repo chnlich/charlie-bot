@@ -7,5 +7,5 @@
 # Every Python reader derives its form from this tuple. Some packages build served-file URLs;
 # other packages parse them. The auth whitelist deliberately derives nothing: the file server sits
 # behind the access key, and deriving the prefix there would re-open the gate. The frontend gate
-# (web/static/js/chat/artifacts.js) mirrors the single element.
+# (web/static/js/chat/file-links.js) mirrors the single element.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)

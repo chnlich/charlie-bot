@@ -7,7 +7,7 @@
   // turn window near the viewport, with one height spacer above and below.
   //
   // Fetched messages live in an in-memory store; HTML build / markdown /
-  // math / artifact / timestamp post-process run in scroll-gated idle slices
+  // math / file-link / package / timestamp post-process run in scroll-gated idle slices
   // producing ready fragments. Collapsed turn bodies and out-of-window turns
   // are never in the DOM. Open/override, expanded `N steps` bars and open
   // explain panels live in a registry keyed by turn key (head|conclusion|

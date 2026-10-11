@@ -76,6 +76,7 @@
         Open in code-server
       </button>
       {% endif %}
+      {% for part in page_parts('diff_toolbar') %}{% include part %}{% endfor %}
       <span id="status" class="text-xs text-slate-600 ml-2"></span>
     </form>
   </div>

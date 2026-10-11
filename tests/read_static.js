@@ -13,6 +13,11 @@ function readStatic(...parts) {
   return fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'js', ...parts), 'utf8');
 }
 
+// A package's page-part source: src/<kind>/<name>/static/<parts>, served at /static/<kind>/<name>/.
+function readPackageStatic(kind, name, ...parts) {
+  return fs.readFileSync(path.join(__dirname, '..', 'src', kind, name, 'static', ...parts), 'utf8');
+}
+
 // Script paths index.html loads, in document order, with the /static/js/ prefix
 // and the ?v= cache query stripped. The vm harnesses derive their module lists
 // from here so a script added to or reordered on the page cannot drift from
@@ -38,4 +43,4 @@ function runStaticModules(context, files) {
   }
 }
 
-module.exports = {readStatic, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};
+module.exports = {readStatic, readPackageStatic, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};

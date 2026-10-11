@@ -40,7 +40,7 @@ with gc_off(collect=False):
   from src.infra.log_once import LazyStructlogLogger
   from src.infra.models import SessionMetadata, utc_now
   from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-  from src.runtime import init_seed, session_events, session_store
+  from src.runtime import init_seed, session_events, session_store, templating
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
@@ -560,6 +560,12 @@ with gc_off(collect=False):
 # ---------------------------------------------------------------------------
 # Static files (CSS, JS, images — NOT the SPA)
 # ---------------------------------------------------------------------------
+
+# Each page package's static/ serves under /static/<kind>/<name>/. These mounts precede the /static mount, which
+# would answer their paths first. check_dir=False checks the directory per request, so a static/ directory that a
+# fast-forward creates serves without a restart.
+for _url_path, _package_static in templating.page_package_static():
+  app.mount(f"/static/{_url_path}", StaticFiles(directory=str(_package_static), check_dir=False))
 
 _static_dir = REPO_ROOT / "web" / "static"
 

@@ -13,7 +13,7 @@ from fastapi import responses
 from src.infra import config, constants, log_once, models, timeouts
 from src.runtime import session_events, session_listing, session_store, task_sessions, templating
 from src.runtime.api import deps, message_utils, sessions
-from src.runtime.hooks import page_render, sequence_controllers
+from src.runtime.hooks import backend_types, page_render, sequence_controllers
 
 log = log_once.LazyStructlogLogger()
 
@@ -116,6 +116,15 @@ async def home_page(
       })
 
 
+def _compact_facts(cfg: config.CharlieBotConfig) -> dict[str, dict[str, object]]:
+  """The compact button's facts for each configured backend type: whether manual compaction runs, and the hint."""
+  facts: dict[str, dict[str, object]] = {}
+  for option in cfg.backends.options:
+    traits = backend_types.traits_for(option.type)
+    facts[option.type] = {"manual": traits.manual_compact, "hint": traits.compact_hint}
+  return facts
+
+
 @router.get("/", response_class=responses.HTMLResponse)
 async def index(
     request: fastapi.Request,
@@ -202,6 +211,8 @@ async def index(
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backends.options,
+          "backend_compact": _compact_facts(cfg),
+          "default_backend_id": sessions._default_backend_id(cfg),
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
           "active_backend_type": active_backend_type,

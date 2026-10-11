@@ -299,6 +299,7 @@ class _FakeAccount(usage_sources.QuotaAccount):
 
   def __init__(self, provider: str, label: str, get_value: Callable[[], Any], error: str = "no data") -> None:
     self.provider = provider
+    self.provider_label = provider.title()
     self.label = label
     self._get_value = get_value
     self.last_error = error
@@ -378,7 +379,8 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_poll_panel_keys_order_pending_markers_and_error_entries(monkeypatch: pytest.MonkeyPatch) -> None:
   """The panel's wire contract: one ``<provider>:<label>`` entry per account in registration order, a pending
-  marker for every account not yet read, and an error entry carrying the account's last error."""
+  marker for every account not yet read, an error entry carrying the account's last error, and the provider's
+  display label on every entry."""
   codex_reading = {"windows": [], "fetched_at": "2026-01-01T00:00:00+00:00", "provider": "codex"}
   accounts = [
       _FakeAccount("claude", "main", lambda: _claude_fetch_value(1.0)),
@@ -391,10 +393,20 @@ def test_poll_panel_keys_order_pending_markers_and_error_entries(monkeypatch: py
   first, second, third = (payload["providers"] for payload in state["payloads"])
   assert list(first) == ["claude:main", "claude:ext-1", "codex:main"]
   assert first["claude:main"]["account"] == "main" and "windows" in first["claude:main"]
-  assert first["claude:ext-1"] == {"provider": "claude", "account": "ext-1", "pending": True}
-  assert first["codex:main"] == {"provider": "codex", "account": "main", "pending": True}
-  assert second["claude:ext-1"] == {"provider": "claude", "account": "ext-1", "error": "credentials not found"}
-  assert third["codex:main"] == {**codex_reading, "account": "main"}
+  assert first["claude:ext-1"] == {
+      "provider": "claude",
+      "provider_label": "Claude",
+      "account": "ext-1",
+      "pending": True
+  }
+  assert first["codex:main"] == {"provider": "codex", "provider_label": "Codex", "account": "main", "pending": True}
+  assert second["claude:ext-1"] == {
+      "provider": "claude",
+      "provider_label": "Claude",
+      "account": "ext-1",
+      "error": "credentials not found"
+  }
+  assert third["codex:main"] == {**codex_reading, "provider_label": "Codex", "account": "main"}
 
 
 def test_poll_drops_an_account_the_next_round_no_longer_lists(monkeypatch: pytest.MonkeyPatch) -> None:

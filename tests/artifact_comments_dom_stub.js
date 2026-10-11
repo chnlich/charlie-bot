@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Element/class-list stub and shared rig helpers for the artifact-comments vm
 // tests (no jsdom): the superset of every DOM member
-// web/static/js/artifact-comments.js touches, so a member the script reads but
+// src/features/artifacts/static/artifact-comments.js touches, so a member the script reads but
 // the stub lacks throws inside the vm and fails the loading test.
 // ---------------------------------------------------------------------------
 

@@ -51,8 +51,9 @@ from src.runtime.hooks.usage_sources import (
     PANEL_RESETS_AT,
     PANEL_SCOPE_LABEL,
     PANEL_UTILIZATION,
-    PANEL_WINDOW_MINUTES,
     PANEL_WINDOWS,
+    panel_window_expired,
+    parse_iso_utc,
 )
 from src.runtime.model_family import model_family
 
@@ -325,37 +326,6 @@ def observe_usage_panel(label: str, usage: dict) -> None:
   if at.tzinfo is None:
     at = at.replace(tzinfo=UTC)
   _panel_readings[label] = {"at": at, PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}
-
-
-def parse_iso_utc(value: Any) -> datetime | None:
-  """UTC datetime from an ISO-8601 string, or None when missing or unparseable."""
-  if not isinstance(value, str) or not value:
-    return None
-  try:
-    parsed = datetime.fromisoformat(value)
-  except ValueError:
-    return None
-  return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
-
-
-def panel_window_expired(window: dict[str, Any], sampled: datetime | None, now: datetime) -> bool:
-  """Whether one stored usage-panel window's reading is expired at *now*.
-
-  The single expiry rule shared by the account pool's fold and the usage
-  panel's emit-time annotation: a window is expired when its reset has passed
-  while the sample predates it, or when the sample is older than the window is
-  long. An unparseable ``resets_at`` leaves only the age rule; a missing or
-  unparseable sample time reads as live (never expired on a guess).
-  """
-  if sampled is None:
-    return False
-  resets_at = parse_iso_utc(window.get(PANEL_RESETS_AT))
-  if resets_at is not None and resets_at <= now and sampled < resets_at:
-    return True
-  window_minutes = window.get(PANEL_WINDOW_MINUTES)
-  if isinstance(window_minutes, int) and not isinstance(window_minutes, bool):
-    return now - sampled > timedelta(minutes=window_minutes)
-  return False
 
 
 def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str, Any]]:

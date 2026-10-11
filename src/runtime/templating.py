@@ -1,7 +1,8 @@
-"""The request-time template engine and the static-asset version token every page render stamps.
+"""The request-time template engine, the page parts of each slot, and the static-asset version token every page render stamps.
 
-The engine's search path and template globals come from the page-render registry
-(`src.runtime.hooks.page_render`): web/templates first, then each registered package's `templates/`.
+The engine's search path, its template globals and the page parts come from the page-render registry
+(`src.runtime.hooks.page_render`): web/templates first, then each page package's `templates/`. The served
+static trees are web/static and each page package's `static/`.
 """
 
 import hashlib
@@ -65,20 +66,36 @@ _ASSET_DIGEST_STATE: dict[str, tuple | dict[str, bytes] | str] = {
 }
 
 
+def package_directory(package: str) -> pathlib.Path:
+  """src/<kind>/<name> for the package "src.<kind>.<name>"."""
+  return constants.REPO_ROOT.joinpath(*package.split("."))
+
+
+def page_package_static() -> list[tuple[str, pathlib.Path]]:
+  """("<kind>/<name>", its static/ directory) for each page package, in registration order.
+
+  The first item is the URL path under /static/ that serves the directory.
+  """
+  return [(package.removeprefix("src.").replace(".", "/"), package_directory(package) / "static")
+          for package in page_render.page_packages()]
+
+
 def _asset_tree_digest() -> str:
-  """Content digest over the served static tree, refreshed per call.
+  """Content digest over the served static trees, refreshed per call.
 
   The ?v= token names the bytes the URL serves, and a working-tree edit can
-  land between restarts, so the digest walks the tree (one stat pass over the
-  static files) and re-hashes only files whose (mtime_ns, size) signature
-  moved; an unchanged walk serves the memoized digest. The walk scans with
-  os.scandir so each entry answers is_file from the directory record and
-  stats once.
+  land between restarts, so the digest walks web/static and each page
+  package's static/ (one stat pass over the static files) and re-hashes only
+  files whose (mtime_ns, size) signature moved; an unchanged walk serves the
+  memoized digest. Each file is keyed by its URL path under /static/. The walk
+  scans with os.scandir so each entry answers is_file from the directory
+  record and stats once.
   """
   static_root = constants.REPO_ROOT / "web" / "static"
   if not static_root.is_dir():
     return ""
   pairs: list[tuple[str, int, int]] = []
+  paths: dict[str, pathlib.Path] = {}
 
   def walk(dir_path: pathlib.Path, prefix: str) -> None:
     with os.scandir(dir_path) as entries:
@@ -89,8 +106,13 @@ def _asset_tree_digest() -> str:
         elif entry.is_file():
           st = entry.stat()
           pairs.append((rel, st.st_mtime_ns, st.st_size))
+          paths[rel] = pathlib.Path(entry.path)
 
   walk(static_root, "")
+  # Most packages have no static/ directory; a fast-forward can add one at any time.
+  for url_path, directory in page_package_static():
+    if directory.is_dir():
+      walk(directory, f"{url_path}/")
   pairs.sort()
   sig = tuple(pairs)
   if _ASSET_DIGEST_STATE["sig"] == sig:
@@ -100,7 +122,7 @@ def _asset_tree_digest() -> str:
   for rel, mtime, size in pairs:
     if rel in digests and old_stats.get(rel) == (mtime, size):
       continue
-    digests[rel] = hashlib.sha1((static_root / rel).read_bytes()).digest()
+    digests[rel] = hashlib.sha1(paths[rel].read_bytes()).digest()
   combined = hashlib.sha1()
   for rel, _, _ in pairs:
     combined.update(rel.encode())
@@ -126,12 +148,29 @@ _templates_instance: templating.Jinja2Templates | None = None
 
 
 def _template_directories() -> list[pathlib.Path]:
-  """web/templates, then the `templates/` directory of each registered package, in registration order."""
+  """web/templates, then the `templates/` directory of each page package, in registration order.
+
+  A package without a templates/ directory adds a path that holds no template until a fast-forward creates it.
+  """
   directories = [constants.REPO_ROOT / "web" / "templates"]
-  directories.extend(
-      pathlib.Path(importlib.import_module(package).__file__).parent / "templates"
-      for package in page_render.template_packages())
+  directories.extend(package_directory(package) / "templates" for package in page_render.page_packages())
   return directories
+
+
+def page_parts(slot: str) -> list[str]:
+  """Template names of the slot's page parts that exist on disk now, in registration order.
+
+  A page places a slot with {% for part in page_parts('<slot>') %}{% include part %}{% endfor %}. A slot name
+  outside page_render.PAGE_SLOTS raises ValueError, so a misspelled slot fails the render.
+  """
+  if slot not in page_render.PAGE_SLOTS:
+    raise ValueError(f"page slot {slot!r} is not one of {page_render.PAGE_SLOTS}")
+  parts = []
+  for package in page_render.page_packages():
+    name = f"{package.rpartition('.')[2]}/page_{slot}.html"
+    if (package_directory(package) / "templates" / name).is_file():
+      parts.append(name)
+  return parts
 
 
 def _assert_unique_template_names(directories: list[pathlib.Path]) -> None:
@@ -154,6 +193,7 @@ def templates() -> templating.Jinja2Templates:
     directories = _template_directories()
     _assert_unique_template_names(directories)
     engine = templating.Jinja2Templates(directory=[str(directory) for directory in directories])
+    engine.env.globals["page_parts"] = page_parts
     for name, (module, attr) in page_render.template_globals().items():
       engine.env.globals[name] = getattr(importlib.import_module(module), attr)
     _templates_instance = engine

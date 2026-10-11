@@ -18,6 +18,8 @@ def register() -> None:
           preassigned_session_id=False,
           reads_context_window=False,
           family_prefix="codex",
+          manual_compact=False,
+          compact_hint="codex only compacts automatically — tune model_auto_compact_token_limit",
       ),
   )
   backend_lifecycle_registration.register_usage_resolver("codex", "src.backends.codex.codex_usage:CodexUsageResolver")

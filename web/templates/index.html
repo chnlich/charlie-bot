@@ -16,6 +16,7 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <link rel="stylesheet" href="/static/css/styles.css?v={{ static_asset_version|urlencode }}">
+  {% for part in page_parts('head') %}{% include part %}{% endfor %}
   <!-- Loaded after styles.css so Tailwind's `.hidden` utility (display:none) wins the
        cascade over styles.css's unconditional `display:flex` modal-overlay rules --
        matching the Play CDN's effective load order, which injected its stylesheet
@@ -44,6 +45,8 @@
       {{ opt.id|tojson }}: {{ opt.type|tojson }},
       {% endfor %}
     };
+    const BACKEND_COMPACT = {{ backend_compact|tojson }};
+    const DEFAULT_BACKEND_ID = {{ default_backend_id|tojson }};
     const VOICE_BACKENDS = [
       {% for backend in (voice_backends() if voice_backends is defined else []) %}
       {id: {{ backend.id|tojson }}, label: {{ backend.label|tojson }}, livePartials: {{ backend.live_partials|tojson }}, unavailableReason: {{ backend.unavailable_reason|tojson }}},
@@ -52,8 +55,6 @@
     const VOICE_DEFAULT_BACKEND = {{ (voice_default_backend() if voice_default_backend is defined else none)|tojson }};
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
-    const PREVIEW_MODE = {{ (preview_mode() if preview_mode is defined else false)|tojson }};
-    globalThis.__CHARLIEBOT_PREVIEW__ = PREVIEW_MODE;
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
@@ -194,7 +195,7 @@
         <button id="compact-btn"
                 onclick="compactContext()"
                 class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-                {% if active_backend_type != 'cc-claude' %}disabled{% endif %}>Compact</button>
+                {% set compact = backend_compact.get(active_backend_type) %}{% if not (compact and compact.manual) %}disabled{% endif %}>Compact</button>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -209,9 +210,11 @@
           <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
           <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
+          {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
         </div>
       </header>
+      {% for part in page_parts('below_header') %}{% include part %}{% endfor %}
 
       <div class="relative">
       <div id='ext-usage-strip' class='hidden flex flex-col gap-1.5 px-4 py-1.5 bg-slate-800/80 border-b border-slate-700/50 text-xs text-slate-400'>
@@ -293,6 +296,7 @@
                   <svg class="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
               </div>
+              {% for part in page_parts('input_buttons') %}{% include part %}{% endfor %}
               <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send (Ctrl+Enter)">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
               </button>
@@ -374,6 +378,7 @@
         <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
         <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>
       </div>
+      {% for part in page_parts('tab_panels') %}{% include part %}{% endfor %}
       </div><!-- end tab content wrapper -->
 
       {% else %}
@@ -465,6 +470,7 @@
   <script src="/static/js/plan-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/ext_usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
+  {% for part in page_parts('scripts') %}{% include part %}{% endfor %}
 
   <div id="cron-modal" class="diff-modal-overlay hidden">
     <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
@@ -548,5 +554,6 @@
       </div>
     </div>
   </div>
+  {% for part in page_parts('modals') %}{% include part %}{% endfor %}
 </body>
 </html>

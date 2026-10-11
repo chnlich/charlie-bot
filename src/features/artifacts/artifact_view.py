@@ -58,7 +58,7 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   tags = (
       f"<script>window.__cbcServerSessionId={json.dumps(session_id)};</script>\n"
       f"<script src=/static/js/comment_post.js?v={templating.static_asset_version()}></script>\n"
-      f"<script src=/static/js/artifact-comments.js?v={templating.static_asset_version()}></script>")
+      f"<script src=/static/features/artifacts/artifact-comments.js?v={templating.static_asset_version()}></script>")
   idx = html_text.rfind("</body>")
   if idx == -1:
     return html_text + "\n" + tags + "\n"

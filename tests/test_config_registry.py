@@ -95,7 +95,6 @@ INDEX_WITHOUT_PACKAGE_SCRIPT = "\n".join(
     "package, fallback",
     [
         ("src.features.voice", "const VOICE_DEFAULT_BACKEND = null;"),
-        ("src.features.session_tree_preview", "const PREVIEW_MODE = false;"),
     ],
 )
 def test_the_index_page_renders_without_a_deleted_package(package: str, fallback: str) -> None:

@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-from src.infra import metadata_slots
+from src.infra import metadata_slot_registration, metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.deferred import deferred_import_loader
 
@@ -253,7 +253,7 @@ class ThreadMetadata(BaseModel):
 
   @model_serializer(mode="wrap")
   def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
-    return metadata_slots.arrange(metadata_slots.ON_THREAD, type(self).model_fields, handler(self), info)
+    return metadata_slots.arrange(metadata_slot_registration.ON_THREAD, type(self).model_fields, handler(self), info)
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ class SessionMetadata(BaseModel):
 
   @model_serializer(mode="wrap")
   def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
-    return metadata_slots.arrange(metadata_slots.ON_SESSION, type(self).model_fields, handler(self), info)
+    return metadata_slots.arrange(metadata_slot_registration.ON_SESSION, type(self).model_fields, handler(self), info)
 
 
 metadata_slots.provide_metadata_models(SessionMetadata, ThreadMetadata)
@@ -467,7 +467,7 @@ class CreateSessionRequest(BaseModel):
 
   @model_validator(mode="after")
   def _registered_keys_only(self) -> Self:
-    metadata_slots.check_registered(metadata_slots.ON_SESSION, self.model_extra or {})
+    metadata_slots.check_registered(metadata_slot_registration.ON_SESSION, self.model_extra or {})
     return self
 
 

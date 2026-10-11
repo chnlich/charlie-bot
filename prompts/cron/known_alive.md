@@ -237,8 +237,8 @@ Known-alive symbols:
   the parameter, so vulture flags it as an unused variable at that request site. Same
   fixture-name-discovery class as the autouse block above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
-  `src.runtime.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
-  instead of the host profile), requested by name in three tests' parameter lists; the bodies
+  `src.features.artifacts.cli.home.charliebot_home_dir` so the wrap verb's home resolution lands
+  under the pytest tmp tree instead of the host profile), requested by name in three tests' parameter lists; the bodies
   never reference the parameter, so vulture flags it as an unused variable at each request site.
   Same fixture-name-discovery class as `isolated_config` above.
 - `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
@@ -435,3 +435,18 @@ Known-alive symbols:
   NotImplementedError without the override. The subprocess-stdin close path
   (`src/runtime/agent_process/base.py` awaits `stdin.wait_closed()`) dispatches through it.
   A whole-repo grep finds only the definition, so vulture flags it as an unused method.
+- `run_scheduled_backup` (`src/features/backup/backup.py`), `run_scheduled_usage_ledger`
+  (`src/features/usage/usage_ledger.py`) and `run_scheduled_cool_storage`
+  (`src/features/usage/storage_cool.py`) — reached by string: each feature package's
+  `register()` passes the function to `scheduled_handlers.register_handler(<name>, <module>,
+  attr=<attr>)` (`src/features/backup/__init__.py`, `src/features/usage/__init__.py`), and a
+  registered task with `handler: <name>` awaits `getattr(import_module(module), attr)()`
+  (`src/runtime/hooks/scheduled_handlers.py`). `scheduled_loop_action`
+  (`src/features/backlog/backlog_loop.py`) is the same class under
+  `scheduled_handlers.register_loop_action` (`src/features/backlog/__init__.py`): a task with a
+  `loop:` section awaits `getattr(import_module(module), attr)(name=, repo=, loop=)` on each
+  fire. Vulture flags each of the four as an unused function at 60% confidence.
+- `set_task_manager` (`src/runtime/task_execution.py`) — kept deliberately as the test
+  injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
+  swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep
+  finds only the definition and that test file, so vulture flags it as an unused function.

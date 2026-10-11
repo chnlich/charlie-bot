@@ -75,6 +75,9 @@ class ImproveState(pydantic.BaseModel):
   # "running" state stamped with a dead pid and marks it interrupted instead
   # of leaving a permanently blocking active lock (src.features.improve.improve_sequence).
   server_pid: int | None = None
+  # The error text the final report carries, written in the same save as the
+  # final status.
+  end_error: str | None = None
 
 
 class ImproveLoopAlreadyRunningError(RuntimeError):
@@ -388,14 +391,16 @@ async def _land_work_branch_after_loop(
     stopped_by_user: bool,
     previous_summaries: list[str],
     session_id: str,
-) -> dict | None:
+) -> tuple[dict | None, str | None]:
   """Decide how to land the work branch after the iteration loop finishes.
 
   Fast-forwards work_branch onto base_branch when merge_back is set and the loop
   produced summaries without being stopped. On FF push failure, falls back to
   pushing the bare work branch so the master agent can land it manually (PR,
-  manual rebase, etc.). Returns the merge_result dict to attach to the payload,
-  or None when no landing decision was recorded (best-effort branch push only).
+  manual rebase, etc.). Returns the merge_result dict to attach to the payload
+  (None when no landing decision was recorded — best-effort branch push only),
+  and the end-error text the loop's final report carries (None when every push
+  succeeded).
   """
   # Worktree was created from origin/<base>, so the FF push only fails if origin/<base>
   # advanced during the loop. On failure, hand the work branch back to the master agent
@@ -404,23 +409,30 @@ async def _land_work_branch_after_loop(
   if merge_back and not stopped_by_user and previous_summaries:
     ok, push_err = await git.git_push_refspec(resolved_repo, work_branch, base_branch)
     if ok:
-      return {'merged': True, 'base_branch': base_branch}
+      return {'merged': True, 'base_branch': base_branch}, None
     log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
     # Keep the work branch on origin so the master agent can act on it.
     ok_push, push_branch_err = await git.git_push_branch(resolved_repo, work_branch)
     if not ok_push:
       log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
+      end_error = (f"The fast-forward landing onto {base_branch} failed ({push_err}); "
+                   f"pushing the work branch to origin also failed ({push_branch_err}).")
+    else:
+      end_error = (
+          f"The fast-forward landing onto {base_branch} failed ({push_err}); "
+          "the work branch was pushed to origin.")
     return {
         'merged': False,
         'error': push_err,
         'work_branch': work_branch,
         'base_branch': base_branch,
-    }
+    }, end_error
   # Best-effort push work_branch to remote
   ok, push_err = await git.git_push_branch(resolved_repo, work_branch)
   if not ok:
     log.warning("improve_loop_push_failed", session=session_id, error=push_err)
-  return None
+    return None, f"Pushing the work branch to origin failed ({push_err})."
+  return None, None
 
 
 def blocked_loop_summary(iteration: int, reason: str) -> str:

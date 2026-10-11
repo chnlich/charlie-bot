@@ -316,6 +316,7 @@ async def run_improve_sequence(
       base_branch = resolution.canonical
     except Exception as e:
       state.status = 'failed'
+      state.end_error = improve_command.WORKTREE_CREATE_ERROR_PREFIX + str(e)
       await improve_command.save_loop_state(session_id, state, cfg)
       await improve_command.clear_active_loop_lock(session_id, cfg)
       log.error("improve_sequence_worktree_failed", session=session_id, loop_id=loop_id, error=str(e))
@@ -394,8 +395,9 @@ async def run_improve_sequence(
     stopped_by_user = state.status == 'stopped'
 
     merge_result: dict | None = None
+    end_error: str | None = None
     if blocked is None and not stopped_by_user:
-      merge_result = await improve_command._land_work_branch_after_loop(
+      merge_result, end_error = await improve_command._land_work_branch_after_loop(
           resolved_repo, work_branch, base_branch, merge_back, stopped_by_user, previous_summaries, session_id)
 
     # The final report's per-outcome sentence is re-derived from the durable
@@ -416,6 +418,8 @@ async def run_improve_sequence(
       # next.
       state.status = 'blocked'
       outcome_label = "blocked"
+    if end_error is not None:
+      state.end_error = end_error
     await improve_command.save_loop_state(session_id, state, cfg)
     await improve_command.clear_active_loop_lock(session_id, cfg)
 
@@ -441,6 +445,8 @@ async def run_improve_sequence(
     state = await improve_command.load_loop_state(session_id, loop_id, cfg)
     if state is not None:
       state.status = 'failed'
+      controller_error = f"Controller error: {exc}"
+      state.end_error = f"{state.end_error} {controller_error}" if state.end_error else controller_error
       await improve_command.save_loop_state(session_id, state, cfg)
     await improve_command.clear_active_loop_lock(session_id, cfg)
     try:
@@ -821,6 +827,9 @@ async def _loop_close_verdict(
     text = await asyncio.to_thread(report_path.read_text)
     summaries.append(text.removeprefix(improve_command.RUNNER_FALLBACK_REPORT_MARKER)[:500])
   detail = ("\n\nIteration summaries:\n" + "\n\n".join(summaries)) if summaries else ""
+  # The end error rides after the outcome sentence, before the iteration
+  # summaries, verbatim (never truncated).
+  end_error_part = f" {state.end_error}" if state.end_error else ""
   landing: LandingEvidence | None = None
   if state.status == "completed" and state.base_branch:
     # The merge-back's own evidence: the work branch's tip, which the FF push
@@ -829,7 +838,7 @@ async def _loop_close_verdict(
     if commit:
       landing = LandingEvidence(branch=f"origin/{state.base_branch}", commit=commit, repo_path=state.repo_path)
   evidence = CompletionEvidence(
-      summary=f"[Improve loop {loop_id}] {sentence}{detail}",
+      summary=f"[Improve loop {loop_id}] {sentence}{end_error_part}{detail}",
       result_refs=[f"loop:{loop_id}"],
       run_ids=successful_ids,
       landing=landing)

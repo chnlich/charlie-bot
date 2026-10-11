@@ -1,0 +1,9 @@
+  <script src="https://cdn.jsdelivr.net/npm/diff/dist/diff.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>
+  <script type="module">
+    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs';
+    window.pdfjsLib = pdfjsLib;
+  </script>
+  <link rel="stylesheet" href="/static/features/latex/latex.css?v={{ static_asset_version|urlencode }}">

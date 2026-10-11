@@ -9,9 +9,6 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/diff/dist/diff.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
@@ -22,11 +19,6 @@
        matching the Play CDN's effective load order, which injected its stylesheet
        after styles.css had already been parsed. -->
   <link rel="stylesheet" href="/static/css/tailwind.css?v={{ static_asset_version|urlencode }}">
-  <script type="module">
-    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs';
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs';
-    window.pdfjsLib = pdfjsLib;
-  </script>
   <script>
     let SESSION_ID = {{ active_session.id|tojson if active_session else 'null' }};
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
@@ -207,7 +199,6 @@
           {% if preview_mode is not defined or not preview_mode() %}
           <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
           {% endif %}
-          <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
           <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
           {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
@@ -306,32 +297,6 @@
       </div>
 
 
-      <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
-
-      <!-- ===== LATEX PANEL ===== -->
-
-      <div id="latex-panel" class="hidden latex-panel flex flex-col" style="width: 60%">
-        <!-- Panel header -->
-        <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-700 bg-slate-800/50">
-          <div class="flex gap-1 bg-slate-800 rounded-lg p-0.5">
-            <button onclick="switchLatexView('pdf')" id="btn-latex-pdf" class="px-3 py-1 text-xs rounded-md font-medium transition-colors latex-toggle-active">PDF</button>
-            <button onclick="switchLatexView('tex')" id="btn-latex-tex" class="px-3 py-1 text-xs rounded-md font-medium transition-colors text-slate-400 hover:text-slate-200">TeX</button>
-          </div>
-          <button onclick="compileLatex()" id="btn-compile" class="px-3 py-1.5 text-xs rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Compile</button>
-          <span id="compile-status" class="text-xs text-slate-500"></span>
-          <span id="latex-git-info" class="text-xs text-slate-400 font-mono" title=""></span>
-          <div class="flex-1"></div>
-          {{ close_button('toggleLatexPanel()', 'Close panel', close_btn_class) }}
-        </div>
-        <!-- PDF view -->
-        <div id="latex-pdf-view" class="flex-1 min-h-0">
-          <div id="latex-pdf-canvas-container" class="w-full h-full overflow-auto bg-slate-900 flex flex-col items-center gap-2 p-2"></div>
-        </div>
-        <!-- TeX source view -->
-        <div id="latex-tex-view" class="flex-1 min-h-0 hidden overflow-auto">
-          <textarea id="latex-editor" class="w-full h-full bg-slate-900 text-slate-200 font-mono text-sm p-4 resize-none focus:outline-none" spellcheck="false"></textarea>
-        </div>
-      </div>
       <div id="backlog-resize-handle" class="resize-handle" style="display:none"></div>
 
       <!-- ===== BACKLOG PANEL ===== -->
@@ -465,7 +430,6 @@
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/latex-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/backlog-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/plan-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/ext_usage.js?v={{ static_asset_version|urlencode }}"></script>
@@ -541,19 +505,6 @@
     </div>
   </div>
 
-  <div id="diff-modal" class="diff-modal-overlay hidden">
-    <div class="diff-modal">
-      <div class="diff-modal-header">
-        <span class="text-sm font-semibold text-slate-200">AI proposed changes to TeX source</span>
-        {{ close_button('rejectTexEdit()', 'Close', close_btn_class) }}
-      </div>
-      <div class="diff-modal-body" id="diff-modal-body"></div>
-      <div class="diff-modal-footer">
-        <button onclick="rejectTexEdit()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 font-medium transition-colors">Reject</button>
-        <button onclick="acceptTexEdit()" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Accept</button>
-      </div>
-    </div>
-  </div>
   {% for part in page_parts('modals') %}{% include part %}{% endfor %}
 </body>
 </html>

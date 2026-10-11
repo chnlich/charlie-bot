@@ -116,9 +116,6 @@
   background: #3b82f6;
 }
 body.resizing { cursor: col-resize; user-select: none; }
-/* LaTeX panel */
-.latex-panel { border-left: none; }
-.latex-toggle-active { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
 /* HTML artifact iframe cards */
 .html-artifact { margin: 0.5rem 0; }
 /* One toolbar shape for the inline card and the fullscreen modal. */
@@ -347,11 +344,9 @@ body.resizing { cursor: col-resize; user-select: none; }
   #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: min(320px, 100vw) !important; }
   #sidebar.open { display: flex; }
   #resize-handle { display: none; }
-  #latex-resize-handle { display: none !important; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
   #backlog-panel:not(.hidden) { width: 100% !important; }
-  #latex-panel:not(.hidden) { width: 100% !important; }
   /* Tabs on their own row on mobile */
   main > header { flex-wrap: wrap; }
   #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
@@ -421,16 +416,6 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex; gap: 0.5rem; justify-content: flex-end;
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
-.diff-modal-body .d2h-wrapper { background: #0f172a; color: #e2e8f0; }
-.diff-modal-body .d2h-file-header { background: #1e293b; border-color: #475569; }
-.diff-modal-body .d2h-code-linenumber { background: #1e293b; color: #64748b; border-color: #334155; }
-.diff-modal-body .d2h-code-line { background: #0f172a; color: #e2e8f0; }
-.diff-modal-body .d2h-ins { background: rgba(34, 197, 94, 0.1); }
-.diff-modal-body .d2h-del { background: rgba(239, 68, 68, 0.1); }
-.diff-modal-body .d2h-ins .d2h-code-line-ctn { background: rgba(34, 197, 94, 0.15); }
-.diff-modal-body .d2h-del .d2h-code-line-ctn { background: rgba(239, 68, 68, 0.15); }
-.diff-modal-body .d2h-file-diff { border-color: #475569; }
-.diff-modal-body .d2h-code-side-line { background: #0f172a; }
 /* Session-row action buttons, the hover reveal: at rest a row's buttons sit
    out of flow at the row's right end, so the name and the second-line spans
    reach the row's right edge and no width is reserved for actions. On hover

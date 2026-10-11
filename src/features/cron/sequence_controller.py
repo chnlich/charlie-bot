@@ -64,9 +64,10 @@ def _last_saturday_1am_utc(now: datetime) -> datetime:
 
 @dataclass(frozen=True)
 class CronBinding:
-  """One loaded cron task bound to a task-tree node."""
+  """The loaded cron tasks bound to a task-tree node: ``name`` is the first, ``names`` every one."""
 
   name: str
+  names: tuple[str, ...]
   dedicated_backend: bool = True
 
   def backend_lock_detail(self, target_backend: str) -> str:
@@ -103,7 +104,9 @@ class CronBinding:
     return None
 
   async def on_archive(self) -> None:
-    await asyncio.to_thread(write_cron_key, self.name, "enabled", value=False)
+    """Disable every task bound to the archived node: one left enabled errors on each scheduler tick."""
+    for name in self.names:
+      await asyncio.to_thread(write_cron_key, name, "enabled", value=False)
 
 
 class CronSequenceController(SequenceController):
@@ -161,8 +164,8 @@ class CronSequenceController(SequenceController):
     return bool(names)
 
   def binding(self, session_id: str) -> CronBinding | None:
-    name = bound_task_name(session_id)
-    return None if name is None else CronBinding(name)
+    names = bound_task_names(session_id)
+    return CronBinding(names[0], tuple(names)) if names else None
 
   def owns_session(self, meta: SessionMetadata) -> bool:
     return metadata_slots.fields_of(meta, "cron").scheduled_task is not None

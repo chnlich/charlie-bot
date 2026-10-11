@@ -318,12 +318,12 @@ Known-alive symbols:
   `monkeypatch.setattr(autonamer, "build_backend", ...)` in `tests/test_master_cc_consumer.py`,
   whose existence check reads the attribute before the loader runs. Vulture flags each hook as an
   unused function at 60% confidence.
-- `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
+- `open_connection`, `post_message`, `add_reaction`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
   `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
   `tests/core/test_slack_thread_follow.py`) — the summon, reply, follow, and ack paths in
   `src/features/slack/slack_listener.py` dispatch every Slack Web API call on the injected client
-  (`client.post_message(...)`, `client.get_permalink(...)`, `client.get_thread_replies(...)`,
+  (`client.post_message(...)`, `client.get_thread_replies(...)`,
   `client.add_reaction(...)`, `client.open_connection()`), so each method is reached
   only through that dynamic dispatch. The double's docstring pins the surface ("implements only
   what the listener paths may call"), so a missing method fails with an AttributeError by

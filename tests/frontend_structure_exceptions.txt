@@ -1,0 +1,43 @@
+# Rows are the upward uses that predate the frontend structure.
+# Rows only leave this table.
+#
+# One row per pair: user file -> defining file. Paths are repo-relative and the rows are sorted.
+
+web/static/js/chat/artifacts.js -> web/static/js/chat/scroll.js
+web/static/js/chat/artifacts.js -> web/static/js/chat/turn-engine.js
+web/static/js/chat/artifacts.js -> web/static/js/plan-panel.js
+web/static/js/chat/input.js -> web/static/js/sidebar/status.js
+web/static/js/chat/input.js -> web/static/js/websocket.js
+web/static/js/chat/ratings-explain.js -> web/static/js/chat/rendering.js
+web/static/js/chat/ratings-explain.js -> web/static/js/sidebar/modals.js
+web/static/js/chat/rendering.js -> web/static/js/chat/turn-engine.js
+web/static/js/chat/rendering.js -> web/static/js/sidebar/modals.js
+web/static/js/chat/scroll.js -> web/static/js/chat/turn-engine.js
+web/static/js/chat/triggers-tray.js -> web/static/js/sidebar/namespace.js
+web/static/js/chat/triggers-tray.js -> web/static/js/sidebar/session-view.js
+web/static/js/chat/triggers-tray.js -> web/static/js/sidebar/status.js
+web/static/js/file-upload.js -> web/static/js/chat/shared.js
+web/static/js/sidebar/filters.js -> web/static/js/sidebar/archived.js
+web/static/js/sidebar/filters.js -> web/static/js/sidebar/groups.js
+web/static/js/sidebar/filters.js -> web/static/js/sidebar/session-view.js
+web/static/js/sidebar/groups.js -> web/static/js/sidebar/archived.js
+web/static/js/sidebar/groups.js -> web/static/js/sidebar/modals.js
+web/static/js/sidebar/groups.js -> web/static/js/sidebar/session-view.js
+web/static/js/sidebar/modals.js -> web/static/js/latex-panel.js
+web/static/js/sidebar/session-view.js -> web/static/js/plan-panel.js
+web/static/js/sidebar/session-view.js -> web/static/js/sidebar/modals.js
+web/static/js/sidebar/session-view.js -> web/static/js/voice-input.js
+web/static/js/sidebar/status.js -> web/static/js/sidebar/groups.js
+web/static/js/sidebar/status.js -> web/static/js/sidebar/session-view.js
+web/static/js/tabs.js -> web/static/js/backlog-panel.js
+web/static/js/tabs.js -> web/static/js/latex-panel.js
+web/static/js/tabs.js -> web/static/js/plan-panel.js
+web/static/js/tabs.js -> web/static/js/terminal_panel.js
+web/static/js/websocket.js -> web/static/js/ext_usage.js
+web/static/js/websocket.js -> web/static/js/latex-panel.js
+web/static/js/websocket.js -> web/static/js/plan-panel.js
+web/static/js/websocket.js -> web/static/js/sidebar/filters.js
+web/static/js/websocket.js -> web/static/js/sidebar/namespace.js
+web/static/js/websocket.js -> web/static/js/sidebar/session-view.js
+web/static/js/websocket.js -> web/static/js/sidebar/status.js
+web/static/js/websocket.js -> web/static/js/usage.js

@@ -12,7 +12,7 @@ import pytest
 from fastapi import testclient
 
 from src.features.diff_view import api as git_api
-from src.features.memory.store_root import memory_dir
+from src.features.memory import store_root
 from src.infra import config
 
 
@@ -173,7 +173,7 @@ def test_memory_store_repo_accepted_outside_workspace_dirs(tmp_path: pathlib.Pat
       charliebot_home=tmp_path / "charliebot-home",
       paths={"workspace_dirs": [str(workspace)]},
   )
-  repo = _build_repo(memory_dir(cfg))
+  repo = _build_repo(store_root.memory_dir(cfg))
   app = fastapi.FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
   conftest.apply_config_overrides(app, cfg)

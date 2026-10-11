@@ -1,9 +1,9 @@
 # Thread reply format
 
 The reply is the message the summoner reads in the thread: one round posts one message for any reply within the
-platform's per-message limit, stated on the summon prompt's platform line. Write the reply as the answer itself: a few
-sentences that answer the question asked, conclusion first. Keep it under 500 characters, and put anything past that
-on a page.
+platform's per-message limit, stated on the platform line of this session's thread reply contract. Write the reply
+as the answer itself: a few sentences that answer the question asked, conclusion first. Keep it under 500
+characters, and put anything past that on a page.
 
 Depth goes to a page. When the answer rests on evidence, numbers, or a walkthrough, write an
 HTML artifact and give the reply one full URL to it; a short answer stands on its own as the
@@ -19,10 +19,10 @@ follows the same language.
 
 ## Delivery
 
-The reply reaches the thread through the reply command named on the summon prompt's platform line, run from the
-session directory with `--file <path>`: the command posts the file's text to the summoning thread and prints a readback
-with the character count. A round that answers a summon posts exactly one reply this way; everything addressed to the
-operator stays in the session, since nothing else is posted. A page the reply links is one you publish first: run
+The reply reaches the thread through the reply command named on the platform line of this session's thread reply
+contract, run from the session directory with `--file <path>`: the command posts the file's text to the summoning
+thread and prints a readback with the character count. A round that answers a summon posts exactly one reply this
+way; everything addressed to the operator stays in the session, since nothing else is posted. A page the reply links is one you publish first: run
 `charliebot publish <page>` and write the URL it prints into the reply. The reply path posts your text as written, so a
 CharlieBot file-server link refuses the whole reply.
 

@@ -45,8 +45,8 @@ REQUIRED_PERMISSIONS: dict[str, int] = {
     "ADD_REACTIONS": 1 << 6,
 }
 
-# The shape message_link emits and parse_message_link accepts; ids are
-# snowflakes, so always digits.
+# The shape of a discord.com channel or message link that
+# parse_message_link accepts; ids are snowflakes, so always digits.
 _MESSAGE_LINK_RE = re.compile(r"^https://discord\.com/channels/(\d+)/(\d+)(?:/(\d+))?$")
 
 # Discord's hard cap on a thread name; longer names are truncated, not refused.
@@ -62,19 +62,10 @@ def snowflake_key(snowflake: str) -> int:
   return int(snowflake)
 
 
-def message_link(guild_id: str, channel_id: str, message_id: str | None = None) -> str:
-  """The https://discord.com/channels/... link to a channel, or to one message
-  inside it when ``message_id`` is given."""
-  link = f"https://discord.com/channels/{guild_id}/{channel_id}"
-  if message_id is not None:
-    link += f"/{message_id}"
-  return link
-
-
 def parse_message_link(url: str) -> tuple[str, str, str | None]:
-  """Inverse of ``message_link``: (guild_id, channel_id, message_id) with the
-  message id None when the link points at the channel. Anything that is not
-  such a link raises ValueError."""
+  """(guild_id, channel_id, message_id) of one discord.com channel or message
+  link, the message id None when the link points at the channel. Anything
+  that is not such a link raises ValueError."""
   match = _MESSAGE_LINK_RE.match(url)
   if match is None:
     raise ValueError(f"not a discord.com channel/message link: {url!r}")

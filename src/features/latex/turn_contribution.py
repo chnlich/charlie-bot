@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-from src.features.latex import latex
-from src.features.latex.event_types import TEX_EDIT_PROPOSED
-from src.infra.config import CharlieBotConfig
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionMetadata
+from src.features.latex import event_types, latex
+from src.infra import config, log_once, models
 from src.runtime import session_events
 from src.runtime.hooks import turn_contributions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 class LatexTurnContribution(turn_contributions.TurnContribution):
@@ -22,18 +19,18 @@ class LatexTurnContribution(turn_contributions.TurnContribution):
   when no snapshot was taken, so a turn queued while the file was absent proposes nothing.
   """
 
-  async def before_turn(self, meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
+  async def before_turn(self, meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> None:
     latex.clear_snapshot()
     if latex.get_tex_path().exists():
       await asyncio.to_thread(latex.snapshot_tex)
 
-  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig) -> None:
+  async def after_turn(self, meta: models.SessionMetadata, done_event: dict, *, cfg: config.CharlieBotConfig) -> None:
     if not latex.has_snapshot():
       return
     proposal = await asyncio.to_thread(latex.check_tex_changed)
     if proposal:
-      await session_events.events().persist_and_broadcast(meta.id, {"type": TEX_EDIT_PROPOSED})
-      log.info(TEX_EDIT_PROPOSED, session=meta.id)
+      await session_events.events().persist_and_broadcast(meta.id, {"type": event_types.TEX_EDIT_PROPOSED})
+      log.info(event_types.TEX_EDIT_PROPOSED, session=meta.id)
     else:
       latex.clear_snapshot()
 

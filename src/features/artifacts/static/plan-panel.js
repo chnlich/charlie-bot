@@ -752,3 +752,25 @@ const planPanel = (() => {
     currentSessionId: _currentSessionId,
   };
 })();
+
+// The plans tab is a full-area view that hides chat; a session switch returns to chat.
+registerTab({
+  id: 'chat-plans',
+  showsChat: false,
+  fullScreenOnMobile: false,
+  keepOnSessionSwitch: false,
+  onShow() {
+    document.getElementById('tab-plans').classList.remove('hidden');
+    planPanel.onTabShown();
+  },
+  onHide() { document.getElementById('tab-plans').classList.add('hidden'); },
+});
+
+// The panel re-syncs its registry on every socket (re)connect, re-fetches on a
+// plan_updated event, and drops its selection when the active session changes.
+registerWsConnectHandler(() => {
+  planPanel.invalidate();
+  planPanel.onReconnect();
+});
+registerWsMessageHandler('plan_updated', (ev) => planPanel.onPlanUpdated(ev.plan_id));
+document.addEventListener('charliebot:active-session-changed', () => planPanel.onActiveSessionChanged());

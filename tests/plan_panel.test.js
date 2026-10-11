@@ -5,13 +5,13 @@ const test = require('node:test');
 const vm = require('node:vm');
 const { escapeHtml } = require('./escape_html_stub');
 
-const { readStatic } = require('./read_static');
+const { readPackageStatic } = require('./read_static');
 
 const { SESSIONS_ROOT } = require('./sessions_root_stub');
 
 const { makePlan, makeVersion } = require('./plan_factories_stub');
 
-const PLAN_PANEL_JS = readStatic('plan-panel.js');
+const PLAN_PANEL_JS = readPackageStatic('features', 'artifacts', 'plan-panel.js');
 
 // ---------------------------------------------------------------------------
 // Minimal DOM shim used both as the `DOMParser` injected into the plan-panel
@@ -199,6 +199,10 @@ function loadPlanPanelScript(opts = {}) {
     }),
     DOMParser,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
+    // The core entries the panel registers with at load; tests/page_registries.test.js covers them.
+    registerTab: noop,
+    registerWsConnectHandler: noop,
+    registerWsMessageHandler: noop,
   };
   vm.createContext(context);
   vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});

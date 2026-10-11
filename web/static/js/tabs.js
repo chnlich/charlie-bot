@@ -29,19 +29,6 @@ registerTab({
   onHide() {},
 });
 
-// The plans tab is a full-area view that hides chat; a session switch returns to chat.
-registerTab({
-  id: 'chat-plans',
-  showsChat: false,
-  fullScreenOnMobile: false,
-  keepOnSessionSwitch: false,
-  onShow() {
-    document.getElementById('tab-plans').classList.remove('hidden');
-    planPanel.onTabShown();
-  },
-  onHide() { document.getElementById('tab-plans').classList.add('hidden'); },
-});
-
 function switchTab(tab) {
   const shown = registeredTabs.get(tab);
   if (!shown) throw new Error('Unknown tab: ' + tab);

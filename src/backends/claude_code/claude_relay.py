@@ -10,15 +10,19 @@ the callers differ only in how they persist events and rebuild the process.
 During a run every ``rate_limit_event`` updates the account's reading. A
 rejection means the process ends on its own and the run relays; a warning at
 or above the warning line with the reset more than 45 minutes away arms a
-relay at the next safe point, the first tool result after the warning, where
-the process is terminated and the transcript ends on a completed tool call. An
-exit that names an authentication failure marks the account unhealthy and
-relays too.
+relay at the next safe point, the first tool result after the warning. The
+safe point terminates the process only when the pool holds an account strictly
+below the warning line; with none, the run stays armed and keeps going, and
+the next tool result recomputes. An exit that names an authentication failure
+marks the account unhealthy and relays too.
 
-Relay: the transcript is copied to the account with the most headroom among the
-others and Claude Code resumes the same session id with one fixed continuation
-prompt. The user sees no account names; those stay in the server log, the
-metadata and the usage panel.
+Relay: the transcript is copied to the destination account and Claude Code
+resumes the same session id with one fixed continuation prompt. A warning
+relay lands on an account strictly below the warning line, falling back to the
+most headroom when that account vanishes between the gate and the move; a
+rejection lands on the account with the most headroom among the others. The
+user sees no account names; those stay in the server log, the metadata and the
+usage panel.
 """
 
 from __future__ import annotations
@@ -65,10 +69,10 @@ LOGIN_FAILED = "login_failed"
 LOGIN_REASON_AUTH_FAILED = "auth_failed"
 LOGIN_REASON_EMPTY_CREDENTIALS = "empty_credentials"
 
-# The one pool-exhausted phrase: ``pool_exhausted_message`` renders it and the
-# improve quota classification (improve_command's pattern table) matches its
-# lowercase form, so a pre-spawn exhaustion ends a loop for the same quota
-# reason a mid-run rejection does.
+# The one pool-exhausted phrase: ``pool_exhausted_message`` renders it, and the
+# phrase-pin tests (test_task_sequences, test_task_execution) hold the prefix
+# stable. Improve's quota classification reads the refusal event's
+# QUOTA_EXHAUSTED flag, never this text.
 POOL_EXHAUSTED_PHRASE = "Claude account pool has no available account"
 
 
@@ -98,11 +102,25 @@ def _reset_far_enough(info: dict, now: datetime) -> bool:
 
 
 class RelayWatch:
-  """Folds one run's events into a relay decision for its account."""
+  """Folds one run's events into a relay decision for its account.
 
-  def __init__(self, label: str, model: str | None, now: datetime | None = None) -> None:
+  The armed safe point terminates only when ``cool_destination`` names an account
+  strictly below the warning line; with none the run stays armed and the next safe
+  point recomputes.
+  """
+
+  def __init__(
+      self,
+      label: str,
+      model: str | None,
+      cfg: CharlieBotConfig,
+      account_pool: str | None,
+      now: datetime | None = None,
+  ) -> None:
     self.label = label
     self.model = model
+    self.cfg = cfg
+    self.account_pool = account_pool
     self._now = now
     self.reason: str | None = None
     self.armed = False
@@ -112,7 +130,8 @@ class RelayWatch:
     self.decided: str | None = None
 
   def observe(self, event: dict) -> bool:
-    """Record the event; True exactly when the run must be terminated now (armed safe point)."""
+    """Record the event; True exactly when the run must be terminated now (an armed safe
+    point with an account strictly below the warning line to move to)."""
     event_type = event.get("type")
     if event_type == ET.RATE_LIMIT_EVENT:
       info = event.get(ET.RATE_LIMIT_INFO)
@@ -132,6 +151,12 @@ class RelayWatch:
       self.auth_failed = True
       return False
     if self.armed and self.reason is None and _is_tool_result_event(event):
+      moment = claude_accounts.now_or(self._now)
+      destination = claude_accounts.cool_destination(self.cfg, self.model, account_pool=self.account_pool, now=moment)
+      if destination is None or destination.label == self.label:
+        # Nothing strictly below the warning line: stay armed and keep running; the
+        # next safe point recomputes.
+        return False
       self.reason = RELAY_WARNING
       return True
     return False
@@ -148,25 +173,34 @@ class RelayWatch:
     return self.decided is not None
 
 
+def _pool_detail(cfg: CharlieBotConfig, now: datetime | None, account_pool: str | None) -> str:
+  """The pool state both relay error messages render: that pool's earliest reset or, with
+  no rejection reset ahead, each account's unavailability."""
+  reset = claude_accounts.earliest_reset(cfg, now, account_pool)
+  if reset is not None:
+    when = f"earliest reset {reset.astimezone(UTC).strftime('%H:%M')} UTC"
+  else:
+    when = claude_accounts.unavailable_detail(cfg, now, account_pool) or "no unavailability recorded"
+  return f"pool '{account_pool}'; {when}" if account_pool else when
+
+
 def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None, account_pool: str | None = None) -> str:
   """The pool-exhausted error: it names the pool and that pool's earliest reset.
 
   A named pool renders ``... no available account (pool 'alpha'; earliest reset
-  03:00 UTC); ...``; with no pool the reset stands alone (``... no available
-  account (no reset time known); ...``). ``POOL_EXHAUSTED_PHRASE`` itself stays
-  byte-identical: the improve quota classification matches the phrase's
-  lowercase form.
+  03:00 UTC); ...``; with no rejection reset ahead the reset slot instead lists
+  each account's unavailability (``... no available account (pool 'alpha';
+  main: missing credentials); ...``). ``POOL_EXHAUSTED_PHRASE`` itself stays
+  byte-identical: the phrase-pin tests hold the prefix stable.
   """
-  reset = claude_accounts.earliest_reset(cfg, now, account_pool)
-  when = f"earliest reset {reset.astimezone(UTC).strftime('%H:%M')} UTC" if reset else "no reset time known"
-  detail = f"pool '{account_pool}'; {when}" if account_pool else when
-  return f"{POOL_EXHAUSTED_PHRASE} ({detail}); this run did not complete."
+  return f"{POOL_EXHAUSTED_PHRASE} ({_pool_detail(cfg, now, account_pool)}); this run did not complete."
 
 
-def relay_limit_message() -> str:
+def relay_limit_message(cfg: CharlieBotConfig, account_pool: str | None = None) -> str:
+  """The relay-cap error; the pool detail is ``pool_exhausted_message``'s rendering."""
   return (
-      f"Claude account relay limit reached ({MAX_RELAYS_PER_TURN} relays in one run); "
-      "this run did not complete.")
+      f"Claude account relay limit reached ({MAX_RELAYS_PER_TURN} relays in one run; "
+      f"{_pool_detail(cfg, None, account_pool)}); this run did not complete.")
 
 
 def login_required_event(account: ClaudeAccount, reason: str) -> dict:
@@ -200,11 +234,16 @@ def relay_move(
     cc_session_id: str | None,
     now: datetime | None = None,
     account_pool: str | None = None,
+    min_headroom: float = 0.0,
 ) -> RelayMove:
   """Choose the account with the most headroom besides *current* and copy the transcript there.
 
   The next account comes from pool *account_pool* alone; the relay never falls
-  back to another pool. The pool exhausted and the transcript-missing cases leave
+  back to another pool. A *min_headroom* above zero (the warning relay's
+  strictly-below-the-line bar) falls back to the regular select when nothing
+  qualifies: the gate's reading may have been a transient, and a fallback
+  landing may sit at or above the line and self-corrects at the next safe
+  point. The pool exhausted and the transcript-missing cases leave
   *refused_holder* None, and a copy the newer-transcript guard refused carries
   the destination account holding the newer transcript. This module never
   redirects a refused move -- adopting *refused_holder* and continuing the run
@@ -214,7 +253,10 @@ def relay_move(
   if not cc_session_id:
     return RelayMove(
         None, "Claude account relay impossible: the run produced no session id to resume.", None, pool_exhausted=False)
-  nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now, account_pool=account_pool)
+  nxt = claude_accounts.select(
+      cfg, model, exclude={current.label}, now=now, account_pool=account_pool, min_headroom=min_headroom)
+  if nxt is None and min_headroom > 0.0:
+    nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now, account_pool=account_pool)
   if nxt is None:
     return RelayMove(None, pool_exhausted_message(cfg, now, account_pool), None, pool_exhausted=True)
   try:

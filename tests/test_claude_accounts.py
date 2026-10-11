@@ -123,6 +123,53 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
   assert claude_accounts.earliest_reset(cfg, now=NOW) == NOW + timedelta(hours=1)
 
 
+def test_select_min_headroom_keeps_the_bar_strict(tmp_path: Path) -> None:
+  """min_headroom raises the candidate bar: an account exactly at the bar stays out at the
+  raised value and contends again at the default."""
+  cfg = _pool_cfg(tmp_path, labels=("main",))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.90, 0.10), now=NOW)
+  gate = 1.0 - claude_accounts.WARNING_UTILIZATION
+
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW, min_headroom=gate) is None
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW, min_headroom=0.10) is None
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "main"
+
+
+def test_cool_destination_picks_the_best_strictly_below_line_account(tmp_path: Path) -> None:
+  """The armed-safe-point gate: the best account whose headroom still exceeds the warning
+  line's share; an at-line account and a rejected one stay out."""
+  cfg = _pool_cfg(tmp_path)
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.92, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.85, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit(
+      "ext-2", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
+
+  destination = claude_accounts.cool_destination(cfg, FABLE_MODEL, now=NOW)
+
+  assert destination is not None and destination.label == "ext-1"
+
+
+def test_cool_destination_is_none_without_a_below_line_account(tmp_path: Path) -> None:
+  """Every account at or above the line -- the single-account pool's armed state, say --
+  leaves no destination, and the current account never comes back as one."""
+  cfg = _pool_cfg(tmp_path, labels=("main",))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.92, 0.10), now=NOW)
+
+  assert claude_accounts.cool_destination(cfg, FABLE_MODEL, now=NOW) is None
+
+
+def test_cool_destination_admits_an_account_with_no_reading(tmp_path: Path) -> None:
+  """An account nobody has read scores a full window: strictly below the line, it is the
+  destination."""
+  cfg = _pool_cfg(tmp_path)
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.92, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.95, 0.10), now=NOW)
+
+  destination = claude_accounts.cool_destination(cfg, FABLE_MODEL, now=NOW)
+
+  assert destination is not None and destination.label == "ext-2"
+
+
 # ---------------------------------------------------------------------------
 # Named pools
 # ---------------------------------------------------------------------------
@@ -195,7 +242,7 @@ def test_relay_exhaustion_without_pools_keeps_the_unnamed_message(tmp_path: Path
 
 def test_pool_exhaustion_names_the_pool_even_without_a_reset_time(tmp_path: Path) -> None:
   """A pool exhausted with no rejection reading -- every login emptied, say -- still names
-  the pool; the reset slot reads 'no reset time known'."""
+  the pool; the reset slot lists each account's unavailability instead."""
   cfg = _pool_cfg(tmp_path, pools={"alpha": ["main", "ext-1"]})
   write_pool_credentials(tmp_path / "claude-main", access_token="")
   write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
@@ -205,7 +252,26 @@ def test_pool_exhaustion_names_the_pool_even_without_a_reset_time(tmp_path: Path
 
   assert (move.account, move.refused_holder) == (None, None)
   assert move.error == (
-      "Claude account pool has no available account (pool 'alpha'; no reset time known); "
+      "Claude account pool has no available account "
+      "(pool 'alpha'; main: missing credentials; ext-1: missing credentials); "
+      "this run did not complete.")
+
+
+def test_pool_exhaustion_renders_cooldown_zero_headroom_and_credential_reasons(tmp_path: Path) -> None:
+  """With no rejection reset ahead the pool-exhausted message names each account's reason:
+  an auth-failure cooldown with its lift time, zero headroom, missing credentials."""
+  cfg = _pool_cfg(tmp_path)
+  claude_accounts.record_auth_failure("main", NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 1.0, 0.10), now=NOW)
+  write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
+  current = claude_accounts.account_by_label(cfg, "main")
+
+  move = claude_relay.relay_move(cfg, FABLE_MODEL, current, "uuid-1", now=NOW)
+
+  assert (move.account, move.refused_holder) == (None, None)
+  assert move.error == (
+      "Claude account pool has no available account "
+      "(main: auth-failure cooldown until 20:15 UTC; ext-1: zero headroom; ext-2: missing credentials); "
       "this run did not complete.")
 
 

@@ -227,7 +227,11 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
         prompt=prompt,
         account_label=account.label,
         account=account,
-        relay_watch=claude_relay.RelayWatch(account.label, ctx.option.model),
+        relay_watch=claude_relay.RelayWatch(
+            account.label,
+            ctx.option.model,
+            cfg=ctx.cfg,
+            account_pool=claude_accounts.option_pool(ctx.option)),
         relays=relays)
 
   def watch(
@@ -246,11 +250,13 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     """Plan the process that continues the run on the next pool login.
 
     A login failure first marks the login unhealthy and tells the operator. The relay limit
-    raises ``LaunchRefused`` with ``quota_exhausted`` False. The transcript moves to the login with
-    the most headroom, a large Fable context is compacted there, and the next process resumes
-    the same session with the continuation prompt. A pool without a login raises ``LaunchRefused``
-    with ``quota_exhausted`` True; a run without a session id and a failed copy raise it with
-    ``quota_exhausted`` False.
+    raises ``LaunchRefused`` with ``quota_exhausted`` False -- except a warning relay, which
+    passes the cap when a strictly-below-the-line destination exists (the counter still
+    counts it). The transcript moves to the login with the most headroom (a warning relay
+    lands only strictly below the warning line), a large Fable context is compacted there,
+    and the next process resumes the same session with the continuation prompt. A pool
+    without a login raises ``LaunchRefused`` with ``quota_exhausted`` True; a run without a
+    session id and a failed copy raise it with ``quota_exhausted`` False.
     turn: a copy that the newer-transcript guard refused is not an error: the destination holds
     the newer transcript, so the turn adopts that login and continues from it. The new login is
     persisted on the session.
@@ -262,10 +268,25 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     decision = launch.relay_watch.decided
     if decision == claude_relay.LOGIN_FAILED:
       await master_cc_relay.report_login_failure(ctx, current)
+    account_pool = claude_accounts.option_pool(ctx.option)
     if launch.relays >= claude_relay.MAX_RELAYS_PER_TURN:
-      raise backend_lifecycle.LaunchRefused(claude_relay.relay_limit_message(), quota_exhausted=False)
+      # A warning relay with a strictly-below-line destination moves toward cooler quota,
+      # not between equally spent accounts: it is exempt from the cap, whose counter it
+      # still increments.
+      exempt = (
+          decision == claude_relay.RELAY_WARNING and
+          claude_accounts.cool_destination(ctx.cfg, ctx.option.model, account_pool=account_pool) is not None)
+      if not exempt:
+        raise backend_lifecycle.LaunchRefused(
+            claude_relay.relay_limit_message(ctx.cfg, account_pool), quota_exhausted=False)
     relays = launch.relays + 1
-    next_account = await master_cc_relay.prepare_relay(ctx, current, native_id, decision, relays)
+    next_account = await master_cc_relay.prepare_relay(
+        ctx,
+        current,
+        native_id,
+        decision,
+        relays,
+        min_headroom=1.0 - claude_accounts.WARNING_UTILIZATION if decision == claude_relay.RELAY_WARNING else 0.0)
     if ctx.kind == "turn":
       # The relay's label persist point: disk carries the new account from the moment the
       # continuation is built, not at round end (an unchanged account skips the write inside

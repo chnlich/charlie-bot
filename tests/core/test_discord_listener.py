@@ -4,47 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
-from unittest.mock import patch
+import pathlib
+from unittest import mock
 
+import conftest
 import httpx
 import pytest
-from conftest import (
-    DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
-    PUBLISH_BASE_URL,
-    ROOT,
-    SessionBlocks,
-    bind_deps_blocks,
-    build_session_blocks,
-    build_task_tree,
-    create_root_session,
-    fake_backends,
-    mention_seam,
-    shut_down_trigger_tasks,
-    stub_credentials,
-    thread_blocks,
-)
 
-from src.features.chat_threads.thread_entry import ThreadReplyError
-from src.features.discord.discord_client import BASE_URL, DiscordClient, snowflake_key
-from src.features.discord.discord_listener import (
-    _DM_NOTICE,
-    _REPLY_COMMAND,
-    DiscordThreadAdapter,
-    _build_follow_wake_message,
-    deliver_done,
-    handle_message_create,
-    post_reply,
-    summon_session_id,
-)
-from src.features.discord.event_types import DISCORD_REPLY
-from src.features.discord.metadata import DiscordOrigin
-from src.features.discord.turn_contribution import DiscordTurnContribution
+from src.features.chat_threads import thread_entry
+from src.features.discord import discord_client, discord_listener, event_types, metadata, turn_contribution
+from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
-from src.infra import metadata_slots
-from src.infra.config import CharlieBotConfig
-from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus, TriggerStatus
-from src.runtime.triggers import TriggerManager
+from src.runtime import triggers
 
 _GUILD = "900000000000000001"
 _PARENT = "900000000000000002"
@@ -108,49 +79,49 @@ class FakeDiscordClient:
 
   async def get_messages(self, channel_id: str, *, after: str | None = None, limit: int = 100) -> list[dict]:
     self.calls.append(("get_messages", {"channel_id": channel_id, "after": after, "limit": limit}))
-    floor = snowflake_key(after) if after is not None else 0
-    return [m for m in self.thread if snowflake_key(m["id"]) > floor][:limit]
+    floor = discord_client.snowflake_key(after) if after is not None else 0
+    return [m for m in self.thread if discord_client.snowflake_key(m["id"]) > floor][:limit]
 
 
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
+def _build_cfg(tmp_path: pathlib.Path) -> config.CharlieBotConfig:
   """CharlieBotConfig for discord tests: the home dir lives under tmp_path so each test owns its own
   tree, and the stubbed test token plus the single allowed user id wire the delivery and listener
   paths under src.features.discord.discord_listener."""
-  stub_credentials({"discord": {"bot_token": "test-bot-token"}})
-  return CharlieBotConfig(
+  conftest.stub_credentials({"discord": {"bot_token": "test-bot-token"}})
+  return config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       discord={"allowed_users": {
           _USER: "tester"
       }},
-      backends=fake_backends(),
+      backends=conftest.fake_backends(),
   )
 
 
 def _rig(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     *,
     channels: dict[str, dict] | None = None,
     thread: list[dict] | None = None,
-) -> tuple[CharlieBotConfig, SessionBlocks, TriggerManager, FakeDiscordClient]:
+) -> tuple[config.CharlieBotConfig, conftest.SessionBlocks, triggers.TriggerManager, FakeDiscordClient]:
   """Discord rig: cfg, managers, and session home rooted at tmp_path, plus the recording fake client."""
   cfg = _build_cfg(tmp_path)
   cfg.sessions_dir.mkdir(parents=True)  # the task tree's index reads it, so an empty home still has it
-  session_blocks = build_session_blocks(cfg)
-  tree = build_task_tree(cfg, session_blocks)
-  return cfg, session_blocks, TriggerManager(cfg, tree), FakeDiscordClient(channels=channels, thread=thread)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  return cfg, session_blocks, triggers.TriggerManager(cfg, tree), FakeDiscordClient(channels=channels, thread=thread)
 
 
 def _summon_rig(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     channels: dict[str, dict] | None = None,
     thread: list[dict] | None = None,
-) -> tuple[CharlieBotConfig, SessionBlocks, TriggerManager, FakeDiscordClient]:
+) -> tuple[config.CharlieBotConfig, conftest.SessionBlocks, triggers.TriggerManager, FakeDiscordClient]:
   """_rig for a summon that creates its session: the summon opens its manager root through the deps
   task-tree singleton, so this binds a tree over the rig's session blocks."""
   cfg, session_blocks, trigger_mgr, client = _rig(tmp_path, channels=channels, thread=thread)
-  bind_deps_blocks(monkeypatch, session_blocks.tree, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, session_blocks.tree, session_blocks)
   return cfg, session_blocks, trigger_mgr, client
 
 
@@ -185,7 +156,8 @@ async def _drain(tasks: list[asyncio.Task]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_text_channel_summon_starts_thread_and_session(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, trigger_mgr, client = _summon_rig(
       tmp_path, monkeypatch, channels={_PARENT: {
           "id": _PARENT,
@@ -194,16 +166,16 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
       }})
   tasks: list[asyncio.Task] = []
 
-  with mention_seam(tasks) as trigger:
-    sid = await handle_message_create(
-        _message(), cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+  with conftest.mention_seam(tasks) as trigger:
+    sid = await discord_listener.handle_message_create(
+        _message(), cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
-  assert sid == summon_session_id(_GUILD, _THREAD)
+  assert sid == discord_listener.summon_session_id(_GUILD, _THREAD)
 
   meta = await session_blocks.store.get_session(sid)
   assert meta is not None
-  assert metadata_slots.fields_of(meta, "discord").discord_origin == DiscordOrigin(
+  assert metadata_slots.fields_of(meta, "discord").discord_origin == metadata.DiscordOrigin(
       guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   assert meta.name.startswith("Discord #general ")
   assert meta.group == "Discord #general"
@@ -236,7 +208,7 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
   }
   link = f"https://discord.com/channels/{_GUILD}/{_PARENT}/{_MENTION}"
   assert agent_messages[0]["content"].startswith(f"Discord 线程召唤：{link}\n\n")
-  assert f"Reply command: `{_REPLY_COMMAND} --file <path>`" in agent_messages[0]["content"]
+  assert f"Reply command: `{discord_listener._REPLY_COMMAND} --file <path>`" in agent_messages[0]["content"]
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
@@ -245,7 +217,7 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
 
 @pytest.mark.asyncio
 async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_citation_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The tail's scope slot holds the Discord scope doc verbatim; the Slack scope's citation boundary is not appended."""
   cfg, session_blocks, trigger_mgr, client = _summon_rig(
       tmp_path, monkeypatch, channels={_PARENT: {
@@ -255,16 +227,16 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_cit
       }})
   tasks: list[asyncio.Task] = []
 
-  with mention_seam(tasks):
-    sid = await handle_message_create(
-        _message(), cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+  with conftest.mention_seam(tasks):
+    sid = await discord_listener.handle_message_create(
+        _message(), cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   events = session_blocks.events.load_chat_events_sync(sid)
   content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
-  scope = (ROOT / "prompts" / "discord_reply_scope.md").read_text(encoding="utf-8").strip()
-  red_line = (ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
-  reply_format = (ROOT / "prompts" / "thread_reply_format.md").read_text(encoding="utf-8").strip()
+  scope = (conftest.ROOT / "prompts" / "discord_reply_scope.md").read_text(encoding="utf-8").strip()
+  red_line = (conftest.ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
+  reply_format = (conftest.ROOT / "prompts" / "thread_reply_format.md").read_text(encoding="utf-8").strip()
   assert content.endswith(f"{scope}\n{red_line}\n{reply_format}")
   # The citation boundary lives only in the Slack scope doc; the Discord prompt
   # carries just its own three docs and must not inherit it.
@@ -273,7 +245,8 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_cit
 
 def test_follow_wake_names_the_discord_scope_doc_and_the_shared_docs() -> None:
   """The wake orders the scope doc, the red line, and the reply format re-read before any reply."""
-  msg = _build_follow_wake_message("1000000000000000100", f"https://discord.com/channels/{_GUILD}/{_PARENT}")
+  msg = discord_listener._build_follow_wake_message(
+      "1000000000000000100", f"https://discord.com/channels/{_GUILD}/{_PARENT}")
   assert "prompts/discord_reply_scope.md" in msg
   assert "prompts/thread_reply_redline.md" in msg
   assert "prompts/thread_reply_format.md" in msg
@@ -281,7 +254,7 @@ def test_follow_wake_names_the_discord_scope_doc_and_the_shared_docs() -> None:
 
 @pytest.mark.asyncio
 async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, trigger_mgr, client = _summon_rig(
       tmp_path,
       monkeypatch,
@@ -301,15 +274,20 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
   )
   tasks: list[asyncio.Task] = []
 
-  with mention_seam(tasks):
-    sid = await handle_message_create(
-        _message(channel_id=_THREAD), cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+  with conftest.mention_seam(tasks):
+    sid = await discord_listener.handle_message_create(
+        _message(channel_id=_THREAD),
+        cfg,
+        *conftest.thread_blocks(session_blocks),
+        client,
+        trigger_mgr,
+        bot_user_id=_BOT_USER)
     await _drain(tasks)
 
-  assert sid == summon_session_id(_GUILD, _THREAD)
+  assert sid == discord_listener.summon_session_id(_GUILD, _THREAD)
   meta = await session_blocks.store.get_session(sid)
   assert meta is not None
-  assert metadata_slots.fields_of(meta, "discord").discord_origin == DiscordOrigin(
+  assert metadata_slots.fields_of(meta, "discord").discord_origin == metadata.DiscordOrigin(
       guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   assert meta.name.startswith("Discord #general ")
   assert meta.group == "Discord #general"
@@ -327,7 +305,7 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
 
 
 @pytest.mark.asyncio
-async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_second_summon_reuses_and_unarchives(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, trigger_mgr, client = _summon_rig(
       tmp_path, monkeypatch, channels={_PARENT: {
           "id": _PARENT,
@@ -336,27 +314,27 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: 
       }})
   tasks: list[asyncio.Task] = []
 
-  with mention_seam(tasks):
-    first = await handle_message_create(
-        _message(), cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+  with conftest.mention_seam(tasks):
+    first = await discord_listener.handle_message_create(
+        _message(), cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
-    second = await handle_message_create(
-        _message(), cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+    second = await discord_listener.handle_message_create(
+        _message(), cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
     await session_blocks.lifecycle.archive_session(first)
-    third = await handle_message_create(
-        _message(), cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+    third = await discord_listener.handle_message_create(
+        _message(), cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   assert first == second == third
   sessions = await session_blocks.listing.list_sessions()
   assert len(sessions) == 1
   meta = await session_blocks.store.get_session(first)
-  assert meta is not None and meta.status == SessionStatus.ACTIVE
+  assert meta is not None and meta.status == models.SessionStatus.ACTIVE
 
 
 @pytest.mark.asyncio
-async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> None:
+async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: pathlib.Path) -> None:
   cfg, session_blocks, trigger_mgr, client = _rig(
       tmp_path, channels={_PARENT: {
           "id": _PARENT,
@@ -364,22 +342,22 @@ async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> 
           "name": "general"
       }})
 
-  with mention_seam():
-    disallowed = await handle_message_create(
+  with conftest.mention_seam():
+    disallowed = await discord_listener.handle_message_create(
         _message(author={"id": _OTHER}),
         cfg,
-        *thread_blocks(session_blocks),
+        *conftest.thread_blocks(session_blocks),
         client,
         trigger_mgr,
         bot_user_id=_BOT_USER)
     # A bot-flagged author drops even when its id is on the allow-list.
-    bot = await handle_message_create(
+    bot = await discord_listener.handle_message_create(
         _message(author={
             "id": _USER,
             "bot": True
         }),
         cfg,
-        *thread_blocks(session_blocks),
+        *conftest.thread_blocks(session_blocks),
         client,
         trigger_mgr,
         bot_user_id=_BOT_USER)
@@ -390,7 +368,7 @@ async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
+async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: pathlib.Path) -> None:
   cfg, session_blocks, trigger_mgr, client = _rig(tmp_path)
   message = {
       "id": _MENTION,
@@ -405,12 +383,12 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
       }],
   }
 
-  with mention_seam():
-    sid = await handle_message_create(
-        message, cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+  with conftest.mention_seam():
+    sid = await discord_listener.handle_message_create(
+        message, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
 
   assert sid is None
-  assert client.posts == [{"channel_id": _DM_CHANNEL, "content": _DM_NOTICE}]
+  assert client.posts == [{"channel_id": _DM_CHANNEL, "content": discord_listener._DM_NOTICE}]
   assert not [name for name, _ in client.calls if name == "add_reaction"]
   assert await session_blocks.listing.list_sessions() == []
 
@@ -421,7 +399,7 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_path: Path) -> None:
+async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_path: pathlib.Path) -> None:
   cfg, session_blocks, trigger_mgr, client = _rig(tmp_path)
   meta = await _discord_session(session_blocks)
   # A 3-digit watermark: string order would flip it against the 19-digit
@@ -433,12 +411,12 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
   message = _message(id=message_id, channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:
-    sid = await handle_message_create(
-        message, cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await discord_listener.handle_message_create(
+        message, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
 
     armed = [
         t for t in await trigger_mgr.list_triggers(meta.id)
-        if t.status == TriggerStatus.PENDING and t.message.startswith("discord-thread-follow")
+        if t.status == models.TriggerStatus.PENDING and t.message.startswith("discord-thread-follow")
     ]
     assert sid == meta.id
     assert len(armed) == 1
@@ -447,11 +425,11 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
     # The arm reads no thread content: the wake does that when it fires.
     assert not client.calls
   finally:
-    shut_down_trigger_tasks(trigger_mgr)
+    conftest.shut_down_trigger_tasks(trigger_mgr)
 
 
 @pytest.mark.asyncio
-async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_path: Path) -> None:
+async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_path: pathlib.Path) -> None:
   """An archived thread session's eligible unmentioned message revives it: the
   unarchive precedes the arm, the session is ACTIVE again, and the follow
   trigger is armed exactly as for an active session (the revived session
@@ -462,19 +440,19 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
   message = _message(id="1000000000000000100", channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:
-    sid = await handle_message_create(
-        message, cfg, *thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await discord_listener.handle_message_create(
+        message, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
 
     armed = [
         t for t in await trigger_mgr.list_triggers(meta.id)
-        if t.status == TriggerStatus.PENDING and t.message.startswith("discord-thread-follow")
+        if t.status == models.TriggerStatus.PENDING and t.message.startswith("discord-thread-follow")
     ]
     assert sid == meta.id
     revived = await session_blocks.store.get_session(meta.id)
-    assert revived is not None and revived.status == SessionStatus.ACTIVE
+    assert revived is not None and revived.status == models.SessionStatus.ACTIVE
     assert len(armed) == 1
   finally:
-    shut_down_trigger_tasks(trigger_mgr)
+    conftest.shut_down_trigger_tasks(trigger_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +461,7 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> None:
+async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: pathlib.Path) -> None:
   cfg, _session_blocks, _trigger_mgr, client = _rig(tmp_path)
   human = [
       {
@@ -496,9 +474,9 @@ async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> N
       } for i in range(101)
   ]
   bot = {"id": "50000000000000000050", "author": {"id": _OTHER, "bot": True}, "content": "noise", "type": 0}
-  client.thread = sorted([*human, bot], key=lambda m: snowflake_key(m["id"]))
-  adapter = DiscordThreadAdapter(client)
-  origin = DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
+  client.thread = sorted([*human, bot], key=lambda m: discord_client.snowflake_key(m["id"]))
+  adapter = discord_listener.DiscordThreadAdapter(client)
+  origin = metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
 
   messages = await adapter.read_eligible(origin, cfg)
 
@@ -521,22 +499,22 @@ async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> N
   ]
 
 
-async def _discord_session(session_blocks: SessionBlocks) -> SessionMetadata:
+async def _discord_session(session_blocks: conftest.SessionBlocks) -> models.SessionMetadata:
   """Create the session bound to the test thread and return its metadata."""
-  return await create_root_session(
+  return await conftest.create_root_session(
       session_blocks,
-      CreateSessionRequest(
-          session_id=summon_session_id(_GUILD, _THREAD),
+      models.CreateSessionRequest(
+          session_id=discord_listener.summon_session_id(_GUILD, _THREAD),
           name="discord session",
-          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+          discord_origin=metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
 
 
 @pytest.mark.asyncio
-async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: Path) -> None:
+async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: pathlib.Path) -> None:
   """A reply whose page link is the published URL goes out exactly as written."""
   cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
   sid = (await _discord_session(session_blocks)).id
-  text = f"see {PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
+  text = f"see {conftest.PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
   requests: list[httpx.Request] = []
 
   def handler(request: httpx.Request) -> httpx.Response:
@@ -545,13 +523,14 @@ async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: Path) -
 
   # The real REST client over an in-memory transport: the wire request shows
   # whether the post went out as JSON or as a multipart upload.
-  client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
+  client = discord_client.DiscordClient(
+      httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    readback = await discord_listener.post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
 
   assert len(requests) == 1
   request = requests[0]
-  assert (request.method, str(request.url)) == ("POST", f"{BASE_URL}/channels/{_THREAD}/messages")
+  assert (request.method, str(request.url)) == ("POST", f"{discord_client.BASE_URL}/channels/{_THREAD}/messages")
   assert request.headers["content-type"] == "application/json"
   assert json.loads(request.content)["content"] == text
   assert readback["text"] == text
@@ -559,21 +538,22 @@ async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_path: Path) -> None:
+async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_path: pathlib.Path) -> None:
   """A server-port application-route link posts as written and rides the operator-alone note."""
   cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
   sid = (await _discord_session(session_blocks)).id
   route_url = f"http://127.0.0.1:{cfg.server.port}/diff"
-  text = f"open {PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html and {route_url}"
+  text = f"open {conftest.PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html and {route_url}"
   requests: list[httpx.Request] = []
 
   def handler(request: httpx.Request) -> httpx.Response:
     requests.append(request)
     return httpx.Response(200, json={"id": "0"})
 
-  client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
+  client = discord_client.DiscordClient(
+      httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    readback = await discord_listener.post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
 
   assert json.loads(requests[0].content)["content"] == text
   assert readback["operator_only_note"] is not None and route_url in readback["operator_only_note"]
@@ -594,36 +574,38 @@ async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_p
         ),
     ])
 async def test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link(
-    tmp_path: Path, link_template: str, named_path: str) -> None:
+    tmp_path: pathlib.Path, link_template: str, named_path: str) -> None:
   cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
   sid = (await _discord_session(session_blocks)).id
   link = link_template.format(port=cfg.server.port)
 
   with (
-      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      pytest.raises(ThreadReplyError) as excinfo,
+      mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      pytest.raises(thread_entry.ThreadReplyError) as excinfo,
   ):
-    await post_reply(sid, f"see {link} for details", cfg, session_blocks.store, session_blocks.events)
+    await discord_listener.post_reply(sid, f"see {link} for details", cfg, session_blocks.store, session_blocks.events)
 
   assert excinfo.value.status == 422
   assert link in excinfo.value.detail
   assert f"charliebot publish {named_path}" in excinfo.value.detail
   assert client.posts == []
-  assert not [ev for ev in session_blocks.events.load_chat_events_sync(sid) if ev.get("type") == DISCORD_REPLY]
+  assert not [
+      ev for ev in session_blocks.events.load_chat_events_sync(sid) if ev.get("type") == event_types.DISCORD_REPLY
+  ]
 
 
 @pytest.mark.asyncio
 async def test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_nudge(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The funnel's hook reads the session's log through the block accessors and writes the nudge event there."""
   cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
   block = {"guild_id": _GUILD, "channel_id": _PARENT, "thread_id": _THREAD, "mention_id": _MENTION}
-  meta = await create_root_session(
+  meta = await conftest.create_root_session(
       session_blocks,
-      CreateSessionRequest(
+      models.CreateSessionRequest(
           name="discord session",
-          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
-  bind_deps_blocks(monkeypatch, session_blocks.tree, session_blocks)
+          discord_origin=metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+  conftest.bind_deps_blocks(monkeypatch, session_blocks.tree, session_blocks)
   summon = {
       "type": ET.AGENT_MESSAGE,
       "content": "Discord summon; post the reply with `charliebot discord reply --file <path>`.",
@@ -634,8 +616,8 @@ async def test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_
   await session_blocks.events.save_chat_event(meta.id, done)
   tasks: list[asyncio.Task] = []
 
-  with mention_seam(tasks):
-    await DiscordTurnContribution().after_turn(meta, done, cfg=cfg)
+  with conftest.mention_seam(tasks):
+    await turn_contribution.DiscordTurnContribution().after_turn(meta, done, cfg=cfg)
     await _drain(tasks)
 
   nudges = [
@@ -646,18 +628,18 @@ async def test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_
 
 
 @pytest.mark.asyncio
-async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: Path) -> None:
+async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: pathlib.Path) -> None:
   # An empty stub: any client build would fail on the missing token, so False
   # here proves the audit never reached for one.
-  stub_credentials({})
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  session_blocks = build_session_blocks(cfg)
-  meta = await create_root_session(session_blocks, CreateSessionRequest(name="plain"))
+  conftest.stub_credentials({})
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
+  session_blocks = conftest.build_session_blocks(cfg)
+  meta = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="plain"))
   events_before = session_blocks.events.load_chat_events_sync(meta.id)
 
-  assert await deliver_done(
+  assert await discord_listener.deliver_done(
       meta.id, {
           "type": ET.MASTER_DONE,
           "input_event_id": "e1"
-      }, cfg, *thread_blocks(session_blocks)) is False
+      }, cfg, *conftest.thread_blocks(session_blocks)) is False
   assert session_blocks.events.load_chat_events_sync(meta.id) == events_before

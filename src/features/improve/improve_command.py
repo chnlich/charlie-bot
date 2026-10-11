@@ -415,8 +415,9 @@ async def _land_work_branch_after_loop(
     ok_push, push_branch_err = await git.git_push_branch(resolved_repo, work_branch)
     if not ok_push:
       log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
-      end_error = (f"The fast-forward landing onto {base_branch} failed ({push_err}); "
-                   f"pushing the work branch to origin also failed ({push_branch_err}).")
+      end_error = (
+          f"The fast-forward landing onto {base_branch} failed ({push_err}); "
+          f"pushing the work branch to origin also failed ({push_branch_err}).")
     else:
       end_error = (
           f"The fast-forward landing onto {base_branch} failed ({push_err}); "

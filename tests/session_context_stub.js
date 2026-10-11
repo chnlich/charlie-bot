@@ -80,6 +80,7 @@ function baseSessionContext(overrides = {}) {
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     escapeHtml: (v) => v,
     switchTab: () => {},
+    tabAfterSessionSwitch: () => 'chat',
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
     renderProseMarkdown: (txt) => txt,

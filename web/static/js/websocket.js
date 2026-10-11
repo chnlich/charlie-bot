@@ -16,6 +16,20 @@ let reconnectTimer = null;
 let pendingUserEchoes = 0;
 let wsGeneration = 0;
 
+// Event type -> handler(ev). A package registers the handlers of its own event
+// types when its script loads. A registered handler runs for an event of this
+// session after the event cursor advances, as the built-in handlers at the end
+// of handleWSEvent do.
+const wsMessageHandlers = new Map();
+
+function registerWsMessageHandler(type, handler) {
+  if (typeof type !== 'string' || !type || typeof handler !== 'function') {
+    throw new Error('Invalid WebSocket message handler registration');
+  }
+  if (wsMessageHandlers.has(type)) throw new Error('Duplicate WebSocket message handler: ' + type);
+  wsMessageHandlers.set(type, handler);
+}
+
 function isStaleSocket(socket, targetSession, generation) {
   return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
 }
@@ -213,6 +227,12 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
 
   _bumpEventCursor(ev);
 
+  const registeredHandler = wsMessageHandlers.get(t);
+  if (registeredHandler) {
+    registeredHandler(ev);
+    return;
+  }
+
   if (t === 'message') {
     _commitMessage(ev.message || {});
   } else if (t === 'stream') {
@@ -235,8 +255,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     // The usage header is a projection over the full event list, so the forced
     // poll is what updates it — the WebSocket handler must not write the header.
     pollActiveSessionView({force: true});
-  } else if (t === 'tex_edit_proposed') {
-    showDiffModal();
   } else if (t === 'ext_usage') {
     renderExtUsage(ev);
   } else if (t === 'plan_updated') {

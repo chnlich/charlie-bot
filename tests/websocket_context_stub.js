@@ -41,7 +41,6 @@ function loadWebsocketContext(extraContext) {
     getSessionIndicatorState: () => ({}),
     setSessionPendingTriggerIndicator: () => {},
     updateSidebarSessionName: () => {},
-    showDiffModal: () => {},
     handleSidebarSearch: () => {},
     switchSidebarFilter: () => {},
     currentFilter: 'all',

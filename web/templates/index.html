@@ -193,14 +193,13 @@
           </svg>
         </a>
         <div id="tab-buttons" class="flex gap-1">
-          <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
           {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
         </div>
       </header>
       {% for part in page_parts('below_header') %}{% include part %}{% endfor %}
 
-      <!-- Tab content wrapper (chat + worker leaf + plans + package tab panels) -->
+      <!-- Tab content wrapper (chat + worker leaf + package tab panels) -->
       <div class="flex-1 flex min-h-0">
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
@@ -278,29 +277,6 @@
             </div>
           </div>
         </div>
-      </div>
-      <!-- ===== PLANS TAB (full-area, workers-pattern) ===== -->
-      <div id="tab-plans" class="flex-1 flex flex-col min-h-0 min-w-0 bg-gray-900 overflow-hidden hidden">
-        <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-700 bg-gray-800">
-          <select id="plan-selector" onchange="planPanel.selectPlan(this.value)"
-                  class="flex-1 min-w-0 text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
-          <select id="plan-version-selector" onchange="planPanel.selectVersion(this.value)"
-                  class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
-          <label id="plan-diff-toggle-wrap" class="hidden text-xs text-gray-400 cursor-pointer select-none whitespace-nowrap">
-            <input id="plan-diff-toggle" type="checkbox" onchange="planPanel.setDiffEnabled(this.checked)" class="accent-blue-500">
-            Compare with previous
-          </label>
-          <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Refresh</button>
-          <button onclick="planPanel.openCurrentInTab()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Open in tab</button>
-        </div>
-        <div id="plan-stale-notice" class="hidden px-4 py-1.5 text-xs text-yellow-400 bg-yellow-900/20 border-b border-yellow-700/40">
-          Viewing an older version — the latest version may differ.
-        </div>
-        <div id="plan-empty-state" class="flex-1 flex items-center justify-center text-sm text-gray-500">
-          No plans registered for this session.
-        </div>
-        <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
-        <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>
       </div>
       {% for part in page_parts('tab_panels') %}{% include part %}{% endfor %}
       </div><!-- end tab content wrapper -->
@@ -385,7 +361,6 @@
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/plan-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
   {% for part in page_parts('scripts') %}{% include part %}{% endfor %}
 

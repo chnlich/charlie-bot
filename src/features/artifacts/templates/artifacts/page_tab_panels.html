@@ -1,0 +1,23 @@
+      <!-- ===== PLANS TAB (full-area, workers-pattern) ===== -->
+      <div id="tab-plans" class="flex-1 flex flex-col min-h-0 min-w-0 bg-gray-900 overflow-hidden hidden">
+        <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-700 bg-gray-800">
+          <select id="plan-selector" onchange="planPanel.selectPlan(this.value)"
+                  class="flex-1 min-w-0 text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
+          <select id="plan-version-selector" onchange="planPanel.selectVersion(this.value)"
+                  class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
+          <label id="plan-diff-toggle-wrap" class="hidden text-xs text-gray-400 cursor-pointer select-none whitespace-nowrap">
+            <input id="plan-diff-toggle" type="checkbox" onchange="planPanel.setDiffEnabled(this.checked)" class="accent-blue-500">
+            Compare with previous
+          </label>
+          <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Refresh</button>
+          <button onclick="planPanel.openCurrentInTab()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Open in tab</button>
+        </div>
+        <div id="plan-stale-notice" class="hidden px-4 py-1.5 text-xs text-yellow-400 bg-yellow-900/20 border-b border-yellow-700/40">
+          Viewing an older version — the latest version may differ.
+        </div>
+        <div id="plan-empty-state" class="flex-1 flex items-center justify-center text-sm text-gray-500">
+          No plans registered for this session.
+        </div>
+        <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
+        <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>
+      </div>

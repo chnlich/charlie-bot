@@ -4,10 +4,10 @@ The stand-in steps below record their calls. ``--step`` calls one function and r
 a step re-enters in a fresh interpreter after ``uv sync``.
 """
 
+import pathlib
 import subprocess
 import sys
 import types
-from pathlib import Path
 
 import pytest
 
@@ -16,26 +16,26 @@ from src.app import setup as setup_runner
 from src.backends.claude_code import setup_check
 from src.features.cron import seed
 from src.features.voice import voice_setup
-from src.infra.config import CharlieBotConfig
+from src.infra import config
 from src.runtime.hooks import wiring
 
-CALLS: list[tuple[str, bool, CharlieBotConfig]] = []
+CALLS: list[tuple[str, bool, config.CharlieBotConfig]] = []
 
 
-def first_step(cfg: CharlieBotConfig, *, dry_run: bool) -> None:
+def first_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   CALLS.append(("first", dry_run, cfg))
 
 
-def second_step(cfg: CharlieBotConfig, *, dry_run: bool) -> None:
+def second_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   CALLS.append(("second", dry_run, cfg))
 
 
-def lone_step(cfg: CharlieBotConfig, *, dry_run: bool) -> None:
+def lone_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   CALLS.append(("lone", dry_run, cfg))
 
 
 @pytest.fixture
-def fresh_registry(profile_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fresh_registry(profile_home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """A scratch CHARLIEBOT_HOME and a registry that holds only the two stand-in steps."""
   CALLS.clear()
   monkeypatch.setattr(registrations, "register_all", lambda: None)
@@ -47,7 +47,7 @@ def fresh_registry(profile_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.mark.parametrize(("argv", "dry_run"), [(["--dry-run"], True), ([], False)])
 def test_the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag(
-    fresh_registry: Path, argv: list[str], dry_run: bool) -> None:
+    fresh_registry: pathlib.Path, argv: list[str], dry_run: bool) -> None:
   setup_runner.main(argv)
 
   assert [(name, flag) for name, flag, _ in CALLS] == [("first", dry_run), ("second", dry_run)]
@@ -56,7 +56,7 @@ def test_the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag(
   assert (fresh_registry / "config.yaml").exists() is (not dry_run)
 
 
-def test_step_calls_an_unregistered_function_once_and_runs_nothing_else(fresh_registry: Path) -> None:
+def test_step_calls_an_unregistered_function_once_and_runs_nothing_else(fresh_registry: pathlib.Path) -> None:
   setup_runner.main(["--step", f"{__name__}:lone_step"])
 
   assert [(name, flag) for name, flag, _ in CALLS] == [("lone", False)]
@@ -82,7 +82,7 @@ def test_the_voice_step_syncs_then_re_enters_only_on_enable_step_when_a_gpu_is_p
   runner = types.SimpleNamespace(__spec__=types.SimpleNamespace(name="sentinel.runner"))
   monkeypatch.setitem(sys.modules, "__main__", runner)
 
-  voice_setup.setup_step(CharlieBotConfig(), dry_run=False)
+  voice_setup.setup_step(config.CharlieBotConfig(), dry_run=False)
 
   assert recorded_commands[0] == ["uv", "sync", "--group", "gpu-voice"]
   assert recorded_commands[1] == [
@@ -97,6 +97,6 @@ def test_the_voice_step_runs_no_command_without_a_gpu_or_in_a_dry_run(
     monkeypatch: pytest.MonkeyPatch, recorded_commands: list[list[str]], gpu: bool, dry_run: bool) -> None:
   monkeypatch.setattr(voice_setup.shutil, "which", lambda name: "/usr/bin/nvidia-smi" if gpu else None)
 
-  voice_setup.setup_step(CharlieBotConfig(), dry_run=dry_run)
+  voice_setup.setup_step(config.CharlieBotConfig(), dry_run=dry_run)
 
   assert recorded_commands == []

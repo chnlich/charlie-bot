@@ -23,10 +23,9 @@ import pytest_asyncio
 from fastapi import testclient
 
 from src.infra import models
-from src.runtime import task_sessions
+from src.runtime import session_store, task_sessions
 from src.runtime.api import deps
 from src.runtime.api import sessions as sessions_api
-from src.runtime.session_store import SessionStore
 
 BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
@@ -98,7 +97,7 @@ async def api_env(store_env):
   tree, session_id = store_env
   app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.dependency_overrides[deps.get_session_store] = lambda: SessionStore(tree._cfg)
+  app.dependency_overrides[deps.get_session_store] = lambda: session_store.SessionStore(tree._cfg)
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
   app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
   return tree, session_id, testclient.TestClient(app)

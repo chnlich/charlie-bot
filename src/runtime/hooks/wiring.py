@@ -13,9 +13,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-  from pathlib import Path
+  import pathlib
 
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
 PHASES = ("early", "ready")
 
@@ -166,7 +166,7 @@ def file_views() -> list[object]:
   return [getattr(importlib.import_module(module), attr) for module, attr in _FILE_VIEWS]
 
 
-def startup_checks() -> list[Callable[[CharlieBotConfig], None]]:
+def startup_checks() -> list[Callable[[config.CharlieBotConfig], None]]:
   """The registered startup check functions, imported, in registration order."""
   return [getattr(importlib.import_module(module), attr) for module, attr in _STARTUP_CHECKS]
 
@@ -176,6 +176,6 @@ def setup_steps() -> list[Callable[..., None]]:
   return [getattr(importlib.import_module(module), attr) for module, attr in _SETUP_STEPS]
 
 
-def diff_roots() -> list[Callable[[CharlieBotConfig], Path]]:
+def diff_roots() -> list[Callable[[config.CharlieBotConfig], pathlib.Path]]:
   """The registered diff root functions, imported, in registration order."""
   return [getattr(importlib.import_module(module), attr) for module, attr in _DIFF_ROOTS]

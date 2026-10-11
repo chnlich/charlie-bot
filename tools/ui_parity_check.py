@@ -59,6 +59,10 @@ Whitelist (the tree-UI nodes the outline drops on both sides):
   a real shell's prompt and the tmux status clock, whose row count and
   timestamps differ between two loads of the same tree. The terminal's layout
   (#tab-terminal, the .xterm wrapper and viewport) stays in the outline.
+- xterm-width-cache: the off-screen holder (a div at top -50000px under body)
+  that xterm's DOM renderer measures glyph widths in. Its spans hold the last
+  characters the terminal measured, which follow the order a real shell's
+  output paints in, so two loads of the same tree differ (``<`` against ``t``).
 The preview cap counting only root rows is the one intended difference the data
 does not reach: every group holds at most five rows even when flat.
 
@@ -361,6 +365,10 @@ OUTLINE_JS = r"""
     // .xterm-rows: the terminal's live screen. Its row count and text follow a
     // real shell and the tmux status clock, so two loads of one tree differ.
     if (el.classList.contains('xterm-rows')) return 'xterm-screen';
+    // body > div at top -50000px: where xterm's DOM renderer measures glyph
+    // widths. Its spans hold the last characters measured, which follow the
+    // order a real shell's output paints in, so two loads of one tree differ.
+    if (el.parentElement === document.body && el.style.top === '-50000px') return 'xterm-width-cache';
     return null;
   }
   function ownText(el) {

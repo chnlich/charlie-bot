@@ -4,7 +4,7 @@ from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.infra import event_types as ET
+from src.infra import constants, event_types as ET, text_length
 from src.infra.buildinfo import build_info
 from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger
@@ -332,8 +332,27 @@ async def session_message(
   prefix. A mid-run target session enqueues the wake on the master
   work-item queue. An archived task target refuses the relay with 409
   (``task <id> is archived``);
-  only the user's own message restores an archived node.
+  only the user's own message restores an archived node. A message over
+  MAX_AGENT_MESSAGE_WEIGHTED_CHARS weighted characters
+  (``text_length.weighted_length``) is refused with 422 before any lookup or write.
   """
+  weighted_chars = text_length.weighted_length(req.content)
+  if weighted_chars > constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS:
+    log.info(
+        "session_message_refused",
+        session=req.session_id,
+        target_session=req.target_session_id,
+        weighted_chars=weighted_chars,
+        limit=constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS,
+    )
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Message is {weighted_chars} weighted characters; "
+            f"the limit is {constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS}.\n"
+            "CJK characters, CJK punctuation, and fullwidth characters count 2.\n"
+            "Write the long content to a file. Send a short message with the conclusion,\n"
+            "the request, and the file path."))
   caller = require_found(await store.get_session(req.session_id))
   target = await store.get_session(req.target_session_id)
   if target is None:

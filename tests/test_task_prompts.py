@@ -17,7 +17,7 @@ import conftest
 import pytest
 
 from src.features.memory import memory, store_root
-from src.infra import models
+from src.infra import constants, models
 from src.runtime import task_prompts, task_sessions
 
 pytestmark = pytest.mark.asyncio
@@ -245,3 +245,23 @@ async def test_staged_candidates_never_enter_startup_or_query(tmp_path: pathlib.
   worker_selection = memory.select_worker_memory(store, "")
   assert worker_selection is not None
   assert all(not sources for _d, _t, sources in worker_selection.segments)
+
+
+# ---------------------------------------------------------------------------
+# The Between Agents limit placeholder
+# ---------------------------------------------------------------------------
+
+
+async def test_manager_prompt_fills_the_agent_message_limit(tmp_path: pathlib.Path) -> None:
+  """The Between Agents rule reaches the manager prompt with the limit filled
+  from the constant, never as an unfilled placeholder."""
+  cfg, _sm, mgr = conftest.build_env(tmp_path)
+  root = await create_task(mgr, parent=None, request_id="root", name="Root")
+  meta = await mgr.load_meta(root.id)
+  segments, _err = task_prompts.build_segments(cfg, meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  joined = task_prompts.assemble_snapshot(segments).instructions_text
+
+  assert (
+      f"`charliebot session send` refuses a message over "
+      f"{constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS} weighted characters." in joined)
+  assert "{{agent_message_limit}}" not in joined

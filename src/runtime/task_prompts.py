@@ -57,6 +57,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.infra import constants
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import RunRecord, SessionMetadata, TaskSpec, TaskType
@@ -296,7 +297,8 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   workflows = _read_source_file(
       cfg.charlie_bot_repo / "prompts" / workflows_file,
       what="manager workflow rules").replace("{{session_id}}", meta.id)
-  contract = _sections_text(cfg, "task_manager.md", ("manager_role", "manager_boundaries"))
+  contract = _sections_text(cfg, "task_manager.md", ("manager_role", "manager_boundaries")).replace(
+      "{{agent_message_limit}}", str(constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS))
   segments = [
       RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),)),
       RuleSegment(text=shared, sources=(PromptSource(SCOPE_BASE, "prompts/master.md"),)),

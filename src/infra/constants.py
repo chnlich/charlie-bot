@@ -49,6 +49,13 @@ CALLER_SESSION_HEADER = "X-CharlieBot-Caller-Session"
 # artifacts), so the CLI argparse precheck and --help text share this constant.
 MAX_TRIGGER_MESSAGE_CHARS = 200
 
+# Upper bound on one inter-agent session send, in weighted characters
+# (weighted_length: CJK characters, CJK punctuation, and fullwidth forms count
+# 2). The session-message endpoint's 422 refusal, the session send --help
+# texts, and the generated manager prompt's {{agent_message_limit}} placeholder
+# share this constant.
+MAX_AGENT_MESSAGE_WEIGHTED_CHARS = 2000
+
 # Cold-session idle threshold (days): the storage sweep's default judgment and
 # the CLI parser's --min-idle-days default and --help text share one number.
 MIN_IDLE_DAYS = 14

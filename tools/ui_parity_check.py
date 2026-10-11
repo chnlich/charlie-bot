@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Layout parity check: main against this branch on the same synthetic sessions.
+"""Layout parity check: main against this branch on the whole chat page.
 
-The task-tree UI may change the production layout only by an explicit list of
-intended differences. This check renders the sidebar and the tab bar of both
-checkouts from identical session files, at desktop and phone widths, and fails
-on any difference outside that list, so a stray layout change is caught before
-anyone looks at the trial instance.
+The web frontend restructure (eight landings, each moving one feature's UI
+code into its own package) may change the production page only by an explicit
+list of intended differences. This check renders the whole page of both
+checkouts from identical session files, at desktop and phone widths, after
+load, under the archived sidebar filter, and after a click on every tab
+button, and fails on any outline difference outside that list and on any
+script error the branch side raises that main does not.
 
 How it works:
 
 - Main side. A temporary detached worktree at --main-ref (default: the merge
-  base of HEAD and origin/main, the main this branch last absorbed).
+  base of HEAD and origin/main). A worktree checkout has no build artifacts
+  and the check builds nothing, so when ``src/runtime/agent_process/_vfkspawn.c``
+  is identical on both sides the check copies the branch tree's built
+  extension into the main worktree; otherwise it stops and names the
+  difference.
 - Servers. Each side serves its own ``server.app`` from its own checkout in a
   child process (``serve`` mode below) with uvicorn ``lifespan="off"`` (no
   scheduler, recovery or trigger scans) on a free local port, against a fresh
@@ -20,12 +26,25 @@ How it works:
   and are checked by eye on the trial instance.
 - Data. The same metadata.json files are written into both homes: three
   groups, one root with a child session and a worker, two archived workers and
-  plain sessions. The task rows carry the schema-v2 task fields, so both sides
-  nest the same rows.
-- Browser. System google-chrome, headless, over CDP with a private profile.
-  Each view exports the DOM outline of ``aside#sidebar`` and ``main > header``
-  (tag, id, classes, own text, visibility) after the whitelist below drops its
-  nodes, and the two outlines must be identical.
+  plain sessions. Every row carries the schema_version 2 profile today's
+  server requires, and the task rows nest the same on both sides.
+- Browser. The first of google-chrome, google-chrome-stable, chromium,
+  chromium-browser on PATH, headless, over CDP with a private profile; pass
+  --chrome to name a binary. Each view exports the DOM outline of
+  ``document.body`` (tag, id, classes, own text) after the whitelist below
+  and every invisible subtree drop their nodes — the check compares the
+  rendered page of each view — and the two outlines must be identical.
+- Views. Each width renders the page after load (``all``), after the archived
+  sidebar filter (``archived``), and after a click on each button inside
+  ``#tab-buttons`` (``tab-<button id>``). The buttons come from the main
+  side's loaded DOM in page order, never from a list in this tool, because
+  later landings move tab buttons into packages and change their order.
+- Script errors. Per side and view the check collects uncaught exceptions
+  (Runtime.exceptionThrown), console errors (Runtime.consoleAPICalled with
+  type error) and log errors (Log.entryAdded with level error), normalized so
+  the side's own port and stack positions do not register. The check fails
+  when the branch side has an error message the main side lacks; the report
+  lists the errors of both sides.
 
 Whitelist (the tree-UI nodes the outline drops on both sides):
 
@@ -34,15 +53,37 @@ Whitelist (the tree-UI nodes the outline drops on both sides):
 - tree-container, tree-toggle: the subtree wrapper and the expand chevron.
 - worker-icon: the leaf or delivered-check icon on a worker row.
 - new-child-action, task-context-action: the two hover row actions.
+- xterm-screen: the terminal's live screen rows (.xterm-rows and its subtree):
+  a real shell's prompt and the tmux status clock, whose row count and
+  timestamps differ between two loads of the same tree. The terminal's layout
+  (#tab-terminal, the .xterm wrapper and viewport) stays in the outline.
 The preview cap counting only root rows is the one intended difference the data
-does not reach: every group holds at most five rows even when flat. Apart from
-the whitelist, the logo's build label (served commit and date) is compared as a
-placeholder.
+does not reach: every group holds at most five rows even when flat.
+
+Stable content: a node whose text changes between two loads of the same tree
+(a relative time, a connection state, a clock) compares as a placeholder; see
+PLACEHOLDER_RULES, where each rule names its node and the reason. Intended
+differences beyond that go to the --expected file, one entry per line:
+
+  <view> | <outline line, as printed in the diff without the +/- prefix>
+
+For example, a landing that adds a release banner inside the header lists:
+
+  1440px/all |   div#release-banner "Release 12 is out"
+
+A diff line with no entry fails the check, and an entry that matches no diff
+line fails the check, so the file stays exact. Lines starting with # are
+comments.
 
 Run:  uv run python tools/ui_parity_check.py [--main-ref REF] [--chrome BIN]
-        [--evidence-dir DIR]
-Exit 0: no difference outside the whitelist. Exit 1: differences, printed as a
-unified diff per view. Exit 2: the check could not run.
+        [--expected FILE] [--evidence-dir DIR]
+On host3 (Playwright's Chromium; /usr/bin/chromium-browser there is a snap
+wrapper that cannot run headless on a temporary profile):
+  uv run python tools/ui_parity_check.py --main-ref origin/main \
+    --chrome ~/.cache/ms-playwright/chromium-1228/chrome-linux/chrome
+Exit 0: no difference outside the whitelist and the --expected file, and no
+new script error. Exit 1: differences or new script errors, printed per view.
+Exit 2: the check could not run.
 """
 
 from __future__ import annotations
@@ -70,11 +111,22 @@ from tools import browser_harness_session_tree  # noqa: E402
 
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))
-FILTERS = ("all", "archived")
 ACTIVE_ID = "00000000-0000-4000-8000-0000000000a0"
-# The logo's build label names the served commit and its date, so it differs
-# between any two commits; both sides compare it as one placeholder.
-BUILD_LABEL = re.compile(r"\b[0-9a-f]{7,40} \u00b7 \d{2}-\d{2}\b")
+CHROME_CANDIDATES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+VFKSPAWN_C = pathlib.Path("src/runtime/agent_process/_vfkspawn.c")
+# Stack frames and code positions inside an error message: the same error on
+# both sides must compare equal, so its location does not register.
+LINE_COL = re.compile(r":\d+:\d+")
+CACHE_BUSTER = re.compile(r"([?&])t=\d+")
+
+# Placeholder rules: each entry names one node whose own text changes between
+# two loads of the same tree, with the reason; outline_lines rewrites the
+# matched text before comparing, so only the varying part disappears.
+PLACEHOLDER_RULES = (
+    # The logo's build label names the served commit and its date, so it
+    # differs between any two commits.
+    ("BUILD_LABEL", re.compile(r"\b[0-9a-f]{7,40} · \d{2}-\d{2}\b"), "<build label>"),
+)
 
 
 def fail(message: str) -> None:
@@ -92,18 +144,23 @@ def _sid(n: int) -> str:
 
 
 def synthetic_sessions() -> list[dict]:
-  """(id, name, group, status, parent, profile, starred) rows, newest first."""
+  """(id, name, group, status, parent, profile, starred) rows, newest first.
+
+  Every row carries the schema_version 2 profile today's server requires: the
+  independent roots are managers, and the root's descendants keep their
+  manager and worker profiles.
+  """
   root, child, worker = _sid(1), _sid(2), _sid(3)
   rows = [
-      (ACTIVE_ID, "Release notes", "alpha", "active", None, None, False),
+      (ACTIVE_ID, "Release notes", "alpha", "active", None, "manager", False),
       (root, "Rework auth", "alpha", "active", None, "manager", False),
       (child, "Token store", "alpha", "active", root, "manager", False),
       (worker, "Implement the parser", "alpha", "active", root, "worker", False),
-      (_sid(4), "Benchmark sweep", "beta", "active", None, None, True),
-      (_sid(5), "Loader cleanup", "beta", "active", None, None, False),
-      (_sid(6), "Onboarding doc", "gamma", "active", None, None, False),
-      (_sid(7), "Scratchpad", None, "active", None, None, False),
-      (_sid(8), "Weekly review", None, "active", None, None, False),
+      (_sid(4), "Benchmark sweep", "beta", "active", None, "manager", True),
+      (_sid(5), "Loader cleanup", "beta", "active", None, "manager", False),
+      (_sid(6), "Onboarding doc", "gamma", "active", None, "manager", False),
+      (_sid(7), "Scratchpad", None, "active", None, "manager", False),
+      (_sid(8), "Weekly review", None, "active", None, "manager", False),
       (_sid(9), "Implement the cache", "alpha", "archived", root, "worker", False),
       (_sid(10), "Implement the retry", "alpha", "archived", root, "worker", False),
   ]
@@ -121,9 +178,10 @@ def synthetic_sessions() -> list[dict]:
         "starred": starred,
         "created_at": stamp,
         "updated_at": stamp,
+        "schema_version": 2,
+        "profile": profile,
+        "task_parent_id": parent,
     }
-    if profile:
-      meta.update({"schema_version": 2, "profile": profile, "task_parent_id": parent})
     out.append(meta)
   return out
 
@@ -217,7 +275,10 @@ class Side:
         text=True)
     line = self.proc.stdout.readline()
     if not line.startswith(READY_PREFIX):
-      fail(f"{self.name} server did not start; log {self.log_path}: {line.strip()}")
+      # The side's own error travels in the message: a copied log is evidence,
+      # not the only place the failure shows.
+      tail = self.log_path.read_text(encoding="utf-8", errors="replace")[-1500:] if self.log_path.exists() else ""
+      fail(f"{self.name} server did not start; log {self.log_path}: {line.strip()}\n{tail}")
     modules = json.loads(line[len(READY_PREFIX):])
     paths = [modules["server"], *modules["src"]]
     if not all(pathlib.Path(p).resolve().is_relative_to(self.repo.resolve()) for p in paths):
@@ -236,18 +297,49 @@ class Side:
     browser_harness_session_tree.stop_child(self.proc, grace_s=10, kill_reap_s=10)
 
 
+def provision_main_extension(main_tree: pathlib.Path) -> None:
+  """Give the detached main worktree the compiled _vfkspawn extension.
+
+  The worktree checkout has no build artifacts and the check builds nothing,
+  so the main side borrows the branch tree's built extension — sound only
+  while the C source is identical on both sides.
+  """
+  main_c = (main_tree / VFKSPAWN_C).read_text(encoding="utf-8")
+  branch_c = (SCRIPT_REPO / VFKSPAWN_C).read_text(encoding="utf-8")
+  if main_c != branch_c:
+    diff = list(
+        difflib.unified_diff(
+            branch_c.splitlines(), main_c.splitlines(), "branch", "main", lineterm="", n=1))[:30]
+    fail(
+        f"{VFKSPAWN_C} differs between the branch and the main checkout, so the main side cannot "
+        "borrow the branch's built extension; pass a --main-ref whose _vfkspawn.c matches the "
+        "branch, or build the extension in a main checkout (uv sync):\n" + "\n".join(diff))
+  built = sorted(SCRIPT_REPO.glob(str(VFKSPAWN_C.parent / "_vfkspawn*.so")))
+  if not built:
+    fail(f"no built _vfkspawn extension under {SCRIPT_REPO / VFKSPAWN_C.parent}; run `uv sync` in the branch checkout")
+  for so in built:
+    shutil.copy(so, main_tree / VFKSPAWN_C.parent / so.name)
+
+
 # ---------------------------------------------------------------------------
 # Browser: CDP helpers and the outline export.
 # ---------------------------------------------------------------------------
 
-# Walks one root and returns [depth, tag, id, classes, text, visible] rows,
-# skipping each whitelisted node with its subtree and counting the rule hits.
+# Walks document.body and returns [depth, tag, id, classes, text, visible]
+# rows for the rendered page: each whitelisted node drops with its subtree,
+# and so does every invisible node — an inactive tab's panel or a closed
+# modal belongs to the views that show it. script/style/template/link/meta
+# carry code, not layout, so they drop too: an inline script's text would
+# diff the two checkouts' source rather than the page. Rule hits are counted
+# either way.
 OUTLINE_JS = r"""
 (function (parentOf) {
   const present = new Set([...document.querySelectorAll('#session-list [id^="session-"]')]
     .map((el) => el.id.slice('session-'.length)));
   const hits = {};
   function rule(el) {
+    const tag = el.tagName.toLowerCase();
+    if (['script', 'style', 'template', 'link', 'meta'].includes(tag)) return 'non-layout-tag';
     const id = el.id || '';
     if (id.startsWith('session-')) {
       const parent = parentOf[id.slice('session-'.length)];
@@ -258,7 +350,8 @@ OUTLINE_JS = r"""
     const onclick = el.getAttribute('onclick') || '';
     if (onclick.includes('createChildSession(')) return 'new-child-action';
     if (onclick.includes('openTaskContextModal(')) return 'task-context-action';
-    if (el.tagName.toLowerCase() === 'svg' && (el.getAttribute('title') || '').startsWith('Worker (')) return 'worker-icon';
+    if (tag === 'svg' && (el.getAttribute('title') || '').startsWith('Worker (')) return 'worker-icon';
+    if (el.classList.contains('xterm-rows')) return 'xterm-screen';
     return null;
   }
   function ownText(el) {
@@ -273,14 +366,14 @@ OUTLINE_JS = r"""
   function walk(el, depth) {
     const hit = rule(el);
     if (hit) { hits[hit] = (hits[hit] || 0) + 1; return; }
+    // Only the rendered page compares: an invisible subtree (another tab's
+    // panel, a closed modal) belongs to the views that show it.
+    if (!visible(el)) { hits['not-rendered'] = (hits['not-rendered'] || 0) + 1; return; }
     const classes = [...el.classList].sort().join('.');
-    rows.push([depth, el.tagName.toLowerCase(), el.id || '', classes, ownText(el), visible(el)]);
+    rows.push([depth, el.tagName.toLowerCase(), el.id || '', classes, ownText(el), true]);
     for (const child of el.children) walk(child, depth + 1);
   }
-  for (const selector of ['aside#sidebar', 'main > header']) {
-    const root = document.querySelector(selector);
-    if (root) walk(root, 0); else rows.push([0, 'missing', selector, '', '', false]);
-  }
+  walk(document.body, 0);
   return {rows, hits};
 })
 """
@@ -313,14 +406,55 @@ def outline_lines(rows: list[list]) -> list[str]:
   lines = []
   for depth, tag, el_id, classes, text, shown in rows:
     head = tag + (f"#{el_id}" if el_id else "") + (f".{classes}" if classes else "")
-    text = BUILD_LABEL.sub("<build label>", text)
+    for _, pattern, replacement in PLACEHOLDER_RULES:
+      text = pattern.sub(replacement, text)
     lines.append("  " * depth + head + (f" {json.dumps(text)}" if text else "") + ("" if shown else " [hidden]"))
   return lines
 
 
-async def capture(
+def collect_errors(events: list[dict], mark: int, session_id: str, side: Side) -> list[str]:
+  """Normalized script-error messages the page raised since *mark* (a length
+  of the CDP event log taken before the view's interaction)."""
+  messages = set()
+  for event in events[mark:]:
+    if event.get("sessionId") != session_id:
+      continue
+    method = event.get("method", "")
+    params = event.get("params", {})
+    text = None
+    if method == "Runtime.exceptionThrown":
+      details = params.get("exceptionDetails", {})
+      exception = details.get("exception", {})
+      text = f"{details.get('text', '')} {exception.get('description') or exception.get('value') or ''}"
+    elif method == "Runtime.consoleAPICalled" and params.get("type") == "error":
+      text = json.dumps(params.get("args", []))
+    elif method == "Log.entryAdded" and params.get("entry", {}).get("level") == "error":
+      entry = params["entry"]
+      text = f"{entry.get('text', '')} {entry.get('url', '')}"
+    if text is None:
+      continue
+    text = text.replace(side.base, "<side>").replace(str(side.port), "<port>")
+    text = LINE_COL.sub(":<line>", text)
+    # Cache-busting query stamps (the TeX panel's /api/latex/pdf?t=<millis>)
+    # differ between any two loads.
+    text = CACHE_BUSTER.sub(r"\1t=<nonce>", text)
+    messages.add(re.sub(r"\s+", " ", text).strip()[:400])
+  return sorted(messages)
+
+
+async def snap(cdp: browser_harness_session_tree.CDP, session_id: str, side: Side, mark: int,
+               parent_of: dict) -> dict:
+  """One view's outline, whitelist hits and script errors since *mark*."""
+  capture = await evaluate(cdp, session_id, OUTLINE_JS + f"({json.dumps(parent_of)})")
+  capture["errors"] = collect_errors(cdp.events, mark, session_id, side)
+  return capture
+
+
+async def capture_width(
     cdp: browser_harness_session_tree.CDP, session_id: str, side: Side, width: int, height: int, mobile: bool,
-    view_filter: str, parent_of: dict) -> dict:
+    parent_of: dict, tab_buttons: list[str] | None) -> tuple[dict, list[str]]:
+  """The view sequence for one side at one width; returns the views and the
+  tab buttons in the side's own DOM (the caller keeps the main side's list)."""
   await cdp.send(
       "Emulation.setDeviceMetricsOverride", {
           "width": width,
@@ -336,6 +470,8 @@ async def capture(
           "url": side.base
       },
       session_id=session_id)
+  views: dict = {}
+  mark = len(cdp.events)
   await cdp.send("Page.navigate", {"url": f"{side.base}/?session={ACTIVE_ID}"}, session_id=session_id)
   await wait_for(cdp, session_id, f"!!document.getElementById('session-{ACTIVE_ID}')", f"the {side.name} session list")
   if mobile:
@@ -343,47 +479,82 @@ async def capture(
     # rows are compared as rendered, not as hidden nodes.
     await evaluate(cdp, session_id, "toggleMobileSidebar()")
     await asyncio.sleep(0.5)
-  if view_filter != "all":
-    await evaluate(cdp, session_id, f"switchSidebarFilter({json.dumps(view_filter)})")
-    await wait_for(
-        cdp, session_id, "!!document.querySelector('#session-list [id^=\"session-\"]:not(#session-" + ACTIVE_ID +
-        ")') && !document.getElementById('session-" + ACTIVE_ID + "')", f"the {side.name} {view_filter} list")
   # Let the first status poll and any deferred paint settle before reading.
   await asyncio.sleep(2.0)
-  return await evaluate(cdp, session_id, OUTLINE_JS + f"({json.dumps(parent_of)})")
+  views[f"{width}px/all"] = await snap(cdp, session_id, side, mark, parent_of)
+  buttons = await evaluate(
+      cdp, session_id, "[...document.querySelectorAll('#tab-buttons button')].map((button) => button.id)")
+
+  mark = len(cdp.events)
+  await evaluate(cdp, session_id, "switchSidebarFilter('archived')")
+  await wait_for(
+      cdp, session_id, "!!document.querySelector('#session-list [id^=\"session-\"]:not(#session-" + ACTIVE_ID +
+      ")') && !document.getElementById('session-" + ACTIVE_ID + "')", f"the {side.name} archived list")
+  await asyncio.sleep(1.0)
+  views[f"{width}px/archived"] = await snap(cdp, session_id, side, mark, parent_of)
+
+  await evaluate(cdp, session_id, "switchSidebarFilter('all')")
+  await wait_for(cdp, session_id, f"!!document.getElementById('session-{ACTIVE_ID}')", f"the {side.name} all list")
+  for button_id in (tab_buttons if tab_buttons is not None else buttons):
+    view = f"{width}px/tab/{button_id}"
+    mark = len(cdp.events)
+    clicked = await evaluate(
+        cdp, session_id, f"(function () {{ const button = document.getElementById({json.dumps(button_id)});"
+        " if (!button) return false; button.click(); return true; })()")
+    # Let the tab's own refresh (backlog, plans, terminal) fetch and paint.
+    await asyncio.sleep(1.5)
+    if clicked:
+      views[view] = await snap(cdp, session_id, side, mark, parent_of)
+    else:
+      views[view] = {
+          "rows": [[0, "missing", button_id, "", "", False]],
+          "hits": {},
+          "errors": [f"tab button #{button_id} is not in the DOM"],
+      }
+  return views, buttons
 
 
-async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
+async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> tuple[dict, list[str]]:
   import websockets
 
   profile = pathlib.Path(tempfile.mkdtemp(prefix="ui-parity-chrome-"))
   debug_port = browser_harness_session_tree.pick_free_port()
+  # --no-sandbox: host3's kernel denies the sandbox's user namespaces (the
+  # headless_render harness launches the same way); the pages rendered here
+  # are the check's own synthetic ones.
   proc = browser_harness_session_tree.launch_chrome(
-      chrome, profile, debug_port,
-      ["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-allow-origins=*"])
+      chrome, profile, debug_port, [
+          "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
+          "--remote-allow-origins=*"
+      ])
   try:
     ws_url = await browser_harness_session_tree.devtools_ws_url(proc, 20, fail)
     async with websockets.connect(ws_url, max_size=50 * 1024 * 1024) as ws:
       cdp = browser_harness_session_tree.CDP(ws)
       captures: dict = {}
+      # The tab buttons come from the main side's DOM in page order; the same
+      # click sequence then runs on both sides at every width.
+      tab_buttons: list[str] | None = None
       for width, height, mobile in WIDTHS:
-        for view_filter in FILTERS:
-          view = f"{width}px/{view_filter}"
-          captures[view] = {}
-          for side in sides:
-            session_id, target_id = await browser_harness_session_tree.open_cdp_page(cdp, ("Page", "Network"))
-            await cdp.send(
-                "Page.addScriptToEvaluateOnNewDocument", {
-                    "source":
-                        (
-                            f"try {{ localStorage.setItem('charliebot_access_key', "
-                            f"{json.dumps(side.access_key)}); }} catch (e) {{}}")
-                },
-                session_id=session_id)
-            captures[view][side.name] = await capture(
-                cdp, session_id, side, width, height, mobile, view_filter, parent_of)
-            await cdp.send("Target.closeTarget", {"targetId": target_id})
-      return captures
+        for side in sides:
+          session_id, target_id = await browser_harness_session_tree.open_cdp_page(
+              cdp, ("Page", "Network", "Runtime", "Log"))
+          await cdp.send(
+              "Page.addScriptToEvaluateOnNewDocument", {
+                  "source":
+                      (
+                          f"try {{ localStorage.setItem('charliebot_access_key', "
+                          f"{json.dumps(side.access_key)}); }} catch (e) {{}}")
+              },
+              session_id=session_id)
+          views, buttons = await capture_width(
+              cdp, session_id, side, width, height, mobile, parent_of, tab_buttons)
+          if side.name == "main" and tab_buttons is None:
+            tab_buttons = buttons
+          for view, capture in views.items():
+            captures.setdefault(view, {})[side.name] = capture
+          await cdp.send("Target.closeTarget", {"targetId": target_id})
+      return captures, tab_buttons or []
   finally:
     browser_harness_session_tree.stop_child(proc, grace_s=5, kill_reap_s=5)
     shutil.rmtree(profile, ignore_errors=True)
@@ -405,12 +576,27 @@ def resolve_main_ref(ref: str | None) -> str:
     fail(f"cannot resolve the main reference {ref or 'merge-base HEAD origin/main'}: {exc.stderr.strip()}")
 
 
+def load_expected(path: pathlib.Path) -> set[tuple[str, str]]:
+  """The --expected file: (view, outline line) entries, one per line."""
+  entries = set()
+  for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    line = raw.rstrip()
+    if not line or line.startswith("#"):
+      continue
+    view, sep, text = line.partition(" | ")
+    if not sep or not view.strip() or not text:
+      fail(f"{path}:{lineno}: an entry is '<view> | <outline line>': {raw!r}")
+    entries.add((view.strip(), text))
+  return entries
+
+
 def check(args: argparse.Namespace) -> int:
-  chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+  chrome = args.chrome or next((c for c in (shutil.which(name) for name in CHROME_CANDIDATES) if c), None)
   if not chrome:
-    fail("google-chrome is not installed; pass --chrome")
+    fail(f"none of {', '.join(CHROME_CANDIDATES)} is on PATH; pass --chrome")
   main_sha = resolve_main_ref(args.main_ref)
   branch_sha = git("rev-parse", "HEAD")
+  expected = load_expected(pathlib.Path(args.expected)) if args.expected else set()
   evidence = pathlib.Path(args.evidence_dir or tempfile.mkdtemp(prefix="ui-parity-evidence-"))
   evidence.mkdir(parents=True, exist_ok=True)
   sessions = synthetic_sessions()
@@ -423,22 +609,33 @@ def check(args: argparse.Namespace) -> int:
     git("worktree", "add", "--detach", "--quiet", str(main_tree), main_sha)
     sides = [Side("main", main_tree, tmp, sessions), Side("branch", SCRIPT_REPO, tmp, sessions)]
     try:
+      provision_main_extension(main_tree)
       for side in sides:
         side.start()
-      captures = asyncio.run(run_browser(chrome, sides, parent_of))
+      captures, tab_buttons = asyncio.run(run_browser(chrome, sides, parent_of))
     finally:
       for side in sides:
         side.stop()
       for side in sides:
-        shutil.copy(side.log_path, evidence / side.log_path.name)
+        # A side that failed to start never wrote its log; the failure message
+        # already carries that side's own error.
+        if side.log_path.exists():
+          shutil.copy(side.log_path, evidence / side.log_path.name)
       git("worktree", "remove", "--force", str(main_tree))
 
-  failures = 0
-  report = {"main": main_sha, "branch": branch_sha, "views": {}}
+  print(f"tab buttons from the main DOM in page order: {', '.join(tab_buttons)}", flush=True)
+  problems: list[str] = []
+  occurred: set[tuple[str, str]] = set()
+  report = {"main": main_sha, "branch": branch_sha, "tab_buttons": tab_buttons, "views": {}}
   for view, by_side in captures.items():
-    main_lines = outline_lines(by_side["main"]["rows"])
-    branch_lines = outline_lines(by_side["branch"]["rows"])
+    main_capture, branch_capture = by_side["main"], by_side["branch"]
+    main_lines = outline_lines(main_capture["rows"])
+    branch_lines = outline_lines(branch_capture["rows"])
     diff = list(difflib.unified_diff(main_lines, branch_lines, "main", "branch", lineterm="", n=2))
+    diff_entries = {(view, line[1:]) for line in diff if line[:1] in ("+", "-") and not line.startswith(("+++", "---"))}
+    uncovered = diff_entries - expected
+    occurred |= diff_entries & expected
+    new_errors = sorted(set(branch_capture["errors"]) - set(main_capture["errors"]))
     hits = {side: by_side[side]["hits"] for side in by_side}
     stem = view.replace("/", "-")
     (evidence / f"outline-{stem}-main.txt").write_text("\n".join(main_lines) + "\n", encoding="utf-8")
@@ -447,20 +644,44 @@ def check(args: argparse.Namespace) -> int:
         "hits": hits,
         "diff": diff,
         "main_nodes": len(main_lines),
-        "branch_nodes": len(branch_lines)
+        "branch_nodes": len(branch_lines),
+        "errors": {
+            "main": main_capture["errors"],
+            "branch": branch_capture["errors"]
+        },
+        "new_errors": new_errors,
     }
-    state = "differs" if diff else "identical"
+    if not diff:
+      state = "identical"
+    elif uncovered:
+      state = "differs"
+    else:
+      state = "expected differences only"
     print(
         f"{view}: {state} ({len(main_lines)} nodes compared; whitelist hits "
-        f"main {hits['main']}, branch {hits['branch']})",
+        f"main {hits['main']}, branch {hits['branch']}; script errors "
+        f"main {len(main_capture['errors'])}, branch {len(branch_capture['errors'])})",
         flush=True)
-    if diff:
-      failures += 1
+    if uncovered:
+      problems.append(f"{view}: {len(uncovered)} outline difference(s) outside the expected file")
       print("\n".join(diff), flush=True)
+      print("differences outside the expected file, in --expected entry form:", flush=True)
+      for _, text in sorted(uncovered):
+        print(f"{view} | {text}", flush=True)
+    if new_errors:
+      problems.append(f"{view}: {len(new_errors)} script error(s) the main side does not raise")
+      for message in new_errors:
+        print(f"new script error: {message}", flush=True)
+  stale = expected - occurred
+  if stale:
+    problems.append(f"{len(stale)} expected entrie(s) did not occur")
+    print("expected entries that did not occur:", flush=True)
+    for view, text in sorted(stale):
+      print(f"{view} | {text}", flush=True)
   (evidence / "ui_parity_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
   print(f"evidence: {evidence}", flush=True)
-  if failures:
-    print(f"UI PARITY CHECK FAILED: {failures} of {len(captures)} views differ outside the whitelist", flush=True)
+  if problems:
+    print(f"UI PARITY CHECK FAILED: {'; '.join(problems)}", flush=True)
     return 1
   print("UI PARITY CHECK PASSED", flush=True)
   return 0
@@ -473,7 +694,9 @@ def main() -> None:
   serve_parser.add_argument("--repo", type=pathlib.Path, required=True)
   serve_parser.add_argument("--port", type=int, required=True)
   parser.add_argument("--main-ref", default=None, help="main commit (default: merge-base HEAD origin/main)")
-  parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome on PATH)")
+  parser.add_argument(
+      "--chrome", default=None, help=f"Chrome binary (default: the first of {', '.join(CHROME_CANDIDATES)} on PATH)")
+  parser.add_argument("--expected", default=None, help="file listing the intended outline differences")
   parser.add_argument("--evidence-dir", default=None, help="report and server logs (default: a new temp dir)")
   args = parser.parse_args()
   if args.mode == "serve":

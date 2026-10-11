@@ -37,15 +37,15 @@ function showAuthOverlay() {
 // artifact iframe pages do not, so their copies stay local there.
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
-// Shared fill styling for every horizontal meter bar on index.html (sidebar
-// context bar, ext-usage quota bars): one literal keeps the bars painting
-// alike. index.html loads this file before both consumers; the static
+// Shared fill styling for every horizontal meter bar on index.html (the
+// sidebar context bar and the package meter bars): one literal keeps the bars
+// painting alike. index.html loads this file before every consumer; the static
 // #usage-bar markup renders before any script, so its copy stays local there.
 const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300';
 
 // WebSocket endpoints take the access key as a 'token' query param: the
 // browser WebSocket API exposes no header channel for the fetch wrapper's
-// Bearer header. Loads before the websocket/voice/terminal connectors.
+// Bearer header. Loads before every script that opens a WebSocket.
 function withAccessToken(url) {
   const key = localStorage.getItem(ACCESS_KEY_NAME);
   if (!key) return url;

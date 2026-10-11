@@ -106,8 +106,12 @@
     if (container) container.classList.add('hidden');
   }
 
-  globalThis.TerminalPanel = {
-    show,
-    hide,
-  };
+  registerTab({
+    id: 'terminal',
+    showsChat: false,
+    fullScreenOnMobile: false,
+    keepOnSessionSwitch: true,
+    onShow: show,
+    onHide: hide,
+  });
 })();

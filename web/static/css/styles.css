@@ -6,7 +6,7 @@
 .prose-msg code { background: #0f172a; border: 1px solid #92400e; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.8rem; font-family: 'Fira Code', ui-monospace, monospace; color: #fbbf24; overflow-wrap: break-word; word-break: break-all; }
 .prose-msg pre code { background: transparent; padding: 0; }
 /* Wide chars in code blocks and tool-output pres sit in fixed 2ch boxes so
-   terminal-style CJK ASCII diagrams keep their column grid (wrapped by
+   monospace CJK ASCII diagrams keep their column grid (wrapped by
    wrapWideChars in markdown-renderer.js). Glyph stays left in its box. */
 .wc2ch { display: inline-block; white-space: pre; width: 2ch; }
 /* Code block with header bar */

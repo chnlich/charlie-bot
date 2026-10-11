@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readPackageStatic } = require('./read_static');
 
-const TERMINAL_MOUNT_JS = readStatic('terminal_mount.js');
+const TERMINAL_MOUNT_JS = readPackageStatic('features', 'terminal', 'terminal_mount.js');
 
 function loadHelpers() {
   const constructed = [];

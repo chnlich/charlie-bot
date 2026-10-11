@@ -523,8 +523,8 @@ async function switchSession(sessionId) {
   pollSessionStatus();
   ensureActiveSessionViewPolling();
 
-  // Reset lazy-load state
-  _backlogLoaded = false;
+  // A package that loads its data once per session listens for this event.
+  document.dispatchEvent(new CustomEvent('charliebot:session-switched'));
   scheduleLazySessionDataLoad();
 }
 

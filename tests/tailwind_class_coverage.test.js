@@ -23,7 +23,7 @@ const BUILD_ENV = Object.assign({}, process.env, {
 
 const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 const { loadArtifactsScript } = require('./artifacts_context_stub');
 const { makeChatRenderContext } = require('./chat_rendering_context_stub');
 
@@ -33,6 +33,7 @@ function makeDocument(elements) {
     createElement(tag) { return new FakeElement(tag); },
     querySelector() { return null; },
     querySelectorAll() { return []; },
+    addEventListener() {},
   };
 }
 
@@ -59,13 +60,14 @@ function loadBacklogContext(elements, fetchImpl) {
     console: { error: () => {} },
     fetch: fetchImpl,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
+    registerTab: () => {},
   };
   vm.createContext(context);
   // backlog-panel.js declares `const backlogPanel = (() => {...})();` at top
   // level -- a `const` binding is not a property of the vm context object, so
   // bridge it onto the context in the same script (same lexical scope).
   vm.runInContext(
-      readStatic('backlog-panel.js') + '\nglobalThis.backlogPanel = backlogPanel;',
+      readPackageStatic('features', 'backlog', 'backlog-panel.js') + '\nglobalThis.backlogPanel = backlogPanel;',
       context,
       { filename: 'backlog-panel.js' });
   return context;

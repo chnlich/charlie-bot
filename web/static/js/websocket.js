@@ -255,8 +255,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     // The usage header is a projection over the full event list, so the forced
     // poll is what updates it — the WebSocket handler must not write the header.
     pollActiveSessionView({force: true});
-  } else if (t === 'ext_usage') {
-    renderExtUsage(ev);
   } else if (t === 'plan_updated') {
     if (typeof planPanel !== 'undefined') planPanel.onPlanUpdated(ev.plan_id);
   }

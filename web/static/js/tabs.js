@@ -29,47 +29,6 @@ registerTab({
   onHide() {},
 });
 
-registerTab({
-  id: 'terminal',
-  showsChat: false,
-  fullScreenOnMobile: false,
-  keepOnSessionSwitch: true,
-  onShow() {
-    const terminalTab = document.getElementById('tab-terminal');
-    if (terminalTab) terminalTab.classList.remove('hidden');
-    if (globalThis.TerminalPanel) globalThis.TerminalPanel.show();
-  },
-  onHide() {
-    const terminalTab = document.getElementById('tab-terminal');
-    if (terminalTab) terminalTab.classList.add('hidden');
-    if (globalThis.TerminalPanel) globalThis.TerminalPanel.hide();
-  },
-});
-
-let _backlogLoaded = false;
-
-function setBacklogPanelVisible(visible) {
-  const backlogPanelEl = document.getElementById('backlog-panel');
-  if (backlogPanelEl) backlogPanelEl.classList.toggle('hidden', !visible);
-  const backlogHandle = document.getElementById('backlog-resize-handle');
-  if (backlogHandle) backlogHandle.style.display = visible ? '' : 'none';
-}
-
-registerTab({
-  id: 'chat-backlog',
-  showsChat: true,
-  fullScreenOnMobile: true,
-  keepOnSessionSwitch: true,
-  onShow() {
-    setBacklogPanelVisible(true);
-    if (!_backlogLoaded) {
-      _backlogLoaded = true;
-      backlogPanel.refresh();
-    }
-  },
-  onHide() { setBacklogPanelVisible(false); },
-});
-
 // The plans tab is a full-area view that hides chat; a session switch returns to chat.
 registerTab({
   id: 'chat-plans',

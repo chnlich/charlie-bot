@@ -1012,7 +1012,8 @@ async def test_controller_exception_closes_the_child_failed(
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
   finals = _final_reports(tree, manager.id)
   assert len(finals) == 1 and finals[0]["outcome"] == "failed"
-  assert finals[0]["summary"].startswith("[Improve loop 1] Improve loop failed.")
+  assert finals[0]["summary"].startswith(
+      "[Improve loop 1] Improve loop failed. Controller error: injected landing failure")
   assert "iter one words" in finals[0]["summary"] and "iter two words" in finals[0]["summary"]
 
 
@@ -1048,7 +1049,8 @@ async def test_worktree_failure_closes_the_child_failed(
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
   finals = _final_reports(tree, manager.id)
   assert len(finals) == 1 and finals[0]["outcome"] == "failed"
-  assert finals[0]["summary"] == "[Improve loop 1] Improve loop failed."
+  assert finals[0]["summary"] == (
+      "[Improve loop 1] Improve loop failed. Failed to create worktree: injected worktree failure")
   assert builds == []  # no iteration ever launched
   assert tree.runs.list_run_records_sync(child_id) == []
 

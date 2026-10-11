@@ -1,6 +1,7 @@
 {
   "name": "charlie-bot",
   "devDependencies": {
-    "tailwindcss": "3.4.17"
+    "tailwindcss": "3.4.17",
+    "sucrase": "3.35.1"
   }
 }

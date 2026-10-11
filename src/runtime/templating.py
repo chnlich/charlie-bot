@@ -76,8 +76,10 @@ def page_package_static() -> list[tuple[str, pathlib.Path]]:
 
   The first item is the URL path under /static/ that serves the directory.
   """
-  return [(package.removeprefix("src.").replace(".", "/"), package_directory(package) / "static")
-          for package in page_render.page_packages()]
+  return [
+      (package.removeprefix("src.").replace(".", "/"), package_directory(package) / "static")
+      for package in page_render.page_packages()
+  ]
 
 
 def _asset_tree_digest() -> str:

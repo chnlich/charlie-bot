@@ -51,7 +51,8 @@ def test_deleting_a_package_line_removes_its_routes_and_keeps_the_others() -> No
   assert DELETED_STATIC in with_package
   assert not any(path.startswith(DELETED_PREFIX) or path == DELETED_STATIC for path in without_package)
   assert without_package == [
-      path for path in with_package if not path.startswith(DELETED_PREFIX) and path != DELETED_STATIC]
+      path for path in with_package if not path.startswith(DELETED_PREFIX) and path != DELETED_STATIC
+  ]
 
 
 def test_a_second_registration_of_one_name_raises() -> None:

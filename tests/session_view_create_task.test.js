@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups,
-  stubPageTimers, SWITCH_TELEMETRY_URL} = require('./session_context_stub');
+  stubPageTimers} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
 
 const CREATED = (n) => ({ok: true, status: 200, json: async () => (
@@ -47,7 +47,6 @@ function buildHarness(overrides = {}) {
       h.posts.push({url, body: JSON.parse(opts.body)});
       return createResponse(h.posts.length);
     }
-    if (url === SWITCH_TELEMETRY_URL) return {ok: true, status: 200, json: async () => ({ok: true})};
     const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap$/);
     if (boot) return {ok: true, status: 200, json: async () => bootstrapPayload(boot[1], 0, false)};
     return {ok: true, status: 200, json: async () => ({})};

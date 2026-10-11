@@ -7,6 +7,9 @@
 const sidebarFilters = [];
 const sidebarFiltersByName = {};
 
+// The pill strip lists the filters in registration order. A filter with
+// `before` takes its place in front of the named filter. A package registers
+// its filter when its script loads.
 function registerSidebarFilter(filter) {
   if (!filter || !filter.name || !filter.label || !filter.url) throw new Error('Invalid sidebar filter registration');
   if (sidebarFiltersByName[filter.name]) throw new Error('Duplicate sidebar filter: ' + filter.name);
@@ -16,12 +19,13 @@ function registerSidebarFilter(filter) {
     url: filter.url,
     restoreFromUrl: filter.restoreFromUrl !== false,
   };
-  sidebarFilters.push(normalized);
+  const at = filter.before ? sidebarFilters.indexOf(sidebarFiltersByName[filter.before]) : sidebarFilters.length;
+  if (at < 0) throw new Error('Unknown sidebar filter: ' + filter.before);
+  sidebarFilters.splice(at, 0, normalized);
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
 registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/', restoreFromUrl: false});
-registerSidebarFilter({name: 'threads', label: 'Threads', url: '/api/sessions/chat-threads'});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
@@ -349,6 +353,7 @@ async function toggleSessionStar(id, currentlyStarred) {
 
 
 const GLOBALS = {
+  registerSidebarFilter,
   archiveSession,
   unarchiveSession,
   confirmDeletePermanently,

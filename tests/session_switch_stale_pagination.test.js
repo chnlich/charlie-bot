@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {bootstrapPayload, buildSwitchFlowHarness, makeSidebarRow, SWITCH_TELEMETRY_URL} =
+const {bootstrapPayload, buildSwitchFlowHarness, makeSidebarRow} =
   require('./session_context_stub');
 
 const PENDING = Symbol('pending');
@@ -48,9 +48,6 @@ function buildHarness(eventsHandler) {
     fields: {fetchCalls: [], pendingEvents: [], errors: [], preBootstrap: null},
     contextTweaks: (context, h) => { context.console.error = (...args) => h.errors.push(args); },
     fetch: (h, url, opts = {}) => {
-      if (url === SWITCH_TELEMETRY_URL) {
-        return {ok: true, status: 200, json: async () => ({ok: true})};
-      }
       const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
       if (boot) {
         // Interleaving (a) hook: the test may land the stale flight inside the

@@ -1,9 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const { escapeHtml } = require('./escape_html_stub');
 const {createEscapingElement} = require('./dom_element_stub');
 const {loadChatRendering} = require('./chat_rendering_context_stub');
+const {readPackageStatic} = require('./read_static');
 
 function assertWellFormedMarkup(html, label = 'html') {
   assert.doesNotMatch(html, /<[^>]*</, `${label} contains a nested tag opener`);
@@ -251,6 +253,9 @@ test('a launch-failed Run header shows the no-output-log note and the ref link r
 
 test('run_delivery closes the transcript with the summary and the four evidence links', () => {
   const context = loadChatRendering();
+  // The Diff link registers from the diff_view package.
+  vm.runInContext(readPackageStatic('features', 'diff_view', 'delivery-diff-link.js'), context,
+                  {filename: 'delivery-diff-link.js'});
 
   const delivered = context.renderMessage({
     role: 'run_delivery',

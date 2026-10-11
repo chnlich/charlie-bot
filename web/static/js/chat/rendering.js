@@ -513,18 +513,22 @@ function renderMessagesToDetachedContainer(messages, sessionId) {
 }
 
 // The delivery banner's evidence links. A host-absolute ref rides the
-// file-server route; the diff page compares the run's work branch against its
-// base branch.
+// file-server route.
 function evidenceHref(ref) {
   return typeof ref === 'string' && ref.startsWith('/') ? '/absolute_filepath' + ref : null;
 }
 
-function deliveryDiffHref(msg, sessionId) {
-  if (!msg || !msg.repo_path || !msg.base_branch || !msg.branch_name) return null;
-  return '/diff?repo=' + encodeURIComponent(msg.repo_path)
-    + '&base=' + encodeURIComponent(msg.base_branch)
-    + '&head=' + encodeURIComponent(msg.branch_name)
-    + '&session=' + encodeURIComponent(sessionId || '');
+// The banner's package links follow core's three, in registration order. A
+// package registers {label, href} when its script loads: href(msg, sessionId)
+// returns the link's URL, or null for a gray label.
+const deliveryLinks = [];
+
+function registerDeliveryLink(link) {
+  if (!link || !link.label || typeof link.href !== 'function') throw new Error('Invalid delivery link registration');
+  if (deliveryLinks.some((existing) => existing.label === link.label)) {
+    throw new Error('Duplicate delivery link: ' + link.label);
+  }
+  deliveryLinks.push(link);
 }
 
 // A worker transcript's per-Run header (a system line of kind run_header):
@@ -729,8 +733,8 @@ function renderMessage(msg, sessionId) {
       + renderDelegateMetadata(msg, sessionId) + timeDiv() + "</div></div>";
   }
   if (msg.role === "run_delivery") {
-    // The worker transcript's close: the delivery summary and the four
-    // evidence links.
+    // The worker transcript's close: the delivery summary and the evidence
+    // links.
     var delivered = msg.completed;
     var palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
     var labelClass = delivered ? 'text-green-300' : 'text-slate-400';
@@ -739,8 +743,7 @@ function renderMessage(msg, sessionId) {
       evidenceLinkHtml('Raw log', evidenceHref(msg.raw_log_ref)),
       evidenceLinkHtml('Events', evidenceHref(msg.events_ref)),
       evidenceLinkHtml('Result', evidenceHref(msg.result_ref)),
-      evidenceLinkHtml('Diff', deliveryDiffHref(msg, sessionId)),
-    ];
+    ].concat(deliveryLinks.map(function(link) { return evidenceLinkHtml(link.label, link.href(msg, sessionId)); }));
     var refsHtml = '';
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     if (refs.length) {
@@ -915,6 +918,7 @@ const GLOBALS = {
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
   registerMessagePostProcessor,
+  registerDeliveryLink,
   buildTurnRowFromSpec,
   installTurnFold,
   installTurnCollapseControl,

@@ -329,8 +329,8 @@ function buildEmptySessionBootstrap(session) {
 }
 
 // ---------------------------------------------------------------------------
-// Switch diagnostics + bootstrap cache: five one-line telemetry points per
-// switch (started/completed/superseded/failed/render_error), plus a short-lived
+// Switch phases + bootstrap cache: five one-line phase records per switch
+// (started/completed/superseded/failed/render_error), plus a short-lived
 // cache so a superseded generation's fetched bootstrap serves an immediate
 // re-click of the same session.
 // ---------------------------------------------------------------------------
@@ -355,9 +355,9 @@ function freshCachedBootstrap(sessionId) {
   return entry.data;
 }
 
+// Each phase record goes out as a page event, so a diagnostics package may
+// record it. A listener's failure stays inside dispatchEvent and never breaks a switch.
 function reportSwitchEvent(phase, fromSessionId, sessionId, generation, extra = {}) {
-  // Fire-and-forget by design: never awaited, failures dropped — the
-  // diagnostics channel must never delay or break a switch.
   const record = {
     phase,
     from_session: fromSessionId,
@@ -369,13 +369,7 @@ function reportSwitchEvent(phase, fromSessionId, sessionId, generation, extra = 
     client_ts: new Date().toISOString(),
     ...extra,
   };
-  try {
-    fetch('/api/diag/switch-events', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(record),
-    }).catch(() => {});
-  } catch (_err) {}
+  document.dispatchEvent(new CustomEvent('charliebot:session-switch-phase', {detail: record}));
 }
 
 function switchTargetName(sessionId) {

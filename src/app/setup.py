@@ -16,7 +16,7 @@ import importlib
 from collections.abc import Sequence
 
 from src.app import registrations
-from src.infra.config import get_config
+from src.infra import config
 from src.runtime import init_seed
 from src.runtime.hooks import wiring
 
@@ -54,7 +54,7 @@ def main(argv: Sequence[str] | None = None) -> None:
   args = parser.parse_args(argv)
 
   registrations.register_all()
-  cfg = get_config()
+  cfg = config.get_config()
 
   if args.step is not None:
     module, separator, attr = args.step.partition(":")

@@ -153,11 +153,11 @@ function scheduleLazySessionDataLoad() {
 }
 
 // ---------------------------------------------------------------------------
-// Worker / thread transcript mode (the live record in the main chat column)
+// Worker transcript mode (the live record in the main chat column)
 // ---------------------------------------------------------------------------
-// A task-tree worker node's messages are its Runs' transcript, and a projected
-// legacy thread row's are its thread events; both render through the main chat
-// column and stay live through the transcript poll (the server's memoized
+// A task-tree worker node's messages are its Runs' transcript; they render
+// through the main chat column and stay live through the transcript poll (the
+// server's memoized
 // projection answers an unchanged read with one stat pass). The poll carries
 // thinking_since (the header timer), the signallable run (the stop control),
 // and the streaming draft, so a worker page needs no other live channel.
@@ -1024,7 +1024,7 @@ function renderNoActiveSessionView() {
   pendingUserEchoes = 0;
 
   SESSION_ID = null;
-  globalThis.renderPendingTriggersTray(null, false);
+  globalThis.renderPendingTriggersTray(null);
   if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
   DRAFT_KEY = null;
   THINKING_SINCE = null;

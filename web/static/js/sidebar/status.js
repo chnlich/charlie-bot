@@ -553,8 +553,8 @@ function updateThinkingTime() {
 }
 
 async function cancelMaster() {
-  // A worker node's or legacy thread view's stop button signals the active
-  // Run through its own cancel route (session-view.js), not the chat cancel.
+  // A worker node's stop button signals the active Run through its own
+  // cancel route (session-view.js), not the chat cancel.
   if (typeof transcriptTarget === 'function' && transcriptTarget()) {
     return cancelTranscriptTarget();
   }

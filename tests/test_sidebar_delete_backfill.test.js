@@ -103,15 +103,12 @@ function taskNode(id, parent, hour, overrides = {}) {
   return makeSession(id, {profile: 'manager', task_parent_id: parent, updated_at: at(hour), ...overrides});
 }
 
-// A projected legacy worker-thread leaf (_projected_thread_row in
-// src/runtime/api/sessions.py): profile worker, task_parent_id = parent id, and the
-// worker_thread origin pair — no session exists behind the row id.
+// A worker session child: profile worker, task_parent_id = parent id.
 function workerLeaf(id, parent, hour, overrides = {}) {
   return makeSession(id, {
     profile: 'worker',
     task_parent_id: parent,
     updated_at: at(hour),
-    worker_thread: {session_id: parent, thread_id: id},
     ...overrides,
   });
 }
@@ -120,9 +117,9 @@ function anchorIdsInOrder(html) {
   return [...html.matchAll(/<a\b[^>]*id="session-([^"]+)"/g)].map((m) => m[1]);
 }
 
-// A legacy parent P with two projected worker-thread leaves, a task-node
-// child C carrying its own child G, plus an unrelated root R — every subtree
-// shape the inline delete must take with the clicked row.
+// A legacy parent P with two worker leaves, a task-node child C carrying its
+// own child G, plus an unrelated root R — every subtree shape the inline
+// delete must take with the clicked row.
 function taskFamilyRows() {
   return [
     legacyRow('p1', 10),
@@ -389,26 +386,4 @@ test('archiving the viewed legacy parent switches to a row outside its subtree',
   // which a node-only repaint would have promoted ahead of it.
   assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['r1']);
   assert.deepEqual(switches, ['r1']);
-});
-
-test('archiving a legacy parent takes its projected leaf with it', async () => {
-  const parent = makeSession('cp1', {profile: null, updated_at: at(10)});
-  const leaf = makeSession('cleaf', {
-    profile: 'worker',
-    task_parent_id: 'cp1',
-    updated_at: at(9),
-    worker_thread: {session_id: 'cp1', thread_id: 'ct1'},
-  });
-  const {context, nav, fetchCalls} = buildContext();
-  await paintGrouped(context, [parent, leaf, makeSession('cr1', {updated_at: at(8)})]);
-
-  // The grouped list nests the leaf under its parent.
-  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['cp1', 'cleaf', 'cr1']);
-
-  const baseline = fetchCalls.length;
-  await context.archiveSession('cp1');
-  await settle();
-
-  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['cr1']);
-  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/cp1']);
 });

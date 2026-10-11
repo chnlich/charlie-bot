@@ -7,24 +7,21 @@ and ``get_plan_manager`` (the Depends form).
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+import fastapi
+import pydantic
 
-from src.features.artifacts.plans import PlanRegistryManager
-from src.infra import config
-from src.infra.models import SessionMetadata
-from src.infra.responses import FastJsonResponse
-from src.runtime import session_events
-from src.runtime.api.deps import bad_request, get_session_store, require_found, require_session
-from src.runtime.session_store import SessionStore
+from src.features.artifacts import plans
+from src.infra import config, models, responses
+from src.runtime import session_events, session_store
+from src.runtime.api import deps
 
-internal_router = APIRouter()
-sessions_router = APIRouter()
+internal_router = fastapi.APIRouter()
+sessions_router = fastapi.APIRouter()
 
 
-class PlanPresentRequest(BaseModel):
+class PlanPresentRequest(pydantic.BaseModel):
   """Request body for the internal plan/present endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   file: str
@@ -38,9 +35,9 @@ PlanAmendTrigger = Literal["auto_amend", "feedback"]
 PlanCloseMode = Literal["superseded", "abandoned", "completed"]
 
 
-class PlanAmendRequest(BaseModel):
+class PlanAmendRequest(pydantic.BaseModel):
   """Request body for the internal plan/amend endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   file: str
@@ -54,50 +51,50 @@ class PlanAmendRequest(BaseModel):
   base_sha: str | None = None
 
 
-class PlanApproveRequest(BaseModel):
+class PlanApproveRequest(pydantic.BaseModel):
   """Request body for the internal plan/approve endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   plan_id: int | None = None
 
 
-class PlanCloseRequest(BaseModel):
+class PlanCloseRequest(pydantic.BaseModel):
   """Request body for the internal plan/close endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   plan_id: int
   close_as: PlanCloseMode
 
 
-_plan_manager: PlanRegistryManager | None = None
+_plan_manager: plans.PlanRegistryManager | None = None
 
 
-def plan_manager() -> PlanRegistryManager:
+def plan_manager() -> plans.PlanRegistryManager:
   global _plan_manager
   if _plan_manager is None:
-    _plan_manager = PlanRegistryManager(config.get_config(), session_events.events())
+    _plan_manager = plans.PlanRegistryManager(config.get_config(), session_events.events())
   return _plan_manager
 
 
-def get_plan_manager() -> PlanRegistryManager:
+def get_plan_manager() -> plans.PlanRegistryManager:
   return plan_manager()
 
 
 @sessions_router.get("/{session_id}/plans")
 async def list_plans(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
-    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-) -> FastJsonResponse:
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    plan_mgr: plans.PlanRegistryManager = fastapi.Depends(get_plan_manager),
+) -> responses.FastJsonResponse:
   """Return the plan registry for a session with derived states and read errors.
 
   Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;
   a corrupt registry produces 200 with empty plans and one error entry, never 5xx.
   """
   # The plan panel polls this route.
-  return FastJsonResponse(await plan_mgr.list_plans(session_id))
+  return responses.FastJsonResponse(await plan_mgr.list_plans(session_id))
 
 
 def _build_base(req: PlanPresentRequest | PlanAmendRequest) -> dict | None:
@@ -106,15 +103,15 @@ def _build_base(req: PlanPresentRequest | PlanAmendRequest) -> dict | None:
   return {"repo": req.base_repo, "branch": req.base_branch, "sha": req.base_sha}
 
 
-async def _authorize_plan_session(session_id: str, store: SessionStore) -> None:
-  require_found(await store.get_session(session_id))
+async def _authorize_plan_session(session_id: str, store: session_store.SessionStore) -> None:
+  deps.require_found(await store.get_session(session_id))
 
 
 @internal_router.post("/plan/present")
 async def plan_present(
     req: PlanPresentRequest,
-    store: SessionStore = Depends(get_session_store),
-    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    plan_mgr: plans.PlanRegistryManager = fastapi.Depends(get_plan_manager),
 ) -> dict:
   """Register a new plan lineage (v1, trigger=initial)."""
   await _authorize_plan_session(req.session_id, store)
@@ -126,14 +123,14 @@ async def plan_present(
         base=_build_base(req),
     )
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
 
 
 @internal_router.post("/plan/amend")
 async def plan_amend(
     req: PlanAmendRequest,
-    store: SessionStore = Depends(get_session_store),
-    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    plan_mgr: plans.PlanRegistryManager = fastapi.Depends(get_plan_manager),
 ) -> dict:
   """Append the next version to a plan lineage."""
   await _authorize_plan_session(req.session_id, store)
@@ -147,32 +144,32 @@ async def plan_amend(
         note=req.note,
     )
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
 
 
 @internal_router.post("/plan/approve")
 async def plan_approve(
     req: PlanApproveRequest,
-    store: SessionStore = Depends(get_session_store),
-    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    plan_mgr: plans.PlanRegistryManager = fastapi.Depends(get_plan_manager),
 ) -> dict:
   """Record a takeoff against the latest version of a plan lineage."""
   await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.approve(req.session_id, plan_id=req.plan_id)
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
 
 
 @internal_router.post("/plan/close")
 async def plan_close(
     req: PlanCloseRequest,
-    store: SessionStore = Depends(get_session_store),
-    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    plan_mgr: plans.PlanRegistryManager = fastapi.Depends(get_plan_manager),
 ) -> dict:
   """Terminate a plan lineage as superseded, abandoned, or completed."""
   await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.close(req.session_id, req.plan_id, req.close_as)
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e

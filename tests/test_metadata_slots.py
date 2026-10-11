@@ -47,7 +47,7 @@ def _probe(name: str) -> str:
 
 def _resolve_pending() -> None:
   """Any ``metadata_slots`` call resolves every pending registration; this one reads nothing else."""
-  metadata_slots.check_registered(metadata_slots.ON_SESSION, {})
+  metadata_slots.check_registered(metadata_slot_registration.ON_SESSION, {})
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_a_registration_made_after_a_resolution_resolves_on_the_next_call() -> N
   _resolve_pending()
   metadata_slot_registration.register_metadata_fields("late", _probe("LateSessionFields"))
 
-  metadata_slots.check_registered(metadata_slots.ON_SESSION, {"late_note": "kept"})
+  metadata_slots.check_registered(metadata_slot_registration.ON_SESSION, {"late_note": "kept"})
 
 
 @pytest.mark.usefixtures("probe_slots")

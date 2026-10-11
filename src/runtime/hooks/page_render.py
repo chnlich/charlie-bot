@@ -17,8 +17,9 @@ from __future__ import annotations
 
 # The places a page leaves for package parts. index.html places the first seven, the diff page places
 # diff_toolbar, and the home page places home_notes.
-PAGE_SLOTS = ("head", "tab_buttons", "below_header", "tab_panels", "input_buttons", "modals", "scripts",
-              "diff_toolbar", "home_notes")
+PAGE_SLOTS = (
+    "head", "tab_buttons", "below_header", "tab_panels", "input_buttons", "modals", "scripts", "diff_toolbar",
+    "home_notes")
 
 # Registration order is the order of the lists: template directories search in it, page parts and cards list in it.
 _PAGE_PACKAGES: list[str] = []

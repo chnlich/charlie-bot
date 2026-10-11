@@ -15,8 +15,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.features.discord import discord_client, discord_commands, discord_listener
-from src.features.discord.metadata import DiscordOrigin
+from src.features.discord import discord_client, discord_commands, discord_listener, metadata
 from src.infra import config, metadata_slots, models
 
 _GUILD = "800000000000000001"
@@ -156,7 +155,7 @@ async def _make_session(session_blocks: conftest.SessionBlocks, *, watermark: st
       models.CreateSessionRequest(
           session_id=discord_listener.summon_session_id(_GUILD, _THREAD),
           name="discord session",
-          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+          discord_origin=metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
   if watermark is not None:
     metadata_slots.set_fields(meta, "discord", discord_watermark_id=watermark)
     meta.updated_at = models.utc_now()

@@ -14,9 +14,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.infra import constants, event_types as ET
-from src.infra import models
-from src.infra import text_length
+from src.infra import constants, models, text_length
+from src.infra import event_types as ET
 from src.runtime.cli import session
 
 # ---------------------------------------------------------------------------
@@ -226,11 +225,9 @@ def test_cli_session_send_maps_a_422_refusal_to_exit_2(
   cfg = _mock_cli_config(tmp_path)
   resp = conftest.make_json_response({"detail": detail}, status_code=422)
 
-  with pytest.raises(SystemExit) as excinfo:
-    with conftest.patched_cli_post(cfg,
-                                   ["session", "send", "target-id", "--message", "a" * 2001, "--session", "caller-id"],
-                                   return_value=resp):
-      session.main()
+  with pytest.raises(SystemExit) as excinfo, conftest.patched_cli_post(
+      cfg, ["session", "send", "target-id", "--message", "a" * 2001, "--session", "caller-id"], return_value=resp):
+    session.main()
 
   assert excinfo.value.code == session.EXIT_SEND_REFUSED
   payload = json.loads(capsys.readouterr().err)

@@ -4,7 +4,8 @@ from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.infra import constants, event_types as ET, text_length
+from src.infra import constants, text_length
+from src.infra import event_types as ET
 from src.infra.buildinfo import build_info
 from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger

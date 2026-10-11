@@ -2050,7 +2050,7 @@ class FakeSlackClient:
   assertions built on it fail on any call a path was not expected to make.
   ``reactions`` models the live per-message reaction set the ack-clear path
   reads back, ``thread`` is what the conversations.replies seam returns, and
-  permalinks and channel names are fabricated. Implements only what the
+  channel names are fabricated. Implements only what the
   listener paths may call: a regression to reading anything else fails here
   with an AttributeError by construction.
   """
@@ -2096,10 +2096,6 @@ class FakeSlackClient:
       return {"ok": False, "error": "no_reaction"}
     names.discard(name)
     return {"ok": True}
-
-  async def get_permalink(self, channel: str, ts: str) -> str:
-    self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
-    return f"https://fake.slack.test/archives/{channel}/p{ts}"
 
   async def get_channel_name(self, channel_id: str) -> str | None:
     self.calls.append(("get_channel_name", {"channel": channel_id}))

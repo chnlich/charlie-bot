@@ -42,8 +42,9 @@ _TEAM = "T_TEST"
 _RETRY_DELAYS_PATCH_TARGET = "src.features.chat_threads.thread_entry._RETRY_DELAYS"
 _QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.runtime.master_cc_queue.queued_user_event_ids"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
-# A summon prompt embeds prompts/thread_reply_format.md, which names the reply
-# command; the audit reads that name off the summon to know its contract.
+# The older full-prompt summon format: its content names the reply command, so
+# the round-end audit still reads the summon as issued under the current
+# contract (the current format is the one line `SLACK.summon_line`).
 _SUMMON_CONTENT = f"Slack 线程召唤：{_PERMALINK}\n\nPost the reply with `charliebot slack reply --file <path>`."
 
 
@@ -342,8 +343,10 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   nudge = nudges[0]
   assert nudge["type"] == ET.AGENT_MESSAGE
   assert nudge["slack"] == {**summon["slack"], "nudge_of": summon["id"]}
-  assert _PERMALINK in nudge["content"]
-  assert "charliebot slack reply --file" in nudge["content"]
+  # The nudge carries the decision only: no link, no reply-command usage.
+  assert _PERMALINK not in nudge["content"]
+  assert "charliebot slack reply" not in nudge["content"]
+  assert "Slack thread: the round answering this mention ended without posting a reply" in nudge["content"]
   trigger.assert_awaited_once()
   assert trigger.await_args.args[:2] == (sid, nudge["content"])
   assert trigger.await_args.kwargs["input_id"] == nudge["id"]

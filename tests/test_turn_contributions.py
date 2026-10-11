@@ -33,11 +33,13 @@ from conftest import (
 
 from src.features.discord.event_types import DISCORD_REPLY
 from src.features.discord.metadata import DiscordOrigin
+from src.features.discord.turn_contribution import DiscordTurnContribution
 from src.features.latex import latex
 from src.features.latex.event_types import TEX_EDIT_PROPOSED
 from src.features.latex.turn_contribution import LatexTurnContribution
 from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
+from src.features.slack.turn_contribution import SlackTurnContribution
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, SessionMetadata
 from src.runtime import master_cc_run, master_cc_state, message_aggregator, session_events, streaming
@@ -92,6 +94,97 @@ def test_manager_root_task_path_reads_the_rule_file_of_its_kind(kind: str, tmp_p
   assert "prompts/task_manager.md" in refs
   by_ref = {source.source_ref: segment.text for segment in segments for source in segment.sources}
   assert by_ref[f"prompts/{rule_file}"] == prompts_text(rule_file, meta.id)
+
+
+# ---------------------------------------------------------------------------
+# The thread reply contract: a thread session's manager instructions carry it once
+# ---------------------------------------------------------------------------
+
+
+def _prompt_text(name: str) -> str:
+  return (conftest.ROOT / "prompts" / name).read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.parametrize("kind, summon_line", [("slack", "Slack 线程召唤"), ("discord", "Discord 线程召唤")])
+def test_thread_session_manager_instructions_carry_the_reply_contract_once(
+    kind: str, summon_line: str, tmp_path: Path) -> None:
+  """The contract (platform part plus the three rule docs) rides the managed
+  instructions once, with each doc's full text present exactly once; the
+  summon input itself stays out of the instructions."""
+  _, origin = SESSION_KINDS[kind]
+  meta = SessionMetadata(id="root-1", name="root", profile="manager", **origin)
+
+  segments, _ = build_segments(
+      real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  joined = "\n\n".join(segment.text for segment in segments)
+
+  scope_doc = f"{kind}_reply_scope.md"
+  scope, red_line, reply_format = (
+      _prompt_text(name) for name in (scope_doc, "thread_reply_redline.md", "thread_reply_format.md"))
+  for doc_text in (scope, red_line, reply_format):
+    assert joined.count(doc_text) == 1
+  # One segment carries the contract; its sources name the three prompt files.
+  contract = [segment for segment in segments if scope in segment.text]
+  assert len(contract) == 1
+  assert [source.source_ref for source in contract[0].sources] == [
+      f"prompts/{scope_doc}", "prompts/thread_reply_redline.md", "prompts/thread_reply_format.md"]
+  # The platform part rides the same segment, ahead of the docs.
+  assert contract[0].text.index("Platform:") < contract[0].text.index(scope)
+  # The contract segment holds rules only: the summon line stays the input's
+  # content (thread_session.md legitimately quotes it as an input kind).
+  assert summon_line not in contract[0].text
+
+
+def test_slack_contract_part_carries_the_thread_address(tmp_path: Path) -> None:
+  """Slack's contract part names this session's thread ids — the summon link's replacement."""
+  _, origin = SESSION_KINDS["slack"]
+  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+
+  segments, _ = build_segments(real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  joined = "\n\n".join(segment.text for segment in segments)
+
+  assert "channel `C1`、thread_ts `1700000000.000100`" in joined
+  assert "conversations.replies" in joined
+  assert "本次召唤是线程里最新一条 @ 机器人的消息" in joined
+  assert "`charliebot slack ack --message-id <ts> [...]`" in joined
+
+
+def test_discord_contract_part_carries_the_summon_mark(tmp_path: Path) -> None:
+  """Discord's contract part states the server-side read and the ``summon: true`` mark,
+  and carries no Slack-only citation boundary."""
+  _, origin = SESSION_KINDS["discord"]
+  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+
+  segments, _ = build_segments(real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  joined = "\n\n".join(segment.text for segment in segments)
+
+  assert "`charliebot discord read`" in joined
+  assert "`summon: true`" in joined
+  assert "已成文的私有内容不引用" not in joined
+
+
+def test_main_session_instructions_carry_no_reply_contract(tmp_path: Path) -> None:
+  """A session without a thread origin gets none of the contract."""
+  meta = SessionMetadata(id="root-1", name="root", profile="manager")
+
+  segments, _ = build_segments(
+      real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  joined = "\n\n".join(segment.text for segment in segments)
+  refs = [source.source_ref for segment in segments for source in segment.sources]
+
+  for name in ("slack_reply_scope.md", "discord_reply_scope.md", "thread_reply_redline.md", "thread_reply_format.md"):
+    assert _prompt_text(name) not in joined
+    assert f"prompts/{name}" not in refs
+
+
+@pytest.mark.parametrize("contribution, kind", [(SlackTurnContribution(), "slack"),
+                                                (DiscordTurnContribution(), "discord")])
+def test_contract_segment_goes_to_manager_rounds_only(contribution, kind: str) -> None:
+  """A worker-kind run of the same thread session gets no contract."""
+  _, origin = SESSION_KINDS[kind]
+  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+
+  assert contribution.instruction_segments(meta, "work", real_repo_cfg(Path("/tmp"))) == []
 
 
 # ---------------------------------------------------------------------------

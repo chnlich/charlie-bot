@@ -4,7 +4,6 @@
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initSidebarResize();
-  initBacklogResize();
   restoreSidebarFromUrl();
   updateRelativeTimes();
 
@@ -39,19 +38,6 @@ document.addEventListener('DOMContentLoaded', () => {
       autoResize(inp);
     }
   }
-
-  // Re-evaluate mobile layout on platform mode change
-  platform.onChange((mode) => {
-    const backlogPanel = document.getElementById('backlog-panel');
-    const chatEl = document.getElementById('tab-chat');
-    if (!backlogPanel || backlogPanel.classList.contains('hidden')) return;
-    // Backlog visible: fullscreen on mobile, side-panel on desktop
-    if (mode === 'desktop') {
-      chatEl.classList.remove('hidden');
-    } else {
-      chatEl.classList.add('hidden');
-    }
-  });
 
   // Init scroll-to-top pagination for tail-loaded sessions
   initScrollPagination();

@@ -35,7 +35,6 @@ function loadWebsocketContext(extraContext) {
     startThinking: () => {},
     stopThinking: () => {},
     pollActiveSessionView: () => {},
-    renderExtUsage: () => {},
     refreshSessionStatusNow: () => {},
     setSessionIndicator: () => {},
     getSessionIndicatorState: () => ({}),

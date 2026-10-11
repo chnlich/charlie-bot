@@ -480,6 +480,8 @@ function renderExtUsage(data) {
   _syncExtUsageChrome(strip);
 }
 
+registerWsMessageHandler('ext_usage', renderExtUsage);
+
 // Repaint rather than patch text: a reading can cross into "expired" purely by
 // the passage of time, which changes the bar as well as the label.
 function _refreshResetTimers() {

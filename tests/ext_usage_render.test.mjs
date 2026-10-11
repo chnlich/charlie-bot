@@ -159,13 +159,14 @@ function loadExtUsageScript(options = {}) {
       return 0;
     },
     clearInterval() {},
+    registerWsMessageHandler() {},
   };
   context.window = context;
   if (options.platform !== undefined) {
     context.platform = options.platform;
   }
 
-  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/js/ext_usage.js');
+  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/features/usage/static/ext_usage.js');
   const scriptSource = fs.readFileSync(scriptPath, 'utf8');
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
@@ -593,9 +594,9 @@ test('mobile CSS selectors for the strip match the attributes the renderer emits
   collect(strip);
   assert.ok(emitted.size > 0, 'renderer emitted data-field attributes');
 
-  const css = _readStylesCss();
+  const css = _readUsageCss();
   const selectors = [...css.matchAll(/#ext-usage-strip[^{}]*?\[([a-z-]+)([$^*]?=)"([^"]+)"\]/g)];
-  assert.ok(selectors.length > 0, 'styles.css scopes attribute selectors to #ext-usage-strip');
+  assert.ok(selectors.length > 0, 'usage.css scopes attribute selectors to #ext-usage-strip');
 
   for (const [whole, attr, op, value] of selectors) {
     assert.equal(attr, 'data-field',
@@ -774,9 +775,9 @@ test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () =>
   };
   collect(strip);
 
-  const css = _readStylesCss();
+  const css = _readUsageCss();
   assert.ok(css.includes('[data-field^="7d-"]'),
-      'styles.css must still key the narrow-screen 7d group off the data-field prefix');
+      'usage.css must still key the narrow-screen 7d group off the data-field prefix');
 
   const scopedFields = [...emitted].filter((f) => f.startsWith('7d-') && f !== '7d-bar' && f !== '7d-pct' && f !== '7d-reset');
   assert.ok(scopedFields.length > 0,
@@ -789,15 +790,15 @@ test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () =>
 // here — the key name is the persistence contract and a silent rename must
 // fail these tests. In the fake DOM there is no CSS engine, so "visibility"
 // is asserted as the class contract the two collapse rules implement; the
-// rules' presence in styles.css is pinned separately.
+// rules' presence in usage.css is pinned separately.
 // ---------------------------------------------------------------------------
 const COLLAPSE_STORAGE_KEY = 'ext_usage_strip_collapsed_v1';
 const COLLAPSED_CSS_RULE = '#ext-usage-strip.collapsed [data-key]';
 const EXPANDED_CSS_RULE = '#ext-usage-strip:not(.collapsed) [data-field="summary"]';
 
-function _readStylesCss() {
+function _readUsageCss() {
   return fs.readFileSync(
-      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/css/styles.css'), 'utf8');
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/features/usage/static/usage.css'), 'utf8');
 }
 
 // The in-memory boolean, the stored preference, the strip class, row
@@ -838,9 +839,9 @@ function _assertCollapseConsistent(harness, expect, label) {
 
 test('collapse state stays internally consistent across render and toggle sequences', () => {
   // Pin the two CSS rules the class contract stands for.
-  const css = _readStylesCss();
-  assert.ok(css.includes(COLLAPSED_CSS_RULE), 'styles.css hides detail rows when collapsed');
-  assert.ok(css.includes(EXPANDED_CSS_RULE), 'styles.css hides the summary row when expanded');
+  const css = _readUsageCss();
+  assert.ok(css.includes(COLLAPSED_CSS_RULE), 'usage.css hides detail rows when collapsed');
+  assert.ok(css.includes(EXPANDED_CSS_RULE), 'usage.css hides the summary row when expanded');
 
   const harness = loadExtUsageScript({ platform: { isMobile: false } });
   const { context, strip } = harness;

@@ -292,3 +292,50 @@ function initBacklogResize() {
     onDragEnd: () => {},
   });
 }
+
+// ---------------------------------------------------------------------------
+// Backlog tab
+// ---------------------------------------------------------------------------
+// The panel loads its list on the first show after each session switch.
+let _backlogLoaded = false;
+
+function setBacklogPanelVisible(visible) {
+  const backlogPanelEl = document.getElementById('backlog-panel');
+  if (backlogPanelEl) backlogPanelEl.classList.toggle('hidden', !visible);
+  const backlogHandle = document.getElementById('backlog-resize-handle');
+  if (backlogHandle) backlogHandle.style.display = visible ? '' : 'none';
+}
+
+registerTab({
+  id: 'chat-backlog',
+  showsChat: true,
+  fullScreenOnMobile: true,
+  keepOnSessionSwitch: true,
+  onShow() {
+    setBacklogPanelVisible(true);
+    if (!_backlogLoaded) {
+      _backlogLoaded = true;
+      backlogPanel.refresh();
+    }
+  },
+  onHide() { setBacklogPanelVisible(false); },
+});
+
+document.addEventListener('charliebot:session-switched', () => { _backlogLoaded = false; });
+
+document.addEventListener('DOMContentLoaded', () => {
+  initBacklogResize();
+
+  // Re-evaluate mobile layout on platform mode change
+  platform.onChange((mode) => {
+    const backlogPanel = document.getElementById('backlog-panel');
+    const chatEl = document.getElementById('tab-chat');
+    if (!backlogPanel || backlogPanel.classList.contains('hidden')) return;
+    // Backlog visible: fullscreen on mobile, side-panel on desktop
+    if (mode === 'desktop') {
+      chatEl.classList.remove('hidden');
+    } else {
+      chatEl.classList.add('hidden');
+    }
+  });
+});

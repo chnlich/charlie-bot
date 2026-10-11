@@ -71,7 +71,7 @@ function showStreaming(draft) {
 
 function hideStreaming() {
   // A pending trailing paint must not land after a hide: callers hide from
-  // terminal or context-switch paths (committed bubble, error, session swap).
+  // end-of-turn or context-switch paths (committed bubble, error, session swap).
   if (streamRenderTimer !== null) {
     clearTimeout(streamRenderTimer);
     streamRenderTimer = null;

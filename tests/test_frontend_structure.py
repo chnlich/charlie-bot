@@ -32,6 +32,7 @@ package's script registers a handler with it at load time. The core registration
 Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
 for it. The core page events today:
 
+    charliebot:session-switched web/static/js/sidebar/session-view.js (the end of a session switch)
     charliebot:sidebar-resized  web/static/js/sidebar/modals.js (the end of a sidebar drag)
 
 A landing that adds a registration entry or a page event extends these lists.

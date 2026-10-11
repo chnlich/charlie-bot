@@ -28,10 +28,7 @@ web/static/js/sidebar/session-view.js -> web/static/js/sidebar/modals.js
 web/static/js/sidebar/session-view.js -> web/static/js/voice-input.js
 web/static/js/sidebar/status.js -> web/static/js/sidebar/groups.js
 web/static/js/sidebar/status.js -> web/static/js/sidebar/session-view.js
-web/static/js/tabs.js -> web/static/js/backlog-panel.js
 web/static/js/tabs.js -> web/static/js/plan-panel.js
-web/static/js/tabs.js -> web/static/js/terminal_panel.js
-web/static/js/websocket.js -> web/static/js/ext_usage.js
 web/static/js/websocket.js -> web/static/js/plan-panel.js
 web/static/js/websocket.js -> web/static/js/sidebar/filters.js
 web/static/js/websocket.js -> web/static/js/sidebar/namespace.js

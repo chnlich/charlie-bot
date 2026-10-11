@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // The core registration entries a package page part uses: registerTab
-// (tabs.js) and registerWsMessageHandler (websocket.js). The latex package
-// registers its tab and its proposed-edit event through them, so deleting the
-// package leaves no latex name in the core files.
+// (tabs.js) and registerWsMessageHandler (websocket.js). Each package registers
+// its tab and its event types through them, so deleting a package leaves no
+// name of it in the core files.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -32,7 +32,6 @@ function loadTabsContext({isMobile = false} = {}) {
   const context = {
     document: {getElementById: (id) => elements.get(id) || null},
     platform: {isMobile},
-    backlogPanel: {refresh: () => calls.push('backlog.refresh')},
     planPanel: {onTabShown: () => calls.push('plans.onTabShown')},
   };
   context.globalThis = context;
@@ -117,21 +116,66 @@ test('a registered message handler runs for its event type after the event curso
   assert.throws(() => context.registerWsMessageHandler('', () => {}), /Invalid WebSocket message handler/);
 });
 
-test('the latex package registers its tab and its proposed-edit event', () => {
+// A package's scripts loaded in page order, with the core entries recording what they register.
+function loadPackageScripts(name, files, extra = {}) {
   const tabs = [];
   const handlers = new Map();
+  const listeners = new Map();
   const context = {
     registerTab: (tab) => tabs.push(tab),
     registerWsMessageHandler: (type, handler) => handlers.set(type, handler),
-    document: {addEventListener: () => {}},
+    document: {
+      addEventListener: (type, listener) => listeners.set(type, listener),
+      getElementById: () => null,
+    },
+    ...extra,
   };
   context.globalThis = context;
   vm.createContext(context);
+  for (const file of files) vm.runInContext(readPackageStatic('features', name, file), context, {filename: file});
+  return {context, tabs, handlers, listeners};
+}
 
-  vm.runInContext(readPackageStatic('features', 'latex', 'latex-panel.js'), context, {filename: 'latex-panel.js'});
+function tabLayouts(tabs) {
+  return tabs.map(({id, showsChat, fullScreenOnMobile, keepOnSessionSwitch}) => ({id, showsChat, fullScreenOnMobile, keepOnSessionSwitch}));
+}
 
-  assert.deepEqual(
-      tabs.map(({id, showsChat, fullScreenOnMobile, keepOnSessionSwitch}) => ({id, showsChat, fullScreenOnMobile, keepOnSessionSwitch})),
-      [{id: 'chat-tex', showsChat: true, fullScreenOnMobile: true, keepOnSessionSwitch: true}]);
+test('the latex package registers its tab and its proposed-edit event', () => {
+  const {tabs, handlers} = loadPackageScripts('latex', ['latex-panel.js']);
+
+  assert.deepEqual(tabLayouts(tabs), [{id: 'chat-tex', showsChat: true, fullScreenOnMobile: true, keepOnSessionSwitch: true}]);
   assert.deepEqual([...handlers.keys()], ['tex_edit_proposed']);
+});
+
+test('the backlog package registers its tab and reloads its list on the first show after a session switch', () => {
+  const fetched = [];
+  const {tabs, listeners} = loadPackageScripts('backlog', ['backlog-panel.js'], {
+    fetch: (url) => {
+      fetched.push(url);
+      return new Promise(() => {});
+    },
+  });
+  const [backlogTab] = tabs;
+
+  backlogTab.onShow();
+  backlogTab.onShow();
+  listeners.get('charliebot:session-switched')();
+  backlogTab.onShow();
+
+  assert.deepEqual(tabLayouts(tabs), [{id: 'chat-backlog', showsChat: true, fullScreenOnMobile: true, keepOnSessionSwitch: true}]);
+  assert.deepEqual(fetched, ['/api/backlog/repos', '/api/backlog/repos']);
+});
+
+test('the terminal package registers its tab', () => {
+  const {tabs} = loadPackageScripts(
+      'terminal', ['terminal_b64.js', 'terminal_clipboard.js', 'terminal_mount.js', 'terminal_panel.js']);
+
+  assert.deepEqual(tabLayouts(tabs), [{id: 'terminal', showsChat: false, fullScreenOnMobile: false, keepOnSessionSwitch: true}]);
+});
+
+test('the usage package renders its strip from its event type', () => {
+  const {context, handlers} = loadPackageScripts('usage', ['ext_usage.js']);
+
+  assert.deepEqual([...handlers.keys()], ['ext_usage']);
+  assert.equal(handlers.get('ext_usage'), context.renderExtUsage);
 });

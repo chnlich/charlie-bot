@@ -56,7 +56,10 @@ function baseSessionContext(overrides = {}) {
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},
+      dispatchEvent: () => true,
     },
+    // session-view.js announces the end of a session switch as a page event.
+    CustomEvent,
     disconnectWS: () => {},
     connectWS: () => {},
     cancelReconnect: () => {},
@@ -90,7 +93,6 @@ function baseSessionContext(overrides = {}) {
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},
     showToast: () => {},
-    _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},

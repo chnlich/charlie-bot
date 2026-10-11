@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Shared .prose-msg DOM stub for the node --test vm render tests (no jsdom).
 // Both chat_artifact_cards.test.js and chat_attachments_render.test.js drive
-// chat/artifacts.js through the same anchor/prose/parent surface; a member the
+// chat/file-links.js and the artifacts package's artifact-cards.js through the
+// same anchor/prose/parent surface; a member the
 // script reads but the stub lacks throws inside the vm and fails the test.
 // ---------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, runStaticModules} = require('./read_static');
 const { createClassList, createEscapingElement } = require('./dom_element_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
@@ -81,6 +81,7 @@ function loadChatScript() {
 
   vm.createContext(context);
   runStaticModules(context, chatModules());
+  vm.runInContext(readPackageStatic('features', 'artifacts', 'artifact-cards.js'), context, {filename: 'artifact-cards.js'});
   return context;
 }
 

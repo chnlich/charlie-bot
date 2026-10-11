@@ -6,7 +6,7 @@
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const renderExplainButton = Chat.renderExplainButton;
-  const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
+  const markFileLinks = Chat.markFileLinks;
   const toolInputSummary = Chat.toolInputSummary;
 
 // The one branch glyph: the clone_start banner's "Cloned from" marker and the
@@ -78,7 +78,7 @@ function renderToolActivity(tools) {
 }
 
 function renderRawBackendOutput(text) {
-  // Keep literal protocol paths inert during linked-artifact post-processing.
+  // Keep literal protocol paths inert during the file-link post-processing.
   return '<details class="prose-msg border border-slate-600/30 rounded-lg overflow-hidden">'
     + '<summary class="cursor-pointer flex items-center justify-between gap-3 px-3 py-2 bg-slate-800/50 text-xs text-slate-300">'
     + '<span class="font-medium">Raw backend output</span>'
@@ -111,7 +111,7 @@ function isStableRenderedMessage(el) {
 // plus one `.turn-row`. Folded shows the row and hides the span; open does the
 // reverse. Nothing is ever unwrapped, and the only nodes that ever move after
 // wrapping are a span's carried inputs (queued for the next round) — so a
-// reader-expanded `N steps` bar, an open explain panel and embedded artifact
+// reader-expanded `N steps` bar, an open explain panel and embedded package
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
 const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker', child_report: 'Report'};
@@ -480,9 +480,21 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
   globalThis.applyTurnOutline(container);
 }
 
+// Message post-processors run over each freshly rendered root in registration order, after
+// core's math and file-link passes and before code highlighting. A package registers its
+// processor when its script loads.
+const messagePostProcessors = [];
+
+function registerMessagePostProcessor(processor) {
+  if (typeof processor !== 'function') throw new Error('Invalid message post-processor registration');
+  if (messagePostProcessors.includes(processor)) throw new Error('Duplicate message post-processor');
+  messagePostProcessors.push(processor);
+}
+
 function postProcessRenderedMessages(root) {
   root.querySelectorAll('.prose-msg').forEach(renderChatMath);
-  embedLinkedHtmlArtifacts(root);
+  markFileLinks(root);
+  messagePostProcessors.forEach((processor) => processor(root));
   scheduleCodeHighlightFlush(root);
   root.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
     el.textContent = formatBubbleTime(el.dataset.ts);
@@ -902,6 +914,7 @@ const GLOBALS = {
 // the fold bar's click handler closes over the module scope. Legacy callers go
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
+  registerMessagePostProcessor,
   buildTurnRowFromSpec,
   installTurnFold,
   installTurnCollapseControl,

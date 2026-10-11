@@ -6,9 +6,9 @@
 // ellipsis U+2026, an astral emoji, and the screenshot sentence as one worked
 // example) (a) every rendered href is plain printable ASCII with the cut-off
 // tail following the anchor as text, (b) the pathname the markdown render
-// produces equals the pathname the artifacts.js scanner extracts from the same
+// produces equals the pathname the file-links.js scanner extracts from the same
 // raw text, and (c) the ASCII control battery tokenizes byte-identically to
-// stock marked. See chat/artifacts.js FILE_SERVER_LINK_SOURCE for the scanner
+// stock marked. See chat/file-links.js FILE_SERVER_LINK_SOURCE for the scanner
 // side of the same boundary, and chat_file_link_prefixes.test.js for probe
 // cleanliness against it.
 // ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ function showAuthOverlay() {
 
 // Shared Content-Type for fetches that send a JSON body through the wrapper
 // above. index.html loads this file before every consumer; diff.html and the
-// artifact iframe pages do not, so their copies stay local there.
+// package iframe pages do not, so their copies stay local there.
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 // Shared fill styling for every horizontal meter bar on index.html (the

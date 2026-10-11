@@ -3,22 +3,23 @@
 // (chat_file_link_prefixes.test.js, chat_url_ascii_boundary.test.js,
 // chat_artifact_cards.test.js): nodes with real parent/child links, because
 // the marking splits a text node and hangs a sibling off an element, plus
-// loadArtifactsScript, which loads the real chat/namespace.js and
-// chat/artifacts.js in a vm against stubs for every non-artifacts global the
-// modules touch. fetch is recorded, so tests read the probe requests the
-// render would have made.
+// loadArtifactsScript, which loads the real chat/namespace.js, core
+// chat/file-links.js and the artifacts package's artifact-cards.js in a vm
+// against stubs for every other global the modules touch. fetch is recorded,
+// so tests read the probe requests the render would have made.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 
 const { escapeHtml } = require('./escape_html_stub');
 
 const { SESSIONS_ROOT, SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
 
 const NAMESPACE_JS = readStatic('chat/namespace.js');
-const ARTIFACTS_JS = readStatic('chat/artifacts.js');
+const FILE_LINKS_JS = readStatic('chat/file-links.js');
+const ARTIFACT_CARDS_JS = readPackageStatic('features', 'artifacts', 'artifact-cards.js');
 
 const PAGE_URL = 'https://charliebot.example/';
 const ARTIFACT_ABS = SESSION_DIR + '/artifacts/report.html';
@@ -279,9 +280,12 @@ function loadArtifactsScript(opts) {
     },
   };
   if (o.planPanel) context.planPanel = o.planPanel;
+  // chat/rendering.js is not loaded; the cards' post-processor runs through render() below.
+  context.Chat = {registerMessagePostProcessor: () => {}};
   vm.createContext(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
-  vm.runInContext(ARTIFACTS_JS, context, {filename: 'artifacts.js'});
+  vm.runInContext(FILE_LINKS_JS, context, {filename: 'chat/file-links.js'});
+  vm.runInContext(ARTIFACT_CARDS_JS, context, {filename: 'artifact-cards.js'});
   return {context, requests};
 }
 
@@ -289,7 +293,9 @@ function settled() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+// The order postProcessRenderedMessages runs them in: core's file-link pass, then the cards.
 async function render(context, root) {
+  context.Chat.markFileLinks(root);
   context.Chat.embedLinkedHtmlArtifacts(root);
   await settled();
 }

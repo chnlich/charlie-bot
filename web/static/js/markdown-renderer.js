@@ -626,8 +626,7 @@ function recordCodeTokens(tokens) {
   // text node; this extension only decides what survives the parse. The
   // delimiter scan is math-scanner.js's mathSpan (loaded just before this
   // file), shared with the wrap pre-render driver; tests/chat_math_extension.test.js
-  // and tests/core/test_artifact_wrap.py run the same case list against both
-  // consumers.
+  // and the driver's tests run the same case list against both consumers.
   const mathExtension = {
     name: 'math',
     level: 'inline',
@@ -669,7 +668,7 @@ function recordCodeTokens(tokens) {
     // before the first such character. Stock marked stops a bare URL only at
     // whitespace, so a URL before Chinese prose swallows the tail into href and
     // link text, and the polluted href then fails every downstream consumer
-    // (artifact-card regex, missing-file probe, click). chat/artifacts.js's
+    // (link cards, missing-file probe, click). chat/file-links.js's
     // FILE_SERVER_LINK_SOURCE stops at the same boundary when it scans code and
     // text carriers for file-server links — two copies of one definition, kept
     // in sync by the comments in both files (the modules load independently, so

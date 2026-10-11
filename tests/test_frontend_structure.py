@@ -25,6 +25,9 @@ directory: those URL prefixes belong to package static files.
 A package learns core's facts through a registration entry: a function core provides, and the
 package's script registers a handler with it at load time. The core registration entries today:
 
+    Chat.registerFileLinkFamily web/static/js/chat/file-links.js (a family of file links the package owns)
+    Chat.registerMessagePostProcessor
+                                web/static/js/chat/rendering.js (a pass over each rendered message root)
     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)

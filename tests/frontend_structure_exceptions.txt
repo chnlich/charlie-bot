@@ -3,9 +3,6 @@
 #
 # One row per pair: user file -> defining file. Paths are repo-relative and the rows are sorted.
 
-web/static/js/chat/artifacts.js -> web/static/js/chat/scroll.js
-web/static/js/chat/artifacts.js -> web/static/js/chat/turn-engine.js
-web/static/js/chat/artifacts.js -> web/static/js/plan-panel.js
 web/static/js/chat/input.js -> web/static/js/sidebar/status.js
 web/static/js/chat/input.js -> web/static/js/websocket.js
 web/static/js/chat/ratings-explain.js -> web/static/js/chat/rendering.js

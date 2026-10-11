@@ -130,35 +130,15 @@ def _scan_sessions(cfg: config.CharlieBotConfig, now: datetime.datetime,
   return facts
 
 
-def _scan_references(cfg: config.CharlieBotConfig,
-                     facts: dict[str, usage_sources.SessionFacts]) -> dict[str, list[usage_sources.SessionFacts]]:
+def _scan_references(facts: dict[str, usage_sources.SessionFacts]) -> dict[str, list[usage_sources.SessionFacts]]:
   """Backend session ids CharlieBot metadata references, mapped to their referencing sessions.
 
-  A session's ``cc_session_id`` is the reference its backend record hangs from;
-  thread metadata is CharlieBot metadata too, so a thread's ``cc_session_id``
-  (a legacy field the current model no longer persists) blocks reclamation
-  exactly as a session's own does.
+  A session's ``cc_session_id`` is the reference its backend record hangs from.
   """
   references: dict[str, list[usage_sources.SessionFacts]] = {}
   for owner in facts.values():
     if owner.cc_session_id is not None:
       references.setdefault(owner.cc_session_id, []).append(owner)
-  for thread_dir in sorted(cfg.sessions_dir.glob(f"*/{runs.THREADS_DIR_NAME}/*")):
-    if not thread_dir.is_dir():
-      continue
-    meta = json_utils.load_json_meta(
-        thread_dir / run_identity.SESSION_METADATA_NAME, "storage_cool_thread_meta_read_failed")
-    referenced_id = _optional_str((meta or {}).get("cc_session_id"))
-    if referenced_id is None:
-      continue
-    owner = facts.get(thread_dir.parent.parent.name)
-    if owner is None:
-      log.warning("storage_cool_thread_reference_orphaned", thread=str(thread_dir), cc_session_id=referenced_id)
-      # The thread metadata is still a CharlieBot reference even when its
-      # parent session metadata has gone away.  Keep it conservative: an
-      # unknown owner is not cold.
-      owner = usage_sources.SessionFacts(id=thread_dir.parent.parent.name, cold=False, cc_session_id=None)
-    references.setdefault(referenced_id, []).append(owner)
   return references
 
 
@@ -292,7 +272,7 @@ def run_cool_sweep(
     # this sweep deletes nothing.
     _capture_usage_before_sweep()
   facts = _scan_sessions(cfg, now, min_idle_days)
-  references = _scan_references(cfg, facts)
+  references = _scan_references(facts)
   if session_id is not None:
     if session_id not in facts:
       raise ValueError(f"session not found: {session_id}")

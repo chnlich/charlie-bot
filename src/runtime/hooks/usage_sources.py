@@ -266,7 +266,7 @@ class SweepScope:
 
   ``facts`` maps a session id to its ``SessionFacts``; a scoped run keeps only the scoped session,
   and none when it is not cold. ``references`` maps each backend session id that CharlieBot metadata
-  references to the sessions that reference it, threads included. A record goes under one rule: every
+  references to the sessions that reference it. A record goes under one rule: every
   referencing session is cold, or nothing references it and its own idle clock is past
   ``orphan_idle_days``. ``session_id`` is the scoped session id, or None for a whole-host run.
   ``vacuum`` and ``force`` are the options as given: a dry run vacuums nothing, and ``force`` has no

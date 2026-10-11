@@ -95,17 +95,20 @@ async function fetchScopedStatus(path, ids) {
   return merged;
 }
 
-function compactButtonTitle(backendType) {
-  if (backendType === 'cc-claude') return '';
-  if (backendType === 'codex') return 'codex only compacts automatically — tune model_auto_compact_token_limit';
-  return 'Manual compaction is not supported on this backend';
+// The compact button's facts come from the server, by backend type (BACKEND_COMPACT):
+// a type that runs manual compaction enables the button; any other type, a type
+// the configuration no longer lists included, shows its hint or the generic title.
+function compactButtonTitle(compact) {
+  if (compact && compact.manual) return '';
+  return (compact && compact.hint) || 'Manual compaction is not supported on this backend';
 }
 
 function updateBackendHeaderControls(backendType) {
   const compactBtn = document.getElementById('compact-btn');
   if (compactBtn) {
-    compactBtn.disabled = backendType !== 'cc-claude';
-    compactBtn.title = compactButtonTitle(backendType);
+    const compact = BACKEND_COMPACT[backendType];
+    compactBtn.disabled = !(compact && compact.manual);
+    compactBtn.title = compactButtonTitle(compact);
   }
 }
 

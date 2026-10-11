@@ -96,6 +96,10 @@ function baseSessionContext(overrides = {}) {
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},
+    // index.html's server facts: the compact button's facts by backend type and
+    // the configured default backend id.
+    BACKEND_COMPACT: overrides.BACKEND_COMPACT || {},
+    DEFAULT_BACKEND_ID: overrides.DEFAULT_BACKEND_ID || 'claude-opus-4.6',
     // config.js's shared literals and the draft-save seam; index.html loads
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.

@@ -81,7 +81,7 @@ async function sendMessage() {
 }
 
 // ---------------------------------------------------------------------------
-// Manual compaction (cc-claude only; gated by #compact-btn's disabled attribute)
+// Manual compaction (backends whose compact facts enable it; gated by #compact-btn's disabled attribute)
 // ---------------------------------------------------------------------------
 async function compactContext() {
   if (blockIfUploadsInFlight()) return;

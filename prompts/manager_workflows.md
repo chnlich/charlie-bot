@@ -37,7 +37,7 @@ credentials, an inherited environment), so one check covers the whole fault clas
 
 ## Delegation
 
-Session identity travels in `CHARLIEBOT_SESSION_ID`, which the server writes into each manager process, so a session-scoped CLI lands in this session from any cwd; cwd supplies the identity only when that variable is absent, and an explicit `--session` is rejected on mismatch. Omit `--session` in normal manager use. The same applies to the `improve` and `schedule-trigger` examples below.
+Session identity travels in `CHARLIEBOT_SESSION_ID`, which the server writes into each manager process, so a session-scoped CLI lands in this session from any cwd; cwd supplies the identity only when that variable is absent, and an explicit `--session` is rejected on mismatch. Omit `--session` in normal manager use. The same applies to the `improve` examples below.
 
 ### Runtime delegation authorization
 Runtime authorization is derived from the chat event log — see skills/plan-approval/SKILL.md for the full contract.

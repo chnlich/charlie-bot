@@ -5,8 +5,6 @@
 
 web/static/js/chat/input.js -> web/static/js/sidebar/status.js
 web/static/js/chat/input.js -> web/static/js/websocket.js
-web/static/js/chat/ratings-explain.js -> web/static/js/chat/rendering.js
-web/static/js/chat/ratings-explain.js -> web/static/js/sidebar/modals.js
 web/static/js/chat/rendering.js -> web/static/js/chat/turn-engine.js
 web/static/js/chat/rendering.js -> web/static/js/sidebar/modals.js
 web/static/js/chat/scroll.js -> web/static/js/chat/turn-engine.js

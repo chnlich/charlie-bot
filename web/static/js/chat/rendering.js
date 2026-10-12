@@ -5,7 +5,6 @@
   const escapeHtmlAttr = Chat.escapeHtmlAttr;
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
-  const renderExplainButton = Chat.renderExplainButton;
   const markFileLinks = Chat.markFileLinks;
   const toolInputSummary = Chat.toolInputSummary;
 
@@ -111,7 +110,7 @@ function isStableRenderedMessage(el) {
 // plus one `.turn-row`. Folded shows the row and hides the span; open does the
 // reverse. Nothing is ever unwrapped, and the only nodes that ever move after
 // wrapping are a span's carried inputs (queued for the next round) — so a
-// reader-expanded `N steps` bar, an open explain panel and embedded package
+// reader-expanded `N steps` bar, an open separator panel and embedded package
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
 const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker', child_report: 'Report'};
@@ -358,7 +357,7 @@ function buildTurnRow(turn) {
 }
 
 // The fold-back control shares the separator line with clone-to-here, Elon-e,
-// Explain and the round rating.
+// the package separator buttons and the round rating.
 function installTurnCollapseControl(separator) {
   if (separator.querySelector('.turn-collapse')) return;
   const btn = document.createElement('button');
@@ -478,6 +477,17 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
   container.innerHTML = parts.join('') + streamHtml;
   globalThis.postProcessRenderedMessages(container);
   globalThis.applyTurnOutline(container);
+}
+
+// Separator buttons follow core's Clone and Elon-e buttons on each separator line, in
+// registration order: render(sessionId, eventIndex) returns one button's HTML. A package
+// registers its renderer when its script loads.
+const separatorButtons = [];
+
+function registerSeparatorButton(render) {
+  if (typeof render !== 'function') throw new Error('Invalid separator button registration');
+  if (separatorButtons.includes(render)) throw new Error('Duplicate separator button');
+  separatorButtons.push(render);
 }
 
 // Message post-processors run over each freshly rendered root in registration order, after
@@ -685,7 +695,7 @@ function openMessageWrapper(layoutClass, msg) {
   return "<div class=\"" + layoutClass + "\"" + messageIdentityAttrs(msg) + ">";
 }
 
-// The one markdown bubble body: chat bubbles and the explain panel's answer body
+// The one markdown bubble body: chat bubbles and a separator panel's answer body
 // render through the same escape + renderProseMarkdown + data-raw round-trip.
 function mdDiv(text) {
   var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
@@ -833,7 +843,7 @@ function renderMessage(msg, sessionId) {
           + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
           + "</button>"
-          + renderExplainButton(sessionId, msg.event_index);
+          + separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
       }
       if (msg.id != null) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
@@ -918,6 +928,7 @@ const GLOBALS = {
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
   registerMessagePostProcessor,
+  registerSeparatorButton,
   registerDeliveryLink,
   buildTurnRowFromSpec,
   installTurnFold,

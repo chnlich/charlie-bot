@@ -48,11 +48,12 @@ function loadChatContext(elements) {
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });
   context.Chat.renderRoundRatingButtons = () => '<button class="round-rating-btn text-slate-500 hover:text-green-400"></button>';
-  context.Chat.renderExplainButton = () => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>';
   context.Chat.markFileLinks = () => {};
   // The voice package registers the badge a dictated message's bubble carries.
   context.Chat.registerInputMode('voice', '&#127908; Voice');
   vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
+  // The explain package's separator button.
+  context.Chat.registerSeparatorButton(() => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>');
   return context;
 }
 

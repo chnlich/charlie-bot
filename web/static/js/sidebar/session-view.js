@@ -315,6 +315,133 @@ async function cancelTranscriptTarget() {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Active session view poll
+// ---------------------------------------------------------------------------
+let activeSessionViewPollInflight = false;
+const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
+
+function stopActiveSessionViewPolling() {
+  stopPageTimer('active-session-view');
+}
+
+function ensureActiveSessionViewPolling() {
+  if (!SESSION_ID || (!masterThinking && !THINKING_SINCE)) {
+    stopActiveSessionViewPolling();
+    return;
+  }
+  if (pageTimerRegistered('active-session-view')) return;
+  startPageTimer('active-session-view', pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
+}
+
+async function pollActiveSessionView(opts) {
+  const force = opts && opts.force;
+  if (activeSessionViewPollInflight || !SESSION_ID || (!force && !masterThinking && !THINKING_SINCE)) return;
+
+  const pollSessionId = SESSION_ID;
+  activeSessionViewPollInflight = true;
+  try {
+    const res = await fetch('/api/sessions/' + pollSessionId + '/usage');
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (pollSessionId !== SESSION_ID) return;
+
+    THINKING_SINCE = data.session.thinking_since || null;
+    setActiveBackendId(data.active_backend);
+    setSwitchableBackends(data.switchable_backends);
+    updateActiveBackendBadges();
+    globalThis.renderUsageFromData(data.usage);
+
+    if (!THINKING_SINCE && masterThinking) {
+      globalThis.stopThinking();
+    }
+  } catch (err) {
+    console.error('pollActiveSessionView failed:', err);
+  } finally {
+    activeSessionViewPollInflight = false;
+    globalThis.ensureActiveSessionViewPolling();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Thinking indicator
+// ---------------------------------------------------------------------------
+// The thinking indicator owns only the header timer and the session-view poll:
+// it never touches the send button. The button's disabled state has one writer
+// — the in-flight lock (refreshSendLock in file-upload.js) — so a master run
+// leaves typing available no matter how long it runs. The keepSendEnabled
+// option stays in the call convention every start site passes; nothing reads
+// it any more.
+function startThinking(opts) {
+  masterThinking = true;
+  thinkingStart = thinkingStart || Date.now();
+  document.getElementById('thinking').classList.remove('hidden');
+  updateThinkingTime();
+  startPageTimer('thinking-tick', updateThinkingTime, 1000);
+  globalThis.ensureActiveSessionViewPolling();
+}
+
+// Resumes the indicator when a page load or SPA switch lands while the master
+// is mid-thought. THINKING_SINCE is the server-stamped start the session view
+// and status polls refresh; the send button stays with the in-flight lock, so
+// typing remains available while the run is still processing.
+function resumeThinkingIfMidThought() {
+  if (THINKING_SINCE) {
+    thinkingStart = new Date(THINKING_SINCE).getTime();
+    startThinking({keepSendEnabled: true});
+  }
+}
+
+function stopThinking(opts) {
+  masterThinking = false;
+  document.getElementById('thinking').classList.add('hidden');
+  stopPageTimer('thinking-tick');
+  thinkingStart = null;
+  // No button write here: master_done or assistant_error can land inside an
+  // upload or input-work window, and re-enabling would punch through the in-flight
+  // lock. Only refreshSendLock writes the button.
+  stopActiveSessionViewPolling();
+  if (!switching && !(opts && opts.preserveSessionIndicator)) Sidebar.updateSpinner();
+}
+
+function updateThinkingTime() {
+  if (!thinkingStart) return;
+  const secs = Math.floor((Date.now() - thinkingStart) / 1000);
+  document.getElementById('thinking-time').textContent = secs + 's';
+}
+
+async function cancelMaster() {
+  // A worker node's stop button signals the active Run through its own
+  // cancel route (session-view.js), not the chat cancel.
+  if (typeof transcriptTarget === 'function' && transcriptTarget()) {
+    return cancelTranscriptTarget();
+  }
+  try {
+    const res = await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
+    if (res.ok) return;
+
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.error || body.message || '';
+    } catch (_err) {
+      detail = '';
+    }
+
+    if (res.status === 404 && detail === 'No active master agent') {
+      // Backend already broadcasts a visible assistant_error for this case.
+      return;
+    }
+
+    const suffix = detail || (`HTTP ${res.status}`);
+    showToast(`Cancel failed: ${suffix}`, true);
+    console.error('Cancel master failed:', res.status, detail || res.statusText);
+  } catch (err) {
+    showToast('Cancel failed: network error. Please try again.', true);
+    console.error('Cancel master failed:', err);
+  }
+}
+
 function buildEmptySessionBootstrap(session) {
   const backend = session.backend || getDefaultBackendId();
   return {
@@ -1024,6 +1151,14 @@ const API = {
   createChildSession,
   createSessionInGroup,
   renderNoActiveSessionView,
+  stopActiveSessionViewPolling,
+  ensureActiveSessionViewPolling,
+  pollActiveSessionView,
+  startThinking,
+  resumeThinkingIfMidThought,
+  stopThinking,
+  updateThinkingTime,
+  cancelMaster,
 };
 Sidebar.wire(API, {
   switchBackend,

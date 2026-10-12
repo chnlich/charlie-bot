@@ -7,12 +7,14 @@
 // and expandSessionGroup writes the target expanded into the
 // session-group-collapsed localStorage state before the create's repaint.
 // Harness follows sidebar_rename_prefill.test.js via
-// sidebar_groups_context_stub.js (namespace.js + groups.js only).
+// sidebar_groups_context_stub.js (namespace.js + groups.js only); the gear's
+// test adds session-menus.js, whose openGroupHeaderMenu the gear calls.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const {readStatic} = require('./read_static');
 const {loadGroups} = require('./sidebar_groups_context_stub');
 
 const SESSION_GROUP_COLLAPSED_STORAGE_KEY = 'session-group-collapsed';
@@ -69,6 +71,7 @@ test('the "(No group)" header renders no create button', () => {
 
 test('a named group header\u2019s Settings gear reads the group name and builds the menu items', async () => {
   const {context, nav} = buildContext();
+  vm.runInContext(readStatic('sidebar/session-menus.js'), context, {filename: 'session-menus.js'});
   // A package's registered item leads the menu and receives the group name.
   const calls = [];
   context.registerGroupMenuItem({label: 'Package item', onSelect: (name) => calls.push(['package', name])});
@@ -77,7 +80,7 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
 
   const gear = nav.innerHTML.match(/<button[^>]*title="Settings"[^>]*>[\s\S]*?<\/button>/);
   assert.ok(gear, 'the named group header is missing the Settings gear');
-  assert.match(gear[0], /openGroupHeaderMenu\(this\)/);
+  assert.match(gear[0], /sidebarControl\('openGroupHeaderMenu', this\)/);
   assert.match(gear[0], /class="[^"]*opacity-0 group-hover:opacity-100[^"]*"/);
   assert.ok(
     nav.innerHTML.indexOf('title="New session in group"') < nav.innerHTML.indexOf('title="Settings"'),
@@ -96,8 +99,8 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
   assert.deepEqual(stopped, [true], 'the click does not reach the header toggle');
   assert.equal(captured.anchor, context.__button);
 
-  // Each item gets the gear's group name. Rename and delete are groups.js-local,
-  // so their wiring shows at the fetch boundary.
+  // Each item gets the gear's group name. Rename and delete run groups.js's
+  // renameGroup and deleteGroup, so their wiring shows at the fetch boundary.
   const posts = [];
   context.prompt = () => 'beta';
   context.confirm = () => true;

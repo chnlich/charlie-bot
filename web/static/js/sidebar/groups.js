@@ -353,17 +353,17 @@ function renderNewChildButton(s, activeBtnClass) {
       activeBtnClass);
 }
 
-// The row's Settings hover button: opens the shared row menu (row-menu.js)
-// with the facts its items need as data attributes -- current group,
-// task-tree parent, profile, registered row facts -- because openSessionRowMenu
-// below reads them off the anchor at click time. The optional rowMenu argument
-// marks which item list the anchor's row builds: the archived row reuses the
-// markup and the data attributes (archived.js's [data-current-group] rewrite
-// included) and only the menu differs. It owns its markup the way the star
-// does: the frame renderer takes no extra attributes.
+// The row's Settings hover button: opens the shared row menu (row-menu.js) with
+// the facts its items need as data attributes -- current group, task-tree
+// parent, profile, registered row facts -- because openSessionRowMenu
+// (session-menus.js) reads them off the anchor at click time. The optional
+// rowMenu argument marks which item list the anchor's row builds: the archived
+// row reuses the markup and the data attributes (archived.js's
+// [data-current-group] rewrite included) and only the menu differs. It owns its
+// markup the way the star does: the frame renderer takes no extra attributes.
 function renderSettingsButton(s, activeBtnClass, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); openSessionRowMenu(this, '${s.id}')"
+  return `<button onclick="event.preventDefault(); event.stopPropagation(); sidebarControl('openSessionRowMenu', this, '${s.id}')"
           title="Settings"${menuMarker}
           data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
@@ -371,101 +371,6 @@ function renderSettingsButton(s, activeBtnClass, rowMenu) {
           class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
-}
-
-// The normal row's Settings menu: openRowMenu (row-menu.js) draws, places and
-// closes the popover; this builds its items from the Settings button's data
-// attributes. Each item keeps its old direct button's condition: a task-tree
-// child moves with its parent (no group move), and a legacy row has no task
-// record behind Task & context. The registered items follow
-// (registerSessionMenuItems).
-function desktopSessionMenuItems(attrs, sessionId) {
-  const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];
-  if (!attrs.taskParent) {
-    items.push({label: 'Move to group…',
-      onSelect: () => showGroupSelector(sessionId, attrs.currentGroup || null)});
-  }
-  if (attrs.profile) {
-    items.push({label: 'Task & context', onSelect: () => openTaskContextModal(sessionId)});
-  }
-  sessionMenuItemSources.forEach(source => items.push(...source.items(attrs, sessionId)));
-  return items;
-}
-
-// The touch menu's star item reads the row's starred state off the star
-// button at open time -- filters.js's toggleSessionStar repaints it in place
-// (the text-yellow-400 flip), so the class never goes stale between renders.
-function touchStarItem(sessionId) {
-  const star = document.getElementById('star-' + sessionId);
-  const starred = !!star && star.classList.contains('text-yellow-400');
-  return {label: starred ? 'Remove from Later' : 'Add to Later',
-    onSelect: () => toggleSessionStar(sessionId, starred)};
-}
-
-function openSessionRowMenu(anchor, sessionId) {
-  const attrs = anchor.dataset;
-  // The archived row reuses the Settings button's markup and data attributes;
-  // its marker picks the archived item list instead of the normal one.
-  if (attrs.rowMenu === 'archived') {
-    openArchivedRowMenu(anchor, sessionId);
-    return;
-  }
-  const items = [];
-  if (window.matchMedia('(hover: none)').matches) {
-    // Touch: the direct buttons are hidden behind the gear, so the menu
-    // leads with the star toggle and the child creation and trails with the
-    // archive -- the three actions with no desktop direct button left.
-    items.push(touchStarItem(sessionId));
-    items.push({label: 'New child session', onSelect: () => createChildSession(sessionId)});
-    items.push(...desktopSessionMenuItems(attrs, sessionId));
-    items.push({separator: true});
-    items.push({label: 'Archive', onSelect: () => archiveSession(sessionId)});
-  } else {
-    items.push(...desktopSessionMenuItems(attrs, sessionId));
-  }
-  openRowMenu(anchor, items);
-}
-
-// The archived row's Settings menu: each item keeps its old direct button's
-// condition -- a task-tree child moves with its parent (no group move) -- and
-// the delete keeps its red danger styling. Touch leads with the star toggle
-// and Unarchive (the direct buttons a touch row hides); a child's menu keeps
-// the separator around the group move's absence.
-function openArchivedRowMenu(anchor, sessionId) {
-  const attrs = anchor.dataset;
-  const touch = window.matchMedia('(hover: none)').matches;
-  const items = [];
-  if (touch) {
-    items.push(touchStarItem(sessionId));
-    items.push({label: 'Unarchive', onSelect: () => unarchiveSession(sessionId)});
-  }
-  if (!attrs.taskParent) {
-    items.push({label: 'Move to group…',
-      onSelect: () => showGroupSelector(sessionId, attrs.currentGroup || null)});
-  }
-  // The delete rides a separator wherever the menu has an item above it: on
-  // touch always, on desktop only when the group move is present (a desktop
-  // child's menu is the delete alone).
-  if (!attrs.taskParent || touch) {
-    items.push({separator: true});
-  }
-  items.push({label: 'Delete permanently', danger: true,
-    onSelect: () => confirmDeletePermanently(sessionId)});
-  openRowMenu(anchor, items);
-}
-
-// The named group header's Settings menu: the gear reads the group name off
-// its own data attribute at click time (no module-level state), and each item
-// keeps its old direct button's call. The registered items lead the menu
-// (registerGroupMenuItem).
-function openGroupHeaderMenu(anchor) {
-  const groupName = anchor.dataset.groupName;
-  openRowMenu(anchor, [
-    ...groupMenuItems.map(item => ({label: item.label, onSelect: () => item.onSelect(groupName)})),
-    {label: 'Rename group', onSelect: () => renameGroup(groupName)},
-    {separator: true},
-    {label: 'Delete group', danger: true, onSelect: () => deleteGroup(groupName)},
-  ]);
 }
 
 // Session-row highlight: a tint change lands here, not in one renderer.
@@ -568,7 +473,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       </button>` : '';
     const groupActions = key && options.groupActions !== false ? `${createInGroupButton}
       <button data-group-name="${safeKey}"
-              onclick="event.stopPropagation(); openGroupHeaderMenu(this)"
+              onclick="event.stopPropagation(); sidebarControl('openGroupHeaderMenu', this)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity" title="Settings">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
       </button>` : '';
@@ -836,7 +741,8 @@ function renderSessionItem(s, filter, options = {}) {
     actions = renderStarButton(s, activeBtnClass);
   } else if (isArchivedRow) {
     // The archived row: three direct buttons; the group move and the delete
-    // moved into the archived Settings menu (openArchivedRowMenu above).
+    // moved into the archived Settings menu (openArchivedRowMenu in
+    // session-menus.js).
     actions = `
       ${renderStarButton(s, activeBtnClass)}
       ${renderRowActionButton(
@@ -851,7 +757,7 @@ function renderSessionItem(s, filter, options = {}) {
   } else {
     // A normal row (manager or legacy): four direct buttons; rename, group
     // move, Task & context and the registered items moved into the Settings
-    // menu (openSessionRowMenu above).
+    // menu (openSessionRowMenu in session-menus.js).
     actions = `
       ${renderStarButton(s, activeBtnClass)}
       ${renderNewChildButton(s, activeBtnClass)}
@@ -984,8 +890,6 @@ const GLOBALS = {
   resetGroupLimitState,
   toggleSessionGroupLimit,
   showGroupSelector,
-  openSessionRowMenu,
-  openGroupHeaderMenu,
   toggleSessionGroup,
   renameGroup,
   deleteGroup,
@@ -994,6 +898,8 @@ const GLOBALS = {
   toggleTreeNode,
 };
 const SIDEBAR_ONLY = {
+  sessionMenuItemSources,
+  groupMenuItems,
   filterPillClass,
   TRASH_SVG_PATH,
   starButtonOnclick,

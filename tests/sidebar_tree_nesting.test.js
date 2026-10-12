@@ -366,7 +366,7 @@ test('a normal row\u2019s direct buttons end in Settings carrying the menu facts
   assert.ok(at('title="Star"') > -1 && at('title="Star"') < at('title="New child session"')
     && at('title="New child session"') < at('title="Archive"') && at('title="Archive"') < at('title="Settings"'),
     `the four direct buttons render in order: ${r1}`);
-  assert.match(r1, /openSessionRowMenu\(this, 'r1'\)/);
+  assert.match(r1, /sidebarControl\('openSessionRowMenu', this, 'r1'\)/);
   // The facts openSessionRowMenu builds the items from.
   assert.match(r1, /data-current-group="Work"/);
   assert.match(r1, /data-task-parent=""/);
@@ -397,9 +397,9 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
   };
 
   // A root manager, unbound: all four items, each core item's onSelect wired
-  // to its old direct button's call. (Move to group runs groups.js-local
-  // showGroupSelector, outside this harness's reach; the browser harness
-  // covers it. cron_broken_ui.test.js drives the schedule items.)
+  // to its old direct button's call. (Move to group opens the group selector
+  // modal, outside this harness's reach; the browser harness covers it.
+  // cron_broken_ui.test.js drives the schedule items.)
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
     ['Rename', 'Move to group\u2026', 'Task & context', 'Add schedule\u2026']);
   items[0].onSelect(click);

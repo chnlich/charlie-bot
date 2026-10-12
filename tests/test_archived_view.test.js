@@ -237,7 +237,7 @@ test('an archived row\u2019s direct buttons are Star, Unarchive and the archived
   // (archived.js's [data-current-group] rewrite keys on data-current-group),
   // plus the marker that selects the archived item list.
   const tag = row.match(/<button[^>]*title="Settings"[^>]*>/)[0];
-  assert.match(tag, /openSessionRowMenu\(this, 'arch-a'\)/);
+  assert.match(tag, /sidebarControl\('openSessionRowMenu', this, 'arch-a'\)/);
   assert.match(tag, /data-row-menu="archived"/);
   assert.match(tag, /data-current-group="Work"/);
   assert.match(tag, /data-task-parent=""/);

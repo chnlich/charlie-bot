@@ -13,14 +13,14 @@ import dataclasses
 from collections.abc import AsyncIterator, Sequence
 from typing import ClassVar, Literal
 
-# The capture worklet's chunk (web/static/js/voice-input.js VOICE_CHUNK_SAMPLES):
+# The capture worklet's chunk (src/features/voice/static/voice-input.js VOICE_CHUNK_SAMPLES):
 # 2048 samples = 128 ms of PCM16. The voice relay forwards the browser's frames
 # unsplit, so this is the chunk size a live backend's audio iterator carries in
 # production; the replay script paces at it and the backend tests build their
 # fake audio at it.
 VOICE_CHUNK_SAMPLES = 2048
 
-# The capture rate, mono PCM16 (web/static/js/voice-input.js VOICE_SAMPLE_RATE):
+# The capture rate, mono PCM16 (src/features/voice/static/voice-input.js VOICE_SAMPLE_RATE):
 # the worklet resamples the microphone to this rate before emitting chunks. Every
 # Python reader of captured audio — the upload's WAV validation, the offline VAD
 # and decode, the live backends' mimeType and byte pacing — must read this same

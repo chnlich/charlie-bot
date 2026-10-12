@@ -331,13 +331,6 @@ body { overscroll-behavior: none; }
   #session-list a { min-height: 44px; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
-/* Voice input overlay: client-side level bar + timer above the message input.
-   The bar/fill/hint elements are built by voice-input.js's ensureVoiceOverlay. */
-.voice-level-bar { height: 0.375rem; margin-bottom: 0.25rem; border-radius: 9999px; background: #1e293b; overflow: hidden; }
-.voice-level-fill { height: 100%; width: 0%; border-radius: 9999px; background: #4ade80; transition: width 0.12s linear; }
-.voice-meta { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
-.voice-timer { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: #94a3b8; }
-.voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Pending triggers tray (chat column, chat/triggers-tray.js): dashed amber
    border and the --watch spellings' mono face, per the reviewed mockup. */
 .tray-border { border: 1px dashed rgba(245, 158, 11, .55); }

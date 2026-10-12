@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -301,7 +301,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   // Page order: file-upload.js lands before voice-input.js and owns the
   // send-button lock the transcription windows report to.
   vm.runInContext(readStatic('file-upload.js'), context, {filename: 'file-upload.js'});
-  vm.runInContext(readStatic('voice-input.js'), context, {filename: 'voice-input.js'});
+  vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), context, {filename: 'voice-input.js'});
 
   // Wrap the lock's open/close so tests can assert a path never engaged it
   // while the real counting behavior stays live for every other path.

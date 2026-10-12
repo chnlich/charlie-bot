@@ -122,6 +122,8 @@ test('the Workspace view keeps the group-header create button', () => {
 
   context.restoreSidebarFromUrl();
 
-  assert.deepEqual(fetchRequests, ['/api/cron/tasks']);
+  // The restore paints the server-rendered list with no fetch: this harness
+  // registers no Workspace badge loader.
+  assert.deepEqual(fetchRequests, []);
   assert.match(nav.innerHTML, /createSessionInGroup\(this\.dataset\.groupName\)/);
 });

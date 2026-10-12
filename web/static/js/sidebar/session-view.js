@@ -930,20 +930,6 @@ async function createSessionNode(taskParentId, group) {
   return res.json();
 }
 
-// The group header's clock button: a scheduled task is born bound. The
-// manager node is created in that group first, then the cron editor opens in
-// create mode with the node prefilled as the binding and the task's project
-// set to the group.
-async function createScheduledTaskInGroup(group) {
-  try {
-    const node = await createSessionNode(null, group);
-    if (typeof Sidebar.expandSessionGroup === 'function') Sidebar.expandSessionGroup(group);
-    openCronAdder({sessionId: node.id, project: group});
-  } catch (err) {
-    console.error('Create scheduled task failed:', err);
-  }
-}
-
 async function createTaskNode(taskParentId, group) {
   try {
     const data = await createSessionNode(taskParentId, group);
@@ -1040,12 +1026,12 @@ const API = {
   createSession,
   createChildSession,
   createSessionInGroup,
-  createScheduledTaskInGroup,
   renderNoActiveSessionView,
 };
 Sidebar.wire(API, {
   switchBackend,
   loadOlderIfNeeded,
+  createSessionNode,
 });
 
 })();

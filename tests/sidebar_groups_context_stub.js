@@ -15,6 +15,7 @@ const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
+const CRON_JS = readStatic('cron.js');
 
 const BACKEND_OPTIONS = {
   'claude-opus-5': 'CC · Opus 5',
@@ -49,6 +50,16 @@ function loadGroups() {
   return context;
 }
 
+// loadGroups plus the cron script, run after groups.js as the page runs a
+// package's script after core. The script also registers its Workspace badge
+// with filters.js, which this harness does not load, so a stub takes it.
+function loadGroupsWithCron() {
+  const context = loadGroups();
+  context.registerWorkspaceBadge = () => {};
+  vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+  return context;
+}
+
 // One rendered sidebar row for *session* spread over the defaults every row
 // test shares.
 function row(session) {
@@ -59,4 +70,4 @@ function row(session) {
   );
 }
 
-module.exports = {loadGroups, row};
+module.exports = {loadGroups, loadGroupsWithCron, row};

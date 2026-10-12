@@ -11,6 +11,7 @@ const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./r
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
+const CRON_JS = readStatic('cron.js');
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
@@ -120,6 +121,13 @@ function createChatSidebarContext(context) {
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   runStaticModules(context, chatModules());
   runStaticModules(context, sidebarModules());
+}
+
+// The cron script: a harness whose rows, menus or Workspace badge show the
+// cron parts runs it after createChatSidebarContext, as the page runs a
+// package's script after the core modules.
+function loadCronPackage(context) {
+  vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
 }
 
 // One sidebar row as the harnesses mount it: querySelector answers only
@@ -323,6 +331,7 @@ module.exports = {
   baseSessionContext,
   buildSidebarIndicatorContext,
   createChatSidebarContext,
+  loadCronPackage,
   buildSidebarFilterElements,
   buildUsageElements,
   buildSwitchFlowHarness,

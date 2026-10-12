@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// The sidebar list operations' server-answer handling (sidebar/filters.js):
+// The sidebar list operations' server-answer handling (session-actions.js):
 // a failed archive (DELETE /api/sessions/{id}) or unarchive
 // (POST /api/sessions/{id}/unarchive) surfaces the server's detail to the
 // user through the page toast — the 409 blockers shape (message + blocker
@@ -38,12 +38,12 @@ function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () 
   context.globalThis = context;
   vm.createContext(context);
   // namespace.js first, as on the page: it supplies Sidebar.wire and the
-  // currentFilter/sessionUnread state the filters module reads.
+  // currentFilter/sessionUnread state the actions module reads.
   vm.runInContext(readStatic('sidebar/namespace.js'), context, {filename: 'namespace.js'});
-  // The other modules the page loads between namespace and filters only add
-  // render helpers; the archive path touches Sidebar.removeSessionFromRenderedList.
+  // Of the modules the page loads between namespace and session-actions, the
+  // archive path touches one helper: Sidebar.removeSessionFromRenderedList.
   context.Sidebar.removeSessionFromRenderedList = () => true;
-  vm.runInContext(readStatic('sidebar/filters.js'), context, {filename: 'filters.js'});
+  vm.runInContext(readStatic('sidebar/session-actions.js'), context, {filename: 'session-actions.js'});
   return context;
 }
 

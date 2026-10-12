@@ -360,7 +360,7 @@ test('the bell title names the count and the next fire time, and clicking it exp
     next_trigger_at: '2026-04-02T12:00:00Z',
   });
   assert.match(html, /title="2 pending delayed triggers · next /);
-  assert.match(html, /onclick="event\.preventDefault\(\); event\.stopPropagation\(\); openPendingTriggers\('s1'\)"/);
+  assert.match(html, /onclick="event\.preventDefault\(\); event\.stopPropagation\(\); sidebarControl\('openPendingTriggers', 's1'\)"/);
 
   const idle = context.renderPendingTriggerIndicator({
     id: 's2', has_pending_trigger: false, pending_trigger_count: 0, next_trigger_at: null,

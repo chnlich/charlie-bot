@@ -8,7 +8,8 @@
 // session-group-collapsed localStorage state before the create's repaint.
 // Harness follows sidebar_rename_prefill.test.js via
 // sidebar_groups_context_stub.js (namespace.js + groups.js only); the gear's
-// test adds session-menus.js, whose openGroupHeaderMenu the gear calls.
+// test adds session-actions.js and session-menus.js, whose openGroupHeaderMenu
+// the gear calls.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -71,6 +72,7 @@ test('the "(No group)" header renders no create button', () => {
 
 test('a named group header\u2019s Settings gear reads the group name and builds the menu items', async () => {
   const {context, nav} = buildContext();
+  vm.runInContext(readStatic('sidebar/session-actions.js'), context, {filename: 'session-actions.js'});
   vm.runInContext(readStatic('sidebar/session-menus.js'), context, {filename: 'session-menus.js'});
   // A package's registered item leads the menu and receives the group name.
   const calls = [];
@@ -99,8 +101,9 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
   assert.deepEqual(stopped, [true], 'the click does not reach the header toggle');
   assert.equal(captured.anchor, context.__button);
 
-  // Each item gets the gear's group name. Rename and delete run groups.js's
-  // renameGroup and deleteGroup, so their wiring shows at the fetch boundary.
+  // Each item gets the gear's group name. Rename and delete run
+  // session-actions.js's renameGroup and deleteGroup, so their wiring shows at
+  // the fetch boundary.
   const posts = [];
   context.prompt = () => 'beta';
   context.confirm = () => true;

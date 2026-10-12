@@ -233,14 +233,8 @@ function pendingTriggerTitle(count, nextTriggerAt) {
 
 function renderPendingTriggerIndicator(session) {
   const count = Number(session.pending_trigger_count) || 0;
-  const click = `event.preventDefault(); event.stopPropagation(); openPendingTriggers('${session.id}')`;
+  const click = `event.preventDefault(); event.stopPropagation(); sidebarControl('openPendingTriggers', '${session.id}')`;
   return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${Chat.PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
-}
-
-// The bell's click: open the session like a row click does, and expand its
-// tray once it lands. On the already-open session the tray expands in place.
-function openPendingTriggers(sid) {
-  if (!expandPendingTriggersTray(sid)) switchSession(sid);
 }
 
 function renderPendingPlanApprovalIndicator(session) {
@@ -492,7 +486,6 @@ const API = {
   unreadReplyIsCurrent,
   rowUnreadState,
   renderPendingTriggerIndicator,
-  openPendingTriggers,
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,
   setSessionIndicator,

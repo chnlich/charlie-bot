@@ -68,8 +68,8 @@ function buildContext({sessionId = 'session-live', rows = [], fetchHandler} = {}
   createChatSidebarContext(context);
   loadCronPackage(context);
   // session-view.js wires its real switchSession/renderNoActiveSessionView
-  // globals at load (after filters.js), so the stubs the delete path resolves
-  // at call time must be re-installed over the wired ones.
+  // globals at load, so the stubs the delete path resolves at call time must
+  // be re-installed over the wired ones.
   context.switchSession = recordSwitch;
   context.renderNoActiveSessionView = recordNoActiveView;
   return {context, nav, fetchCalls, switches, noActiveViews, elements};

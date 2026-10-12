@@ -5,6 +5,3 @@
 
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/archived.js
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/groups.js
-web/static/js/sidebar/filters.js -> web/static/js/sidebar/session-view.js
-web/static/js/sidebar/groups.js -> web/static/js/sidebar/archived.js
-web/static/js/sidebar/status.js -> web/static/js/sidebar/session-view.js

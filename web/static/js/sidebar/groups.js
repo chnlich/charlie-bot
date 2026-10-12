@@ -99,112 +99,6 @@ function toggleSessionGroupLimit(key) {
   updateGroupLimitDom(key, expanded);
 }
 
-const GROUP_MODAL_OVERLAY_ID = 'group-modal-overlay';
-
-function closeGroupModal() {
-  document.getElementById(GROUP_MODAL_OVERLAY_ID)?.remove();
-}
-
-async function showGroupSelector(sessionId, currentGroup) {
-  // Fetch existing groups
-  let groups = [];
-  try {
-    const res = await fetch('/api/sessions/groups');
-    if (!res.ok) throw new Error(`Fetch groups failed: ${res.status}`);
-    groups = await res.json();
-  } catch (err) {
-    console.error('Fetch groups failed:', err);
-    return;
-  }
-
-  // Remove any existing modal
-  closeGroupModal();
-
-  const overlay = document.createElement('div');
-  overlay.id = GROUP_MODAL_OVERLAY_ID;
-  overlay.className = MODAL_OVERLAY_CLASS;
-
-  const groupButtons = groups.map(g => {
-    const isActive = g === currentGroup;
-    const activeClass = isActive ? 'bg-purple-600/30 text-purple-300 border-purple-500/50' : 'bg-slate-700 hover:bg-slate-600 text-slate-300 border-transparent';
-    return `<button data-group="${escapeHtmlAttr(g)}" class="w-full text-left px-3 py-2 rounded-lg text-sm border transition-colors ${activeClass}">${escapeHtml(g)}</button>`;
-  }).join('');
-
-  overlay.innerHTML = `
-    <div class="${MODAL_DIALOG_CLASS}"
-         onclick="event.stopPropagation()">
-      <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
-      <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
-        ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-400 transition-colors">Remove group</button>` : ''}
-        ${groupButtons}
-      </div>
-      <div class="flex gap-2">
-        <input id="new-group-input" type="text" placeholder="New group name..."
-               class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500">
-        <button id="new-group-btn" class="px-3 py-1.5 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors">Add</button>
-      </div>
-    </div>`;
-
-  // Handle existing group clicks
-  overlay.querySelectorAll('[data-group]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const group = btn.dataset.group || null;
-      closeGroupModal();
-      setSessionGroup(sessionId, group);
-    });
-  });
-
-  // Handle new group
-  const addNewGroup = () => {
-    const input = document.getElementById('new-group-input');
-    const name = input.value.trim();
-    if (!name) return;
-    closeGroupModal();
-    setSessionGroup(sessionId, name);
-  };
-  overlay.querySelector('#new-group-btn').addEventListener('click', addNewGroup);
-  overlay.querySelector('#new-group-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') addNewGroup();
-    if (e.key === 'Escape') closeGroupModal();
-  });
-
-  // Close on overlay click
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
-  // Close on Escape
-  const escHandler = (e) => {
-    if (e.key === 'Escape') {
-      closeGroupModal();
-      document.removeEventListener('keydown', escHandler);
-    }
-  };
-  document.addEventListener('keydown', escHandler);
-
-  document.body.appendChild(overlay);
-  document.getElementById('new-group-input').focus();
-}
-
-async function setSessionGroup(sessionId, group) {
-  try {
-    const res = await fetch(`/api/sessions/${sessionId}/group`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({group}),
-    });
-    if (!res.ok) throw new Error(`Set group failed: ${res.status}`);
-    if (currentFilter === 'archived') {
-      // The archived view updates the row and filter-strip counts in place;
-      // a refetch would rebuild the whole paginated list.
-      applyArchivedGroupChange(sessionId, group);
-      return;
-    }
-    switchSidebarFilter(currentFilter);
-  } catch (err) {
-    console.error('Set group failed:', err);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Session-row and group-menu registrations
 // ---------------------------------------------------------------------------
@@ -272,12 +166,6 @@ function registerGroupMenuItem(item) {
 // here, not in one renderer.
 const STAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
 
-// The one trash-can outline: real deletion only -- through the namespace
-// filters.js's delete-confirm modal (Sidebar.TRASH_SVG_PATH); the archived
-// row's Delete permanently and the group header's Delete group are menu
-// items now, not icons.
-const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>`;
-
 // The one archive-box outline: the Archive action button (a normal row's and
 // a worker row's -- archiving is not deletion, so it gets its own icon).
 const ARCHIVE_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>`;
@@ -287,13 +175,6 @@ const ARCHIVE_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" s
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
 
 const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
-
-// The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
-// group modal below and, through the namespace, filters.js's delete-confirm
-// modal (Sidebar.MODAL_OVERLAY_CLASS / Sidebar.MODAL_DIALOG_CLASS). Each dialog
-// keeps its own extras (filters.js's adds text-center) and inner markup.
-const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
-const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
 // Single source for both pill strips: through the namespace, the sidebar
 // filter strip (filters.js) and the archived view's group strip (archived.js).
@@ -333,7 +214,7 @@ function renderRowActionButton(onclick, colorClass, title, svgBody, activeBtnCla
 
 function renderArchiveButton(s, activeBtnClass) {
   return renderRowActionButton(
-      `event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')`,
+      `event.preventDefault(); event.stopPropagation(); sidebarControl('archiveSession', '${s.id}')`,
       'hover:text-red-400',
       'Archive',
       ARCHIVE_SVG_PATH,
@@ -532,29 +413,6 @@ function expandSessionGroup(key) {
   localStorage.setItem(SESSION_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedState));
 }
 
-async function renameGroup(oldName) {
-  const newName = prompt(`Rename group "${oldName}" to:`, oldName);
-  if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
-  const res = await fetch('/api/sessions/groups/rename', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({old_name: oldName, new_name: newName.trim()}),
-  });
-  if (!res.ok) throw new Error(`Rename group failed: ${res.status}`);
-  switchSidebarFilter(currentFilter);
-}
-
-async function deleteGroup(groupName) {
-  if (!confirm(`Remove group "${groupName}"? Sessions will be ungrouped.`)) return;
-  const res = await fetch('/api/sessions/groups/delete', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({group: groupName}),
-  });
-  if (!res.ok) throw new Error(`Delete group failed: ${res.status}`);
-  switchSidebarFilter(currentFilter);
-}
-
 // Model label for a session row: BACKEND_OPTIONS carries the config-authored label
 // ("CC · Opus 5"); the row shows it without the backend-family prefix because the
 // 320px sidebar leaves only ~67px next to the timestamp. Returns null when the
@@ -746,7 +604,7 @@ function renderSessionItem(s, filter, options = {}) {
     actions = `
       ${renderStarButton(s, activeBtnClass)}
       ${renderRowActionButton(
-          `event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')`,
+          `event.preventDefault(); event.stopPropagation(); sidebarControl('unarchiveSession', '${s.id}')`,
           'hover:text-green-400',
           'Unarchive',
           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/>',
@@ -889,10 +747,7 @@ const GLOBALS = {
   paintWorkspaceBadges,
   resetGroupLimitState,
   toggleSessionGroupLimit,
-  showGroupSelector,
   toggleSessionGroup,
-  renameGroup,
-  deleteGroup,
   renderSessionItem,
   renderSessionList,
   toggleTreeNode,
@@ -901,10 +756,7 @@ const SIDEBAR_ONLY = {
   sessionMenuItemSources,
   groupMenuItems,
   filterPillClass,
-  TRASH_SVG_PATH,
   starButtonOnclick,
-  MODAL_OVERLAY_CLASS,
-  MODAL_DIALOG_CLASS,
   removeSessionFromRenderedList,
   resyncSessionUnread,
   buildSessionTree,
@@ -912,7 +764,6 @@ const SIDEBAR_ONLY = {
   isTreeNodeExpanded,
   expandTreeNode,
   expandSessionGroup,
-  setSessionGroup,
   renderGroupedSessionList,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);

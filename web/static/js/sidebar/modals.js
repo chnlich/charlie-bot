@@ -271,6 +271,9 @@ function populateSessionActionBackendSelect(selectedBackendId) {
   }
 }
 
+// The backend-choice modal of a session action. Without onConfirm, the confirm
+// POSTs /api/sessions/<id>/<action> and opens the session it creates. A package
+// passes onConfirm(backend) for an action that stays on this session.
 function openSessionActionModal({
   action,
   sessionId,
@@ -279,13 +282,14 @@ function openSessionActionModal({
   bodyText,
   confirmLabel,
   failureLabel,
+  onConfirm = null,
 }) {
   const overlay = document.getElementById('session-action-modal-overlay');
   const titleEl = document.getElementById('session-action-modal-title');
   const bodyEl = document.getElementById('session-action-modal-body');
   const confirmEl = document.getElementById('session-action-modal-confirm');
 
-  sessionActionModalState = {action, sessionId, eventIndex, failureLabel};
+  sessionActionModalState = {action, sessionId, eventIndex, failureLabel, onConfirm};
   populateSessionActionBackendSelect(getActiveBackendId());
 
   if (titleEl) titleEl.textContent = title;
@@ -309,23 +313,16 @@ function closeSessionActionModal() {
 async function submitSessionActionModal() {
   if (!sessionActionModalState) return;
 
-  const {action, sessionId, eventIndex, failureLabel} = sessionActionModalState;
+  const {action, sessionId, eventIndex, failureLabel, onConfirm} = sessionActionModalState;
   const backendSelect = document.getElementById('session-action-backend');
   const backend = backendSelect ? backendSelect.value : getActiveBackendId();
 
   try {
-    if (action === 'explain') {
-      // Explain stays on this session: POST registers the async generation, the
-      // button goes pending, and the panel skeleton opens under the divider.
-      const res = await fetch('/api/sessions/' + sessionId + '/explain', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({event_index: eventIndex, backend}),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await res.json();
+    if (onConfirm) {
+      // A package's action stays on this session: its handler runs the request
+      // and its follow-up, and the modal closes after it.
+      await onConfirm(backend);
       closeSessionActionModal();
-      markExplainPending(sessionId, eventIndex, backend);
       return;
     }
     const res = await fetch('/api/sessions/' + sessionId + '/' + action, {
@@ -341,18 +338,6 @@ async function submitSessionActionModal() {
     console.error(failureLabel + ' failed:', err);
     alert(failureLabel + ' failed: ' + err.message);
   }
-}
-
-function explainSession(sessionId, eventIndex) {
-  openSessionActionModal({
-    action: 'explain',
-    sessionId,
-    eventIndex,
-    title: 'Explain This Round',
-    bodyText: 'Choose the model that explains this round. The explanation is kept with the session; nothing is written to the chat history.',
-    confirmLabel: 'Explain',
-    failureLabel: 'Explain',
-  });
 }
 
 function forkSession(sessionId, eventIndex = null) {
@@ -554,13 +539,13 @@ const GLOBALS = {
   closeCronModal,
   saveCronTask,
   deleteCronTask,
+  openSessionActionModal,
   closeSessionActionModal,
   submitSessionActionModal,
   forkSession,
   eloneSession,
   openTaskContextModal,
   closeTaskContextModal,
-  explainSession,
 };
 const SIDEBAR_ONLY = { applyCronBrokenView };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);

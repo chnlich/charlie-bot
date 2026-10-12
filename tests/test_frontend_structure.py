@@ -30,6 +30,9 @@ package's script registers a handler with it at load time. The core registration
     Chat.registerInputMode      web/static/js/chat/attachments.js (an input mode and its user-bubble badge)
     Chat.registerMessagePostProcessor
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)
+    Chat.registerSeparatorButton
+                                web/static/js/chat/rendering.js (a button on each separator line)
+    Chat.registerSeparatorPanel web/static/js/chat/turn-engine.js (a panel under a separator line that the engine reopens)
     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
@@ -40,6 +43,8 @@ for it. The core page events today:
 
     charliebot:active-session-changed
                                 web/static/js/sidebar/session-view.js (SESSION_ID names another session)
+    charliebot:session-data-load
+                                web/static/js/sidebar/session-view.js (the idle load of the session's per-session data)
     charliebot:session-switch-phase
                                 web/static/js/sidebar/session-view.js (one phase of a session switch, with its timing)
     charliebot:session-switched web/static/js/sidebar/session-view.js (the end of a session switch)

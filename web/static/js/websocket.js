@@ -168,13 +168,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Explain (btw-style) state change for one divider: repaint the button from the
-  // frame; a frame carries no body, so an open panel re-fetches the single entry.
-  if (t === 'explain_status') {
-    updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend);
-    return;
-  }
-
   // A changed task node re-fetches the list the same way a group change does.
   if (t === 'session_group_changed' || t === 'task_tree_changed') {
     const searchInput = document.getElementById('sidebar-search');

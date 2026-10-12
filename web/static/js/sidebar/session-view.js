@@ -145,10 +145,15 @@ function scheduleLazySessionDataLoad() {
   lazySessionDataTimer = scheduleIdleTask(() => {
     lazySessionDataTimer = null;
     pollActiveSessionView({force: true});
-    // One explain/status GET per session load/switch paints every divider's
-    // explain button from persisted truth; turns the engine materializes later
-    // read the map at render time, so no per-divider request is ever needed.
-    loadExplainStatuses(SESSION_ID);
+    // A package that loads per-session data once per session load or switch
+    // listens for this event. detail.isCurrent() tells, when its response lands,
+    // whether the same session and switch generation still own the view.
+    const sessionId = SESSION_ID;
+    const generation = switchGeneration;
+    document.dispatchEvent(new CustomEvent('charliebot:session-data-load', {detail: {
+      sessionId,
+      isCurrent: () => generation === switchGeneration && sessionId === SESSION_ID,
+    }}));
   });
 }
 
@@ -617,22 +622,6 @@ function renderSessionView(data) {
   // is not a scrollability signal here.
   if (sessionHasMore && container.scrollHeight <= container.clientHeight + 80) {
     loadOlderIfNeeded(container);
-  }
-}
-
-async function loadExplainStatuses(sessionId) {
-  // In-flight token: only the session and switch generation that own the view
-  // when the response lands may install the map (same rule as loadOlderMessages).
-  const flight = {sessionId, generation: switchGeneration};
-  try {
-    const res = await fetch('/api/sessions/' + sessionId + '/explain/status');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const statuses = await res.json();
-    if (flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID) return;
-    setActiveExplainStatuses(statuses);
-    applyExplainStatusesToDom();
-  } catch (err) {
-    console.error('Load explain statuses failed:', err);
   }
 }
 

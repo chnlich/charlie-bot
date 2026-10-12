@@ -481,7 +481,7 @@ test('renderSessionList limits each grouped session section to five visible sess
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
   // The named header's direct buttons: the create and the Settings gear (the
   // scheduled-task, rename and delete actions moved into the gear's menu).
-  assert.match(nav.innerHTML, /createSessionInGroup\(this\.dataset\.groupName\)/);
+  assert.match(nav.innerHTML, /sidebarControl\('createSessionInGroup', this\.dataset\.groupName\)/);
   assert.match(nav.innerHTML, /sidebarControl\('openGroupHeaderMenu', this\)/);
 });
 

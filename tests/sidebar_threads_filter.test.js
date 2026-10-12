@@ -125,5 +125,5 @@ test('the Workspace view keeps the group-header create button', () => {
   // The restore paints the server-rendered list with no fetch: this harness
   // registers no Workspace badge loader.
   assert.deepEqual(fetchRequests, []);
-  assert.match(nav.innerHTML, /createSessionInGroup\(this\.dataset\.groupName\)/);
+  assert.match(nav.innerHTML, /sidebarControl\('createSessionInGroup', this\.dataset\.groupName\)/);
 });

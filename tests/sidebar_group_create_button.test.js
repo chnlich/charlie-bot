@@ -40,15 +40,15 @@ test('a named group header renders the create button first, clicking through wit
   assert.ok(button, 'the named group header is missing the create button');
   assert.match(button[0], /title="New session in group"/);
   assert.match(button[0], /class="[^"]*hover:text-green-400[^"]*"/);
-  assert.match(button[0], /createSessionInGroup\(this\.dataset\.groupName\)/);
+  assert.match(button[0], /sidebarControl\('createSessionInGroup', this\.dataset\.groupName\)/);
   assert.ok(
     nav.innerHTML.indexOf('createSessionInGroup') < nav.innerHTML.indexOf('openGroupHeaderMenu'),
     'the create button is placed first, before the Settings gear');
 
-  // A click resolves the createSessionInGroup global with this.dataset.groupName.
+  // A click calls the createSessionInGroup control with this.dataset.groupName.
   const calls = [];
   const stopped = [];
-  context.createSessionInGroup = (name) => calls.push(name);
+  context.registerSidebarControl('createSessionInGroup', (name) => calls.push(name));
   const onclick = button[0].match(/onclick="([^"]+)"/)[1];
   context.__button = {dataset: {groupName: 'alpha'}};
   context.__event = {stopPropagation: () => stopped.push(true)};

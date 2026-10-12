@@ -1130,6 +1130,10 @@ function renderNoActiveSessionView() {
   switching = false;
 }
 
+// The session rows and group headers that groups.js renders.
+registerSidebarControl('switchSession', switchSession);
+registerSidebarControl('createChildSession', createChildSession);
+registerSidebarControl('createSessionInGroup', createSessionInGroup);
 
 const API = {
   getDefaultBackendId,

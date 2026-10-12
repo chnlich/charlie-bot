@@ -15,6 +15,7 @@ from conftest import (
     build_session_blocks,
     build_task_tree,
     create_scheduled_node,
+    make_cron_client,
     write_nightly_task,
 )
 
@@ -39,7 +40,6 @@ def cron_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
   tree = build_task_tree(cfg, session_blocks)
   from conftest import bind_deps_blocks
   bind_deps_blocks(monkeypatch, tree, session_blocks)
-  from tests.test_cron_backend import make_cron_client
   _patch_cron_d(monkeypatch, temp_home / ".charliebot" / "config.d" / "cron.d")
   return cfg, session_blocks, tree, temp_home, make_cron_client
 

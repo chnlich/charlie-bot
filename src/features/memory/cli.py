@@ -24,7 +24,8 @@ negation-word hit as a ``warning:`` line on stderr and still exits 0; the same l
 land in the commit message's ``Negation warnings:`` section.
 
 ``query`` (through ``load_store``), ``add`` and the ``proposal`` verbs create the store
-scaffold on first use (``memory.ensure_store``); ``lint`` reports the tree as it finds it.
+scaffold on first use (``memory.ensure_store``); ``lint`` reports the tree as it finds it,
+printing each over-width entry body line as a ``warning:`` line on stderr without failing.
 
 A present CHARLIEBOT_RUN_TOKEN fixes the query's audience from the verified,
 active owning Run's role: omitted or contradictory --audience cannot broaden
@@ -234,7 +235,10 @@ def _store_root(args: argparse.Namespace) -> Path:
 
 
 def _cmd_lint(args: argparse.Namespace) -> None:
-  violations = memory.lint(_store_root(args))
+  root = _store_root(args)
+  violations = memory.lint(root)
+  for warning in memory_proposal.width_warnings(root):
+    print(f"warning: {warning}", file=sys.stderr)
   if violations:
     for v in violations:
       print(v)

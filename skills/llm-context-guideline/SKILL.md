@@ -135,10 +135,12 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
-Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Keep
-code, paths, identifiers, and commands verbatim. When a semicolon joins two clauses, write them as
-two sentences. Entry prose follows the Writing Style section of prompts/master.md, its "Text a
-model reads" subsection included. Apply the admission test line by line as well as entry by entry.
+Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Line
+width is terminal display width: a character whose `east_asian_width` is W or F counts two columns,
+so one Chinese character counts two. Keep code, paths, identifiers, and commands verbatim. When
+a semicolon joins two clauses, write them as two sentences. Entry prose follows the Writing Style
+section of prompts/master.md, its "Text a model reads" subsection included. Apply the admission
+test line by line as well as entry by entry.
 Keep each line whose removal changes what a capable model does.
 Brevity is part of the admission bar: lead with the action and keep the mechanism the action is
 unintelligible without; session reports and run dirs hold the receipts, verification notes, and

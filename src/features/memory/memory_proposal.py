@@ -21,6 +21,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import unicodedata
 
 from src.features.memory import memory
 
@@ -34,6 +35,7 @@ _NEGATION = re.compile(
 )
 _NEGATION_ADVICE = "state the standing reality or the action to take, and keep the fact it carried"
 _BODY_LINE_LIMIT = 12
+_BODY_LINE_COLUMN_LIMIT = 120
 _BACKTICKED = re.compile(r"`[^`]*`")
 
 
@@ -197,6 +199,12 @@ def _entry_body(text: str) -> list[str]:
   return []
 
 
+def _display_width(line: str) -> int:
+  """The terminal columns *line* occupies: a character whose east-asian width is W or F
+  counts two columns (a CJK character counts two), every other character counts one."""
+  return sum(2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in line)
+
+
 def _prose_units(body: list[str]) -> list[str]:
   """The text of each unit the prose check reads: the lead, then each bullet.
 
@@ -267,8 +275,8 @@ def _prose_violations(text: str, base_text: str | None) -> list[str]:
   """The writing-rule violations of *text* over the same file's base version.
 
   A unit (see :func:`_prose_units`) that the base version already holds verbatim escapes the
-  sentence checks — old entries take the rules at their next edit — while the body line limit
-  binds every committed entry, whatever the base version's line count.
+  sentence checks — old entries take the rules at their next edit — while the column and
+  body line limits bind every committed entry, base-verbatim lines included.
   """
   body = _entry_body(text)
   violations: list[str] = []
@@ -283,6 +291,10 @@ def _prose_violations(text: str, base_text: str | None) -> list[str]:
         violations.append(f"sentence over 25 words ({words}): {sentence}")
       if ";" in masked:
         violations.append(f"semicolon joins clauses: {sentence}")
+  for line in body:
+    width = _display_width(line)
+    if width > _BODY_LINE_COLUMN_LIMIT:
+      violations.append(f"body line over {_BODY_LINE_COLUMN_LIMIT} columns ({width}): {line[:60]}")
   if len(body) > _BODY_LINE_LIMIT:
     violations.append(f"body has {len(body)} lines (limit {_BODY_LINE_LIMIT})")
   return violations
@@ -362,7 +374,9 @@ def commit(
 
   The prose check then refuses an entry whose added or rewritten sentences
   break the "Text a model reads" rules (a sentence over 25 words, a semicolon
-  joining clauses) or whose body exceeds 12 lines; the ``topics`` vocabulary
+  joining clauses), whose body exceeds 12 lines, or whose body holds a physical
+  line over 120 terminal columns (a character whose east-asian width is W or F
+  counts two, and base-verbatim lines refuse too); the ``topics`` vocabulary
   file is exempt. The negation check over the same sentences and the title
   never refuses: each hit comes back as a warning for the caller to print, and
   the commit message records the payloads under ``Negation warnings:`` after
@@ -420,6 +434,23 @@ def commit(
     if result.returncode != 0:
       raise ProposalRefusalError(f"committing {path} failed: {result.stderr.strip()}")
   return _git(worktree, "rev-parse", "HEAD").strip(), warnings
+
+
+def width_warnings(memory_dir: pathlib.Path) -> list[str]:
+  """One advisory line per entry body line over the column limit; never a refusal.
+
+  The proposal commit gate owns the width enforcement; the live store still carries
+  over-width lines that a content revision has yet to clear, so ``charliebot memory
+  lint`` prints these as warnings and keeps its exit code clean.
+  """
+  warnings: list[str] = []
+  for md_file in sorted(memory_dir.glob("entries/*/*.md")):
+    rel = md_file.relative_to(memory_dir)
+    for line in _entry_body(md_file.read_text(encoding="utf-8")):
+      width = _display_width(line)
+      if width > _BODY_LINE_COLUMN_LIMIT:
+        warnings.append(f"{rel}: body line over {_BODY_LINE_COLUMN_LIMIT} columns ({width}): {line[:60]}")
+  return warnings
 
 
 def land(memory_dir: pathlib.Path, sha: str) -> dict[str, str]:

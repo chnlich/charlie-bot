@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from conftest import (
     FakeSlackClient,
@@ -25,6 +26,8 @@ from conftest import (
 from src.features.slack.slack_listener import (
     _REPLY_COMMAND,
     SLACK,
+    SlackClient,
+    SlackThreadAdapter,
     handle_app_mention,
     summon_session_id,
     thread_contract_part,
@@ -158,6 +161,31 @@ def test_contract_part_carries_the_platform_line_the_address_and_the_rules() -> 
   assert "slack-thread-follow floor=<ts>" in part
   assert "从 floor 标注的消息读起" in part
   assert "`charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack" in part
+
+
+@pytest.mark.asyncio
+async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messages(tmp_path: Path) -> None:
+  """The eligible readback through a real SlackClient: the thread is read with conversations.replies
+  on its channel and ts, and only the allowed human's message comes back."""
+  from src.features.slack.metadata import SlackOrigin
+
+  reply = {"type": "message", "user": "U_ALLOWED", "ts": "1700000000.000200", "text": "hi"}
+  bot = {"type": "message", "subtype": "bot_message", "bot_id": "B_TEST", "ts": "1700000000.000300", "text": "bot"}
+  requests: list[httpx.Request] = []
+
+  def handler(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json={"ok": True, "messages": [reply, bot]})
+
+  async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")
+    origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS)
+    messages = await SlackThreadAdapter(client).read_eligible(origin, build_slack_cfg(tmp_path))
+
+  [request] = requests
+  assert request.url.path == "/api/conversations.replies"
+  assert dict(request.url.params) == {"channel": "C_TEST", "ts": _TS}
+  assert [(m.id, m.user, m.text) for m in messages] == [("1700000000.000200", "U_ALLOWED", "hi")]
 
 
 @pytest.mark.asyncio

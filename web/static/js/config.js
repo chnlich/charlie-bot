@@ -9,7 +9,7 @@
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 
 // The one reader of the access key for request auth: the fetch wrapper below and
-// the voice upload's XHR (which no wrapper patches) both send this header.
+// a package's own XHR (which no wrapper patches) both send this header.
 function accessTokenAuthorization() {
   const key = localStorage.getItem(ACCESS_KEY_NAME);
   return key ? 'Bearer ' + key : null;
@@ -49,7 +49,7 @@ const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300
 function withAccessToken(url) {
   const key = localStorage.getItem(ACCESS_KEY_NAME);
   if (!key) return url;
-  // A path may already carry a query of its own (the voice relay's ?backend=).
+  // A path may already carry a query of its own (a package relay's ?backend=).
   const separator = url.includes('?') ? '&' : '?';
   return url + separator + 'token=' + encodeURIComponent(key);
 }

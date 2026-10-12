@@ -128,13 +128,14 @@ function disposeActiveTurnEngine() {
 
 // Runs on every path that leaves the active session view: the per-session
 // pollers and turn engine must be down before the next view reuses the
-// composer state cleared here.
+// composer state cleared here. A package that holds per-view composer state
+// drops it on the charliebot:session-view-teardown page event.
 function teardownActiveSessionView() {
   stopActiveSessionViewPolling();
   stopTranscriptPolling();
   resetLazySessionData();
   disposeActiveTurnEngine();
-  resetVoiceState();
+  document.dispatchEvent(new CustomEvent('charliebot:session-view-teardown'));
   uploadedFiles = [];
   renderFileChips();
 }

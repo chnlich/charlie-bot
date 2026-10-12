@@ -153,8 +153,9 @@ test('normalizeUserMessage strips legacy attachment footers and keeps file names
   assert.match(html, /report\.pdf/);
 });
 
-test('renderUserMessageBubble shows the voice marker for a dictated message only', () => {
+test('renderUserMessageBubble shows a registered input mode\'s badge, and none for a typed message', () => {
   const context = loadChatScript();
+  context.Chat.registerInputMode('voice', '&#127908; Voice');
 
   assert.match(context.renderUserMessageBubble('hello', 'voice', null, null), /Voice/);
   assert.doesNotMatch(context.renderUserMessageBubble('hello', null, null, null), /Voice/);

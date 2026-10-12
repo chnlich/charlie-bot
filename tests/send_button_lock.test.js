@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Send-button lock: #send-btn's disabled state has one writer — the in-flight
-// count lock (file-upload.js refreshSendLock) driven by attachment uploads plus
-// voice transcription windows. Thinking state never writes the button, so a
+// lock (file-upload.js refreshSendLock) driven by attachment uploads plus the
+// input-work window voice opens for each transcription. Thinking state never
+// writes the button, so a
 // master run leaves it sendable; each optimistic send's server echo is skipped
 // exactly once via the pendingUserEchoes count. Driven through the real chat,
 // sidebar, websocket, file-upload and voice-input modules on the

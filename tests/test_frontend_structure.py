@@ -27,6 +27,7 @@ package's script registers a handler with it at load time. The core registration
 
     Chat.registerDeliveryLink   web/static/js/chat/rendering.js (a link on the worker delivery banner)
     Chat.registerFileLinkFamily web/static/js/chat/file-links.js (a family of file links the package owns)
+    Chat.registerInputMode      web/static/js/chat/attachments.js (an input mode and its user-bubble badge)
     Chat.registerMessagePostProcessor
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)
     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
@@ -42,6 +43,8 @@ for it. The core page events today:
     charliebot:session-switch-phase
                                 web/static/js/sidebar/session-view.js (one phase of a session switch, with its timing)
     charliebot:session-switched web/static/js/sidebar/session-view.js (the end of a session switch)
+    charliebot:session-view-teardown
+                                web/static/js/sidebar/session-view.js (the active session view is torn down)
     charliebot:sidebar-resized  web/static/js/sidebar/modals.js (the end of a sidebar drag)
 
 A landing that adds a registration entry or a page event extends these lists.

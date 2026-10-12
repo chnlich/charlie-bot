@@ -6,33 +6,32 @@ let uploadsInFlight = 0;
 let nextUploadId = 1;
 
 // The send button's lock is a count, not a flag: attachment uploads count in
-// uploadsInFlight, and voice-input.js bumps the shared figure through
-// voiceTranscriptionStarted/Settled for each transcription window (upload +
-// decode). Recording itself never counts. refreshSendLock below is the button's
-// only disabled writer.
-let voiceTranscribesInFlight = 0;
+// uploadsInFlight, and a package that fills the input asynchronously opens an
+// input-work window through inputWorkStarted and closes it through
+// inputWorkSettled, both with the message the gate shows while the window is
+// open. refreshSendLock below is the button's only disabled writer.
+const inputWorkInFlight = new Map(); // waiting message -> open windows
 
 const UPLOAD_IN_FLIGHT_MESSAGE = 'Please wait for the attachment upload to finish';
-const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
 
-// voice-input.js reports its transcription windows here so the gate and the
-// lock read one combined figure.
-function voiceTranscriptionStarted() {
-  voiceTranscribesInFlight++;
+function inputWorkStarted(message) {
+  inputWorkInFlight.set(message, (inputWorkInFlight.get(message) || 0) + 1);
   refreshSendLock();
 }
 
-function voiceTranscriptionSettled() {
-  voiceTranscribesInFlight--;
+function inputWorkSettled(message) {
+  const open = inputWorkInFlight.get(message) - 1;
+  if (open > 0) inputWorkInFlight.set(message, open);
+  else inputWorkInFlight.delete(message);
   refreshSendLock();
 }
 
 // The chat-input and /compact send paths both refuse submission through this
-// gate while an attachment upload or a voice transcription is in flight; one
+// gate while an attachment upload or an input-work window is open; one
 // definition keeps the refusal behavior from drifting.
 function blockIfUploadsInFlight() {
-  if (uploadsInFlight <= 0 && voiceTranscribesInFlight <= 0) return false;
-  showToast(uploadsInFlight > 0 ? UPLOAD_IN_FLIGHT_MESSAGE : VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE, true);
+  if (uploadsInFlight <= 0 && !inputWorkInFlight.size) return false;
+  showToast(uploadsInFlight > 0 ? UPLOAD_IN_FLIGHT_MESSAGE : inputWorkInFlight.keys().next().value, true);
   return true;
 }
 
@@ -164,14 +163,14 @@ function removeFile(id) {
   renderFileChips();
 }
 
-// The send button's single disabled writer: locked exactly while the combined
-// attachment + voice in-flight count is positive, painted with the same greyed
+// The send button's single disabled writer: locked exactly while an attachment
+// upload or an input-work window is open, painted with the same greyed
 // style the upload path always used. Thinking state never writes here, so a
 // master run can neither lock nor unlock the button.
 function refreshSendLock() {
   const btn = document.getElementById('send-btn');
   if (!btn) return;
-  if (uploadsInFlight + voiceTranscribesInFlight > 0) {
+  if (uploadsInFlight > 0 || inputWorkInFlight.size) {
     btn.setAttribute('disabled', '');
     btn.classList.add('opacity-50', 'cursor-not-allowed');
     btn.classList.remove('hover:bg-blue-500');

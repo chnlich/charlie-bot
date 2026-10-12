@@ -590,6 +590,62 @@ def test_commit_allows_a_wide_line_folded_into_continuation_lines(store: Path, m
   assert "prose check" not in err
 
 
+# --- body line limit: pure deletions ------------------------------------------
+
+
+def _body_lines(count: int) -> str:
+  """*count* short one-sentence bullet lines: a canon body of the v5-gap entry's shape."""
+  return "".join(f"- Body line {i} stands.\n" for i in range(1, count + 1))
+
+
+def test_commit_allows_a_pure_deletion_from_a_50_line_body(store: Path, monkeypatch, capsys) -> None:
+  """The line limit prices new verbosity: deleting one line from a 50-line body canon
+  already holds (the v5-gap entry's shape) adds nothing, so the commit passes."""
+  rel = Path("entries/profile/v5-gap.md")
+  base_text = _entry_text("v5-gap", _body_lines(50))
+  _live_commit(store, rel, base_text, "canon body of 50 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text.replace("- Body line 25 stands.\n", ""), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "trim")))
+  assert code == 0, err
+  assert "prose check" not in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
+
+
+def test_commit_refuses_a_deletion_that_also_adds_a_line(store: Path, monkeypatch, capsys) -> None:
+  """The exemption covers only commits that add no body line: swap one line for another
+  and the worktree body leaves the head version's multiset, so the limit still binds."""
+  rel = Path("entries/profile/swapped-line.md")
+  base_text = _entry_text("swapped-line", _body_lines(50))
+  _live_commit(store, rel, base_text, "canon body of 50 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  edited = base_text.replace("- Body line 25 stands.\n", "- The replacement line stands.\n")
+  (worktree / rel).write_text(edited, encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "swap")))
+  assert code == 1
+  assert "body has 50 lines (limit 12)" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_allows_trimming_a_13_line_body_to_12(store: Path, monkeypatch, capsys) -> None:
+  """A pure deletion that lands exactly at the limit passes: 13 lines down to 12."""
+  rel = Path("entries/profile/trim-to-limit.md")
+  base_text = _entry_text("trim-to-limit", _body_lines(13))
+  _live_commit(store, rel, base_text, "canon body of 13 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text.replace("- Body line 7 stands.\n", ""), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "trim")))
+  assert code == 0, err
+  assert "prose check" not in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
+
+
 def test_commit_replace_pr_lines_commits_and_lists_the_replaced_lines(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
   rel = Path("entries/profile/replaced.md")

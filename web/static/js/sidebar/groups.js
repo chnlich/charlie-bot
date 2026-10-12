@@ -282,11 +282,6 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // a worker row's -- archiving is not deletion, so it gets its own icon).
 const ARCHIVE_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>`;
 
-// The one cog-outline body: the session-row Settings button below and,
-// through the namespace, status.js's worker indicator (Sidebar.GEAR_SVG_PATH).
-// Each call site keeps its own center markup.
-const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
-
 // The one right-chevron outline: the session-group collapse toggle and the
 // tree-row expand chevron below. Each call site keeps its own <svg> wrapper.
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
@@ -366,7 +361,7 @@ function renderSettingsButton(s, activeBtnClass, rowMenu) {
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
           data-profile="${escapeHtmlAttr(s.profile || '')}"${renderSessionMenuAttrs(s)}
           class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
 }
 
@@ -535,8 +530,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   // Grouping follows the root rows; a child row nests under its parent
   // whatever its own group field says.
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
-  lastTreeChildrenOf = childrenOf;
-  lastTreeParentOf = parentOf;
+  recordTreeShape(childrenOf, parentOf);
   revealActiveSessionOnce(parentOf);
   const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.group);
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
@@ -568,7 +562,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); openGroupHeaderMenu(this)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity" title="Settings">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
       </button>` : '';
 
     html += `<div class="session-group group" data-sgroup-key="${safeKey}">
@@ -682,8 +676,6 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
 // The expanded set lives in memory only, so a reload starts every parent
 // collapsed (a persisted expand state once hid a preview-cap regression).
 const treeExpandedNodes = new Set();
-let lastTreeChildrenOf = new Map();
-let lastTreeParentOf = new Map();
 // The session whose ancestors the last paint opened (one reveal per switch).
 let lastRevealedSessionId = null;
 
@@ -722,16 +714,6 @@ function countTreeRows(rows, childrenOf) {
 
 function isTreeNodeExpanded(sessionId) {
   return treeExpandedNodes.has(sessionId);
-}
-
-// The children of the last grouped paint, for indicator aggregation.
-function treeChildIds(sessionId) {
-  return (lastTreeChildrenOf.get(sessionId) || []).map(s => s.id);
-}
-
-// The parent of a nested row in the last grouped paint (null for a root).
-function treeParentId(sessionId) {
-  return lastTreeParentOf.get(sessionId) || null;
 }
 
 // The active session's ancestors open once per switch, so a node reached by
@@ -913,10 +895,9 @@ function renderSessionItem(s, filter, options = {}) {
 
 function renderSessionList(sessions, filter, options = {}) {
   searchListPainted = (filter === 'search');
-  // The grouped paints (Workspace and Later) nest rows and set the tree maps
-  // themselves; a flat paint shows each row's own facts.
-  lastTreeChildrenOf = new Map();
-  lastTreeParentOf = new Map();
+  // The grouped paints (Workspace and Later) nest rows and record their tree
+  // shape themselves; a flat paint shows each row's own facts.
+  recordTreeShape(new Map(), new Map());
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     const labels = {
@@ -1007,7 +988,6 @@ const GLOBALS = {
 const SIDEBAR_ONLY = {
   TRASH_SVG_PATH,
   starButtonOnclick,
-  GEAR_SVG_PATH,
   MODAL_OVERLAY_CLASS,
   MODAL_DIALOG_CLASS,
   removeSessionFromRenderedList,
@@ -1017,8 +997,6 @@ const SIDEBAR_ONLY = {
   isTreeNodeExpanded,
   expandTreeNode,
   expandSessionGroup,
-  treeChildIds,
-  treeParentId,
   setSessionGroup,
   renderGroupedSessionList,
 };

@@ -174,6 +174,10 @@ function rowUnreadState(sessionId, serverValue) {
 const SPINNER_SVG_INNER =
   '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
   + '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>';
+// The one cog-outline body: the worker indicator below and, through the
+// namespace, groups.js's Settings buttons (Sidebar.GEAR_SVG_PATH). Each call
+// site keeps its own center markup.
+const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
 const GEAR_CENTER_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
 const SPINNER_TITLE = 'Task is running';
@@ -189,7 +193,7 @@ const CLOCK_SVG_PATH =
   + 'd="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>';
 
 function gearSvgContent() {
-  return (Sidebar.GEAR_SVG_PATH || '') + GEAR_CENTER_PATH;
+  return GEAR_SVG_PATH + GEAR_CENTER_PATH;
 }
 
 // The unread dot: the row's own unread reply — never a descendant's. Pinned
@@ -278,20 +282,33 @@ function updateSidebarHighlight(newSessionId) {
 // paints the subtree's hollow mark. The facts are the latest applied state
 // per row (list paint, status poll, task_tree_changed / running_changed
 // broadcasts) and the shared unread map; the tree shape comes from the last
-// grouped paint.
+// grouped paint, which groups.js records here.
 const ownIndicatorState = {};
+let lastTreeChildrenOf = new Map();
+let lastTreeParentOf = new Map();
 
-function treeChildIdsOf(sid) {
-  return Sidebar.treeChildIds ? Sidebar.treeChildIds(sid) : [];
+function recordTreeShape(childrenOf, parentOf) {
+  lastTreeChildrenOf = childrenOf;
+  lastTreeParentOf = parentOf;
+}
+
+// The children of the last grouped paint, for indicator aggregation.
+function treeChildIds(sessionId) {
+  return (lastTreeChildrenOf.get(sessionId) || []).map(s => s.id);
+}
+
+// The parent of a nested row in the last grouped paint (null for a root).
+function treeParentId(sessionId) {
+  return lastTreeParentOf.get(sessionId) || null;
 }
 
 function subtreeHasState(sid, state) {
-  return treeChildIdsOf(sid).some(
+  return treeChildIds(sid).some(
       child => (ownIndicatorState[child] || 'idle') === state || subtreeHasState(child, state));
 }
 
 function subtreeUnread(sid) {
-  return treeChildIdsOf(sid).some(child => !!sessionUnread[child] || subtreeUnread(child));
+  return treeChildIds(sid).some(child => !!sessionUnread[child] || subtreeUnread(child));
 }
 
 // The subtree stand-in, in the same priority position as the row's own state:
@@ -344,8 +361,7 @@ function paintSessionIndicator(sid) {
 // row's dot and every ancestor's subtree mark clear in one paint.
 function refreshSessionIndicator(sid) {
   paintSessionIndicator(sid);
-  if (!Sidebar.treeParentId) return;
-  for (let parent = Sidebar.treeParentId(sid); parent; parent = Sidebar.treeParentId(parent)) {
+  for (let parent = treeParentId(sid); parent; parent = treeParentId(parent)) {
     paintSessionIndicator(parent);
   }
 }
@@ -359,7 +375,7 @@ function setSessionIndicator(sid, state) {
 // their stand-in gear and their subtree marks here, once the rows exist.
 function refreshTreeIndicators() {
   Object.keys(ownIndicatorState).forEach(sid => {
-    if (treeChildIdsOf(sid).length) paintSessionIndicator(sid);
+    if (treeChildIds(sid).length) paintSessionIndicator(sid);
   });
 }
 
@@ -591,6 +607,7 @@ async function cancelMaster() {
 
 const API = {
   recordRenderedSessionStatus,
+  recordTreeShape,
   updateBackendHeaderControls,
   updateSidebarSessionName,
   getSessionIndicatorState,
@@ -627,6 +644,9 @@ const API = {
 Sidebar.wire(API, {
   sidebarSessionIds,
   updateSpinner,
+  GEAR_SVG_PATH,
+  treeChildIds,
+  treeParentId,
 });
 
 })();

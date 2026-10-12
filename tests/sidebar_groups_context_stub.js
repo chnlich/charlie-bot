@@ -41,6 +41,7 @@ function loadGroups() {
     renderPendingTriggerIndicator: () => '',
     renderPendingPlanApprovalIndicator: () => '',
     recordRenderedSessionStatus: () => {},
+    recordTreeShape: () => {},
   };
   context.globalThis = context;
   vm.createContext(context);

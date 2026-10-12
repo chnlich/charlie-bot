@@ -351,8 +351,8 @@ test('a logical row offers New child session; a worker leaf does not', () => {
 
   context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), meta('legacy')], 'all');
 
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /title="New child session"[\s\S]*?createChildSession\('r1'\)|createChildSession\('r1'\)[\s\S]*?title="New child session"/);
-  assert.match(rowHtml(nav.innerHTML, 'legacy'), /createChildSession\('legacy'\)/);
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /title="New child session"[\s\S]*?sidebarControl\('createChildSession', 'r1'\)|sidebarControl\('createChildSession', 'r1'\)[\s\S]*?title="New child session"/);
+  assert.match(rowHtml(nav.innerHTML, 'legacy'), /sidebarControl\('createChildSession', 'legacy'\)/);
   assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /New child session|createChildSession/);
 });
 
@@ -609,7 +609,7 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
     const row = rowHtml(html, t);
     assert.doesNotMatch(row, /star-btn|title="Rename"|title="Edit schedule"|title="Add schedule"/);
     assert.match(row, /title="Archive"/);
-    assert.match(anchorOpenTag(html, t), /switchSession\('t/);
+    assert.match(anchorOpenTag(html, t), /sidebarControl\('switchSession', 't/);
   }
   // The group header counts every rendered row, roots and descendants.
   assert.match(html, /<span class="text-xs text-slate-500 ml-auto">4<\/span>/);

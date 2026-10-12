@@ -362,7 +362,7 @@ OUTLINE_JS = r"""
     if (el.classList.contains('tree-subtree') || el.classList.contains('tree-children')) return 'tree-container';
     if (el.hasAttribute('data-tree-toggle')) return 'tree-toggle';
     const onclick = el.getAttribute('onclick') || '';
-    if (onclick.includes('createChildSession(')) return 'new-child-action';
+    if (onclick.includes('createChildSession')) return 'new-child-action';
     if (onclick.includes('openTaskContextModal(')) return 'task-context-action';
     if (tag === 'svg' && (el.getAttribute('title') || '').startsWith('Worker (')) return 'worker-icon';
     // .xterm-rows: the terminal's live screen. Its row count and text follow a

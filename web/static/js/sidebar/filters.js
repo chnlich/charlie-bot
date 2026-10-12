@@ -346,6 +346,8 @@ async function toggleSessionStar(id, currentlyStarred) {
   }
 }
 
+// The session rows' star button (groups.js).
+registerSidebarControl('toggleSessionStar', toggleSessionStar);
 
 const GLOBALS = {
   registerSidebarFilter,

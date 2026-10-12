@@ -308,7 +308,7 @@ function filterPillClass(active) {
 // toggleSessionStar after a star toggle (Sidebar.starButtonOnclick). The
 // starred argument is the state the next click should toggle away from.
 function starButtonOnclick(id, starred) {
-  return `event.preventDefault(); event.stopPropagation(); toggleSessionStar('${id}', ${starred})`;
+  return `event.preventDefault(); event.stopPropagation(); sidebarControl('toggleSessionStar', '${id}', ${starred})`;
 }
 
 function renderStarButton(s, activeBtnClass) {
@@ -346,7 +346,7 @@ function renderArchiveButton(s, activeBtnClass) {
 // same creation body as New Session with this row as the parent.
 function renderNewChildButton(s, activeBtnClass) {
   return renderRowActionButton(
-      `event.preventDefault(); event.stopPropagation(); createChildSession('${s.id}')`,
+      `event.preventDefault(); event.stopPropagation(); sidebarControl('createChildSession', '${s.id}')`,
       'hover:text-green-400',
       'New child session',
       PLUS_SVG_PATH,
@@ -389,8 +389,8 @@ function renderSessionRowShell(s, {filter, activeClass, options, indicators, lin
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   return `<a href="/?session=${s.id}&filter=${filter}"
-     class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="startRename(event, '${s.id}')"
-     onclick="event.preventDefault(); switchSession('${s.id}')"
+     class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="sidebarControl('startRename', event, '${s.id}')"
+     onclick="event.preventDefault(); sidebarControl('switchSession', '${s.id}')"
      id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
@@ -467,7 +467,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     // hidden too; the Settings gear stays.
     const createInGroupButton = filter !== 'threads' ? `
       <button data-group-name="${safeKey}"
-              onclick="event.stopPropagation(); createSessionInGroup(this.dataset.groupName)"
+              onclick="event.stopPropagation(); sidebarControl('createSessionInGroup', this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-green-400 transition-opacity" title="New session in group">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PLUS_SVG_PATH}</svg>
       </button>` : '';

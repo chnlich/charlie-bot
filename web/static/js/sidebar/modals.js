@@ -385,6 +385,8 @@ function closeTaskContextModal() {
   taskContextModalSession = null;
 }
 
+// The session row's double-click (groups.js).
+registerSidebarControl('startRename', startRename);
 
 const GLOBALS = {
   startRename,

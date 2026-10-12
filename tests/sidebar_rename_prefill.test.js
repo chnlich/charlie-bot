@@ -72,10 +72,10 @@ test('row handlers carry no session name: every startRename call holds only the 
   for (const filter of ['all', 'scheduled']) {
     const html = loadGroups().Sidebar.renderSessionItem(
       {id: 's1', name: hostile, updated_at: '2026-07-29T17:12:00Z'}, filter);
-    const calls = html.match(/startRename\([^)]*\)/g) || [];
+    const calls = html.match(/sidebarControl\('startRename'[^)]*\)/g) || [];
     assert.ok(calls.length >= 1, `${filter} row is missing a startRename call`);
     for (const call of calls) {
-      assert.match(call, /^startRename\(event, 's1'\)$/,
+      assert.match(call, /^sidebarControl\('startRename', event, 's1'\)$/,
         `${filter} row bakes session state into the handler: ${call}`);
     }
   }

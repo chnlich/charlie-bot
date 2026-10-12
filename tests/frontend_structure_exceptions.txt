@@ -1,7 +1,0 @@
-# Rows are the upward uses that predate the frontend structure.
-# Rows only leave this table.
-#
-# One row per pair: user file -> defining file. Paths are repo-relative and the rows are sorted.
-
-web/static/js/sidebar/filters.js -> web/static/js/sidebar/archived.js
-web/static/js/sidebar/filters.js -> web/static/js/sidebar/groups.js

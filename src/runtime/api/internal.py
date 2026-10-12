@@ -149,7 +149,6 @@ async def _delegate_task_tree(
     request_id = delegate_request_id(req)
     task_spec = TaskSpec(
         goal=req.description,
-        context_refs=[req.context] if req.context else [],
         repo_path=req.repo_path,
         base_branch=req.base_branch,
         task_type=req.task_type,

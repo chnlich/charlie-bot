@@ -666,7 +666,7 @@ function renderDelegateMetadata(msg, sessionId) {
       ['repo', displayMetadataValue(invocation.repo_path, repoEmpty)],
       ['base', displayMetadataValue(invocation.base_branch, baseEmpty)],
       ['task spec file', displayMetadataValue(invocation.task_spec_file, '(unknown)')],
-      ['reviewer context file', displayMetadataValue(invocation.reviewer_context_file, '(none)')],
+      ...(invocation.reviewer_context_file ? [['reviewer context file', invocation.reviewer_context_file]] : []),
       ['backend/model', delegateBackendModel(invocation, msg)],
       ['keep worktree', invocation.keep_worktree ? 'true' : 'false'],
     ];

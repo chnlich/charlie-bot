@@ -20,6 +20,7 @@ function loadModals(dom) {
   const Sidebar = {};
   const context = {
     Sidebar,
+    Chat: {registerSeparatorButton: () => {}},
     globalThis: null,
     document: dom.document,
     console: {error: () => {}},

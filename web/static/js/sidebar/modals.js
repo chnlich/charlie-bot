@@ -210,6 +210,20 @@ function eloneSession(sessionId, eventIndex) {
   });
 }
 
+// The separator line's Clone to here and Elon-e buttons. modals.js is the one
+// core file that registers separator buttons, and core loads before every
+// package, so these two lead the line.
+Chat.registerSeparatorButton(function(sessionId, eventIndex) {
+  return "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + eventIndex + ")\""
+    + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
+    + Chat.CLONE_SVG
+    + "</button>"
+    + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + eventIndex + ")\""
+    + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
+    + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
+    + "</button>";
+});
+
 
 // ---------------------------------------------------------------------------
 // Task & context dialog (plan 4.2): a read-only view of a logical session's

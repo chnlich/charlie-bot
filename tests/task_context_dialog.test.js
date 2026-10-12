@@ -32,6 +32,7 @@ function buildHarness(routes) {
   const proseCalls = [];
   const context = {
     Sidebar: {},
+    Chat: {registerSeparatorButton: () => {}},
     globalThis: null,
     document: {getElementById: (id) => elements.get(id) || null},
     console: {error: () => {}},

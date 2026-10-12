@@ -395,6 +395,65 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
 
 
 @pytest.mark.asyncio
+async def test_failed_review_continuation_reports_failure_to_the_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
+  work_started = asyncio.Event()
+  work_gate = asyncio.Event()
+  review_started = asyncio.Event()
+  review_gate = asyncio.Event()
+
+  async def work_wait() -> None:
+    work_started.set()
+    await work_gate.wait()
+
+  async def review_wait() -> None:
+    review_started.set()
+    await review_gate.wait()
+
+  install_backends(
+      monkeypatch, [
+          NativeIdBackend([test_task_execution.result_event("did the work")], native_id="native-1", gate=work_wait),
+          NativeIdBackend(
+              [test_task_execution.result_event("review approved")], native_id="native-review-1", gate=review_wait),
+          NativeIdBackend([], native_id="native-review-1", exit_code=1),
+      ])
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run1_id = decision["run_id"]
+  await asyncio.wait_for(work_started.wait(), timeout=15)
+  record = tree.runs.read_run_sync(worker.id, run1_id)
+  assert record is not None and record.worktree_path
+  work_wt = Path(record.worktree_path)
+  (work_wt / "marker.txt").write_text("marked\n")
+  conftest.run_git(work_wt, "add", "-A")
+  conftest.run_git(work_wt, "commit", "-q", "-m", "the work")
+  work_gate.set()
+  await asyncio.wait_for(review_started.wait(), timeout=15)
+  review1 = await _wait_for_review_of(tree, worker.id, run1_id)
+  mgr = await _save_trigger(cfg, tree, _trigger(worker.id, message="CI passed"))
+  review_gate.set()
+  await test_task_execution.wait_for_terminal_run(tree, worker.id, review1.id)
+
+  # The continuation review fails. The paused review's verdict already ended
+  # the retry chain, so nothing respawns it: the failure must reach the parent.
+  await _fire(mgr, _trigger(worker.id, message="CI passed"))
+  review2 = await _wait_for_new_run(tree, worker.id, {run1_id, review1.id})
+  assert review2.kind == "review"
+  _r2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, review2.id)
+  assert outcome2 == "failed"
+  deadline = asyncio.get_event_loop().time() + 10
+  reports: list[dict] = []
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  assert reports and reports[-1]["outcome"] == "failed"
+  assert tree.task_state(worker.id) == "open"
+
+
+@pytest.mark.asyncio
 async def test_failed_run_with_pending_trigger_reports_failure_as_today(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)

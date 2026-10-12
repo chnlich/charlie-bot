@@ -1157,13 +1157,14 @@ class AgentBackend(ABC):
     if stdin_error is not None:
       raise stdin_error
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text for a single prompt with no tools and no instructions file.
 
     Backend-agnostic default: run the agent in a throwaway empty cwd (so no
     AGENTS.md/CLAUDE.md is written) with the system prompt framed into the user
     prompt, collecting assistant text until the RESULT event. Subclasses with a
     cheaper CLI-native one-shot (claude/codex/opencode) override this.
+    ``timeout`` is in seconds; ``None`` waits without a limit.
     """
 
     # A one-shot writes no instructions file; the framed system prompt is the only steering.

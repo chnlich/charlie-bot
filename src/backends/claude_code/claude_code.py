@@ -288,11 +288,11 @@ class ClaudeCodeBackend(base.AgentBackend):
   def _stdin_prompt(self, prompt: str) -> str | None:
     return prompt
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text via `claude -p` in text mode, using this backend's model.
 
     Print mode with tools disabled: no session persistence, prompt on stdin,
-    plain-text stdout. The process group is killed on timeout.
+    plain-text stdout. The process group is killed on timeout; ``None`` waits without a limit.
     """
     proc = await asyncio.create_subprocess_exec(
         "claude",

@@ -171,15 +171,15 @@ def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespa
 
 class _FakeBackend:
 
-  def __init__(self, answer: str | None = None, error: str | None = None) -> None:
+  def __init__(self, answer: str | None = None, error: str | BaseException | None = None) -> None:
     self._answer = answer
-    self._error = error
+    self._error = RuntimeError(error) if isinstance(error, str) else error
     self.calls: list[dict] = []
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     self.calls.append({"prompt": prompt, "system_prompt": system_prompt, "timeout": timeout})
     if self._error is not None:
-      raise RuntimeError(self._error)
+      raise self._error
     assert self._answer is not None
     return self._answer
 
@@ -202,7 +202,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   lines = capsys.readouterr().out.splitlines()
   assert lines[-5:] == [
       "--- cold read ---",
-      "attempt alpha failed: boom",
+      "attempt alpha failed: RuntimeError: boom",
       "backend beta",
       "(1) The reader's problem.",
       "(2)-(6) fine.",
@@ -213,7 +213,19 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   assert '"where are we?"' in prompt
   assert "(7) Read as an engineer who knows the domain" in prompt
   assert "<trigger message verbatim>" not in prompt
-  assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
+  assert backends["beta"].calls[0]["timeout"] is None
+
+
+def test_probe_records_each_failed_attempt_with_its_exception_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An exception with an empty message still names its type in the attempt record."""
+  artifact = _write(tmp_path, _sitrep_ok_doc())
+  cfg, _options = _probe_cfg(tmp_path)
+  backends = {"alpha": _FakeBackend(error=TimeoutError()), "beta": _FakeBackend(error="kaput")}
+  _patch_backends(monkeypatch, backends)
+  result = artifact_check.run_probe(cfg, artifact, "where are we?")
+  assert result.attempts == [("alpha", "TimeoutError: "), ("beta", "RuntimeError: kaput")]
+  assert result.backend_id is None
 
 
 def test_cli_assertions_only_passes_a_page_over_the_height_target(
@@ -334,8 +346,8 @@ def test_background_with_a_failing_assertion_starts_no_process(
 def test_background_starts_the_cold_read_and_registers_its_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """Passing assertions: the command returns at once (the sleep outlives it), one trigger
-  watches the detached pid with backends x 300 + 60 seconds of max wait and a label holding
-  the log path, and the log's first line names the page and its sha256."""
+  watches the detached pid with a one-hour max wait and a label holding the log path, and
+  the log's first line names the page and its sha256."""
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -358,7 +370,7 @@ def test_background_starts_the_cold_read_and_registers_its_wake(
   log_path = Path(payload["message"].removeprefix("cold read: "))
   assert call["endpoint"] == "/api/internal/schedule-trigger"
   assert payload["session_id"] == session_id
-  assert payload["delay_seconds"] == 2 * 300 + 60
+  assert payload["delay_seconds"] == 3600
   assert payload["watch_targets"] == [
       {
           "kind": "local_pid",
@@ -489,7 +501,7 @@ def test_cold_read_log_holds_the_header_then_the_probe_output(tmp_path: Path, mo
   assert lines[0] == f"page {artifact} sha256 {hashlib.sha256(artifact.read_bytes()).hexdigest()}"
   assert lines[-5:] == [
       "--- cold read ---",
-      "attempt alpha failed: boom",
+      "attempt alpha failed: RuntimeError: boom",
       "backend beta",
       "(1) The reader's problem.",
       "(2)-(6) fine.",

@@ -1,5 +1,7 @@
-"""Session memory-cap cgroup helpers: config schema, naming, degradation, attribution."""
+"""Process helpers: session memory-cap cgroups (config schema, naming, degradation, attribution) and
+wait_or_kill_group's no-limit path."""
 
+import asyncio
 import pathlib
 
 import pytest
@@ -58,3 +60,20 @@ def test_classify_cap_kill_on_max_growth() -> None:
   assert "session 内存上限触发" in msg
   assert "12288" in msg
   assert "gpuq" in msg
+
+
+# ---------------------------------------------------------------------------
+# wait_or_kill_group: timeout=None waits without a limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_or_kill_group_without_a_limit_returns_the_result() -> None:
+
+  async def answer() -> str:
+    await asyncio.sleep(0.05)
+    return "done"
+
+  stderr_task = asyncio.create_task(asyncio.sleep(3600))
+  assert await process.wait_or_kill_group(answer(), None, -1, stderr_task) == "done"
+  assert stderr_task.cancelled()

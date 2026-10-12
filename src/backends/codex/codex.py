@@ -88,14 +88,14 @@ class CodexBackend(base.AgentBackend):
     base.prepend_path_dir(codex_env, base.USER_LOCAL_BIN)
     return codex_env
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text via `codex exec --json` with the configured model and effort.
 
     Codex has no system-prompt flag, so the system prompt is framed into the user
     prompt. agent_message text is accumulated with the same cumulative-delta logic
     as the streaming path (_handle_agent_message). The process group is killed on
-    timeout. Structured backend failures are raised instead of being mistaken for
-    non-JSON assistant text.
+    timeout; ``None`` waits without a limit. Structured backend failures are raised
+    instead of being mistaken for non-JSON assistant text.
     """
     framed = self._frame_system_prompt(system_prompt, prompt)
     cmd = [*self._exec_command_head(), "--", framed]

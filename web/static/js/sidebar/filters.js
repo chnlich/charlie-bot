@@ -214,18 +214,21 @@ function setSidebarFilterPill(filter) {
   }
 }
 
-// The Workspace error badge rides this fetch: a failed cron pull yields no
-// badge ([]) but never hides the session list.
-async function fetchBrokenCronTasks() {
-  try {
-    const res = await fetch('/api/cron/tasks');
-    if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
-    const tasks = await res.json();
-    return tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
-  } catch (err) {
-    console.error('Cron tasks fetch failed:', err);
-    return [];
-  }
+// The badges at the top of the Workspace list: a package registers a loader
+// when its script loads. load() resolves to the badge HTML, or '' for no
+// badge, and resolves even when its own fetch fails, so the list still paints.
+const workspaceBadgeLoaders = [];
+
+function registerWorkspaceBadge(load) {
+  if (typeof load !== 'function') throw new Error('Invalid Workspace badge registration');
+  if (workspaceBadgeLoaders.includes(load)) throw new Error('Duplicate Workspace badge');
+  workspaceBadgeLoaders.push(load);
+}
+
+// Every loader runs on each Workspace fetch; the badges paint in registration
+// order.
+function loadWorkspaceBadges() {
+  return Promise.all(workspaceBadgeLoaders.map(load => load())).then(badges => badges.join(''));
 }
 
 function switchSidebarFilter(filter) {
@@ -240,16 +243,16 @@ function switchSidebarFilter(filter) {
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
   if (filter === 'all') {
-    // The error badge's broken tasks and the session list load in parallel, so
-    // badge and list paint together in the one render call.
+    // The Workspace badges and the session list load in parallel, so badges
+    // and list paint together in the one render call.
     Promise.all([
       fetch(registeredFilter.url).then(res => {
         if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
         return res.json();
       }),
-      fetchBrokenCronTasks(),
+      loadWorkspaceBadges(),
     ])
-      .then(([sessions, brokenTasks]) => renderSessionList(sessions, filter, {brokenTasks}))
+      .then(([sessions, workspaceBadges]) => renderSessionList(sessions, filter, {workspaceBadges}))
       .catch(err => console.error('Filter fetch failed:', err));
     return;
   }
@@ -293,9 +296,9 @@ function restoreSidebarFromUrl() {
       renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
     } else {
       renderSessionList(INITIAL_SESSIONS, 'all');
-      // The error badge rides its own cron pull so the first paint never waits
-      // for it; the repaint discards itself when the view has moved on.
-      fetchBrokenCronTasks().then(paintWorkspaceBadge);
+      // The Workspace badges load on their own so the first paint never waits
+      // for them; the repaint discards itself when the view has moved on.
+      loadWorkspaceBadges().then(paintWorkspaceBadges);
     }
   }
 }
@@ -354,6 +357,7 @@ async function toggleSessionStar(id, currentlyStarred) {
 
 const GLOBALS = {
   registerSidebarFilter,
+  registerWorkspaceBadge,
   archiveSession,
   unarchiveSession,
   confirmDeletePermanently,

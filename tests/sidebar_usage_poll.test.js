@@ -6,7 +6,7 @@ const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
 const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
-  makeSessionMeta } = require('./session_context_stub');
+  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 
@@ -81,6 +81,7 @@ function buildContext(overrides = {}) {
   context.confirm = overrides.confirm || (() => true);
 
   createChatSidebarContext(context);
+  loadCronPackage(context);
   return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements, localStorageData};
 }
 

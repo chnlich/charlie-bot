@@ -14,7 +14,7 @@ const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
 const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  makeSessionMeta } = require('./session_context_stub');
+  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
 
 function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
@@ -66,6 +66,7 @@ function buildContext({sessionId = 'session-live', rows = [], fetchHandler} = {}
     return innerFetch(url, opts);
   };
   createChatSidebarContext(context);
+  loadCronPackage(context);
   // session-view.js wires its real switchSession/renderNoActiveSessionView
   // globals at load (after filters.js), so the stubs the delete path resolves
   // at call time must be re-installed over the wired ones.
@@ -228,11 +229,11 @@ test('a failed cron pull still paints the Workspace list, with no badge', async 
   assert.ok(!nav.innerHTML.includes('scheduled tasks failed to load'), nav.innerHTML);
 });
 
-test('an in-place delete repaint carries the badge\u2019s broken tasks through unchanged', async () => {
+test('an in-place delete repaint carries the Workspace badges through unchanged', async () => {
   const sessions = Array.from({length: 6}, (_, i) => makeSession(`c${i + 1}`, {group: null}));
   const {context, nav, fetchCalls} = buildContext();
   await paintGroupedWithBadge(context, sessions,
-      {brokenTasks: [{name: 'z-broken', error: 'boom', broken: true, path: '/h/z.yaml', enabled: null}]});
+      {workspaceBadges: '<div>\u26a0 1 scheduled tasks failed to load</div>'});
 
   assert.equal(countRows(nav.innerHTML), 6);
   assert.match(nav.innerHTML, /session-group-limit-extra hidden/);
@@ -249,7 +250,7 @@ test('an in-place delete repaint carries the badge\u2019s broken tasks through u
   assert.doesNotMatch(nav.innerHTML, /session-group-limit-toggle/);
   assert.doesNotMatch(nav.innerHTML, /Show all/);
   assert.ok(nav.innerHTML.includes('ml-auto">5</span>'));
-  // The in-place repaint carries the badge's broken tasks through unchanged.
+  // The in-place repaint carries the Workspace badges through unchanged.
   assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
   assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/c2']);
 });

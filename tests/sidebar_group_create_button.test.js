@@ -69,6 +69,9 @@ test('the "(No group)" header renders no create button', () => {
 
 test('a named group header\u2019s Settings gear reads the group name and builds the menu items', async () => {
   const {context, nav} = buildContext();
+  // A package's registered item leads the menu and receives the group name.
+  const calls = [];
+  context.registerGroupMenuItem({label: 'Package item', onSelect: (name) => calls.push(['package', name])});
 
   context.renderSessionList([sessionRow('s1', 'alpha')], 'all');
 
@@ -93,12 +96,9 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
   assert.deepEqual(stopped, [true], 'the click does not reach the header toggle');
   assert.equal(captured.anchor, context.__button);
 
-  // Each item keeps its old direct button's call, with the gear's group name.
-  // New scheduled task runs session-view.js's global; rename and delete are
-  // groups.js-local, so their wiring shows at the fetch boundary.
-  const calls = [];
+  // Each item gets the gear's group name. Rename and delete are groups.js-local,
+  // so their wiring shows at the fetch boundary.
   const posts = [];
-  context.createScheduledTaskInGroup = (name) => calls.push(['scheduled', name]);
   context.prompt = () => 'beta';
   context.confirm = () => true;
   context.JSON_HEADERS = {'Content-Type': 'application/json'};
@@ -109,7 +109,7 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
   };
   const items = [...captured.items];
   assert.deepEqual(items.filter((item) => !item.separator).map((item) => item.label),
-    ['New scheduled task', 'Rename group', 'Delete group']);
+    ['Package item', 'Rename group', 'Delete group']);
   assert.deepEqual(items.map((item) => !!item.separator), [false, false, true, false],
     'the separator sits before Delete group');
   assert.equal(items[3].danger, true, 'Delete group keeps its danger styling');
@@ -118,7 +118,7 @@ test('a named group header\u2019s Settings gear reads the group name and builds 
   items[1].onSelect(click);
   items[3].onSelect(click);
   await new Promise(setImmediate);
-  assert.deepEqual(calls, [['scheduled', 'alpha']]);
+  assert.deepEqual(calls, [['package', 'alpha']]);
   assert.deepEqual(posts, [
     ['/api/sessions/groups/rename', JSON.stringify({old_name: 'alpha', new_name: 'beta'})],
     ['/api/sessions/groups/delete', JSON.stringify({group: 'alpha'})],

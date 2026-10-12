@@ -11,7 +11,17 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { buildSidebarIndicatorContext, makeSessionMeta } = require('./session_context_stub');
+const { buildSidebarIndicatorContext: buildCoreSidebarContext, loadCronPackage, makeSessionMeta } =
+  require('./session_context_stub');
+
+// A bound node's schedule lines, clock badge and schedule menu items come from
+// the cron script, so each harness here runs it after the core modules, as
+// the page does.
+function buildSidebarIndicatorContext(ids) {
+  const built = buildCoreSidebarContext(ids);
+  loadCronPackage(built.context);
+  return built;
+}
 
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
 
@@ -376,8 +386,6 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
   const calls = [];
   const click = {preventDefault() {}, stopPropagation() {}};
   context.openTaskContextModal = (...args) => calls.push(['taskContext', ...args]);
-  context.openCronEditor = (...args) => calls.push(['edit', ...args]);
-  context.openCronAdder = (...args) => calls.push(['add', ...args]);
   context.startRename = (...args) => calls.push(['rename', ...args]);
   let items = null;
   context.openRowMenu = (anchor, built) => { items = built; };
@@ -388,21 +396,17 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
     return [...items].map((item) => item.label);
   };
 
-  // A root manager, unbound: all four items, each onSelect wired to its old
-  // direct button's call. (Move to group runs groups.js-local
+  // A root manager, unbound: all four items, each core item's onSelect wired
+  // to its old direct button's call. (Move to group runs groups.js-local
   // showGroupSelector, outside this harness's reach; the browser harness
-  // covers it.)
+  // covers it. cron_broken_ui.test.js drives the schedule items.)
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
     ['Rename', 'Move to group\u2026', 'Task & context', 'Add schedule\u2026']);
   items[0].onSelect(click);
   items[2].onSelect(click);
-  items[3].onSelect(click);
-  // JSON-normalized: openCronAdder's {sessionId} literal is built inside the
-  // vm and carries the vm's Object.prototype, which deepStrictEqual rejects.
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
-    ['rename', {}, 'r1'],
+  assert.deepEqual(calls, [
+    ['rename', click, 'r1'],
     ['taskContext', 'r1'],
-    ['add', {sessionId: 'r1'}],
   ]);
   assert.equal(calls[0][1], click, 'rename takes the item\u2019s click event');
 
@@ -420,9 +424,6 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
   // A bound row edits its own task instead of adding one.
   assert.deepEqual(open({scheduleTask: 'task-cron1'}, 'cron1'),
     ['Rename', 'Move to group\u2026', 'Edit schedule\u2026']);
-  calls.length = 0;
-  items[2].onSelect(click);
-  assert.deepEqual(calls, [['edit', 'task-cron1']]);
 });
 
 test('touch menus lead with the Later toggle and child creation and trail with Archive', () => {

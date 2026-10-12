@@ -206,18 +206,66 @@ async function setSessionGroup(sessionId, group) {
 }
 
 // ---------------------------------------------------------------------------
-// Cron error badge
+// Session-row and group-menu registrations
 // ---------------------------------------------------------------------------
-// Global cron load-failure badge, rendered at the top of Workspace from the
-// broken cron entries the filter fetch hands the renderer (name order);
-// clicking opens the cron editor on the first broken task. Empty when nothing
-// is broken.
-function renderCronErrorBadge(brokenTasks) {
-  const broken = brokenTasks || [];
-  if (!broken.length) return '';
-  return `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs cursor-pointer"
-       role="button" title="Open the first failed task"
-       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">⚠ ${broken.length} scheduled tasks failed to load</div>`;
+// A package adds to the session rows and to the group header menu through
+// these entries when its script loads. Each entry checks its argument and
+// rejects a duplicate.
+const sessionRowBadges = [];
+const sessionRowLines = [];
+const sessionMenuItemSources = [];
+const groupMenuItems = [];
+
+// A row badge: render(s) returns the badge HTML for the row, or ''. The
+// badges follow the row's own indicators, in registration order.
+function registerSessionRowBadge(render) {
+  if (typeof render !== 'function') throw new Error('Invalid session row badge registration');
+  if (sessionRowBadges.includes(render)) throw new Error('Duplicate session row badge');
+  sessionRowBadges.push(render);
+}
+
+// A row line: render(s) returns the HTML of the row's line, or null to keep
+// the time line. The first registered line that is not null wins.
+function registerSessionRowLine(render) {
+  if (typeof render !== 'function') throw new Error('Invalid session row line registration');
+  if (sessionRowLines.includes(render)) throw new Error('Duplicate session row line');
+  sessionRowLines.push(render);
+}
+
+// Settings menu items of a normal row: rowAttrs(s) names the row facts the
+// items read, as {camelCaseKey: value}, and the Settings button carries each
+// as a data attribute. items(attrs, sessionId) builds the items from the
+// button's dataset at click time; they follow the core items.
+function registerSessionMenuItems(source) {
+  if (!source || typeof source.items !== 'function'
+      || (source.rowAttrs !== undefined && typeof source.rowAttrs !== 'function')) {
+    throw new Error('Invalid session menu items registration');
+  }
+  if (sessionMenuItemSources.some(known => known.items === source.items)) {
+    throw new Error('Duplicate session menu items');
+  }
+  sessionMenuItemSources.push(source);
+}
+
+// The registered row facts as the Settings button's data attributes: a
+// camelCase dataset key is its kebab-case data- attribute.
+function renderSessionMenuAttrs(s) {
+  return sessionMenuItemSources
+    .flatMap(source => Object.entries(source.rowAttrs ? source.rowAttrs(s) : {}))
+    .map(([key, value]) => `\n          data-${key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}="${escapeHtmlAttr(value)}"`)
+    .join('');
+}
+
+// A group header menu item: onSelect(groupName). The registered items lead
+// the menu, in registration order.
+function registerGroupMenuItem(item) {
+  if (!item || !item.label || typeof item.onSelect !== 'function') {
+    throw new Error('Invalid group menu item registration');
+  }
+  if (groupMenuItems.some(known => known.label === item.label)) {
+    throw new Error('Duplicate group menu item: ' + item.label);
+  }
+  groupMenuItems.push(item);
 }
 
 // Session-row action buttons: a markup change to one of these buttons lands
@@ -243,9 +291,7 @@ const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stro
 // tree-row expand chevron below. Each call site keeps its own <svg> wrapper.
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
 
-// The one clock-badge body (face plus hands): renderScheduledBadge below.
 const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
-const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
 
 // The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
 // group modal below and, through the namespace, filters.js's delete-confirm
@@ -306,7 +352,7 @@ function renderNewChildButton(s, activeBtnClass) {
 
 // The row's Settings hover button: opens the shared row menu (row-menu.js)
 // with the facts its items need as data attributes -- current group,
-// task-tree parent, profile, bound schedule task -- because openSessionRowMenu
+// task-tree parent, profile, registered row facts -- because openSessionRowMenu
 // below reads them off the anchor at click time. The optional rowMenu argument
 // marks which item list the anchor's row builds: the archived row reuses the
 // markup and the data attributes (archived.js's [data-current-group] rewrite
@@ -318,8 +364,7 @@ function renderSettingsButton(s, activeBtnClass, rowMenu) {
           title="Settings"${menuMarker}
           data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
-          data-profile="${escapeHtmlAttr(s.profile || '')}"
-          data-schedule-task="${escapeHtmlAttr(s.schedule_task || '')}"
+          data-profile="${escapeHtmlAttr(s.profile || '')}"${renderSessionMenuAttrs(s)}
           class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
@@ -328,9 +373,9 @@ function renderSettingsButton(s, activeBtnClass, rowMenu) {
 // The normal row's Settings menu: openRowMenu (row-menu.js) draws, places and
 // closes the popover; this builds its items from the Settings button's data
 // attributes. Each item keeps its old direct button's condition: a task-tree
-// child moves with its parent (no group move), a legacy row has no task
-// record behind Task & context, a bound row edits its task while an unbound
-// manager adds one.
+// child moves with its parent (no group move), and a legacy row has no task
+// record behind Task & context. The registered items follow
+// (registerSessionMenuItems).
 function desktopSessionMenuItems(attrs, sessionId) {
   const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];
   if (!attrs.taskParent) {
@@ -340,11 +385,7 @@ function desktopSessionMenuItems(attrs, sessionId) {
   if (attrs.profile) {
     items.push({label: 'Task & context', onSelect: () => openTaskContextModal(sessionId)});
   }
-  if (attrs.scheduleTask) {
-    items.push({label: 'Edit schedule…', onSelect: () => openCronEditor(attrs.scheduleTask)});
-  } else if (attrs.profile === 'manager') {
-    items.push({label: 'Add schedule…', onSelect: () => openCronAdder({sessionId})});
-  }
+  sessionMenuItemSources.forEach(source => items.push(...source.items(attrs, sessionId)));
   return items;
 }
 
@@ -412,41 +453,16 @@ function openArchivedRowMenu(anchor, sessionId) {
 
 // The named group header's Settings menu: the gear reads the group name off
 // its own data attribute at click time (no module-level state), and each item
-// keeps its old direct button's call.
+// keeps its old direct button's call. The registered items lead the menu
+// (registerGroupMenuItem).
 function openGroupHeaderMenu(anchor) {
   const groupName = anchor.dataset.groupName;
   openRowMenu(anchor, [
-    {label: 'New scheduled task', onSelect: () => createScheduledTaskInGroup(groupName)},
+    ...groupMenuItems.map(item => ({label: item.label, onSelect: () => item.onSelect(groupName)})),
     {label: 'Rename group', onSelect: () => renameGroup(groupName)},
     {separator: true},
     {label: 'Delete group', danger: true, onSelect: () => deleteGroup(groupName)},
   ]);
-}
-
-// A bound node's clock badge: blue while the task is enabled, grey with the
-// Disabled line when it is not. One markup home for every view's row.
-function renderScheduledBadge(s) {
-  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.schedule_task)}">${CLOCK_SVG_BODY}</svg>`;
-}
-
-// A bound node's schedule lines, in every view: the next run (or Disabled),
-// then the truncated cron · timezone line, then the firing bookkeeping's Last
-// line the legacy cron rows carried. One markup home for every view's row.
-function renderSessionScheduleLine(s) {
-  const disabled = s.schedule_enabled === false;
-  let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
-    + `<span class="block truncate text-xs text-slate-500" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
-  if (s.last_run_status) {
-    const lastClass = s.last_run_status === 'success' ? 'text-green-400'
-      : s.last_run_status === 'running' ? 'text-yellow-400'
-        : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
-    // The Last line truncates with an ellipsis like the cron line above it
-    // (one line tall on the touch drawer too) and carries its full text in
-    // the title attribute.
-    const lastText = `Last: ${s.last_run_status}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}`;
-    html += `<span class="block truncate text-xs ${lastClass}" title="${escapeHtmlAttr(lastText)}">${escapeHtml(lastText)}</span>`;
-  }
-  return html;
 }
 
 // Session-row highlight: a tint change lands here, not in one renderer.
@@ -492,14 +508,14 @@ function resyncSessionUnread(sessions) {
 
 let lastGroupedRenderArgs = null;
 
-// The Workspace error badge's async repaint: the first paint never waits for
-// the cron pull, and this repaint sources the first paint's own args (no list
-// refetch) — discarding itself when the view has already moved on (another
-// filter, or the search overlay on screen).
-function paintWorkspaceBadge(brokenTasks) {
+// The Workspace badges' async repaint: the first paint never waits for the
+// badge loaders (filters.js registerWorkspaceBadge), and this repaint sources
+// the first paint's own args (no list refetch) — discarding itself when the
+// view has already moved on (another filter, or the search overlay on screen).
+function paintWorkspaceBadges(workspaceBadges) {
   if (currentFilter !== 'all' || searchListPainted) return;
   if (!lastGroupedRenderArgs || lastGroupedRenderArgs.filter !== 'all') return;
-  renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all', {brokenTasks});
+  renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all', {workspaceBadges});
 }
 // Whether the last renderSessionList call painted the search overlay. The
 // search flow never assigns currentFilter, so this marker — not the filter
@@ -511,9 +527,9 @@ let searchListPainted = false;
 // ---------------------------------------------------------------------------
 function renderGroupedSessionList(sessions, filter, options = {}) {
   const nav = options.container || document.getElementById('session-list');
-  lastGroupedRenderArgs = {sessions, filter, brokenTasks: options.brokenTasks || null};
+  lastGroupedRenderArgs = {sessions, filter, workspaceBadges: options.workspaceBadges || ''};
   if (!sessions.length) {
-    nav.innerHTML = renderCronErrorBadge(options.brokenTasks) + renderEmptyNote('No sessions yet');
+    nav.innerHTML = (options.workspaceBadges || '') + renderEmptyNote('No sessions yet');
     return;
   }
   // Grouping follows the root rows; a child row nests under its parent
@@ -540,7 +556,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     // The Threads view hides the New-session-in-group button: a session
     // created there has no platform origin and would fall back to Workspace.
     // The gate derives from the filter, not the call options, so the in-place
-    // repaints (removeSessionFromRenderedList, paintWorkspaceBadge) keep it
+    // repaints (removeSessionFromRenderedList, paintWorkspaceBadges) keep it
     // hidden too; the Settings gear stays.
     const createInGroupButton = filter !== 'threads' ? `
       <button data-group-name="${safeKey}"
@@ -577,7 +593,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       </div>
     </div>`;
   }
-  nav.innerHTML = renderCronErrorBadge(options.brokenTasks) + html;
+  nav.innerHTML = (options.workspaceBadges || '') + html;
   resyncSessionUnread(sessions);
   // Parent rows take their collapsed-subtree stand-ins now that the rows exist.
   if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
@@ -844,7 +860,7 @@ function renderSessionItem(s, filter, options = {}) {
     actions = renderArchiveButton(s, activeBtnClass);
   } else {
     // A normal row (manager or legacy): four direct buttons; rename, group
-    // move, Task & context and the schedule items moved into the Settings
+    // move, Task & context and the registered items moved into the Settings
     // menu (openSessionRowMenu above).
     actions = `
       ${renderStarButton(s, activeBtnClass)}
@@ -856,7 +872,7 @@ function renderSessionItem(s, filter, options = {}) {
       renderSessionIndicators(s),
       renderPendingTriggerIndicator(s),
       renderPendingPlanApprovalIndicator(s),
-      s.schedule_task ? renderScheduledBadge(s) : '',
+      ...sessionRowBadges.map(render => render(s)),
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
   // in one column: a logical row draws the chevron even with no children
@@ -877,9 +893,9 @@ function renderSessionItem(s, filter, options = {}) {
       showChildCount ? renderTreeChildCount(s.id, options.treeChildCount) : '',
       indicators,
   ].join('\n    ');
-  const line = s.schedule_task
-      ? renderSessionScheduleLine(s)
-      : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
+  // The first registered row line that answers replaces the time line.
+  const line = sessionRowLines.reduce((found, render) => found ?? render(s), null)
+      ?? renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
   // A context row dims and carries the active tag after the line, as the mock
   // shows it; the tag rides outside the name span so a long name cannot push
   // it out.
@@ -910,9 +926,9 @@ function renderSessionList(sessions, filter, options = {}) {
       archived: 'No archived sessions',
       search: 'No matching sessions',
     };
-    // The Workspace error badge rides the empty paint too: with zero sessions
-    // it is still the one thing paging the maintainer.
-    nav.innerHTML = (filter === 'all' ? renderCronErrorBadge(options.brokenTasks) : '')
+    // The Workspace badges ride the empty paint too: with zero sessions a badge
+    // is still the one thing paging the maintainer.
+    nav.innerHTML = (filter === 'all' ? (options.workspaceBadges || '') : '')
       + renderEmptyNote(labels[filter]);
     return;
   }
@@ -963,15 +979,19 @@ function removeSessionFromRenderedList(sessionId) {
   renderGroupedSessionList(
       lastGroupedRenderArgs.sessions.filter(s => !doomed.has(s.id)),
       lastGroupedRenderArgs.filter,
-      {brokenTasks: lastGroupedRenderArgs.brokenTasks});
+      {workspaceBadges: lastGroupedRenderArgs.workspaceBadges});
   return true;
 }
 
 
 
 const GLOBALS = {
+  registerSessionRowBadge,
+  registerSessionRowLine,
+  registerSessionMenuItems,
+  registerGroupMenuItem,
   renderEmptyNote,
-  paintWorkspaceBadge,
+  paintWorkspaceBadges,
   resetGroupLimitState,
   toggleSessionGroupLimit,
   showGroupSelector,

@@ -94,163 +94,6 @@ function initSidebarResize() {
 }
 
 // ---------------------------------------------------------------------------
-// Cron task editor modal
-// ---------------------------------------------------------------------------
-let cronEditMode = null; // 'edit' or 'add'
-let cronOriginalName = null;
-// The node a create-mode editor binds: set by Add schedule / New scheduled
-// task, saved with the task, and cleared by any other open path. An edit-mode
-// save never sends it (the PUT body leaves the task's binding untouched).
-let cronAddSessionId = null;
-
-// Fields (besides the always-readonly name) that a broken task locks down: a
-// broken file's truth is the raw yaml on disk, never an edit form.
-const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone'];
-
-// Switch the modal between the broken read-only error view (task.broken) and
-// today's editable form. Broken: every field read-only, Enabled disabled and
-// rendering the file's raw value (indeterminate when the file was
-// unparseable), the full load error + path in the error box, Save hidden,
-// Delete kept. Normal/add: byte-identical behavior to the pre-broken form.
-function applyCronBrokenView(task) {
-  const isBroken = !!(task && task.broken);
-  CRON_EDITABLE_FIELD_IDS.forEach(id => { document.getElementById(id).readOnly = isBroken; });
-  document.getElementById('cron-backend').disabled = isBroken;
-  const enabledEl = document.getElementById('cron-enabled');
-  enabledEl.disabled = isBroken;
-  enabledEl.indeterminate = isBroken && task.enabled === null;
-  if (isBroken) enabledEl.checked = task.enabled === true;
-  document.getElementById('cron-save-btn').classList.toggle('hidden', isBroken);
-  const errorBox = document.getElementById('cron-error-box');
-  if (isBroken) {
-    errorBox.textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
-    errorBox.classList.remove('hidden');
-  } else {
-    errorBox.textContent = '';
-    errorBox.classList.add('hidden');
-  }
-}
-
-async function openCronEditor(taskName) {
-  cronAddSessionId = null;
-  let task;
-  try {
-    const res = await fetch('/api/cron/tasks');
-    if (!res.ok) throw new Error(await res.text());
-    const tasks = await res.json();
-    task = tasks.find(t => t.name === taskName);
-  } catch (err) {
-    console.error('Failed to load cron tasks:', err);
-    alert('Failed to load task: ' + err);
-    return;
-  }
-  if (!task) {
-    alert('Task "' + taskName + '" not found');
-    return;
-  }
-  cronEditMode = 'edit';
-  cronOriginalName = taskName;
-  document.getElementById('cron-modal-title').textContent = 'Edit Scheduled Task';
-  document.getElementById('cron-name').value = task.name;
-  document.getElementById('cron-name').readOnly = true;
-  document.getElementById('cron-expr').value = task.cron || '';
-  document.getElementById('cron-prompt-file').value = task.prompt_file || '';
-  document.getElementById('cron-repo').value = task.repo || '';
-  document.getElementById('cron-backend').value = task.backend || '';
-  document.getElementById('cron-project').value = task.project || '';
-  document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
-  document.getElementById('cron-enabled').checked = task.enabled !== false;
-  applyCronBrokenView(task);
-  document.getElementById('cron-delete-btn').classList.remove('hidden');
-  document.getElementById('cron-modal').classList.remove('hidden');
-}
-
-function openCronAdder(options = {}) {
-  cronEditMode = 'add';
-  cronOriginalName = null;
-  cronAddSessionId = options.sessionId || null;
-  document.getElementById('cron-modal-title').textContent = 'New Scheduled Task';
-  document.getElementById('cron-name').value = '';
-  document.getElementById('cron-name').readOnly = false;
-  document.getElementById('cron-expr').value = '';
-  document.getElementById('cron-prompt-file').value = '';
-  document.getElementById('cron-repo').value = '';
-  document.getElementById('cron-backend').value = '';
-  document.getElementById('cron-project').value = options.project || '';
-  document.getElementById('cron-timezone').value = 'America/Los_Angeles';
-  document.getElementById('cron-enabled').checked = true;
-  applyCronBrokenView(null);
-  document.getElementById('cron-delete-btn').classList.add('hidden');
-  document.getElementById('cron-modal').classList.remove('hidden');
-}
-
-function closeCronModal() {
-  document.getElementById('cron-modal').classList.add('hidden');
-}
-
-// Cron-modal mutations share one failure surface: alert on transport error or
-// non-OK response and leave the modal open. A null return means the caller
-// stops before the close-and-refresh.
-async function cronModalRequest(promise) {
-  let res;
-  try {
-    res = await promise;
-  } catch (err) {
-    alert('Failed: ' + err);
-    return null;
-  }
-  if (!res.ok) {
-    alert('Failed: ' + await res.text());
-    return null;
-  }
-  return res;
-}
-
-async function saveCronTask() {
-  const name = document.getElementById('cron-name').value.trim();
-  const cron = document.getElementById('cron-expr').value.trim();
-  const prompt_file = document.getElementById('cron-prompt-file').value.trim() || null;
-  const repo = document.getElementById('cron-repo').value.trim() || null;
-  const backend = document.getElementById('cron-backend').value || null;
-  const project = document.getElementById('cron-project').value.trim() || null;
-  const timezone = document.getElementById('cron-timezone').value.trim();
-  const enabled = document.getElementById('cron-enabled').checked;
-
-  let promise;
-  if (cronEditMode === 'edit') {
-    promise = fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
-    });
-  } else {
-    promise = fetch('/api/cron/tasks', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      // A created task with a prefilled binding is born bound (its node
-      // exists); a null binding drops out of the body and the scheduler's
-      // auto-bind creates the node.
-      body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled, session_id: cronAddSessionId}),
-    });
-  }
-  if ((await cronModalRequest(promise)) === null) return;
-  closeCronModal();
-  // The saved schedule shows on its node row in the view the editor was
-  // opened from (the Scheduled view is gone).
-  switchSidebarFilter(currentFilter);
-}
-
-async function deleteCronTask() {
-  const name = cronOriginalName;
-  if (!confirm(`Delete task "${name}"?`)) return;
-  const promise = fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
-  if ((await cronModalRequest(promise)) === null) return;
-  closeCronModal();
-  // Deletion archives nothing: the node stays, its clock row goes.
-  switchSidebarFilter(currentFilter);
-}
-
-// ---------------------------------------------------------------------------
 // Session clone (fork) and Elon-e
 // ---------------------------------------------------------------------------
 function populateSessionActionBackendSelect(selectedBackendId) {
@@ -534,11 +377,6 @@ const GLOBALS = {
   handleRenameKey,
   commitRename,
   initSidebarResize,
-  openCronEditor,
-  openCronAdder,
-  closeCronModal,
-  saveCronTask,
-  deleteCronTask,
   openSessionActionModal,
   closeSessionActionModal,
   submitSessionActionModal,
@@ -547,7 +385,6 @@ const GLOBALS = {
   openTaskContextModal,
   closeTaskContextModal,
 };
-const SIDEBAR_ONLY = { applyCronBrokenView };
-Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
+Sidebar.wire(GLOBALS);
 
 })();

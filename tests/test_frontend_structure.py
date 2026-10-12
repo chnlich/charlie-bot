@@ -33,8 +33,13 @@ package's script registers a handler with it at load time. The core registration
     Chat.registerSeparatorButton
                                 web/static/js/chat/rendering.js (a button on each separator line)
     Chat.registerSeparatorPanel web/static/js/chat/turn-engine.js (a panel under a separator line that the engine reopens)
+    registerGroupMenuItem       web/static/js/sidebar/groups.js (an item of a group header's menu)
+    registerSessionMenuItems    web/static/js/sidebar/groups.js (items of a session row's Settings menu)
+    registerSessionRowBadge     web/static/js/sidebar/groups.js (a badge after a session row's indicators)
+    registerSessionRowLine      web/static/js/sidebar/groups.js (a line in place of a session row's time line)
     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
+    registerWorkspaceBadge      web/static/js/sidebar/filters.js (a badge at the top of the Workspace list)
     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)
 

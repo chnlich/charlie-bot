@@ -14,7 +14,7 @@ const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
 const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  makeSessionMeta } = require('./session_context_stub');
+  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
   return makeSessionMeta(id, {status: 'archived', ...overrides});
@@ -78,6 +78,7 @@ function buildContext(overrides = {}) {
     return innerFetch(url, opts);
   };
   createChatSidebarContext(context);
+  loadCronPackage(context);
   return {context, elements, fetchCalls};
 }
 

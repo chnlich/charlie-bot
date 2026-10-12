@@ -678,7 +678,6 @@ class DelegateRequest(BaseModel):
   base_branch: str | None = None
   backend: str | None = None
   repo_path: str | None = None
-  context: str | None = None
   task_type: TaskType = TaskType.IMPLEMENT
   keep_worktree: bool = False
   delegate_invocation: DelegateInvocationMetadata | None = None

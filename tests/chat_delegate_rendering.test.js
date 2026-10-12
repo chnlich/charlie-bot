@@ -60,6 +60,8 @@ test('task_delegated renders CLI-style metadata without full task spec', () => {
   assert.match(html, /thread-123/);
   assert.match(html, /\/tmp\/repo/);
   assert.match(html, /\/tmp\/task\.md/);
+  assert.match(html, /reviewer context file/);
+  assert.match(html, /\/tmp\/reviewer\.md/);
   assert.match(html, /codex-o3 \/ o3/);
   assert.match(html, /keep worktree/);
   assert.doesNotMatch(html, /Secret implementation details/);
@@ -110,6 +112,7 @@ test('a new-style delegation links its child session and shows the live state li
   // The child link rides the status poll's scope; the dead panel pointer is gone.
   assert.match(html, /href="\/\?session=child-session-9"/);
   assert.match(html, /data-delegate-session="child-session-9"/);
+  assert.doesNotMatch(html, /reviewer context file/);
   assert.doesNotMatch(html, /Workers panel/);
 });
 

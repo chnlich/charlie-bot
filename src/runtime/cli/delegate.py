@@ -7,7 +7,6 @@ identity resolves per ``common.resolve_session_id``):
     --repo /path/to/repo \
     --base-branch main \
     --task-spec-file /path/to/task_spec.md \
-    --reviewer-context-file /path/to/reviewer_context.md \
     --keep-worktree 0 \
     --task-type implement
 
@@ -96,11 +95,8 @@ def main() -> None:
       help=(
           "Configured backend option id from ~/.charliebot/config.yaml; omit unless the user "
           "explicitly named a backend for this delegation (see epilog)"))
-  parser.add_argument(
-      "--reviewer-context-file",
-      dest="reviewer_context_file",
-      default=None,
-      help="Optional path to reviewer-only context")
+  # Parsed only so the check after parse_args can name its replacement; argparse's unknown-argument error cannot.
+  parser.add_argument("--reviewer-context-file", dest="reviewer_context_file", help=argparse.SUPPRESS)
   parser.add_argument(
       "--keep-worktree",
       required=True,
@@ -137,6 +133,9 @@ def main() -> None:
           "'verify' = repo-less read-only plan verifier; no worktree, reviewer, or merge."),
   )
   args = parser.parse_args()
+  if args.reviewer_context_file is not None:
+    parser.error(
+        "--reviewer-context-file was removed: put reviewer instructions under the task spec's ## Reviewer Checklist")
 
   if args.task_type == "verify":
     if args.repo is not None:
@@ -157,9 +156,6 @@ def main() -> None:
   session_id = common.resolve_session_id(args.session)
   task_spec = common.read_required_text_file("--task-spec-file", args.task_spec_file)
   common.validate_task_spec_markdown(task_spec)
-  reviewer_context = None
-  if args.reviewer_context_file is not None:
-    reviewer_context = common.read_required_text_file("--reviewer-context-file", args.reviewer_context_file)
 
   payload = {
       "session_id": session_id,
@@ -172,7 +168,7 @@ def main() -> None:
               "repo_path": args.repo,
               "base_branch": args.base_branch,
               "task_spec_file": args.task_spec_file,
-              "reviewer_context_file": args.reviewer_context_file,
+              "reviewer_context_file": None,
               "keep_worktree": bool(args.keep_worktree),
               "backend": args.backend,
           },
@@ -183,8 +179,6 @@ def main() -> None:
     payload["backend"] = args.backend
   if args.repo is not None:
     payload["repo_path"] = args.repo
-  if reviewer_context is not None:
-    payload["context"] = reviewer_context
   if args.request_id is not None:
     payload["request_id"] = args.request_id
 

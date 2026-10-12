@@ -255,20 +255,20 @@ def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[st
   assert "The resolved backend runs every work Run of the worker session" in out
 
 
-def test_main_posts_reviewer_context_file_as_context(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_rejects_removed_reviewer_context_file_flag(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """The removed --reviewer-context-file exits with a usage error naming the Reviewer Checklist, before any POST."""
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
-  reviewer_context_file = tmp_path / "reviewer_context.md"
-  reviewer_context_file.write_text("review these state-machine edges")
 
-  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file",
-                                                 str(reviewer_context_file), session="s1")) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t3"}
+  with (
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file",
+                                                str(tmp_path / "reviewer_context.md"), session="s1")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
     delegate.main()
 
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload["context"] == "review these state-machine edges"
-  assert payload["delegate_invocation"]["task_spec_file"] == str(task_spec_file)
-  assert payload["delegate_invocation"]["reviewer_context_file"] == str(reviewer_context_file)
+  conftest.assert_cli_reject_exit2(exc_info, capsys, "## Reviewer Checklist")
+  post_mock.assert_not_called()
 
 
 _REQUIRED_FLAG_OMISSION_CASES = [
@@ -341,13 +341,6 @@ def test_main_uses_error_detail_from_response(tmp_path: pathlib.Path, monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("file_flag", "staged_name", "with_valid_task_spec"),
-    [
-        pytest.param("--task-spec-file", "task_spec.md", False, id="task-spec-file"),
-        pytest.param("--reviewer-context-file", "reviewer_context.md", True, id="reviewer-context-file"),
-    ],
-)
-@pytest.mark.parametrize(
     ("file_body", "err_fragment"),
     [
         pytest.param(None, "not found", id="missing"),
@@ -358,31 +351,22 @@ def test_main_rejects_unusable_file_argument(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    file_flag: str,
-    staged_name: str,
-    with_valid_task_spec: bool,
     file_body: str | None,
     err_fragment: str,
 ) -> None:
-  """An unusable required file argument rejects before posting, naming the flag and the cause."""
+  """An unusable --task-spec-file rejects before posting, naming the flag and the cause."""
   cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
-  staged_file = tmp_path / staged_name
+  task_spec_file = tmp_path / "task_spec.md"
   if file_body is not None:
-    staged_file.write_text(file_body)
-  if with_valid_task_spec:
-    task_spec_file = _write_task_spec(tmp_path)
-    extra_argv = [file_flag, str(staged_file)]
-  else:
-    task_spec_file = staged_file
-    extra_argv = []
+    task_spec_file.write_text(file_body)
 
   with (
-      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, *extra_argv)) as post_mock,
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
     delegate.main()
 
-  conftest.assert_cli_reject_exit2(exc_info, capsys, file_flag, err_fragment)
+  conftest.assert_cli_reject_exit2(exc_info, capsys, "--task-spec-file", err_fragment)
   post_mock.assert_not_called()
 
 

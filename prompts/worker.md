@@ -6,6 +6,7 @@
 ## Role
 - You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.
 - Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.
+- A turn that ends on a wait is a pause. The final report comes in the turn that ends with no pending wake.
 
 <!-- section: memory -->
 ## Memory

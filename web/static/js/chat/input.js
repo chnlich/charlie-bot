@@ -7,14 +7,39 @@
   // it as input_mode, and a send or an emptied composer clears it.
   let composerInputMode = null;
 
+  // The note line beside the composer: a package that inserted text by other
+  // means says where it came from through setInputNote. The note shares the
+  // input mode's lifecycle, so clearing the mode clears and hides it too.
+  function setInputNote(text) {
+    const note = document.getElementById('input-note');
+    if (!note) return;
+    note.textContent = text;
+    note.classList.remove('hidden');
+  }
+
+  // The one clear the composer input state takes: the mode and the note die
+  // together, so no path drops one and leaves the other.
+  function clearInputModeAndNote() {
+    composerInputMode = null;
+    const note = document.getElementById('input-note');
+    if (note) {
+      note.textContent = '';
+      note.classList.add('hidden');
+    }
+  }
+
   function setInputMode(mode) {
+    if (mode === null) {
+      clearInputModeAndNote();
+      return;
+    }
     composerInputMode = mode;
   }
 
   const _msgInput = document.getElementById('msg-input');
   if (_msgInput) {
     _msgInput.addEventListener('input', () => {
-      if (!_msgInput.value) composerInputMode = null;
+      if (!_msgInput.value) clearInputModeAndNote();
     });
   }
 
@@ -66,7 +91,7 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
-  composerInputMode = null;
+  clearInputModeAndNote();
 
   // Start thinking indicator; keepSendEnabled leaves the button to the
   // in-flight lock, so a master run never locks typing.
@@ -117,6 +142,7 @@ const GLOBALS = {
 const CHAT_ONLY = {
   postChatMessage,
   setInputMode,
+  setInputNote,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

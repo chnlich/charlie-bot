@@ -51,6 +51,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     micPending: null,
     input: {value: '', focus() {}, addEventListener() {}},
     chatFlags: [],
+    chatNotes: [],
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
     overlayMap: new Map(),
     beforeunloadCount: 0,
@@ -286,7 +287,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     },
     showToast: (message, isError) => state.toasts.push({msg: message, isError: !!isError}),
     accessTokenAuthorization: () => null,
-    Chat: {setInputMode: (mode) => state.chatFlags.push(mode), registerInputMode() {}},
+    Chat: {
+      setInputMode: (mode) => state.chatFlags.push(mode),
+      setInputNote: (text) => state.chatNotes.push(text),
+      registerInputMode() {},
+    },
     autoResize() {},
     saveDraft() {},
   };
@@ -954,6 +959,7 @@ test('a final inside the budget inserts once and ends the run with no upload', a
   assert.equal(state.sendLockOpens, 0); // the send lock never engaged
   assert.equal(state.sendLockSettles, 0);
   assert.equal(state.beforeunloadCount, 0);
+  assert.deepEqual(state.chatNotes, []); // the relay's words carry no note
 
   await state.arm(); // the slot is free: the next click starts a new recording
   assert.equal(state.micCalls, 2);
@@ -1067,6 +1073,7 @@ test('an error frame mid-recording stops visibly and one click transcribes local
   await tick();
   await tick();
   assert.equal(state.input.value, 'after error');
+  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1099,6 +1106,7 @@ test('a lost socket mid-recording stops visibly and one click transcribes locall
   await tick();
   await tick();
   assert.equal(state.input.value, 'after close');
+  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1132,6 +1140,7 @@ test('a spent budget stops visibly and one click transcribes locally', async () 
   await tick();
   await tick();
   assert.equal(state.input.value, 'local words');
+  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1226,6 +1235,31 @@ test('the local backend opens no relay, fires the probe, and uploads right after
   await tick();
   await tick();
   assert.equal(state.input.value, 'recognized words');
+  assert.deepEqual(state.chatNotes, []); // a chosen local backend sets no note
+});
+
+test('an empty local decode after the stop-state click sets no note', async () => {
+  const {context, state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(RATE); // 2020 ms of budget for this length
+
+  await state.stopLive();
+  state.timerByMs(2020).fn(); // the budget expires
+  await tick();
+  await tick();
+
+  context.toggleVoice(); // the stop state's click
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 1); // exactly one POST
+
+  state.xhrs[0].respond(200, {text: ''});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, ''); // the empty decode inserted nothing
+  assert.deepEqual(state.toasts, [{msg: 'No speech detected', isError: false}]);
+  assert.deepEqual(state.chatNotes, []); // no insertion, no note
 });
 
 test('the caret is disabled while a run is active and back on release', async () => {

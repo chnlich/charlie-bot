@@ -49,6 +49,10 @@ const VOICE_UPLOAD_TIMEOUT_MS = 60 * 1000;
 const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
 // The input_mode a dictated message carries (src/features/voice/turn_contribution.py VOICE_INPUT_MODE).
 const VOICE_INPUT_MODE = 'voice';
+// The note a fallback decode's inserted text carries beside the composer: the
+// upload named a live backend id and the server decoded it with the local
+// engine, the lower-quality path the user may want to drop and re-record.
+const VOICE_LOCAL_FALLBACK_NOTE = '本地引擎转写（质量较低）';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so
 // the budget grows with the run; a fixed wait is either too short for long
@@ -694,6 +698,11 @@ function applyVoiceFinal(run, fullText) {
   } else {
     insertVoiceText(words);
   }
+  // A live backend's id reaches the upload only through the stop-state click
+  // (or its retry), and the server decodes a live id with the local engine:
+  // the inserted words carry the fallback note so the user can drop them and
+  // record again. The empty-text return above sets no note.
+  if (run.backend.livePartials) Chat.setInputNote(VOICE_LOCAL_FALLBACK_NOTE);
 }
 
 function insertVoiceText(text) {

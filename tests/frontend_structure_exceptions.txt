@@ -14,8 +14,3 @@ web/static/js/sidebar/groups.js -> web/static/js/sidebar/modals.js
 web/static/js/sidebar/groups.js -> web/static/js/sidebar/session-view.js
 web/static/js/sidebar/status.js -> web/static/js/sidebar/groups.js
 web/static/js/sidebar/status.js -> web/static/js/sidebar/session-view.js
-web/static/js/websocket.js -> web/static/js/sidebar/filters.js
-web/static/js/websocket.js -> web/static/js/sidebar/namespace.js
-web/static/js/websocket.js -> web/static/js/sidebar/session-view.js
-web/static/js/websocket.js -> web/static/js/sidebar/status.js
-web/static/js/websocket.js -> web/static/js/usage.js

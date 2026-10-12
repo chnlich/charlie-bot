@@ -5,8 +5,8 @@
 // wsUrlWithToken page-load order, and a no-op for every hook websocket.js
 // calls into the chat/sidebar modules), the harness's own globals spread
 // over that base (SESSION_ID, document, setTimeout, the recorders), then
-// one load sequence — createContext, websocket.js — so the load order both
-// suites depend on lives in one place.
+// one load sequence — createContext, websocket.js, websocket-handlers.js — so
+// the load order both suites depend on lives in one place.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 
@@ -14,6 +14,7 @@ const { createFakeWebSocketClass } = require('./fake_websocket');
 const { readStatic } = require('./read_static');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
+const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 function loadWebsocketContext(extraContext) {
   const context = {
@@ -48,6 +49,7 @@ function loadWebsocketContext(extraContext) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   return {context, FakeWebSocket: context.WebSocket};
 }
 

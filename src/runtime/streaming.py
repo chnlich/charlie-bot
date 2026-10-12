@@ -37,9 +37,9 @@ log = log_once.LazyStructlogLogger()
 # draft to one dump per window.
 _STREAM_COALESCE_INTERVAL = 0.2  # seconds
 
-# websocket.js hideStreaming reach: _commitMessage on committed bubbles (its
-# comments pin the commit-supersedes-preview rule) plus the ``assistant_error``
-# and ``error`` arms of the event switch.
+# websocket-handlers.js hideStreaming reach: _commitMessage on committed
+# bubbles (its comments pin the commit-supersedes-preview rule) plus the
+# ``assistant_error`` and ``error`` handlers.
 _PREVIEW_HIDING_TYPES = frozenset({"message", ET.ASSISTANT_ERROR, ET.ERROR})
 
 # Channel vocabulary: the two named topic forms the fan-out routes on. The

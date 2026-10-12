@@ -9,6 +9,7 @@ const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, crea
   loadCronPackage, makeSessionMeta } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
+const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 // The usage payload the usage-header tests render: the fields every test shares
 // with one value. Each call passes the fields it varies (context_tokens, model,
@@ -204,6 +205,7 @@ test('a result WebSocket event forces a poll without writing the header directly
   ]);
   const {context} = buildContext({elements});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 
   let pollCall = null;
   context.pollActiveSessionView = (opts) => { pollCall = opts; };
@@ -594,6 +596,7 @@ test('in-place refresh paths preserve group expansion', async () => {
       name: 'websocket session_group_changed event',
       setup(context) {
         vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+        vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
       },
       drive(context) {
         context.handleWSEvent({type: 'session_group_changed', session_id: 'session-a', group: 'Work'}, 'session-a', 0);

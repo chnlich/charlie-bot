@@ -68,6 +68,7 @@ function loadChatContext(elements) {
   vm.runInContext(FILE_UPLOAD_JS, context, { filename: 'file-upload.js' });
   loadChatRenderingModules(context);
   vm.runInContext(readStatic('websocket.js'), context, { filename: 'websocket.js' });
+  vm.runInContext(readStatic('websocket-handlers.js'), context, { filename: 'websocket-handlers.js' });
   vm.runInContext(readStatic('chat/input.js'), context, { filename: 'chat/input.js' });
   return context;
 }

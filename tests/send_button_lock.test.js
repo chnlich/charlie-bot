@@ -24,6 +24,7 @@ const {
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
+const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 const VOICE_INPUT_JS = readPackageStatic('features', 'voice', 'voice-input.js');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -118,6 +119,7 @@ function buildLockHarness() {
   // at call time, so the load order only mirrors the page's dependency.
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   vm.runInContext(VOICE_INPUT_JS, context, {filename: 'voice-input.js'});
   // The voice slot and the echo count are the modules' top-level lets: their
   // lexical bindings shadow any context property, so tests claim and read them

@@ -91,6 +91,7 @@ function loadScrollContext(elements) {
   };
   vm.createContext(context);
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/scroll.js'), context, { filename: 'chat/scroll.js' });
   return context;
 }

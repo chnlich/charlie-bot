@@ -456,7 +456,7 @@ function renderPlanCompactCard(link, ordinal, prose, reg) {
   // never the 150px geometry band: a fitting reply opens at the bottom
   // unpinned, and a late card landing there must not yank the view down.
   // Views without the engine keep the geometry read and the direct write.
-  var engine = (mc && Chat.TurnEngine) ? Chat.TurnEngine.activeFor(mc) : null;
+  var engine = Chat.activeTurnEngineFor(mc);
   var atBottom = engine ? engine.pinnedIntent : (mc ? shouldAutoScroll(mc) : false);
   insertHtmlArtifactCard(prose, card, ordinal);
   link.el.dataset.embedded = '1';
@@ -713,7 +713,7 @@ function installHtmlArtifactListener() {
     var container = document.getElementById('messages');
     // The same follow rule as the card insertion above: the engine's pin
     // intent when hosted, the geometry band when it is not.
-    var engine = (container && Chat.TurnEngine) ? Chat.TurnEngine.activeFor(container) : null;
+    var engine = Chat.activeTurnEngineFor(container);
     var wasAtBottom = engine ? engine.pinnedIntent : (container ? shouldAutoScroll(container) : false);
     var cap = Math.floor(window.innerHeight * 0.8);
     frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';

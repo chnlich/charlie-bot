@@ -248,7 +248,7 @@ function transcriptRig(prefix, turns) {
     active_backend_type: '',
     has_more: false,
   });
-  const engine = context.Chat.TurnEngine.activeFor(root);
+  const engine = context.Chat.activeTurnEngineFor(root);
   assert.ok(engine && engine.alive, 'the engine mounted for the transcript view');
   return {context, root, engine};
 }
@@ -294,7 +294,7 @@ test('a transcript reset repaint keeps the reading position and a live engine', 
   await resetTranscript(context, 'tx_', 8, 'reset-1');
   settle(timersOf(context));
 
-  const remounted = context.Chat.TurnEngine.activeFor(root);
+  const remounted = context.Chat.activeTurnEngineFor(root);
   assert.ok(remounted && remounted.alive, 'a fresh engine owns the view after the reset');
   assert.notEqual(remounted, engine, 'the stale engine was replaced, not reused');
   assert.equal(anchorY(root, anchorId), before, 'the reader kept their message on screen');
@@ -320,7 +320,7 @@ test('a transcript reset while pinned stays at the bottom', async () => {
   await resetTranscript(context, 'txp_', 8, 'reset-1');
   settle(timersOf(context));
   assert.equal(distanceFromBottom(root), 0, 'a pinned reader stays pinned through the reset');
-  const remounted = context.Chat.TurnEngine.activeFor(root);
+  const remounted = context.Chat.activeTurnEngineFor(root);
   assert.ok(remounted && remounted.pinnedIntent, 'the remount kept the follow intent');
 });
 

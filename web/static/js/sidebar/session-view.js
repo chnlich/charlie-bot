@@ -120,9 +120,7 @@ function resetLazySessionData() {
 
 function disposeActiveTurnEngine() {
   const container = document.getElementById('messages');
-  const engine = globalThis.Chat && Chat.TurnEngine && container
-    ? Chat.TurnEngine.activeFor(container)
-    : null;
+  const engine = Chat.activeTurnEngineFor(container);
   if (engine) engine.dispose();
 }
 
@@ -237,8 +235,7 @@ function applyTranscriptUpdate(data) {
       // tail's scroll-up pagination stands down. The reader's place survives
       // the repaint: pinned readers stay at the bottom, one reading history
       // keeps their message at the same viewport offset.
-      const engine = globalThis.Chat && Chat.TurnEngine
-        ? Chat.TurnEngine.activeFor(container) : null;
+      const engine = Chat.activeTurnEngineFor(container);
       // The follow decision is the engine's shouldFollow(): a fitting reply
       // opened at the bottom is not pinned, but its deferred follow must
       // survive the reset remount the same way the pin does.
@@ -716,7 +713,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       sessionHasMore = false;
     }
 
-    const engine = globalThis.Chat && Chat.TurnEngine ? Chat.TurnEngine.activeFor(container) : null;
+    const engine = Chat.activeTurnEngineFor(container);
 
     const sentinel = document.getElementById('load-more-sentinel');
 

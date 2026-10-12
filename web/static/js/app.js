@@ -25,8 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // engine owns the position instead — its mount pinned the bottom or
   // restored the reading anchor, and this write would undo the anchor.
   const msgs = document.getElementById('messages');
-  const mountedEngine = globalThis.Chat && Chat.TurnEngine
-    ? Chat.TurnEngine.activeFor(msgs) : null;
+  const mountedEngine = Chat.activeTurnEngineFor(msgs);
   if (msgs && !mountedEngine) msgs.scrollTop = msgs.scrollHeight;
 
   // Restore draft message from localStorage

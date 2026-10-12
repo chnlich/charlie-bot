@@ -88,7 +88,7 @@ function openRig({messages, session = {}, thinkingSince = null, pendingDraft = n
     switchable_backends: [],
     has_more: false,
   });
-  const engine = context.Chat.TurnEngine.activeFor(root);
+  const engine = context.Chat.activeTurnEngineFor(root);
   assert.ok(engine && engine.alive, 'the turn engine mounted for the open');
   return {context, root, engine, timers};
 }

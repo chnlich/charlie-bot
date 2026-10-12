@@ -94,7 +94,7 @@ RESULTS_NAME = "chat_scroll_regression_results.json"
 SNAP_JS = """(() => {
   const c = document.getElementById('messages');
   if (!c) return null;
-  const e = globalThis.Chat && Chat.TurnEngine ? Chat.TurnEngine.activeFor(c) : null;
+  const e = globalThis.Chat && Chat.TurnEngine ? Chat.activeTurnEngineFor(c) : null;
   const btn = document.getElementById('scroll-to-bottom');
   const sent = document.getElementById('load-more-sentinel');
   return {
@@ -151,7 +151,7 @@ WRAP_OF_JS = """((id) => {
 # The engine's own reading anchor: the identity the engine held the place
 # with, and the one a preserved place must keep across display-mode switches.
 ENGINE_ANCHOR_JS = """(() => {
-  const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  const e = Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'));
   return e && e.readingAnchor ? {kind: e.readingAnchor.kind,
       key: e.readingAnchor.key || null, id: e.readingAnchor.id || null,
       offset: e.readingAnchor.offset} : null;
@@ -174,12 +174,12 @@ ROW_OF_JS = """((key) => {
 # write and the position the scroll range actually allowed. Read per step and
 # cleared before the next, so every row carries its own clamp evidence.
 READ_CLAMP_JS = """(() => {
-  const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  const e = Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'));
   return e && e.lastRestoreClamp ? Object.assign({}, e.lastRestoreClamp) : null;
 })()"""
 
 CLEAR_CLAMP_JS = """(() => {
-  const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  const e = Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'));
   if (e) e.lastRestoreClamp = null;
   return true;
 })()"""
@@ -193,7 +193,7 @@ INSTALL_INSTRUMENT_JS = """(() => {
   window.__restoreLog = [];
   const wire = () => {
     const c = document.getElementById('messages');
-    const e = globalThis.Chat && Chat.TurnEngine ? Chat.TurnEngine.activeFor(c) : null;
+    const e = globalThis.Chat && Chat.TurnEngine ? Chat.activeTurnEngineFor(c) : null;
     if (!e || e.__instrumented) return false;
     e.__instrumented = true;
     const orig = e.reproject.bind(e);
@@ -399,7 +399,7 @@ async def wait_reader_settled(cdp: CDP, session_id: str, timeout_s: float = 30.0
   """
   probe = (
       "(() => {const c = document.getElementById('messages');"
-      "const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(c);"
+      "const e = Chat.TurnEngine && Chat.activeTurnEngineFor(c);"
       "if (!e) return null;"
       "return {age: Math.round(performance.now() - e.lastScrollTs),"
       "        queue: Chat.TurnEngine.debug(c).queueLength};})()")
@@ -717,7 +717,7 @@ async def run_scenarios(
   await wait_for(
       cdp,
       cs, "Chat.TurnEngine && document.getElementById('messages') "
-      "&& Chat.TurnEngine.activeFor(document.getElementById('messages')) "
+      "&& Chat.activeTurnEngineFor(document.getElementById('messages')) "
       "&& document.querySelector('#messages [data-message-id]')",
       label="turn engine mounted with rendered messages")
   head_first_id = await ev(
@@ -804,13 +804,13 @@ async def run_scenarios(
   await scroll_write(cdp, cs, 450)
   pre = await snap(cdp, cs)
   await wheel_until_trigger(cdp, cs)
-  lead_key = await ev(cdp, cs, "Chat.TurnEngine.activeFor(document.getElementById('messages')).segments[0].key")
+  lead_key = await ev(cdp, cs, "Chat.activeTurnEngineFor(document.getElementById('messages')).segments[0].key")
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
   await wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="pagination fetch fired")
   await wait_for(
       cdp,
-      cs, "Chat.TurnEngine.activeFor(document.getElementById('messages'))"
+      cs, "Chat.activeTurnEngineFor(document.getElementById('messages'))"
       ".entries.some(e => e.msg && e.msg.id === 'pg1_00u')",
       label="older page ingested")
   immediate = await snap(cdp, cs)
@@ -828,7 +828,7 @@ async def run_scenarios(
       f"added history exceeds the old scroll range (height {pre['height']} -> {settled['height']})")
   merge_state = await ev(
       cdp, cs, (
-          "(() => {const e = Chat.TurnEngine.activeFor(document.getElementById('messages'));"
+          "(() => {const e = Chat.activeTurnEngineFor(document.getElementById('messages'));"
           "const seg = e.segments.find(sg => sg.entries.some(en => en.msg && en.msg.id === 'pg1_24u'));"
           "return {merged: seg ? seg.key || ('flat#' + e.segments.indexOf(seg)) : null,"
           "rederives: e.stats.rederivesOfSettledTurns};})()"))
@@ -875,10 +875,10 @@ async def run_scenarios(
   await asyncio.sleep(3.0)
   body_text = await ev(cdp, cs, "document.body.innerText.includes('STALE-PAGE-MARKER')")
   stale_node = await ev(
-      cdp, cs, "(Chat.TurnEngine.activeFor(document.getElementById('messages'))||{entries:[]})"
+      cdp, cs, "(Chat.activeTurnEngineFor(document.getElementById('messages'))||{entries:[]})"
       ".entries.some(e => e.msg && e.msg.id === 'stale_marker_u')")
   active = await snap(cdp, cs)
-  mounted_b = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
+  mounted_b = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')))")
   sc.check(active["sessionId"] == sid_b, "session B is the active view")
   sc.check(not body_text and not stale_node, "the stale page's content never rendered")
   sc.check(mounted_b, "engine mounted for session B")
@@ -891,7 +891,7 @@ async def run_scenarios(
   await wait_for(
       cdp,
       cs,
-      "Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'))",
+      "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'))",
       label="session A re-rendered")
   await settle()
   await ev(cdp, cs, "window.__sessionId = " + json.dumps(sid))
@@ -936,7 +936,7 @@ async def run_scenarios(
   await wait_for(
       cdp,
       cs,
-      "Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'))",
+      "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'))",
       label="session A re-rendered")
   await ev(cdp, cs, INSTALL_HELPERS_JS)
   await ev(cdp, cs, INSTALL_INSTRUMENT_JS)
@@ -959,7 +959,7 @@ async def run_scenarios(
   await ev(cdp, cs, "window.__transcriptPayload = null")
   settled = await snap(cdp, cs)
   ay_settled = await anchor_y(cdp, cs, anchor["id"])
-  mounted = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
+  mounted = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')))")
   sc.check(mounted, "the live engine survived the reset")
   sc.check(pos_holds(ay_before, ay_settled), f"anchor {anchor['id']} holds its viewport offset across the repaint")
   sc.check(settled["bottom"] > 150, "reader not thrown to the bottom by the repaint")
@@ -1111,7 +1111,7 @@ async def run_scenarios(
   await settle()
   back = await snap(cdp, cs)
   ay_back = await anchor_y(cdp, cs, anchor["id"])
-  mounted = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
+  mounted = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')))")
   sc.check(hidden["viewport"] == 0, "the chat column actually hid")
   sc.check(back["viewport"] > 0, "the chat column is visible again")
   sc.check(mounted, "engine still mounted after hide/show")

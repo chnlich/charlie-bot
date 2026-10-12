@@ -3,8 +3,8 @@
 // paintStreamDraft reads the engine's shouldFollow() — the pin intent OR the
 // follow the open deferred to the next turn — and the paint's restore routes
 // through the engine's jumpToBottom. The harness loads the real usage.js,
-// renderer and scroll seam; the engine is a minimal fake under
-// Chat.TurnEngine.activeFor exposing the method and recording jumpToBottom
+// renderer and scroll seam; the engine is a minimal fake that
+// Chat.activeTurnEngineFor returns, exposing the method and recording jumpToBottom
 // calls.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
@@ -40,7 +40,7 @@ function installFakeEngine(context, container, { pinnedIntent, followNextTurn })
       container.scrollTop = container.scrollHeight;
     },
   };
-  context.Chat.TurnEngine = { activeFor: (el) => (el === container ? engine : null) };
+  context.Chat.activeTurnEngineFor = (el) => (el === container ? engine : null);
   return engine;
 }
 

@@ -17,7 +17,7 @@ function hideScrollToBottom() {
 
 function scrollToBottom() {
   const container = document.getElementById('messages');
-  const engine = Chat.TurnEngine && container ? Chat.TurnEngine.activeFor(container) : null;
+  const engine = Chat.activeTurnEngineFor(container);
   if (engine) {
     // The engine owns the pin state: the jump re-arms following and marks its
     // own write so the echo is not read as user activity.
@@ -36,7 +36,7 @@ function scrollToBottom() {
 // state is the engine's user-intent flag, and the jump routes through it so
 // the write stays an engine write.
 function restoreBottomPin(container, wasAtBottom, forceScroll) {
-  const engine = Chat.TurnEngine && container ? Chat.TurnEngine.activeFor(container) : null;
+  const engine = Chat.activeTurnEngineFor(container);
   if (engine) {
     if (forceScroll || wasAtBottom) {
       engine.jumpToBottom();
@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Under the turn engine the button tracks the user's pin intent (a
       // reader paused inside the 150px geometry band is still reading);
       // legacy views keep the geometry band.
-      const engine = Chat.TurnEngine ? Chat.TurnEngine.activeFor(container) : null;
+      const engine = Chat.activeTurnEngineFor(container);
       if (engine ? engine.pinnedIntent : shouldAutoScroll(container)) hideScrollToBottom();
     });
   }

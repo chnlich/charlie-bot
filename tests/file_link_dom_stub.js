@@ -281,7 +281,8 @@ function loadArtifactsScript(opts) {
   };
   if (o.planPanel) context.planPanel = o.planPanel;
   // chat/rendering.js is not loaded; the cards' post-processor runs through render() below.
-  context.Chat = {registerMessagePostProcessor: () => {}};
+  // chat/shared.js is not loaded either, so the engine lookup sees no engine.
+  context.Chat = {registerMessagePostProcessor: () => {}, activeTurnEngineFor: () => null};
   vm.createContext(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   vm.runInContext(FILE_LINKS_JS, context, {filename: 'chat/file-links.js'});

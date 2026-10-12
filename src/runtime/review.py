@@ -5,7 +5,8 @@ import pathlib
 
 from src.infra import config, log_once, models, ndjson
 from src.infra import event_types as ET
-from src.runtime import chat_events, message_aggregator
+from src.runtime import message_aggregator
+from src.runtime.task_errors import TaskInvalidError
 
 log = log_once.LazyStructlogLogger()
 
@@ -19,8 +20,8 @@ _REVIEW_CHECKLIST_INTRO = (
     "IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
     "Only fix clear bugs, correctness issues, or scope violations. "
     "Do not refactor, restyle, or improve code that is functionally correct.\n\n"
-    "If the user request contains task spec sections, read every path listed under `## Source Files` "
-    "before judging the diff. Apply the task spec's `## Reviewer Checklist`. For control-flow or "
+    "The Context section carries the task spec. When the spec has a `## Source Files` section, read every path "
+    "it lists before judging the diff. Apply the spec's `## Reviewer Checklist`. For control-flow or "
     "state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
     "on tests.")
 
@@ -110,23 +111,25 @@ def review_landing_target(base_branch: str) -> str:
   return f"origin/{review_published_branch(base_branch)}"
 
 
-def review_context_lines(
-    user_request: str | None,
-    worker_summary: str | None,
-    delegator_hint: str,
-) -> list[str]:
-  """The review prompt's context lines: the extracted evidence, or the fallback, plus the hint.
+def review_spec_text(task: models.TaskSpec) -> str:
+  """The spec a review judges the work against: the task goal, then its acceptance tests.
 
-  The unavailable line appears only when neither the request nor the summary
-  was extracted, so the reviewer always knows why the context is thin.
+  The review reads the same task record the work Run's prompt reads. An empty
+  goal raises, because a review with no spec has nothing to judge the work against.
   """
-  lines: list[str] = []
-  if user_request:
-    lines.append(f"**User request:** {user_request}")
+  if not task.goal.strip():
+    raise TaskInvalidError("review has no task spec: the task record's goal is empty")
+  parts = [task.goal]
+  if task.acceptance:
+    parts.append("\n".join(["## Acceptance Tests", *[f"- {a}" for a in task.acceptance]]))
+  return "\n\n".join(parts)
+
+
+def review_context_lines(spec_text: str, worker_summary: str | None, delegator_hint: str) -> list[str]:
+  """The review prompt's context lines: the task spec, the worker summary when one was extracted, and the hint."""
+  lines = [f"**Task spec:**\n{spec_text}"]
   if worker_summary:
     lines.append(f"**Worker summary:** {worker_summary}")
-  if not lines:
-    lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
   lines.append(f"**Delegator hint:** {delegator_hint}")
   return lines
 
@@ -143,28 +146,6 @@ def review_git_venue(branch_name: str, wt_path: str) -> str:
   return (
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
       f"All git operations below run from the worktree.")
-
-
-def _first_delegation_description(chat_log: pathlib.Path, thread_id: str) -> str | None:
-  """First task_delegated description naming *thread_id*, in file order, or None.
-
-  Stops at the first matching event whether its description carries text or
-  not; blank and malformed lines are skipped by the shared reader skip
-  contract. A missing file means no match, never an error. Thread ids are
-  ``str(uuid.uuid4())`` — ASCII, serialized verbatim — so the raw id bytes
-  are the needle the containing reader may skip by.
-  """
-  needle = thread_id.encode("utf-8")
-  for event in ndjson.iter_ndjson_events_containing(chat_log, needle, log_event=ndjson.PARSE_SKIP_LOG_EVENT,
-                                                    log_fields={}):
-    if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
-      value = event.get("description")
-      if isinstance(value, str):
-        normalized = value.strip()
-        if normalized:
-          return normalized
-      return None
-  return None
 
 
 def _worker_summary_from_events_log(worker_log: pathlib.Path) -> str | None:
@@ -218,45 +199,19 @@ def _worker_error_from_events_log(worker_log: pathlib.Path) -> str | None:
   return None
 
 
-async def extract_review_context(
-    session_id: str,
-    thread_id: str,
-    sessions_dir: pathlib.Path,
-    worker_log_path: pathlib.Path,
-) -> tuple[str | None, str | None]:
-  """Extract user request and worker summary from JSONL logs for review context.
+async def extract_review_context(session_id: str, thread_id: str, worker_log_path: pathlib.Path) -> str | None:
+  """Extract the worker summary from its JSONL log for review context, or None when extraction fails.
 
-  Returns (user_request, worker_summary); each may independently be None when extraction fails.
-  The caller's prompt builder handles partial context.
+  The caller's prompt builder handles a missing summary.
   """
-  user_request: str | None = None
   worker_summary: str | None = None
-  has_user_request = False
-  has_worker_summary = False
-  session_dir = sessions_dir / session_id
-
   try:
-    chat_log = chat_events.chat_events_path(session_dir)
-    description = await asyncio.to_thread(_first_delegation_description, chat_log, thread_id)
-    if description is not None:
-      user_request = description
-      has_user_request = True
-  except Exception as e:
-    log.warning("review_context_chat_events_failed", session=session_id, thread=thread_id, error=str(e))
-  if not has_user_request:
-    log.warning("review_context_user_request_unavailable", session=session_id, thread=thread_id)
-
-  try:
-    chosen = await asyncio.to_thread(_worker_summary_from_events_log, worker_log_path)
-    if chosen:
-      worker_summary = chosen
-      has_worker_summary = True
+    worker_summary = await asyncio.to_thread(_worker_summary_from_events_log, worker_log_path)
   except Exception as e:
     log.warning("review_context_worker_events_failed", session=session_id, thread=thread_id, error=str(e))
-  if not has_worker_summary:
+  if not worker_summary:
     log.warning("review_context_worker_summary_unavailable", session=session_id, thread=thread_id)
-
-  return user_request, worker_summary
+  return worker_summary
 
 
 def _resolve_preference_option(cfg: config.CharlieBotConfig, option_id: str) -> models.BackendOption:

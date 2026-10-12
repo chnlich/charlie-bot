@@ -12,35 +12,25 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import socket
 import subprocess
 import sys
-from pathlib import Path
 
+import fastapi
 import pytest
 import yaml
-from fastapi import WebSocket
 
 import src.features.session_tree_preview.session_tree_preview as preview_module
-from src.features.session_tree_preview.session_tree_preview import (
-    PreviewRefusedError,
-    PreviewUnavailableGate,
-    PreviewWorkspaceError,
-    check_home_location,
-    check_port,
-    make_workspace_guard,
-    read_source_backend,
-    refusal_reason,
-)
-from tools.browser_harness_session_tree import pick_free_port
+from tools import browser_harness_session_tree
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 OPERATOR_KEY = "source-operator-key-0000"
 PROVIDER_KEY = "provider-key-1111"
 
 
-def write_source_home(home: Path, *, backend: dict | None = None, port: int = 18498) -> dict:
+def write_source_home(home: pathlib.Path, *, backend: dict | None = None, port: int = 18498) -> dict:
   """One synthetic source (production-like) profile: minimal config + operator key."""
   home.mkdir(parents=True, exist_ok=True)
   if backend is None:
@@ -76,7 +66,7 @@ def write_source_home(home: Path, *, backend: dict | None = None, port: int = 18
 
 
 @pytest.fixture
-def source_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def source_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """A synthetic source profile selected by the environment for this test."""
   home = tmp_path / "source-home"
   write_source_home(home)
@@ -90,38 +80,40 @@ def source_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_check_home_location_refuses_overlaps(tmp_path: Path, source_home: Path) -> None:
+def test_check_home_location_refuses_overlaps(tmp_path: pathlib.Path, source_home: pathlib.Path) -> None:
   inside = source_home / "nested" / "preview"
-  with pytest.raises(PreviewRefusedError, match="overlaps the production home"):
-    check_home_location(inside, source_home=source_home, source_workspace_dirs=[])
+  with pytest.raises(preview_module.PreviewRefusedError, match="overlaps the production home"):
+    preview_module.check_home_location(inside, source_home=source_home, source_workspace_dirs=[])
   container = tmp_path / "container"
   prod_inside = container / ".charliebot"
   prod_inside.mkdir(parents=True)
-  with pytest.raises(PreviewRefusedError, match="overlaps the production home"):
-    check_home_location(container, source_home=prod_inside, source_workspace_dirs=[])
+  with pytest.raises(preview_module.PreviewRefusedError, match="overlaps the production home"):
+    preview_module.check_home_location(container, source_home=prod_inside, source_workspace_dirs=[])
   workspace_inside = tmp_path / "workspaces" / "preview"
-  with pytest.raises(PreviewRefusedError, match="overlaps the production workspace"):
-    check_home_location(
+  with pytest.raises(preview_module.PreviewRefusedError, match="overlaps the production workspace"):
+    preview_module.check_home_location(
         workspace_inside, source_home=tmp_path / "elsewhere", source_workspace_dirs=[str(tmp_path / "workspaces")])
-  with pytest.raises(PreviewRefusedError, match="overlaps the running checkout"):
-    check_home_location(REPO_ROOT / "sub" / "dir", source_home=tmp_path / "elsewhere", source_workspace_dirs=[])
+  with pytest.raises(preview_module.PreviewRefusedError, match="overlaps the running checkout"):
+    preview_module.check_home_location(
+        REPO_ROOT / "sub" / "dir", source_home=tmp_path / "elsewhere", source_workspace_dirs=[])
   sibling = tmp_path / "sibling-preview"
-  check_home_location(sibling, source_home=source_home, source_workspace_dirs=[str(tmp_path / "workspaces")])
+  preview_module.check_home_location(
+      sibling, source_home=source_home, source_workspace_dirs=[str(tmp_path / "workspaces")])
 
 
-def test_check_port_refuses_source_port_and_occupied(source_home: Path) -> None:
-  with pytest.raises(PreviewRefusedError, match="between 1 and 65535"):
-    check_port(0, source_server_port=18498)
-  with pytest.raises(PreviewRefusedError, match="source profile's server port"):
-    check_port(18498, source_server_port=18498)
+def test_check_port_refuses_source_port_and_occupied(source_home: pathlib.Path) -> None:
+  with pytest.raises(preview_module.PreviewRefusedError, match="between 1 and 65535"):
+    preview_module.check_port(0, source_server_port=18498)
+  with pytest.raises(preview_module.PreviewRefusedError, match="source profile's server port"):
+    preview_module.check_port(18498, source_server_port=18498)
   with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.bind(("127.0.0.1", 0))
     sock.listen(1)
     occupied = sock.getsockname()[1]
-    with pytest.raises(PreviewRefusedError, match="not free"):
-      check_port(occupied, source_server_port=18498)
-  free = pick_free_port()
-  check_port(free, source_server_port=18498)
+    with pytest.raises(preview_module.PreviewRefusedError, match="not free"):
+      preview_module.check_port(occupied, source_server_port=18498)
+  free = browser_harness_session_tree.pick_free_port()
+  preview_module.check_port(free, source_server_port=18498)
 
 
 def _clear_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,7 +169,7 @@ def test_assert_no_bound_singletons_refuses_each_bound_singleton(
 
   _clear_singletons(monkeypatch)
   monkeypatch.setattr(importlib.import_module(module_name), attr, object())
-  with pytest.raises(PreviewRefusedError, match=f"switched: {attr}$"):
+  with pytest.raises(preview_module.PreviewRefusedError, match=f"switched: {attr}$"):
     preview_module.assert_no_bound_singletons()
 
 
@@ -186,12 +178,13 @@ def test_assert_no_bound_singletons_refuses_each_bound_singleton(
 # ---------------------------------------------------------------------------
 
 
-def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_source_backend_refuses_unisolated_backend_types(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = tmp_path / "source"
   write_source_home(home, backend={"id": "cc-claude-entry", "label": "CC", "type": "cc-claude", "model": "claude-x"})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  with pytest.raises(PreviewRefusedError, match="only for charlie-code"):
-    read_source_backend("cc-claude-entry")
+  with pytest.raises(preview_module.PreviewRefusedError, match="only for charlie-code"):
+    preview_module.read_source_backend("cc-claude-entry")
 
 
 # ---------------------------------------------------------------------------
@@ -199,18 +192,18 @@ def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path, mo
 # ---------------------------------------------------------------------------
 
 
-def test_workspace_guard_refuses_outside_and_accepts_inside(tmp_path: Path) -> None:
-  from src.infra.config import CharlieBotConfig
+def test_workspace_guard_refuses_outside_and_accepts_inside(tmp_path: pathlib.Path) -> None:
+  from src.infra import config
 
   home = tmp_path / "trial-home"
-  cfg = CharlieBotConfig(
+  cfg = config.CharlieBotConfig(
       charliebot_home=home,
       paths={
           "workspace_dirs": [str(home / "workspaces")],
           "worktree_dir": str(home / "worktrees")
       })
-  guard = make_workspace_guard(cfg)
-  with pytest.raises(PreviewWorkspaceError, match="workspace boundary"):
+  guard = preview_module.make_workspace_guard(cfg)
+  with pytest.raises(preview_module.PreviewWorkspaceError, match="workspace boundary"):
     guard(REPO_ROOT)
   inside = home / "workspaces" / "synthetic-repo"
   inside.mkdir(parents=True)
@@ -224,10 +217,9 @@ def test_workspace_guard_refuses_outside_and_accepts_inside(tmp_path: Path) -> N
 
 
 def _gated_probe_app():
-  from fastapi import FastAPI
-  from fastapi.routing import APIRouter
+  from fastapi import routing
 
-  probe = APIRouter()
+  probe = routing.APIRouter()
 
   @probe.get("/api/cron/tasks")
   async def list_tasks():
@@ -262,26 +254,26 @@ def _gated_probe_app():
     return {"ok": True}
 
   @probe.websocket("/ws/terminal")
-  async def terminal(websocket: WebSocket):
+  async def terminal(websocket: fastapi.WebSocket):
     await websocket.accept()
     await websocket.send_text("should never be reached")
 
   @probe.websocket("/ws/sessions/{session_id}")
-  async def session_ws(websocket: WebSocket, session_id: str):
+  async def session_ws(websocket: fastapi.WebSocket, session_id: str):
     await websocket.accept()
     await websocket.send_text("hello " + session_id)
     await websocket.close()
 
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(probe)
-  app.add_middleware(PreviewUnavailableGate)
+  app.add_middleware(preview_module.PreviewUnavailableGate)
   return app
 
 
 def test_preview_gate_refuses_disabled_mutations_and_passes_the_rest() -> None:
-  from fastapi.testclient import TestClient
+  from fastapi import testclient
 
-  client = TestClient(_gated_probe_app())
+  client = testclient.TestClient(_gated_probe_app())
   assert client.get("/api/cron/tasks").status_code == 200
   refused = client.post("/api/cron/tasks", json={})
   assert refused.status_code == 403
@@ -294,8 +286,8 @@ def test_preview_gate_refuses_disabled_mutations_and_passes_the_rest() -> None:
     assert "External messaging and delayed triggers are disabled" in response.json()["detail"]
   assert client.get("/api/unknown").status_code == 404  # read paths pass through
   assert client.post("/api/sessions/", json={}).status_code == 200
-  assert refusal_reason("/api/sessions/", "POST") is None
-  assert refusal_reason("/api/cron/tasks", "GET") is None
+  assert preview_module.refusal_reason("/api/sessions/", "POST") is None
+  assert preview_module.refusal_reason("/api/cron/tasks", "GET") is None
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +295,7 @@ def test_preview_gate_refuses_disabled_mutations_and_passes_the_rest() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _cli_env(source: Path, *, strip_launcher: bool = False, launcher_dir: Path | None = None) -> dict:
+def _cli_env(source: pathlib.Path, *, strip_launcher: bool = False, launcher_dir: pathlib.Path | None = None) -> dict:
   env = dict(os.environ.items())
   env["CHARLIEBOT_HOME"] = str(source)
   env["PYTHONUNBUFFERED"] = "1"
@@ -316,10 +308,10 @@ def _cli_env(source: Path, *, strip_launcher: bool = False, launcher_dir: Path |
 
 def _run_cli(
     args: list[str],
-    source: Path,
+    source: pathlib.Path,
     *,
     strip_launcher: bool = False,
-    launcher_dir: Path | None = None) -> subprocess.CompletedProcess:
+    launcher_dir: pathlib.Path | None = None) -> subprocess.CompletedProcess:
   return subprocess.run(
       [sys.executable, "-m", "src.app.main", "session-tree", "preview", *args],
       cwd=str(REPO_ROOT),
@@ -330,8 +322,8 @@ def _run_cli(
 
 
 def _refusal(
-    tmp_path: Path,
-    source: Path,
+    tmp_path: pathlib.Path,
+    source: pathlib.Path,
     args: list[str],
     match: str,
     *,
@@ -346,10 +338,13 @@ def _refusal(
   return proc
 
 
-def test_cli_refuses_symlinked_home_resolving_into_production(tmp_path: Path, source_home: Path) -> None:
+def test_cli_refuses_symlinked_home_resolving_into_production(
+    tmp_path: pathlib.Path, source_home: pathlib.Path) -> None:
   link = tmp_path / "innocent-name"
   link.symlink_to(source_home / "nested-deeper")
   _refusal(
       tmp_path, source_home,
-      ["--home", str(link), "--port", str(pick_free_port()), "--backend", "clc-test"], "overlaps the production home")
+      ["--home",
+       str(link), "--port",
+       str(browser_harness_session_tree.pick_free_port()), "--backend", "clc-test"], "overlaps the production home")
   assert not (source_home / "nested-deeper").exists()

@@ -95,8 +95,6 @@ def main() -> None:
       help=(
           "Configured backend option id from ~/.charliebot/config.yaml; omit unless the user "
           "explicitly named a backend for this delegation (see epilog)"))
-  # Parsed only so the check after parse_args can name its replacement; argparse's unknown-argument error cannot.
-  parser.add_argument("--reviewer-context-file", dest="reviewer_context_file", help=argparse.SUPPRESS)
   parser.add_argument(
       "--keep-worktree",
       required=True,
@@ -132,10 +130,15 @@ def main() -> None:
           "must NOT commit. No reviewer, no merge. "
           "'verify' = repo-less read-only plan verifier; no worktree, reviewer, or merge."),
   )
-  args = parser.parse_args()
-  if args.reviewer_context_file is not None:
+  args, unknown_args = parser.parse_known_args()
+  # The removed reviewer context file option gets an error that names its replacement; every other
+  # unknown argument errors the way parse_args itself would.
+  if any(arg.startswith("--reviewer-") for arg in unknown_args):
     parser.error(
-        "--reviewer-context-file was removed: put reviewer instructions under the task spec's ## Reviewer Checklist")
+        "the reviewer context file option was removed: put reviewer instructions under "
+        "the task spec's ## Reviewer Checklist")
+  if unknown_args:
+    parser.error(f"unrecognized arguments: {' '.join(unknown_args)}")
 
   if args.task_type == "verify":
     if args.repo is not None:

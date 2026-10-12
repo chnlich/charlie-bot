@@ -19,23 +19,21 @@ from tests import test_task_execution
 
 
 @pytest.mark.asyncio
-async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
+async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the_review(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An input admitted while the review Run holds the serialized slot gets
-    the next permitted serialized dispatch after the review chain finishes.
+  """An input admitted while the review Run holds the serialized slot pauses
+    the review's delivery and rides the review's own continuation.
 
     Deterministic by construction: the review backend is GATED, so the admit
     and the landing-defeating commit provably land during the review — no race
-    against the scripted review's finish. The review itself succeeds; what
-    blocks delivery is the work branch's commit not landing on main (an empty
-    commit on the branch, made while the review runs), so the chain reports
-    "passed review but its branch did not land". The next dispatch's backend
-    is GATED too: the child-open assertion runs while that dispatch provably
-    has not finished, the one point the contract pins the child open (a node
-    with an unfinished dispatch cannot close — its pending input, then its
-    active Run, blocks the close). Waiting for the parent report instead
-    races the next dispatch's whole delivery chain, whose successful close
-    of the child is legal once the dispatch has finished.
+    against the scripted review's finish. The review itself succeeds; the
+    pending input makes its ending a pause: no landing check, no merge, no
+    report. The continuation is a review Run (the latest Run is a successful
+    review whose merge never started), gated so the child-open assertion runs
+    while it provably has not finished. Only the continuation's own finish
+    runs the landing check — and there the empty commit left on the branch
+    during the first review makes it honestly fail, so the chain reports
+    "passed review but its branch did not land".
     """
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -86,12 +84,10 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
           # actions below, so they are provably "during the review Run".
           test_task_execution.SpawningScriptedBackend(
               [test_task_execution.result_event("review approved")], gate=review_gate_wait),
-          # The stranded input's next dispatch, gated so the child-open
+          # The stranded input's review continuation, gated so the child-open
           # assertion below runs while it provably has not finished.
           test_task_execution.SpawningScriptedBackend(
-              [test_task_execution.result_event("tweak done")], gate=tweak_gate_wait),
-          # The tweak's own delivery chain spawns its review of the tweak run.
-          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak review approved")]),
+              [test_task_execution.result_event("tweak reviewed")], gate=tweak_gate_wait),
       ],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="Start the work.", actor="user")
@@ -111,9 +107,9 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), review_run.id) is None
 
   # DURING the review: admit the input and leave a commit on the work branch
-  # that never lands on main, so the successful review cannot complete
-  # delivery (its landing check honestly fails). The input rides the parent
-  # manager's provenance, the request-entry gate's authorized sender.
+  # that never lands on main, so the continuation's landing check honestly
+  # fails when it finally runs. The input rides the parent manager's
+  # provenance, the request-entry gate's authorized sender.
   await tree.dispatch.admit_input(
       child.id, event_type=ET.AGENT_MESSAGE, content="one more tweak", actor="agent", from_session=manager.id)
   work_run = await tree.runs.get_run(child.id, work_run_id)
@@ -130,10 +126,32 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   assert ok
   review_gate.set()
 
+  # The successful review's ending was a pause: no landing check ran, so no
+  # blocked report reached the parent yet, and the child stays open.
   await test_task_execution.wait_for_terminal_run(tree, child.id, review_run.id, timeout=10.0)
+  assert tree.task_state(child.id) == "open"
+  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  assert not reports, f"the paused review reported before its continuation: {reports}"
 
-  # The blocked report reached the parent; the child is still open...
-  reports: list[dict] = []
+  # The stranded input's next permitted serialized dispatch is the review's
+  # continuation: a review Run of the same work Run, parked at its gate, so it
+  # provably has not finished — the point where the contract pins the child
+  # open. Reading the state earlier or later races the delivery chain.
+  await asyncio.wait_for(tweak_started.wait(), timeout=15)
+  records = tree.runs.list_run_records_sync(child.id)
+  next_runs = [r for r in records if r.id not in (work_run_id, review_run.id)]
+  assert len(next_runs) == 1, f"the input admitted during the review was stranded: {records}"
+  assert next_runs[0].kind == "review" and next_runs[0].review_of_run_id == work_run_id
+  assert next_runs[0].input_event_ids, "the next dispatch did not claim the admitted input"
+  assert tree.task_state(child.id) == "open"
+  tweak_gate.set()
+
+  # Released, the continuation finishes successfully — and only now does the
+  # landing check run: the unlanded commit defeats it, so the chain reports
+  # "passed review but its branch did not land" and the child stays open.
+  _tweak_record, tweak_outcome = await test_task_execution.wait_for_terminal_run(
+      tree, child.id, next_runs[0].id, timeout=10.0)
+  assert tweak_outcome == "success"
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
@@ -141,21 +159,4 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
       break
     await asyncio.sleep(0.1)
   assert any("review" in str(e.get("summary", "")).lower() for e in reports), reports
-
-  # ...and the stranded input got the next permitted serialized dispatch: a
-  # fresh work Run claimed it. That dispatch is parked at its gate, so it
-  # provably has not finished — the point where the contract pins the child
-  # open. Reading the state earlier or later races the delivery chain: once
-  # this dispatch finishes, its chain's close of the child is legal.
-  await asyncio.wait_for(tweak_started.wait(), timeout=15)
-  records = tree.runs.list_run_records_sync(child.id)
-  next_runs = [r for r in records if r.kind == "work" and r.id != work_run_id]
-  assert len(next_runs) == 1, f"the input admitted during the review was stranded: {records}"
-  assert next_runs[0].input_event_ids, "the next dispatch did not claim the admitted input"
   assert tree.task_state(child.id) == "open"
-  tweak_gate.set()
-
-  # Released, the next dispatch finishes successfully.
-  _tweak_record, tweak_outcome = await test_task_execution.wait_for_terminal_run(
-      tree, child.id, next_runs[0].id, timeout=10.0)
-  assert tweak_outcome == "success"

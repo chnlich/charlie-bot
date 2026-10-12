@@ -65,6 +65,7 @@ from src.runtime.control_events import (
 from src.runtime.review import review_landing_target
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunStore, run_not_found_in_task_text
+from src.runtime.session_sidebar import pending_trigger_state_sync
 from src.runtime.task_errors import (
     RESTORE_CHAIN_HOP_LIMIT,
     TaskArchivedError,
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
 
   from src.runtime.control_sink import ControlEventSink
   from src.runtime.session_events import SessionEvents
+  from src.runtime.session_store import SessionStore
 
 log = LazyStructlogLogger()
 
@@ -105,6 +107,7 @@ class CompletionTree(Protocol):
   runs: RunStore
   dispatch: session_dispatch.TaskInputDispatcher
   session_events: SessionEvents
+  session_store: SessionStore
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
     ...
@@ -1024,6 +1027,24 @@ class TaskCompletionManager:
       return replay
     return await self._close_now(session_id, request_id=effective_request_id, evidence=evidence, actor=ACTOR_SYSTEM)
 
+  def pause_reason(self, session_id: str) -> str | None:
+    """The node's pause reason, or None when nothing waits.
+
+        A run that ends while its node has a pending trigger (its triggers
+        directory) or a pending input (input facts no Run claimed) is a pause,
+        not a delivery: the node stays open on its branch and worktree, and the
+        wake's own run continues. The one definition every delivery entry asks
+        first; it reads disk facts only and adds no state of its own.
+        """
+    triggers_dir = self._tree.session_store.session_dir(session_id) / "triggers"
+    pending_triggers, _next_fire = pending_trigger_state_sync(triggers_dir, None, None)
+    if pending_triggers:
+      return f"has {pending_triggers} pending trigger(s)"
+    pending = self._tree.dispatch.pending_inputs(session_id)
+    if pending:
+      return session_dispatch.unprocessed_input_blocker(pending)
+    return None
+
   async def after_run_finished(self, session_id: str, run_id: str) -> None:
     """The one post-success follow-up owner, driven by the durable outcome.
 
@@ -1047,6 +1068,12 @@ class TaskCompletionManager:
       return
     if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT:
       log.info("worker_delivery_awaits_review", session_id=session_id, run_id=run_id)
+      return
+    pause = self.pause_reason(session_id)
+    if pause is not None:
+      # A paused run is not a delivery: the wake's continuation run
+      # re-evaluates completion when it ends with nothing pending.
+      log.info("worker_delivery_paused", session_id=session_id, run_id=run_id, reason=pause)
       return
     try:
       await self.evaluate_automatic_completion(session_id, run_id=run_id)

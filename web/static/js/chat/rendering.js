@@ -8,8 +8,8 @@
   const markFileLinks = Chat.markFileLinks;
   const toolInputSummary = Chat.toolInputSummary;
 
-// The one branch glyph: the clone_start banner's "Cloned from" marker and the
-// separator's "Clone to here" fork button below.
+// The one branch glyph: the clone_start banner's "Cloned from" marker below
+// and the separator's "Clone to here" button (sidebar/modals.js).
 const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
 
 // The one down-chevron glyph, path-only because its consuming sites keep different
@@ -835,15 +835,7 @@ function renderMessage(msg, sessionId) {
     var buttons = "";
     if (sessionId) {
       if (msg.event_index != null) {
-        buttons = "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
-          + CLONE_SVG
-          + "</button>"
-          + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
-          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
-          + "</button>"
-          + separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
+        buttons = separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
       }
       if (msg.id != null) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
@@ -930,6 +922,7 @@ const CHAT_ONLY = {
   registerMessagePostProcessor,
   registerSeparatorButton,
   registerDeliveryLink,
+  CLONE_SVG,
   buildTurnRowFromSpec,
   installTurnFold,
   installTurnCollapseControl,

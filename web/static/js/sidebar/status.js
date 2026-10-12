@@ -543,7 +543,7 @@ function stopThinking(opts) {
   stopPageTimer('thinking-tick');
   thinkingStart = null;
   // No button write here: master_done or assistant_error can land inside an
-  // upload/voice window, and re-enabling would punch through the in-flight
+  // upload or input-work window, and re-enabling would punch through the in-flight
   // lock. Only refreshSendLock writes the button.
   stopActiveSessionViewPolling();
   if (!switching && !(opts && opts.preserveSessionIndicator)) updateSpinner();

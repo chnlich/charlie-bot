@@ -282,10 +282,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
         return state.overlayMap.get(id) || null;
       },
       createElement: () => makeEl(),
+      addEventListener() {},
     },
     showToast: (message, isError) => state.toasts.push({msg: message, isError: !!isError}),
     accessTokenAuthorization: () => null,
-    Chat: {setVoiceContributed: (v) => state.chatFlags.push(v)},
+    Chat: {setInputMode: (mode) => state.chatFlags.push(mode), registerInputMode() {}},
     autoResize() {},
     saveDraft() {},
   };
@@ -305,15 +306,15 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
 
   // Wrap the lock's open/close so tests can assert a path never engaged it
   // while the real counting behavior stays live for every other path.
-  const realStarted = context.voiceTranscriptionStarted;
-  const realSettled = context.voiceTranscriptionSettled;
-  context.voiceTranscriptionStarted = () => {
+  const realStarted = context.inputWorkStarted;
+  const realSettled = context.inputWorkSettled;
+  context.inputWorkStarted = (message) => {
     state.sendLockOpens += 1;
-    realStarted();
+    realStarted(message);
   };
-  context.voiceTranscriptionSettled = () => {
+  context.inputWorkSettled = (message) => {
     state.sendLockSettles += 1;
-    realSettled();
+    realSettled(message);
   };
 
   // Click once and drive the arming chain to `recording`: mic -> audio context
@@ -537,7 +538,7 @@ test('the confirm probe fires exactly once at 5 s and inserts its words', async 
   await tick();
   await tick();
   assert.equal(state.input.value, '你好今天');
-  assert.deepEqual(state.chatFlags, [true]);
+  assert.deepEqual(state.chatFlags, ['voice']);
   assert.equal(state.voiceUi().hint.textContent, '你好今天');
 });
 
@@ -588,7 +589,7 @@ test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decodin
   await tick();
   await tick();
   assert.equal(state.input.value, '你好今天天气不错');
-  assert.deepEqual(state.chatFlags, [true]); // the unanswered confirm inserted nothing
+  assert.deepEqual(state.chatFlags, ['voice']); // the unanswered confirm inserted nothing
   assert.equal(state.beforeunloadCount, 0); // idle again
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
 
@@ -781,7 +782,7 @@ test('teardown aborts an in-flight upload and frees the slot', async () => {
   assert.equal(state.beforeunloadCount, 0);
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
   assert.equal(state.voiceUi(), null);
-  assert.deepEqual(state.chatFlags, [false]);
+  assert.deepEqual(state.chatFlags, [null]);
 
   upload.respond(200, {text: 'late'});
   await tick();

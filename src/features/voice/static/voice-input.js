@@ -45,6 +45,10 @@ const VOICE_MAX_SAMPLES = 5 * 60 * VOICE_SAMPLE_RATE; // the server's recording 
 // The upload-phase budget: past it the request aborts into the retry state. The
 // decode wait after the body is sent is unbounded but visible ("Decoding...").
 const VOICE_UPLOAD_TIMEOUT_MS = 60 * 1000;
+// The send gate's message while a transcription window (upload + decode) is open.
+const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
+// The input_mode a dictated message carries (src/features/voice/turn_contribution.py VOICE_INPUT_MODE).
+const VOICE_INPUT_MODE = 'voice';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so
 // the budget grows with the run; a fixed wait is either too short for long
@@ -613,7 +617,7 @@ async function startUpload(run) {
   run.requestInFlight = true;
   // The transcription window (upload + decode) opens here: it counts toward
   // the send-button lock; the recording before it never did.
-  voiceTranscriptionStarted();
+  inputWorkStarted(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);
   updateVoiceLeaveGuard();
   showVoiceHint(run, VOICE_HINT_UPLOADING);
   run.uploadTimer = setTimeout(() => {
@@ -648,7 +652,7 @@ function failVoiceUpload(run, err) {
   run.requestInFlight = false;
   // The window closes with the failure; a retry re-enters startUpload and
   // opens a fresh one.
-  voiceTranscriptionSettled();
+  inputWorkSettled(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);
   run.phase = 'retry'; // the buffer stays; the next click re-uploads it
   updateVoiceLeaveGuard();
   const message = run.uploadTimedOut ? 'Voice upload timed out' : err.message;
@@ -668,7 +672,7 @@ function applyVoiceFinal(run, fullText) {
   run.requestInFlight = false;
   // The window closes with the decode landed; run.xhr is already null, so the
   // release's abort below settles nothing further.
-  voiceTranscriptionSettled();
+  inputWorkSettled(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);
   releaseVoiceRun(run);
   const words = fullText.trim();
   if (!words) {
@@ -683,7 +687,7 @@ function applyVoiceFinal(run, fullText) {
     const head = input.value.slice(0, span.start);
     const tail = input.value.slice(span.end);
     input.value = head + words + tail;
-    Chat.setVoiceContributed(true);
+    Chat.setInputMode(VOICE_INPUT_MODE);
     autoResize(input);
     saveDraft();
     input.focus();
@@ -699,7 +703,7 @@ function insertVoiceText(text) {
   const input = document.getElementById('msg-input');
   const current = input.value.trim();
   input.value = current ? current + ' ' + text : text;
-  Chat.setVoiceContributed(true);
+  Chat.setInputMode(VOICE_INPUT_MODE);
   autoResize(input);
   saveDraft();
   input.focus();
@@ -1073,7 +1077,7 @@ function resetVoiceState() {
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
-  Chat.setVoiceContributed(false);
+  Chat.setInputMode(null);
 }
 
 function discardVoiceRecording(run, message) {
@@ -1111,7 +1115,7 @@ function abortVoiceUpload(run) {
   // An xhr still held here means its startUpload window never settled: the
   // abort's own callbacks die on the ownership guard, so the cancel and the
   // session-switch teardown settle the count at this one spot.
-  voiceTranscriptionSettled();
+  inputWorkSettled(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);
 }
 
 function cleanupVoiceCapture(run) {
@@ -1154,3 +1158,8 @@ function removeVoiceOverlay() {
 
 // First paint: the mic's tooltip names the backend a recording would use.
 updateVoiceMicTitle();
+
+// A dictated message's bubble carries the microphone badge, and the run ends
+// with the session view it belongs to.
+Chat.registerInputMode(VOICE_INPUT_MODE, '&#127908; Voice');
+document.addEventListener('charliebot:session-view-teardown', resetVoiceState);

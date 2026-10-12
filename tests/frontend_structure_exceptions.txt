@@ -20,7 +20,6 @@ web/static/js/sidebar/filters.js -> web/static/js/sidebar/session-view.js
 web/static/js/sidebar/groups.js -> web/static/js/sidebar/archived.js
 web/static/js/sidebar/groups.js -> web/static/js/sidebar/modals.js
 web/static/js/sidebar/groups.js -> web/static/js/sidebar/session-view.js
-web/static/js/sidebar/session-view.js -> src/features/voice/static/voice-input.js
 web/static/js/sidebar/session-view.js -> web/static/js/sidebar/modals.js
 web/static/js/sidebar/status.js -> web/static/js/sidebar/groups.js
 web/static/js/sidebar/status.js -> web/static/js/sidebar/session-view.js

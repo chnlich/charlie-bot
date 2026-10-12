@@ -211,7 +211,7 @@ test('a dictated message posts input_mode voice and the next typed message posts
   const calls = [];
   context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
 
-  context.Chat.setVoiceContributed(true);
+  context.Chat.setInputMode('voice');
   input.value = 'dictated words';
   await context.sendMessage();
   input.value = 'typed words';

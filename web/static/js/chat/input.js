@@ -2,16 +2,19 @@
 (function() {
   const Chat = globalThis.Chat;
 
-  let voiceContributed = false;
+  // The composer's input mode: a package that fills the composer by other means
+  // names its mode through setInputMode (null clears it). The next send carries
+  // it as input_mode, and a send or an emptied composer clears it.
+  let composerInputMode = null;
 
-  function setVoiceContributed(value) {
-    voiceContributed = !!value;
+  function setInputMode(mode) {
+    composerInputMode = mode;
   }
 
   const _msgInput = document.getElementById('msg-input');
   if (_msgInput) {
     _msgInput.addEventListener('input', () => {
-      if (!_msgInput.value) voiceContributed = false;
+      if (!_msgInput.value) composerInputMode = null;
     });
   }
 
@@ -54,7 +57,7 @@ async function sendMessage() {
   const payloadFiles = toPayloadFiles(uploadedFilesForPayload);
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
-  const inputMode = voiceContributed ? 'voice' : null;
+  const inputMode = composerInputMode;
 
   // Optimistic UI: append user message and bump session to top
   pendingUserEchoes++;
@@ -63,7 +66,7 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
-  voiceContributed = false;
+  composerInputMode = null;
 
   // Start thinking indicator; keepSendEnabled leaves the button to the
   // in-flight lock, so a master run never locks typing.
@@ -113,7 +116,7 @@ const GLOBALS = {
 };
 const CHAT_ONLY = {
   postChatMessage,
-  setVoiceContributed,
+  setInputMode,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

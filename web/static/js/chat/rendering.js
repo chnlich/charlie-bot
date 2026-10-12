@@ -263,7 +263,7 @@ function renderedNodeText(node) {
 
 // `.prose-msg[data-raw]` carries the message's own unrendered markdown; a plain
 // bubble keeps its text in `.whitespace-pre-wrap`, which is also what leaves the
-// voice badge and the time div out of the first line.
+// input-mode badge and the time div out of the first line.
 function messageSourceText(el) {
   const prose = el.querySelector('.prose-msg');
   if (prose) return prose.dataset.raw != null ? prose.dataset.raw : renderedNodeText(prose);

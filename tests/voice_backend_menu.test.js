@@ -68,7 +68,9 @@ function buildHarness({stored = null, defaultBackend = 'local', backends = BACKE
     document: {
       getElementById: (id) => elements.get(id) || null,
       createElement: () => makeEl(),
+      addEventListener() {},
     },
+    Chat: {registerInputMode() {}},
     VOICE_BACKENDS: backends,
     VOICE_DEFAULT_BACKEND: defaultBackend,
     autoResize() {},

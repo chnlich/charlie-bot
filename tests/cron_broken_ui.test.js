@@ -2,11 +2,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 const { escapeHtml, escapeHtmlText } = require('./escape_html_stub');
 
 const GROUPS_JS = readStatic('sidebar/groups.js');
-const CRON_JS = readStatic('cron.js');
+const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
 function makeClassList() {
   const classes = new Set();

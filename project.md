@@ -305,5 +305,5 @@ decodes the opening clip as a recognition probe.
 
 **Configuration**
 - `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
-- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version (the id rule: the `BackendsConfig` comment in `src/infra/config.py`)
+- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: the `BackendsConfig` comment in `src/infra/config.py`; usage's startup check, `src/features/usage/backend_ids.py`, refuses an id outside them)
 - `backends.preference`: ordered list of backend IDs for cross-backend reviewer selection; server startup refuses a preference entry (`require_backends`) or a cron task or step backend (cron's startup check, `src/features/cron/backend_refs.py`) that names no option id

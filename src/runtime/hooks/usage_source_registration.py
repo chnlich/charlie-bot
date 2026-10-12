@@ -13,9 +13,10 @@ class UsageSource(NamedTuple):
   """One place usage is logged.
 
   ``name`` is the ledger's source value and the usage page's card title. ``id_prefixes`` name a
-  backend id that has left the config. ``run_logs_only`` means the usage lives only in CharlieBot's
-  own run logs. ``module`` is the implementation module, imported on first use; None when
-  CharlieBot's own logs are the only home.
+  backend id: a config id must start with one (usage's startup check), and an id that left the
+  config attributes through one. ``run_logs_only`` means the usage lives only in CharlieBot's own
+  run logs. ``module`` is the implementation module, imported on first use; None when CharlieBot's
+  own logs are the only home.
   """
 
   name: str

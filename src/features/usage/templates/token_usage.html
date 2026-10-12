@@ -146,15 +146,16 @@
       &mdash; upserts one record per API call into it (deduped on the CLI&rsquo;s own message id), and this page
       reads its rows from that ledger alone, as of the last capture; loading the page captures nothing.
       No vendor usage API is called, and ledger rows are never deleted,
-      so the numbers stop shrinking when the source logs they were parsed from are pruned. CLC usage and the
-      fallback records both come from CharlieBot&rsquo;s own logs; a fallback record counts only when the
+      so the numbers stop shrinking when the source logs they were parsed from are pruned. CLC and
+      Antigravity usage and the fallback records come from CharlieBot&rsquo;s own logs; a fallback record
+      counts only when the
       CLI&rsquo;s own log holds no record of the same session, so a sub-row marked (fallback) is a lower
       bound.</li>
     <li><b>Dedupe:</b> Claude Code replays history verbatim on resume / fork, so responses are deduped on <code>message.id</code>.</li>
     <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
       <code>total_token_usage</code>, so summing across files double counts; the per-request
       <code>last_token_usage</code> is summed instead, and the cumulative value only cross-checks root sessions.</li>
-    <li><b>Not covered:</b> backend types with no collection rule here (e.g. antigravity) are not in this
+    <li><b>Not covered:</b> backend types with no collection rule here (gemini) are not in this
       table &mdash; their per-run usage lives only in the thread event logs stored beside each session&rsquo;s
       threads. Gemini (<code>gemini.api_key</code> direct) has no local token log; any call made on another
       machine, or outside the Claude login directories listed under <code>accounts.claude</code> in <code>config.yaml</code>,

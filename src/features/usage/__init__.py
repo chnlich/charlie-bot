@@ -19,3 +19,4 @@ def register() -> None:
   wiring.register_command("storage", "src.features.usage.storage_cli")
   scheduled_handlers.register_handler(
       "cool_storage", "src.features.usage.storage_cool", attr="run_scheduled_cool_storage")
+  wiring.register_startup_check("src.features.usage.backend_ids", attr="check_backend_ids")

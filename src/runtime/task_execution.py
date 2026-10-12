@@ -1702,12 +1702,13 @@ class TaskExecutionAdapter:
     assert (work_run.branch_name and work_run.worktree_path and work_run.repo_path and work_run.base_branch), (
         f"review of work run {work_run.id} needs its exact repo/base/branch/worktree "
         "provenance; an unset base is never silently replaced with main")
-    user_request, worker_summary = await review.extract_review_context(
-        session_id,
-        work_run.id,
-        self._cfg.sessions_dir,
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
-    context_lines = review.review_context_lines(user_request, worker_summary, f"(work run {work_run.id})")
+    meta = await self._tree.load_meta(session_id)
+    assert meta is not None and meta.task is not None, (
+        f"review of work run {work_run.id} needs its node's task record for the spec")
+    worker_summary = await review.extract_review_context(
+        session_id, work_run.id, worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
+    context_lines = review.review_context_lines(
+        review.review_spec_text(meta.task), worker_summary, f"(work run {work_run.id})")
     return task_prompts.review_task_context(
         branch_name=work_run.branch_name,
         wt_path=work_run.worktree_path,
@@ -1724,24 +1725,17 @@ class TaskExecutionAdapter:
         the review context is the task spec (its acceptance tests included)
         plus the work report's path list, and the reviewer checks the current
         state of those paths against the acceptance tests. The spec comes from
-        the task record — the same body the work Run executed against.
+        the task record, the same record the work Run's prompt reads.
         """
     meta = await self._tree.load_meta(session_id)
-    task = meta.task if meta is not None else None
-    spec_parts = []
-    if task is not None and task.goal.strip():
-      spec_parts.append(task.goal)
-    if task is not None and task.acceptance:
-      spec_parts.append("\n".join(["## Acceptance Tests", *[f"- {a}" for a in task.acceptance]]))
-    _user_request, worker_summary = await review.extract_review_context(
-        session_id,
-        work_run.id,
-        self._cfg.sessions_dir,
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
+    assert meta is not None and meta.task is not None, (
+        f"review of work run {work_run.id} needs its node's task record for the spec")
+    worker_summary = await review.extract_review_context(
+        session_id, work_run.id, worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
     return task_prompts.repo_less_review_task_context(
         chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
         worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
-        spec_text="\n\n".join(spec_parts) or None,
+        spec_text=review.review_spec_text(meta.task),
         work_report=worker_summary,
     )
 

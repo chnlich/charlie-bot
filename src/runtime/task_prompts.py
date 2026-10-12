@@ -541,7 +541,7 @@ def repo_less_review_task_context(
     *,
     chat_log_path: Path,
     worker_log_path: Path,
-    spec_text: str | None,
+    spec_text: str,
     work_report: str | None,
 ) -> str:
   """The repo-less review run's volatile half: the spec, the reported paths, no git.
@@ -552,7 +552,6 @@ def repo_less_review_task_context(
   judgment: the current state of those paths against the acceptance tests —
   no diff to read, nothing to merge or push.
   """
-  spec = spec_text if spec_text and spec_text.strip() else "(the task spec text was not recorded)"
   report = (
       work_report
       if work_report and work_report.strip() else "(the work Run left no final report; judge the paths the task names)")
@@ -560,6 +559,6 @@ def repo_less_review_task_context(
       f"## Context\n"
       f"This task changed host paths directly; it has no repository, so there is no diff to read and\n"
       f"nothing to merge or push. Review the CURRENT state of the paths the work report lists.\n\n"
-      f"### Task spec (acceptance tests included)\n{spec}\n\n"
+      f"### Task spec (acceptance tests included)\n{spec_text}\n\n"
       f"### Work report (every created, modified and deleted path, and each acceptance test's result)\n{report}\n\n"
       f"{review_log_pointer(chat_log_path, worker_log_path)}")

@@ -57,6 +57,7 @@ from src.infra.models import PatchSessionTaskRequest, RunRecord, SessionMetadata
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
+from src.runtime.task_errors import TaskInvalidError
 from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests
@@ -644,6 +645,66 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   pm_events = tree.runs.load_events_sync(manager.id)
   for r in tree.runs.list_run_records_sync(manager.id):
     assert tree.runs.terminal_outcome(pm_events, r.id) == "success"
+
+
+# ---------------------------------------------------------------------------
+# Review context: the spec is the node's task record, the one the delegate wrote
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_repo_review_context_carries_the_delegated_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  from src.runtime.api import internal as internal_api
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  repo, _origin = init_repo_with_origin(tmp_path / "review-spec-work")
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
+  install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  spec = "## Goal\n\nrename the config key\n\n## Reviewer Checklist\n- the legacy key still loads\n"
+  # The delegated run launches on the API loop, which lives only inside this block.
+  with make_api_client(cfg, session_blocks, tree) as client:
+    response = client.post(
+        "/api/internal/delegate",
+        json={
+            "session_id": manager.id,
+            "description": spec,
+            "task_type": "quick-edit",
+            "keep_worktree": False,
+            "repo_path": str(repo),
+            "base_branch": "main",
+        },
+        headers=OP_HEADERS)
+    assert response.status_code == 200, response.text
+    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
+    # The finished work Run carries the worktree and branch the review reuses.
+    work_run, outcome = await wait_for_terminal_run(tree, child_id, run_id)
+    assert outcome == "success"
+    review_context = await tree.dispatch.executor._build_review_context(child_id, work_run)
+  assert "- the legacy key still loads" in review_context
+
+
+@pytest.mark.asyncio
+async def test_repo_review_context_refuses_a_task_with_an_empty_goal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path / "empty-goal-work")
+  empty_spec = {"goal": "", "repo_path": str(repo), "base_branch": "main", "task_type": "implement"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, empty_spec))
+  work_run = RunRecord(
+      id="run-work",
+      session_id=worker.id,
+      kind="work",
+      backend="fake",
+      model="fake-model",
+      repo_path=str(repo),
+      base_branch="main",
+      branch_name="charliebot/task-empty-goal",
+      worktree_path=str(tmp_path / "empty-goal-worktree"))
+  with pytest.raises(TaskInvalidError):
+    await tree.dispatch.executor._build_review_context(worker.id, work_run)
 
 
 # ---------------------------------------------------------------------------

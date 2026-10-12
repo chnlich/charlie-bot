@@ -1,31 +1,22 @@
 """Tests for scheduled task backend overrides."""
 
-from datetime import datetime
-from pathlib import Path
+import datetime
+import pathlib
+import zoneinfo
 from typing import Any
-from unittest.mock import AsyncMock
-from zoneinfo import ZoneInfo
+from unittest import mock
 
+import conftest
 import pytest
 import yaml
-from conftest import (
-    OPUS_BACKEND_ID,
-    SessionBlocks,
-    bind_deps_blocks,
-    build_task_tree,
-    create_scheduled_node,
-    make_cron_client,
-    make_scheduler_setup,
-    write_nightly_prompt,
-)
 
 from src.features.cron import api as cron_api
-from src.features.cron.config import ScheduledTaskConfig
-from src.features.cron.loader import _load_cron_file
-from src.infra.config import CharlieBotConfig
+from src.features.cron import config as cron_config
+from src.features.cron import loader
+from src.infra import config
 
 
-def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
+def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: pathlib.Path) -> None:
   """Redirect the cron API's host-file IO at *cron_dir*.
 
   src.features.cron.api binds cron_dir and cron_path as separate module globals, so
@@ -40,11 +31,11 @@ _NIGHTLY_PROMPT_MD = "run nightly\n"
 
 
 def _cron_api_rig(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     preseed_backend: str | None = None,
-) -> tuple[Path, CharlieBotConfig, SessionBlocks, Path]:
+) -> tuple[pathlib.Path, config.CharlieBotConfig, conftest.SessionBlocks, pathlib.Path]:
   """Stage the cron API world: a cron.d dir, the nightly prompt source, the
   patched cron-dir bindings, and the real scheduler trio.
 
@@ -55,27 +46,28 @@ def _cron_api_rig(
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   if preseed_backend is None:
-    md_path = write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
+    md_path = conftest.write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
   else:
     _yaml_path, md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path, backend=preseed_backend)
   _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_blocks, _ = make_scheduler_setup(tmp_path)
+  cfg, session_blocks, _ = conftest.make_scheduler_setup(tmp_path)
   return cron_dir, cfg, session_blocks, md_path
 
 
 @pytest.mark.asyncio
-async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_scheduler_aligns_bound_node_backend_in_place(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A bound task's node follows the task config: the tick's alignment switches
   the node's backend in place and leaves the scheduler bookkeeping untouched."""
-  cfg, session_blocks, scheduler = make_scheduler_setup(tmp_path)
-  tree = build_task_tree(cfg, session_blocks)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
-  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
+  cfg, session_blocks, scheduler = conftest.make_scheduler_setup(tmp_path)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
+  node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
   node.last_scheduled_run = "2026-06-07T09:00:00+00:00"
   node.last_scheduled_cron = "0 2 * * *"
   await session_blocks.store.save_metadata(node)
 
-  task_cfg = ScheduledTaskConfig(
+  task_cfg = cron_config.ScheduledTaskConfig(
       name="nightly",
       cron="0 2 * * *",
       prompt="nightly prompt",
@@ -98,24 +90,24 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
 
 @pytest.mark.asyncio
 async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A hand-edited yaml backend seen by the tick switches the node in place and
   preserves its last_scheduled_run: the next fire is computed from the true last
   occurrence, not from a rotated generation's empty bookkeeping."""
-  cfg, session_blocks, scheduler = make_scheduler_setup(tmp_path)
-  tree = build_task_tree(cfg, session_blocks)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
-  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
-  now = datetime.now(ZoneInfo("America/Los_Angeles"))
+  cfg, session_blocks, scheduler = conftest.make_scheduler_setup(tmp_path)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
+  node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
+  now = datetime.datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
   await tree.update_slot_fields(node.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron="* * * * *")
-  task_cfg = ScheduledTaskConfig(
+  task_cfg = cron_config.ScheduledTaskConfig(
       name="nightly",
       cron="* * * * *",
       prompt="nightly prompt",
       backend="codex-o3",
       session_id=node.id,
   )
-  execute_task = AsyncMock()
+  execute_task = mock.AsyncMock()
   scheduler._execute_task = execute_task
 
   await scheduler._align_bound_backend(task_cfg, cfg)
@@ -130,7 +122,7 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
 
 
 def test_cron_api_persists_and_clears_backend(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cron_dir, cfg, session_blocks, md_path = _cron_api_rig(tmp_path, monkeypatch)
@@ -139,7 +131,7 @@ def test_cron_api_persists_and_clears_backend(
   def _read_backend() -> str:
     return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
 
-  with make_cron_client(cfg, session_blocks) as client:
+  with conftest.make_cron_client(cfg, session_blocks) as client:
     create_response = client.post(
         "/api/cron/tasks",
         json={
@@ -168,12 +160,12 @@ def test_cron_api_persists_and_clears_backend(
 
 
 def test_cron_api_rejects_invalid_backend_on_create(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cron_dir, cfg, session_blocks, md_path = _cron_api_rig(tmp_path, monkeypatch)
 
-  with make_cron_client(cfg, session_blocks) as client:
+  with conftest.make_cron_client(cfg, session_blocks) as client:
     response = client.post(
         "/api/cron/tasks",
         json={
@@ -189,14 +181,17 @@ def test_cron_api_rejects_invalid_backend_on_create(
   assert not (cron_dir / "nightly.yaml").exists()
 
 
-def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | None = None) -> tuple[Path, Path, str]:
+def _seed_prompt_file_task(cron_dir: pathlib.Path,
+                           tmp_path: pathlib.Path,
+                           *,
+                           backend: str | None = None) -> tuple[pathlib.Path, pathlib.Path, str]:
   """Write a prompt_file-backed 'nightly' job; returns (yaml_path, md_path, md_content).
 
   The host file carries the path to its prompt source under ``prompt_file`` and
   the pointed file owns the body, exactly as production host files look.
   ``backend`` adds the backend key to the host file.
   """
-  md_path = write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
+  md_path = conftest.write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
   body: dict[str, Any] = {
       "cron": "0 3 * * *",
       "prompt_file": str(md_path),  # absolute path, as production files use
@@ -210,12 +205,12 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | Non
   return yaml_path, md_path, _NIGHTLY_PROMPT_MD
 
 
-def test_load_cron_file_loads_prompt_file(tmp_path: Path) -> None:
+def test_load_cron_file_loads_prompt_file(tmp_path: pathlib.Path) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path)
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path)
   yaml_path, md_path, md_content = _seed_prompt_file_task(cron_dir, tmp_path)
 
-  task, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  task, _ = loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
   assert task.prompt == md_content
   assert task.prompt_file == str(md_path)

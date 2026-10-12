@@ -177,6 +177,18 @@ class SlackClient:
       raise RuntimeError(f"reactions.remove failed: {payload}")
     return payload
 
+  async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
+    """GET conversations.replies for one thread; return its messages in order."""
+    resp = await self._http.get(
+        "https://slack.com/api/conversations.replies",
+        headers=self._bot_headers,
+        params={
+            "channel": channel,
+            "ts": thread_ts
+        },
+    )
+    return self._checked_payload(resp, "conversations.replies")["messages"]
+
   async def get_channel_name(self, channel_id: str) -> str | None:
     """Resolve a channel id to its display name via conversations.info.
 

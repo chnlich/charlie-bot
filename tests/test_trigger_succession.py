@@ -9,7 +9,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.runtime import master_trigger
-from src.runtime.api.message_utils import build_agent_message_event
+from src.runtime.api import message_utils
 
 
 def _record_launches(tree) -> list[tuple[str, list[str]]]:
@@ -31,7 +31,7 @@ async def test_trigger_master_dispatches_the_input_a_task_node_already_holds(
   conftest.bind_deps_blocks(monkeypatch, tree, mgr)
   launches = _record_launches(tree)
   root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
-  persisted = build_agent_message_event("summon prompt", from_session=root.id, from_session_name="Slack")
+  persisted = message_utils.build_agent_message_event("summon prompt", from_session=root.id, from_session_name="Slack")
   await mgr.events.persist_and_broadcast(root.id, persisted)
 
   await master_trigger.trigger_master(

@@ -331,7 +331,7 @@ test('the bell opens another session and expands the tray it lands on', async ()
   await context.renderPendingTriggersTray('session-a');
   await tick();
 
-  context.expandPendingTriggersTray('session-b');
+  context.openPendingTriggers('session-b');
   assert.deepEqual(switchedTo, ['session-b']);
 
   // The switch lands: renderSessionView opens the new session's tray expanded.
@@ -349,7 +349,7 @@ test('the bell on the open session expands the tray in place', async () => {
   await tick();
   assert.ok(!tray.innerHTML.includes('· next'), 'collapsed by default');
 
-  context.expandPendingTriggersTray('session-a');
+  context.openPendingTriggers('session-a');
   assert.match(tray.innerHTML, /· next/);
 });
 
@@ -360,13 +360,13 @@ test('the bell title names the count and the next fire time, and clicking it exp
     next_trigger_at: '2026-04-02T12:00:00Z',
   });
   assert.match(html, /title="2 pending delayed triggers · next /);
-  assert.match(html, /onclick="event\.preventDefault\(\); event\.stopPropagation\(\); expandPendingTriggersTray\('s1'\)"/);
+  assert.match(html, /onclick="event\.preventDefault\(\); event\.stopPropagation\(\); openPendingTriggers\('s1'\)"/);
 
   const idle = context.renderPendingTriggerIndicator({
     id: 's2', has_pending_trigger: false, pending_trigger_count: 0, next_trigger_at: null,
   });
   assert.match(idle, /class="[^"]*hidden/);
-  assert.ok(!idle.includes('expandPendingTriggersTray') || idle.includes('hidden'),
+  assert.ok(!idle.includes('openPendingTriggers') || idle.includes('hidden'),
       'the hidden bell keeps its click attr but is not shown');
 });
 

@@ -39,9 +39,10 @@
   const CHARS_PER_LINE_EST = 75;
   const FOLDED_MEASURE_MEMORY = 32;
 
+  // The engines live in chat/shared.js's map, which Chat.activeTurnEngineFor
+  // reads.
   function activeEngines() {
-    if (!globalThis.__turnEngineInstances) globalThis.__turnEngineInstances = new WeakMap();
-    return globalThis.__turnEngineInstances;
+    return Chat.turnEngines;
   }
 
   function supportsTurnEngine(container) {
@@ -1394,17 +1395,11 @@
     return engine;
   }
 
-  function activeFor(container) {
-    const engine = activeEngines().get(container);
-    return engine && engine.alive ? engine : null;
-  }
-
   Chat.TurnEngine = {
     MAX_WINDOW_TURNS,
     mountIfAvailable,
-    activeFor,
     debug(container) {
-      const engine = activeFor(container);
+      const engine = Chat.activeTurnEngineFor(container);
       if (!engine) return null;
       engine.ensureOffsets();
       return {

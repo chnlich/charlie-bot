@@ -408,8 +408,8 @@ function turnIsOpen(wrap, isLast) {
 // Engine-hosted wraps route open/fold through the engine's registry; legacy
 // wraps keep the dataset implementation.
 function turnEngineForWrap(wrap) {
-  if (!wrap || !wrap.dataset || !wrap.dataset.turnKey || !Chat.TurnEngine) return null;
-  return Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  if (!wrap || !wrap.dataset || !wrap.dataset.turnKey) return null;
+  return Chat.activeTurnEngineFor(document.getElementById('messages'));
 }
 
 function setTurnOverride(wrap, open) {
@@ -457,7 +457,7 @@ function setPageDepth(depth) {
   pageDepth = depth;
   Chat.pageDepth = depth;
   const root = document.getElementById('messages');
-  const engine = Chat.TurnEngine && Chat.TurnEngine.activeFor(root);
+  const engine = Chat.activeTurnEngineFor(root);
   if (engine) {
     engine.setDepth(depth);
     updatePageDepthControl();
@@ -865,7 +865,7 @@ function renderMessage(msg, sessionId) {
 // the projection and pins the bottom when the reader is there.
 function ingestLiveMessage(msg, sessionId, forceScroll) {
   var container = document.getElementById("messages");
-  var engine = Chat.TurnEngine && Chat.TurnEngine.activeFor(container);
+  var engine = Chat.activeTurnEngineFor(container);
   if (engine) {
     engine.appendMessage(msg, forceScroll);
     return true;

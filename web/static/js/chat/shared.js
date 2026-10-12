@@ -204,6 +204,17 @@ function isRenderedMessage(msg) {
   return document.querySelector('[data-message-id="' + CSS.escape(id) + '"]') !== null;
 }
 
+// The mounted turn engine of each message container. turn-engine.js mounts
+// and disposes the engines in this map, and every reader asks
+// activeTurnEngineFor, so the chat files below turn-engine.js reach the
+// engine too.
+const turnEngines = new WeakMap();
+
+function activeTurnEngineFor(container) {
+  const engine = turnEngines.get(container);
+  return engine && engine.alive ? engine : null;
+}
+
 const GLOBALS = {
   splitTurnSpan,
   shouldAutoScroll,
@@ -223,6 +234,8 @@ const CHAT_ONLY = {
   escapeJsSingleQuoted,
   messageIdentityAttrs,
   toolInputSummary,
+  turnEngines,
+  activeTurnEngineFor,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

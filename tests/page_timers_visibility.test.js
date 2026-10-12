@@ -244,6 +244,8 @@ function buildAppContext() {
     reconnectDelay: 1000,
     WebSocket: {OPEN: 1},
     autoResize() {},
+    // The chat bundle is not loaded, so the engine lookup sees no engine.
+    Chat: {activeTurnEngineFor: () => null},
     setInterval: timers.setInterval,
     clearInterval: timers.clearInterval,
     console: {error() {}, warn() {}, log() {}},

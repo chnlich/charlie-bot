@@ -428,11 +428,6 @@ async def anchor_y(cdp: CDP, session_id: str, anchor_id: str) -> dict | None:
   return await ev(cdp, session_id, ANCHOR_Y_JS + f'("{anchor_id}")')
 
 
-async def reinstall_instrument(cdp: CDP, session_id: str) -> None:
-  """Re-arm the engine instrumentation after a scenario re-mounted the engine."""
-  await ev(cdp, session_id, INSTALL_INSTRUMENT_JS)
-
-
 async def screenshot(cdp: CDP, session_id: str, evidence_dir: Path, name: str) -> str:
   res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
   path = evidence_dir / f"{name}.png"

@@ -295,6 +295,14 @@ const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stro
 const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
 const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
+// Single source for both pill strips: through the namespace, the sidebar
+// filter strip (filters.js) and the archived view's group strip (archived.js).
+function filterPillClass(active) {
+  return active
+    ? 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300'
+    : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
+}
+
 // The one construction of the star button's onclick body: rendered below for
 // a fresh list render and, through the namespace, re-applied by filters.js's
 // toggleSessionStar after a star toggle (Sidebar.starButtonOnclick). The
@@ -986,6 +994,7 @@ const GLOBALS = {
   toggleTreeNode,
 };
 const SIDEBAR_ONLY = {
+  filterPillClass,
   TRASH_SVG_PATH,
   starButtonOnclick,
   MODAL_OVERLAY_CLASS,

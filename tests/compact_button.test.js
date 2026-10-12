@@ -63,7 +63,7 @@ function loadChatContext(elements) {
     JSON_HEADERS: {'Content-Type': 'application/json'},
   };
   vm.createContext(context);
-  // The real file-upload.js rides the page before the chat modules; its gate
+  // The real file-upload.js rides the page before chat/input.js; its gate
   // (blockIfUploadsInFlight) is what compactContext and sendMessage share.
   vm.runInContext(FILE_UPLOAD_JS, context, { filename: 'file-upload.js' });
   loadChatRenderingModules(context);

@@ -3,9 +3,6 @@
 #
 # One row per pair: user file -> defining file. Paths are repo-relative and the rows are sorted.
 
-web/static/js/chat/input.js -> web/static/js/sidebar/status.js
-web/static/js/chat/input.js -> web/static/js/websocket.js
-web/static/js/file-upload.js -> web/static/js/chat/shared.js
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/archived.js
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/groups.js
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/session-view.js

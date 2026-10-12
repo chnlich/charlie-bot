@@ -271,12 +271,13 @@ def _sentences(unit: str) -> list[str]:
   return out
 
 
-def _prose_violations(text: str, base_text: str | None) -> list[str]:
+def _prose_violations(text: str, base_text: str | None, *, skip_body_line_limit: bool) -> list[str]:
   """The writing-rule violations of *text* over the same file's base version.
 
   A unit (see :func:`_prose_units`) that the base version already holds verbatim escapes the
   sentence checks — old entries take the rules at their next edit — while the column and
   body line limits bind every committed entry, base-verbatim lines included.
+  *skip_body_line_limit* waives the line limit for a pure deletion (see :func:`commit`).
   """
   body = _entry_body(text)
   violations: list[str] = []
@@ -295,7 +296,7 @@ def _prose_violations(text: str, base_text: str | None) -> list[str]:
     width = _display_width(line)
     if width > _BODY_LINE_COLUMN_LIMIT:
       violations.append(f"body line over {_BODY_LINE_COLUMN_LIMIT} columns ({width}): {line[:60]}")
-  if len(body) > _BODY_LINE_LIMIT:
+  if not skip_body_line_limit and len(body) > _BODY_LINE_LIMIT:
     violations.append(f"body has {len(body)} lines (limit {_BODY_LINE_LIMIT})")
   return violations
 
@@ -377,10 +378,12 @@ def commit(
   joining clauses), whose body exceeds 12 lines, or whose body holds a physical
   line over 120 terminal columns (a character whose east-asian width is W or F
   counts two, and base-verbatim lines refuse too); the ``topics`` vocabulary
-  file is exempt. The negation check over the same sentences and the title
-  never refuses: each hit comes back as a warning for the caller to print, and
-  the commit message records the payloads under ``Negation warnings:`` after
-  ``Replaced PR lines:``.
+  file is exempt. A commit that only deletes body lines from the proposal
+  head's version — the worktree's body multiset sits inside that version's —
+  skips the 12-line limit and takes the other checks as usual. The negation
+  check over the same sentences and the title never refuses: each hit comes
+  back as a warning for the caller to print, and the commit message records
+  the payloads under ``Negation warnings:`` after ``Replaced PR lines:``.
 
   *message_file* resolves against the caller's working directory here: the
   git subprocess runs inside the worktree, so a relative path would otherwise
@@ -412,7 +415,14 @@ def commit(
   warnings: list[str] = []
   if current_text is not None and rel != pathlib.PurePosixPath("topics"):
     base_text = _rev_text(memory_dir, base, path)
-    violations = _prose_violations(current_text, base_text)
+    # The body line limit prices new verbosity; a pure deletion (the worktree's body-line
+    # multiset sits inside the proposal head version's, no body line added) only shortens
+    # the store, so it skips the limit. Sentence, semicolon and width checks still run,
+    # and a new file has no head version to subset, so it never skips.
+    head_text = _rev_text(memory_dir, PROPOSAL_BRANCH, path)
+    head_body = collections.Counter(_entry_body(head_text)) if head_text is not None else collections.Counter()
+    pure_deletion = collections.Counter(_entry_body(current_text)) <= head_body
+    violations = _prose_violations(current_text, base_text, skip_body_line_limit=pure_deletion)
     if violations:
       raise ProposalRefusalError(f"{path}: prose check failed:\n" + "\n".join(f"  {v}" for v in violations))
     warnings = _negation_warnings(current_text, base_text)

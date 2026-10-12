@@ -21,8 +21,10 @@
 
   const TRAY_ID = 'pending-triggers-tray';
   const CANCEL_REVERT_MS = 3000;
-  // The sidebar bell's glyph (status.js PENDING_TRIGGER_BELL_SVG_PATH): two
-  // surfaces of one fact render one icon.
+  // The pending-trigger bell's body: the sidebar's bell (sidebar/status.js)
+  // renders the same glyph, so the two surfaces of one fact read as one
+  // signal. Wired chatOnly for the sidebar's bell.
+  const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/>';
   const CHEVRON_DOWN_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
   const CHEVRON_UP_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>';
   const X_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>';
@@ -44,7 +46,7 @@
 
   function bellSvg() {
     return '<svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-      + Sidebar.PENDING_TRIGGER_BELL_SVG_PATH + '</svg>';
+      + PENDING_TRIGGER_BELL_SVG_PATH + '</svg>';
   }
 
   function chevronSvg(up) {
@@ -243,17 +245,17 @@
     renderTray();
   }
 
-  // The sidebar bell: open the session like a row click does, and expand the
-  // tray once it lands. On the already-open session switchSession would
-  // return early, so the tray expands in place.
+  // The sidebar bell: on the open session the tray expands in place, and the
+  // answer is true. For another session the answer is false: the caller
+  // switches there, and the tray opens expanded once the switch lands.
   function expandPendingTriggersTray(sid) {
     if (sid === SESSION_ID && traySessionId === sid) {
       trayExpanded = true;
       renderTray();
-      return;
+      return true;
     }
     trayExpandOnNextOpen = true;
-    switchSession(sid);
+    return false;
   }
 
   // The row's two-step cancel: the first click arms ("Cancel?") for
@@ -308,6 +310,8 @@
     togglePendingTriggersTray,
     expandPendingTriggersTray,
     trayCancelClick,
-  }, {});
+  }, {
+    PENDING_TRIGGER_BELL_SVG_PATH,
+  });
 
 })();

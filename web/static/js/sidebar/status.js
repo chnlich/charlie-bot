@@ -217,11 +217,6 @@ function renderSessionIndicators(session) {
     <span id="subtree-unread-${session.id}" title="${escapeHtmlAttr(SUBTREE_UNREAD_TITLE)}" class="w-2 h-2 rounded-full border border-yellow-400 flex-shrink-0 hidden"></span>`;
 }
 
-// The pending-trigger bell's body: the chat column's tray
-// (chat/triggers-tray.js) renders the same glyph, so the two surfaces of one
-// fact read as one signal. Wired sidebarOnly for the tray's bellSvg().
-const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/>';
-
 function pendingTriggerTitle(count, nextTriggerAt) {
   const normalized = Number(count) || 0;
   let title;
@@ -234,8 +229,14 @@ function pendingTriggerTitle(count, nextTriggerAt) {
 
 function renderPendingTriggerIndicator(session) {
   const count = Number(session.pending_trigger_count) || 0;
-  const click = `event.preventDefault(); event.stopPropagation(); expandPendingTriggersTray('${session.id}')`;
-  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
+  const click = `event.preventDefault(); event.stopPropagation(); openPendingTriggers('${session.id}')`;
+  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${Chat.PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
+}
+
+// The bell's click: open the session like a row click does, and expand its
+// tray once it lands. On the already-open session the tray expands in place.
+function openPendingTriggers(sid) {
+  if (!expandPendingTriggersTray(sid)) switchSession(sid);
 }
 
 function renderPendingPlanApprovalIndicator(session) {
@@ -599,6 +600,7 @@ const API = {
   unreadReplyIsCurrent,
   rowUnreadState,
   renderPendingTriggerIndicator,
+  openPendingTriggers,
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,
   setSessionIndicator,
@@ -625,7 +627,6 @@ const API = {
 Sidebar.wire(API, {
   sidebarSessionIds,
   updateSpinner,
-  PENDING_TRIGGER_BELL_SVG_PATH,
 });
 
 })();

@@ -5,9 +5,6 @@
 
 web/static/js/chat/input.js -> web/static/js/sidebar/status.js
 web/static/js/chat/input.js -> web/static/js/websocket.js
-web/static/js/chat/triggers-tray.js -> web/static/js/sidebar/namespace.js
-web/static/js/chat/triggers-tray.js -> web/static/js/sidebar/session-view.js
-web/static/js/chat/triggers-tray.js -> web/static/js/sidebar/status.js
 web/static/js/file-upload.js -> web/static/js/chat/shared.js
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/archived.js
 web/static/js/sidebar/filters.js -> web/static/js/sidebar/groups.js

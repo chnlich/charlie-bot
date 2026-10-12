@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import pathlib
 
 import conftest
 import pytest
@@ -34,7 +34,7 @@ def _event(event_id: str, event_type: str, **payload: object) -> dict:
   return {"id": event_id, "type": event_type, "timestamp": STAMP, **payload}
 
 
-def _write_session(home: Path, meta: dict, dumps_options: dict, events: list[dict] | None) -> None:
+def _write_session(home: pathlib.Path, meta: dict, dumps_options: dict, events: list[dict] | None) -> None:
   directory = home / "sessions" / meta["id"]
   (directory / "data").mkdir(parents=True)
   (directory / "metadata.json").write_text(json.dumps(meta, **dumps_options), encoding="utf-8")
@@ -44,7 +44,7 @@ def _write_session(home: Path, meta: dict, dumps_options: dict, events: list[dic
 
 
 @pytest.fixture()
-def home(tmp_path: Path) -> Path:
+def home(tmp_path: pathlib.Path) -> pathlib.Path:
   """A scratch home with three v1 sessions and one manager root."""
   home = conftest.make_home_config(tmp_path).charliebot_home
   _write_session(
@@ -97,7 +97,7 @@ def home(tmp_path: Path) -> Path:
   return home
 
 
-def _tree_hash(root: Path) -> str:
+def _tree_hash(root: pathlib.Path) -> str:
   """One digest over every path and file content under *root*."""
   digest = hashlib.sha256()
   for path in sorted(root.rglob("*")):
@@ -107,25 +107,25 @@ def _tree_hash(root: Path) -> str:
   return digest.hexdigest()
 
 
-def _state(home: Path) -> str:
+def _state(home: pathlib.Path) -> str:
   """The digest of everything a conversion writes: the sessions and the receipts, never the fence files."""
   return _tree_hash(home / "sessions") + (_tree_hash(home / "migrations") if (home / "migrations").exists() else "")
 
 
-def _run(command: str, home: Path) -> int:
+def _run(command: str, home: pathlib.Path) -> int:
   return conversion.main([command, "--home", str(home)])
 
 
-def _metadata_text(home: Path, session_id: str) -> str:
+def _metadata_text(home: pathlib.Path, session_id: str) -> str:
   return (home / "sessions" / session_id / "metadata.json").read_text(encoding="utf-8")
 
 
-def _log_ids(home: Path, session_id: str) -> list[str]:
+def _log_ids(home: pathlib.Path, session_id: str) -> list[str]:
   path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
   return [json.loads(line)["id"] for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def test_apply_converts_each_v1_session_and_keeps_the_rest(home: Path, tmp_path: Path) -> None:
+def test_apply_converts_each_v1_session_and_keeps_the_rest(home: pathlib.Path, tmp_path: pathlib.Path) -> None:
   root_before = _metadata_text(home, ROOT_ID)
   originals = {sid: json.loads(_metadata_text(home, sid)) for sid in V1_IDS}
 
@@ -166,7 +166,7 @@ def test_apply_converts_each_v1_session_and_keeps_the_rest(home: Path, tmp_path:
   assert (entries[NO_LOG_ID]["old_schema_version"], entries[NO_LOG_ID]["old_profile"]) == (1, None)
 
 
-def test_second_apply_changes_nothing(home: Path) -> None:
+def test_second_apply_changes_nothing(home: pathlib.Path) -> None:
   assert _run("apply", home) == 0
   converted = _state(home)
 
@@ -176,7 +176,7 @@ def test_second_apply_changes_nothing(home: Path) -> None:
 
 
 def test_interrupted_apply_converges_to_the_clean_result(
-    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   clean_home = conftest.make_home_config(tmp_path / "clean").charliebot_home
   for source in (home / "sessions").iterdir():
     target = clean_home / "sessions" / source.name
@@ -188,7 +188,7 @@ def test_interrupted_apply_converges_to_the_clean_result(
 
   append_event = conversion.append_event
 
-  def fail_after_archived_import(session_dir: Path, event: dict) -> None:
+  def fail_after_archived_import(session_dir: pathlib.Path, event: dict) -> None:
     append_event(session_dir, event)
     if session_dir.name == ARCHIVED_ID and event["id"] == conversion.import_event_id(ARCHIVED_ID):
       raise RuntimeError("simulated crash after task_imported")
@@ -209,7 +209,7 @@ def test_interrupted_apply_converges_to_the_clean_result(
   assert conversion.load_receipt(home)["status"] == conversion.RECEIPT_COMPLETE
 
 
-def test_rollback_restores_every_byte(home: Path) -> None:
+def test_rollback_restores_every_byte(home: pathlib.Path) -> None:
   before = _tree_hash(home / "sessions")
   assert _run("apply", home) == 0
   assert _tree_hash(home / "sessions") != before
@@ -221,7 +221,8 @@ def test_rollback_restores_every_byte(home: Path) -> None:
   assert (home / conversion.ROLLED_BACK_RELATIVE_PATH).is_file()
 
 
-def test_rollback_after_an_interrupted_apply_restores_every_byte(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rollback_after_an_interrupted_apply_restores_every_byte(
+    home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   before = _tree_hash(home / "sessions")
   write_metadata = conversion.write_converted_metadata
   calls: list[str] = []
@@ -242,7 +243,7 @@ def test_rollback_after_an_interrupted_apply_restores_every_byte(home: Path, mon
   assert _tree_hash(home / "sessions") == before
 
 
-def test_rollback_keeps_events_written_after_the_conversion(home: Path) -> None:
+def test_rollback_keeps_events_written_after_the_conversion(home: pathlib.Path) -> None:
   assert _run("apply", home) == 0
   later = _event("a-later", ET.USER, content="written after the conversion")
   log = home / "sessions" / ACTIVE_ID / "data" / "chat_events.jsonl"
@@ -255,7 +256,7 @@ def test_rollback_keeps_events_written_after_the_conversion(home: Path) -> None:
 
 
 def test_apply_and_rollback_refuse_while_another_process_holds_the_fence(
-    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    home: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   before = _state(home)
   with monkeypatch.context() as patcher:
     patcher.setattr(conversion, "source_sha", lambda: pytest.fail("apply looked up git before fencing the home"))
@@ -274,7 +275,7 @@ def test_apply_and_rollback_refuse_while_another_process_holds_the_fence(
   assert _state(home) == converted
 
 
-def test_apply_refuses_a_home_with_an_unparseable_session_and_writes_nothing(home: Path) -> None:
+def test_apply_refuses_a_home_with_an_unparseable_session_and_writes_nothing(home: pathlib.Path) -> None:
   log = home / "sessions" / ACTIVE_ID / "data" / "chat_events.jsonl"
   with log.open("a", encoding="utf-8") as stream:
     stream.write('{"id": "torn", "type": "us')
@@ -286,7 +287,8 @@ def test_apply_refuses_a_home_with_an_unparseable_session_and_writes_nothing(hom
 
 
 @pytest.mark.parametrize("corrupt_manager_log", [False, True])
-def test_dry_run_writes_nothing(home: Path, capsys: pytest.CaptureFixture[str], corrupt_manager_log: bool) -> None:
+def test_dry_run_writes_nothing(
+    home: pathlib.Path, capsys: pytest.CaptureFixture[str], corrupt_manager_log: bool) -> None:
   if corrupt_manager_log:
     manager_log = home / "sessions" / ROOT_ID / "data" / "chat_events.jsonl"
     with manager_log.open("a", encoding="utf-8") as stream:

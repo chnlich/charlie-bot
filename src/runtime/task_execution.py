@@ -127,6 +127,64 @@ def run_worker_binding(
   return ThreadMetadata(id=run_id, session_id=session_id, description="", pid=pid, pid_start=pid_start)
 
 
+def _native_continuation_matches(
+    held_id: str | None,
+    recorded_hash: str | None,
+    recorded_backend: str | None,
+    recorded_model: str | None,
+    *,
+    prompt_hash: str,
+    option: BackendOption,
+) -> bool:
+  """The one native-conversation continuation rule, shared by manager turns and worker runs.
+
+  A held conversation continues only when the recorded prompt hash, backend
+  identity and model all match this launch's own; the same backend identity
+  always shares the launch's continuation domain.
+  """
+  return (
+      held_id is not None and recorded_hash == prompt_hash and recorded_backend == option.id and
+      recorded_model == option.model)
+
+
+def _snapshot_prompt_hash(run: RunRecord) -> str | None:
+  """The prompt hash of one launched Run's committed snapshot, or None without a readable one."""
+  if run.prompt_snapshot_ref is None:
+    return None
+  try:
+    loaded = json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+  except (OSError, ValueError):
+    return None
+  loaded_hash = loaded.get("prompt_hash")
+  return str(loaded_hash) if loaded_hash is not None else None
+
+
+def worker_continuation_reset_note(reason: str, previous_log_path: Path) -> str:
+  """The bracketed note that opens a continued worker node's fresh native conversation.
+
+  Trade-off 1 of the pause/continue plan: the branch and worktree are
+  inherited and the task spec with the new input follows, so the note names
+  where the previous Run's log stays readable — the fresh context's only way
+  to recover what the earlier conversation already did.
+  """
+  return (
+      f"[Context reset: {reason}. The task continues on the same branch and worktree; "
+      f"its spec and the new input follow. The previous run's log is at {previous_log_path} — "
+      "read it before acting, so finished work is not repeated.]")
+
+
+@dataclasses.dataclass(frozen=True)
+class RunContinuation:
+  """One worker-node continuation: the previous Run and whether its native conversation continues.
+
+  ``native_id`` is the previous Run's native session id when the continuation
+  rule matched (the prompt carries only the new input batch); None means the
+  branch and worktree are inherited but the conversation starts fresh.
+  """
+  previous: RunRecord
+  native_id: str | None
+
+
 @dataclasses.dataclass(frozen=True)
 class LaunchSettlement:
   """The settled launch/wait verdict one controller-owned Run reached.
@@ -447,6 +505,8 @@ class TaskExecutionAdapter:
               kind=kind,  # type: ignore[arg-type]
               backend=backend,
               model=model)
+          if meta.profile == "worker":
+            self._inherit_worker_continuation(meta, record)
           # This lock hold already covers the reservation: the locked
           # registration variant, then the locked batch claim.
           await tree.runs.register_run_locked(record, task_spec_text=canonical_task_spec_text(meta.task))
@@ -468,6 +528,47 @@ class TaskExecutionAdapter:
     # would early-return on the guard this reservation just took).
     self._schedule_launch(session_id, run_id)
     return run_id
+
+  def _inherit_worker_continuation(self, meta: SessionMetadata, record: RunRecord) -> None:
+    """Bind a fresh dispatch on an already-run worker node to the node's latest Run.
+
+        The continuation inherits the latest Run's repo, base, branch and
+        worktree — no new worktree is ever prepared for it — and its kind is
+        ``review`` when that latest Run is a successful review whose merge
+        never started (the task holds no close fact and never sent a blocked
+        report to its parent), ``work`` otherwise. A node whose episode closed
+        (delivered or cancelled) keeps the first-run shape: the next run
+        prepares its own worktree from the base.
+        """
+    session_id = meta.id
+    latest = self._tree.runs.newest_run_record_sync(session_id)
+    if latest is None:
+      return
+    if self._tree.facts_of(session_id).close_events:
+      return
+    record.repo_path = latest.repo_path
+    record.base_branch = latest.base_branch
+    record.branch_name = latest.branch_name
+    record.worktree_path = latest.worktree_path
+    events = self._tree.runs.load_events_sync(session_id)
+    if (latest.kind == "review" and self._tree.runs.terminal_outcome(events, latest.id) == "success" and
+        not self._blocked_report_sent(meta)):
+      record.kind = "review"
+      record.review_of_run_id = latest.review_of_run_id
+
+  def _blocked_report_sent(self, meta: SessionMetadata) -> bool:
+    """True when this node ever delivered a blocked child report to its parent.
+
+        The report fact lives in the recipient's own log (parent-log
+        persistence is delivery), so the read is the parent's durable fact
+        history; a root node has no recipient and never reported.
+        """
+    parent = meta.task_parent_id
+    if not parent:
+      return False
+    return any(
+        e.get("type") == ET.CHILD_REPORT and e.get("child_session_id") == meta.id and e.get("outcome") == "blocked"
+        for e in self._tree.fact_history(parent))
 
   def _reserve_backend_model(self, meta: SessionMetadata) -> tuple[str, str | None]:
     """The task's backend+model for a fresh reservation, resolved strictly."""
@@ -1131,9 +1232,13 @@ class TaskExecutionAdapter:
     if sequence_prefix:
       content = f"{sequence_prefix}{content}"
 
-    anchor_continues = (
-        meta.cc_session_id is not None and meta.native_prompt_hash == snapshot.prompt_hash and
-        meta.native_backend == option.id and meta.native_model == option.model)
+    anchor_continues = _native_continuation_matches(
+        meta.cc_session_id,
+        meta.native_prompt_hash,
+        meta.native_backend,
+        meta.native_model,
+        prompt_hash=snapshot.prompt_hash,
+        option=option)
     fresh_native = not anchor_continues
     prompt = content
     if fresh_native and meta.cc_session_id is not None:
@@ -1221,6 +1326,8 @@ class TaskExecutionAdapter:
     events_log = run_dir / RUN_EVENTS_NAME
 
     task_type = task_prompts.prompt_task_type(meta.task)
+    continuation = self._run_continuation(meta, run, option, snapshot)
+    continued = continuation is not None and continuation.native_id is not None
     review_worktree: str | None = None
     if run.kind == "review":
       work_run = await self._tree.runs.get_run(session_id, run.review_of_run_id or "")
@@ -1228,7 +1335,10 @@ class TaskExecutionAdapter:
         raise TaskInvalidError(f"review run {run_id} names no recorded work Run")
       # The review reuses the work Run's exact repo, branch and worktree.
       review_worktree = work_run.worktree_path
-      context = await self._build_review_context(session_id, work_run)
+      if continued:
+        context = await self._batch_only_context(meta, run)
+      else:
+        context = await self._build_review_context(session_id, work_run)
     elif run.sequence_ref is not None:
       # The owning controller composes a sequence Run's context: an iteration
       # returns its rendered bindings + loop position; a controller whose
@@ -1244,14 +1354,33 @@ class TaskExecutionAdapter:
         context = await self._build_step_context(meta, run, launch_prompt, task_type)
     elif launch_prompt is not None:
       context = await self._build_step_context(meta, run, launch_prompt, task_type)
+    elif continued:
+      context = await self._batch_only_context(meta, run)
     else:
       context = await self._build_work_context(meta, run, task_type)
     prompt = context
+    if continuation is not None and continuation.native_id is None:
+      # Trade-off 1: the backend, model or instructions moved while the node
+      # waited, so the old conversation cannot continue. The fresh one opens
+      # with the reset note — the branch and worktree are inherited either
+      # way, and the previous Run's log carries what it already did.
+      previous = continuation.previous
+      if previous.backend and previous.backend != option.id:
+        reason = backend_switch_reset_reason(previous.backend, option.id)
+      else:
+        reason = (
+            "this task's managed instructions or sources changed since the previous "
+            "run, so this run starts a fresh native conversation")
+      previous_log = self._tree.runs.run_dir(session_id, previous.id) / RUN_EVENTS_NAME
+      prompt = f"{worker_continuation_reset_note(reason, previous_log)}\n\n{context}"
     await self._persist_launch_text(session_id, run_id, prompt)
 
     binding = run_worker_binding(run_id, session_id)
     if backend_types.traits_for(option.type).preassigned_session_id:
-      backend_types.lifecycle_for(option).assign_thread_native_id(binding, str(uuid.uuid4()))
+      # A continued conversation keeps its own native id (the resume flag
+      # names it); a fresh one gets the runtime-chosen id as today.
+      preassigned = continuation.native_id if continued else str(uuid.uuid4())
+      backend_types.lifecycle_for(option).assign_thread_native_id(binding, preassigned)
 
     async def on_spawned(spawned: ThreadMetadata) -> None:
       if spawned.pid is None or spawned.pid_start is None:
@@ -1277,6 +1406,7 @@ class TaskExecutionAdapter:
           extra_env=self._child_env(session_id, run_id, meta.name),
           instructions_content=snapshot.instructions_text,
           session_meta=meta,
+          held_native_id=continuation.native_id if continued else None,
       )
       # Session-level notices (a pool login that needs re-login, a relay compaction) reach
       # the session chat through the successor chain.
@@ -1314,6 +1444,73 @@ class TaskExecutionAdapter:
     if fresh is not None:
       run = fresh
     await self._after_worker_run(meta, run, durable_outcome)
+
+  def _previous_run(self, session_id: str, run_id: str) -> RunRecord | None:
+    """The node's latest Run record before *run_id* (the canonical launch order), or None."""
+    previous: RunRecord | None = None
+    for record in self._tree.runs.list_run_records_sync(session_id):
+      if record.id != run_id:
+        previous = record
+    return previous
+
+  def _run_continuation(
+      self,
+      meta: SessionMetadata,
+      run: RunRecord,
+      option: BackendOption,
+      snapshot: PromptSnapshot,
+  ) -> RunContinuation | None:
+    """The continuation this launch performs, or None for an independent launch.
+
+        A dispatcher-created run on a worker node whose delivery episode is
+        still open continues the node's latest Run — its registration already
+        inherited the repo, base, branch and worktree. The native conversation
+        continues when the backend identity, model and prompt hash all match
+        the previous Run's recorded launch (the manager's continuation rule);
+        otherwise the launch keeps the inheritance but starts a fresh
+        conversation. Retried Runs and sequence Runs keep their own launch
+        shape, and a review Run is a continuation only where the delivery
+        chain could not have spawned it: right after a successful review of
+        the same work Run whose merge paused.
+        """
+    if run.sequence_ref is not None or run.retry_of_run_id is not None:
+      return None
+    previous = self._previous_run(meta.id, run.id)
+    if previous is None:
+      return None
+    if run.kind == "review":
+      events = self._tree.runs.load_events_sync(meta.id)
+      if (previous.kind != "review" or previous.review_of_run_id != run.review_of_run_id or
+          self._tree.runs.terminal_outcome(events, previous.id) != "success"):
+        return None
+    elif run.kind == "work":
+      # An episode that closed (delivered or cancelled) starts fresh, exactly
+      # as it did before continuations existed.
+      if self._tree.facts_of(meta.id).close_events:
+        return None
+    else:
+      return None
+    native_id: str | None = None
+    if _native_continuation_matches(previous.native_session_id, _snapshot_prompt_hash(previous), previous.backend,
+                                    previous.model, prompt_hash=snapshot.prompt_hash, option=option):
+      native_id = previous.native_session_id
+    return RunContinuation(previous=previous, native_id=native_id)
+
+  async def _batch_only_context(self, meta: SessionMetadata, run: RunRecord) -> str:
+    """The continued conversation's whole task/input context: this run's claimed batch.
+
+        The conversation already holds the task spec and the worktree
+        bindings from the earlier run, so a continued run's prompt is only
+        what is new. An empty batch is impossible — the dispatcher claims one
+        before this launch exists — and surfaces loudly.
+        """
+    batch_ids = set(run.input_event_ids)
+    batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
+    provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
+    content, _uploads = compose_input_prompt(meta, batch, provenance) if batch else ("", [])
+    if not content.strip():
+      raise TaskInvalidError(f"run {run.id} continues a conversation but claims no consumable input")
+    return content
 
   async def _finalize_worker_run(
       self,
@@ -1824,6 +2021,13 @@ class TaskExecutionAdapter:
       if durable_outcome == "success":
         task_type = meta.task.task_type if meta.task is not None else TaskType.IMPLEMENT
         if task_type == TaskType.IMPLEMENT:
+          pause = self._tree.completion.pause_reason(session_id)
+          if pause is not None:
+            # A paused run is not a delivery: no review spawns, the task
+            # stays open on its branch and worktree, and the wake's
+            # continuation run re-enters this chain when it ends.
+            log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)
+            return
           await self._maybe_spawn_review(session_id, run)
         else:
           await self._cleanup_worktree_if_delivered(session_id, run)
@@ -1869,6 +2073,12 @@ class TaskExecutionAdapter:
           work_run=work_run.id,
           task_state=task_state)
       await self._cleanup_worktree_if_delivered(session_id, work_run)
+      return
+    pause = self._tree.completion.pause_reason(session_id)
+    if pause is not None:
+      # A paused review is not a merge: the wake's continuation review
+      # delivers when it ends with nothing pending.
+      log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)
       return
     refs = [f"{RUN_REF_PREFIX}{work_run.id}"]
     if work_run.task_spec_hash:
@@ -2287,7 +2497,11 @@ async def _replay_followups(
         # window is repaired and a repeated pass lands nothing twice.
         await tree.completion.after_run_finished(session_id, run.id)
         if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT and run.repo_path:
-          await adapter._maybe_spawn_review(session_id, run)
+          pause = tree.completion.pause_reason(session_id)
+          if pause is not None:
+            log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)
+          else:
+            await adapter._maybe_spawn_review(session_id, run)
       elif outcome in ("failed", "interrupted", "blocked"):
         await adapter._report_failure_to_parent(session_id, run, outcome)
     elif run.kind == "review":

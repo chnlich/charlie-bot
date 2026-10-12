@@ -15,14 +15,14 @@ reads live in ``src/runtime/triggers.py``.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import datetime
 import os
+import pathlib
 import shlex
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
 
 from src.infra import ssh, timeouts
 
@@ -30,7 +30,7 @@ from src.infra import ssh, timeouts
 REMOTE_RUNS_DIR = "/tmp/charliebot_runs"
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class Launch:
   """One started wrapper: the watched PID, its host (None = local), and the two paths its wake reads."""
   pid: int
@@ -43,7 +43,7 @@ class RemoteLaunchError(Exception):
   """The ssh start failed or the remote PID did not parse; no launch record and no trigger exist."""
 
 
-def mint_launch_id(started_at: datetime) -> str:
+def mint_launch_id(started_at: datetime.datetime) -> str:
   """The launch id format ``<UTC %Y%m%dT%H%M%S>-<6 hex>``; secrets rides the one start that mints an id."""
   import secrets
 
@@ -55,11 +55,12 @@ def _wrapper_command(cmd: str, exit_file: str) -> str:
 
   The echo stays outside the subshell: an ``exit`` builtin inside CMD ends the
   subshell only, and the wrapper still writes the exit file before it exits.
+  The newline before ``)`` keeps a trailing ``# comment`` in CMD from swallowing it.
   """
-  return f"({cmd}); echo $? > {shlex.quote(exit_file)}"
+  return f"({cmd}\n); echo $? > {shlex.quote(exit_file)}"
 
 
-def launch_local(cmd: str, *, cwd: str, log_path: Path, exit_file: Path) -> Launch:
+def launch_local(cmd: str, *, cwd: str, log_path: pathlib.Path, exit_file: pathlib.Path) -> Launch:
   """Start the wrapper on this host as a new-session process; the log is appended to."""
   log_path.parent.mkdir(parents=True, exist_ok=True)
   exit_file.parent.mkdir(parents=True, exist_ok=True)

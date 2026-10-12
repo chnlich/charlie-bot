@@ -14,7 +14,7 @@ import pathlib
 import subprocess
 import sys
 import time
-from types import SimpleNamespace
+import types
 from typing import Any
 from unittest import mock
 
@@ -26,21 +26,21 @@ from src.runtime.cli import schedule_trigger
 POST_PATCH_TARGET = "src.runtime.cli.common.post_internal_api"
 
 
-def _cfg(tmp_path: pathlib.Path) -> SimpleNamespace:
-  return SimpleNamespace(sessions_dir=tmp_path / "sessions")
+def _cfg(tmp_path: pathlib.Path) -> types.SimpleNamespace:
+  return types.SimpleNamespace(sessions_dir=tmp_path / "sessions")
 
 
 def _argv(*extra: str) -> list[str]:
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", "m", *extra]
 
 
-def _patch_cli(monkeypatch: pytest.MonkeyPatch, cfg: SimpleNamespace, argv: list[str]) -> None:
+def _patch_cli(monkeypatch: pytest.MonkeyPatch, cfg: types.SimpleNamespace, argv: list[str]) -> None:
   monkeypatch.setattr("sys.argv", argv)
   monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
 
-def _registering_post(cfg: SimpleNamespace, session_id: str, calls: list[dict]):
+def _registering_post(cfg: types.SimpleNamespace, session_id: str, calls: list[dict]):
 
   def post(endpoint: str, payload: dict, *, readback: Any = None, rejection_exit_codes: Any = None) -> dict:
     calls.append({"endpoint": endpoint, "payload": payload})
@@ -74,7 +74,7 @@ def _reap(pid: int, timeout: float = 5) -> None:
   raise TimeoutError(f"pid {pid} not reaped after {timeout}s")
 
 
-def _metadata(cfg: SimpleNamespace, session_id: str) -> dict:
+def _metadata(cfg: types.SimpleNamespace, session_id: str) -> dict:
   metas = list((cfg.sessions_dir / session_id / "launches").glob("*/metadata.json"))
   assert len(metas) == 1
   return json.loads(metas[0].read_text())

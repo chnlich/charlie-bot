@@ -94,6 +94,21 @@ def test_launch_local_runs_in_cwd_and_logs_output(tmp_path: pathlib.Path) -> Non
     launcher.kill_launch(launch)
 
 
+def test_launch_local_trailing_comment_in_cmd_still_writes_the_exit_file(tmp_path: pathlib.Path) -> None:
+  launch = launcher.launch_local(
+      "echo hi # trailing comment",
+      cwd=str(tmp_path),
+      log_path=tmp_path / "log",
+      exit_file=tmp_path / "exit",
+  )
+  try:
+    conftest._wait_for(lambda: pathlib.Path(launch.exit_file).exists(), 5, "the exit file never appeared")
+    assert pathlib.Path(launch.exit_file).read_text().strip() == "0"
+    assert pathlib.Path(launch.log).read_text().strip() == "hi"
+  finally:
+    launcher.kill_launch(launch)
+
+
 def test_kill_launch_local_kills_the_process_group(tmp_path: pathlib.Path) -> None:
   launch = launcher.launch_local(
       "sleep 600",
@@ -131,7 +146,7 @@ def test_launch_remote_parses_the_wrapper_pid() -> None:
   wrapper = remote_argv[-1]
   assert "setsid bash -lc" in wrapper
   assert "echo $!" in wrapper
-  assert "{ (echo hi); echo $? > EXIT; }" in wrapper.replace(
+  assert "{ (echo hi\n); echo $? > EXIT; }" in wrapper.replace(
       shlex.quote("/tmp/charliebot_runs/20261008T000000-abc123/exit"), "EXIT")
   # The redirections sit on the brace group: the exit-code write is not one of them.
   assert "} < /dev/null >" in wrapper

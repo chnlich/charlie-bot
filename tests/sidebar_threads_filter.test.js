@@ -107,7 +107,7 @@ test('the Threads view hides the group-header create button, in-place repaints i
   await flush();
 
   assert.equal(nav.innerHTML.includes('createSessionInGroup'), false, 'no create button on Threads');
-  assert.match(nav.innerHTML, /openGroupHeaderMenu\(this\)/, 'the Settings gear stays');
+  assert.match(nav.innerHTML, /sidebarControl\('openGroupHeaderMenu', this\)/, 'the Settings gear stays');
 
   // The in-place delete repaint repaints from the last-rendered args with no
   // refetch — the gate derives from the filter, so the button stays hidden.

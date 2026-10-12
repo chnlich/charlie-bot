@@ -37,6 +37,28 @@
   exposeState('statusPollMs', 3000);
   exposeState('thinkingStart', null);
 
+  // The sidebar's rendered controls (the onclick strings of the rows, the
+  // group headers and the pending-trigger bell) call sidebarControl(name,
+  // ...args). The file that defines a control's handler registers it under
+  // its name when its script loads, so a renderer names a handler of a file
+  // loaded after it only as a string.
+  const sidebarControls = new Map();
+
+  function registerSidebarControl(name, handler) {
+    if (typeof name !== 'string' || !name || typeof handler !== 'function') {
+      throw new Error('Invalid sidebar control registration');
+    }
+    if (sidebarControls.has(name)) throw new Error('Duplicate sidebar control: ' + name);
+    sidebarControls.set(name, handler);
+  }
+
+  function sidebarControl(name, ...args) {
+    const handler = sidebarControls.get(name);
+    if (!handler) throw new Error('Unregistered sidebar control: ' + name);
+    return handler(...args);
+  }
+
   Sidebar.wire = wire;
+  wire({registerSidebarControl, sidebarControl});
   global.Sidebar = Sidebar;
 })(globalThis);

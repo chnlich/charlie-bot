@@ -482,7 +482,7 @@ test('renderSessionList limits each grouped session section to five visible sess
   // The named header's direct buttons: the create and the Settings gear (the
   // scheduled-task, rename and delete actions moved into the gear's menu).
   assert.match(nav.innerHTML, /createSessionInGroup\(this\.dataset\.groupName\)/);
-  assert.match(nav.innerHTML, /openGroupHeaderMenu\(this\)/);
+  assert.match(nav.innerHTML, /sidebarControl\('openGroupHeaderMenu', this\)/);
 });
 
 test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pill enter path', async () => {

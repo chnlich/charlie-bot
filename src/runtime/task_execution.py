@@ -148,15 +148,10 @@ def _native_continuation_matches(
 
 
 def _snapshot_prompt_hash(run: RunRecord) -> str | None:
-  """The prompt hash of one launched Run's committed snapshot, or None without a readable one."""
+  """The prompt hash of one launched Run's committed snapshot, or None for a Run that never committed one."""
   if run.prompt_snapshot_ref is None:
     return None
-  try:
-    loaded = json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
-  except (OSError, ValueError):
-    return None
-  loaded_hash = loaded.get("prompt_hash")
-  return str(loaded_hash) if loaded_hash is not None else None
+  return str(json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))["prompt_hash"])
 
 
 def worker_continuation_reset_note(reason: str, previous_log_path: Path) -> str:
@@ -2055,6 +2050,10 @@ class TaskExecutionAdapter:
             work_run,
             "blocked",
             summary=f"review of work run {work_run.id} failed on every configured reviewer backend")
+      elif self._tree.runs.terminal_outcome(self._tree.runs.load_events_sync(session_id), retried) == "success":
+        # The chain ends at the first successful review, so no retry exists for a failed run that follows
+        # one: it is the continuation of a paused review, and it reports like any failed run.
+        await self._report_failure_to_parent(session_id, run, durable_outcome)
       return
     if durable_outcome != "success":
       return

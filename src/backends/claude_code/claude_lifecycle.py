@@ -168,25 +168,23 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     # The login with the most headroom, so the relay loop can move the run when that login is
     # rejected mid-run. A run resuming a held conversation (a worker-node continuation) starts
     # on the login holding its transcript: each pool login sees only its own store, so a resume
-    # anywhere else finds nothing. No holder anywhere drops the resume to a fresh process.
+    # anywhere else finds nothing. No holder anywhere refuses the launch: the continued run's
+    # prompt is only the new input, so a fresh process would work without the task spec.
     account_pool = claude_accounts.option_pool(ctx.option)
     resume_id = ctx.held_native_id
     if resume_id is not None:
       holder = claude_accounts.find_transcript_account(ctx.cfg, resume_id)
-      if holder is not None:
-        return self._pooled_launch(ctx, holder, resume_id=resume_id, prompt=None, relays=0)
-      log.warning(
-          "task_resume_transcript_missing",
-          session=ctx.session_meta.id,
-          cc_session_id=resume_id,
-          pool=[account.label for account in claude_accounts.pool(ctx.cfg)],
-      )
-      resume_id = None
+      if holder is None:
+        raise backend_lifecycle.LaunchRefused(
+            f"the held conversation {resume_id} has no transcript on any pool login "
+            f"({', '.join(account.label for account in claude_accounts.pool(ctx.cfg))})",
+            quota_exhausted=False)
+      return self._pooled_launch(ctx, holder, resume_id=resume_id, prompt=None, relays=0)
     account = claude_accounts.select(ctx.cfg, ctx.option.model, account_pool=account_pool)
     if account is None:
       raise backend_lifecycle.LaunchRefused(
           claude_relay.pool_exhausted_message(ctx.cfg, account_pool=account_pool), quota_exhausted=True)
-    return self._pooled_launch(ctx, account, resume_id=resume_id, prompt=None, relays=0)
+    return self._pooled_launch(ctx, account, resume_id=None, prompt=None, relays=0)
 
   def _pooled_resume_id(self, ctx: backend_lifecycle.LaunchContext) -> str | None:
     """The held conversation id when a pool login holds its transcript, else None.

@@ -198,6 +198,50 @@ async def test_non_claude_task_build_receives_no_claude_account(
   assert "claude_account" not in builds[0]["kwargs"]
 
 
+def _task_context(
+    cfg: config.CharlieBotConfig, option, held_native_id: str | None,
+    tmp_path: pathlib.Path) -> backend_lifecycle.LaunchContext:
+
+  async def unused(*args: object) -> None:
+    raise AssertionError("placement emits nothing")
+
+  meta = models.SessionMetadata(profile="worker", id="s1", name="t", backend=option.id)
+  return backend_lifecycle.LaunchContext(
+      cfg=cfg,
+      option=option,
+      session_meta=meta,
+      kind="task",
+      cwd=str(tmp_path),
+      held_native_id=held_native_id,
+      preassigned_native_id="99999999-2222-3333-4444-555555555555",
+      emit=unused,
+      record_account=unused,
+      context_state=unused)
+
+
+@pytest.mark.asyncio
+async def test_pooled_task_resume_starts_on_the_login_holding_the_transcript(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  option = next(o for o in cfg.backends.options if o.id == conftest.POOLED_FABLE_ID)
+  lifecycle = backend_types.lifecycle_for(option)
+
+  # A held conversation no login holds is refused: the continued run's prompt
+  # is only the new input, so a fresh process would work without the task spec.
+  with pytest.raises(backend_lifecycle.LaunchRefused, match="has no transcript") as refused:
+    await lifecycle.place(_task_context(cfg, option, CC_ID, tmp_path))
+  assert refused.value.quota_exhausted is False
+
+  conftest.make_transcript(tmp_path / "claude-ext-2", CC_ID)
+  resumed = await lifecycle.place(_task_context(cfg, option, CC_ID, tmp_path))
+  fresh = await lifecycle.place(_task_context(cfg, option, None, tmp_path))
+
+  assert resumed.resume_id == CC_ID and resumed.account_label == "ext-2"
+  # The resumed process opens no new conversation id; the fresh one opens the runtime-chosen id.
+  assert "claude_session_id" not in resumed.backend_kwargs
+  assert fresh.resume_id is None
+  assert fresh.backend_kwargs["claude_session_id"] == "99999999-2222-3333-4444-555555555555"
+
+
 # ---------------------------------------------------------------------------
 # quota_exhausted on the launch error event: master turns
 # ---------------------------------------------------------------------------

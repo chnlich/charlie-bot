@@ -10,12 +10,12 @@
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
-const CRON_JS = readStatic('cron.js');
+const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
 const BACKEND_OPTIONS = {
   'claude-opus-5': 'CC · Opus 5',

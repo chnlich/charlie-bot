@@ -41,15 +41,11 @@
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
-  {# Shared chrome literals: form_label_class for the scheduled-task modal
-     labels below, close_btn_class for the close_button calls below,
-     cron_field_class for the scheduled-task modal input/select fields below.
-     Each literal stays a complete token run:
-     Tailwind extracts class candidates from source text, never split across
-     template syntax. #}
-  {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
+  {# Shared chrome literal: close_btn_class for the close_button calls below
+     and in the package parts. It stays a complete token run: Tailwind
+     extracts class candidates from source text, never split across template
+     syntax. #}
   {% set close_btn_class = 'text-slate-500 hover:text-slate-300 p-1' %}
-  {% set cron_field_class = 'w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200' %}
   {% from 'partials/close_button.html' import close_button %}
   <!-- Auth overlay (shown when access key is required but not yet provided) -->
   <div id="auth-overlay" class="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center" style="display:none">
@@ -347,65 +343,7 @@
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/cron.js?v={{ static_asset_version|urlencode }}"></script>
   {% for part in page_parts('scripts') %}{% include part %}{% endfor %}
-
-  <div id="cron-modal" class="diff-modal-overlay hidden">
-    <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
-      <div class="diff-modal-header">
-        <span class="text-sm font-semibold text-slate-200" id="cron-modal-title">Edit Scheduled Task</span>
-        {{ close_button('closeCronModal()', '', close_btn_class) }}
-      </div>
-      <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
-        <form class="flex flex-col gap-3 h-full">
-          <div id="cron-error-box" class="hidden whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
-          <div>
-            <label class="{{ form_label_class }}">Name</label>
-            <input id="cron-name" type="text" class="{{ cron_field_class }}" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Cron Expression</label>
-            <input id="cron-expr" type="text" class="{{ cron_field_class }} font-mono" placeholder="0 2 * * *" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Prompt file (path to the file owning the prompt body)</label>
-            <input id="cron-prompt-file" type="text" class="{{ cron_field_class }} font-mono" placeholder="prompts/example.md" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Repo (optional)</label>
-            <input id="cron-repo" type="text" class="{{ cron_field_class }}" placeholder="~/workspace/my-repo" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Backend</label>
-            <select id="cron-backend" class="{{ cron_field_class }}">
-              <option value="">Inherit / default</option>
-              {% for opt in backend_options %}
-              <option value="{{ opt.id }}">{{ opt.label }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Project (optional)</label>
-            <input id="cron-project" type="text" class="{{ cron_field_class }}" placeholder="e.g. alpha-lab" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Timezone</label>
-            <input id="cron-timezone" type="text" class="{{ cron_field_class }}" value="America/Los_Angeles" />
-          </div>
-          <div class="flex items-center gap-2">
-            <input id="cron-enabled" type="checkbox" checked class="rounded bg-slate-800 border-slate-600" />
-            <label for="cron-enabled" class="text-xs text-slate-400">Enabled</label>
-          </div>
-        </form>
-      </div>
-      <div class="diff-modal-footer">
-        <button onclick="deleteCronTask()" id="cron-delete-btn" class="px-4 py-1.5 text-sm rounded-lg bg-red-800 hover:bg-red-700 text-slate-200 font-medium hidden">Delete</button>
-        <div class="flex-1"></div>
-        <button onclick="closeCronModal()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 text-slate-200 font-medium">Cancel</button>
-        <button onclick="saveCronTask()" id="cron-save-btn" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
-      </div>
-    </div>
-  </div>
 
   <div id="text-modal-overlay" class="diff-modal-overlay" style="display:none" onclick="closeTextModal()">
     <div class="diff-modal" style="max-width:700px" onclick="event.stopPropagation()">

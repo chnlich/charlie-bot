@@ -7,11 +7,11 @@
 // load time.
 const vm = require('node:vm');
 
-const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
-const CRON_JS = readStatic('cron.js');
+const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();

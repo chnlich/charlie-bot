@@ -33,6 +33,7 @@ SOURCE_CHARLIE_CODE = "CLC"
 SOURCE_CLAUDE_CODE = "Claude Code"
 SOURCE_CODEX = "Codex"
 SOURCE_OPENCODE = "opencode"
+SOURCE_ANTIGRAVITY = "Antigravity"
 
 
 @pytest.fixture(autouse=True)
@@ -255,9 +256,9 @@ class _Option:
 
 def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> None:
   """The page attribution reads a registered id's config type first (the type wins over
-  the id's prefix), an off-config id's type prefix next, and the master-run account as
-  CLC; a backend type with no collection rule raises, naming the id, instead of landing
-  under a wrong CLI."""
+  the id's prefix), an off-config id's type prefix next — short spelling included — and the
+  master-run account as CLC through its clc- prefix; a backend type with no collection rule
+  raises, naming the id, instead of landing under a wrong CLI."""
   registry = {
       "charlie-code-glm": _Option("charlie-code-glm", "charlie-code", "openai/zai-org/GLM-5.3-Flash"),
       "codex-gpt": _Option("codex-gpt", "codex", "openai/gpt-5"),
@@ -265,6 +266,7 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
       "kimi-k3": _Option("kimi-k3", "cc-kimi", "moonshotai/Kimi-K3"),
       "glm-air": _Option("glm-air", "cc-openai-compatible", "openai/GLM-Air"),
       "oc-qwen": _Option("oc-qwen", "opencode", "qwen/qwen3"),
+      "agy-antigravity": _Option("agy-antigravity", "antigravity", None),
       # A registered id whose type disagrees with its prefix: the type wins.
       "claude-mislabeled": _Option("claude-mislabeled", "codex", "openai/gpt-5"),
   }
@@ -274,16 +276,31 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
   assert tt.backend_page_source("kimi-k3", registry) == SOURCE_CLAUDE_CODE
   assert tt.backend_page_source("glm-air", registry) == SOURCE_CLAUDE_CODE
   assert tt.backend_page_source("oc-qwen", registry) == SOURCE_OPENCODE
+  assert tt.backend_page_source("agy-antigravity", registry) == SOURCE_ANTIGRAVITY
   assert tt.backend_page_source("claude-mislabeled", registry) == SOURCE_CODEX
   assert tt.backend_page_source("charlie-code-retired", {}) == SOURCE_CHARLIE_CODE
   assert tt.backend_page_source("codex-retired", {}) == SOURCE_CODEX
   assert tt.backend_page_source("claude-retired", {}) == SOURCE_CLAUDE_CODE
   assert tt.backend_page_source("opencode-retired", {}) == SOURCE_OPENCODE
+  assert tt.backend_page_source("oc-kimi-k3", {}) == SOURCE_OPENCODE
+  assert tt.backend_page_source("clc-kimi-k3", {}) == SOURCE_CHARLIE_CODE
+  assert tt.backend_page_source("agy-x", {}) == SOURCE_ANTIGRAVITY
   assert tt.backend_page_source("clc-master", {}) == SOURCE_CHARLIE_CODE
-  with pytest.raises(ValueError, match="ag-1"):
-    tt.backend_page_source("ag-1", {"ag-1": _Option("ag-1", "antigravity", "model")})
+  # A type with no usage source raises even while its id is registered: gemini registers none.
+  with pytest.raises(ValueError, match="gem-1"):
+    tt.backend_page_source("gem-1", {"gem-1": _Option("gem-1", "gemini", "model")})
   with pytest.raises(ValueError, match="gem-1"):
     tt.backend_page_source("gem-1", {})
+
+
+def test_a_retired_id_names_its_row_by_the_prefix_its_source_registers() -> None:
+  """A retired id whose thread recorded no model names its row by the id minus its source's
+  prefix, short spelling included; a registry entry would name the config model instead."""
+  assert tt._thread_row_model({"backend": "oc-kimi-k3"}, {}) == "kimi-k3"
+  assert tt._thread_row_model({"backend": "clc-kimi-k3"}, {}) == "kimi-k3"
+  assert tt._thread_row_model({"backend": "agy-x"}, {}) == "x"
+  assert tt._thread_row_model({"backend": "opencode-retired"}, {}) == "retired"
+  assert tt._thread_row_model({"backend": "charlie-code-retired"}, {}) == "retired"
 
 
 def _stub_registry(monkeypatch: pytest.MonkeyPatch, *options: _Option) -> None:

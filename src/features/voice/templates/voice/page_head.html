@@ -1,0 +1,9 @@
+  <link rel="stylesheet" href="/static/features/voice/voice.css?v={{ static_asset_version|urlencode }}">
+  <script>
+    const VOICE_BACKENDS = [
+      {% for backend in (voice_backends() if voice_backends is defined else []) %}
+      {id: {{ backend.id|tojson }}, label: {{ backend.label|tojson }}, livePartials: {{ backend.live_partials|tojson }}, unavailableReason: {{ backend.unavailable_reason|tojson }}},
+      {% endfor %}
+    ];
+    const VOICE_DEFAULT_BACKEND = {{ (voice_default_backend() if voice_default_backend is defined else none)|tojson }};
+  </script>

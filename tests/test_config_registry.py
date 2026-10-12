@@ -65,7 +65,7 @@ def test_a_config_loads_without_a_deleted_package_and_refuses_its_type(tmp_path:
 
 
 # One fresh interpreter in which the package in argv[1] is deleted: it leaves PACKAGES before register_all() and
-# its modules no longer import. Then / renders and the page is searched for the fallback text in argv[2].
+# its modules no longer import. Then / renders and the page is searched for the package's page text in argv[2].
 INDEX_WITHOUT_PACKAGE_SCRIPT = "\n".join(
     [
         "import sys",
@@ -92,23 +92,24 @@ INDEX_WITHOUT_PACKAGE_SCRIPT = "\n".join(
 
 
 @pytest.mark.parametrize(
-    "package, fallback",
+    "package, present",
     [
-        ("src.features.voice", "const VOICE_DEFAULT_BACKEND = null;"),
+        ("src.features.voice", False),
+        ("src.features.no_such_package", True),  # the control: every package stays, so the voice constants render
     ],
 )
-def test_the_index_page_renders_without_a_deleted_package(package: str, fallback: str) -> None:
+def test_the_index_page_renders_without_a_deleted_package(package: str, present: bool) -> None:
   result = subprocess.run(
-      [sys.executable, "-c", INDEX_WITHOUT_PACKAGE_SCRIPT, package, fallback],
+      [sys.executable, "-c", INDEX_WITHOUT_PACKAGE_SCRIPT, package, "const VOICE_BACKENDS = ["],
       cwd=conftest.ROOT,
       capture_output=True,
       text=True,
       check=True,
       timeout=60)
 
-  status, has_fallback = result.stdout.splitlines()[-2:]
+  status, has_marker = result.stdout.splitlines()[-2:]
   assert status == "200"
-  assert has_fallback == "True"
+  assert has_marker == str(present)
 
 
 def test_registry_refuses_a_second_registration_and_an_unregistered_type() -> None:

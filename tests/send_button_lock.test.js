@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, sidebarModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules} = require('./read_static');
 const {createElement, createClassList} = require('./dom_element_stub');
 const {
   baseSessionContext,
@@ -23,7 +23,7 @@ const {
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
-const VOICE_INPUT_JS = readStatic('voice-input.js');
+const VOICE_INPUT_JS = readPackageStatic('features', 'voice', 'voice-input.js');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flush = async () => { await tick(); await tick(); };

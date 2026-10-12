@@ -48,147 +48,6 @@ function renderSidebarFilterPills() {
   container.innerHTML = buttons;
 }
 
-// Inline removal shared by archive / unarchive / delete: the list never
-// refetches — grouped views repaint in place from the last-rendered list
-// minus the session (preview backfill, counts and Show-all toggle resync),
-// the archived tab and the search overlay fall back to removing just the row
-// node, and when it was the session being viewed the view moves to the first
-// remaining rendered session.
-async function removeSessionRowInline(sessionId) {
-  delete sessionUnread[sessionId];
-  const repainted = Sidebar.removeSessionFromRenderedList(sessionId);
-  if (!repainted) {
-    const row = document.getElementById('session-' + sessionId);
-    if (row) row.remove();
-  }
-
-  if (SESSION_ID !== sessionId) {
-    updateSidebarHighlight(SESSION_ID);
-    return;
-  }
-  let nextId = null;
-  document.querySelectorAll('a[id^="session-"]').forEach(el => {
-    const sid = el.id.slice('session-'.length);
-    if (!nextId && sid && sid !== sessionId) nextId = sid;
-  });
-  if (nextId) {
-    await switchSession(nextId);
-  } else {
-    renderNoActiveSessionView();
-  }
-}
-
-async function archiveSession(id) {
-  try {
-    const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(await archiveRefusalDetail(res));
-    await removeSessionRowInline(id);
-  } catch (err) {
-    console.error('Archive failed:', err);
-    showToast(err.message, true);
-  }
-}
-
-// The server's refusal sentence for the row's user: a 409 archive refusal
-// carries its blockers (the nodes holding an unfinished run) beside the
-// message; any other refusal body keeps whatever detail it carries.
-async function archiveRefusalDetail(res) {
-  let detail = `Archive failed: ${res.status}`;
-  try {
-    const body = await res.json();
-    const d = body && body.detail;
-    if (typeof d === 'string') {
-      detail = d;
-    } else if (d && typeof d === 'object') {
-      detail = d.message || detail;
-      if (Array.isArray(d.blockers) && d.blockers.length) detail += '\n' + d.blockers.join('\n');
-    }
-  } catch (err) {
-    // A bodyless refusal keeps the status line.
-  }
-  return detail;
-}
-
-async function deleteSessionPermanently(sessionId) {
-  const res = await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Permanent delete failed: ${res.status}`);
-  if (currentFilter === 'archived') archivedForgetSession(sessionId);
-  await removeSessionRowInline(sessionId);
-}
-
-async function unarchiveSession(id) {
-  try {
-    const res = await fetch(`/api/sessions/${id}/unarchive`, { method: 'POST' });
-    if (!res.ok) throw new Error(await archiveRefusalDetail(res));
-    // A task node's restore answers with the restored ids: the target plus
-    // its archived ancestor chain, so the archived list drops them all. A
-    // legacy session's restore answers with the session metadata; its row is
-    // the only one that leaves.
-    let restored = [id];
-    const body = await res.json().catch(() => null);  // an unreadable body keeps the single-row drop
-    if (body && Array.isArray(body.restored)) restored = body.restored;
-    if (currentFilter === 'archived') {
-      restored.forEach(rid => archivedForgetSession(rid));
-      await removeSessionRowInline(id);
-      return;
-    }
-    switchSidebarFilter(currentFilter);
-  } catch (err) {
-    console.error('Unarchive failed:', err);
-    showToast(err.message, true);
-  }
-}
-
-let deleteConfirmKeyHandler = null;
-
-function closeDeleteConfirmModal() {
-  document.getElementById('delete-confirm-overlay')?.remove();
-  if (deleteConfirmKeyHandler) {
-    document.removeEventListener('keydown', deleteConfirmKeyHandler);
-    deleteConfirmKeyHandler = null;
-  }
-}
-
-function confirmDeletePermanently(sessionId) {
-  closeDeleteConfirmModal();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'delete-confirm-overlay';
-  overlay.className = Sidebar.MODAL_OVERLAY_CLASS;
-  overlay.innerHTML = `
-    <div class="${Sidebar.MODAL_DIALOG_CLASS} text-center"
-         onclick="event.stopPropagation()">
-      <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        ${Sidebar.TRASH_SVG_PATH}
-      </svg>
-      <p class="text-sm font-semibold text-slate-200 mb-1">Delete permanently?</p>
-      <p class="text-xs text-slate-400 mb-4">This will permanently delete this session and all its data. This cannot be undone.</p>
-      <div class="flex gap-2 justify-center">
-        <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
-        <button id="confirm-delete-btn" class="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors">Delete</button>
-      </div>
-    </div>`;
-
-  overlay.querySelector('#confirm-cancel-btn').addEventListener('click', closeDeleteConfirmModal);
-  overlay.querySelector('#confirm-delete-btn').addEventListener('click', async () => {
-    closeDeleteConfirmModal();
-    try {
-      await deleteSessionPermanently(sessionId);
-    } catch (err) {
-      console.error('Permanent delete failed:', err);
-    }
-  });
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeDeleteConfirmModal();
-  });
-  deleteConfirmKeyHandler = (e) => {
-    if (e.key === 'Escape') closeDeleteConfirmModal();
-  };
-  document.addEventListener('keydown', deleteConfirmKeyHandler);
-
-  document.body.appendChild(overlay);
-}
-
 // ---------------------------------------------------------------------------
 // Sidebar filter & star
 // ---------------------------------------------------------------------------
@@ -352,9 +211,6 @@ registerSidebarControl('toggleSessionStar', toggleSessionStar);
 const GLOBALS = {
   registerSidebarFilter,
   registerWorkspaceBadge,
-  archiveSession,
-  unarchiveSession,
-  confirmDeletePermanently,
   setSidebarFilterPill,
   switchSidebarFilter,
   enterSidebarFilter,
@@ -362,10 +218,6 @@ const GLOBALS = {
   handleSidebarSearch,
   toggleSessionStar,
 };
-const SIDEBAR_ONLY = {
-  removeSessionRowInline,
-  deleteSessionPermanently,
-};
-Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
+Sidebar.wire(GLOBALS);
 
 })();

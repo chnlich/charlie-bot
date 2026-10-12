@@ -13,10 +13,12 @@ Long-running work takes one of two routes, chosen by the duration you expect:
   wait: state the budget when the call takes one, and when the tool hands the command back still running, the next
   call waits on it again; a liveness probe loop is never the wait. A command the tool cuts off returns its output
   so far.
-- Expected longer: start it detached (`(setsid nohup cmd > log 2>&1 < /dev/null & echo $!)` locally,
-  `charliebot remote-launch` remotely), register one `charliebot schedule-trigger` watch on it before the turn ends,
-  and choose the wait yourself; the parentheses turn job control off, so `$!` is the process itself; each subcommand's
-  `--help` gives its arguments, and the wake brings you back with the targets' state.
+- Expected longer: start it with `charliebot schedule-trigger --cmd` (add `--host` for a remote command), which
+  registers the wake in the same step; or start it detached yourself — `(setsid nohup cmd > log 2>&1 < /dev/null &
+  echo $!)`, the parentheses turning job control off so `$!` is the process itself — and register one
+  `charliebot schedule-trigger --watch` on it. Either way the registration lands before the turn ends and you
+  choose the wait yourself; each subcommand's `--help` gives its arguments, and the wake brings you back with the
+  targets' state.
 A task that carries its own completion wake (`charliebot delegate`, `charliebot improve`) is the turn's last action;
 its summary arrives in a new turn.
 After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes,

@@ -48,10 +48,10 @@ the remote PID did not parse (nothing registered).
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from src.infra import constants, help_formatter
@@ -241,7 +241,7 @@ def _register_and_record(
     session_id: str,
     launch: launcher.Launch,
     launch_id: str,
-    started_at: datetime,
+    started_at: datetime.datetime,
     cwd: str,
 ) -> None:
   """Register the started process's wake and write its launch record.

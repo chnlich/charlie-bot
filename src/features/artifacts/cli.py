@@ -29,10 +29,8 @@ import contextlib
 import hashlib
 import io
 import json
-import os
 import pathlib
-import signal
-import subprocess
+import shlex
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -42,7 +40,7 @@ from src.features.artifacts import artifact_check, artifact_wrap, constants
 from src.infra import constants as infra_constants
 from src.infra import help_formatter, home
 from src.runtime.cli import common as cli_common
-from src.runtime.cli import schedule_trigger
+from src.runtime.cli import launcher, schedule_trigger
 
 if TYPE_CHECKING:
   from src.infra import config
@@ -86,29 +84,12 @@ def _build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def _spawn_cold_read(argv: list[str], log_path: pathlib.Path, cwd: pathlib.Path) -> subprocess.Popen:
-  """Start the detached cold-read child: a new-session process with stdin from /dev/null and
-  stdout and stderr appended to *log_path*."""
-  with log_path.open("a", encoding="utf-8") as log:
-    return subprocess.Popen(
-        argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True)
-
-
 def _start_cold_read_log(log_path: pathlib.Path, artifact: pathlib.Path) -> None:
   """Create the cold-read log (parents included) with its first line: page path and the page
   bytes' sha256, so the wake can tell whether the page changed after the cold read started."""
   log_path.parent.mkdir(parents=True, exist_ok=True)
   digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
   log_path.write_text(f"page {artifact} sha256 {digest}\n", encoding="utf-8")
-
-
-def _terminate_process_group(proc: subprocess.Popen) -> None:
-  """SIGKILL the detached cold read's process group; the child leads it (start_new_session), so
-  its own renderer subprocess dies with it."""
-  # An already-exited cold read meets the termination goal; SIGKILL otherwise.
-  with contextlib.suppress(ProcessLookupError):
-    os.killpg(proc.pid, signal.SIGKILL)
-  proc.wait()
 
 
 def _rejection_reason(captured_stderr: str) -> str:
@@ -137,9 +118,21 @@ def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path
       str(artifact), "--genre", args.genre, "--trigger", args.trigger
   ]
   # The same interpreter and the same code tree as this command: the tree root is the directory
-  # holding the src package of this very file.
-  proc = _spawn_cold_read(argv, log_path, pathlib.Path(__file__).resolve().parents[3])
-  watch_targets = [{"kind": infra_constants.WatchKind.LOCAL_PID.value, "pid": proc.pid}]
+  # holding the src package of this very file. The shared launcher wraps the child so its exit
+  # code lands beside the log for the wake.
+  launch = launcher.launch_local(
+      shlex.join(argv),
+      cwd=str(pathlib.Path(__file__).resolve().parents[3]),
+      log_path=log_path,
+      exit_file=log_path.with_suffix(".exit"))
+  watch_targets = [
+      {
+          "kind": infra_constants.WatchKind.LOCAL_PID.value,
+          "pid": launch.pid,
+          "exit_file": launch.exit_file,
+          "log": launch.log,
+      }
+  ]
   backend_count = sum(1 for _ in autonamer.iter_light_backends(cfg))
   payload = {
       "session_id": session_id,
@@ -157,14 +150,14 @@ def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path
   except SystemExit:
     # post_internal_api exits on a server rejection or a failed call, after printing the
     # reason as JSON on stderr; the cold read must not outlive its wake.
-    _terminate_process_group(proc)
+    launcher.kill_launch(launch)
     print(f"wake registration rejected: {_rejection_reason(stderr_capture.getvalue())}")
     return 1
   if schedule_trigger._readback_trigger(session_id, label, watch_targets) is None:
-    _terminate_process_group(proc)
+    launcher.kill_launch(launch)
     print("wake registration rejected: no pending trigger watching the cold-read pid on readback")
     return 1
-  print(f"cold read started: pid {proc.pid} log {log_path} trigger {result['trigger_id']}")
+  print(f"cold read started: pid {launch.pid} log {log_path} trigger {result['trigger_id']}")
   return 0
 
 

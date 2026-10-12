@@ -17,7 +17,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - Cron scheduled tasks in prompt, handler, loop, and task-chain (`steps`) modes
 - Manual run of a scheduled task: `POST /api/cron/tasks/{name}/run` fires it once through the scheduled path
 - Delayed triggers (`charliebot schedule-trigger`) watching local/remote PIDs and SLURM jobs; one trigger can watch many targets
-- `charliebot remote-launch` for long-running remote commands
+- `charliebot schedule-trigger --cmd` starts a long-running command detached (locally or over ssh) and registers its wake; the wake carries the exit code and log path
 
 ### Knowledge
 
@@ -87,8 +87,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot memory` — query and lint the store; `add` stages a capture
 - `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans
 - `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
-- `charliebot remote-launch` — launch a long-running remote command
-- `charliebot schedule-trigger` — schedule a delayed trigger (timed or watching PIDs/SLURM jobs)
+- `charliebot schedule-trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
 - `charliebot session` — create a session; `send` relays a message to another session as an agent_message
 - `charliebot session-tree` — migrate a home's legacy sessions to the task tree (dry-run/apply/rollback) and run an isolated trial preview
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from

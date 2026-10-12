@@ -1,4 +1,4 @@
-"""Tests for AgentBackend stdout/stderr capture and hang_diagnostics."""
+"""Tests for AgentBackend stdout/stderr capture, hang_diagnostics, and the one-shot text path."""
 from __future__ import annotations
 
 import os
@@ -90,3 +90,16 @@ async def test_write_chunk_lands_every_byte_in_order(tmp_path: pathlib.Path) -> 
   finally:
     os.close(fd)
   assert path.read_bytes() == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_without_a_limit_returns_the_assistant_text() -> None:
+  """timeout=None collects the assistant text up to the RESULT event and returns it."""
+  payload_lines = [
+      '{"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}',
+      '{"type": "result", "result": "", "usage": {}}',
+  ]
+  joined = "\\n".join(payload_lines)
+  backend = _ScriptedBackend(f"printf '{joined}\\n'\nexit 0\n")
+
+  assert await backend.one_shot_text("prompt", "system", timeout=None) == "hi"

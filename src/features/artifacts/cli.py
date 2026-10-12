@@ -45,6 +45,9 @@ from src.runtime.cli import launcher, schedule_trigger
 if TYPE_CHECKING:
   from src.infra import config
 
+# The bound wakes the session and does not stop the cold read.
+COLD_READ_WAKE_MAX_WAIT_SECONDS = 3600
+
 
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
@@ -99,10 +102,6 @@ def _rejection_reason(captured_stderr: str) -> str:
 
 def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path, cfg: config.CharlieBotConfig) -> int:
   """Detach the cold read and register its wake; the module docstring holds the contract."""
-  # The autonamer import drags fastapi and the sessions stack (~250 ms); it serves only this
-  # branch's backend count, so the wrap and foreground paths must not pay it.
-  from src.runtime import autonamer  # deferred: charliebot artifact --help
-
   session_id = cli_common.resolve_session_id(None)
   timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
   log_path = pathlib.Path("/tmp/charliebot-coldread") / session_id[:8] / f"{artifact.name}.{timestamp}.log"
@@ -133,10 +132,9 @@ def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path
           "log": launch.log,
       }
   ]
-  backend_count = sum(1 for _ in autonamer.iter_light_backends(cfg))
   payload = {
       "session_id": session_id,
-      "delay_seconds": int(backend_count * artifact_check.ARTIFACT_PROBE_TIMEOUT) + 60,
+      "delay_seconds": COLD_READ_WAKE_MAX_WAIT_SECONDS,
       "message": label,
       "watch_targets": watch_targets,
   }

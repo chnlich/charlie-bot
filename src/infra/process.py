@@ -51,8 +51,9 @@ async def kill_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
 
 
 async def wait_or_kill_group(
-    coro: Coroutine[Any, Any, _T], timeout: float, pid: int, stderr_task: asyncio.Task[bytes]) -> _T:
-  """Await *coro* for at most *timeout* seconds; cancel and drain *stderr_task* on every exit.
+    coro: Coroutine[Any, Any, _T], timeout: float | None, pid: int, stderr_task: asyncio.Task[bytes]) -> _T:
+  """Await *coro* for at most *timeout* seconds (``None`` waits without a limit); cancel and drain *stderr_task*
+  on every exit.
 
   On timeout the process group of *pid* is SIGKILLed before the TimeoutError
   propagates. The drain (cancel, then await while suppressing CancelledError)

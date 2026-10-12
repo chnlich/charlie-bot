@@ -757,7 +757,7 @@ class OpenCodeBackend(base.AgentBackend):
     await self._abort_session()
     await super().terminate()
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text via `opencode run --format json` with all tools denied.
 
     Uses the one-shot ``run`` command (not the ``serve`` server the agent loop
@@ -771,7 +771,7 @@ class OpenCodeBackend(base.AgentBackend):
     uses (which nest the part under ``properties``). The parser therefore feeds
     the top-level ``part`` directly to ``_translate_part`` so ``_part_delta``'s
     cumulative logic applies to ``text``-type parts. The process group is killed
-    on timeout.
+    on timeout; ``None`` waits without a limit.
     """
     self._reset_run_state()
     framed = self._frame_system_prompt(system_prompt, prompt)

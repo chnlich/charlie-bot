@@ -586,15 +586,26 @@ async def test_latex_after_turn_skips_the_check_without_a_snapshot(monkeypatch: 
 
 
 class _LetGoBackend(ScriptedRelayBackend):
-  """A backend whose turn is cancelled after the agent edited the file, as at a graceful restart."""
+  """A backend whose turn is cancelled after the agent edited the file, as at a graceful restart.
+
+  The gate holds the CancelledError until the test holds the consumer's task handle. A started
+  run() proves the consumer dequeued the item, and the enqueue registered the consumer before
+  that (master_cc_queue._enqueue_work_item), so the registry read cannot miss a consumer whose
+  turn already started. The before_turn hooks sit between create_task and the registration, and
+  their thread hops have no loop-tick budget.
+  """
 
   def __init__(self, tex_path: Path) -> None:
     super().__init__([], exit_code=0)
     self._tex_path = tex_path
+    self.turn_started = asyncio.Event()
+    self.release_cancel = asyncio.Event()
 
   async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     await self._on_spawn(self.pid)
     self._tex_path.write_text("edited by the agent", encoding="utf-8")
+    self.turn_started.set()
+    await self.release_cancel.wait()
     raise asyncio.CancelledError
     yield {}
 
@@ -609,17 +620,18 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   session = await conftest.create_root_session(mgr, CreateSessionRequest(name="let-go"))
   conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   tasks: list[asyncio.Task] = []
-  install_scripted_backends(monkeypatch, [_LetGoBackend(tex_file)], BUILD_BACKEND_PATCH_TARGET)
+  let_go_backend = _LetGoBackend(tex_file)
+  install_scripted_backends(monkeypatch, [let_go_backend], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.runtime.session_events.create_logged_task", make_task_spawner(tasks))
 
   async with fresh_master_state(session.id):
     queued = asyncio.create_task(run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks()))
-    for _ in range(1000):
-      if session.id in master_cc_state._session_consumers:
-        break
-      await asyncio.sleep(0)
-    consumer = master_cc_state._session_consumers[session.id]
+    try:
+      await asyncio.wait_for(let_go_backend.turn_started.wait(), timeout=5)
+      consumer = master_cc_state._session_consumers[session.id]
+    finally:
+      let_go_backend.release_cancel.set()
     await asyncio.wait({consumer}, timeout=5)
     queued.cancel()
     await asyncio.gather(queued, return_exceptions=True)

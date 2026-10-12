@@ -23,7 +23,7 @@ Known-alive symbols:
   `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` includes
   each router with `include_router(prefix=...)` (the package routers through the wiring registry,
   `src/app/registrations.py`) and `web/static/js/` fetches the composed paths
-  (e.g. `/rounds/{id}/rate` from `chat/ratings-explain.js`). The Python function names have exactly zero whole-repo matches outside
+  (e.g. `/rounds/{id}/rate` from `chat/ratings.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
@@ -66,7 +66,7 @@ Known-alive symbols:
   (`terminal_websocket`, in `src/features/terminal/api.py`, needs no entry: `tests/test_terminal_backend.py`
   imports it by name, so the Step 3 grep finds it.)
 - `voice_preview_websocket` — `@ws_router.websocket` handler in `src/features/voice/api.py` (`/ws/voice/{session_id}`),
-  reached by URL string: `web/static/js/voice-input.js` dials `/ws/voice/${sessionId}` with the
+  reached by URL string: `src/features/voice/static/voice-input.js` dials `/ws/voice/${sessionId}` with the
   transcription backend named in the `?backend=` query, and `tests/voice_input_run.test.js`
   asserts the composed URL. The Python name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused function. Same class as the `session_websocket`
@@ -181,7 +181,7 @@ Known-alive symbols:
   ``file-chip file-chip--${file.status}``, and `tests/chat_attachments_render.test.js` asserts
   the failed and uploaded variants by name. A dead-selector scan that greps each full class
   name finds no template or JS literal, so it flags them as unused CSS.
-- `d2h-wrapper`, `d2h-file-header`, `d2h-del`, `d2h-ins` (`web/static/css/styles.css`, scoped
+- `d2h-wrapper`, `d2h-file-header`, `d2h-del`, `d2h-ins` (`src/features/latex/static/latex.css`, scoped
   under `.diff-modal-body`) — reached by library DOM construction: the diff2html bundle both
   templates load from jsdelivr CDN emits every one of these class names when it renders the
   diff, and the rules restyle that output. A dead-selector scan that greps each full class
@@ -194,7 +194,7 @@ Known-alive symbols:
   `You`/`Turn`/`Worker`/`Trigger` supplying the suffixes; `tests/chat_session_bump.test.js`
   asserts the wrapper class by name. A dead-selector scan grepping each full class name
   finds only its definition, so it flags them as unused CSS.
-- `activate` (`web/static/js/terminal_clipboard.js`, the object addon passed to
+- `activate` (`src/features/terminal/static/terminal_clipboard.js`, the object addon passed to
   `term.loadAddon`) — xterm.js lifecycle dispatch: the library's `_addonManager.loadAddon`
   ends with `t.activate(e)`, invoking the addon's `activate` method by that name
   (verified against the CDN build the template loads, xterm 5.3.0). It is what attaches

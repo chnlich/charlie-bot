@@ -248,6 +248,23 @@ def test_cli_lint_dir_reads_given_root(
   assert "entries/profile/retired.md" in out and "unknown header field 'created'" in out
 
 
+def test_cli_lint_warns_on_an_overwide_body_line_without_failing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """Width stays advisory outside the proposal commit gate: lint prints one warning per
+  over-width body line on stderr and keeps exit 0, so live canon with legacy wide lines
+  (and the land gate's tree lint, which reads violations only) never blocks on them."""
+  other = tmp_path / "store-wide"
+  conftest.write_memory_topics(other)
+  line = "- " + "a" * 119  # 121 terminal columns
+  conftest.write_memory_entry(other, "profile", "wide-body", body=f"{line}\n")
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "lint", "--dir", str(other)])
+  from src.features.memory import cli
+  cli.main()
+  captured = capsys.readouterr()
+  assert captured.out.strip() == "clean"
+  assert f"warning: entries/profile/wide-body.md: body line over 120 columns (121): {line[:60]}" in captured.err
+
+
 def test_cli_query_dir_reads_given_root(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   """query --dir reads entries from the given root, not the live store."""

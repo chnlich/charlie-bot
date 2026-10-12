@@ -24,19 +24,50 @@ freely in one trigger.
     --max-wait 3600 \
     --watch neptune:12345 slurm:98765 \
     --message 'Remote + slurm training finished'
+
+Alternative: start a command and watch the started process in one step. ``--cmd
+CMD`` starts CMD detached through the shared launcher (``--host HOST`` runs it
+on that ssh host, ``--cwd DIR`` picks its working directory — locally the
+caller's current directory, remotely the ssh login directory), writes the
+launch record under the session's ``launches/`` directory, and registers the
+wake on the wrapper process; the trigger fires when the command exits or at
+--max-wait, whichever comes first, and the wake carries the exit code and the
+log path. ``--cmd`` and ``--watch`` are mutually exclusive.
+
+  charliebot schedule-trigger \
+    --cmd 'make all' \
+    --max-wait 1800 \
+    --message 'Build finished'
+
+Exit codes: 0 = registered (stdout prints one JSON object: trigger_id, fire_at
+and the launch record fields), 2 = usage error or a rejected/failed
+registration (a started process is killed first), 3 = the ssh start failed or
+the remote PID did not parse (nothing registered).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.infra import constants, help_formatter
 from src.runtime.cli import common as cli_common
 
+if TYPE_CHECKING:
+  from src.runtime.cli import launcher
+
 # Exit code returned when trigger creation is rejected: remote-PID verify-on-create
 # or --message length validation. Mirrors argparse's usage-error exit code.
 EXIT_VERIFY_REJECTED = 2
+
+# Exit code returned when the --cmd start over ssh failed or the remote PID did
+# not parse: no process was started (or none whose PID is known) and no trigger
+# was registered.
+EXIT_SSH_FAILED = 3
 
 
 def _positive_int(value: str, raw: str, what: str) -> int:
@@ -125,7 +156,31 @@ def _build_parser() -> argparse.ArgumentParser:
           "(e.g. neptune:slurm:98765). "
           "Kinds may be mixed freely. The trigger fires when ALL targets have "
           "finished (ALL semantics) OR when --max-wait elapses, whichever comes "
-          "first."),
+          "first. Mutually exclusive with --cmd."),
+  )
+  parser.add_argument(
+      "--cmd",
+      default=None,
+      metavar="CMD",
+      help=(
+          "Start CMD detached and watch the started process: the trigger fires "
+          "when it exits or at --max-wait, whichever comes first, and the wake "
+          "carries the exit code and the log path. Mutually exclusive with "
+          "--watch."),
+  )
+  parser.add_argument(
+      "--host",
+      default=None,
+      metavar="HOST",
+      help="Run --cmd on this ssh host. Requires --cmd.",
+  )
+  parser.add_argument(
+      "--cwd",
+      default=None,
+      metavar="DIR",
+      help=(
+          "Working directory for --cmd. Requires --cmd. Defaults to the "
+          "current directory locally, and to the ssh login directory with --host."),
   )
   return parser
 
@@ -181,10 +236,120 @@ def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] |
   return {"trigger_id": newest["id"], "fire_at": newest["fire_at"]}
 
 
+def _register_and_record(
+    args: argparse.Namespace,
+    session_id: str,
+    launch: launcher.Launch,
+    launch_id: str,
+    started_at: datetime,
+    cwd: str,
+) -> None:
+  """Register the started process's wake and write its launch record.
+
+  A rejected or unverifiable registration kills the started process group and
+  exits 2: nothing started outlives its wake. On success the launch record
+  lands at ``<session>/launches/<launch_id>/metadata.json`` and stdout prints
+  trigger_id, fire_at and the record's fields as one JSON object.
+  """
+  from src.runtime.cli import launcher  # deferred: charliebot schedule-trigger --help
+
+  if launch.host is None:
+    target: dict = {
+        "kind": constants.WatchKind.LOCAL_PID.value,
+        "pid": launch.pid,
+        "exit_file": launch.exit_file,
+        "log": launch.log,
+    }
+  else:
+    target = {
+        "kind": constants.WatchKind.REMOTE_PID.value,
+        "host": launch.host,
+        "pid": launch.pid,
+        "exit_file": launch.exit_file,
+        "log": launch.log,
+    }
+  watch_targets = [target]
+  payload: dict = {
+      "session_id": session_id,
+      "delay_seconds": args.max_wait,
+      "message": args.message,
+      "watch_targets": watch_targets,
+  }
+  try:
+    result = cli_common.post_internal_api(
+        "/api/internal/schedule-trigger",
+        payload,
+        readback=lambda: _readback_trigger(session_id, args.message, watch_targets),
+        rejection_exit_codes={422: EXIT_VERIFY_REJECTED},
+    )
+  except SystemExit:
+    # post_internal_api printed the reason as JSON on stderr; the started
+    # process must not outlive its wake.
+    launcher.kill_launch(launch)
+    sys.exit(EXIT_VERIFY_REJECTED)
+  if _readback_trigger(session_id, args.message, watch_targets) is None:
+    launcher.kill_launch(launch)
+    print(
+        json.dumps({"error": "registration rejected: no pending trigger watching the started pid on readback"}),
+        file=sys.stderr)
+    sys.exit(EXIT_VERIFY_REJECTED)
+
+  record = {
+      "launch_id": launch_id,
+      "session_id": session_id,
+      "host": launch.host,
+      "pid": launch.pid,
+      "cwd": cwd,
+      "cmd": args.cmd,
+      "started_at": started_at.isoformat().replace("+00:00", "Z"),
+      "log": launch.log,
+      "exit_file": launch.exit_file,
+      "trigger_id": result["trigger_id"],
+  }
+  launch_dir = cli_common.get_config().sessions_dir / session_id / "launches" / launch_id
+  launch_dir.mkdir(parents=True, exist_ok=True)
+  (launch_dir / "metadata.json").write_text(json.dumps(record, separators=(",", ":")) + "\n", encoding="utf-8")
+  print(json.dumps({"trigger_id": result["trigger_id"], "fire_at": result["fire_at"], **record}, indent=2))
+
+
+def _main_cmd(args: argparse.Namespace, session_id: str) -> None:
+  """Start --cmd detached through the shared launcher and register its wake."""
+  from src.infra import models  # deferred: charliebot schedule-trigger --help
+  from src.runtime.cli import launcher  # deferred: charliebot schedule-trigger --help
+
+  started_at = models.utc_now()
+  launch_id = launcher.mint_launch_id(started_at)
+  if args.host is None:
+    cwd = args.cwd or os.getcwd()
+    sessions_dir = cli_common.get_config().sessions_dir
+    launch_dir = sessions_dir / session_id / "launches" / launch_id
+    launch = launcher.launch_local(args.cmd, cwd=cwd, log_path=launch_dir / "log", exit_file=launch_dir / "exit")
+  else:
+    # The record's "~" names the ssh login directory: without --cwd the remote
+    # wrapper runs there and no local path describes it.
+    cwd = args.cwd or "~"
+    try:
+      launch = launcher.launch_remote(args.host, args.cmd, cwd=args.cwd, launch_id=launch_id)
+    except launcher.RemoteLaunchError as e:
+      print(json.dumps({"error": str(e)}), file=sys.stderr)
+      sys.exit(EXIT_SSH_FAILED)
+  _register_and_record(args, session_id, launch, launch_id, started_at, cwd)
+
+
 def main() -> None:
   parser = _build_parser()
   args = parser.parse_args()
+  if args.cmd is not None and args.watch is not None:
+    cli_common.exit_usage_error(
+        "--cmd and --watch are mutually exclusive: the trigger watches the one process --cmd starts")
+  if args.host is not None and args.cmd is None:
+    cli_common.exit_usage_error("--host requires --cmd: it names the host the started command runs on")
+  if args.cwd is not None and args.cmd is None:
+    cli_common.exit_usage_error("--cwd requires --cmd: it names the started command's working directory")
   session_id = cli_common.resolve_session_id(args.session)
+  if args.cmd is not None:
+    _main_cmd(args, session_id)
+    return
 
   watch_targets: list[dict] | None = args.watch
 

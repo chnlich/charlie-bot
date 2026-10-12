@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import random
+import shlex
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -279,13 +280,15 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
 
 async def _probe_remaining_remote_pids(
     remaining: dict[str, set[int]],
+    targets_by_key: dict[tuple[str, int], RemotePid],
     trigger_id: str,
 ) -> list[str]:
   """Probe every (host, pid) in ``remaining`` concurrently via ssh.
 
   Mutates ``remaining`` in place: DEAD pids are discarded and hosts whose set
-  goes empty are dropped. Returns ``host:pid`` labels for newly-exited pids;
-  transient probe errors are logged and the pid stays under observation.
+  goes empty are dropped. Returns labels for newly-exited pids (``host:pid``,
+  carrying the exit file's verdict when the target has one); transient probe
+  errors are logged and the pid stays under observation.
   """
   probes = [(host, pid) for host, pids in remaining.items() for pid in pids]
   results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
@@ -295,7 +298,7 @@ async def _probe_remaining_remote_pids(
       remaining[host].discard(pid)
       if not remaining[host]:
         del remaining[host]
-      newly_exited.append(f"{host}:{pid}")
+      newly_exited.append(await _remote_finished_label(targets_by_key[(host, pid)]))
     elif status == "ALIVE":
       continue
     else:
@@ -308,6 +311,79 @@ async def _probe_remaining_remote_pids(
           raw=raw.strip(),
       )
   return newly_exited
+
+
+# ---------------------------------------------------------------------------
+# Fire-time labels: exit-file reads for launcher-started targets
+# ---------------------------------------------------------------------------
+
+
+def _log_suffix(log: str | None) -> str:
+  """The ``, log <path>`` tail a target with a log path carries in its fire-time label."""
+  return f", log {log}" if log is not None else ""
+
+
+def _still_alive_label(target: LocalPid | RemotePid) -> str:
+  """The timeout-fire label of a target still running: today's bare label plus its log path."""
+  base = str(target.pid) if isinstance(target, LocalPid) else f"{target.host}:{target.pid}"
+  return f"{base}{_log_suffix(target.log)}"
+
+
+def _read_local_exit_code(exit_file: str) -> str | None:
+  """The wrapper-written exit code out of the local exit file; None when absent or empty."""
+  try:
+    content = Path(exit_file).read_text(encoding="utf-8").strip()
+  except OSError:
+    return None
+  return content or None
+
+
+async def _ssh_read_exit_code(host: str, exit_file: str) -> str | None:
+  """The wrapper-written exit code out of a remote exit file; None when absent or unreadable.
+
+  A failed read (ssh down, cat nonzero, empty file) states no exit code: the
+  wake must never carry one the exit file did not provide.
+  """
+  run = await _run_probe_cmd(
+      ssh_cmd(host, f"cat {shlex.quote(exit_file)} 2>/dev/null"),
+      timeout=SSH_OVERALL_TIMEOUT,
+      kill_wait_log_event="ssh_exit_read_wait_after_kill_failed",
+      host=host,
+      exit_file=exit_file,
+  )
+  if isinstance(run, str):
+    return None
+  stdout_b, _stderr_b, returncode = run
+  if returncode != 0:
+    return None
+  return stdout_b.decode("utf-8", errors="replace").strip() or None
+
+
+def _exit_state_label(pid_label: str, code: str | None, log: str | None) -> str:
+  """``1234: exit 0, log <path>`` — or ``exit file missing`` when the exit file gave no code."""
+  state = f"exit {code}" if code is not None else "exit file missing"
+  return f"{pid_label}: {state}{_log_suffix(log)}"
+
+
+async def _local_finished_label(target: LocalPid, *, gone_at_start: bool) -> str:
+  """The fire-time label of an exited local target.
+
+  A launcher-started target (``exit_file`` set) states the code read out of
+  its exit file; a target without one keeps the bare-pid label.
+  """
+  if target.exit_file is None:
+    return f"{target.pid} (gone at start)" if gone_at_start else str(target.pid)
+  code = await asyncio.to_thread(_read_local_exit_code, target.exit_file)
+  return _exit_state_label(str(target.pid), code, target.log)
+
+
+async def _remote_finished_label(target: RemotePid) -> str:
+  """The fire-time label of an exited remote target: ``host:pid`` plus the exit verdict."""
+  base = f"{target.host}:{target.pid}"
+  if target.exit_file is None:
+    return base
+  code = await _ssh_read_exit_code(target.host, target.exit_file)
+  return _exit_state_label(base, code, target.log)
 
 
 # ---------------------------------------------------------------------------
@@ -855,17 +931,19 @@ class TriggerManager:
     A pid that has already exited at start counts as finished (labelled "gone at
     start") and the wait continues for the rest — per-target, AND-correct. pidfd
     readiness cannot reap an arbitrary (non-child) pid, so finished labels carry
-    no exit code.
+    no exit code beyond what a target's own exit file states.
     """
     loop = asyncio.get_running_loop()
     pidfds: dict[int, int] = {}  # fd -> pid
+    targets_by_pid = {t.pid: t for t in targets}
+    finished_pids: list[int] = []
     finished: list[str] = []
 
     for t in targets:
       try:
         fd = _pidfd_open(t.pid)
       except ProcessLookupError:
-        finished.append(f"{t.pid} (gone at start)")
+        finished.append(await _local_finished_label(t, gone_at_start=True))
         continue
       pidfds[fd] = t.pid
 
@@ -886,7 +964,7 @@ class TriggerManager:
         _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)
       with contextlib.suppress(OSError):
         os.close(fd)
-      finished.append(str(pid))
+      finished_pids.append(pid)
       if not pidfds:
         done.set()
 
@@ -907,7 +985,8 @@ class TriggerManager:
         with contextlib.suppress(OSError):
           os.close(fd)
 
-    still_alive = [str(p) for p in pidfds.values()]
+    finished.extend([await _local_finished_label(targets_by_pid[pid], gone_at_start=False) for pid in finished_pids])
+    still_alive = [_still_alive_label(targets_by_pid[p]) for p in pidfds.values()]
     return finished, still_alive
 
   async def _wait_with_remote_probe(
@@ -917,12 +996,15 @@ class TriggerManager:
   ) -> tuple[list[str], list[str]]:
     """Polling wait via ssh probes with backoff. Returns (finished, still_alive).
 
-    Labels use ``host:pid``. Verify-on-create has already confirmed every PID was
-    ALIVE at create time.
+    Labels use ``host:pid`` (plus the exit file's verdict and log for
+    launcher-started targets). Verify-on-create has already confirmed every PID
+    was ALIVE at create time.
     """
     remaining: dict[str, set[int]] = {}
+    targets_by_key: dict[tuple[str, int], RemotePid] = {}
     for t in targets:
       remaining.setdefault(t.host, set()).add(t.pid)
+      targets_by_key[(t.host, t.pid)] = t
 
     finished: list[str] = []
     step = 0
@@ -941,13 +1023,13 @@ class TriggerManager:
       if (trigger.fire_at - now).total_seconds() <= 0:
         break
 
-      finished.extend(await _probe_remaining_remote_pids(remaining, trigger.id))
+      finished.extend(await _probe_remaining_remote_pids(remaining, targets_by_key, trigger.id))
 
       step += 1
       if not remaining:
         break
 
-    still_alive = [f"{host}:{pid}" for host, pids in remaining.items() for pid in pids]
+    still_alive = [_still_alive_label(targets_by_key[(host, pid)]) for host, pids in remaining.items() for pid in pids]
     return finished, still_alive
 
   async def _wait_with_sacct(
@@ -1083,7 +1165,8 @@ def _format_suffix(
 
   Labels are pre-formatted by each sub-waiter: `"1234"` (local pid, possibly
   "gone at start"), `"host:5678"` (remote pid), `"slurm:42: COMPLETED 0:0"`
-  (slurm job).
+  (slurm job), and — for launcher-started targets carrying an exit file —
+  `"1234: exit 0, log <path>"` (or `"host:5678: ..."` remotely).
   """
   finished_part = ", ".join(finished)
   if reason == "completed":

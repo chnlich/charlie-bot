@@ -262,16 +262,31 @@ class ThreadMetadata(BaseModel):
 
 
 class LocalPid(BaseModel):
-  """A process on the trigger-server host, watched via pidfd."""
+  """A process on the trigger-server host, watched via pidfd.
+
+  ``exit_file``/``log`` come from a launcher-started wrapper (schedule-trigger
+  --cmd, artifact check --background): the fire-time label of a finished target
+  reads its exit code out of ``exit_file`` and names ``log``. Both None keeps
+  the bare-pid label, which is also what trigger files written before these
+  fields existed load as.
+  """
   kind: Literal[WatchKind.LOCAL_PID] = WatchKind.LOCAL_PID
   pid: int
+  exit_file: str | None = None
+  log: str | None = None
 
 
 class RemotePid(BaseModel):
-  """A process on another host, watched via periodic ssh `kill -0` probes."""
+  """A process on another host, watched via periodic ssh `kill -0` probes.
+
+  ``exit_file``/``log`` play the same role as on LocalPid; the exit file is
+  read over ssh at fire time.
+  """
   kind: Literal[WatchKind.REMOTE_PID] = WatchKind.REMOTE_PID
   host: str
   pid: int
+  exit_file: str | None = None
+  log: str | None = None
 
 
 class SlurmJob(BaseModel):

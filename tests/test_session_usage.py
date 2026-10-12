@@ -1,41 +1,35 @@
 """Focused tests for session usage resolution."""
 
 import json
-from pathlib import Path
+import pathlib
 from typing import Any
 
+import conftest
 import pytest
-from conftest import OPUS_BACKEND_ID, SessionBlocks, backend_option, build_session_blocks, fresh_state_fixture
 
-from src.backends.claude_code.claude_code import _DECLARED_WINDOW_WARNINGS_SEEN, headless_claude_declared_window
-from src.backends.claude_code.claude_launch import (
-    AUTO_COMPACT_WINDOW_ENV,
-    AUTOCOMPACT_PCT_OVERRIDE_ENV,
-    CLAUDE_COMPACT_CONTEXT_RESERVE,
-    CLAUDE_COMPACT_OUTPUT_RESERVE,
-    MAX_CONTEXT_TOKENS_ENV,
-)
+from src.backends.claude_code import claude_code, claude_launch
 from src.backends.codex import codex_usage
-from src.infra.config import CharlieBotConfig
-from src.infra.models import SessionMetadata
-from src.runtime.agent_process.base import make_context_reading_event
+from src.infra import config, models
+from src.runtime.agent_process import base
 
 
-def _build_cfg(tmp_path: Path, **codex_kwargs: Any) -> CharlieBotConfig:
-  codex_opt = backend_option(id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
-  return CharlieBotConfig(
+def _build_cfg(tmp_path: pathlib.Path, **codex_kwargs: Any) -> config.CharlieBotConfig:
+  codex_opt = conftest.backend_option(
+      id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
+  return config.CharlieBotConfig(
       charliebot_home=tmp_path,
       backends={
           "options":
               [
-                  backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
+                  conftest.backend_option(
+                      id=conftest.OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
                   codex_opt,
               ]
       },
   )
 
 
-def _write_session(session_blocks: SessionBlocks, meta: SessionMetadata, events: list[dict]) -> None:
+def _write_session(session_blocks: conftest.SessionBlocks, meta: models.SessionMetadata, events: list[dict]) -> None:
   session_dir = session_blocks.events.get_chat_events_path(meta.id).parent
   session_dir.mkdir(parents=True, exist_ok=True)
   (session_dir.parent / "threads").mkdir(parents=True, exist_ok=True)
@@ -44,15 +38,16 @@ def _write_session(session_blocks: SessionBlocks, meta: SessionMetadata, events:
   session_blocks.events.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
 
 
-def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tuple[SessionBlocks, SessionMetadata]:
+def _session_rig(tmp_path: pathlib.Path, session_id: str, name: str,
+                 backend: str) -> tuple[conftest.SessionBlocks, models.SessionMetadata]:
   """Session blocks over a fresh _build_cfg config plus one session's metadata: the pair a resolve test starts from."""
   cfg = _build_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  meta = SessionMetadata(profile="manager", id=session_id, name=name, backend=backend)
+  session_blocks = conftest.build_session_blocks(cfg)
+  meta = models.SessionMetadata(profile="manager", id=session_id, name=name, backend=backend)
   return session_blocks, meta
 
 
-async def _resolved_usage(session_blocks: SessionBlocks, meta: SessionMetadata) -> dict:
+async def _resolved_usage(session_blocks: conftest.SessionBlocks, meta: models.SessionMetadata) -> dict:
   """The common resolve rig: default-kwargs resolve asserting a mapping came back."""
   usage = await session_blocks.anchors.resolve_session_usage(meta.id, meta)
   assert usage is not None
@@ -69,7 +64,7 @@ def _assert_no_context_tier(usage: dict | None) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _codex_home_under_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _codex_home_under_tmp(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Pin the codex resolver's default home under tmp_path: codex runs from the default
   home, so the rollout tree the tests seed is ``<tmp>/codex-home/sessions``."""
   home = tmp_path / "codex-home"
@@ -136,8 +131,8 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: Path) -> None:
-  session_blocks, meta = _session_rig(tmp_path, "session-assistant", "Assistant", OPUS_BACKEND_ID)
+async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: pathlib.Path) -> None:
+  session_blocks, meta = _session_rig(tmp_path, "session-assistant", "Assistant", conftest.OPUS_BACKEND_ID)
   _write_session(session_blocks, meta, _cumulative_result_with_assistant_reading())
 
   usage = await _resolved_usage(session_blocks, meta)
@@ -153,8 +148,8 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_path: Path) -> None:
-  session_blocks, meta = _session_rig(tmp_path, "session-ignore", "Ignore", OPUS_BACKEND_ID)
+async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_path: pathlib.Path) -> None:
+  session_blocks, meta = _session_rig(tmp_path, "session-ignore", "Ignore", conftest.OPUS_BACKEND_ID)
   _write_session(
       session_blocks,
       meta,
@@ -188,8 +183,8 @@ _COST_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("result_costs, expected_cost", _COST_ROWS)
 async def test_total_cost_across_results(
-    tmp_path: Path, result_costs: tuple[float, float], expected_cost: object) -> None:
-  session_blocks, meta = _session_rig(tmp_path, "session-cost", "Cost", OPUS_BACKEND_ID)
+    tmp_path: pathlib.Path, result_costs: tuple[float, float], expected_cost: object) -> None:
+  session_blocks, meta = _session_rig(tmp_path, "session-cost", "Cost", conftest.OPUS_BACKEND_ID)
   _write_session(
       session_blocks, meta, [
           _result_event(result_costs[0], {"claude-opus-4-6": {
@@ -209,7 +204,7 @@ async def test_total_cost_across_results(
 # Acceptance test 8: headless_claude_declared_window
 # ---------------------------------------------------------------------------
 
-_reset_declared_window_warnings = fresh_state_fixture(_DECLARED_WINDOW_WARNINGS_SEEN.clear)
+_reset_declared_window_warnings = conftest.fresh_state_fixture(claude_code._DECLARED_WINDOW_WARNINGS_SEEN.clear)
 
 
 @pytest.fixture
@@ -218,15 +213,16 @@ def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
   # The declared-window logic reads exactly these three names; the module constants are
   # the one-spelling home the default pin, the forward allowlist, and the degradation
   # checks must agree on.
-  for name in (AUTO_COMPACT_WINDOW_ENV, AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV):
+  for name in (claude_launch.AUTO_COMPACT_WINDOW_ENV, claude_launch.AUTOCOMPACT_PCT_OVERRIDE_ENV,
+               claude_launch.MAX_CONTEXT_TOKENS_ENV):
     monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "500000")
-  expected_point = 500_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
-  assert headless_claude_declared_window() == (500_000, expected_point)
+  monkeypatch.setenv(claude_launch.AUTO_COMPACT_WINDOW_ENV, "500000")
+  expected_point = 500_000 - claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE - claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
+  assert claude_code.headless_claude_declared_window() == (500_000, expected_point)
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +234,7 @@ _K3_MODEL = "openai/moonshotai/Kimi-K3"
 
 
 def _k3_reading() -> dict:
-  return make_context_reading_event(_K3_MODEL, 118_234, 262_144, 170_393)
+  return base.make_context_reading_event(_K3_MODEL, 118_234, 262_144, 170_393)
 
 
 def _assert_k3_reading(usage: dict) -> None:
@@ -250,8 +246,8 @@ def _assert_k3_reading(usage: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path) -> None:
-  session_blocks, meta = _session_rig(tmp_path, "session-reading", "Reading", OPUS_BACKEND_ID)
+async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: pathlib.Path) -> None:
+  session_blocks, meta = _session_rig(tmp_path, "session-reading", "Reading", conftest.OPUS_BACKEND_ID)
   # Several result events with turn-cumulative usage and no context_snapshot
   # (charlie-code today), plus context_reading events: the newest reading
   # decides all four fields, the cumulative usage never reaches the readout.
@@ -259,7 +255,7 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
       session_blocks, meta, [
           _result_event(0.10, input_tokens=1_000_000),
           _result_event(0.20, input_tokens=2_000_000),
-          make_context_reading_event("old/model", 10_000, 100_000, 90_000),
+          base.make_context_reading_event("old/model", 10_000, 100_000, 90_000),
           _k3_reading(),
       ])
 
@@ -270,8 +266,8 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
-  session_blocks, meta = _session_rig(tmp_path, "session-emptyslot", "Empty Slot", OPUS_BACKEND_ID)
+async def test_empty_slot_keeps_context_unknown(tmp_path: pathlib.Path) -> None:
+  session_blocks, meta = _session_rig(tmp_path, "session-emptyslot", "Empty Slot", conftest.OPUS_BACKEND_ID)
   # Only text assistant events (no usage -> no claude slot) and cumulative
   # result events: the slot stays empty and the context fields stay unknown.
   _write_session(
@@ -295,7 +291,7 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
 
   _assert_no_context_tier(usage)
 
-  empty_meta = SessionMetadata(
-      profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
+  empty_meta = models.SessionMetadata(
+      profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=conftest.OPUS_BACKEND_ID)
   _write_session(session_blocks, empty_meta, [])
   assert await session_blocks.anchors.resolve_session_usage(empty_meta.id, empty_meta) is None

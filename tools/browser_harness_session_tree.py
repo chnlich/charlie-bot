@@ -14,8 +14,8 @@ evidence files and CLI parsing. The helpers:
   SIGKILL and reap); ``log`` and ``fail`` are the shared print and failure
   exit.
 - CDP mini-client. ``CDP`` speaks the Chrome DevTools Protocol over the
-  browser websocket: request/response matching, event collection, console
-  error capture, session-list fetch counts and mutation tracking.
+  browser websocket: request/response matching, event collection and
+  console error capture.
 - Chrome launch and page wire-up. ``resolve_chrome`` finds the binary,
   ``launch_chrome`` starts headless chrome with a CDP endpoint and a private
   profile (``DESKTOP_CAPTURE_FLAGS`` is the shared flag set),

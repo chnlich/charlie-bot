@@ -34,7 +34,11 @@ class NativeIdBackend(test_task_execution.SpawningScriptedBackend):
   path scans that file for the run's native session id; the plain double
   writes no raw file, so a run that must carry a native id (every paused run
   whose continuation should resume its conversation) writes the one raw line
-  the scan translates to the attach event.
+  the scan reads.
+
+  The line is Claude's ``system/init`` event. The finalize scan reads it
+  without a translation, so the test needs no agent CLI binary. A Codex
+  ``thread.started`` line would need the Codex backend built to translate it.
   """
 
   def __init__(self, *args, native_id: str, **kwargs) -> None:
@@ -46,7 +50,7 @@ class NativeIdBackend(test_task_execution.SpawningScriptedBackend):
     async for event in super().run(prompt, cwd, env, uploaded_files=uploaded_files):
       yield event
     if self.raw_log_dir is not None:
-      line = json.dumps({"type": "thread.started", "thread_id": self._native_id}) + "\n"
+      line = json.dumps({"type": "system", "subtype": "init", "session_id": self._native_id}) + "\n"
       (Path(self.raw_log_dir) / "agent.raw.ndjson").write_text(line, encoding="utf-8")
 
 

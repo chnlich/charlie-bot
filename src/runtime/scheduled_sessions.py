@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from src.infra.models import SessionMetadata
-from src.runtime.hooks.sequence_controllers import sequence_controllers
-from src.runtime.hooks.sidebar_contributions import sidebar_contributions
+from src.infra import models
+from src.runtime.hooks import sequence_controllers, sidebar_contributions
 
 
 def subtree_roots(
-    metas: Iterable[SessionMetadata],
-    is_root: Callable[[SessionMetadata], bool],
+    metas: Iterable[models.SessionMetadata],
+    is_root: Callable[[models.SessionMetadata], bool],
     *,
     include_root: bool,
 ) -> dict[str, str]:
@@ -68,10 +67,10 @@ def subtree_roots(
   return roots
 
 
-def sequence_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
+def sequence_subtree_roots(metas: Iterable[models.SessionMetadata]) -> dict[str, str]:
   """Map every sequence-subtree row to the owned session above it."""
 
-  controllers = sequence_controllers()
+  controllers = sequence_controllers.sequence_controllers()
   return subtree_roots(
       metas,
       lambda meta: any(controller.owns_session(meta) for controller in controllers),
@@ -79,7 +78,7 @@ def sequence_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
   )
 
 
-def view_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, dict[str, str]]:
+def view_subtree_roots(metas: Iterable[models.SessionMetadata]) -> dict[str, dict[str, str]]:
   """Map each sidebar view's key to its subtree rows: row id to the id of the view's root above it.
 
   The view rule over :func:`subtree_roots`: a row is a view root when a sidebar
@@ -90,7 +89,7 @@ def view_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, dict[str, 
   entry.
   """
   metas = list(metas)
-  contributions = sidebar_contributions()
+  contributions = sidebar_contributions.sidebar_contributions()
   root_ids: dict[str, set[str]] = {}
   for meta in metas:
     for contribution in contributions:

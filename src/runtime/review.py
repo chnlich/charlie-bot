@@ -29,7 +29,12 @@ _REVIEW_CHECKLIST_INTRO = (
     "The Context section carries the task spec. When the spec has a `## Source Files` section, read every path "
     "it lists before judging the diff. Apply the spec's `## Reviewer Checklist`. For control-flow or "
     "state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
-    "on tests.")
+    "on tests.\n\n"
+    "The Later Messages section holds each message that the worker received\n"
+    "after the task spec, in claim order.\n"
+    "When a later message changes the task spec, judge the work against the later\n"
+    "message.\n"
+    "When the task spec and a skill disagree, follow the task spec.")
 
 # The checklist heading and intro render only in the managed instruction block
 # (review_rules_text); only the judgment rules below ride the numbered steps too.
@@ -131,9 +136,17 @@ def review_spec_text(task: models.TaskSpec) -> str:
   return "\n\n".join(parts)
 
 
-def review_context_lines(spec_text: str, worker_summary: str | None, delegator_hint: str) -> list[str]:
-  """The review prompt's context lines: the task spec, the worker summary when one was extracted, and the hint."""
+def review_context_lines(
+    spec_text: str,
+    later_messages: str,
+    worker_summary: str | None,
+    delegator_hint: str,
+) -> list[str]:
+  """The review prompt's context lines: the task spec, the Later Messages section when the worker
+  received messages after it, the worker summary when one was extracted, and the hint."""
   lines = [f"**Task spec:**\n{spec_text}"]
+  if later_messages:
+    lines.append(later_messages)
   if worker_summary:
     lines.append(f"**Worker summary:** {worker_summary}")
   lines.append(f"**Delegator hint:** {delegator_hint}")

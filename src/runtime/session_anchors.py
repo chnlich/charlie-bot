@@ -24,12 +24,16 @@ from src.runtime.session_usage import SessionUsageResolver
 
 # The clone-style instruction context-reset notes append after the
 # history note: the fresh native conversation must read the chat log first and
-# open its reply with where things stand, instead of silently losing every
-# convention the earlier turns set.
+# state where things stand and the conventions in force, instead of silently
+# losing every convention the earlier turns set. Those sentences follow the
+# status block, so the reply's first line stays the Goal item; a thread post
+# keeps the format of prompts/thread_reply_format.md.
 CONTEXT_RESET_INSTRUCTION = (
-    "Get oriented from that log before you respond: open your reply with two or "
-    "three sentences on where things stand and the conventions in force, then "
-    "respond to what follows.")
+    "Get oriented from that log before you respond. Then write two or three "
+    "sentences on where things stand and the conventions in force. When your "
+    "rules open the reply with a status block, put these sentences after the "
+    "block. Then respond to what follows. A Slack or Discord thread post "
+    "carries only the answer that `prompts/thread_reply_format.md` defines.")
 
 
 def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> str:
@@ -47,9 +51,9 @@ def context_reset_note(reason: str, task_goal: str | None = None) -> str:
 
   The one assembly site for task-tree turn-start notes: the reason names why the previous
   conversation was left, the history note says where that history stays
-  readable, and the instruction tells the new model to read the log and open
-  with where things stand before responding. The task goal names what the
-  fresh context is working on.
+  readable, and the instruction tells the new model to read the log and state
+  where things stand after the status block before responding. The task goal
+  names what the fresh context is working on.
   """
   task_part = "" if task_goal is None else f" The task is: {task_goal}."
   return (f"[Context reset: {reason}.{task_part} {HISTORY_LOCATION_NOTE} "

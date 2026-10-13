@@ -273,7 +273,7 @@ class ClaudeCodeBackend(base.AgentBackend):
     if self._extra_flags:
       self._cmd += self._extra_flags
 
-  # Claude Code auto-detects CLAUDE.md in the run cwd.
+  # A manager turn's session cwd holds this CLAUDE.md, which Claude Code auto-detects.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
@@ -283,7 +283,10 @@ class ClaudeCodeBackend(base.AgentBackend):
     return out
 
   def _build_command(self, prompt: str) -> list[str]:
-    return list(self._cmd)
+    cmd = list(self._cmd)
+    if self._instructions_file is not None:
+      cmd += ["--append-system-prompt-file", str(self._instructions_file)]
+    return cmd
 
   def _stdin_prompt(self, prompt: str) -> str | None:
     return prompt

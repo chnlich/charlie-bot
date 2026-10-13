@@ -154,6 +154,11 @@ def _snapshot_prompt_hash(run: RunRecord) -> str | None:
   return str(json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))["prompt_hash"])
 
 
+# The reset reason when the previous Run recorded no native conversation id, so there is nothing to resume.
+NO_NATIVE_ID_RESET_REASON = (
+    "the previous run recorded no native conversation id, so this run starts a fresh native conversation")
+
+
 def worker_continuation_reset_note(reason: str, previous_log_path: Path) -> str:
   """The bracketed note that opens a continued worker node's fresh native conversation.
 
@@ -531,9 +536,11 @@ class TaskExecutionAdapter:
         worktree — no new worktree is ever prepared for it — and its kind is
         ``review`` when that latest Run is a successful review whose merge
         never started (the task holds no close fact and never sent a blocked
-        report to its parent), ``work`` otherwise. A node whose episode closed
-        (delivered or cancelled) keeps the first-run shape: the next run
-        prepares its own worktree from the base.
+        report to its parent), ``work`` otherwise. A review continuation runs
+        on the paused review's backend and model, so the reviewer that paused
+        still judges the work; a work continuation keeps the node default. A
+        node whose episode closed (delivered or cancelled) keeps the first-run
+        shape: the next run prepares its own worktree from the base.
         """
     session_id = meta.id
     latest = self._tree.runs.newest_run_record_sync(session_id)
@@ -550,6 +557,8 @@ class TaskExecutionAdapter:
         not self._blocked_report_sent(meta)):
       record.kind = "review"
       record.review_of_run_id = latest.review_of_run_id
+      record.backend = latest.backend
+      record.model = latest.model
 
   def _blocked_report_sent(self, meta: SessionMetadata) -> bool:
     """True when this node ever delivered a blocked child report to its parent.
@@ -1362,6 +1371,8 @@ class TaskExecutionAdapter:
       previous = continuation.previous
       if previous.backend and previous.backend != option.id:
         reason = backend_switch_reset_reason(previous.backend, option.id)
+      elif previous.native_session_id is None:
+        reason = NO_NATIVE_ID_RESET_REASON
       else:
         reason = (
             "this task's managed instructions or sources changed since the previous "
@@ -1587,6 +1598,10 @@ class TaskExecutionAdapter:
 
     def _scan() -> str | None:
       for event in runs.parse_raw_lines(raw_path.read_bytes()):
+        # Claude's translate passes its system/init event through unchanged, so
+        # its conversation id arrives as the raw event, not as a session_attached one.
+        if event.get("type") == "system" and event.get("subtype") == "init" and event.get("session_id"):
+          return str(event["session_id"])
         for translated in translate(event):
           if translated.get("type") == ET.SESSION_ATTACHED and translated.get("session_id"):
             return str(translated["session_id"])

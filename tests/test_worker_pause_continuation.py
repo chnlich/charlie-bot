@@ -22,6 +22,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra.models import PendingTrigger
+from src.runtime.task_execution import NO_NATIVE_ID_RESET_REASON
 from src.runtime.triggers import TriggerManager
 from tests import test_task_execution
 
@@ -99,10 +100,18 @@ async def _worker_child(
     *,
     task_type: str = "implement",
     with_repo: bool = True,
+    backend_options: list | None = None,
 ):
   """(cfg, tree, manager, worker, repo): a worker child under a manager root with its
-    takeoff authorization, the silent-broadcast executor and the parent-turn build double."""
-  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+    takeoff authorization, the silent-broadcast executor and the parent-turn build double.
+
+    ``backend_options`` configures several backends; the preference follows their
+    order, so the reviewer is the first option that is not the worker's."""
+  if backend_options is None:
+    cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  else:
+    cfg, session_blocks, tree = test_task_execution.build_spawning_env(
+        tmp_path, monkeypatch, options=backend_options, preference=[option.id for option in backend_options])
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   _patch_parent_turn_build(monkeypatch)
   repo = None
@@ -595,3 +604,192 @@ async def test_delivery_without_pending_wake_behaves_as_today(tmp_path: Path, mo
   assert not Path(record.worktree_path).exists()
   reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
   assert reports and reports[-1]["outcome"] == "completed"
+
+
+def _two_backends() -> list:
+  """A worker backend and a reviewer backend that differ in both id and model."""
+  return [
+      conftest.backend_option(id="worker-a", label="Worker", type="codex", model="worker-model"),
+      conftest.backend_option(id="reviewer-b", label="Reviewer", type="codex", model="reviewer-model"),
+  ]
+
+
+async def _pause_review_with_pending_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, builds_extra: list):
+  """Drive a work run on worker-a and its review on reviewer-b, with a wake pending when the review ends.
+
+    Returns (cfg, tree, worker, work run id, review record, the wake's trigger manager, the launch builds)."""
+  cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch, backend_options=_two_backends())
+  work_started = asyncio.Event()
+  work_gate = asyncio.Event()
+  review_started = asyncio.Event()
+  review_gate = asyncio.Event()
+
+  async def work_wait() -> None:
+    work_started.set()
+    await work_gate.wait()
+
+  async def review_wait() -> None:
+    review_started.set()
+    await review_gate.wait()
+
+  builds = install_backends(
+      monkeypatch, [
+          NativeIdBackend([test_task_execution.result_event("did the work")], native_id="native-1", gate=work_wait),
+          NativeIdBackend(
+              [test_task_execution.result_event("review approved")], native_id="native-review-1", gate=review_wait),
+          *builds_extra,
+      ])
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run1_id = decision["run_id"]
+  await asyncio.wait_for(work_started.wait(), timeout=15)
+  record = tree.runs.read_run_sync(worker.id, run1_id)
+  assert record is not None and record.worktree_path
+  work_wt = Path(record.worktree_path)
+  (work_wt / "marker.txt").write_text("marked\n")
+  conftest.run_git(work_wt, "add", "-A")
+  conftest.run_git(work_wt, "commit", "-q", "-m", "the work")
+  work_gate.set()
+  await asyncio.wait_for(review_started.wait(), timeout=15)
+  review1 = await _wait_for_review_of(tree, worker.id, run1_id)
+  mgr = await _save_trigger(cfg, tree, _trigger(worker.id, message="CI passed"))
+  review_gate.set()
+  _r1, outcome_r1 = await test_task_execution.wait_for_terminal_run(tree, worker.id, review1.id)
+  assert outcome_r1 == "success"
+  return cfg, tree, worker, run1_id, review1, mgr, builds
+
+
+@pytest.mark.asyncio
+async def test_review_continuation_runs_on_the_paused_reviews_backend_and_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A review continuation keeps the reviewer's backend and model: the worker's model never judges its own work."""
+  _cfg, tree, worker, run1_id, review1, mgr, builds = await _pause_review_with_pending_wake(
+      tmp_path, monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("ok")])])
+  assert review1.backend == "reviewer-b"
+
+  await _fire(mgr, _trigger(worker.id, message="CI passed"))
+  review2 = await _wait_for_new_run(tree, worker.id, {run1_id, review1.id})
+  assert review2.kind == "review" and review2.review_of_run_id == run1_id
+  assert (review2.backend, review2.model) == ("reviewer-b", "reviewer-model")
+  _r2, outcome_r2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, review2.id)
+  assert outcome_r2 == "success"
+  assert builds[2]["option"].id == "reviewer-b"
+
+
+@pytest.mark.asyncio
+async def test_review_continuation_refuses_a_reviewer_backend_no_longer_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """No fallback: a paused reviewer whose backend left the config fails its continuation, never the worker's backend."""
+  cfg, tree, worker, run1_id, review1, mgr, builds = await _pause_review_with_pending_wake(
+      tmp_path, monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("ok")])])
+
+  cfg.backends.options = [option for option in cfg.backends.options if option.id != "reviewer-b"]
+  await _fire(mgr, _trigger(worker.id, message="CI passed"))
+  review2 = await _wait_for_new_run(tree, worker.id, {run1_id, review1.id})
+  assert review2.backend == "reviewer-b"
+  _r2, outcome_r2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, review2.id)
+  assert outcome_r2 == "failed"
+  assert len(builds) == 2, "the continuation launched a backend although its reviewer was not configured"
+
+
+@pytest.mark.asyncio
+async def test_work_continuation_keeps_the_node_default_backend_and_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch, backend_options=_two_backends())
+  work_started = asyncio.Event()
+  work_gate = asyncio.Event()
+  cont_started = asyncio.Event()
+  cont_gate = asyncio.Event()
+
+  async def work_wait() -> None:
+    work_started.set()
+    await work_gate.wait()
+
+  async def cont_wait() -> None:
+    cont_started.set()
+    await cont_gate.wait()
+
+  builds = install_backends(
+      monkeypatch, [
+          NativeIdBackend([test_task_execution.result_event("did the work")], native_id="native-1", gate=work_wait),
+          test_task_execution.SpawningScriptedBackend(
+              [test_task_execution.result_event("wake handled")], gate=cont_wait),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")]),
+      ])
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run1_id = decision["run_id"]
+  await asyncio.wait_for(work_started.wait(), timeout=15)
+  # Input admitted while the work runs makes its end a pause; the continuation is a work run.
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="keep going", actor="user")
+  work_gate.set()
+  _run1, outcome1 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run1_id)
+  assert outcome1 == "success"
+
+  # Gated, so the continuation is the only new run when the test reads it.
+  await asyncio.wait_for(cont_started.wait(), timeout=15)
+  run2 = await _wait_for_new_run(tree, worker.id, {run1_id})
+  assert run2.kind == "work"
+  assert (run2.backend, run2.model) == ("worker-a", "worker-model")
+  cont_gate.set()
+  _run2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run2.id)
+  assert outcome2 == "success"
+  assert builds[1]["option"].id == "worker-a"
+
+
+@pytest.mark.asyncio
+async def test_native_session_id_reads_the_claude_system_init_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Claude's raw log opens with a system/init event carrying the conversation id; the finalize scan reads it there."""
+  claude_option = conftest.backend_option(id="claude", label="Claude", type="cc-claude", model="claude-model")
+  cfg, session_blocks, tree = test_task_execution.build_spawning_env(
+      tmp_path, monkeypatch, options=[claude_option], preference=["claude"])
+  executor = test_task_execution.build_execution_adapter(cfg, session_blocks, tree)
+  raw_path = tmp_path / "agent.raw.ndjson"
+  init_event = {"type": "system", "subtype": "init", "session_id": "claude-session-1", "model": "claude-model"}
+  raw_path.write_text(json.dumps(init_event) + "\n", encoding="utf-8")
+  assert await executor._native_session_id(raw_path, claude_option) == "claude-session-1"
+
+
+@pytest.mark.asyncio
+async def test_continuation_on_an_unchanged_backend_names_a_missing_native_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
+  work_started = asyncio.Event()
+  work_gate = asyncio.Event()
+  cont_started = asyncio.Event()
+  cont_gate = asyncio.Event()
+
+  async def work_wait() -> None:
+    work_started.set()
+    await work_gate.wait()
+
+  async def cont_wait() -> None:
+    cont_started.set()
+    await cont_gate.wait()
+
+  # The plain double writes no raw log, so its run records no native conversation id.
+  builds = install_backends(
+      monkeypatch, [
+          test_task_execution.SpawningScriptedBackend(
+              [test_task_execution.result_event("did the work")], gate=work_wait),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("carried on")], gate=cont_wait),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")]),
+      ])
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run1_id = decision["run_id"]
+  await asyncio.wait_for(work_started.wait(), timeout=15)
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="keep going", actor="user")
+  work_gate.set()
+  run1, outcome1 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run1_id)
+  assert outcome1 == "success"
+  assert run1.native_session_id is None
+
+  await asyncio.wait_for(cont_started.wait(), timeout=15)
+  run2 = await _wait_for_new_run(tree, worker.id, {run1_id})
+  assert builds[1]["kwargs"].get("resume_session_id") is None
+  assert NO_NATIVE_ID_RESET_REASON in _launch_prompt(tree, worker.id, run2.id)
+  cont_gate.set()
+  _run2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run2.id)
+  assert outcome2 == "success"

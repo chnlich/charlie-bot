@@ -44,6 +44,10 @@ Runtime authorization is derived from the chat event log — see skills/plan-app
 
 Delegate every repository change: feature implementation, bug fixes, refactoring, tests, and tooling setup that creates or modifies tracked files.
 
+When a task explains, measures or reviews another deliverable, list that
+deliverable's URL and head revision under Source Files. Delegate that task
+after the deliverable exists.
+
 **Do NOT delegate** answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
 
 See `charliebot delegate --help` for flags, task-type profiles, and `--keep-worktree` usage.

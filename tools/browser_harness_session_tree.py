@@ -118,8 +118,6 @@ class CDP:
     self._pending: dict[int, asyncio.Future] = {}
     self._events: list[dict] = []
     self.console_errors: list[str] = []
-    self.list_fetch_counts: list[str] = []
-    self.mutations: list[dict] = []
     self._reader = asyncio.create_task(self._read_loop())
 
   @property
@@ -151,21 +149,6 @@ class CDP:
             self.console_errors.append(json.dumps(msg["params"].get("args", []))[:500])
           if method == "Runtime.exceptionThrown":
             self.console_errors.append(str(msg["params"].get("exceptionDetails", {}))[:500])
-          if method == "Network.requestWillBeSent":
-            request = msg["params"]["request"]
-            url = request["url"]
-            if request.get("method") == "GET" and url.endswith("/api/sessions/"):
-              self.list_fetch_counts.append(url)
-            if request.get("method") in ("POST", "PATCH") and "/api/sessions" in url:
-              # Every outgoing mutation with its exact target URL
-              # and body — the ground truth for "which task did
-              # this dialog actually submit against".
-              self.mutations.append(
-                  {
-                      "url": url,
-                      "method": request.get("method"),
-                      "body": (request.get("postData") or "")[:600],
-                  })
     except Exception as exc:  # reader exit is fine at shutdown
       log(f"cdp reader stopped: {exc!r}")
 
@@ -179,17 +162,6 @@ class CDP:
     self._pending[msg_id] = fut
     await self._ws.send(json.dumps(payload))
     return await asyncio.wait_for(fut, timeout=30)
-
-  def drain_list_fetches(self) -> list[str]:
-    seen = self.list_fetch_counts
-    self.list_fetch_counts = []
-    return seen
-
-  def mutations_since(self, mark: int) -> list[dict]:
-    return self.mutations[mark:]
-
-  def mutation_mark(self) -> int:
-    return len(self.mutations)
 
 
 # ---------------------------------------------------------------------------

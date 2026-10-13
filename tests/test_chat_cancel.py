@@ -83,7 +83,7 @@ async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -
 
   meta = await session_blocks.store.get_session(node.id)
   assert meta is not None and meta.profile == "manager"
-  result = await cancel_master_agent(node.id, _meta=meta, session_events=session_blocks.events, task_mgr=tree)
+  result = await cancel_master_agent(node.id, _meta=meta, events=session_blocks.events, task_mgr=tree)
 
   assert result == {"ok": True}
   events = tree.events.load_events(node.id)
@@ -114,7 +114,7 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
     await tree.runs.record_launch(node.id, run.id, pid=live.pid, pid_start="not-this-boot")
     meta = await session_blocks.store.get_session(node.id)
     with pytest.raises(HTTPException) as exc_info:
-      await cancel_master_agent(node.id, _meta=meta, session_events=session_blocks.events, task_mgr=tree)
+      await cancel_master_agent(node.id, _meta=meta, events=session_blocks.events, task_mgr=tree)
     assert exc_info.value.status_code == 409
   finally:
     if live.poll() is None:

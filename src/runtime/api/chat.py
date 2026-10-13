@@ -1,48 +1,33 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
-from pathlib import Path
+import pathlib
 
 import aiofiles
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+import fastapi
+from fastapi import responses
 
+from src.infra import config, log_once, models
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SendMessageRequest, SessionMetadata
-from src.runtime.api.deps import (
-    get_config_on_loop,
-    get_session_events,
-    get_task_manager,
-    require_caller,
-    require_session,
-)
-from src.runtime.api.sessions import _task_http_error
-from src.runtime.message_events import serialize_uploaded_files
-from src.runtime.run_token import CallerIdentity
-from src.runtime.runs import RunIdentityConflictError
-from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
-from src.runtime.session_events import SessionEvents
-from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError
-from src.runtime.task_sessions import TaskTreeManager
+from src.runtime import message_events, run_token, runs, session_dispatch, session_events, task_errors, task_sessions
+from src.runtime.api import deps, sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
 @router.post("/{session_id}/upload")
 async def upload_file(
     session_id: str,
-    file: UploadFile = File(...),
-    _meta: SessionMetadata = Depends(require_session),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    file: fastapi.UploadFile = fastapi.File(...),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """Upload a file to the session's uploads directory. Returns {filename, path, size}."""
   uploads_dir = cfg.sessions_dir / session_id / "uploads"
   uploads_dir.mkdir(parents=True, exist_ok=True)
 
-  dest = uploads_dir / Path(file.filename or "upload").name
+  dest = uploads_dir / pathlib.Path(file.filename or "upload").name
   size = 0
   try:
     async with aiofiles.open(dest, "wb") as out:
@@ -54,7 +39,7 @@ async def upload_file(
         size += len(chunk)
   except Exception as e:
     log.warning("file_upload_failed", session=session_id, filename=file.filename, error=str(e))
-    raise HTTPException(status_code=500, detail="Failed to save uploaded file") from e
+    raise fastapi.HTTPException(status_code=500, detail="Failed to save uploaded file") from e
 
   log.info("file_uploaded", session=session_id, filename=file.filename, size=size)
   return {"filename": file.filename, "path": str(dest.resolve()), "size": size}
@@ -63,15 +48,15 @@ async def upload_file(
 @router.post("/{session_id}/message")
 async def send_message(
     session_id: str,
-    req: SendMessageRequest,
-    _meta: SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
-) -> JSONResponse:
+    req: models.SendMessageRequest,
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
+) -> responses.JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
-  uploaded_files = serialize_uploaded_files(req.uploaded_files)
-  event_type = input_event_type_for_caller(caller)
-  from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
+  uploaded_files = message_events.serialize_uploaded_files(req.uploaded_files)
+  event_type = session_dispatch.input_event_type_for_caller(caller)
+  from_session, from_session_name = session_dispatch.agent_provenance(caller) if event_type != ET.USER else (None, None)
   try:
     admitted = await task_mgr.dispatch.admit_input(
         session_id,
@@ -84,15 +69,15 @@ async def send_message(
         input_mode=req.input_mode,
     )
     decision = await task_mgr.dispatch.dispatch_pending(session_id)
-  except (TaskConflictError, TaskForbiddenError, TaskInvalidError) as e:
-    raise _task_http_error(e) from e
+  except (task_errors.TaskConflictError, task_errors.TaskForbiddenError, task_errors.TaskInvalidError) as e:
+    raise sessions._task_http_error(e) from e
   log.info(
       "send_message",
       session=session_id,
       content_chars=len(req.content),
       uploaded_files_count=len(uploaded_files),
   )
-  return JSONResponse(
+  return responses.JSONResponse(
       status_code=202,
       content={
           "status": "accepted",
@@ -104,7 +89,7 @@ async def send_message(
       })
 
 
-async def _cancel_task_node_runs(session_id: str, task_mgr: TaskTreeManager) -> int:
+async def _cancel_task_node_runs(session_id: str, task_mgr: task_sessions.TaskTreeManager) -> int:
   """Stop every launched, non-terminal Run of one task-tree node.
 
   Each stop rides the run store's own entry point: the durable request lands
@@ -127,20 +112,20 @@ async def _cancel_task_node_runs(session_id: str, task_mgr: TaskTreeManager) -> 
 @router.post("/{session_id}/cancel")
 async def cancel_master_agent(
     session_id: str,
-    session_events: SessionEvents = Depends(get_session_events),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-    _meta: SessionMetadata = Depends(require_session),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
 ) -> dict:
   """Stop every launched, non-terminal Run of the task."""
   try:
     requested = await _cancel_task_node_runs(session_id, task_mgr)
-  except RunIdentityConflictError as e:
-    raise _task_http_error(e) from e
+  except runs.RunIdentityConflictError as e:
+    raise sessions._task_http_error(e) from e
   if requested == 0:
-    await session_events.persist_and_broadcast(
+    await events.persist_and_broadcast(
         session_id, {
             "type": ET.ASSISTANT_ERROR,
             "content": "No active master agent to cancel.",
         })
-    raise HTTPException(status_code=404, detail="No active master agent")
+    raise fastapi.HTTPException(status_code=404, detail="No active master agent")
   return {"ok": True}

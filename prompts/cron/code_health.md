@@ -1,6 +1,6 @@
 This run works in the repo worktree: branch, test, push, `gh pr create`, review the diff on the
-pull request, then squash-merge it once the checks are green. A red check earns a fix on the same
-branch, or the pull request is abandoned. Every change lands through the pull request, which stays
+pull request, then squash-merge it once the checks are green. A red check follows the red-check
+rules of Step 7. Every change lands through the pull request, which stays
 the triage record; `main` takes no direct pushes. Before writing code, read
 `skills/writing-style/genres/code.md` and follow it: comments carry constraints only; provenance
 lives in blame.
@@ -14,9 +14,7 @@ work on its branch, then
    review findings or an explicit skip-note; a review that cannot run is
    reported with its reason, same as for a fresh PR.
 2. Step 7 exactly as written: checks watch, fresh-main diff guard, squash
-   merge; a red check earns the fix-on-branch ladder, and a PR that stays
-   red or fails from outside its diff is abandoned with a
-   `code-health-abandoned:` comment naming the topic.
+   merge, and the red-check rules.
 
 After the adopted PR closes — merged or abandoned — the run ends; it opens
 no new PR. The adopt/skip decision is read entirely from the PR's comment
@@ -185,12 +183,49 @@ An empty diff means the change already lives on `main`: close the pull request w
 `gh pr close <PR> --comment 'code-health-abandoned: duplicate of #<N>'`, naming the landed pull
 request when the `main` history identifies it.
 
-A red check earns one fix on the same branch: read it with `gh run view --log-failed`, fix, push,
-and watch again, at most twice. Abandon the pull request when it stays red after the second fix,
-or when the failure comes from outside this diff:
+A red check follows the rules below.
+
+Main's CI state is the newest CI run on main:
+
+    gh run list --branch main --workflow CI --limit 1 --json databaseId,status,conclusion,headSha
+
+When that main run is still in progress, wait for it with `gh run watch <run-id>`.
+
+When the newest comment of an adopted pull request starts `code-health-waiting:`, read main's CI state first:
+
+- When the main run failed, end this code-health run with no change.
+- When the main run passed, start at step 1 of the outside-diff steps below.
+
+For any other red check, read the failure with `gh run view --log-failed`.
+
+A failure inside this diff earns at most two fixes on the same branch.
+Each fix takes these steps:
+
+1. Pull the branch with `git pull --ff-only`.
+2. Fix the failure.
+3. Push the fix.
+4. Watch the checks again.
+
+When the check stays red after the second fix, abandon the pull request:
 
     gh pr close <PR> --comment 'code-health-abandoned: <topic and reason>'
 
-Name the topic in that comment, because Step 1 reads it to skip the topic on the next run. A run
-that cannot finish the wait leaves the pull request open and reports that; Step 0's adoption
-picks the PR up on the next run.
+Name the topic in that comment, because Step 1 reads it to skip the topic on the next run.
+
+A failure outside this diff takes these steps:
+
+1. Update the branch from main with `gh pr update-branch <PR>`. Watch the new checks.
+2. When `gh pr update-branch` reports no change, rerun the failed jobs with
+   `gh run rerun <run-id> --failed`. Watch the checks again.
+3. When the checks pass, go to the merge above.
+4. When the check is red again, read main's CI state.
+5. When the main run failed, leave the pull request open with this comment:
+
+       gh pr comment <PR> --body 'code-health-waiting: main fails <check> at <sha>, run <run-id>'
+
+   This code-health run ends there.
+6. When the main run passed, the failure comes from this diff.
+   Apply the fix steps for a failure inside this diff.
+
+A code-health run that cannot finish the wait leaves the pull request open and reports that.
+Step 0 adopts the pull request on the next run.

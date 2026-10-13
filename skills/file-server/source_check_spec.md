@@ -29,7 +29,7 @@ difference that the page computes.
 
 ## Reviewer Checklist
 
-- (none — verify runs without a reviewer)
+- The verify report is the final output of this task.
 
 ## Out of Scope
 

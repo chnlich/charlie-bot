@@ -53,6 +53,9 @@ if TYPE_CHECKING:
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
 CURSOR_NAME = "agent.raw.cursor"
+# The managed instructions a worker or review run hands its backend. It sits in the run directory,
+# never in the worktree the run works in.
+HARNESS_INSTRUCTIONS_NAME = "harness_instructions.md"
 
 # The transport directory every per-run file sits in (a thread's data dir, a
 # master run's <session>/data/master_runs/<started_at> dir) and the

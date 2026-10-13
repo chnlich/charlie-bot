@@ -14,7 +14,13 @@ log = log_once.LazyStructlogLogger()
 # owns the review rules; prompts/ owns the generic templates. review_rules_text
 # renders them as the review Run's managed instruction block;
 # review_numbered_steps interpolates the same checks into the numbered steps.
-_REVIEW_ROLE_TEXT = "## Code Review\nYou are reviewing another worker's code changes."
+_REVIEW_ROLE_TEXT = (
+    "## Code Review\n"
+    "You are reviewing another worker's code changes.\n"
+    "- The repository guide is the repository's `CLAUDE.md` or `AGENTS.md` file and its `.claude/rules/` files.\n"
+    "- The repository guide sets the rules for the repository's code, environment and tests.\n"
+    "- These instructions set the rules for the task lifecycle, git operations and delegation.\n"
+    "- When the repository guide conflicts with these instructions, follow these instructions.")
 
 _REVIEW_CHECKLIST_INTRO = (
     "IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "

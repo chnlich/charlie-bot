@@ -659,7 +659,7 @@ class AgentBackend(ABC):
 
   Template-method pattern: subclasses override ``_build_command()`` (required),
   and optionally declare ``_INSTRUCTIONS_TARGET`` (what ``_prepare_cwd()`` writes
-  into the run cwd), ``_prepare_transport()``, ``_prepare_env()``, and
+  into a manager turn's session cwd), ``_prepare_transport()``, ``_prepare_env()``, and
   ``translate_event()``.
 
   Event schema contract:
@@ -680,6 +680,7 @@ class AgentBackend(ABC):
       buffer_limit: int | None = None,
       on_spawn: Callable[[int], Awaitable[None]] | None = None,
       instructions_content: str | None = None,
+      instructions_file: Path | None = None,
       resume_session_id: str | None = None,
       log_dir: Path | None = None,
       cgroup_session_id: str | None = None,
@@ -690,6 +691,9 @@ class AgentBackend(ABC):
     self._buffer_limit = buffer_limit or DEFAULT_BUFFER_LIMIT
     self._on_spawn = on_spawn
     self._instructions_content = instructions_content
+    # Where a worker or review run keeps its instructions, outside the worktree it works in. None
+    # for a manager turn, whose instructions ride its session cwd (see _prepare_cwd).
+    self._instructions_file = instructions_file
     self._resume_session_id = resume_session_id
     self._log_dir = log_dir
     # The CharlieBot session this backend's processes belong to. Every spawn
@@ -729,18 +733,22 @@ class AgentBackend(ABC):
     """
     ...
 
-  # (filename, log_event) of the instructions file _prepare_cwd writes into the
-  # run cwd; None keeps the hook a no-op for backends with no file channel.
+  # (filename, log_event) of the instructions file a manager turn writes into its session cwd;
+  # None keeps the hook a no-op for backends with no file channel.
   _INSTRUCTIONS_TARGET: tuple[str, str] | None = None
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Hook to prepare the working directory before subprocess spawn.
 
-    The base implementation writes the file named by ``_INSTRUCTIONS_TARGET``
-    into the cwd (a no-op when no target is declared).
+    A run with an ``instructions_file`` (a worker or review run) writes its instructions
+    there and leaves ``cwd`` alone, because ``cwd`` is a repository worktree. Without one
+    (a manager turn), the base writes the file named by ``_INSTRUCTIONS_TARGET`` into ``cwd``.
     """
-    if self._INSTRUCTIONS_TARGET is not None:
-      self._write_instructions_file(cwd, *self._INSTRUCTIONS_TARGET)
+    if self._instructions_file is not None:
+      self._write_instructions_file(self._instructions_file, "run_instructions_written")
+    elif self._INSTRUCTIONS_TARGET is not None:
+      filename, log_event = self._INSTRUCTIONS_TARGET
+      self._write_instructions_file(Path(cwd) / filename, log_event)
 
   def _prepare_transport(self, log_dir: Path) -> None:
     """Hook to prepare the transport directory before ``_build_command()`` runs.
@@ -752,14 +760,13 @@ class AgentBackend(ABC):
     No-op default.
     """
 
-  def _write_instructions_file(self, cwd: str, filename: str, log_event: str) -> None:
-    """Write _instructions_content into <cwd>/<filename> as UTF-8, or no-op when none is set.
+  def _write_instructions_file(self, path: Path, log_event: str) -> None:
+    """Write _instructions_content to *path* as UTF-8, or no-op when none is set.
 
     log_event stays caller-chosen so each backend keeps its own structured-log event name.
     """
     if not self._instructions_content:
       return
-    path = Path(cwd) / filename
     path.write_text(self._instructions_content, encoding="utf-8")
     log.debug(log_event, path=str(path))
 

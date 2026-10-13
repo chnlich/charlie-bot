@@ -254,15 +254,22 @@ A raw log that stops growing while the process is still alive is what the server
   (`[tool.pylint]` in `pyproject.toml`).
 
 ### 10.2 Worker Instructions
-Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt
-itself: `prompts/worker.md` sections assembled by `_build_worker_prompt` (`src/runtime/spawner_prompt.py`) for
-workers, `review_rules_text` (`src/runtime/review.py`) for reviewers, rendered into the managed instructions by
-`_worker_kind_rule_segments` (`src/runtime/task_prompts.py`) beside the volatile review context that
-`_build_review_context` (`src/runtime/task_execution.py`) assembles. No instruction file is written into a
-worker's worktree, so the checked-out repo's own AGENTS.md/CLAUDE.md stays in effect. Master sessions are the
-only path that writes one: `_build_instructions_content` (`src/runtime/master_cc_run.py`) assembles the
-git-shared base prompt, the per-host override, the memory block, and the project layer, and the backend writes
-it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backends).
+Each worker and reviewer launch writes its managed instructions to `harness_instructions.md` in its Run directory
+(`HARNESS_INSTRUCTIONS_NAME`, `src/runtime/runs.py`). The text is the run's `PromptSnapshot.instructions_text`
+(`src/runtime/task_prompts.py`): the worker role rules from `prompts/worker.md`, `review_rules_text`
+(`src/runtime/review.py`) for reviewers, and the memory block. The worktree is never written, so the checked-out
+repo's own guide files stay in effect for the agent. Each backend passes the instructions on every launch,
+including a resumed run and a pool relay:
+
+- Claude Code: `--append-system-prompt-file <run dir>/harness_instructions.md`.
+- charlie-code: `--instructions-file <run dir>/harness_instructions.md`.
+- Codex: `-c developer_instructions=<file text as a TOML string>` and `-c project_doc_fallback_filenames=["CLAUDE.md"]`.
+- OpenCode: the base class frames the text into the prompt.
+
+A run on a repository starts in its worktree root, so its CLI can read that repository's guide and skills from there;
+a run without a repository starts in its Run directory. A manager turn is the one path that writes an instructions
+file into a working directory: the backend writes it into the session cwd (CLAUDE.md for Claude Code, AGENTS.md
+for the other backends) and passes no flag.
 
 ---
 

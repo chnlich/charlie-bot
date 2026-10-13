@@ -20,6 +20,14 @@ _MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
 FILE_WRITE = "file_write"
 
 
+def _toml_basic_string(text: str) -> str:
+  """The text as a TOML basic string, the value form that `codex -c key=value` parses.
+
+  JSON's string escapes are TOML's too, but JSON leaves DEL (U+007F) raw and TOML requires it escaped.
+  """
+  return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 class CodexBackend(base.AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
@@ -43,8 +51,23 @@ class CodexBackend(base.AgentBackend):
     # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
     self._last_todo_text: dict[str, str] = {}
 
-  # Codex auto-detects AGENTS.md in the run cwd.
+  # A manager turn's session cwd holds this AGENTS.md, which Codex auto-detects.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "codex_wrote_agents_md")
+
+  def _instructions_config_args(self) -> list[str]:
+    """The `--config` overrides carrying a worker or review run's instructions; none on a manager turn.
+
+    developer_instructions takes the instructions text. project_doc_fallback_filenames lets
+    Codex read the repository's CLAUDE.md when its worktree has no AGENTS.md.
+    """
+    if self._instructions_file is None:
+      return []
+    return [
+        "--config",
+        f"developer_instructions={_toml_basic_string(self._instructions_content)}",
+        "--config",
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
+    ]
 
   def _model_config_args(self) -> list[str]:
     args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']
@@ -70,6 +93,7 @@ class CodexBackend(base.AgentBackend):
 
   def _build_command(self, prompt: str) -> list[str]:
     cmd = self._exec_command_head()
+    cmd.extend(self._instructions_config_args())
     if self._resume_session_id:
       # codex exec's resume form splices the subcommand after "exec" and the
       # session id after the exec flags: `codex exec resume <flags> <session-id>`.

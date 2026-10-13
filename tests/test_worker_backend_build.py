@@ -19,7 +19,8 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import worker
+from src.runtime import runs, worker
+from src.runtime.hooks import backend_lifecycle
 
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
 # other four never do and therefore never raise FileNotFoundError on build.
@@ -45,7 +46,7 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
 _CREDENTIAL_SECTIONS = {"test-kimi": {"api_key": "test-key"}, "charliebot": {"access_key": "test-key"}}
 
 
-def _worker(tmp_path: pathlib.Path, backend_type: str) -> worker.Worker:
+def _worker(tmp_path: pathlib.Path, backend_type: str, instructions_content: str | None = None) -> worker.Worker:
   conftest.stub_credentials(_CREDENTIAL_SECTIONS)
   option_kwargs: dict[str, Any] = {"id": "opt", "label": "Opt", "type": backend_type, "model": "test-model"}
   if backend_type in ("cc-openai-compatible", "charlie-code"):
@@ -63,6 +64,7 @@ def _worker(tmp_path: pathlib.Path, backend_type: str) -> worker.Worker:
       task_description="test",
       cfg=cfg,
       backend_option=conftest.backend_option(**option_kwargs),
+      instructions_content=instructions_content,
   )
 
 
@@ -77,3 +79,14 @@ def test_launcher_build_still_fails_without_binaries(
   _hide_all_binaries(monkeypatch)
   with pytest.raises(FileNotFoundError):
     _worker(tmp_path, backend_type)._build_backend(_on_spawn)
+
+
+def test_claude_resume_launch_still_passes_the_run_instructions_file(tmp_path: pathlib.Path) -> None:
+  """A Claude worker launch that resumes a held conversation keeps --append-system-prompt-file."""
+  launch = backend_lifecycle.Launch(backend_kwargs={}, resume_id="held-conversation")
+  backend = _worker(tmp_path, "cc-claude", instructions_content="rules")._build_backend(_on_spawn, launch)
+
+  cmd = backend._build_command("prompt")
+
+  assert cmd[cmd.index("--resume") + 1] == "held-conversation"
+  assert cmd[cmd.index("--append-system-prompt-file") + 1] == str(tmp_path / "data" / runs.HARNESS_INSTRUCTIONS_NAME)

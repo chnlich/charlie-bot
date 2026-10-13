@@ -979,6 +979,8 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   assert outcome == "success"
   assert work_run.worktree_path
   work_wt = Path(work_run.worktree_path)
+  # A repository work Run starts in its worktree root, where the CLI finds the repo guide.
+  assert work_backend.cwd == work_run.worktree_path
   # The work branch started at the new origin tip, never at the stale local main.
   assert run_git(work_wt, "rev-parse", "HEAD") == origin_tip
   assert run_git(repo, "rev-parse", "main") == local_main

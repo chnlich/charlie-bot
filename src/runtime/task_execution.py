@@ -1392,7 +1392,13 @@ class TaskExecutionAdapter:
     exit_code = -1
     worker: Worker | None = None
     try:
-      working_dir = Path(review_worktree) if review_worktree else run_dir
+      # A repository run starts in its worktree root: a review in its work Run's worktree, a work
+      # Run in the worktree its context build recorded on the Run (read again here). A repo-less
+      # run starts in its Run directory.
+      bound = await self._tree.runs.get_run(session_id, run_id)
+      assert bound is not None, f"run {run_id} lost its record while its launch context was built"
+      worktree = review_worktree or bound.worktree_path
+      working_dir = Path(worktree) if worktree else run_dir
       # The Worker places the launch through the backend's lifecycle and relays the run when
       # the lifecycle asks for it (src/runtime/launch_loop.py). A refused launch — before the
       # first process or at a relay — ends the run through the LaunchRefused branch below.

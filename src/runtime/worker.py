@@ -114,6 +114,9 @@ class Worker:
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
     self._instructions_content = instructions_content
+    # The run's instructions file sits beside its events log, in the Run directory: the
+    # worktree the run works in never receives it.
+    self._instructions_file = events_log_path.parent / runs.HARNESS_INSTRUCTIONS_NAME
     self._session_meta = session_meta
     # The conversation this task run resumes (a worker-node continuation);
     # None starts a fresh one, as every task run did before continuations.
@@ -155,6 +158,7 @@ class Worker:
           "buffer_limit": self._cfg.subprocess_buffer_limit,
           "on_spawn": on_spawn,
           "instructions_content": self._instructions_content,
+          "instructions_file": self._instructions_file,
           "log_dir": self._events_log.parent,
           "cgroup_session_id": self._thread.session_id,
           **launch_kwargs,
@@ -189,6 +193,7 @@ class Worker:
         buffer_limit=self._cfg.subprocess_buffer_limit,
         on_spawn=on_spawn,
         instructions_content=self._instructions_content,
+        instructions_file=self._instructions_file,
         log_dir=self._events_log.parent,
         cgroup_session_id=self._thread.session_id,
     )

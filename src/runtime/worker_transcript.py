@@ -19,23 +19,21 @@ space per node.
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import hashlib
 import json
-from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
+import pathlib
 
 from src.infra import event_types as ET
-from src.infra.memo import BoundedMemo, stat_signature
-from src.infra.models import RunRecord, utc_now_iso
-from src.runtime.message_projection import MessageProjection
+from src.infra import memo, models
+from src.runtime import message_projection, task_prompts
 from src.runtime.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME, parse_raw_lines, read_host_boot_time
-from src.runtime.task_prompts import LAUNCH_TEXT_FILENAME
 
 # One entry per open worker page, bounded like the other read-path memos.
 _WORKER_PROJECTION_MEMO_LIMIT = 32
 
-_worker_memo: BoundedMemo[str, TranscriptEntry] = BoundedMemo(_WORKER_PROJECTION_MEMO_LIMIT)
+_worker_memo: memo.BoundedMemo[str, TranscriptEntry] = memo.BoundedMemo(_WORKER_PROJECTION_MEMO_LIMIT)
 
 # Run events whose only role is process bookkeeping, never a chat row: the
 # native-session adoption signal opens a run interval for the stable-prefix
@@ -52,16 +50,16 @@ _SIGNALLABLE_STATES = frozenset({"running", "queued"})
 _FAILED_STATES = frozenset({"failed", "interrupted", "attention"})
 
 
-@dataclass
+@dataclasses.dataclass
 class TranscriptEntry:
   """One memoized transcript projection plus the facts its readers need."""
 
   revision: str
   events: list[dict]
-  projection: MessageProjection
+  projection: message_projection.MessageProjection
   active_run_id: str | None = None
   task_state: str = "open"
-  states: dict[str, str] = field(default_factory=dict)
+  states: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def _backend_label(cfg, backend: str | None) -> str:
@@ -80,8 +78,8 @@ def _run_header_event(
     backend_label: str,
     state: str,
     error: str,
-    started_at: datetime | None,
-    terminal_at: datetime | None,
+    started_at: datetime.datetime | None,
+    terminal_at: datetime.datetime | None,
     task_spec_ref: str,
     launch_prompt_ref: str,
     withheld: str | None = None,
@@ -146,7 +144,7 @@ def _header_error(state: str, events: list[dict]) -> tuple[str, int | None]:
   return "", None
 
 
-def _delivery_event(task_state: str, facts_events: list[dict], runs: list[RunRecord]) -> dict | None:
+def _delivery_event(task_state: str, facts_events: list[dict], runs: list[models.RunRecord]) -> dict | None:
   """The closing delivery summary once the task stands resolved (not open).
 
   The summary and result refs ride the node's task_closed fact; the four
@@ -178,7 +176,7 @@ def _delivery_event(task_state: str, facts_events: list[dict], runs: list[RunRec
       "base_branch": delivered.base_branch or "",
       "branch_name": delivered.branch_name or "",
       "run_id": delivered.id,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
   }
 
 
@@ -191,7 +189,7 @@ def _revision(signature: tuple, states: dict[str, str], task_state: str) -> str:
   return hashlib.sha256(payload.encode()).hexdigest()[:24]
 
 
-def _read_events(path: Path) -> list[dict]:
+def _read_events(path: pathlib.Path) -> list[dict]:
   """One events.jsonl parsed; a missing or unreadable log is an empty segment."""
   try:
     raw = path.read_bytes()
@@ -215,8 +213,9 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
     for entry in sorted(root.iterdir(), key=lambda e: e.name):
       if not entry.is_dir():
         continue
-      parts.append((entry.name, stat_signature(entry / RUN_METADATA_NAME), stat_signature(entry / RUN_EVENTS_NAME)))
-  parts.append(("chat", stat_signature(tree.session_events.get_chat_events_path(session_id))))
+      parts.append(
+          (entry.name, memo.stat_signature(entry / RUN_METADATA_NAME), memo.stat_signature(entry / RUN_EVENTS_NAME)))
+  parts.append(("chat", memo.stat_signature(tree.session_events.get_chat_events_path(session_id))))
   return tuple(parts)
 
 
@@ -242,7 +241,7 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
       # it twice. The drop lives in this projection only — events.jsonl keeps
       # every line.
       run_events = run_events[:error_index] + run_events[error_index + 1:]
-    launch_prompt_path = run_dir / LAUNCH_TEXT_FILENAME
+    launch_prompt_path = run_dir / task_prompts.LAUNCH_TEXT_FILENAME
     transcript.append(
         _run_header_event(
             run_id=run.id,
@@ -269,7 +268,7 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   return TranscriptEntry(
       revision=_revision(signature, states, task_state),
       events=transcript,
-      projection=MessageProjection(list(transcript)),
+      projection=message_projection.MessageProjection(list(transcript)),
       active_run_id=active_run_id,
       task_state=task_state,
       states=states)

@@ -80,6 +80,7 @@ whether the entry belongs in the store at all, and such a candidate is rejected:
   presented text (the new body, or the whole entry after a merge) to the Entry form brevity
   bar before presenting, and the answer names what the trim removed, or states the body's
   line count when the draft already sat at the bar.
+  When the trim removes a line that another home owns, the Brevity line names that home.
 
 A candidate's text is a claim: verify its figures against the live system before presenting them.
 A revise re-verifies the surviving claims of the entry it edits.

@@ -89,7 +89,6 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
 - `charliebot schedule-trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
 - `charliebot session` — create a session; `send` relays a message to another session as an agent_message
-- `charliebot session-tree` — migrate a home's legacy sessions to the task tree (dry-run/apply/rollback) and run an isolated trial preview
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot storage` — `cool` deletes the bytes no reader can reach again: cold sessions' transport files and cold-or-orphaned backend records
 - `charliebot voice-replay-eval` — replay recorded dictations through the transcription backends and score latency and accuracy

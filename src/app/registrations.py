@@ -30,7 +30,6 @@ PACKAGES = (
     "src.features.latex",
     "src.features.memory",
     "src.features.ncu",
-    "src.features.session_tree_preview",
     "src.features.terminal",
     "src.features.trace",
     "src.features.usage",

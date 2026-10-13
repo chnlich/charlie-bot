@@ -58,6 +58,8 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
@@ -66,7 +68,6 @@ from tools.browser_harness_session_tree import (  # noqa: E402
     pick_free_port,
     write_credentials_yaml,
 )
-from tools.live_preview_task_tree import request  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
 RUN_TIMEOUT_SECONDS = 420.0
@@ -92,6 +93,23 @@ def log(message: str) -> None:
 
 def fail(message: str) -> NoReturn:
   raise SystemExit(f"LIVE SMOKE FAILED: {redact(message)}")
+
+
+def request(base: str, key: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+  headers = {"Authorization": "Bearer " + key}
+  data = None
+  if payload is not None:
+    headers["Content-Type"] = "application/json"
+    data = json.dumps(payload).encode()
+  req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+  try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+      return resp.status, json.loads(resp.read().decode() or "{}")
+  except urllib.error.HTTPError as e:
+    try:
+      return e.code, json.loads(e.read().decode() or "{}")
+    except ValueError:
+      return e.code, {}
 
 
 def load_production_backend_entry(backend_id: str) -> dict:

@@ -707,6 +707,191 @@ async def test_repo_review_context_refuses_a_task_with_an_empty_goal(
     await tree.dispatch.executor._build_review_context(worker.id, work_run)
 
 
+async def _claimed_work_run_after(
+    tree: TaskTreeManager, session_id: str, earlier_run_ids: set[str], timeout: float) -> RunRecord:
+  """The node's next work run, once its reservation holds a claimed batch.
+
+    The dispatcher binds a run's input batch at reservation, before the run's
+    process starts, so a message admitted after this returns never joins the
+    batch this run already claimed.
+    """
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline:
+    for run in tree.runs.list_run_records_sync(session_id):
+      if run.kind == "work" and run.id not in earlier_run_ids and run.input_event_ids:
+        return run
+    await asyncio.sleep(0.05)
+  pytest.fail(f"node {session_id} never reserved a work run claiming a batch within {timeout}s")
+
+
+@pytest.mark.asyncio
+async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  from src.runtime import review as review_module
+  from src.runtime.api import internal as internal_api
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root", name="Root manager")
+  repo, _origin = init_repo_with_origin(tmp_path / "review-later-message")
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
+  install_scripted_backends(
+      monkeypatch, [
+          SpawningScriptedBackend([assistant_text_event("started")], exit_code=1),
+          SpawningScriptedBackend([result_event("adjusted")]),
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  with make_api_client(cfg, session_blocks, tree) as client:
+    response = client.post(
+        "/api/internal/delegate",
+        json={
+            "session_id": manager.id,
+            "description": "## Goal\n\nrename the config key\n",
+            "task_type": "quick-edit",
+            "keep_worktree": False,
+            "repo_path": str(repo),
+            "base_branch": "main",
+        },
+        headers=OP_HEADERS)
+    assert response.status_code == 200, response.text
+    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
+    first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
+    assert first_outcome == "failed" and first_run.input_event_ids == []
+    # A failed run keeps the task open; the manager's rule change rides the
+    # agent-relay route, which dispatches the node's second work run — the run
+    # claims exactly that message.
+    relay = client.post(
+        "/api/internal/session-message",
+        json={
+            "session_id": manager.id,
+            "target_session_id": child_id,
+            "content": "## Rule change: keep the legacy key working",
+        },
+        headers=OP_HEADERS)
+    assert relay.status_code == 200, relay.text
+    second_run = await _claimed_work_run_after(tree, child_id, {run_id}, timeout=15.0)
+    agent_messages = [e for e in tree.events.load_events(child_id) if e["type"] == ET.AGENT_MESSAGE]
+    assert [str(e["id"]) for e in agent_messages] == second_run.input_event_ids
+    second_run, second_outcome = await wait_for_terminal_run(tree, child_id, second_run.id)
+    assert second_outcome == "success"
+    review_context = await tree.dispatch.executor._build_review_context(child_id, second_run)
+    repo_less_context = await tree.dispatch.executor._build_repo_less_review_context(child_id, second_run)
+
+  meta = await tree.load_meta(child_id)
+  assert meta is not None and meta.task is not None
+  spec_text = review_module.review_spec_text(meta.task)
+  section = "**Later Messages:**\n[Message from session Root manager] ## Rule change: keep the legacy key working"
+  # The repo review context shows the message after the task spec, before the worker summary.
+  assert f"**Task spec:**\n{spec_text}\n{section}\n**Worker summary:**" in review_context
+  # The repo-less review context shows the same section text.
+  assert f"### Task spec (acceptance tests included)\n{spec_text}\n\n{section}\n\n### Work report" in repo_less_context
+
+
+@pytest.mark.asyncio
+async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  from src.runtime import review as review_module
+  from src.runtime.api import internal as internal_api
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  repo, _origin = init_repo_with_origin(tmp_path / "review-no-later-message")
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
+  install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  with make_api_client(cfg, session_blocks, tree) as client:
+    response = client.post(
+        "/api/internal/delegate",
+        json={
+            "session_id": manager.id,
+            "description": "## Goal\n\nrename the config key\n",
+            "task_type": "quick-edit",
+            "keep_worktree": False,
+            "repo_path": str(repo),
+            "base_branch": "main",
+        },
+        headers=OP_HEADERS)
+    assert response.status_code == 200, response.text
+    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
+    work_run, outcome = await wait_for_terminal_run(tree, child_id, run_id)
+    assert outcome == "success"
+    review_context = await tree.dispatch.executor._build_review_context(child_id, work_run)
+
+  meta = await tree.load_meta(child_id)
+  assert meta is not None and meta.task is not None
+  spec_text = review_module.review_spec_text(meta.task)
+  assert "Later Messages" not in review_context
+  # The task spec is followed directly by the worker summary.
+  assert f"**Task spec:**\n{spec_text}\n**Worker summary:**" in review_context
+
+
+@pytest.mark.asyncio
+async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  from src.runtime.api import internal as internal_api
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root", name="Root manager")
+  repo, _origin = init_repo_with_origin(tmp_path / "review-claim-order")
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
+  install_scripted_backends(
+      monkeypatch, [
+          SpawningScriptedBackend([assistant_text_event("started")], exit_code=1),
+          SpawningScriptedBackend([assistant_text_event("retrying")], exit_code=1),
+          SpawningScriptedBackend([result_event("done")]),
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  with make_api_client(cfg, session_blocks, tree) as client:
+    response = client.post(
+        "/api/internal/delegate",
+        json={
+            "session_id": manager.id,
+            "description": "## Goal\n\nrename the config key\n",
+            "task_type": "quick-edit",
+            "keep_worktree": False,
+            "repo_path": str(repo),
+            "base_branch": "main",
+        },
+        headers=OP_HEADERS)
+    assert response.status_code == 200, response.text
+    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
+    # Each failed run keeps the task open, so each relayed message dispatches
+    # its own follow-up work run: two runs, one claimed message apiece.
+    first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
+    assert first_outcome == "failed" and first_run.input_event_ids == []
+    first_relay = client.post(
+        "/api/internal/session-message",
+        json={
+            "session_id": manager.id,
+            "target_session_id": child_id,
+            "content": "First later message.",
+        },
+        headers=OP_HEADERS)
+    assert first_relay.status_code == 200, first_relay.text
+    second_run = await _claimed_work_run_after(tree, child_id, {run_id}, timeout=15.0)
+    agent_messages = [e for e in tree.events.load_events(child_id) if e["type"] == ET.AGENT_MESSAGE]
+    assert len(agent_messages) == 1 and second_run.input_event_ids == [str(agent_messages[0]["id"])]
+    second_run, second_outcome = await wait_for_terminal_run(tree, child_id, second_run.id)
+    assert second_outcome == "failed"
+    second_relay = client.post(
+        "/api/internal/session-message",
+        json={
+            "session_id": manager.id,
+            "target_session_id": child_id,
+            "content": "Second later message.",
+        },
+        headers=OP_HEADERS)
+    assert second_relay.status_code == 200, second_relay.text
+    third_run = await _claimed_work_run_after(tree, child_id, {run_id, second_run.id}, timeout=15.0)
+    agent_messages = [e for e in tree.events.load_events(child_id) if e["type"] == ET.AGENT_MESSAGE]
+    assert len(agent_messages) == 2 and third_run.input_event_ids == [str(agent_messages[1]["id"])]
+    third_run, third_outcome = await wait_for_terminal_run(tree, child_id, third_run.id)
+    assert third_outcome == "success"
+    review_context = await tree.dispatch.executor._build_review_context(child_id, third_run)
+
+  section_pos = review_context.index("**Later Messages:**")
+  first_pos = review_context.index("[Message from session Root manager] First later message.")
+  second_pos = review_context.index("[Message from session Root manager] Second later message.")
+  assert section_pos < first_pos < second_pos
+
+
 # ---------------------------------------------------------------------------
 # Retry: queued runs, stops, and the explicit-retry gate
 # ---------------------------------------------------------------------------

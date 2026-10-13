@@ -1704,14 +1704,47 @@ class TaskExecutionAdapter:
     parts.append(task_prompts.render_task_body(self._cfg, step_prompt))
     return "\n\n".join(part for part in parts if part)
 
+  async def _later_messages_section(self, meta: SessionMetadata, work_run: RunRecord) -> str:
+    """The review's Later Messages section: every input the node's work runs claimed, first run
+    through *work_run*, rendered in claim order — or "" when they claimed none.
+
+        A message a work run claimed reached the worker as its prompt, so the
+        review judges the work against the same input the worker received: the
+        task spec, then each claimed message (agent messages and
+        scheduled-trigger wakes alike). ``compose_input_prompt`` renders them,
+        the function the work Run's own prompt used; the section keeps the
+        runs' order and each run's own list order. No claimed input, no
+        section: the task spec then sits directly before the worker summary.
+        """
+    claimed_ids: list[str] = []
+    for run in self._tree.runs.list_run_records_sync(meta.id):
+      if run.kind != "work":
+        continue
+      claimed_ids.extend(run.input_event_ids)
+      if run.id == work_run.id:
+        break
+    else:
+      raise TaskInvalidError(f"review of run {work_run.id}: it is not a work run of node {meta.id}")
+    if not claimed_ids:
+      return ""
+    events_by_id = {str(event.get("id")): event for event in self._tree.fact_history(meta.id)}
+    events = [events_by_id[event_id] for event_id in claimed_ids]
+    provenance = await self._tree.dispatch.child_report_provenances(events)
+    content, _uploads = compose_input_prompt(meta, events, provenance)
+    if not content.strip():
+      return ""
+    return f"**Later Messages:**\n{content}"
+
   async def _build_review_context(self, session_id: str, work_run: RunRecord) -> str:
     """The review Run's task/input context: the work being judged and its git steps.
 
         The reviewer's stable contract rides the managed instructions
         (review_rules_text); this context names the exact work Run, its logs,
         and the volatile git steps — it never turns the reviewer into an
-        implementer beyond the checklist's minimal-fix rule. A repo-less work
-        Run reviews paths instead of a diff.
+        implementer beyond the checklist's minimal-fix rule. The task spec is
+        followed by the Later Messages section when the node's work runs
+        claimed input after it. A repo-less work Run reviews paths instead of
+        a diff.
         """
     if not work_run.repo_path:
       return await self._build_repo_less_review_context(session_id, work_run)
@@ -1724,7 +1757,8 @@ class TaskExecutionAdapter:
     worker_summary = await review.extract_review_context(
         session_id, work_run.id, worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
     context_lines = review.review_context_lines(
-        review.review_spec_text(meta.task), worker_summary, f"(work run {work_run.id})")
+        review.review_spec_text(meta.task), await self._later_messages_section(meta, work_run), worker_summary,
+        f"(work run {work_run.id})")
     return task_prompts.review_task_context(
         branch_name=work_run.branch_name,
         wt_path=work_run.worktree_path,
@@ -1738,10 +1772,12 @@ class TaskExecutionAdapter:
     """The repo-less review's task/input context: spec and reported paths, no git.
 
         Without a repository there is no diff to read and nothing to merge:
-        the review context is the task spec (its acceptance tests included)
-        plus the work report's path list, and the reviewer checks the current
-        state of those paths against the acceptance tests. The spec comes from
-        the task record, the same record the work Run's prompt reads.
+        the review context is the task spec (its acceptance tests included),
+        the Later Messages section when the node's work runs claimed input
+        after it, plus the work report's path list, and the reviewer checks
+        the current state of those paths against the acceptance tests. The
+        spec comes from the task record, the same record the work Run's
+        prompt reads.
         """
     meta = await self._tree.load_meta(session_id)
     assert meta is not None and meta.task is not None, (
@@ -1752,6 +1788,7 @@ class TaskExecutionAdapter:
         chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
         worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
         spec_text=review.review_spec_text(meta.task),
+        later_messages=await self._later_messages_section(meta, work_run),
         work_report=worker_summary,
     )
 

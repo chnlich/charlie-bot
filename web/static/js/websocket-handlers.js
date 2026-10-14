@@ -68,12 +68,11 @@ registerWsMessageHandler('unread_changed', (ev) => {
 // Sidebar activity update. The same state mapping the status poll and the
 // list paint apply: a task-tree row's work_state verdict rides the event
 // when the broadcaster knows it, and the 3 s poll corrects any drift.
+// status.js's applyRunningChanged owns the repaint decision: a worker row
+// going idle defers to the poll started below, everything else repaints at
+// once.
 registerWsMessageHandler('running_changed', (ev) => {
-  setSessionIndicator(ev.session_id, getSessionIndicatorState({
-    thinking_since: ev.thinking_since,
-    has_running_tasks: ev.has_running_tasks,
-    work_state: ev.work_state,
-  }));
+  applyRunningChanged(ev);
   if (ev.session_id === SESSION_ID) {
     if (ev.thinking_since) {
       startThinking({keepSendEnabled: true});

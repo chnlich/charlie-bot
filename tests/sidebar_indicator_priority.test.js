@@ -387,18 +387,22 @@ test('a worker row’s run end defers to the poll the handler starts; a busy sta
 
 test('a manager row’s not-running running_changed repaints at once', async () => {
   const {context, shown, FakeWebSocket} = buildRunningChangedContext(['p', 'c']);
-  context.renderSessionList([
-    row('p', null), row('c', 'p', {profile: 'manager', has_running_tasks: true}),
-  ], 'all');
-  assert.deepEqual(shown('c'), {...IDLE_ICONS, spinner: true});
-  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
+  context.renderSessionList([row('p', null), row('c', 'p', {profile: 'manager'})], 'all');
   context.document.querySelectorAll = (selector) => (
     selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}] : []
   );
-  const reply = {c: {has_running_tasks: false, has_unread: false, has_pending_trigger: false}};
+  let reply = {c: {has_running_tasks: true, thinking_since: '2026-04-02T10:00:00Z',
+    has_unread: false, has_pending_trigger: false}};
   context.fetch = async () => ({ok: true, json: async () => reply});
   const socket = openSidebarSocket(context, FakeWebSocket);
 
+  socket.emitMessage({type: 'running_changed', session_id: 'c',
+    thinking_since: '2026-04-02T10:00:00Z', has_running_tasks: true});
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, spinner: true}, 'the manager’s busy start paints now');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
+  await context.Sidebar.pollSessionStatus();  // drains the poll the handler started
+
+  reply = {c: {has_running_tasks: false, has_unread: false, has_pending_trigger: false}};
   socket.emitMessage({type: 'running_changed', session_id: 'c',
     thinking_since: null, has_running_tasks: false});
   assert.deepEqual(shown('c'), IDLE_ICONS, 'a manager row repaints at once: no deferral');

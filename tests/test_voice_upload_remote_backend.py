@@ -11,18 +11,18 @@ unknown, a live backend, the local id - keeps the local decode.
 
 import io
 import json
+import pathlib
 import wave
 from collections.abc import AsyncIterator, Sequence
-from pathlib import Path
 
+import fastapi
 import pytest
-from fastapi import UploadFile
-from structlog.testing import capture_logs
+from structlog import testing
 
 from src.features.voice import api as voice
+from src.features.voice.transcription import base
 from src.features.voice.transcription import registry as transcription_registry
-from src.features.voice.transcription.base import TranscriptEvent, TranscriptionBackend
-from src.infra.config import CharlieBotConfig
+from src.infra import config
 
 SESSION_ID = "session-a"
 BACKEND_ID = "fake-remote"
@@ -40,8 +40,8 @@ def _wav_body(samples: int = 160) -> bytes:
   return buffer.getvalue()
 
 
-def _upload_file(body: bytes) -> UploadFile:
-  return UploadFile(file=io.BytesIO(body), filename="recording.wav")
+def _upload_file(body: bytes) -> fastapi.UploadFile:
+  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
 
 
 async def _pcm_frames(audio: AsyncIterator[bytes]) -> bytes:
@@ -59,17 +59,17 @@ class _FakeRemote:
     self.unavailable: str | None = None
     self.fail = False
 
-  def build(self, cfg: CharlieBotConfig, **_: object) -> TranscriptionBackend:
+  def build(self, cfg: config.CharlieBotConfig, **_: object) -> base.TranscriptionBackend:
     return _FakeRemoteBackend(self, cfg)
 
 
-class _FakeRemoteBackend(TranscriptionBackend):
+class _FakeRemoteBackend(base.TranscriptionBackend):
 
   id = BACKEND_ID
   label = "Fake remote backend"
   live_partials = False
 
-  def __init__(self, owner: _FakeRemote, cfg: CharlieBotConfig) -> None:
+  def __init__(self, owner: _FakeRemote, cfg: config.CharlieBotConfig) -> None:
     self._owner = owner
     self._cfg = cfg
 
@@ -82,7 +82,7 @@ class _FakeRemoteBackend(TranscriptionBackend):
       *,
       vocabulary: Sequence[str],
       languages: Sequence[str],
-  ) -> AsyncIterator[TranscriptEvent]:
+  ) -> AsyncIterator[base.TranscriptEvent]:
     self._owner.calls.append(
         {
             "pcm": await _pcm_frames(audio),
@@ -93,7 +93,7 @@ class _FakeRemoteBackend(TranscriptionBackend):
         })
     if self._owner.fail:
       raise RuntimeError("fake transcription failure")
-    yield TranscriptEvent(kind="final", text=REMOTE_TEXT)
+    yield base.TranscriptEvent(kind="final", text=REMOTE_TEXT)
 
 
 async def _forbidden_bundle() -> object:
@@ -109,27 +109,31 @@ async def _local_decode(session_id: str, bundle: object, pcm_bytes: bytes) -> st
 
 
 @pytest.fixture
-def cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CharlieBotConfig:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", voice={"vocabulary": ["CharlieBot"], "languages": ["zh"]})
+def cfg(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> config.CharlieBotConfig:
+  cfg = config.CharlieBotConfig(
+      charliebot_home=tmp_path / "home", voice={
+          "vocabulary": ["CharlieBot"],
+          "languages": ["zh"]
+      })
   monkeypatch.setattr(voice, "get_config", lambda: cfg)
   return cfg
 
 
 @pytest.fixture
-def remote(cfg: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> _FakeRemote:
+def remote(cfg: config.CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> _FakeRemote:
   owner = _FakeRemote()
   monkeypatch.setitem(transcription_registry._FACTORIES, BACKEND_ID, owner.build)
   return owner
 
 
 async def _post(backend: str | None) -> tuple[object, list[dict]]:
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     response = await voice.upload_voice_recording(
         SESSION_ID, audio=_upload_file(_wav_body()), backend=backend, devices=None)
   return response, logs
 
 
-def _voice_dir(cfg: CharlieBotConfig) -> Path:
+def _voice_dir(cfg: config.CharlieBotConfig) -> pathlib.Path:
   return cfg.sessions_dir / SESSION_ID / "voice"
 
 
@@ -138,7 +142,7 @@ def _voice_dir(cfg: CharlieBotConfig) -> Path:
 
 @pytest.mark.asyncio
 async def test_the_selected_backend_decodes_after_the_recording_is_on_disk(
-    cfg: CharlieBotConfig, remote: _FakeRemote, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg: config.CharlieBotConfig, remote: _FakeRemote, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(voice, "_speech_bundle", _forbidden_bundle)
 
   response, logs = await _post(BACKEND_ID)
@@ -160,7 +164,8 @@ async def test_the_selected_backend_decodes_after_the_recording_is_on_disk(
 
 
 @pytest.mark.asyncio
-async def test_a_transcription_failure_leaves_the_wav_on_disk(cfg: CharlieBotConfig, remote: _FakeRemote) -> None:
+async def test_a_transcription_failure_leaves_the_wav_on_disk(
+    cfg: config.CharlieBotConfig, remote: _FakeRemote) -> None:
   remote.fail = True
 
   response, logs = await _post(BACKEND_ID)
@@ -176,7 +181,7 @@ async def test_a_transcription_failure_leaves_the_wav_on_disk(cfg: CharlieBotCon
 
 @pytest.mark.asyncio
 async def test_an_unavailable_selection_is_an_error_without_a_local_fallback(
-    cfg: CharlieBotConfig, remote: _FakeRemote) -> None:
+    cfg: config.CharlieBotConfig, remote: _FakeRemote) -> None:
   remote.unavailable = "needs fake.api_key"
 
   response, logs = await _post(BACKEND_ID)
@@ -195,7 +200,7 @@ async def test_an_unavailable_selection_is_an_error_without_a_local_fallback(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["gemini", "does-not-exist", "local", None])
 async def test_live_unknown_local_and_absent_ids_keep_the_local_path(
-    cfg: CharlieBotConfig, remote: _FakeRemote, monkeypatch: pytest.MonkeyPatch, backend: str | None) -> None:
+    cfg: config.CharlieBotConfig, remote: _FakeRemote, monkeypatch: pytest.MonkeyPatch, backend: str | None) -> None:
   monkeypatch.setattr(voice, "_speech_bundle", _local_bundle)
   monkeypatch.setattr(voice, "_transcribe_with_bundle", _local_decode)
 

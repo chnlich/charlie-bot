@@ -1669,13 +1669,12 @@ THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.features.chat_threads.thread_ent
 SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot_client"
 DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
-# Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py binds
-# both names at import scope (`from src.infra.config import load_config`,
-# `from src.features.cron.loader import get_scheduled_tasks`), so monkeypatch.setattr lands the
-# stand-in on the src.features.cron.scheduler module attribute and
-# _maybe_run/_reload_config resolve it at call time.
-SCHEDULER_LOAD_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.load_config"
-SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.scheduler.get_scheduled_tasks"
+# Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py reads
+# both through their home modules at call time (`config.load_config`,
+# `loader.get_scheduled_tasks`), so monkeypatch.setattr lands the stand-in on the home module's
+# attribute and _maybe_run/_reload_config resolve it from there.
+SCHEDULER_LOAD_CONFIG_PATCH_TARGET = "src.infra.config.load_config"
+SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.loader.get_scheduled_tasks"
 
 
 @contextlib.contextmanager

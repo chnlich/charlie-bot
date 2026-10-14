@@ -9,12 +9,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.features.slack import slack_listener
-from src.features.slack.event_types import SLACK_REPLY
-from src.features.slack.metadata import SlackOrigin
+from src.features.slack import event_types, metadata, slack_listener
 from src.infra import metadata_slots, models
-from src.runtime import triggers
-from src.runtime.session_store import SessionStore
+from src.runtime import session_store, triggers
 
 _TEAM = "T_TEST"
 _CHANNEL = "C_TEST"
@@ -69,7 +66,7 @@ async def _make_session(
       models.CreateSessionRequest(
           session_id=slack_listener.summon_session_id(_TEAM, _CHANNEL, thread_ts),
           name="slack session",
-          slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
+          slack_origin=metadata.SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
   if watermark is not None:
     metadata_slots.set_fields(meta, "slack", slack_watermark_ts=watermark)
     await session_blocks.store.save_metadata(meta)
@@ -93,7 +90,7 @@ async def test_watermark_persists_through_metadata_json(tmp_path: pathlib.Path) 
   cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
   meta = await _make_session(session_blocks)
   assert metadata_slots.fields_of(meta, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
-  reloaded = await SessionStore(cfg).get_session(meta.id)
+  reloaded = await session_store.SessionStore(cfg).get_session(meta.id)
   assert reloaded is not None
   assert metadata_slots.fields_of(reloaded, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
 
@@ -215,7 +212,9 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   assert [m["ts"] for m in payload["new_messages"]] == [_ts(110), _ts(130)]
   assert payload["new_messages"][0] == {"ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}
   assert client.posts == []
-  assert not [ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]
+  assert not [
+      ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == event_types.SLACK_REPLY
+  ]
 
 
 @pytest.mark.asyncio
@@ -244,7 +243,9 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path)
     assert resp.json()["posted"] is True
 
   assert [p["text"] for p in client.posts] == ["the answer"]
-  assert len([ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]) == 1
+  assert len(
+      [ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == event_types.SLACK_REPLY
+      ]) == 1
 
 
 # ---------------------------------------------------------------------------

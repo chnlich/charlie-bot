@@ -4,36 +4,19 @@ import asyncio
 import copy
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
-from starlette.requests import Request
-from starlette.responses import JSONResponse
+import fastapi
+import pydantic
+from starlette import requests, responses
 
+from src.features.cron import config as cron_config
+from src.features.cron import cron_sequence, loader
 from src.features.cron import event_types as ET
-from src.features.cron.config import ScheduledTaskConfig, ScheduledTaskFields
-from src.features.cron.cron_sequence import effective_scheduled_task_backend
-from src.features.cron.loader import (
-    _load_cron_file,
-    _valid_cron_name,
-    _validate_cron_body,
-    cron_dir,
-    cron_path,
-    get_scheduled_task_errors,
-    get_scheduled_tasks,
-)
-from src.infra.config import CharlieBotConfig, require_backend_option
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionMetadata
-from src.infra.yaml_utils import load_yaml, save_yaml
-from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_lifecycle, get_session_store
-from src.runtime.scheduled_sessions import ScheduledSessionBusyError
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_store import SessionStore
-from src.runtime.task_execution import task_manager
-from src.runtime.thinking_state import busy_since
+from src.infra import config, log_once, models, yaml_utils
+from src.runtime import scheduled_sessions, session_lifecycle, session_store, task_execution, thinking_state
+from src.runtime.api import deps
 
-log = LazyStructlogLogger()
-router = APIRouter()
+log = log_once.LazyStructlogLogger()
+router = fastapi.APIRouter()
 
 # Wire sentence of the cron editor's 404 for a missing task file. Both raisers
 # (apply_task_yaml_update's pre-flight, which the cron PUT route runs, and
@@ -43,26 +26,26 @@ _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 
 
 def _read_cron_yaml(name: str) -> dict:
-  return load_yaml(cron_path(name), default={})
+  return yaml_utils.load_yaml(loader.cron_path(name), default={})
 
 
 def _write_cron_yaml(name: str, data: dict) -> None:
-  save_yaml(cron_path(name), data)
+  yaml_utils.save_yaml(loader.cron_path(name), data)
 
 
 def _validate_cron_name(name: str) -> None:
   """Raise the routes' 400 unless *name* passes :func:`src.features.cron.loader._valid_cron_name`, the rule's one home."""
-  if not _valid_cron_name(name):
-    raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
+  if not loader._valid_cron_name(name):
+    raise fastapi.HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
 
 
-def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
+def _validate_backend_id(backend: str | None, cfg: config.CharlieBotConfig) -> None:
   if not backend:
     return
   try:
-    require_backend_option(cfg, backend, subject="")
+    config.require_backend_option(cfg, backend, subject="")
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
 
 
 def _apply_task_update(task: dict, req: TaskUpdate) -> dict:
@@ -96,12 +79,12 @@ def _apply_task_update(task: dict, req: TaskUpdate) -> dict:
 
 async def _ensure_backend_update_session(
     name: str,
-    cand_model: ScheduledTaskConfig,
+    cand_model: cron_config.ScheduledTaskConfig,
     req: TaskUpdate,
-    cfg: CharlieBotConfig,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
-) -> SessionMetadata | None:
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+) -> models.SessionMetadata | None:
   """The backend change's session effect: the bound node switches in place.
 
   A bound task's node follows the task config: the editor switches the node's
@@ -113,20 +96,20 @@ async def _ensure_backend_update_session(
   """
   if 'backend' not in req.model_fields_set:
     return None
-  backend = effective_scheduled_task_backend(cand_model, cfg)
+  backend = cron_sequence.effective_scheduled_task_backend(cand_model, cfg)
   if not cand_model.session_id:
     return None
   node = await store.get_session(cand_model.session_id)
   if node is None or node.backend == backend:
     return None
   if await _scheduled_node_busy(node):
-    raise ScheduledSessionBusyError(
+    raise scheduled_sessions.ScheduledSessionBusyError(
         f"scheduled task '{name}' backend switch from '{node.backend}' to '{backend}' is blocked "
         f"because node '{node.id}' has running work; retry when it is idle")
   return await lifecycle.switch_backend(node.id, backend)
 
 
-async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: ScheduledTaskConfig) -> None:
+async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: cron_config.ScheduledTaskConfig) -> None:
   """The enable's session effect on a bound archived task node: the node restores.
 
   Enabling a task re-arms its node, and an archived node fires nothing, so the
@@ -137,7 +120,7 @@ async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: Sch
   if req.enabled is not True or not cand_model.session_id:
     return
 
-  tree = task_manager()
+  tree = task_execution.task_manager()
   meta = await tree.load_meta(cand_model.session_id)
   if meta is None:
     return
@@ -147,17 +130,17 @@ async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: Sch
   log.info("cron_enable_restored_node", task=name, session=meta.id, restored=restored)
 
 
-async def _scheduled_node_busy(node: SessionMetadata) -> bool:
+async def _scheduled_node_busy(node: models.SessionMetadata) -> bool:
   """Whether the bound node's own work is in flight.
 
   The rotation busy check's successor: the node's busy interval (the master
   queue's or a worker Run's, per thinking_state). An in-flight round resolved its backend at launch, so the
   editor's switch waits for it instead of splitting the round's identity.
   """
-  return bool(busy_since(node.id))
+  return bool(thinking_state.busy_since(node.id))
 
 
-class TaskUpdate(BaseModel):
+class TaskUpdate(pydantic.BaseModel):
   cron: str | None = None
   prompt_file: str | None = None
   repo: str | None = None
@@ -169,12 +152,12 @@ class TaskUpdate(BaseModel):
   session_id: str | None = None
 
 
-class TaskCreate(ScheduledTaskFields):
+class TaskCreate(cron_config.ScheduledTaskFields):
   """Create-request body for POST /tasks: the shared task field block, all of it editable."""
 
   # The loader's task model rejects unknown keys (extra='forbid'); this body keeps
   # its own looser contract of ignoring them, so the pydantic default is pinned.
-  model_config = ConfigDict(extra='ignore')
+  model_config = pydantic.ConfigDict(extra='ignore')
 
 
 @router.get('/tasks')
@@ -199,7 +182,7 @@ async def list_cron_tasks():
                   'prompt': True
               }
           }
-      }) for t in get_scheduled_tasks()
+      }) for t in loader.get_scheduled_tasks()
   ]
   broken = [
       {
@@ -208,7 +191,7 @@ async def list_cron_tasks():
           'broken': True,
           'path': e.path,
           'enabled': e.enabled
-      } for e in get_scheduled_task_errors()
+      } for e in loader.get_scheduled_task_errors()
   ]
   return valid + broken
 
@@ -216,10 +199,10 @@ async def list_cron_tasks():
 async def apply_task_yaml_update(
     name: str,
     req: TaskUpdate,
-    cfg: CharlieBotConfig,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
-) -> tuple[dict, SessionMetadata | None]:
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+) -> tuple[dict, models.SessionMetadata | None]:
   """Apply a ``TaskUpdate`` to one job's yaml: load, validate, rotate, write.
 
   The cron PUT route's implementation. Returns
@@ -230,9 +213,9 @@ async def apply_task_yaml_update(
   backend, and 409 when the loader fails or the dedicated session is busy
   (busy 409 surfaces before any yaml write).
   """
-  path = cron_path(name)
+  path = loader.cron_path(name)
   if not path.exists():
-    raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
+    raise fastapi.HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
   if 'backend' in req.model_fields_set:
     _validate_backend_id(req.backend, cfg)
   # A syntax-error or otherwise unparseable file body must surface as a 409 with
@@ -241,10 +224,10 @@ async def apply_task_yaml_update(
   # the loader's own catch-all: any failure in _load_cron_file becomes this
   # job's error, never an unhandled exception.
   try:
-    await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
+    await asyncio.to_thread(loader._load_cron_file, loader.cron_path(name), cfg.charlie_bot_repo, name)
     raw = await asyncio.to_thread(_read_cron_yaml, name)
   except Exception as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=409, detail=str(e)) from e
 
   candidate = _apply_task_update(raw, req)
   # Validate the candidate through the exact same body-processing code the
@@ -253,17 +236,18 @@ async def apply_task_yaml_update(
   # reloadable and file-format-only keys like `prompt_file` can never surface
   # as an unhandled ValidationError.
   try:
-    cand_model, _ = await asyncio.to_thread(_validate_cron_body, copy.deepcopy(candidate), cfg.charlie_bot_repo, name)
+    cand_model, _ = await asyncio.to_thread(
+        loader._validate_cron_body, copy.deepcopy(candidate), cfg.charlie_bot_repo, name)
   except Exception as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=409, detail=str(e)) from e
 
-  rotated: SessionMetadata | None = None
+  rotated: models.SessionMetadata | None = None
   try:
     rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, store, lifecycle)
-  except ScheduledSessionBusyError as e:
+  except scheduled_sessions.ScheduledSessionBusyError as e:
     # The 409 lands before any yaml write: the file keeps its current backend
     # when the node's switch cannot happen now.
-    raise HTTPException(status_code=409, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=409, detail=str(e)) from e
   await _restore_enabled_task_node(name, req, cand_model)
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
@@ -274,9 +258,9 @@ async def apply_task_yaml_update(
 async def update_cron_task(
     name: str,
     req: TaskUpdate,
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    store: SessionStore = Depends(get_session_store),
-    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
 ) -> dict:
   _validate_cron_name(name)
   candidate, _ = await apply_task_yaml_update(name, req, cfg, store, lifecycle)
@@ -284,13 +268,14 @@ async def update_cron_task(
 
 
 @router.post('/tasks')
-async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> dict:
+async def create_cron_task(
+    req: TaskCreate, cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop)) -> dict:
   """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
   _validate_cron_name(req.name)
   _validate_backend_id(req.backend, cfg)
-  path = cron_path(req.name)
+  path = loader.cron_path(req.name)
   if path.exists():
-    raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
+    raise fastapi.HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
   payload = req.model_dump()
   if not payload.get('backend'):
     payload.pop('backend', None)
@@ -304,17 +289,17 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   # validation becomes a 409 with the loader's error text, and nothing is
   # written to disk.
   try:
-    await asyncio.to_thread(_validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
+    await asyncio.to_thread(loader._validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
   except Exception as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
-  cron_dir().mkdir(parents=True, exist_ok=True)
+    raise fastapi.HTTPException(status_code=409, detail=str(e)) from e
+  loader.cron_dir().mkdir(parents=True, exist_ok=True)
   await asyncio.to_thread(_write_cron_yaml, req.name, body)
   log.debug('cron_task_created', name=req.name)
   return {'name': req.name, **body}
 
 
 @router.post('/tasks/{name}/run')
-async def run_cron_task_now(name: str, request: Request) -> JSONResponse:
+async def run_cron_task_now(name: str, request: requests.Request) -> responses.JSONResponse:
   """Run a scheduled task once now, through the same path a cron fire takes.
 
   The call lands on ``scheduler.run_task_now`` and writes no chat event of its
@@ -325,12 +310,12 @@ async def run_cron_task_now(name: str, request: Request) -> JSONResponse:
   """
   scheduler = getattr(request.app.state, 'scheduler', None)
   if scheduler is None:
-    raise HTTPException(status_code=503, detail='Scheduler not available')
+    raise fastapi.HTTPException(status_code=503, detail='Scheduler not available')
   try:
     result = await scheduler.run_task_now(name)
   except ValueError as e:
-    raise HTTPException(status_code=404, detail=str(e)) from e
-  return JSONResponse(
+    raise fastapi.HTTPException(status_code=404, detail=str(e)) from e
+  return responses.JSONResponse(
       status_code=202,
       content={
           'type': ET.TASK_TRIGGERED,
@@ -350,9 +335,9 @@ async def delete_cron_task(name: str) -> dict:
   one ever re-activates, is archived by the next tick's sweep.)
   """
   _validate_cron_name(name)
-  path = cron_path(name)
+  path = loader.cron_path(name)
   if not path.exists():
-    raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
+    raise fastapi.HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
   path.unlink()
   log.debug('cron_task_deleted', name=name)
   return {'ok': True}

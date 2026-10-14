@@ -1,19 +1,15 @@
 """Master-agent triggering subsystem — dispatch task-tree inputs into Runs."""
 
 from src.infra import event_types as ET
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionMetadata, SessionStatus
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_store import SessionStore
-from src.runtime.session_successor import SessionSuccessor
-from src.runtime.task_execution import task_manager
+from src.infra import log_once, models
+from src.runtime import session_lifecycle, session_store, session_successor, task_execution
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 async def _wake_task_node(
-    store: SessionStore,
-    node: SessionMetadata,
+    store: session_store.SessionStore,
+    node: models.SessionMetadata,
     *,
     requested_id: str,
     summary: str,
@@ -24,7 +20,7 @@ async def _wake_task_node(
     from_session_name: str | None,
 ) -> None:
   """Dispatch a wake into the resolved task node's pending input queue."""
-  dispatch = task_manager().dispatch
+  dispatch = task_execution.task_manager().dispatch
   if node.id != requested_id and from_session is None:
     predecessor = await store.get_session(requested_id)
     assert predecessor is not None
@@ -45,9 +41,9 @@ async def _wake_task_node(
 async def trigger_master(
     session_id: str,
     summary: str,
-    store: SessionStore,
-    successor: SessionSuccessor,
-    lifecycle: SessionLifecycle,
+    store: session_store.SessionStore,
+    successor: session_successor.SessionSuccessor,
+    lifecycle: session_lifecycle.SessionLifecycle,
     *,
     input_id: str | None = None,
     event_type: str = ET.AGENT_MESSAGE,
@@ -65,7 +61,7 @@ async def trigger_master(
   if resolved.id != session_id:
     log.info("trigger_master_redirected_to_successor", session=session_id, resolved_session=resolved.id)
 
-  if resolved.status == SessionStatus.ARCHIVED and resolved.successor_session_id is None:
+  if resolved.status == models.SessionStatus.ARCHIVED and resolved.successor_session_id is None:
     if not pull_back:
       log.info("wake_skipped_archived", session=session_id, resolved_session=resolved.id)
       return

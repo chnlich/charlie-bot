@@ -1,22 +1,15 @@
 """Shared helpers for chat message persistence and rendering."""
 
 import asyncio
-from dataclasses import dataclass
+import dataclasses
 from typing import TYPE_CHECKING
 
 from src.infra import event_types as ET
-from src.infra.models import utc_now_iso
-from src.runtime import worker_transcript
-from src.runtime.message_aggregator import MessageAggregator
-from src.runtime.message_events import _ATTACHED_FILES_MARKER, _stable_history_projection
-from src.runtime.session_usage import resolve_events_usage
+from src.infra import models
+from src.runtime import message_aggregator, message_events, session_usage, worker_transcript
 
 if TYPE_CHECKING:
-  from src.infra.models import SessionMetadata
-  from src.runtime.message_projection import MessageProjection
-  from src.runtime.session_events import SessionEvents
-  from src.runtime.session_store import SessionStore
-  from src.runtime.task_sessions import TaskTreeManager
+  from src.runtime import message_projection, session_events, session_store, task_sessions
 
 __all__ = [
     "SessionBootstrapData",
@@ -36,7 +29,7 @@ def build_agent_input_content(content: str, uploaded_files: list[dict]) -> str:
   paths = [str(f.get("path", "")).strip() for f in uploaded_files if str(f.get("path", "")).strip()]
   if not paths:
     return content
-  return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
+  return content + message_events._ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
 
 
 def build_scheduled_trigger_event(content: str) -> dict:
@@ -49,7 +42,7 @@ def build_scheduled_trigger_event(content: str) -> dict:
   return {
       "type": ET.SCHEDULED_TRIGGER,
       "content": content,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
   }
 
 
@@ -83,14 +76,14 @@ def build_agent_message_event(content: str, *, from_session: str, from_session_n
       "content": content,
       "from_session": from_session,
       "from_session_name": from_session_name,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
   }
 
 
-@dataclass
+@dataclasses.dataclass
 class SessionBootstrapData:
   """Critical data needed to make one chat session usable."""
-  session: SessionMetadata
+  session: models.SessionMetadata
   messages: list[dict]
   pending_draft: dict | None = None
   total_event_count: int = 0
@@ -99,9 +92,9 @@ class SessionBootstrapData:
 
 
 async def get_message_projection_fast(
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     session_id: str,
-) -> MessageProjection | None:
+) -> message_projection.MessageProjection | None:
   """Return the session's message projection via the warm-hit fast path.
 
   A warm projection hit is a dict read + len compare answered on the event
@@ -109,14 +102,14 @@ async def get_message_projection_fast(
   for its disk reads. Returns None when no projection is available (an
   archived session), and the caller takes its fallback path.
   """
-  projection = session_events.projection_memo_hit(session_id)
+  projection = events.projection_memo_hit(session_id)
   if projection is None:
-    projection = await asyncio.to_thread(session_events.get_message_projection, session_id)
+    projection = await asyncio.to_thread(events.get_message_projection, session_id)
   return projection
 
 
 async def _projection_page(
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     session_id: str,
     message_limit: int,
 ) -> tuple[list[dict], dict | None, int, int, bool] | None:
@@ -126,7 +119,7 @@ async def _projection_page(
   None when no projection is available and the caller must take the legacy
   tail-events path.
   """
-  projection = await get_message_projection_fast(session_events, session_id)
+  projection = await get_message_projection_fast(events, session_id)
   if projection is None:
     return None
   messages, oldest_ordinal, has_more = projection.tail(message_limit)
@@ -134,7 +127,7 @@ async def _projection_page(
 
 
 async def _tail_events_page(
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -146,15 +139,14 @@ async def _tail_events_page(
   ``load_chat_events_range``; ``has_more`` is set when the tail window is full
   or archived events precede it.
   """
-  tail_events, total_count, has_more = await asyncio.to_thread(
-      session_events.load_chat_events_tail, session_id, message_limit)
+  tail_events, total_count, has_more = await asyncio.to_thread(events.load_chat_events_tail, session_id, message_limit)
   offset = archive_offset + total_count - len(tail_events)
   messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
   return (messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
 
 
 async def _worker_messages_page(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
     message_limit: int,
 ) -> tuple[list[dict], dict | None, int, int, bool]:
@@ -170,7 +162,7 @@ async def _worker_messages_page(
   return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more)
 
 
-async def _worker_usage(tree: TaskTreeManager, session_id: str) -> dict | None:
+async def _worker_usage(tree: task_sessions.TaskTreeManager, session_id: str) -> dict | None:
   """Display usage folded over a worker node's Run transcript events.
 
   The header's context reading is the newest Run's last context_reading event;
@@ -178,11 +170,11 @@ async def _worker_usage(tree: TaskTreeManager, session_id: str) -> dict | None:
   event list.
   """
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
-  return await asyncio.to_thread(resolve_events_usage, entry.events)
+  return await asyncio.to_thread(session_usage.resolve_events_usage, entry.events)
 
 
 async def _messages_page(
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -197,19 +189,19 @@ async def _messages_page(
   metadata) falls back the same way.
   """
   if archive_offset == 0:
-    page = await _projection_page(session_events, session_id, message_limit)
+    page = await _projection_page(events, session_id, message_limit)
     if page is not None:
       return page
-  return await _tail_events_page(session_events, session_id, archive_offset, message_limit)
+  return await _tail_events_page(events, session_id, archive_offset, message_limit)
 
 
 async def build_session_bootstrap_data(
     session_id: str,
-    store: SessionStore,
-    session_events: SessionEvents,
+    store: session_store.SessionStore,
+    events: session_events.SessionEvents,
     *,
     message_limit: int = 40,
-    tree: TaskTreeManager | None = None,
+    tree: task_sessions.TaskTreeManager | None = None,
 ) -> SessionBootstrapData:
   """Load the minimal session data needed for first paint or SPA switching.
 
@@ -231,7 +223,7 @@ async def build_session_bootstrap_data(
         tree, session_id, message_limit)
   else:
     messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
-        session_events, session_id, session_meta.archive_offset, message_limit)
+        events, session_id, session_meta.archive_offset, message_limit)
 
   return SessionBootstrapData(
       session=session_meta,
@@ -243,10 +235,12 @@ async def build_session_bootstrap_data(
   )
 
 
-def _committed_messages(agg: MessageAggregator, events: list[dict]) -> list[dict]:
+def _committed_messages(agg: message_aggregator.MessageAggregator, events: list[dict]) -> list[dict]:
   """Feed events through the aggregator and collect the committed message deltas."""
   return [
-      delta["message"] for delta in agg.feed_indexed(_stable_history_projection(events)) if delta["type"] == "message"
+      delta["message"]
+      for delta in agg.feed_indexed(message_events._stable_history_projection(events))
+      if delta["type"] == "message"
   ]
 
 
@@ -256,7 +250,7 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
   Final-flushes any in-progress assistant draft; suitable for stable history
   (paginated older events). For the live-render entrypoint, see ``events_to_view``.
   """
-  agg = MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
+  agg = message_aggregator.MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
   messages = _committed_messages(agg, events)
   for delta in agg.flush_pending():
     messages.append(delta["message"])
@@ -271,5 +265,5 @@ def events_to_view(events: list[dict], event_index_offset: int = 0) -> tuple[lis
   This matches the per-session live aggregator's state so subsequent live
   events extend the draft rather than producing a duplicate bubble.
   """
-  agg = MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
+  agg = message_aggregator.MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
   return _committed_messages(agg, events), agg.pending_draft_message()

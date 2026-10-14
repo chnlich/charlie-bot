@@ -136,6 +136,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
+Skip decision-attribution labels (`（用户定）`, `（用户裁定）`): every entry stands by user
+approval, so the label carries no information.
 Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Line
 width is terminal display width: a character whose `east_asian_width` is W or F counts two columns,
 so one Chinese character counts two. Keep code, paths, identifiers, and commands verbatim. When

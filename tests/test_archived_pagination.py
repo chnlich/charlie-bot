@@ -7,49 +7,48 @@ entries never expire while active entries keep the TTL.
 
 from __future__ import annotations
 
+import datetime
+import pathlib
 import time
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import (
-    SessionBlocks,
-    count_path_read_text,
-    make_session_blocks,
-    user_event,
-)
 
-from src.infra.models import SessionMetadata, SessionStatus
+from src.infra import models
 
-_BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
+_BASE_TIME = datetime.datetime(2026, 8, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
 
 async def _add_session(
-    mgr: SessionBlocks,
+    mgr: conftest.SessionBlocks,
     name: str,
     *,
-    status: SessionStatus = SessionStatus.ARCHIVED,
+    status: models.SessionStatus = models.SessionStatus.ARCHIVED,
     group: str | None = None,
     minutes: int = 0,
     session_id: str | None = None,
-) -> SessionMetadata:
-  meta = SessionMetadata(
-      profile="manager", name=name, status=status, group=group, updated_at=_BASE_TIME + timedelta(minutes=minutes))
+) -> models.SessionMetadata:
+  meta = models.SessionMetadata(
+      profile="manager",
+      name=name,
+      status=status,
+      group=group,
+      updated_at=_BASE_TIME + datetime.timedelta(minutes=minutes))
   if session_id is not None:
     meta.id = session_id
   await mgr.store.save_metadata(meta)
   return meta
 
 
-def _count_session_metadata_reads(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> list[Path]:
+def _count_session_metadata_reads(monkeypatch: pytest.MonkeyPatch, sessions_dir: pathlib.Path) -> list[pathlib.Path]:
   """Count reads of sessions/<id>/metadata.json (thread metadata.json files are excluded)."""
-  return count_path_read_text(
+  return conftest.count_path_read_text(
       monkeypatch, lambda path: path.name == "metadata.json" and path.parent.parent == sessions_dir)
 
 
 @pytest.mark.asyncio
-async def test_keyset_pages_walk_newest_first(tmp_path: Path) -> None:
-  mgr = make_session_blocks(tmp_path)
+async def test_keyset_pages_walk_newest_first(tmp_path: pathlib.Path) -> None:
+  mgr = conftest.make_session_blocks(tmp_path)
   ordered = [await _add_session(mgr, f"s{i}", minutes=i) for i in range(5)]
 
   first = await mgr.listing.list_archived_page(limit=2)
@@ -71,8 +70,8 @@ async def test_keyset_pages_walk_newest_first(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
-  mgr = make_session_blocks(tmp_path)
+async def test_bad_cursor_fails_loudly(tmp_path: pathlib.Path) -> None:
+  mgr = conftest.make_session_blocks(tmp_path)
   await _add_session(mgr, "s0")
 
   with pytest.raises(ValueError, match="not-a-timestamp"):
@@ -84,27 +83,28 @@ async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = make_session_blocks(tmp_path)
+async def test_warm_list_paths_read_zero_metadata_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  mgr = conftest.make_session_blocks(tmp_path)
   for i in range(3):
     await _add_session(mgr, f"arch{i}", minutes=i)
-  await _add_session(mgr, "live-alpha", status=SessionStatus.ACTIVE, minutes=10)
+  await _add_session(mgr, "live-alpha", status=models.SessionStatus.ACTIVE, minutes=10)
 
   await mgr.listing.list_sessions()  # warm every entry
 
   reads = _count_session_metadata_reads(monkeypatch, mgr.cfg.sessions_dir)
   await mgr.listing.list_archived_page(limit=2)
-  await mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
+  await mgr.listing.list_sessions(status=models.SessionStatus.ACTIVE)
   await mgr.search.search_sessions("alpha")
   assert reads == []
 
 
 @pytest.mark.asyncio
 async def test_archived_entries_survive_ttl_active_entries_expire(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = make_session_blocks(tmp_path)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  mgr = conftest.make_session_blocks(tmp_path)
   archived = await _add_session(mgr, "old", minutes=0)
-  active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)
+  active = await _add_session(mgr, "live", status=models.SessionStatus.ACTIVE, minutes=1)
 
   # Age every cache entry past the TTL without touching the clock machinery.
   # Signature None: the expired entry cannot revalidate by stat and re-reads.
@@ -118,14 +118,14 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
 
 
 @pytest.mark.asyncio
-async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) -> None:
-  mgr = make_session_blocks(tmp_path)
+async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: pathlib.Path) -> None:
+  mgr = conftest.make_session_blocks(tmp_path)
   for i in range(200):
     await _add_session(mgr, f"needle-{i:03d}", minutes=i)
-  above = await _add_session(mgr, "unrelated-a", status=SessionStatus.ACTIVE, minutes=1000)
-  below = await _add_session(mgr, "unrelated-b", status=SessionStatus.ACTIVE, minutes=-1)
-  await mgr.events.save_chat_event(above.id, user_event("needle in the events"))
-  await mgr.events.save_chat_event(below.id, user_event("needle in the events"))
+  above = await _add_session(mgr, "unrelated-a", status=models.SessionStatus.ACTIVE, minutes=1000)
+  below = await _add_session(mgr, "unrelated-b", status=models.SessionStatus.ACTIVE, minutes=-1)
+  await mgr.events.save_chat_event(above.id, conftest.user_event("needle in the events"))
+  await mgr.events.save_chat_event(below.id, conftest.user_event("needle in the events"))
 
   rows, derived = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=True, include_pending_trigger_status=True)
@@ -141,10 +141,10 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_path: Path) -> None:
-  mgr = make_session_blocks(tmp_path)
-  await _add_session(mgr, "quiet", status=SessionStatus.ACTIVE, minutes=1)
-  carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=2)
+async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_path: pathlib.Path) -> None:
+  mgr = conftest.make_session_blocks(tmp_path)
+  await _add_session(mgr, "quiet", status=models.SessionStatus.ACTIVE, minutes=1)
+  carrier = await _add_session(mgr, "carrier", status=models.SessionStatus.ACTIVE, minutes=2)
 
   first, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
@@ -156,7 +156,7 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
   # A chat file moves without touching any metadata.json: the append must
   # re-key the derivation or the new hit stays invisible until the next
   # metadata write.
-  await mgr.events.save_chat_event(carrier.id, user_event("needle in the events"))
+  await mgr.events.save_chat_event(carrier.id, conftest.user_event("needle in the events"))
   grown, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert [r.id for r in grown] == [carrier.id]
@@ -169,12 +169,12 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
 
 @pytest.mark.asyncio
 async def test_search_match_memo_stores_nothing_after_an_errored_scan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.runtime.session_search as session_search_module
 
-  mgr = make_session_blocks(tmp_path)
-  carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=1)
-  await mgr.events.save_chat_event(carrier.id, user_event("nothing relevant here"))
+  mgr = conftest.make_session_blocks(tmp_path)
+  carrier = await _add_session(mgr, "carrier", status=models.SessionStatus.ACTIVE, minutes=1)
+  await mgr.events.save_chat_event(carrier.id, conftest.user_event("nothing relevant here"))
 
   real_scan = session_search_module._scan_content_for_hit
   monkeypatch.setattr(session_search_module, "_scan_content_for_hit", lambda *a, **k: None)
@@ -192,7 +192,7 @@ async def test_search_match_memo_stores_nothing_after_an_errored_scan(
 
 @pytest.mark.asyncio
 async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn_derive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.runtime.session_search as session_search_module
 
   # One active chat file per session, the population exactly at the miss
@@ -204,12 +204,13 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   assert session_search_module._SEARCH_MISS_MEMO_LIMIT >= 260
   population = 6
   monkeypatch.setattr(session_search_module, "_SEARCH_MISS_MEMO_LIMIT", population)
-  mgr = make_session_blocks(tmp_path)
+  mgr = conftest.make_session_blocks(tmp_path)
   carriers = [
-      await _add_session(mgr, f"bulk-{i:03d}", status=SessionStatus.ACTIVE, minutes=i) for i in range(population)
+      await _add_session(mgr, f"bulk-{i:03d}", status=models.SessionStatus.ACTIVE, minutes=i)
+      for i in range(population)
   ]
   for meta in carriers:
-    await mgr.events.save_chat_event(meta.id, user_event("filler line\n"))
+    await mgr.events.save_chat_event(meta.id, conftest.user_event("filler line\n"))
 
   needle = "zzq9neverpresentneedle"
   first, _ = await mgr.search.search_sessions_readonly(
@@ -218,7 +219,7 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   assert len(list(mgr.search._search_miss_memo.items())) == len(carriers)
 
   appended = carriers[0]
-  await mgr.events.save_chat_event(appended.id, user_event("churn append\n"))
+  await mgr.events.save_chat_event(appended.id, conftest.user_event("churn append\n"))
 
   scans: list[tuple[str, int]] = []
   real_scan = session_search_module._scan_content_for_hit
@@ -243,7 +244,7 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   assert len(scans) == 1  # the derived rows serve the repeat without a read
 
 
-def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_content_scan_raw_path_matches_decoded_path(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.runtime.session_search as session_search_module
 
   # A tiny window forces many boundary carries, so the straddle cases run for

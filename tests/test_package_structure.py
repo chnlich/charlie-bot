@@ -80,7 +80,7 @@ class Layer(NamedTuple):
 
 # The highest layer comes first. A module imports modules of its own layer or a lower layer.
 RUNTIME_LAYERS = (
-    Layer(8, "entry points", ("api", "cli", "init")),
+    Layer(8, "entry points", ("api", "cli")),
     Layer(
         7, "execution", (
             "autonamer", "master_cc", "master_cc_queue", "master_cc_run", "master_trigger", "spawner", "task_execution",

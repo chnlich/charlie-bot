@@ -1,30 +1,19 @@
 """Master CC turn execution — spawn or re-attach one backend run and stream its events."""
 
 import asyncio
+import datetime
 import os
+import pathlib
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime
-from pathlib import Path
 
+from src.infra import config, constants, log_once, models, ndjson, process
 from src.infra import event_types as ET
-from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
-from src.infra.constants import SESSION_ID_ENV_VAR
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import (
-    BackendOption,
-    SessionMetadata,
-    backend_type_allows_missing_model,
-)
-from src.infra.ndjson import type_line_filter
-from src.infra.process import kill_group_escalating
-from src.runtime import launch_loop, master_cc_state, runs
-from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
+from src.runtime import launch_loop, master_cc_state, runs, spawner_backends, streaming
+from src.runtime.agent_process import base
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
-from src.runtime.spawner_backends import unknown_backend_pin_refusal
-from src.runtime.streaming import handle_compaction_events
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Prefixed to a salvaged silent turn so the user sees the thinking the model
 # produced instead of nothing. Local chat-stream only: preserved verbatim even
@@ -225,7 +214,7 @@ async def _salvage_silent_turn(
   thinking = tracker._salvage_thinking_text()
   if thinking is None:
     return
-  event = make_text_event(f"{NOTICE}\n\n{thinking}")
+  event = base.make_text_event(f"{NOTICE}\n\n{thinking}")
   await persist_and_broadcast(session_id, event)
   log.info("master_cc_silent_turn_salvaged", session=session_id)
 
@@ -235,7 +224,7 @@ async def _salvage_silent_turn(
 # belongs to a backend that runs the claude CLI and inherits the identity
 # translate — so a raw line head-proving another type cannot reach the
 # notice detector.
-_ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
+_ASSISTANT_LINE_FILTER = ndjson.type_line_filter(frozenset({ET.ASSISTANT}))
 
 
 def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple[list[str], str | None]:
@@ -251,7 +240,7 @@ def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple
 
 
 def _build_extra_flags(
-    option: BackendOption,
+    option: models.BackendOption,
     launch: backend_lifecycle.Launch,
     item: master_cc_state._WorkItem,
 ) -> tuple[list[str], str | None]:
@@ -268,7 +257,7 @@ def _build_extra_flags(
   return extra_flags, resume_session_id
 
 
-def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
+def _build_master_env(cfg: config.CharlieBotConfig, session_id: str) -> dict[str, str]:
   """Build the environment for the master backend subprocess.
 
   ``CHARLIEBOT_SESSION_ID`` carries this master's own session identity, so the
@@ -280,7 +269,7 @@ def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
   bin directory on it would give uv an install target.
   """
   env = launch_loop.child_env(os.environ)
-  env[SESSION_ID_ENV_VAR] = session_id
+  env[constants.SESSION_ID_ENV_VAR] = session_id
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
   return env
 
@@ -303,7 +292,7 @@ async def _handle_event(
   # Persist first (injects timestamp), then broadcast with timestamp included
   await persist_and_broadcast(session_id, event)
 
-  await handle_compaction_events(
+  await streaming.handle_compaction_events(
       event,
       persist_and_broadcast=lambda evt: persist_and_broadcast(session_id, evt),
       log_context={"session": session_id},
@@ -353,7 +342,7 @@ async def _refuse_turn(item: master_cc_state._WorkItem, msg: str,
   return None, 1, msg, {}
 
 
-def _resolve_turn_option(item: master_cc_state._WorkItem) -> BackendOption | None:
+def _resolve_turn_option(item: master_cc_state._WorkItem) -> models.BackendOption | None:
   """The backend option a live turn runs on: the item's own, else the session's pin, else None.
 
   A caller that passed no option must not silently inherit backends.options[0]: the session's
@@ -368,7 +357,7 @@ def _resolve_turn_option(item: master_cc_state._WorkItem) -> BackendOption | Non
 
 def _turn_launch_context(
     item: master_cc_state._WorkItem,
-    option: BackendOption,
+    option: models.BackendOption,
     cwd: str,
     held_native_id: str | None,
 ) -> backend_lifecycle.LaunchContext:
@@ -383,7 +372,7 @@ def _turn_launch_context(
     if callbacks.persist_account_label is not None:
       await callbacks.persist_account_label(session_meta.id, label)
 
-  async def context_state() -> tuple[int | None, datetime | None]:
+  async def context_state() -> tuple[int | None, datetime.datetime | None]:
     if callbacks.context_state is None:
       return None, None
     return await callbacks.context_state(session_meta.id, session_meta)
@@ -420,8 +409,9 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if session_meta.backend:
       # The session pins a backend id config.yaml no longer defines.
       fallback_id = cfg.backends.options[0].id if cfg.backends.options else "(none)"
-      msg = (f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
-             "this run did not execute.")
+      msg = (
+          f"backend {spawner_backends.unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
+          "this run did not execute.")
       log.error(
           "master_cc_backend_unresolved",
           session=session_meta.id,
@@ -442,7 +432,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           requested="(none)",
       )
     return await _refuse_turn(item, msg, None)
-  if backend_type_allows_missing_model(option.type) and option.model is not None:
+  if models.backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
   # A contribution may set the session's context window in place of the option's
   # own (a thread session runs the fixed thread window): the option entry is
@@ -492,12 +482,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   let_go = False
 
   tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
-  backend: AgentBackend | None = None
+  backend: base.AgentBackend | None = None
   # Relays this turn performed (a backend with a login pool only).
   relays = 0
 
   # The Run directory holds the backend transport files.
-  log_dir = Path(item.task_run.transport_dir)
+  log_dir = pathlib.Path(item.task_run.transport_dir)
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
   # The invocation's own translated error-event messages, in stream order — the
@@ -563,7 +553,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     process_env = dict(env)
     if process_launch.account_label is not None:
       # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must never shadow it.
-      process_env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
+      process_env.pop(config.CLAUDE_CONFIG_DIR_ENV_VAR, None)
     spawn_flags, spawn_resume_id = _build_extra_flags(option, process_launch, item)
     launch_kwargs = {key: value for key, value in process_launch.backend_kwargs.items() if key != "extra_flags"}
     backend = backend_types.build_backend(
@@ -633,7 +623,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # stream loop. The notices land after the round's own events; a backend without
     # round notices emits nothing.
     if backend is not None and launch_loop.has_round_notices(lifecycle):
-      raw_path = Path(raw_log)
+      raw_path = pathlib.Path(raw_log)
       if not raw_path.is_file():
         # A live cc round always has one (run() creates the raw log before
         # spawn); the guard mirrors the re-attach path's and keeps backend
@@ -710,10 +700,10 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
 
 def _resolve_resume_option(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
-    backend_option: BackendOption | None,
-) -> BackendOption | None:
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
+    backend_option: models.BackendOption | None,
+) -> models.BackendOption | None:
   """Pick the backend option a resume follows with (translate ownership only)."""
   if backend_option is not None:
     return backend_option
@@ -725,7 +715,8 @@ def _resolve_resume_option(
   return cfg.backends.options[0] if cfg.backends.options else None
 
 
-def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) -> Callable[[dict], list[dict]]:
+def _build_fresh_translate(cfg: config.CharlieBotConfig,
+                           option: models.BackendOption | None) -> Callable[[dict], list[dict]]:
   """A fresh translate_event callable for one scan/stream.
 
   Stateful translates (codex text buffering, gemini) require one instance per
@@ -742,7 +733,8 @@ def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) 
     return lambda event: [event]
 
 
-async def _emit_round_notices(item: master_cc_state._WorkItem, option: BackendOption, events: list[dict]) -> None:
+async def _emit_round_notices(
+    item: master_cc_state._WorkItem, option: models.BackendOption, events: list[dict]) -> None:
   """Persist and broadcast the notices the backend's lifecycle reads from the finished round's events."""
   for notice in backend_types.lifecycle_for(option).round_notices(option, events):
     await item.callbacks.persist_and_broadcast(item.session_meta.id, notice)
@@ -764,7 +756,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
   assert record is not None and item.resume_is_alive is not None
   is_alive = item.resume_is_alive
 
-  raw_path = Path(record.raw_log)
+  raw_path = pathlib.Path(record.raw_log)
   log_dir = raw_path.parent
   cursor_path = log_dir / runs.CURSOR_NAME
   stderr_path = log_dir / runs.STDERR_LOG_NAME
@@ -779,13 +771,13 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
 
   try:
     stream_translate = _build_fresh_translate(cfg, option)
-    async for event in tail_follow_events(
+    async for event in base.tail_follow_events(
         raw_path,
         translate=stream_translate,
         is_alive=is_alive,
         cursor=cursor_path,
         start_offset=runs.read_raw_cursor(cursor_path),
-        post_result_timeout=AgentBackend._POST_RESULT_TIMEOUT,
+        post_result_timeout=base.AgentBackend._POST_RESULT_TIMEOUT,
         buffer_limit=cfg.subprocess_buffer_limit,
     ):
       tracker.on_event(event)
@@ -799,7 +791,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     if any(_is_manual_compact_boundary(event) for event in events):
       tracker.note_manual_compact()
 
-    stderr_text = await asyncio.to_thread(_read_stderr_tail, stderr_path)
+    stderr_text = await asyncio.to_thread(base._read_stderr_tail, stderr_path)
     if stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text)
     if exit_code != 0:
@@ -829,7 +821,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
       alive = runs.run_alive_probe(record.pid, record.pid_start, record.started_at, host_boot)
       if alive():
         log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
-        await kill_group_escalating(record.pid, alive)
+        await process.kill_group_escalating(record.pid, alive)
 
   except asyncio.CancelledError:
     log.warning("master_cc_resume_cancelled", session=session_meta.id)

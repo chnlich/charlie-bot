@@ -5,10 +5,10 @@ read the same files, so both import the one walk from here.
 """
 
 import os
-from pathlib import Path
+import pathlib
 
 
-def iter_trigger_file_stats(triggers_dir: str | Path) -> list[tuple[str, os.stat_result]]:
+def iter_trigger_file_stats(triggers_dir: str | pathlib.Path) -> list[tuple[str, os.stat_result]]:
   """(path, stat) pairs for the regular ``*.json`` trigger files under *triggers_dir*.
 
   The one scandir+stat walk every trigger read shares: the list memo of ``TriggerManager``

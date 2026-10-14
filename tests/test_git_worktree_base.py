@@ -28,28 +28,27 @@ Plus the remote operations' per-attempt limit:
 
 import asyncio
 import os
+import pathlib
 import subprocess
-from pathlib import Path
-from types import SimpleNamespace
+import types
 
+import conftest
 import pytest
-from conftest import run_git
 from structlog import testing
 
 from src.infra import git, timeouts
-from src.infra.git import BaseBranchResolutionError, BaseResolution, git_create_worktree, git_current_branch
 
 
-def _commit(cwd: Path, filename: str, content: str, message: str) -> str:
+def _commit(cwd: pathlib.Path, filename: str, content: str, message: str) -> str:
   """Write a file, commit it, and return the new commit's SHA."""
   (cwd / filename).write_text(content, encoding="utf-8")
-  run_git(cwd, "add", filename)
-  run_git(cwd, "commit", "-m", message)
-  return run_git(cwd, "rev-parse", "HEAD")
+  conftest.run_git(cwd, "add", filename)
+  conftest.run_git(cwd, "commit", "-m", message)
+  return conftest.run_git(cwd, "rev-parse", "HEAD")
 
 
 @pytest.fixture
-def repo_setup(tmp_path: Path) -> dict[str, Path]:
+def repo_setup(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
   """Create a bare 'origin' repo plus a 'main_checkout' clone with one shared commit.
 
   Both sides start with the same single commit on branch 'feature'. Tests then
@@ -60,20 +59,20 @@ def repo_setup(tmp_path: Path) -> dict[str, Path]:
   main_checkout = tmp_path / "main_checkout"
 
   # Bare remote.
-  run_git(tmp_path, "init", "--bare", str(origin))
+  conftest.run_git(tmp_path, "init", "--bare", str(origin))
 
   # Seed clone — author the initial commit on branch 'feature' and push.
-  run_git(tmp_path, "clone", str(origin), str(seed))
-  run_git(seed, "config", "user.email", "test@example.com")
-  run_git(seed, "config", "user.name", "Test")
-  run_git(seed, "checkout", "-b", "feature")
+  conftest.run_git(tmp_path, "clone", str(origin), str(seed))
+  conftest.run_git(seed, "config", "user.email", "test@example.com")
+  conftest.run_git(seed, "config", "user.name", "Test")
+  conftest.run_git(seed, "checkout", "-b", "feature")
   _commit(seed, "README.md", "seed\n", "seed")
-  run_git(seed, "push", "-u", "origin", "feature")
+  conftest.run_git(seed, "push", "-u", "origin", "feature")
 
   # Main checkout — represents the user's working clone.
-  run_git(tmp_path, "clone", "--branch", "feature", str(origin), str(main_checkout))
-  run_git(main_checkout, "config", "user.email", "test@example.com")
-  run_git(main_checkout, "config", "user.name", "Test")
+  conftest.run_git(tmp_path, "clone", "--branch", "feature", str(origin), str(main_checkout))
+  conftest.run_git(main_checkout, "config", "user.email", "test@example.com")
+  conftest.run_git(main_checkout, "config", "user.name", "Test")
 
   return {
       "origin": origin,
@@ -83,44 +82,44 @@ def repo_setup(tmp_path: Path) -> dict[str, Path]:
   }
 
 
-def _worktree_head(wt_path: Path) -> str:
-  return run_git(wt_path, "rev-parse", "HEAD")
+def _worktree_head(wt_path: pathlib.Path) -> str:
+  return conftest.run_git(wt_path, "rev-parse", "HEAD")
 
 
 @pytest.mark.asyncio
-async def test_local_equals_origin_uses_origin_tip(repo_setup: dict[str, Path]) -> None:
+async def test_local_equals_origin_uses_origin_tip(repo_setup: dict[str, pathlib.Path]) -> None:
   """When local and origin point at the same commit, the worktree starts from origin/<base>."""
   main_checkout = repo_setup["main_checkout"]
-  expected = run_git(main_checkout, "rev-parse", "feature")
+  expected = conftest.run_git(main_checkout, "rev-parse", "feature")
 
   wt_path = repo_setup["tmp_path"] / "wt-equal"
-  resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-equal", wt_path)
+  resolution = await git.git_create_worktree(main_checkout, "feature", "charliebot/task-equal", wt_path)
 
   assert _worktree_head(wt_path) == expected
-  assert isinstance(resolution, BaseResolution)
+  assert isinstance(resolution, git.BaseResolution)
   assert resolution.canonical == "feature"
   assert resolution.start_point == "origin/feature"
 
 
 @pytest.mark.asyncio
-async def test_local_behind_origin_starts_from_origin_tip(repo_setup: dict[str, Path]) -> None:
+async def test_local_behind_origin_starts_from_origin_tip(repo_setup: dict[str, pathlib.Path]) -> None:
   """A local branch strictly behind origin starts from the origin tip: the
   worktree misses nothing, and the shared checkout's local ref is untouched."""
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
 
   origin_tip = _commit(seed, "advance.txt", "advance\n", "advance origin")
-  run_git(seed, "push", "origin", "feature")
-  local_tip = run_git(main_checkout, "rev-parse", "feature")
+  conftest.run_git(seed, "push", "origin", "feature")
+  local_tip = conftest.run_git(main_checkout, "rev-parse", "feature")
   assert local_tip != origin_tip  # the local branch is behind
 
   wt_path = repo_setup["tmp_path"] / "wt-behind"
-  resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-behind", wt_path)
+  resolution = await git.git_create_worktree(main_checkout, "feature", "charliebot/task-behind", wt_path)
 
   assert _worktree_head(wt_path) == origin_tip
-  assert run_git(main_checkout, "rev-parse", resolution.start_point) == origin_tip
-  assert run_git(main_checkout, "rev-parse", "feature") == local_tip  # the local ref never moved
-  assert isinstance(resolution, BaseResolution)
+  assert conftest.run_git(main_checkout, "rev-parse", resolution.start_point) == origin_tip
+  assert conftest.run_git(main_checkout, "rev-parse", "feature") == local_tip  # the local ref never moved
+  assert isinstance(resolution, git.BaseResolution)
   assert resolution.canonical == "feature"
   assert resolution.start_point == "origin/feature"
   assert resolution.detail == (
@@ -130,7 +129,7 @@ async def test_local_behind_origin_starts_from_origin_tip(repo_setup: dict[str, 
 
 @pytest.mark.asyncio
 async def test_merge_base_unexpected_exit_code_raises(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A merge-base answer that is neither 0 nor 1 (a corrupt repo's exit 128, a
   killed process's 2) is a hard error naming the command and its stderr — the
   resolution never guesses from a broken probe."""
@@ -139,7 +138,7 @@ async def test_merge_base_unexpected_exit_code_raises(
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
   _commit(seed, "advance.txt", "advance\n", "advance origin")
-  run_git(seed, "push", "origin", "feature")  # local feature is now behind: the probe runs
+  conftest.run_git(seed, "push", "origin", "feature")  # local feature is now behind: the probe runs
 
   class _BrokenProc:
     returncode = 2
@@ -153,8 +152,8 @@ async def test_merge_base_unexpected_exit_code_raises(
 
   monkeypatch.setattr(git_mod, "_git_proc_bytes", _broken_merge_base)
 
-  with pytest.raises(BaseBranchResolutionError) as excinfo:
-    await git_create_worktree(
+  with pytest.raises(git.BaseBranchResolutionError) as excinfo:
+    await git.git_create_worktree(
         main_checkout, "feature", "charliebot/task-mb-fail", repo_setup["tmp_path"] / "wt-mb-fail")
   message = str(excinfo.value)
   assert "merge-base --is-ancestor" in message
@@ -164,13 +163,13 @@ async def test_merge_base_unexpected_exit_code_raises(
 
 @pytest.mark.asyncio
 async def test_worktree_add_retries_a_transient_config_lock(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A lock-class failure from a concurrent worktree add is retried: the second
   attempt's result is the one used, and the worktree exists."""
   from src.infra import git as git_mod
 
   main_checkout = repo_setup["main_checkout"]
-  expected = run_git(main_checkout, "rev-parse", "feature")
+  expected = conftest.run_git(main_checkout, "rev-parse", "feature")
   wt_path = repo_setup["tmp_path"] / "wt-retry"
   real_proc_bytes = git_mod._git_proc_bytes
   calls = {"n": 0}
@@ -179,7 +178,8 @@ async def test_worktree_add_retries_a_transient_config_lock(
     if args[:2] == ("worktree", "add"):
       calls["n"] += 1
       if calls["n"] == 1:
-        return (SimpleNamespace(returncode=128), b"", b"fatal: could not lock config file .git/config: File exists")
+        return (
+            types.SimpleNamespace(returncode=128), b"", b"fatal: could not lock config file .git/config: File exists")
       return await real_proc_bytes(repo_path, *args, timeout=timeout)
     return await real_proc_bytes(repo_path, *args, timeout=timeout)
 
@@ -191,7 +191,7 @@ async def test_worktree_add_retries_a_transient_config_lock(
   monkeypatch.setattr(git_mod, "_git_proc_bytes", _lock_once_then_real)
   monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
 
-  resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-retry", wt_path)
+  resolution = await git.git_create_worktree(main_checkout, "feature", "charliebot/task-retry", wt_path)
 
   assert calls["n"] == 2
   assert delays == [0.1]
@@ -201,7 +201,7 @@ async def test_worktree_add_retries_a_transient_config_lock(
 
 @pytest.mark.asyncio
 async def test_concurrent_worktree_adds_in_one_repo_never_overlap(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """Overlapping adds contend for .git/config.lock, and the loser exits non-zero
   after it created its branch, so a retry of the same command cannot succeed:
   the adds of one repository run one at a time."""
@@ -212,7 +212,7 @@ async def test_concurrent_worktree_adds_in_one_repo_never_overlap(
   running = {"now": 0, "most": 0}
 
   async def _resolve(repo_path, base_branch, *, remote_tip=None):
-    return BaseResolution(canonical="feature", start_point="origin/feature", detail="fixed")
+    return git.BaseResolution(canonical="feature", start_point="origin/feature", detail="fixed")
 
   async def _count_overlap(repo_path, *args, timeout):
     if args[:2] != ("worktree", "add"):
@@ -230,7 +230,7 @@ async def test_concurrent_worktree_adds_in_one_repo_never_overlap(
   paths = [repo_setup["tmp_path"] / f"wt-parallel-{i}" for i in range(3)]
   await asyncio.gather(
       *(
-          git_create_worktree(main_checkout, "feature", f"charliebot/task-parallel-{i}", path)
+          git.git_create_worktree(main_checkout, "feature", f"charliebot/task-parallel-{i}", path)
           for i, path in enumerate(paths)))
 
   assert running["most"] == 1
@@ -239,7 +239,7 @@ async def test_concurrent_worktree_adds_in_one_repo_never_overlap(
 
 @pytest.mark.asyncio
 async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A lock that never clears fails loudly on the last attempt with git's own
   error text, after the full 100ms/200ms/400ms backoff schedule."""
   from src.infra import git as git_mod
@@ -252,7 +252,7 @@ async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
   async def _always_locked(repo_path, *args, timeout):
     if args[:2] == ("worktree", "add"):
       calls["n"] += 1
-      return (SimpleNamespace(returncode=128), b"", b"fatal: could not lock config file .git/config: File exists")
+      return (types.SimpleNamespace(returncode=128), b"", b"fatal: could not lock config file .git/config: File exists")
     return await real_proc_bytes(repo_path, *args, timeout=timeout)
 
   delays: list[float] = []
@@ -264,7 +264,7 @@ async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
   monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
 
   with pytest.raises(RuntimeError) as excinfo:
-    await git_create_worktree(main_checkout, "feature", "charliebot/task-locked", wt_path)
+    await git.git_create_worktree(main_checkout, "feature", "charliebot/task-locked", wt_path)
 
   assert calls["n"] == 4  # the first invocation plus 3 retries
   assert delays == [0.1, 0.2, 0.4]
@@ -273,7 +273,7 @@ async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
 
 @pytest.mark.asyncio
 async def test_worktree_add_non_lock_failure_raises_immediately(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A failure outside the lock class is not retried: it raises on the first
   attempt carrying git's real error."""
   from src.infra import git as git_mod
@@ -286,7 +286,7 @@ async def test_worktree_add_non_lock_failure_raises_immediately(
   async def _bad_object(repo_path, *args, timeout):
     if args[:2] == ("worktree", "add"):
       calls["n"] += 1
-      return SimpleNamespace(returncode=128), b"", b"fatal: invalid reference: nope"
+      return types.SimpleNamespace(returncode=128), b"", b"fatal: invalid reference: nope"
     return await real_proc_bytes(repo_path, *args, timeout=timeout)
 
   async def _no_sleep(seconds: float) -> None:
@@ -296,7 +296,7 @@ async def test_worktree_add_non_lock_failure_raises_immediately(
   monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
   with pytest.raises(RuntimeError) as excinfo:
-    await git_create_worktree(main_checkout, "feature", "charliebot/task-bad-object", wt_path)
+    await git.git_create_worktree(main_checkout, "feature", "charliebot/task-bad-object", wt_path)
 
   assert calls["n"] == 1
   assert "fatal: invalid reference: nope" in str(excinfo.value)
@@ -306,7 +306,7 @@ async def test_worktree_add_non_lock_failure_raises_immediately(
 
 
 @pytest.fixture
-def remote_default_repo(tmp_path: Path) -> dict[str, Path]:
+def remote_default_repo(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
   """Bare origin whose HEAD points at main, plus a clone of it.
 
   The clone's refs/remotes/origin/HEAD symref is written once at clone time and
@@ -317,19 +317,19 @@ def remote_default_repo(tmp_path: Path) -> dict[str, Path]:
   seed = tmp_path / "seed"
   clone = tmp_path / "clone"
 
-  run_git(tmp_path, "init", "--bare", str(origin))
-  run_git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+  conftest.run_git(tmp_path, "init", "--bare", str(origin))
+  conftest.run_git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
 
-  run_git(tmp_path, "clone", str(origin), str(seed))
-  run_git(seed, "config", "user.email", "test@example.com")
-  run_git(seed, "config", "user.name", "Test")
-  run_git(seed, "symbolic-ref", "HEAD", "refs/heads/main")
+  conftest.run_git(tmp_path, "clone", str(origin), str(seed))
+  conftest.run_git(seed, "config", "user.email", "test@example.com")
+  conftest.run_git(seed, "config", "user.name", "Test")
+  conftest.run_git(seed, "symbolic-ref", "HEAD", "refs/heads/main")
   _commit(seed, "README.md", "seed\n", "seed main")
-  run_git(seed, "push", "-u", "origin", "main")
+  conftest.run_git(seed, "push", "-u", "origin", "main")
 
-  run_git(tmp_path, "clone", str(origin), str(clone))
-  run_git(clone, "config", "user.email", "test@example.com")
-  run_git(clone, "config", "user.name", "Test")
+  conftest.run_git(tmp_path, "clone", str(origin), str(clone))
+  conftest.run_git(clone, "config", "user.email", "test@example.com")
+  conftest.run_git(clone, "config", "user.name", "Test")
 
   return {
       "origin": origin,
@@ -340,7 +340,7 @@ def remote_default_repo(tmp_path: Path) -> dict[str, Path]:
 
 
 @pytest.mark.asyncio
-async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo: dict[str, Path]) -> None:
+async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo: dict[str, pathlib.Path]) -> None:
   """origin's main advanced, local main stale, checkout on a branch origin does
   not have. A base-less launch must still start at origin's main tip."""
   seed = remote_default_repo["seed"]
@@ -348,27 +348,27 @@ async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo:
   tmp_path = remote_default_repo["tmp_path"]
 
   origin_tip = _commit(seed, "advance.txt", "advance\n", "advance origin main")
-  run_git(seed, "push", "origin", "main")
-  assert run_git(clone, "rev-parse", "main") != origin_tip  # sanity: local main is behind
+  conftest.run_git(seed, "push", "origin", "main")
+  assert conftest.run_git(clone, "rev-parse", "main") != origin_tip  # sanity: local main is behind
 
-  run_git(clone, "checkout", "-b", "local-only")
+  conftest.run_git(clone, "checkout", "-b", "local-only")
 
   base = "origin/main"
   wt_path = tmp_path / "wt-baseless"
-  resolution = await git_create_worktree(clone, base, "charliebot/task-baseless", wt_path)
+  resolution = await git.git_create_worktree(clone, base, "charliebot/task-baseless", wt_path)
 
-  assert run_git(clone, "rev-parse", resolution.start_point) == origin_tip
+  assert conftest.run_git(clone, "rev-parse", resolution.start_point) == origin_tip
   assert wt_path.is_dir()
   assert _worktree_head(wt_path) == origin_tip
 
   # The old fallback (the checkout's current branch) must never land on origin's
   # main tip: it either hard-errors or starts from a different commit. This
   # catches a silent regression back to reading local refs.
-  old_base = await git_current_branch(clone)
+  old_base = await git.git_current_branch(clone)
   try:
     old_wt = tmp_path / "wt-old-fallback"
-    await git_create_worktree(clone, old_base, "charliebot/task-old-fallback", old_wt)
-  except BaseBranchResolutionError:
+    await git.git_create_worktree(clone, old_base, "charliebot/task-old-fallback", old_wt)
+  except git.BaseBranchResolutionError:
     pass
   else:
     assert _worktree_head(old_wt) != origin_tip
@@ -397,7 +397,7 @@ _FAKE_REMOTE_ATTEMPT_TIMEOUT = 0.3  # seconds; each hung attempt costs the test 
 
 
 @pytest.fixture
-def fake_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_git(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Put the fake git first on PATH, shrink the per-attempt limit, and return the call-count file."""
   bin_dir = tmp_path / "bin"
   bin_dir.mkdir()
@@ -414,7 +414,7 @@ def fake_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.mark.asyncio
 async def test_remote_op_hung_first_attempt_succeeds_on_retry(
-    fake_git: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_git: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A hung first ls-remote is killed at the per-attempt limit; the second
   attempt's answer is the result, and one warning names attempt 1."""
   sha = "a" * 40
@@ -443,7 +443,8 @@ async def test_remote_op_hung_first_attempt_succeeds_on_retry(
     ],
 )
 async def test_remote_op_failing_every_attempt_returns_single_attempt_error(
-    fake_git: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, expected_error: str) -> None:
+    fake_git: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+    expected_error: str) -> None:
   """When every attempt fails, the caller gets the error one attempt returned
   before the retries existed — the timeout message, or the last attempt's
   stderr — after one warning per attempt and no wait between attempts."""
@@ -468,14 +469,14 @@ async def test_remote_op_failing_every_attempt_returns_single_attempt_error(
 
 @pytest.mark.asyncio
 async def test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limit(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """worktree add, add and commit keep the 60 s local limit; ls-remote, fetch
   and push each run under the 120 s per-attempt limit."""
   origin = repo_setup["origin"]
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
   _commit(seed, "advance.txt", "advance\n", "advance origin")
-  run_git(seed, "push", "origin", "feature")  # local feature is now behind: the resolution fetches
+  conftest.run_git(seed, "push", "origin", "feature")  # local feature is now behind: the resolution fetches
   (seed / "note.txt").write_text("note\n", encoding="utf-8")
 
   seen: list[tuple[tuple[str, ...], float]] = []
@@ -493,11 +494,13 @@ async def test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limi
   monkeypatch.setattr(git, "_git_proc_bytes", _recording_proc_bytes)
   monkeypatch.setattr(subprocess, "run", _recording_run)
 
-  await git_create_worktree(main_checkout, "feature", "charliebot/task-limits", repo_setup["tmp_path"] / "wt-limits")
+  await git.git_create_worktree(
+      main_checkout, "feature", "charliebot/task-limits", repo_setup["tmp_path"] / "wt-limits")
   await git.git_add_commit_push(seed, ["note.txt"], "add note")
 
   monkeypatch.undo()
-  assert run_git(origin, "rev-parse", "feature") == run_git(seed, "rev-parse", "HEAD")  # the push landed
+  assert conftest.run_git(origin, "rev-parse",
+                          "feature") == conftest.run_git(seed, "rev-parse", "HEAD")  # the push landed
   verbs = ("worktree", "add", "commit", "ls-remote", "fetch", "push")
   assert {
       verb: {timeout for args, timeout in seen if verb in args} for verb in verbs

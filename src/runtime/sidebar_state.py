@@ -16,7 +16,7 @@ window around a mark.
 
 from collections.abc import Iterable
 
-from src.infra.memo import BoundedMemo
+from src.infra import memo
 
 # The sidebar dict keys, single-homed here: the probe snapshot and the
 # per-request derived entry both build and read their dicts by these names,
@@ -70,7 +70,7 @@ _derived_generation = 0
 # caller may read them but never mutate them — the contract every
 # resolve_sidebar_state caller already holds.
 _DERIVED_MAP_MEMO_LIMIT = 4
-_derived_maps: BoundedMemo[tuple, dict] = BoundedMemo(_DERIVED_MAP_MEMO_LIMIT)
+_derived_maps: memo.BoundedMemo[tuple, dict] = memo.BoundedMemo(_DERIVED_MAP_MEMO_LIMIT)
 
 
 def mark_sidebar_dirty(session_id: str) -> None:

@@ -2,13 +2,13 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+import pydantic
 
 
-class VoiceConfig(BaseModel):
+class VoiceConfig(pydantic.BaseModel):
   """``voice:`` section: transcription backend and local-engine selection."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Voice transcription engine. 'sherpa' runs the CPU ONNX pipeline everywhere; 'qwen3_hf'
   # runs the official transformers Qwen3-ASR weights on NVIDIA GPUs (gpu-voice dependency

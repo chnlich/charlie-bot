@@ -10,7 +10,6 @@ import conftest
 import pytest
 import yaml
 
-from src.features.cron import api as cron_api
 from src.features.cron import config as cron_config
 from src.features.cron import loader
 from src.infra import config
@@ -19,12 +18,11 @@ from src.infra import config
 def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: pathlib.Path) -> None:
   """Redirect the cron API's host-file IO at *cron_dir*.
 
-  src.features.cron.api binds cron_dir and cron_path as separate module globals, so
-  both must move; patching cron_dir alone leaves cron_path resolving the real
-  profile directory through src.features.cron.loader.
+  src.features.cron.api resolves cron_dir and cron_path on the loader module at
+  call time, so both patches land on src.features.cron.loader.
   """
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  monkeypatch.setattr(cron_api, "cron_path", lambda name: cron_dir / f"{name}.yaml")
+  monkeypatch.setattr(loader, "cron_dir", lambda: cron_dir)
+  monkeypatch.setattr(loader, "cron_path", lambda name: cron_dir / f"{name}.yaml")
 
 
 _NIGHTLY_PROMPT_MD = "run nightly\n"

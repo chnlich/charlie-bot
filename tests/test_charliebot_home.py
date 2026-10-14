@@ -101,7 +101,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
 
   cfg = core_config.get_config()
   cron_loader.get_scheduled_tasks()
-  api_cron.cron_dir().mkdir(parents=True, exist_ok=True)
+  cron_loader.cron_dir().mkdir(parents=True, exist_ok=True)
   api_cron._write_cron_yaml("probe", {"cron": "* * * * *", "prompt": "p"})
   assert api_cron._read_cron_yaml("probe") == {"cron": "* * * * *", "prompt": "p"}
 
@@ -112,7 +112,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
       cfg.config_d_dir,
       store_root.memory_dir(cfg),
       cfg.claude_md_file,
-      api_cron.cron_dir(),
+      cron_loader.cron_dir(),
       trace_api._perfetto_merge_cache_dir(),
       core_backup.charliebot_dir(),
   ]

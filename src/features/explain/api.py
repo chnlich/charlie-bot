@@ -4,11 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.features.explain import explain
-from src.infra.config import CharlieBotConfig
-from src.infra.models import SessionMetadata
-from src.infra.responses import FastJsonResponse
-from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_events, require_session
-from src.runtime.session_events import SessionEvents
+from src.infra import config, models, responses
+from src.runtime import session_events
+from src.runtime.api import deps
 
 router = APIRouter()
 
@@ -23,10 +21,10 @@ class ExplainRequest(BaseModel):
 async def request_session_explain(
     session_id: str,
     body: ExplainRequest,
-    _meta: SessionMetadata = Depends(require_session),
-    session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> FastJsonResponse:
+    _meta: models.SessionMetadata = Depends(deps.require_session),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+) -> responses.FastJsonResponse:
   """Register (or return) the explain task for a divider; generation runs detached.
 
   A divider with no entry, or a terminal one (re-run overwrites), returns 202 with
@@ -35,34 +33,34 @@ async def request_session_explain(
   """
   option = cfg.get_backend_option(body.backend)
   if option is None:
-    raise bad_request(ValueError(f"unknown backend: {body.backend}"))
-  entry, created = await explain.request_explain(session_events, session_id, body.event_index, option, cfg)
-  return FastJsonResponse(entry, status_code=202 if created else 200)
+    raise deps.bad_request(ValueError(f"unknown backend: {body.backend}"))
+  entry, created = await explain.request_explain(events, session_id, body.event_index, option, cfg)
+  return responses.FastJsonResponse(entry, status_code=202 if created else 200)
 
 
 @router.get('/{session_id}/explain')
 async def get_session_explain(
     session_id: str,
     upto: int,
-    _meta: SessionMetadata = Depends(require_session),
-    session_events: SessionEvents = Depends(get_session_events),
-) -> FastJsonResponse:
+    _meta: models.SessionMetadata = Depends(deps.require_session),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+) -> responses.FastJsonResponse:
   """The single explain entry for a divider; answer and error bodies included."""
-  entry = await explain.get_explain_entry(session_events, session_id, upto)
+  entry = await explain.get_explain_entry(events, session_id, upto)
   if entry is None:
     raise HTTPException(status_code=404, detail=f"no explain entry for event_index {upto}")
-  return FastJsonResponse(entry)
+  return responses.FastJsonResponse(entry)
 
 
 @router.get('/{session_id}/explain/status')
 async def get_session_explain_status(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
-    session_events: SessionEvents = Depends(get_session_events),
-) -> FastJsonResponse:
+    _meta: models.SessionMetadata = Depends(deps.require_session),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+) -> responses.FastJsonResponse:
   """Every explain entry's ``{upto: {state, backend, generated_at}}`` summary; bodies excluded.
 
   The chat page pulls this once per session load/switch to render each divider's
   explain button from persisted truth.
   """
-  return FastJsonResponse(await explain.explain_status(session_events, session_id))
+  return responses.FastJsonResponse(await explain.explain_status(events, session_id))

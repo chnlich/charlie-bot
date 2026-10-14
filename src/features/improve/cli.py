@@ -106,7 +106,7 @@ def main() -> None:
     # stays identical.
     from src.features.improve import improve_sequence  # deferred: charliebot improve --help
     from src.infra import config, models  # deferred: charliebot improve --help
-    from src.runtime.runs import RUN_METADATA_NAME  # deferred: charliebot improve --help
+    from src.runtime import runs  # deferred: charliebot improve --help
 
     cfg = config.get_config()
     loops_dir = cfg.sessions_dir / session_id / "loops"
@@ -137,7 +137,7 @@ def main() -> None:
     # presence (and only the matching parent's) proves the v2 admission.
     try:
       meta = models.SessionMetadata.model_validate_json(
-          (cfg.sessions_dir / session_id / RUN_METADATA_NAME).read_text(encoding="utf-8"))
+          (cfg.sessions_dir / session_id / runs.RUN_METADATA_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
       meta = None
     if meta is None:

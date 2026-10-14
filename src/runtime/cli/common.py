@@ -26,24 +26,14 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
   import io
+  import pathlib
   import socket
   import urllib.parse
-  from pathlib import Path
 
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
-from src.infra import home
-from src.infra.constants import CALLER_SESSION_HEADER, SESSION_ID_ENV_VAR
-from src.infra.credentials import configured_access_key
-from src.infra.home import charliebot_home_dir
-from src.infra.json_utils import write_json_atomically
-from src.infra.timeouts import (
-    CLI_CONNECT_TOTAL_TIMEOUT,
-    HTTP_INTERNAL_API_TIMEOUT,
-    HTTP_VERSION_SKEW_TIMEOUT,
-    SUBPROCESS_GIT_SHA_TIMEOUT,
-)
-from src.runtime.run_token import load_run_token
+from src.infra import constants, credentials, home, json_utils, timeouts
+from src.runtime import run_token
 
 TASK_SPEC_REQUIRED_HEADINGS = (
     "Goal",
@@ -321,7 +311,7 @@ def _request_get(
   return _send_request("GET", url, payload=None, params=params, headers=headers, timeout=timeout)
 
 
-def get_config() -> CharlieBotConfig:
+def get_config() -> config.CharlieBotConfig:
   """Resolve the process config, importing its module on first call.
 
   Only paths that read config import it: --help never does, and the request path
@@ -329,8 +319,8 @@ def get_config() -> CharlieBotConfig:
   module attribute stays the tests' patch target (conftest
   CLI_COMMON_GET_CONFIG_PATCH_TARGET setattrs this name).
   """
-  from src.infra.config import get_config  # deferred: charliebot improve --help
-  return get_config()
+  from src.infra import config  # deferred: charliebot improve --help
+  return config.get_config()
 
 
 # The request contract's server port, cached under the profile home as a
@@ -360,9 +350,9 @@ def _cached_server_port() -> int | None:
   """Return the cached server port, or None when the document is absent, stale, or unreadable."""
   fingerprint = [list(home.file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
   try:
-    from pathlib import Path
+    import pathlib
 
-    doc = json.loads((Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH).read_text(encoding="utf-8"))
+    doc = json.loads((pathlib.Path(home.charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH).read_text(encoding="utf-8"))
   except (OSError, ValueError):
     return None
   if not isinstance(doc, dict) or doc.get("fingerprint") != fingerprint:
@@ -373,12 +363,12 @@ def _cached_server_port() -> int | None:
 
 def _store_base_url_cache(port: int) -> None:
   """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
-  from pathlib import Path
+  import pathlib
 
   doc = {"fingerprint": [home.file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
-  cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
+  cache_path = pathlib.Path(home.charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
   cache_path.parent.mkdir(parents=True, exist_ok=True)
-  write_json_atomically(cache_path, doc, private=True)
+  json_utils.write_json_atomically(cache_path, doc, private=True)
 
 
 def _internal_base_url() -> str:
@@ -395,12 +385,12 @@ def _internal_base_url() -> str:
   return f"http://localhost:{port}"
 
 
-def _sessions_dir() -> Path:
+def _sessions_dir() -> pathlib.Path:
   """The sessions root, derived from the env-resolved home (the same value the config model
   carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
   (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
 
-  return (charliebot_home_dir() / "sessions").resolve()
+  return (home.charliebot_home_dir() / "sessions").resolve()
 
 
 def internal_api_auth_headers() -> dict[str, str]:
@@ -419,10 +409,10 @@ def internal_api_auth_headers() -> dict[str, str]:
   operator caller identities only (an agent's session comes from its verified
   token, never the header).
   """
-  run_token = load_run_token()
-  if run_token:
-    return _with_caller_session({"Authorization": f"Bearer {run_token}"})
-  access_key = configured_access_key()
+  token = run_token.load_run_token()
+  if token:
+    return _with_caller_session({"Authorization": f"Bearer {token}"})
+  access_key = credentials.configured_access_key()
   if access_key:
     return _with_caller_session({"Authorization": f"Bearer {access_key}"})
   return {}
@@ -434,9 +424,9 @@ def _with_caller_session(headers: dict[str, str]) -> dict[str, str]:
   The value comes from the environment variable only: it names the process the
   server started, while the cwd only names a directory.
   """
-  session_id = os.environ.get(SESSION_ID_ENV_VAR)
+  session_id = os.environ.get(constants.SESSION_ID_ENV_VAR)
   if session_id:
-    headers[CALLER_SESSION_HEADER] = session_id
+    headers[constants.CALLER_SESSION_HEADER] = session_id
   return headers
 
 
@@ -453,9 +443,9 @@ def exit_error(message: str) -> NoReturn:
 
 def read_required_text_file(flag_name: str, file_path: str) -> str:
   """Read a required text file, exiting non-zero on a missing or empty file."""
-  from pathlib import Path
+  import pathlib
 
-  path = Path(file_path)
+  path = pathlib.Path(file_path)
   if not path.is_file():
     exit_usage_error(f"{flag_name} not found: {file_path}")
   content = path.read_text()
@@ -482,9 +472,9 @@ def validate_repo_path(parser: argparse.ArgumentParser, value: str) -> None:
   """
   if not value.startswith("/"):
     parser.error(f"--repo must be an absolute path (starting with '/'), got: {value!r}")
-  from pathlib import Path
+  import pathlib
 
-  if not Path(value).is_dir():
+  if not pathlib.Path(value).is_dir():
     parser.error(f"--repo does not exist: {value!r}")
 
 
@@ -516,9 +506,9 @@ def validate_task_spec_markdown(content: str) -> None:
       continue
     if stripped.startswith("- /"):
       source_path = stripped[2:].strip()
-      from pathlib import Path
+      import pathlib
 
-      if not Path(source_path).exists():
+      if not pathlib.Path(source_path).exists():
         exit_usage_error(f"task spec source file not found: {source_path}")
       continue
     exit_usage_error(f"task spec source file entries must be absolute paths or - (none): {stripped}")
@@ -560,7 +550,7 @@ def _best_effort_server_version(base_url: str) -> tuple[str | None, str | None]:
         f"{base_url}/api/internal/version",
         params=None,
         headers=internal_api_auth_headers(),
-        timeout=HTTP_VERSION_SKEW_TIMEOUT)
+        timeout=timeouts.HTTP_VERSION_SKEW_TIMEOUT)
     if resp.status_code >= 400:
       return None, None
     info = resp.json()
@@ -571,10 +561,10 @@ def _best_effort_server_version(base_url: str) -> tuple[str | None, str | None]:
 
 def _maybe_version_skew_hint(base_url: str) -> str | None:
   """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
-  from src.infra.buildinfo import read_repo_head_sha  # deferred: charliebot improve --help
+  from src.infra import buildinfo  # deferred: charliebot improve --help
 
   server_sha, started_at = _best_effort_server_version(base_url)
-  local_sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT)
+  local_sha = buildinfo.read_repo_head_sha(timeouts.SUBPROCESS_GIT_SHA_TIMEOUT)
   return compose_version_skew_hint(server_sha, started_at, local_sha)
 
 
@@ -619,17 +609,23 @@ def _request_with_contract(
   """Issue one internal-API call under the restart-crossing contract."""
   base_url = _internal_base_url()
   url = f"{base_url}{endpoint}"
-  deadline = time.monotonic() + CLI_CONNECT_TOTAL_TIMEOUT
+  deadline = time.monotonic() + timeouts.CLI_CONNECT_TOTAL_TIMEOUT
   attempt = 0
   while True:
     try:
       if method == "POST":
         resp = _request_post(
-            url, json=payload, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+            url,
+            json=payload,
+            params=params,
+            headers=internal_api_auth_headers(),
+            timeout=timeouts.HTTP_INTERNAL_API_TIMEOUT)
       elif method == "PATCH":
-        resp = _request_patch(url, json=payload, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+        resp = _request_patch(
+            url, json=payload, headers=internal_api_auth_headers(), timeout=timeouts.HTTP_INTERNAL_API_TIMEOUT)
       elif method == "GET":
-        resp = _request_get(url, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+        resp = _request_get(
+            url, params=params, headers=internal_api_auth_headers(), timeout=timeouts.HTTP_INTERNAL_API_TIMEOUT)
       else:
         raise RuntimeError(f"internal-API method is POST, PATCH or GET, got {method!r}")
     except _ConnectPhaseError as e:
@@ -706,19 +702,18 @@ def find_local_task_child(
   returns None (outcome unknown), never a fallback to an unrelated sibling or
   unrelated task.
   """
-  from src.infra.models import SessionMetadata  # deferred: charliebot improve --help
+  from src.infra import models  # deferred: charliebot improve --help
 
   # deferred: charliebot improve --help
-  from src.runtime.control_events import derived_delegate_request_id, stable_task_id
-  from src.runtime.runs import DATA_DIR_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME  # deferred: charliebot improve --help
+  from src.runtime import control_events, runs
 
-  resolved_request_id = request_id or derived_delegate_request_id(session_id, task_type, description)
-  child_id = stable_task_id(session_id, resolved_request_id)
-  meta_path = get_config().sessions_dir / child_id / RUN_METADATA_NAME
+  resolved_request_id = request_id or control_events.derived_delegate_request_id(session_id, task_type, description)
+  child_id = control_events.stable_task_id(session_id, resolved_request_id)
+  meta_path = get_config().sessions_dir / child_id / runs.RUN_METADATA_NAME
   if not meta_path.is_file():
     return None
   try:
-    meta = SessionMetadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    meta = models.SessionMetadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
   except (OSError, ValueError):
     return None
   if (meta.id != child_id or meta.task_parent_id != session_id or meta.profile != "worker" or meta.task is None or
@@ -728,9 +723,10 @@ def find_local_task_child(
   # (child, "<request id>:work") binding the server launched — not "whatever
   # run directory sorts first" (a review Run of the same child is a different
   # operation).
-  from src.runtime.control_events import stable_run_id  # deferred: charliebot improve --help
-  run_id = stable_run_id(child_id, f"{resolved_request_id}:work")
-  if not (get_config().sessions_dir / child_id / DATA_DIR_NAME / RUNS_DIR_NAME / run_id / RUN_METADATA_NAME).is_file():
+  from src.runtime import control_events  # deferred: charliebot improve --help
+  run_id = control_events.stable_run_id(child_id, f"{resolved_request_id}:work")
+  if not (get_config().sessions_dir / child_id / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME / run_id /
+          runs.RUN_METADATA_NAME).is_file():
     # Registered but not yet on disk, or the child predates the work Run:
     # the child's existence is still the proof of admission.
     run_id = None
@@ -755,17 +751,16 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
   a borrowed answer. The closed fact outranks the deferral: once this
   request's closure is on disk the task is no longer pending a run finish.
   """
-  from src.runtime.chat_events import chat_events_path  # deferred: charliebot improve --help
-  from src.runtime.control_events import stable_close_event_id  # deferred: charliebot improve --help
+  from src.runtime import chat_events, control_events  # deferred: charliebot improve --help
 
-  events_path = chat_events_path(get_config().sessions_dir / task_id)
+  events_path = chat_events.chat_events_path(get_config().sessions_dir / task_id)
   if not events_path.is_file():
     return None
   try:
     lines = events_path.read_text(encoding="utf-8").splitlines()
   except OSError:
     return None
-  closed_id = stable_close_event_id(task_id, request_id)
+  closed_id = control_events.stable_close_event_id(task_id, request_id)
   deferred: dict | None = None
   for line in lines:
     try:
@@ -812,7 +807,8 @@ def add_session_arg(parser: argparse.ArgumentParser) -> None:
   parser.add_argument(
       "--session",
       default=None,
-      help=f"Session ID (optional; taken from the {SESSION_ID_ENV_VAR} the server writes into the master environment)",
+      help=
+      f"Session ID (optional; taken from the {constants.SESSION_ID_ENV_VAR} the server writes into the master environment)",
   )
 
 
@@ -839,21 +835,22 @@ def resolve_session_id(arg_session: str | None) -> str:
   This docstring is the single home for the CLI caller-contract summary; the
   CLI module headers point here instead of restating it.
   """
-  from pathlib import Path
+  import pathlib
 
-  cwd = Path.cwd().resolve()
+  cwd = pathlib.Path.cwd().resolve()
   sessions_dir = _sessions_dir()
   cwd_session = cwd.name if cwd.parent == sessions_dir else None
 
   # An empty value carries no identity, so it reads as absent and the cwd
   # fallback answers, which is what an unstarted-by-server invocation gets.
-  env_session = os.environ.get(SESSION_ID_ENV_VAR) or None
+  env_session = os.environ.get(constants.SESSION_ID_ENV_VAR) or None
   if env_session is not None:
     if arg_session is not None and arg_session != env_session:
-      _exit_ambiguous_session(f"--session={arg_session} {SESSION_ID_ENV_VAR}={env_session}")
+      _exit_ambiguous_session(f"--session={arg_session} {constants.SESSION_ID_ENV_VAR}={env_session}")
     if cwd_session is not None and cwd_session != env_session:
       print(
-          json.dumps({"note": f"cwd is session dir of {cwd_session}; using {SESSION_ID_ENV_VAR}={env_session}"}),
+          json.dumps(
+              {"note": f"cwd is session dir of {cwd_session}; using {constants.SESSION_ID_ENV_VAR}={env_session}"}),
           file=sys.stderr,
       )
     return env_session

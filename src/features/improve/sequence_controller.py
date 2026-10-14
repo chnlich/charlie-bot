@@ -13,31 +13,30 @@ sessions, claims no session ownership, and adds no listing fields.
 
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
+import datetime
+import pathlib
 from typing import TYPE_CHECKING
 
 from src.features.improve import improve_sequence
-from src.runtime.hooks.sequence_controllers import SequenceController
-from src.runtime.task_errors import TaskInvalidError
+from src.runtime import task_errors
+from src.runtime.hooks import sequence_controllers
 
 if TYPE_CHECKING:
   from collections.abc import Iterable
 
-  from src.infra.config import CharlieBotConfig
-  from src.infra.models import RunRecord, SessionMetadata
-  from src.runtime.hooks.sequence_controllers import SequenceBinding
-  from src.runtime.task_sessions import TaskTreeManager
+  from src.infra import config, models
+  from src.runtime import task_sessions
 
 
-class ImproveSequenceController(SequenceController):
+class ImproveSequenceController(sequence_controllers.SequenceController):
   sequence_kind = "improve"
 
-  async def redrive(self, session_id: str, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
+  async def redrive(self, session_id: str, tree: task_sessions.TaskTreeManager, cfg: config.CharlieBotConfig) -> None:
     raise RuntimeError("improve iteration replay is not supported")
 
   async def launch_context(
-      self, meta: SessionMetadata, run: RunRecord, launch_text: str, cfg: CharlieBotConfig) -> str | None:
+      self, meta: models.SessionMetadata, run: models.RunRecord, launch_text: str,
+      cfg: config.CharlieBotConfig) -> str | None:
     """One iteration's context: shared-worktree bindings + the loop position.
 
     The controller composes the description (live goal, optional plan,
@@ -47,12 +46,14 @@ class ImproveSequenceController(SequenceController):
     """
     seq = run.sequence_ref
     if seq is None or seq.kind != self.sequence_kind:
-      raise TaskInvalidError(
+      raise task_errors.TaskInvalidError(
           f"iteration run {run.id} carries no improve sequence_ref; the controller "
           "that registered it is broken")
     return improve_sequence.iteration_context(cfg, meta, run, seq, launch_text)
 
-  async def after_run(self, session_id: str, run: RunRecord, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
+  async def after_run(
+      self, session_id: str, run: models.RunRecord, tree: task_sessions.TaskTreeManager,
+      cfg: config.CharlieBotConfig) -> None:
     """An iteration's durable finish re-runs its loop's close step.
 
     The loop's own controller task owns progression while it lives; this is
@@ -63,7 +64,8 @@ class ImproveSequenceController(SequenceController):
     await _close_loop_for_run(run, tree, cfg)
 
   async def recover_run(
-      self, session_id: str, run: RunRecord, outcome: str | None, tree: TaskTreeManager, cfg: CharlieBotConfig) -> bool:
+      self, session_id: str, run: models.RunRecord, outcome: str | None, tree: task_sessions.TaskTreeManager,
+      cfg: config.CharlieBotConfig) -> bool:
     """Recovery runs the same close step; the loop itself is never resumed.
 
     Covers the windows ``after_run`` cannot: a stop-requested iteration whose
@@ -74,20 +76,21 @@ class ImproveSequenceController(SequenceController):
     await _close_loop_for_run(run, tree, cfg)
     return False
 
-  async def reconcile_interrupted(self, cfg: CharlieBotConfig, tree: TaskTreeManager) -> None:
+  async def reconcile_interrupted(self, cfg: config.CharlieBotConfig, tree: task_sessions.TaskTreeManager) -> None:
     await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
 
-  def binding(self, session_id: str) -> SequenceBinding | None:
+  def binding(self, session_id: str) -> sequence_controllers.SequenceBinding | None:
     return None
 
-  def owns_session(self, meta: SessionMetadata) -> bool:
+  def owns_session(self, meta: models.SessionMetadata) -> bool:
     return False
 
-  def listing_fields(self, session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
+  def listing_fields(self, session_ids: Iterable[str], now_utc: datetime.datetime) -> dict[str, dict]:
     return {}
 
 
-async def _close_loop_for_run(run: RunRecord, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
+async def _close_loop_for_run(
+    run: models.RunRecord, tree: task_sessions.TaskTreeManager, cfg: config.CharlieBotConfig) -> None:
   """Run the owning loop's close step, located through the Run's sequence_ref.
 
   The owner_ref is the loop directory (``<sessions>/<session>/loops/<id>``),
@@ -96,5 +99,5 @@ async def _close_loop_for_run(run: RunRecord, tree: TaskTreeManager, cfg: Charli
   """
   seq = run.sequence_ref
   assert seq is not None  # the runtime only routes sequence Runs here
-  loop_dir = Path(seq.owner_ref)
+  loop_dir = pathlib.Path(seq.owner_ref)
   await improve_sequence.close_ended_loop_child(tree, cfg, loop_dir.parent.parent.name, int(loop_dir.name))

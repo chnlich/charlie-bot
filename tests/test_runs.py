@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
+import datetime
 import os
+import pathlib
 import time
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 
-from src.infra.ndjson import parse_ndjson_events, type_line_filter
+from src.infra import ndjson
 from src.runtime import runs
 
 HOST_BOOT = runs.read_host_boot_time()
-NOW = datetime.now(UTC)
+NOW = datetime.datetime.now(datetime.UTC)
 
 
 def _identity(event: dict) -> list[dict]:
   return [event]
 
 
-def _write_raw(thread_dir: Path, lines: list[str], age_seconds: float = 0.0) -> Path:
+def _write_raw(thread_dir: pathlib.Path, lines: list[str], age_seconds: float = 0.0) -> pathlib.Path:
   raw = thread_dir / runs.DATA_DIR_NAME / runs.RAW_LOG_NAME
   raw.parent.mkdir(parents=True, exist_ok=True)
   raw.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -49,11 +49,11 @@ def test_is_run_alive_requires_full_identity() -> None:
   # A forged pid_start (pid reuse cannot fake it) is not alive.
   assert runs.is_run_alive(pid, "1", NOW, HOST_BOOT) is False
   # Nothing survives a host reboot: a pre-boot start time is always stale.
-  pre_boot = HOST_BOOT - timedelta(minutes=1)
+  pre_boot = HOST_BOOT - datetime.timedelta(minutes=1)
   assert runs.is_run_alive(pid, pid_start, pre_boot, HOST_BOOT) is False
   # Naive started_at is a caller bug, not "dead".
   with pytest.raises(ValueError, match="must be timezone-aware"):
-    runs.is_run_alive(pid, pid_start, datetime(2026, 1, 1), HOST_BOOT)
+    runs.is_run_alive(pid, pid_start, datetime.datetime(2026, 1, 1), HOST_BOOT)
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ def test_parse_raw_lines_skips_blank_torn_and_non_json() -> None:
   assert events == [{"a": 1}, {"b": 2}]
 
 
-def test_parse_ndjson_events_line_filter_keeps_only_provable_matches(tmp_path: Path) -> None:
+def test_parse_ndjson_events_line_filter_keeps_only_provable_matches(tmp_path: pathlib.Path) -> None:
   """The filter drops lines whose head proves a foreign type and still parses
   every shape it cannot read (foreign leading key, torn line, blank)."""
   raw = tmp_path / "raw.ndjson"
@@ -77,8 +77,8 @@ def test_parse_ndjson_events_line_filter_keeps_only_provable_matches(tmp_path: P
       b'{"type": "assistant", "message": {"model": "m2"}}\n'
       b'{"other_key": 1}\n'  # foreign leading key: no proof, must parse
       b'\n{"torn')
-  events = parse_ndjson_events(
-      raw, log_event="test_skip", log_fields={}, parse_filter=type_line_filter(frozenset({"assistant"})))
+  events = ndjson.parse_ndjson_events(
+      raw, log_event="test_skip", log_fields={}, parse_filter=ndjson.type_line_filter(frozenset({"assistant"})))
   assert events == [
       {
           "type": "assistant",
@@ -96,12 +96,12 @@ def test_parse_ndjson_events_line_filter_keeps_only_provable_matches(tmp_path: P
   ]
 
 
-def test_project_raw_file_line_filter_serves_the_detector_whole(tmp_path: Path) -> None:
+def test_project_raw_file_line_filter_serves_the_detector_whole(tmp_path: pathlib.Path) -> None:
   """The filtered projection keeps every assistant event in order and adds
   nothing the detector reads — a claude-family result event leads with its
   duration field, not "type", so its head proves nothing and it rides along;
   the detector skips it, which is what makes the bounded scan safe."""
-  from src.backends.claude_code.claude_code import out_of_family_served_models
+  from src.backends.claude_code import claude_code
 
   lines = [
       '{"type": "user", "content": "echo"}',
@@ -112,7 +112,7 @@ def test_project_raw_file_line_filter_serves_the_detector_whole(tmp_path: Path) 
   ]
   raw = _write_raw(tmp_path, lines)
   whole = runs.project_raw_file(raw, _identity)
-  filtered = runs.project_raw_file(raw, _identity, type_line_filter(frozenset({"assistant"})))
+  filtered = runs.project_raw_file(raw, _identity, ndjson.type_line_filter(frozenset({"assistant"})))
   assert filtered == [e for e in whole if e.get("type") == "assistant"
                      ] + [{
                          "duration_api_ms": 1,
@@ -121,7 +121,8 @@ def test_project_raw_file_line_filter_serves_the_detector_whole(tmp_path: Path) 
                          "is_error": False
                      }]
   assert (
-      out_of_family_served_models(whole, "claude-fable-5") == out_of_family_served_models(filtered, "claude-fable-5"))
+      claude_code.out_of_family_served_models(whole, "claude-fable-5") == claude_code.out_of_family_served_models(
+          filtered, "claude-fable-5"))
 
 
 def test_result_success_matrix() -> None:

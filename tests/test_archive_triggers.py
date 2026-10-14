@@ -5,33 +5,33 @@ real socket."""
 
 from __future__ import annotations
 
+import datetime
 import json
+import pathlib
 import sys
-from datetime import UTC, datetime
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import bind_deps_blocks, build_env, create_root_session, create_task
 
-from src.infra.models import PendingTrigger
-from src.runtime.triggers import ArchivedSessionError, TriggerManager
+from src.infra import models
+from src.runtime import triggers
 
 
-def _trigger(session_id: str, trigger_id: str = "trig-archived-1") -> PendingTrigger:
-  return PendingTrigger(id=trigger_id, session_id=session_id, fire_at=datetime.now(UTC), message="wake")
+def _trigger(session_id: str, trigger_id: str = "trig-archived-1") -> models.PendingTrigger:
+  return models.PendingTrigger(
+      id=trigger_id, session_id=session_id, fire_at=datetime.datetime.now(datetime.UTC), message="wake")
 
 
 @pytest.mark.asyncio
 async def test_create_trigger_on_an_archived_task_node_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
-  node = await create_task(tree, parent=None, request_id="node")
-  from conftest import OPERATOR
-  await tree.archive_subtree(node.id, caller=OPERATOR)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
+  node = await conftest.create_task(tree, parent=None, request_id="node")
+  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
 
-  trigger_mgr = TriggerManager(cfg, tree)
-  with pytest.raises(ArchivedSessionError, match="target task is archived"):
+  trigger_mgr = triggers.TriggerManager(cfg, tree)
+  with pytest.raises(triggers.ArchivedSessionError, match="target task is archived"):
     await trigger_mgr.create_trigger(node.id, 60, "check the run")
 
   # A pending trigger on the still-open node is untouched; the refusal wrote
@@ -41,16 +41,15 @@ async def test_create_trigger_on_an_archived_task_node_is_refused(
 
 @pytest.mark.asyncio
 async def test_fire_time_backstop_cancels_with_the_archived_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
-  node = await create_task(tree, parent=None, request_id="node")
-  from conftest import OPERATOR
-  trigger_mgr = TriggerManager(cfg, tree)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
+  node = await conftest.create_task(tree, parent=None, request_id="node")
+  trigger_mgr = triggers.TriggerManager(cfg, tree)
   trigger = _trigger(node.id)
   await trigger_mgr._save_trigger(trigger)
   # The archive lands mid-wait: the fire-time re-check must cancel, not fire.
-  await tree.archive_subtree(node.id, caller=OPERATOR)
+  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
 
   await trigger_mgr._wait_and_fire(trigger)
 
@@ -63,37 +62,36 @@ async def test_fire_time_backstop_cancels_with_the_archived_reason(
 
 
 @pytest.mark.asyncio
-async def test_watchdog_reason_carries_into_the_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
-  node = await create_task(tree, parent=None, request_id="node")
-  from conftest import OPERATOR
-  await tree.archive_subtree(node.id, caller=OPERATOR)
+async def test_watchdog_reason_carries_into_the_cancel(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
+  node = await conftest.create_task(tree, parent=None, request_id="node")
+  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
 
-  trigger_mgr = TriggerManager(cfg, tree)
+  trigger_mgr = triggers.TriggerManager(cfg, tree)
   # The dormancy judgment is the one predicate both racers read.
   assert await trigger_mgr._dormancy_reason(node.id) == "target task is archived"
   # An open manager root remains eligible for trigger registration.
-  from src.infra.models import CreateSessionRequest
-  open_root = await create_root_session(session_blocks, CreateSessionRequest(name="Open root"), backend=None)
+  open_root = await conftest.create_root_session(
+      session_blocks, models.CreateSessionRequest(name="Open root"), backend=None)
   assert open_root.profile == "manager"
   assert await trigger_mgr._dormancy_reason(open_root.id) is None
 
 
 def test_schedule_trigger_cli_exits_nonzero_and_prints_the_refusal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """A refused registration leaves the CLI non-zero with the refusal reason on
   stderr (the 422 -> exit 2 mapping rides the real socket)."""
   import threading
-  from http.server import HTTPServer
+  from http import server
 
   from src.runtime.cli import schedule_trigger as cli
-  from tests.test_cli_restart_contract import _QuietHandler
+  from tests import test_cli_restart_contract
 
   detail = "task arch-node is archived (target task is archived); trigger rejected"
   received: dict = {}
 
-  class Handler(_QuietHandler):
+  class Handler(test_cli_restart_contract._QuietHandler):
 
     def do_POST(self) -> None:
       length = int(self.headers.get("Content-Length", "0"))
@@ -105,13 +103,12 @@ def test_schedule_trigger_cli_exits_nonzero_and_prints_the_refusal(
       self.end_headers()
       self.wfile.write(body)
 
-  httpd = HTTPServer(("127.0.0.1", 0), Handler)
+  httpd = server.HTTPServer(("127.0.0.1", 0), Handler)
   port = httpd.server_address[1]
   threading.Thread(target=httpd.serve_forever, daemon=True).start()
   try:
     monkeypatch.setattr("src.runtime.cli.common._internal_base_url", lambda: f"http://127.0.0.1:{port}")
-    from conftest import stub_credentials
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
+    conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(

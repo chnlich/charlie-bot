@@ -14,10 +14,9 @@ import socket
 import time
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request, responses
 
-from src.features.usage import CHARLIE_BOT_SOURCE
+from src.features import usage
 from src.infra import log_once, tasks
 from src.runtime import templating
 from src.runtime.hooks import usage_source_registration, usage_sources, wiring
@@ -129,7 +128,7 @@ def _account_source(
   own logs counts as is, while every other backend's counted records are fallbacks behind
   their CLI's own log — the mark the account's sub-row carries.
   """
-  if row.source != CHARLIE_BOT_SOURCE:
+  if row.source != usage.CHARLIE_BOT_SOURCE:
     return row.source, False
   from src.features.usage import token_tally  # deferred: import server
 
@@ -262,7 +261,7 @@ def _token_usage_context(
     bucket = sums[card.name]
     # The ledger's charlie-bot rows are all usage native to CharlieBot's logs, so a
     # run_logs_only source's native start is the charlie-bot span the ledger keeps.
-    ledger_src = CHARLIE_BOT_SOURCE if card.run_logs_only else card.name
+    ledger_src = usage.CHARLIE_BOT_SOURCE if card.run_logs_only else card.name
     per_src[card.name] = {
         "total": bucket["total"],
         "t_comp": _compact(bucket["total"]),
@@ -301,8 +300,8 @@ def _token_usage_context(
   }
 
 
-@router.get("/token-usage", response_class=HTMLResponse)
-async def token_usage_viewer(request: Request) -> HTMLResponse:
+@router.get("/token-usage", response_class=responses.HTMLResponse)
+async def token_usage_viewer(request: Request) -> responses.HTMLResponse:
   """Render the per-model token usage tally page from the ledger as of the last capture.
 
   The read runs in a thread pool, never on the event loop, and never captures.

@@ -8,9 +8,9 @@ build wall, so `_validate` fans it out; the fan-out's contract is `_split_chunks
 """
 
 import mmap
+import pathlib
 import subprocess
 import sys
-from pathlib import Path
 
 EXIT_OK = 0
 EXIT_NOT_A_TRACE = 3
@@ -26,12 +26,12 @@ _ANCHOR_WINDOW_BYTES = 8 << 20
 _WS = b" \t\r\n"
 
 
-def parent_argv(trace_path: Path, out_path: Path, checkout_root: str) -> list[str]:
+def parent_argv(trace_path: pathlib.Path, out_path: pathlib.Path, checkout_root: str) -> list[str]:
   """The spawn argv the parent runs; *checkout_root* puts ``src`` on the child's path."""
-  return [sys.executable, str(Path(__file__).resolve()), str(trace_path), str(out_path), checkout_root]
+  return [sys.executable, str(pathlib.Path(__file__).resolve()), str(trace_path), str(out_path), checkout_root]
 
 
-def _split_chunks(path: Path, size: int, min_chunk_bytes: int) -> tuple[bool, bytes, list[int]] | None:
+def _split_chunks(path: pathlib.Path, size: int, min_chunk_bytes: int) -> tuple[bool, bytes, list[int]] | None:
   """Byte offsets tiling *path*'s traceEvents array into element-aligned chunks.
 
   Returns the document form (object with a traceEvents array, or bare array),
@@ -116,7 +116,8 @@ def _split_chunks(path: Path, size: int, min_chunk_bytes: int) -> tuple[bool, by
 
 
 def _chunk_parse_input(
-    path: Path, start: int, end: int, index: int, count: int, object_form: bool, indent: bytes) -> bytes | memoryview:
+    path: pathlib.Path, start: int, end: int, index: int, count: int, object_form: bool,
+    indent: bytes) -> bytes | memoryview:
   """The chunk as one standalone JSON document for orjson.
 
   Every chunk ends right before the next element's newline, so its bytes end
@@ -188,7 +189,7 @@ def _validate_chunk_main(argv: list[str]) -> int:
   import orjson
 
   gc.disable()
-  path, start, end = Path(argv[0]), int(argv[1]), int(argv[2])
+  path, start, end = pathlib.Path(argv[0]), int(argv[1]), int(argv[2])
   index, count, object_form = int(argv[3]), int(argv[4]), argv[5] == "1"
   indent = argv[6].encode()
   try:
@@ -200,10 +201,11 @@ def _validate_chunk_main(argv: list[str]) -> int:
 
 
 def _validate_chunk_argv(
-    trace_path: Path, start: int, end: int, index: int, count: int, object_form: bool, indent: bytes) -> list[str]:
+    trace_path: pathlib.Path, start: int, end: int, index: int, count: int, object_form: bool,
+    indent: bytes) -> list[str]:
   return [
       sys.executable,
-      str(Path(__file__).resolve()),
+      str(pathlib.Path(__file__).resolve()),
       "--validate-chunk",
       str(trace_path),
       str(start),
@@ -215,7 +217,8 @@ def _validate_chunk_argv(
   ]
 
 
-def _validate(trace_path: Path, orjson: object, shape_check: object, gc_off: object, min_chunk_bytes: int) -> None:
+def _validate(
+    trace_path: pathlib.Path, orjson: object, shape_check: object, gc_off: object, min_chunk_bytes: int) -> None:
   """The fan-out validation: head chunk in this process, the rest in helpers.
 
   The whole-file parse is the authority whenever anything in the fan-out fails —
@@ -252,7 +255,7 @@ def _validate(trace_path: Path, orjson: object, shape_check: object, gc_off: obj
     _validate_whole(trace_path, orjson, shape_check, gc_off)
 
 
-def _validate_whole(trace_path: Path, orjson: object, shape_check: object, gc_off: object) -> None:
+def _validate_whole(trace_path: pathlib.Path, orjson: object, shape_check: object, gc_off: object) -> None:
   with gc_off(collect=True), trace_path.open("rb") as validate_file:
     # Parseable JSON is not enough: a JSON object with no traceEvents array
     # (an analysis manifest) would otherwise compress into the cache and
@@ -267,17 +270,18 @@ def main(argv: list[str]) -> int:
   import orjson
 
   # deferred: import cycle src.features.trace.trace_merge
-  from src.features.trace.trace_merge import NotATraceError, _trace_events_or_raise, igzip_command
-  from src.infra.gc_control import gc_off  # deferred: python src/features/trace/direct_pass_child.py
+  from src.features.trace import trace_merge
+  from src.infra import gc_control  # deferred: python src/features/trace/direct_pass_child.py
 
-  trace_path, out_path = Path(argv[1]), Path(argv[2])
+  trace_path, out_path = pathlib.Path(argv[1]), pathlib.Path(argv[2])
   # The compress starts before the parse so the two passes overlap, the shape the
   # in-process build ran: the wall is max(parse, compress), not their sum.
   with out_path.open("wb") as compressed:
-    gzip_proc = subprocess.Popen(igzip_command("-c", str(trace_path)), stdout=compressed, stderr=subprocess.PIPE)
+    gzip_proc = subprocess.Popen(
+        trace_merge.igzip_command("-c", str(trace_path)), stdout=compressed, stderr=subprocess.PIPE)
     try:
-      _validate(trace_path, orjson, _trace_events_or_raise, gc_off, _MIN_CHUNK_BYTES)
-    except NotATraceError as error:
+      _validate(trace_path, orjson, trace_merge._trace_events_or_raise, gc_control.gc_off, _MIN_CHUNK_BYTES)
+    except trace_merge.NotATraceError as error:
       _kill(gzip_proc)
       print(str(error), file=sys.stderr)
       return EXIT_NOT_A_TRACE

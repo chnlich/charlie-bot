@@ -1,6 +1,6 @@
 """The template globals of the index page: the voice dropdown's backends and the default backend."""
 
-from src.features.voice.transcription.registry import build_transcription_backends
+from src.features.voice.transcription import registry
 from src.infra import config
 
 
@@ -12,7 +12,7 @@ def voice_backends() -> list[dict]:
           "label": backend.label,
           "live_partials": backend.live_partials,
           "unavailable_reason": backend.unavailable_reason(),
-      } for backend in build_transcription_backends(config.get_config())
+      } for backend in registry.build_transcription_backends(config.get_config())
   ]
 
 

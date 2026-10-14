@@ -3,13 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.features.chat_threads.thread_entry import ThreadReplyError
-from src.features.discord import discord_listener
-from src.features.discord.discord_commands import check_setup, read_thread
-from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_store
-from src.runtime.session_events import SessionEvents
-from src.runtime.session_store import SessionStore
+from src.features.chat_threads import thread_entry
+from src.features.discord import discord_commands, discord_listener
+from src.infra import config
+from src.runtime import session_events, session_store
+from src.runtime.api import deps
 
 router = APIRouter()
 
@@ -39,9 +37,9 @@ class DiscordCheckRequest(BaseModel):
 @router.post("/discord/reply")
 async def discord_reply(
     req: DiscordReplyRequest,
-    store: SessionStore = Depends(get_session_store),
-    session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Discord thread and return the readback.
 
@@ -56,17 +54,17 @@ async def discord_reply(
   """
   try:
     await discord_listener.assert_thread_fresh(req.session_id, cfg, store)
-    return await discord_listener.post_reply(req.session_id, req.text, cfg, store, session_events)
-  except ThreadReplyError as exc:
+    return await discord_listener.post_reply(req.session_id, req.text, cfg, store, events)
+  except thread_entry.ThreadReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.post("/discord/read")
 async def discord_read(
     req: DiscordReadRequest,
-    store: SessionStore = Depends(get_session_store),
-    session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
 ) -> dict:
   """Read the calling session's Discord thread (or the channel *url* names) and return its messages.
 
@@ -82,15 +80,15 @@ async def discord_read(
   cannot see, 502 Discord refused the read.
   """
   try:
-    return await read_thread(req.session_id, req.url, req.limit, cfg, store, session_events)
-  except ThreadReplyError as exc:
+    return await discord_commands.read_thread(req.session_id, req.url, req.limit, cfg, store, events)
+  except thread_entry.ThreadReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.post("/discord/check")
 async def discord_check(
     req: DiscordCheckRequest,
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
 ) -> dict:
   """Report the Discord bot token's setup: bot user, message-content intent, per-guild permissions.
 
@@ -101,6 +99,6 @@ async def discord_check(
   readback carries no token.
   """
   try:
-    return await check_setup(cfg)
-  except ThreadReplyError as exc:
+    return await discord_commands.check_setup(cfg)
+  except thread_entry.ThreadReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc

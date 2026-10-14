@@ -109,7 +109,7 @@ class SessionLifecycle:
       if not session_dir.exists():
         return False
       await asyncio.to_thread(shutil.rmtree, session_dir)
-      # The session's memory-cap cgroup: removed only when empty (no live
+      # The session's cgroup: removed only when empty (no live
       # member left); a retained directory is logged debug and reclaimed by
       # the kernel once its last process exits.
       await asyncio.to_thread(cleanup_session_cgroup, session_id)

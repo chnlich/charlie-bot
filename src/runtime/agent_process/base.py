@@ -697,7 +697,7 @@ class AgentBackend(ABC):
     self._resume_session_id = resume_session_id
     self._log_dir = log_dir
     # The CharlieBot session this backend's processes belong to. Every spawn
-    # point below forks its child into that session's memory-cap cgroup; None
+    # point below forks its child into that session's cgroup; None
     # (a backend with no session home — an unowned one-shot) never enters one.
     self._cgroup_session_id = cgroup_session_id
     self._active_session_cgroup: SessionCgroup | None = None
@@ -864,6 +864,7 @@ class AgentBackend(ABC):
         self._cgroup_session_id,
         memory_max_mb=cfg.server.session_memory_max_mb,
         swap_max_mb=cfg.server.session_swap_max_mb,
+        tasks_max=cfg.server.session_tasks_max,
     )
 
   def _spawn_preexec(self) -> Callable[[], None] | None:

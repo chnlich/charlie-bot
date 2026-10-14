@@ -3,15 +3,19 @@
 // independent families, each picking at most one element per row in a fixed
 // order that reads no expansion state. The activity family — the row's own
 // icon (spinner, a legacy row's own gear, the clock), then a parent's gear
-// for a running descendant. The unread family — the row's own filled dot,
-// else the subtree's hollow mark; no activity state gates either family.
-// The clock never stands in for a subtree. Facts arrive through the list
-// paint, the status poll (applySessionStatus) and the websocket broadcasts.
+// for a running descendant or a paused worker (a worker row whose latest
+// fact is idle with a pending wake-up trigger). The unread family — the
+// row's own filled dot, else the subtree's hollow mark; no activity state
+// gates either family. The clock never stands in for a subtree. Facts
+// arrive through the list paint, the status poll (applySessionStatus) and
+// the websocket broadcasts.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { buildSidebarIndicatorContext, makeSessionMeta } = require('./session_context_stub');
+const { createFakeWebSocketClass } = require('./fake_websocket');
+const { loadWebsocketModules } = require('./websocket_context_stub');
 
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
 
@@ -207,6 +211,201 @@ test('a status-poll reply for a leaf repaints its ancestors', async () => {
   assert.deepEqual(shown('g'), {...IDLE_ICONS, dot: true}, 'the leaf shows its own dot');
 });
 
+// ---------------------------------------------------------------------------
+// The paused worker: a worker row whose Run ended with a wake-up trigger
+// still pending. Its own state is idle, so its own row paints no activity
+// icon, but the delegated-work gear keeps standing in for it on every
+// ancestor row for the whole pause. The fact arrives with the list paint
+// (profile and has_pending_trigger) and with each status-poll reply
+// (has_pending_trigger alone; the poll path takes the worker identity from
+// the list paint's renderedWorkerRows).
+// ---------------------------------------------------------------------------
+
+test('a paused worker grandchild lights the gear on the root and the middle row; its own row paints nothing', () => {
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
+  context.renderSessionList([
+    row('p', null),
+    row('c', 'p', {profile: 'manager'}),
+    row('g', 'c', {has_pending_trigger: true}),
+  ], 'all');
+
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'the root stands in for the paused worker');
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, gear: true}, 'the middle row too');
+  assert.deepEqual(shown('g'), IDLE_ICONS,
+      'the paused worker is idle: no spinner, gear or clock of its own');
+});
+
+test('a manager row’s pending trigger lights no ancestor gear', () => {
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c']);
+  context.renderSessionList([
+    row('p', null), row('c', 'p', {profile: 'manager', has_pending_trigger: true}),
+  ], 'all');
+
+  assert.deepEqual(shown('p'), IDLE_ICONS, 'only a worker row’s trigger counts as delegated work');
+  assert.deepEqual(shown('c'), IDLE_ICONS);
+});
+
+test('a status-poll reply turns the ancestors’ gear off and on with the worker’s trigger fact', async () => {
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
+  context.renderSessionList([
+    row('p', null),
+    row('c', 'p', {profile: 'manager'}),
+    row('g', 'c', {has_pending_trigger: true}),
+  ], 'all');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
+
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
+  );
+  let reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: false}};
+  context.fetch = async () => ({ok: true, json: async () => reply});
+
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(shown('p'), IDLE_ICONS, 'the trigger fired: the gear turns off');
+  assert.deepEqual(shown('c'), IDLE_ICONS);
+
+  reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: true}};
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'the worker paused: the gear turns on');
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, gear: true});
+  assert.deepEqual(shown('g'), IDLE_ICONS, 'the worker row itself stays iconless');
+});
+
+test('a poll reply that ends the worker’s Run keeps the gear while the trigger stays pending', async () => {
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
+  // The worker registered its wake-up trigger while its Run was still live.
+  context.renderSessionList([
+    row('p', null),
+    row('c', 'p', {profile: 'manager'}),
+    row('g', 'c', {has_running_tasks: true, has_pending_trigger: true}),
+  ], 'all');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
+
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
+  );
+  const reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: true}};
+  context.fetch = async () => ({ok: true, json: async () => reply});
+
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(shown('g'), IDLE_ICONS, 'the worker’s own spinner turns off');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'the gear survives the Run’s end');
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, gear: true});
+});
+
+test('a parent thinking over a paused worker shows its own spinner', () => {
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'g']);
+  context.renderSessionList([row('p', null), row('g', 'p', {has_pending_trigger: true})], 'all');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
+
+  context.setSessionIndicator('p', 'thinking');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, spinner: true}, 'the row’s own state outranks the stand-in');
+
+  context.setSessionIndicator('p', 'idle');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'back to the stand-in when its own work ends');
+});
+
+test('the gear hover text names the waiting work too', () => {
+  const {context, nav} = buildSidebarIndicatorContext(['w']);
+  context.renderSessionList([row('w', null)], 'all');
+  const title = nav.innerHTML.match(/<svg id="worker-indicator-w"[^>]*title="([^"]*)"/)[1];
+  assert.equal(title, 'Delegated work running or waiting in subtasks');
+});
+
+// ---------------------------------------------------------------------------
+// The websocket path: websocket-handlers.js loaded over the real status.js.
+// A running_changed event that takes a worker row to idle usually precedes
+// the trigger fact (the worker registers its wake-up right before its Run
+// ends), so that repaint is left to the status poll the handler starts;
+// every other event repaints at once.
+// ---------------------------------------------------------------------------
+
+// One composed harness: the sidebar indicator context plus the websocket
+// load sequence, so a running_changed event runs the real handler into the
+// real indicator facts. Returns the indicator harness with the socket class.
+function buildRunningChangedContext(ids) {
+  const harness = buildSidebarIndicatorContext(ids);
+  const {context} = harness;
+  context.eventCursor = 0;
+  context.wsUrlWithToken = (path) => path;
+  context.WebSocket = createFakeWebSocketClass();
+  loadWebsocketModules(context);
+  return {...harness, FakeWebSocket: context.WebSocket};
+}
+
+function openSidebarSocket(context, FakeWebSocket) {
+  context.connectWS();
+  const socket = FakeWebSocket.instances[0];
+  socket.emitOpen();
+  return socket;
+}
+
+test('a worker row’s run end defers to the poll the handler starts; a busy start repaints at once', async () => {
+  const {context, shown, FakeWebSocket} = buildRunningChangedContext(['p', 'c', 'g']);
+  // The worker grandchild; the last poll saw no pending trigger.
+  context.renderSessionList([
+    row('p', null), row('c', 'p', {profile: 'manager'}), row('g', 'c'),
+  ], 'all');
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
+  );
+  let reply = {g: {has_running_tasks: true, thinking_since: '2026-04-02T10:00:00Z',
+    has_unread: false, has_pending_trigger: false}};
+  context.fetch = async () => ({ok: true, json: async () => reply});
+  const socket = openSidebarSocket(context, FakeWebSocket);
+
+  // A busy start repaints at once.
+  socket.emitMessage({type: 'running_changed', session_id: 'g',
+    thinking_since: '2026-04-02T10:00:00Z', has_running_tasks: true});
+  assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true}, 'the busy start paints the spinner now');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'the ancestors’ gear lights now');
+  await context.Sidebar.pollSessionStatus();  // drains the poll the handler started
+  assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true});
+
+  // The Run ends. The event precedes the trigger fact, so the repaint waits
+  // for the poll the handler starts: the spinner and the gear stay.
+  reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: true}};
+  socket.emitMessage({type: 'running_changed', session_id: 'g',
+    thinking_since: null, has_running_tasks: false});
+  assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true}, 'no repaint yet: the spinner stays');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'the ancestors’ gear stays');
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, gear: true});
+
+  // The poll applies the idle state and the trigger fact in one write.
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(shown('g'), IDLE_ICONS, 'the worker’s own spinner turns off');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true}, 'the gear stays for the paused worker');
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, gear: true});
+
+  // The trigger fires: the next poll turns the gear off.
+  reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: false}};
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(shown('g'), IDLE_ICONS);
+  assert.deepEqual(shown('p'), IDLE_ICONS, 'the gear turns off when the trigger fact clears');
+  assert.deepEqual(shown('c'), IDLE_ICONS);
+});
+
+test('a manager row’s not-running running_changed repaints at once', async () => {
+  const {context, shown, FakeWebSocket} = buildRunningChangedContext(['p', 'c']);
+  context.renderSessionList([
+    row('p', null), row('c', 'p', {profile: 'manager', has_running_tasks: true}),
+  ], 'all');
+  assert.deepEqual(shown('c'), {...IDLE_ICONS, spinner: true});
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}] : []
+  );
+  const reply = {c: {has_running_tasks: false, has_unread: false, has_pending_trigger: false}};
+  context.fetch = async () => ({ok: true, json: async () => reply});
+  const socket = openSidebarSocket(context, FakeWebSocket);
+
+  socket.emitMessage({type: 'running_changed', session_id: 'c',
+    thinking_since: null, has_running_tasks: false});
+  assert.deepEqual(shown('c'), IDLE_ICONS, 'a manager row repaints at once: no deferral');
+  assert.deepEqual(shown('p'), IDLE_ICONS);
+  await context.Sidebar.pollSessionStatus();  // drains the poll the handler started
+});
+
 test('a childless legacy row keeps main’s behavior: its own state and unread flag only', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['solo']);
   // profile null: a legacy session. Its own running state (running worker
@@ -267,7 +466,8 @@ test('a running worker leaf paints the spinner, not the delegated-work gear', ()
 // ---------------------------------------------------------------------------
 // The full priority table (one visual language; two independent families per
 // row): the activity family — own state first, running spinner or waiting
-// clock, then a parent row's stand-in gear for a running descendant — and the
+// clock, then a parent row's stand-in gear for a running descendant or a
+// paused worker — and the
 // unread family — the row's own dot, else the subtree's hollow mark. The
 // clock never stands in for a subtree. A failed Run paints no activity icon
 // anywhere: the alert-indicator element no longer exists for any state.

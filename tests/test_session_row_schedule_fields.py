@@ -14,28 +14,15 @@ manager node and everything under it out.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    OPERATOR,
-    OPUS_BACKEND_ID,
-    build_env,
-    create_root_session,
-    create_task,
-    cron_d_dir,
-    dump_yaml,
-    make_cron_session,
-    make_sessions_listing_client,
-    make_sessions_listing_page_client,
-    page_initial_sessions,
-    walk_archived_pages,
-)
 
-from src.infra.models import CreateSessionRequest, RunRecord, SessionStatus
+from src.infra import models
 
 
-def _write_bound_task(home: Path, name: str, session_id: str, *, enabled: bool = True) -> None:
+def _write_bound_task(home: pathlib.Path, name: str, session_id: str, *, enabled: bool = True) -> None:
   """One synthetic cron task bound to *session_id* (the join's input shape).
 
   A cron.d host file carries ``prompt_file`` — the pointer to the file owning
@@ -44,10 +31,10 @@ def _write_bound_task(home: Path, name: str, session_id: str, *, enabled: bool =
   prompt_path = home / "prompts" / f"{name}.md"
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text(f"synthetic prompt for {name}\n", encoding="utf-8")
-  path = cron_d_dir(home) / f"{name}.yaml"
+  path = conftest.cron_d_dir(home) / f"{name}.yaml"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(
-      dump_yaml(
+      conftest.dump_yaml(
           {
               "cron": "0 3 * * *",
               "prompt_file": str(prompt_path),
@@ -75,11 +62,12 @@ def _assert_unbound_row(row: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
+async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(
+    tmp_path: pathlib.Path, temp_home: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
 
   async def manager(name: str, request_id: str, group: str | None = None):
-    node = await create_task(tree, parent=None, request_id=request_id, profile="manager", name=name)
+    node = await conftest.create_task(tree, parent=None, request_id=request_id, profile="manager", name=name)
     if group is not None:
       node.group = group
       await session_blocks.store.save_metadata(node)
@@ -90,7 +78,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
   unbound = await manager("Plain root", "plain-1", "Synthetic")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   _write_bound_task(temp_home, "synthetic-paused", disabled_node.id, enabled=False)
-  client = make_sessions_listing_client(cfg, session_blocks, tree)
+  client = conftest.make_sessions_listing_client(cfg, session_blocks, tree)
 
   for url in ("/api/sessions/", "/api/sessions/starred"):
     if url.endswith("starred"):
@@ -106,8 +94,8 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
 
   # The homepage's server-rendered sidebar carries the same answer.
   rows = {
-      row["id"]: row
-      for row in page_initial_sessions(make_sessions_listing_page_client(cfg, session_blocks, tree), unbound.id)
+      row["id"]: row for row in conftest.page_initial_sessions(
+          conftest.make_sessions_listing_page_client(cfg, session_blocks, tree), unbound.id)
   }
   _assert_bound_row(rows[bound.id], "synthetic-daily", enabled=True)
   _assert_bound_row(rows[disabled_node.id], "synthetic-paused", enabled=False)
@@ -116,7 +104,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
 
 @pytest.mark.asyncio
 async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
-    tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, temp_home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The one-entry memo serves the stored map while the question is unchanged.
 
   Same id set and fingerprint serves the stored dicts whole (the hit the
@@ -124,29 +112,29 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   change re-derives through the fingerprint even inside the served fire
   window; a now past a served fire re-derives with the next occurrence.
   """
-  from datetime import UTC, datetime, timedelta
+  import datetime
 
-  from src.features.cron.sequence_controller import CronSequenceController
+  from src.features.cron import sequence_controller
 
-  controller = CronSequenceController()
+  controller = sequence_controller.CronSequenceController()
 
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="Bound")
-  other = await create_task(tree, parent=None, request_id="plain-1", profile="manager", name="Plain")
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  bound = await conftest.create_task(tree, parent=None, request_id="bind-1", profile="manager", name="Bound")
+  other = await conftest.create_task(tree, parent=None, request_id="plain-1", profile="manager", name="Plain")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   ids = (bound.id, other.id)
-  now = datetime.now(UTC)
+  now = datetime.datetime.now(datetime.UTC)
 
   first = controller.listing_fields(ids, now)
   _assert_bound_row(first[bound.id], "synthetic-daily", enabled=True)
-  second = controller.listing_fields(ids, now + timedelta(seconds=1))
+  second = controller.listing_fields(ids, now + datetime.timedelta(seconds=1))
   assert second == first
   assert second[other.id] is first[other.id]  # the stored map served whole
 
   assert set(controller.listing_fields((other.id,), now)) == {other.id}
 
   _write_bound_task(temp_home, "synthetic-second", other.id)
-  rebound = controller.listing_fields(ids, now + timedelta(seconds=1))
+  rebound = controller.listing_fields(ids, now + datetime.timedelta(seconds=1))
   assert rebound[other.id]["schedule_task"] == "synthetic-second"
   assert rebound[bound.id] == first[bound.id]
 
@@ -154,10 +142,10 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   # the clock next_run_iso computes from (datetime.now under the task's
   # timezone) 5 minutes past the served fire, so the crossing holds at any
   # wall-clock run instant.
-  fire = datetime.fromisoformat(first[bound.id]["schedule_next_run"])
-  crossed = fire + timedelta(minutes=5)
+  fire = datetime.datetime.fromisoformat(first[bound.id]["schedule_next_run"])
+  crossed = fire + datetime.timedelta(minutes=5)
 
-  class _ShiftedDateTime(datetime):
+  class _ShiftedDateTime(datetime.datetime):
 
     @classmethod
     def now(cls, tz=None):
@@ -165,17 +153,17 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
 
   monkeypatch.setattr("src.features.cron.sequence_controller.datetime", _ShiftedDateTime)
   advanced = controller.listing_fields(ids, crossed)
-  assert datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
+  assert datetime.datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
 
 
 @pytest.mark.asyncio
 async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_gone(
-    tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="synthetic-daily")
+    tmp_path: pathlib.Path, temp_home: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  bound = await conftest.create_task(tree, parent=None, request_id="bind-1", profile="manager", name="synthetic-daily")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   await session_blocks.lifecycle.archive_session(bound.id)
-  client = make_sessions_listing_client(cfg, session_blocks, tree)
+  client = conftest.make_sessions_listing_client(cfg, session_blocks, tree)
 
   resp = client.get("/api/sessions/archived")
   assert resp.status_code == 200
@@ -189,39 +177,39 @@ async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_g
 
 
 @pytest.mark.asyncio
-async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_path: Path) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
+async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
   root.group = "Alpha"
   await session_blocks.store.save_metadata(root)
   # An archived intermediate (its own close fact): it is itself an archived
   # row, and the walk climbs past it to the active root.
-  hidden = await create_task(
+  hidden = await conftest.create_task(
       tree, parent=root.id, request_id="mid-1", profile="manager", name="Synthetic archived middle")
-  delivered = await create_task(
+  delivered = await conftest.create_task(
       tree, parent=hidden.id, request_id="leaf-1", profile="worker", name="Synthetic delivered")
-  await tree.runs.register_run(RunRecord(id="run-1", session_id=delivered.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-1", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-1", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # an end state of its own
-  await tree.archive_subtree(hidden.id, caller=OPERATOR)  # delivered is not open; it stays completed
+  await tree.archive_subtree(hidden.id, caller=conftest.OPERATOR)  # delivered is not open; it stays completed
 
   # An archived child directly under the active root.
-  archived_child = await create_task(
+  archived_child = await conftest.create_task(
       tree, parent=root.id, request_id="archived-child", profile="manager", name="Synthetic archived child")
-  await tree.archive_subtree(archived_child.id, caller=OPERATOR)
+  await tree.archive_subtree(archived_child.id, caller=conftest.OPERATOR)
 
   # Fillers push the archived rows past one small page.
   fillers = []
   for i in range(3):
-    filler = await create_root_session(
-        session_blocks, CreateSessionRequest(name=f"Filler {i}"), backend=OPUS_BACKEND_ID)
+    filler = await conftest.create_root_session(
+        session_blocks, models.CreateSessionRequest(name=f"Filler {i}"), backend=conftest.OPUS_BACKEND_ID)
     await session_blocks.lifecycle.archive_session(filler.id)
     fillers.append(filler)
 
-  client = make_sessions_listing_client(cfg, session_blocks, tree)
+  client = conftest.make_sessions_listing_client(cfg, session_blocks, tree)
   archived: list[str] = []
   context: list[str] = []
-  pages = walk_archived_pages(client)
+  pages = conftest.walk_archived_pages(client)
   for page in pages:
     rows = page["sessions"]
     real = [r for r in rows if not r.get("context_only")]
@@ -235,7 +223,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
     assert len(page_context) == len(set(page_context))
     for row in rows:
       if row.get("context_only"):
-        assert row["status"] != SessionStatus.ARCHIVED
+        assert row["status"] != models.SessionStatus.ARCHIVED
     context.extend(page_context)
 
   # Every archived row exactly once — the walk's cursor never repeats a row.
@@ -249,23 +237,25 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_archived_context_walk_keeps_the_cron_subtree_out(tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  cron = await make_cron_session(session_blocks, "synthetic-cron")
-  active_root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
-  firing = await create_task(
+async def test_archived_context_walk_keeps_the_cron_subtree_out(
+    tmp_path: pathlib.Path, temp_home: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  cron = await conftest.make_cron_session(session_blocks, "synthetic-cron")
+  active_root = await conftest.create_task(
+      tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
+  firing = await conftest.create_task(
       tree, parent=cron.id, request_id="firing-1", profile="worker", name="synthetic-cron · firing-1")
   await session_blocks.lifecycle.archive_session(firing.id)
   # An archived row under the ACTIVE root: the walk climbs to the root, while
   # the firing's chain reaches the cron session, so it never becomes a page row.
-  delivered = await create_task(
+  delivered = await conftest.create_task(
       tree, parent=active_root.id, request_id="leaf-2", profile="worker", name="Synthetic delivered")
-  await tree.runs.register_run(RunRecord(id="run-2", session_id=delivered.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-2", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-2", outcome="success")
 
-  client = make_sessions_listing_client(cfg, session_blocks, tree)
+  client = conftest.make_sessions_listing_client(cfg, session_blocks, tree)
   seen: dict[str, dict] = {}
-  for page in walk_archived_pages(client):
+  for page in conftest.walk_archived_pages(client):
     for row in page["sessions"]:
       seen[row["id"]] = row
 

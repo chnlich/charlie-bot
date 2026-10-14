@@ -14,8 +14,7 @@ let viewportFillCount = 0;
 let triggerZoneFillCount = 0;
 let lazySessionDataTimer = null;
 function getDefaultBackendId() {
-  const backendIds = Object.keys(BACKEND_OPTIONS || {});
-  return backendIds.length ? backendIds[0] : 'claude-opus-4.6';
+  return DEFAULT_BACKEND_ID;
 }
 
 function getActiveBackendId() {
@@ -121,21 +120,20 @@ function resetLazySessionData() {
 
 function disposeActiveTurnEngine() {
   const container = document.getElementById('messages');
-  const engine = globalThis.Chat && Chat.TurnEngine && container
-    ? Chat.TurnEngine.activeFor(container)
-    : null;
+  const engine = Chat.activeTurnEngineFor(container);
   if (engine) engine.dispose();
 }
 
 // Runs on every path that leaves the active session view: the per-session
 // pollers and turn engine must be down before the next view reuses the
-// composer state cleared here.
+// composer state cleared here. A package that holds per-view composer state
+// drops it on the charliebot:session-view-teardown page event.
 function teardownActiveSessionView() {
   stopActiveSessionViewPolling();
   stopTranscriptPolling();
   resetLazySessionData();
   disposeActiveTurnEngine();
-  resetVoiceState();
+  document.dispatchEvent(new CustomEvent('charliebot:session-view-teardown'));
   uploadedFiles = [];
   renderFileChips();
 }
@@ -145,10 +143,15 @@ function scheduleLazySessionDataLoad() {
   lazySessionDataTimer = scheduleIdleTask(() => {
     lazySessionDataTimer = null;
     pollActiveSessionView({force: true});
-    // One explain/status GET per session load/switch paints every divider's
-    // explain button from persisted truth; turns the engine materializes later
-    // read the map at render time, so no per-divider request is ever needed.
-    loadExplainStatuses(SESSION_ID);
+    // A package that loads per-session data once per session load or switch
+    // listens for this event. detail.isCurrent() tells, when its response lands,
+    // whether the same session and switch generation still own the view.
+    const sessionId = SESSION_ID;
+    const generation = switchGeneration;
+    document.dispatchEvent(new CustomEvent('charliebot:session-data-load', {detail: {
+      sessionId,
+      isCurrent: () => generation === switchGeneration && sessionId === SESSION_ID,
+    }}));
   });
 }
 
@@ -232,8 +235,7 @@ function applyTranscriptUpdate(data) {
       // tail's scroll-up pagination stands down. The reader's place survives
       // the repaint: pinned readers stay at the bottom, one reading history
       // keeps their message at the same viewport offset.
-      const engine = globalThis.Chat && Chat.TurnEngine
-        ? Chat.TurnEngine.activeFor(container) : null;
+      const engine = Chat.activeTurnEngineFor(container);
       // The follow decision is the engine's shouldFollow(): a fitting reply
       // opened at the bottom is not pinned, but its deferred follow must
       // survive the reset remount the same way the pin does.
@@ -313,6 +315,133 @@ async function cancelTranscriptTarget() {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Active session view poll
+// ---------------------------------------------------------------------------
+let activeSessionViewPollInflight = false;
+const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
+
+function stopActiveSessionViewPolling() {
+  stopPageTimer('active-session-view');
+}
+
+function ensureActiveSessionViewPolling() {
+  if (!SESSION_ID || (!masterThinking && !THINKING_SINCE)) {
+    stopActiveSessionViewPolling();
+    return;
+  }
+  if (pageTimerRegistered('active-session-view')) return;
+  startPageTimer('active-session-view', pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
+}
+
+async function pollActiveSessionView(opts) {
+  const force = opts && opts.force;
+  if (activeSessionViewPollInflight || !SESSION_ID || (!force && !masterThinking && !THINKING_SINCE)) return;
+
+  const pollSessionId = SESSION_ID;
+  activeSessionViewPollInflight = true;
+  try {
+    const res = await fetch('/api/sessions/' + pollSessionId + '/usage');
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (pollSessionId !== SESSION_ID) return;
+
+    THINKING_SINCE = data.session.thinking_since || null;
+    setActiveBackendId(data.active_backend);
+    setSwitchableBackends(data.switchable_backends);
+    updateActiveBackendBadges();
+    globalThis.renderUsageFromData(data.usage);
+
+    if (!THINKING_SINCE && masterThinking) {
+      globalThis.stopThinking();
+    }
+  } catch (err) {
+    console.error('pollActiveSessionView failed:', err);
+  } finally {
+    activeSessionViewPollInflight = false;
+    globalThis.ensureActiveSessionViewPolling();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Thinking indicator
+// ---------------------------------------------------------------------------
+// The thinking indicator owns only the header timer and the session-view poll:
+// it never touches the send button. The button's disabled state has one writer
+// — the in-flight lock (refreshSendLock in file-upload.js) — so a master run
+// leaves typing available no matter how long it runs. The keepSendEnabled
+// option stays in the call convention every start site passes; nothing reads
+// it any more.
+function startThinking(opts) {
+  masterThinking = true;
+  thinkingStart = thinkingStart || Date.now();
+  document.getElementById('thinking').classList.remove('hidden');
+  updateThinkingTime();
+  startPageTimer('thinking-tick', updateThinkingTime, 1000);
+  globalThis.ensureActiveSessionViewPolling();
+}
+
+// Resumes the indicator when a page load or SPA switch lands while the master
+// is mid-thought. THINKING_SINCE is the server-stamped start the session view
+// and status polls refresh; the send button stays with the in-flight lock, so
+// typing remains available while the run is still processing.
+function resumeThinkingIfMidThought() {
+  if (THINKING_SINCE) {
+    thinkingStart = new Date(THINKING_SINCE).getTime();
+    startThinking({keepSendEnabled: true});
+  }
+}
+
+function stopThinking(opts) {
+  masterThinking = false;
+  document.getElementById('thinking').classList.add('hidden');
+  stopPageTimer('thinking-tick');
+  thinkingStart = null;
+  // No button write here: master_done or assistant_error can land inside an
+  // upload or input-work window, and re-enabling would punch through the in-flight
+  // lock. Only refreshSendLock writes the button.
+  stopActiveSessionViewPolling();
+  if (!switching && !(opts && opts.preserveSessionIndicator)) Sidebar.updateSpinner();
+}
+
+function updateThinkingTime() {
+  if (!thinkingStart) return;
+  const secs = Math.floor((Date.now() - thinkingStart) / 1000);
+  document.getElementById('thinking-time').textContent = secs + 's';
+}
+
+async function cancelMaster() {
+  // A worker node's stop button signals the active Run through its own
+  // cancel route (session-view.js), not the chat cancel.
+  if (typeof transcriptTarget === 'function' && transcriptTarget()) {
+    return cancelTranscriptTarget();
+  }
+  try {
+    const res = await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
+    if (res.ok) return;
+
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.error || body.message || '';
+    } catch (_err) {
+      detail = '';
+    }
+
+    if (res.status === 404 && detail === 'No active master agent') {
+      // Backend already broadcasts a visible assistant_error for this case.
+      return;
+    }
+
+    const suffix = detail || (`HTTP ${res.status}`);
+    showToast(`Cancel failed: ${suffix}`, true);
+    console.error('Cancel master failed:', res.status, detail || res.statusText);
+  } catch (err) {
+    showToast('Cancel failed: network error. Please try again.', true);
+    console.error('Cancel master failed:', err);
+  }
+}
+
 function buildEmptySessionBootstrap(session) {
   const backend = session.backend || getDefaultBackendId();
   return {
@@ -329,8 +458,8 @@ function buildEmptySessionBootstrap(session) {
 }
 
 // ---------------------------------------------------------------------------
-// Switch diagnostics + bootstrap cache: five one-line telemetry points per
-// switch (started/completed/superseded/failed/render_error), plus a short-lived
+// Switch phases + bootstrap cache: five one-line phase records per switch
+// (started/completed/superseded/failed/render_error), plus a short-lived
 // cache so a superseded generation's fetched bootstrap serves an immediate
 // re-click of the same session.
 // ---------------------------------------------------------------------------
@@ -355,9 +484,9 @@ function freshCachedBootstrap(sessionId) {
   return entry.data;
 }
 
+// Each phase record goes out as a page event, so a diagnostics package may
+// record it. A listener's failure stays inside dispatchEvent and never breaks a switch.
 function reportSwitchEvent(phase, fromSessionId, sessionId, generation, extra = {}) {
-  // Fire-and-forget by design: never awaited, failures dropped — the
-  // diagnostics channel must never delay or break a switch.
   const record = {
     phase,
     from_session: fromSessionId,
@@ -369,13 +498,7 @@ function reportSwitchEvent(phase, fromSessionId, sessionId, generation, extra = 
     client_ts: new Date().toISOString(),
     ...extra,
   };
-  try {
-    fetch('/api/diag/switch-events', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(record),
-    }).catch(() => {});
-  } catch (_err) {}
+  document.dispatchEvent(new CustomEvent('charliebot:session-switch-phase', {detail: record}));
 }
 
 function switchTargetName(sessionId) {
@@ -477,7 +600,7 @@ async function switchSession(sessionId) {
 
   // Update globals
   SESSION_ID = sessionId;
-  if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
+  document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
   DRAFT_KEY = 'charliebot-draft-' + sessionId;
   THINKING_SINCE = data.session.thinking_since || null;
   eventCursor = data.event_count;
@@ -523,8 +646,8 @@ async function switchSession(sessionId) {
   pollSessionStatus();
   ensureActiveSessionViewPolling();
 
-  // Reset lazy-load state
-  _backlogLoaded = false;
+  // A package that loads its data once per session listens for this event.
+  document.dispatchEvent(new CustomEvent('charliebot:session-switched'));
   scheduleLazySessionDataLoad();
 }
 
@@ -614,9 +737,7 @@ function renderSessionView(data) {
   globalThis.renderPendingTriggersTray(session.id);
 
   // Restore whichever tab was active before the session switch
-  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
-  const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
-  switchTab(activeTab);
+  switchTab(tabAfterSessionSwitch());
 
   // A tail page shorter than the viewport leaves the container unscrollable, so
   // no scroll event ever fires and the idle sentinel would wait forever. This
@@ -625,22 +746,6 @@ function renderSessionView(data) {
   // is not a scrollability signal here.
   if (sessionHasMore && container.scrollHeight <= container.clientHeight + 80) {
     loadOlderIfNeeded(container);
-  }
-}
-
-async function loadExplainStatuses(sessionId) {
-  // In-flight token: only the session and switch generation that own the view
-  // when the response lands may install the map (same rule as loadOlderMessages).
-  const flight = {sessionId, generation: switchGeneration};
-  try {
-    const res = await fetch('/api/sessions/' + sessionId + '/explain/status');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const statuses = await res.json();
-    if (flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID) return;
-    setActiveExplainStatuses(statuses);
-    applyExplainStatusesToDom();
-  } catch (err) {
-    console.error('Load explain statuses failed:', err);
   }
 }
 
@@ -735,7 +840,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       sessionHasMore = false;
     }
 
-    const engine = globalThis.Chat && Chat.TurnEngine ? Chat.TurnEngine.activeFor(container) : null;
+    const engine = Chat.activeTurnEngineFor(container);
 
     const sentinel = document.getElementById('load-more-sentinel');
 
@@ -949,20 +1054,6 @@ async function createSessionNode(taskParentId, group) {
   return res.json();
 }
 
-// The group header's clock button: a scheduled task is born bound. The
-// manager node is created in that group first, then the cron editor opens in
-// create mode with the node prefilled as the binding and the task's project
-// set to the group.
-async function createScheduledTaskInGroup(group) {
-  try {
-    const node = await createSessionNode(null, group);
-    if (typeof Sidebar.expandSessionGroup === 'function') Sidebar.expandSessionGroup(group);
-    openCronAdder({sessionId: node.id, project: group});
-  } catch (err) {
-    console.error('Create scheduled task failed:', err);
-  }
-}
-
 async function createTaskNode(taskParentId, group) {
   try {
     const data = await createSessionNode(taskParentId, group);
@@ -987,7 +1078,7 @@ async function createTaskNode(taskParentId, group) {
 
     const bootstrap = buildEmptySessionBootstrap(data);
     SESSION_ID = data.id;
-    if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
+    document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
     DRAFT_KEY = 'charliebot-draft-' + data.id;
     THINKING_SINCE = data.thinking_since || null;
     eventCursor = bootstrap.event_count;
@@ -1025,7 +1116,7 @@ function renderNoActiveSessionView() {
 
   SESSION_ID = null;
   globalThis.renderPendingTriggersTray(null);
-  if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
+  document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
   DRAFT_KEY = null;
   THINKING_SINCE = null;
   eventCursor = 0;
@@ -1039,6 +1130,10 @@ function renderNoActiveSessionView() {
   switching = false;
 }
 
+// The session rows and group headers that groups.js renders.
+registerSidebarControl('switchSession', switchSession);
+registerSidebarControl('createChildSession', createChildSession);
+registerSidebarControl('createSessionInGroup', createSessionInGroup);
 
 const API = {
   getDefaultBackendId,
@@ -1059,12 +1154,20 @@ const API = {
   createSession,
   createChildSession,
   createSessionInGroup,
-  createScheduledTaskInGroup,
   renderNoActiveSessionView,
+  stopActiveSessionViewPolling,
+  ensureActiveSessionViewPolling,
+  pollActiveSessionView,
+  startThinking,
+  resumeThinkingIfMidThought,
+  stopThinking,
+  updateThinkingTime,
+  cancelMaster,
 };
 Sidebar.wire(API, {
   switchBackend,
   loadOlderIfNeeded,
+  createSessionNode,
 });
 
 })();

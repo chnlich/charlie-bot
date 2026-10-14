@@ -85,6 +85,12 @@ class ServerConfig(BaseModel):
   # entirely. session_swap_max_mb bounds swap use separately (0 = no swap).
   session_memory_max_mb: int = 12288
   session_swap_max_mb: int = 0
+  # Per-session task cap (processes plus threads), written to the session
+  # cgroup's pids.max. A runaway fork loop then fails with EAGAIN inside its
+  # own session, before it can exhaust the host's PID space and stop every
+  # fork on the host. 0 means no task cap (pids.max = max). With
+  # session_memory_max_mb at 0 there is no session cgroup, so no task cap either.
+  session_tasks_max: int = 4096
 
   # Worker-class launch precheck: the filesystems holding the CharlieBot data
   # dir (~/.charliebot) and the worktree root must hold at least this much
@@ -120,8 +126,9 @@ class BackendsConfig(BaseModel):
   model_config = ConfigDict(extra='forbid')
 
   # Backend id rule (the one home of it; other docs point here). An option id is
-  # "<type prefix>-<family>" (claude-opus, codex-luna, charlie-code-kimi), the
-  # prefix one of claude-, codex-, charlie-code-. The id names the model family
+  # "<type prefix>-<family>" (claude-opus, oc-kimi-k3, clc-glm5-flash), the
+  # prefix one of the id prefixes the type's usage source registers (each type's
+  # src/backends/<package>/__init__.py). The id names the model family
   # and carries no version: the version lives only in the entry's `model` and
   # `label`. Session, thread and Run metadata, package config files and `preference` store
   # the id, so a version bump edits exactly those two fields of one entry and
@@ -129,7 +136,8 @@ class BackendsConfig(BaseModel):
   # (off config, still in old records) by its prefix. An option bound to an
   # account pool may end its id with `-<pool name>`. require_backends refuses a
   # startup whose preference names an id missing from `options`; a package's startup
-  # check does the same for the ids in that package's config files.
+  # check does the same for the ids in that package's config files, and usage's
+  # check_backend_ids refuses an id outside its type's registered prefixes.
 
   # Ordered preference list of BackendOption ids, consumed by two selectors:
   #   - checking-role (reviewer, verify default): first entry that DIFFERS from the

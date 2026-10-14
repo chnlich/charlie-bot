@@ -1,0 +1,764 @@
+
+(function() {
+  const Chat = globalThis.Chat;
+  const resolveFileServerUrl = Chat.resolveFileServerUrl;
+  const absolutePathFromServedPathname = Chat.absolutePathFromServedPathname;
+  const missingMarkerHtml = Chat.missingMarkerHtml;
+  const FILE_SERVER_PREFIX = Chat.FILE_SERVER_PREFIX;
+  const FILE_SERVER_PREFIX_GROUP = Chat.FILE_SERVER_PREFIX_GROUP;
+
+// ---------------------------------------------------------------------------
+// HTML artifact rendering — linked artifacts/*.html render as compact cards.
+// The sandboxed iframe (a whole live document with its own scripts) exists only
+// while the user has the card expanded, and both the fetch cache and the number
+// of simultaneously expanded frames are bounded.
+// ---------------------------------------------------------------------------
+var HTML_ARTIFACT_LINK_RE = /(^|\/)artifacts\/[^/]+\.html$/;
+var HTML_ARTIFACT_CACHE_MAX = 8;
+var MAX_EXPANDED_ARTIFACTS = 3;
+var htmlArtifactFetchCache = new Map();
+var expandedArtifactCards = [];
+
+function basename(path) {
+  var parts = String(path || '').split('/');
+  return parts[parts.length - 1];
+}
+
+function resolveArtifactAbsolutePath(filePath) {
+  if (filePath.charAt(0) === '/') return filePath;
+  var root = (typeof window !== 'undefined' && window.SESSIONS_ROOT) ? window.SESSIONS_ROOT : '';
+  if (!root) {
+    throw new Error('window.SESSIONS_ROOT not injected');
+  }
+  return root + '/' + SESSION_ID + '/' + filePath;
+}
+
+function escapeForSrcdoc(html) {
+  return String(html || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function injectResizeScript(html, frameId) {
+  var script = '<script>(function(){'
+    + 'var frameId=' + JSON.stringify(frameId) + ';'
+    + 'function send(){parent.postMessage({type:"html-artifact-height",id:frameId,height:document.documentElement.scrollHeight},"*");}'
+    + 'new ResizeObserver(send).observe(document.documentElement);'
+    + 'window.addEventListener("load",send);'
+    + 'send();'
+    + '})();<\/script>';
+  var src = String(html || '');
+  var idx = src.lastIndexOf('</body>');
+  if (idx === -1) return src + script;
+  return src.slice(0, idx) + script + src.slice(idx);
+}
+
+function injectLinkBehavior(html, absPath) {
+  var baseHref = FILE_SERVER_PREFIX + absPath;
+  var src = String(html || '');
+  var hasBase = /<base\b/i.test(src);
+  var baseTag = '<base href="' + escapeHtml(baseHref) + '">';
+  var withBase;
+  if (hasBase) {
+    withBase = src;
+  } else {
+    var headMatch = src.match(/<head\b[^>]*>/i);
+    if (headMatch) {
+      var headEnd = headMatch.index + headMatch[0].length;
+      withBase = src.slice(0, headEnd) + baseTag + src.slice(headEnd);
+    } else {
+      withBase = baseTag + src;
+    }
+  }
+  var interceptor = '<script>(function(){'
+    + 'document.addEventListener("click", function(e){'
+    + 'if(e.defaultPrevented) return;'
+    + 'if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) return;'
+    + 'if(e.button!==0) return;'
+    + 'var a=e.target.closest("a[href]");'
+    + 'if(!a) return;'
+    + 'var raw=a.getAttribute("href");'
+    + 'if(raw.charAt(0)==="#"){'
+    + 'e.preventDefault();'
+    + 'if(raw==="#") return;'
+    + 'var frag;'
+    + 'try{frag=decodeURIComponent(raw.slice(1));}catch(_e){frag=raw.slice(1);}'
+    + 'var el=document.getElementById(frag)||document.getElementsByName(frag)[0];'
+    + 'if(el) el.scrollIntoView();'
+    + 'return;'
+    + '}'
+    + 'e.preventDefault();'
+    + 'var url;'
+    + 'try{url=new URL(raw, document.baseURI);}catch(_e){console.warn("Invalid href in artifact", raw);return;}'
+    + 'window.open(url.href, "_blank", "noopener");'
+    + '});'
+    + '})();<\/script>';
+  var bodyIdx = withBase.lastIndexOf('</body>');
+  if (bodyIdx === -1) return withBase + interceptor;
+  return withBase.slice(0, bodyIdx) + interceptor + withBase.slice(bodyIdx);
+}
+
+function htmlArtifactSizeStorageKey(filePath) {
+  return filePath ? 'html-artifact-size:' + filePath : '';
+}
+
+function loadHtmlArtifactSavedSize(filePath) {
+  var key = htmlArtifactSizeStorageKey(filePath);
+  if (!key) return null;
+  try {
+    var raw = localStorage.getItem(key);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    var height = (typeof parsed.height === 'number' && parsed.height > 0) ? parsed.height : 0;
+    var width = (typeof parsed.width === 'number' && parsed.width > 0) ? parsed.width : 0;
+    if (height || width) return {height: height, width: width};
+  } catch (e) {}
+  return null;
+}
+
+function stampViewingSessionFragment(href) {
+  if (typeof SESSION_ID === 'undefined' || !SESSION_ID) return href;
+  var raw = String(href || '');
+  var hashIdx = raw.indexOf('#');
+  var base = hashIdx === -1 ? raw : raw.slice(0, hashIdx);
+  return base + '#cbsession=' + encodeURIComponent(String(SESSION_ID));
+}
+
+function saveHtmlArtifactSavedSize(filePath, size) {
+  var key = htmlArtifactSizeStorageKey(filePath);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(size));
+  } catch (e) {}
+}
+
+// Inner markup of an expanded card: the live iframe plus its toolbar, resize
+// handles and source view. Built on expand only, discarded on collapse.
+function buildHtmlArtifactFrameHtml(opts) {
+  var filePath = opts.filePath || opts.absPath || '';
+  var absPath = opts.absPath || resolveArtifactAbsolutePath(filePath);
+  var rawHtml = opts.html || '';
+  var frameId = 'hf-' + Math.random().toString(36).slice(2);
+  var withScript = injectResizeScript(injectLinkBehavior(rawHtml, absPath), frameId);
+  var srcdoc = escapeForSrcdoc(withScript);
+  var openUrl = stampViewingSessionFragment(FILE_SERVER_PREFIX + absPath);
+  var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
+  var savedSize = loadHtmlArtifactSavedSize(filePath);
+  var iframeSizeStyle = 'min-height:60px;max-height:80vh;';
+  var widthStyle = '';
+  if (savedSize) {
+    if (savedSize.height) iframeSizeStyle = 'height:' + savedSize.height + 'px;max-height:none;';
+    if (savedSize.width) widthStyle = 'width:' + savedSize.width + 'px;';
+  }
+  var iframeStyle = 'width:100%;' + iframeSizeStyle
+    + 'border:1px solid rgba(148,163,184,0.2);border-bottom:none;border-right:none;border-radius:0;'
+    + 'background:white;display:block;';
+  var manualHeightAttr = (savedSize && savedSize.height) ? ' data-manual-height="1"' : '';
+  var filePathAttr = ' data-file-path="' + escapeHtml(filePath) + '"';
+  return '<div class="html-artifact-toolbar" style="' + widthStyle + '">'
+    + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
+    + '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Collapse</button>'
+    + '<button type="button" onclick="expandHtmlArtifact(this)">Full screen</button>'
+    + '<a href="' + escapeHtml(openUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
+    + '<button type="button" onclick="toggleHtmlArtifactSource(this)">View source</button>'
+    + '</div>'
+    + '<div class="html-artifact-frame-wrap" style="' + widthStyle + '">'
+    + '<iframe class="html-artifact-frame" data-frame-id="' + frameId + '"' + manualHeightAttr + filePathAttr
+    + ' sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"'
+    + ' srcdoc="' + srcdoc + '"'
+    + ' style="' + iframeStyle + '"></iframe>'
+    + '<div class="html-artifact-resize-handle html-artifact-resize-s" title="Drag to resize height"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this, \'y\')"></div>'
+    + '<div class="html-artifact-resize-handle html-artifact-resize-e" title="Drag to resize width"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this, \'x\')"></div>'
+    + '<div class="html-artifact-resize-handle html-artifact-resize-se" title="Drag to resize"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this, \'xy\')"></div>'
+    + '</div>'
+    + '<div class="html-artifact-source"><pre><code class="hljs language-html">'
+    + sourceHighlighted + '</code></pre></div>';
+}
+
+function resolveHtmlArtifactLink(source) {
+  var href = '';
+  if (typeof source === 'string') {
+    href = source;
+  } else if (source && source.getAttribute) {
+    href = source.getAttribute('href') || '';
+  }
+  if (!href) return null;
+  var url = resolveFileServerUrl(href);
+  if (!url) return null;
+  var pathname = url.pathname || '';
+  if (!HTML_ARTIFACT_LINK_RE.test(pathname)) return null;
+  var absPath = absolutePathFromServedPathname(pathname);
+  if (absPath === null) return null;
+  return {fetchUrl: pathname, absPath: absPath};
+}
+
+var HTML_ARTIFACT_CODE_RE = new RegExp(
+  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/[^\\s]*\\/artifacts\\/[^/\\s]+\\.html', 'g');
+
+function findArtifactLinkInCode(code) {
+  var text = code.textContent || '';
+  if (!text) return null;
+  var resolved = resolveHtmlArtifactLink(text);
+  if (resolved) return resolved;
+  var matches = text.match(HTML_ARTIFACT_CODE_RE);
+  if (!matches) return null;
+  for (var i = 0; i < matches.length; i++) {
+    resolved = resolveHtmlArtifactLink(matches[i]);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+// Map iteration order is insertion order, so re-inserting on read makes the
+// first key the least recently used one.
+function touchHtmlArtifactCache(absPath, promise) {
+  htmlArtifactFetchCache.delete(absPath);
+  htmlArtifactFetchCache.set(absPath, promise);
+  while (htmlArtifactFetchCache.size > HTML_ARTIFACT_CACHE_MAX) {
+    htmlArtifactFetchCache.delete(htmlArtifactFetchCache.keys().next().value);
+  }
+}
+
+function fetchHtmlArtifact(absPath, fetchUrl) {
+  var cached = htmlArtifactFetchCache.get(absPath);
+  if (cached) {
+    touchHtmlArtifactCache(absPath, cached);
+    return cached;
+  }
+  var promise = fetch(fetchUrl).then(function(resp) {
+    if (!resp.ok) {
+      // The status rides along on the error: it is what tells an expand that the artifact is
+      // gone rather than that the fetch went wrong some other way.
+      var failure = new Error('HTTP ' + resp.status + ' fetching ' + fetchUrl);
+      failure.status = resp.status;
+      throw failure;
+    }
+    return resp.text();
+  }).catch(function(e) {
+    htmlArtifactFetchCache.delete(absPath);
+    throw e;
+  });
+  touchHtmlArtifactCache(absPath, promise);
+  return promise;
+}
+
+function findEmbeddedHtmlArtifactCard(prose, absPath) {
+  var el = prose.nextElementSibling;
+  while (el) {
+    if (el.classList.contains('html-artifact') && el.dataset.artifactPath === absPath) {
+      return el;
+    }
+    el = el.nextElementSibling;
+  }
+  return null;
+}
+
+function insertHtmlArtifactCard(prose, card, ordinal) {
+  var parent = prose.parentNode;
+  if (!parent) return;
+  card.dataset.artifactOrdinal = String(ordinal);
+  var before = prose.nextSibling;
+  while (before && before.nodeType === Node.ELEMENT_NODE && before.classList.contains('html-artifact')) {
+    var existingOrdinal = Number(before.dataset.artifactOrdinal || 0);
+    if (existingOrdinal > ordinal) break;
+    before = before.nextSibling;
+  }
+  parent.insertBefore(card, before);
+}
+
+function markArtifactCardMissing(card) {
+  card.querySelector('.html-artifact-toolbar').insertAdjacentHTML('beforeend', missingMarkerHtml());
+}
+
+// ---------------------------------------------------------------------------
+// Plan compact cards — registered plan-version links render as native cards.
+// Pure helpers (exported for testing) live below; the DOM render path is in
+// embedLinkedHtmlArtifacts. The registry snapshot is owned by the plan panel
+// module (single source of truth, no client-side state derivation).
+// ---------------------------------------------------------------------------
+
+function buildSessionDir(sessionId, sessionsRoot) {
+  var root = sessionsRoot;
+  if (root == null && typeof window !== 'undefined' && window.SESSIONS_ROOT) root = window.SESSIONS_ROOT;
+  if (!root) return '';
+  return root + '/' + sessionId;
+}
+
+function _planStateLabel(plan) {
+  if (typeof planPanel !== 'undefined' && planPanel && typeof planPanel.formatPlanStateLabel === 'function') {
+    return planPanel.formatPlanStateLabel(plan);
+  }
+  if (plan && plan.takeoff != null && plan.state === 'approved') {
+    return 'approved \u00B7 v' + plan.takeoff.v;
+  }
+  return plan ? plan.state : '';
+}
+
+// Both plan-version lookups return this one record shape; compact-card
+// renders and badge updates read the same fields.
+function _planVersionRecord(plan, ver) {
+  return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
+}
+
+// Single walk of the registry's plans→versions: the record for the first
+// version whose (plan, ver) pair satisfies *match*, else null. Both lookups
+// below differ only in their *match*.
+function _findPlanVersionRecord(snapshot, match) {
+  var plans = (snapshot && snapshot.plans) || [];
+  for (var i = 0; i < plans.length; i++) {
+    var plan = plans[i];
+    var versions = (plan && plan.versions) || [];
+    for (var j = 0; j < versions.length; j++) {
+      var ver = versions[j];
+      if (match(plan, ver)) {
+        return _planVersionRecord(plan, ver);
+      }
+    }
+  }
+  return null;
+}
+
+function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
+  var sessionDir = buildSessionDir(sessionId, sessionsRoot);
+  if (!sessionDir) return null;
+  return _findPlanVersionRecord(snapshot, function(plan, ver) {
+    return !!ver && !!ver.file && absPath === sessionDir + '/' + ver.file;
+  });
+}
+
+function lookupPlanVersionState(snapshot, planId, v) {
+  return _findPlanVersionRecord(snapshot, function(plan, ver) {
+    return String(plan && plan.id) === String(planId) && Number(ver && ver.v) === Number(v);
+  });
+}
+
+var ARTIFACT_EXPAND_CONTROL = '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Expand</button>';
+
+function buildCompactToolbarHtml(title, absPath, controls) {
+  var openInTabUrl = stampViewingSessionFragment(FILE_SERVER_PREFIX + absPath);
+  return '<div class="html-artifact-toolbar">'
+    + '<span class="filename">' + escapeHtml(title || '(untitled)') + '</span>'
+    + controls
+    + '<a href="' + escapeHtml(openInTabUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
+    + '</div>';
+}
+
+// One compact card shape for both registered plan versions (which open in the
+// plan panel) and any other HTML artifact (which expands into an iframe here).
+// `opts.fetchUrl` is required for the non-plan variant.
+function buildPlanCompactCardHtml(planId, v, title, state, absPath, opts) {
+  if (planId == null) {
+    return '<div class="artifact-compact-card html-artifact" data-artifact-path="' + escapeHtml(absPath) + '"'
+      + ' data-artifact-fetch-url="' + escapeHtml((opts && opts.fetchUrl) || '') + '">'
+      + buildCompactToolbarHtml(title, absPath, ARTIFACT_EXPAND_CONTROL)
+      + '</div>';
+  }
+  var planControls = '<span class="plan-compact-version">v' + escapeHtml(v) + '</span>'
+    + '<span class="plan-compact-state">' + escapeHtml(state || '') + '</span>'
+    + '<button type="button" onclick="openPlanFromCard(this)">Open panel</button>';
+  return '<div class="plan-compact-card html-artifact" data-artifact-path="' + escapeHtml(absPath) + '"'
+    + ' data-plan-card-plan="' + escapeHtml(planId) + '"'
+    + ' data-plan-card-version="' + escapeHtml(v) + '"'
+    + ' data-plan-card-abs-path="' + escapeHtml(absPath) + '">'
+    + buildCompactToolbarHtml(title, absPath, planControls)
+    + '</div>';
+}
+
+function collapseArtifactCard(card) {
+  var index = expandedArtifactCards.indexOf(card);
+  if (index !== -1) expandedArtifactCards.splice(index, 1);
+  var absPath = card.dataset.artifactPath;
+  card.innerHTML = buildCompactToolbarHtml(basename(absPath), absPath, ARTIFACT_EXPAND_CONTROL);
+  delete card.dataset.artifactExpanded;
+}
+
+function expandArtifactCard(card) {
+  var absPath = card.dataset.artifactPath;
+  var fetchUrl = card.dataset.artifactFetchUrl;
+  return fetchHtmlArtifact(absPath, fetchUrl).then(function(html) {
+    // The chat can be rebuilt (SPA session switch) while the fetch is in
+    // flight; never revive a detached card into the expanded set.
+    if (!card.isConnected) return;
+    if (card.dataset.artifactExpanded === '1') return;
+    card.innerHTML = buildHtmlArtifactFrameHtml({absPath: absPath, filePath: absPath, html: html});
+    card.dataset.artifactExpanded = '1';
+    expandedArtifactCards.push(card);
+    // Oldest expansion wins the eviction: at most MAX_EXPANDED_ARTIFACTS live
+    // documents exist in the chat at any time.
+    while (expandedArtifactCards.length > MAX_EXPANDED_ARTIFACTS) {
+      collapseArtifactCard(expandedArtifactCards[0]);
+    }
+  }).catch(function(e) {
+    console.warn('Failed to expand linked HTML artifact', fetchUrl, e);
+    // This fetch is the probe for an HTML artifact link: a 404 here is the answer a HEAD would
+    // have brought back, so the card carries the marker and no extra request is made.
+    if (e.status === 404) markArtifactCardMissing(card);
+  });
+}
+
+function toggleHtmlArtifactEmbed(btn) {
+  var card = btn.closest('.html-artifact');
+  if (!card) return;
+  if (card.dataset.artifactExpanded === '1') collapseArtifactCard(card);
+  else expandArtifactCard(card);
+}
+
+function openPlanFromCard(btn) {
+  var card = btn.closest('.plan-compact-card');
+  if (!card) return;
+  var planId = card.dataset.planCardPlan;
+  var v = Number(card.dataset.planCardVersion);
+  if (typeof planPanel !== 'undefined' && planPanel && typeof planPanel.openPlan === 'function') {
+    planPanel.openPlan(planId, v);
+  }
+}
+
+function updatePlanCardBadges(snapshot) {
+  var cards = document.querySelectorAll('.plan-compact-card');
+  if (!cards.length) return;
+  cards.forEach(function(card) {
+    var planId = card.dataset.planCardPlan;
+    var v = Number(card.dataset.planCardVersion);
+    var info = lookupPlanVersionState(snapshot, planId, v);
+    if (!info) return;
+    var badge = card.querySelector('.plan-compact-state');
+    if (badge) badge.textContent = info.state;
+  });
+}
+
+function _planRegistryReady() {
+  if (typeof planPanel === 'undefined' || !planPanel) return null;
+  if (typeof planPanel.ready !== 'function') return null;
+  return planPanel.ready();
+}
+
+function _planRegistrySnapshot() {
+  if (typeof planPanel === 'undefined' || !planPanel) return null;
+  if (typeof planPanel.getRegistrySnapshot !== 'function') return null;
+  return planPanel.getRegistrySnapshot();
+}
+
+// `reg` is the registered plan version for this path, or null for any other
+// HTML artifact — both render through the same compact card.
+function renderPlanCompactCard(link, ordinal, prose, reg) {
+  var template = document.createElement('template');
+  template.innerHTML = reg
+    ? buildPlanCompactCardHtml(reg.planId, reg.v, reg.title, reg.state, link.absPath)
+    : buildPlanCompactCardHtml(null, null, basename(link.absPath), null, link.absPath, {fetchUrl: link.fetchUrl});
+  var card = template.content.firstElementChild;
+  if (!card) {
+    throw new Error('artifact compact card render produced no element');
+  }
+  var mc = document.getElementById('messages');
+  // With the turn engine the follow decision is the reader's pin intent,
+  // never the 150px geometry band: a fitting reply opens at the bottom
+  // unpinned, and a late card landing there must not yank the view down.
+  // Views without the engine keep the geometry read and the direct write.
+  var engine = Chat.activeTurnEngineFor(mc);
+  var atBottom = engine ? engine.pinnedIntent : (mc ? shouldAutoScroll(mc) : false);
+  insertHtmlArtifactCard(prose, card, ordinal);
+  link.el.dataset.embedded = '1';
+  if (engine) restoreBottomPin(mc, atBottom, false);
+  else if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
+}
+
+function renderArtifactLink(link, ordinal, prose) {
+  var ready = _planRegistryReady();
+  if (!ready) {
+    renderPlanCompactCard(link, ordinal, prose, null);
+    return;
+  }
+  var isReadyFragment = isTurnEngineReadyFragment(prose);
+  ready.then(function() {
+    if (!link.el.isConnected && !isReadyFragment) return;
+    if (link.el.dataset.embedded === '1') return;
+    var currentProse = link.el.closest('.prose-msg');
+    if (!currentProse || currentProse.closest('#streaming-msg')) return;
+    if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
+      link.el.dataset.embedded = '1';
+      return;
+    }
+    var snapshot = _planRegistrySnapshot();
+    var reg = snapshot ? lookupRegisteredPlanVersion(snapshot, link.absPath, SESSION_ID, window.SESSIONS_ROOT) : null;
+    renderPlanCompactCard(link, ordinal, currentProse, reg);
+  }).catch(function(e) {
+    console.warn('plan registry readiness failed; rendering the artifact card', e);
+    renderPlanCompactCard(link, ordinal, prose, null);
+  });
+}
+
+function makePlainTextArtifactHandle(prose) {
+  return {
+    dataset: {},
+    get isConnected() { return prose.isConnected; },
+    closest: function(sel) { return sel === '.prose-msg' ? prose : null; },
+  };
+}
+
+function isTurnEngineReadyFragment(prose) {
+  for (var node = prose; node; node = node.parentNode) {
+    if (node.__turnEngineReadyFragment) return true;
+  }
+  return false;
+}
+
+// Runs after core's file-link pass (Chat.markFileLinks), which has normalized every anchor's
+// href to the page origin.
+function embedLinkedHtmlArtifacts(root) {
+  root.querySelectorAll('.prose-msg').forEach(function(prose) {
+    if (prose.id === 'streaming-msg' || prose.closest('#streaming-msg')) return;
+    var links = [];
+    var seen = new Set();
+    Array.from(prose.querySelectorAll('a[href]')).forEach(function(anchor) {
+      if (anchor.dataset.embedded === '1') return;
+      var resolved = resolveHtmlArtifactLink(anchor);
+      if (!resolved) return;
+      anchor.setAttribute('href', stampViewingSessionFragment(anchor.getAttribute('href') || ''));
+      if (seen.has(resolved.absPath)) return;
+      seen.add(resolved.absPath);
+      links.push({
+        el: anchor,
+        absPath: resolved.absPath,
+        fetchUrl: resolved.fetchUrl,
+      });
+    });
+    Array.from(prose.querySelectorAll('code')).forEach(function(code) {
+      if (code.dataset.embedded === '1') return;
+      var resolved = findArtifactLinkInCode(code);
+      if (!resolved) return;
+      if (seen.has(resolved.absPath)) return;
+      seen.add(resolved.absPath);
+      links.push({
+        el: code,
+        absPath: resolved.absPath,
+        fetchUrl: resolved.fetchUrl,
+      });
+    });
+    (function scanPlainText(node) {
+      if (!node) return;
+      var type = node.nodeType;
+      if (type === Node.TEXT_NODE) {
+        var text = node.nodeValue || '';
+        if (text) {
+          var matches = text.match(HTML_ARTIFACT_CODE_RE);
+          if (matches) {
+            for (var i = 0; i < matches.length; i++) {
+              var ptResolved = resolveHtmlArtifactLink(matches[i]);
+              if (!ptResolved) continue;
+              if (seen.has(ptResolved.absPath)) continue;
+              seen.add(ptResolved.absPath);
+              links.push({
+                el: makePlainTextArtifactHandle(prose),
+                absPath: ptResolved.absPath,
+                fetchUrl: ptResolved.fetchUrl,
+              });
+            }
+          }
+        }
+        return;
+      }
+      if (type === Node.ELEMENT_NODE) {
+        var tag = node.tagName;
+        if (tag === 'A' || tag === 'CODE') return;
+      }
+      var children = node.childNodes;
+      if (children) {
+        for (var ci = 0; ci < children.length; ci++) scanPlainText(children[ci]);
+      }
+    })(prose);
+    links.forEach(function(link, ordinal) {
+      if (findEmbeddedHtmlArtifactCard(prose, link.absPath)) {
+        link.el.dataset.embedded = '1';
+        return;
+      }
+      renderArtifactLink(link, ordinal, prose);
+    });
+  });
+}
+
+function toggleHtmlArtifactSource(btn) {
+  var card = btn.closest('.html-artifact');
+  if (!card) return;
+  var wrap = card.querySelector('.html-artifact-frame-wrap');
+  var source = card.querySelector('.html-artifact-source');
+  if (!wrap || !source) return;
+  var showingSource = source.style.display === 'block';
+  if (showingSource) {
+    source.style.display = 'none';
+    wrap.style.display = '';
+    btn.textContent = 'View source';
+  } else {
+    wrap.style.display = 'none';
+    source.style.display = 'block';
+    btn.textContent = 'View rendered';
+  }
+}
+
+function startHtmlArtifactResize(e, handle, axis) {
+  e.preventDefault();
+  var card = handle.closest('.html-artifact');
+  if (!card) return;
+  var wrap = card.querySelector('.html-artifact-frame-wrap');
+  var frame = card.querySelector('.html-artifact-frame');
+  if (!wrap || !frame) return;
+  var resizeY = axis.indexOf('y') !== -1;
+  var resizeX = axis.indexOf('x') !== -1;
+  var startX = e.clientX;
+  var startY = e.clientY;
+  var startHeight = frame.getBoundingClientRect().height;
+  var startWidth = wrap.getBoundingClientRect().width;
+  // Block the iframe from absorbing pointer events while dragging — without
+  // this, pointermove stops firing the moment the cursor enters the iframe.
+  frame.style.pointerEvents = 'none';
+  var prevBodyCursor = document.body.style.cursor;
+  document.body.style.cursor = resizeX && resizeY ? 'nwse-resize'
+    : resizeX ? 'ew-resize' : 'ns-resize';
+  function onMove(ev) {
+    if (resizeY) {
+      var newHeight = Math.max(60, startHeight + (ev.clientY - startY));
+      frame.style.height = newHeight + 'px';
+      frame.style.maxHeight = 'none';
+    }
+    if (resizeX) {
+      var newWidth = Math.max(120, startWidth + (ev.clientX - startX));
+      wrap.style.width = newWidth + 'px';
+      var toolbar = card.querySelector('.html-artifact-toolbar');
+      if (toolbar) toolbar.style.width = newWidth + 'px';
+    }
+  }
+  function onUp() {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    frame.style.pointerEvents = '';
+    document.body.style.cursor = prevBodyCursor;
+    if (resizeY) frame.dataset.manualHeight = '1';
+    if (!frame.dataset.filePath) return;
+    var existing = loadHtmlArtifactSavedSize(frame.dataset.filePath) || {height: 0, width: 0};
+    var newSize = {height: existing.height, width: existing.width};
+    if (resizeY) newSize.height = frame.getBoundingClientRect().height;
+    if (resizeX) newSize.width = wrap.getBoundingClientRect().width;
+    saveHtmlArtifactSavedSize(frame.dataset.filePath, newSize);
+  }
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+}
+
+function expandHtmlArtifact(btn) {
+  var card = btn.closest('.html-artifact');
+  if (!card) return;
+  var inlineFrame = card.querySelector('.html-artifact-frame');
+  if (!inlineFrame) return;
+  var srcdoc = inlineFrame.getAttribute('srcdoc') || '';
+  var sandbox = inlineFrame.getAttribute('sandbox') || '';
+  var filenameEl = card.querySelector('.html-artifact-toolbar .filename');
+  var filenameText = filenameEl ? filenameEl.textContent : '';
+
+  var overlay = document.createElement('div');
+  overlay.className = 'html-artifact-modal-overlay';
+
+  var content = document.createElement('div');
+  content.className = 'html-artifact-modal-content';
+  content.addEventListener('click', function (e) { e.stopPropagation(); });
+
+  var toolbar = document.createElement('div');
+  toolbar.className = 'html-artifact-modal-toolbar';
+
+  var filenameSpan = document.createElement('span');
+  filenameSpan.className = 'filename';
+  filenameSpan.textContent = filenameText;
+  toolbar.appendChild(filenameSpan);
+
+  var closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Close';
+  toolbar.appendChild(closeBtn);
+
+  var modalFrame = document.createElement('iframe');
+  modalFrame.setAttribute('sandbox', sandbox);
+  modalFrame.setAttribute('srcdoc', srcdoc);
+
+  content.appendChild(toolbar);
+  content.appendChild(modalFrame);
+  overlay.appendChild(content);
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+  }
+  function close() {
+    document.removeEventListener('keydown', onKeydown);
+    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  }
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', close);
+  document.addEventListener('keydown', onKeydown);
+
+  document.body.appendChild(overlay);
+}
+
+function installHtmlArtifactListener() {
+  if (window.__htmlArtifactListenerInstalled) return;
+  window.__htmlArtifactListenerInstalled = true;
+  window.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data || data.type !== 'html-artifact-height' || !data.id) return;
+    var sel = '.html-artifact-frame[data-frame-id="' + CSS.escape(data.id) + '"]';
+    var frame = document.querySelector(sel);
+    if (!frame) return;
+    // Stop auto-fitting height once the user has manually resized the frame.
+    if (frame.dataset.manualHeight === '1') return;
+    var container = document.getElementById('messages');
+    // The same follow rule as the card insertion above: the engine's pin
+    // intent when hosted, the geometry band when it is not.
+    var engine = Chat.activeTurnEngineFor(container);
+    var wasAtBottom = engine ? engine.pinnedIntent : (container ? shouldAutoScroll(container) : false);
+    var cap = Math.floor(window.innerHeight * 0.8);
+    frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';
+    if (engine) restoreBottomPin(container, wasAtBottom, false);
+    else if (wasAtBottom && container) container.scrollTop = container.scrollHeight;
+  });
+}
+installHtmlArtifactListener();
+
+// Artifact pages are a family of file links. A served artifacts/*.html link is answered by the
+// fetch that builds its card. Every artifact-page link keeps its /artifacts/<file> tail however
+// its prefix was composed, so a same-host URL carrying an /artifacts/ segment that the
+// file-server prefix does not resolve is probed all the same; same-host application routes
+// (/diff, /perfetto) carry no such segment.
+Chat.registerFileLinkFamily({
+  name: 'artifact-pages',
+  textSource: 'https?:\\/\\/[^\\s]+?\\/artifacts\\/' + Chat.FILE_LINK_TAIL_SOURCE,
+  answersFor: function(pathname) { return HTML_ARTIFACT_LINK_RE.test(pathname); },
+  recognizes: function(url) { return (url.pathname || '').indexOf('/artifacts/') !== -1; },
+});
+Chat.registerMessagePostProcessor(embedLinkedHtmlArtifacts);
+
+const GLOBALS = {
+  toggleHtmlArtifactSource,
+  startHtmlArtifactResize,
+  expandHtmlArtifact,
+  toggleHtmlArtifactEmbed,
+  openPlanFromCard,
+};
+const CHAT_ONLY = {
+  updatePlanCardBadges,
+  embedLinkedHtmlArtifacts,
+  expandArtifactCard,
+  collapseArtifactCard,
+  fetchHtmlArtifact,
+  htmlArtifactFetchCache,
+  expandedArtifactCards,
+  resolveHtmlArtifactLink,
+  findArtifactLinkInCode,
+  injectLinkBehavior,
+  lookupRegisteredPlanVersion,
+  lookupPlanVersionState,
+  buildPlanCompactCardHtml,
+  _planStateLabel,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
+
+})();

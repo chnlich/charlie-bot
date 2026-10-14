@@ -3,7 +3,8 @@
 // renders a single div.row-menu appended to document.body, fixed-positioned
 // under the anchor's right edge (flipped above the anchor near the viewport
 // bottom, clamped inside the viewport horizontally), and closeRowMenu removes
-// it. Every anchor is groups.js's: the normal row's openSessionRowMenu, the
+// it. Every anchor is a Settings button that groups.js renders, and
+// session-menus.js builds the items: the normal row's openSessionRowMenu, the
 // archived row's variant of it (the button's data-row-menu marker picks the
 // archived item list) and the group header's openGroupHeaderMenu.
 // ---------------------------------------------------------------------------

@@ -161,3 +161,40 @@ A revision from cold-read findings closes the gate. That revision gets no cold r
 The cold-read prompt and the backend settings live in `src/features/artifacts/artifact_check.py`.
 The log shows the failure of each backend that the cold read tried.
 After the failures, the log shows the answering backend and the seven answers verbatim.
+
+### Source Check
+
+A page that states a cause, a mechanism, or a derived number carries facts
+that the user acts on. A derived number is a sum, a ratio, or a difference
+that the page computes. The cold read judges readability, and the source
+check judges the facts.
+
+- Before you share such a page, run the source check.
+- This applies to every page that you share, whatever its genre.
+- A plan page takes the verify round of the plan-approval skill in place of
+  the source check.
+- A page whose every statement reads a current value back from a system
+  (a count, a time, a status) keeps its genre checks only.
+
+To run the source check:
+
+1. Write the draft hand-over message to a file in your session's `specs/`
+   directory.
+2. Copy `source_check_spec.md` from this skill's directory into the same
+   directory.
+3. In the copy, replace `{page}` with the absolute page path. Replace
+   `{message}` with the absolute path of the draft message.
+4. Delegate the copy:
+
+       charliebot delegate --task-spec-file <copy> --task-type verify --keep-worktree 0
+
+5. End the turn. The report arrives as a wake.
+
+When the report arrives:
+
+- For each finding, use the value that the report gives, or label the claim
+  Open on the page.
+- A revision limited to these corrections closes the check. Then share the
+  page.
+- When a revision adds a cause, a mechanism, or a derived number, run the
+  source check again.

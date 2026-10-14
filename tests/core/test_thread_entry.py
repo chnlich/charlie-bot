@@ -33,7 +33,7 @@ FAKECHAT = thread_entry.ThreadPlatform(
     id_label="id",
     mention_key="mention_id",
     block_keys=("channel_id", "thread_ts", "mention_id"),
-    thread_fallback="(channel {channel_id}, thread {thread_ts})",
+    summon_line="fakechat summon",
 )
 
 
@@ -213,9 +213,9 @@ def test_unread_after_orders_ids_by_the_platform_key() -> None:
   assert [m["id"] for m in thread_entry.unread_after(messages, watermark="100", **kw)] == []
 
 
-def test_follow_floor_parses_the_label_floor() -> None:
-  label = ("fakechat-thread-follow floor=1700000000.000100\n"
-           "Fakechat thread follow: https://fakechat.test/t1")
+def test_follow_label_is_one_line_and_follow_floor_parses_it_back() -> None:
+  label = thread_entry.follow_wake_label(FAKECHAT, "1700000000.000100")
+  assert label == "fakechat-thread-follow floor=1700000000.000100"
   assert thread_entry.follow_floor(label) == "1700000000.000100"
   assert thread_entry.follow_floor("no floor on this label") is None
   assert thread_entry.follow_floor("floor=not-numeric") is None
@@ -296,12 +296,6 @@ class FakeAdapter(thread_entry.ThreadAdapter):
 
   async def remove_ack(self, block: dict) -> None:
     self.removed.append(block)
-
-  async def thread_link(self, origin) -> str:
-    return f"https://fakechat.test/{origin['thread_ts']}"
-
-  def follow_wake_message(self, floor: str, link: str) -> str:
-    return f"{self.platform.follow_trigger_prefix} floor={floor}\n{link}"
 
   async def read_eligible(self, origin, cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
     return list(self.thread)
@@ -452,7 +446,14 @@ async def test_ack_messages_orders_ids_by_the_platform_id_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "content", [
+        FAKECHAT.summon_line,
+        "Fakechat summon; post the reply with `charliebot fakechat reply --file <path>`.",
+    ])
+async def test_audit_nudges_a_summon_of_the_current_contract(tmp_path, content: str) -> None:
+  """Both summon formats of the current contract get the nudge: the one-line
+  input, and the older full prompt that named the reply command."""
   cfg = conftest.make_home_config(tmp_path)
   adapter = FakeAdapter()
   sessions = FakeSessions(_fake_meta())
@@ -460,7 +461,7 @@ async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) ->
       {
           "id": "s1",
           "type": ET.AGENT_MESSAGE,
-          "content": "Fakechat summon; post the reply with `charliebot fakechat reply --file <path>`.",
+          "content": content,
           "fakechat": {
               "channel_id": "c1",
               "thread_ts": "t1",
@@ -483,16 +484,43 @@ async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) ->
   nudge = sessions.persisted[0]
   assert nudge["type"] == ET.AGENT_MESSAGE
   assert nudge["from_session_name"] == "Fakechat"
-  # The link-less summon falls back to the platform's own thread naming.
-  assert nudge["content"].startswith("Fakechat thread (channel c1, thread t1): the round answering this mention")
-  assert "(no `charliebot fakechat reply` call)" in nudge["content"]
-  assert "`charliebot fakechat reply --file <path>`" in nudge["content"]
+  # The nudge carries the decision only: no link, no reply-command usage.
+  assert nudge["content"].startswith("Fakechat thread: the round answering this mention ended without posting a reply")
+  assert "http" not in nudge["content"]
+  assert "fakechat reply" not in nudge["content"]
   assert nudge["fakechat"] == {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1", "nudge_of": "s1"}
+
+
+@pytest.mark.asyncio
+async def test_audit_leaves_a_marker_contract_summon_alone(tmp_path) -> None:
+  """A summon carrying neither the one-line input nor the reply command predates
+  the contract: the audit neither nudges nor posts the notice."""
+  cfg = conftest.make_home_config(tmp_path)
+  adapter = FakeAdapter()
+  sessions = FakeSessions(_fake_meta())
+  sessions.chat_events = [
+      {
+          "id": "s1",
+          "type": ET.AGENT_MESSAGE,
+          "content": "fakechat marker summon",
+          "fakechat": {
+              "channel_id": "c1",
+              "thread_ts": "t1",
+              "mention_id": "m1"
+          },
+      }
+  ]
+  done = {"type": ET.MASTER_DONE, "input_event_id": "s1", "exit_code": 0, "still_thinking": False}
+
+  acted = await thread_entry.deliver_done(adapter, "s1", done, cfg, *conftest.thread_blocks(sessions))
+
+  assert acted is False
+  assert sessions.persisted == []
 
 
 # ---------------------------------------------------------------------------
 # The summon and follow side under the fakechat platform: the fake adapter's
-# ack/link/wake face and the fake trigger manager record what the shared
+# ack face and the fake trigger manager record what the shared
 # machinery consumes, groups, arms, and fires.
 # ---------------------------------------------------------------------------
 
@@ -537,7 +565,7 @@ async def test_follow_message_drops_below_the_watermark_and_arms_above_it() -> N
       origin_matches=origin_matches)
 
   assert armed == "s1"
-  assert [rec.message for rec in triggers.created] == ["fakechat-thread-follow floor=101\nhttps://fakechat.test/t1"]
+  assert [rec.message for rec in triggers.created] == ["fakechat-thread-follow floor=101"]
 
 
 @pytest.mark.asyncio

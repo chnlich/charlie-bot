@@ -273,7 +273,7 @@ class ClaudeCodeBackend(base.AgentBackend):
     if self._extra_flags:
       self._cmd += self._extra_flags
 
-  # Claude Code auto-detects CLAUDE.md in the run cwd.
+  # A manager turn's session cwd holds this CLAUDE.md, which Claude Code auto-detects.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
@@ -283,16 +283,19 @@ class ClaudeCodeBackend(base.AgentBackend):
     return out
 
   def _build_command(self, prompt: str) -> list[str]:
-    return list(self._cmd)
+    cmd = list(self._cmd)
+    if self._instructions_file is not None:
+      cmd += ["--append-system-prompt-file", str(self._instructions_file)]
+    return cmd
 
   def _stdin_prompt(self, prompt: str) -> str | None:
     return prompt
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text via `claude -p` in text mode, using this backend's model.
 
     Print mode with tools disabled: no session persistence, prompt on stdin,
-    plain-text stdout. The process group is killed on timeout.
+    plain-text stdout. The process group is killed on timeout; ``None`` waits without a limit.
     """
     proc = await asyncio.create_subprocess_exec(
         "claude",

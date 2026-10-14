@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 
 const BACKENDS = [
   {id: 'local', label: 'Local (sherpa)', livePartials: false, unavailableReason: null},
@@ -68,14 +68,16 @@ function buildHarness({stored = null, defaultBackend = 'local', backends = BACKE
     document: {
       getElementById: (id) => elements.get(id) || null,
       createElement: () => makeEl(),
+      addEventListener() {},
     },
+    Chat: {registerInputMode() {}},
     VOICE_BACKENDS: backends,
     VOICE_DEFAULT_BACKEND: defaultBackend,
     autoResize() {},
     saveDraft() {},
   };
   vm.createContext(sandbox);
-  vm.runInContext(readStatic('voice-input.js'), sandbox, {filename: 'voice-input.js'});
+  vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), sandbox, {filename: 'voice-input.js'});
 
   // Open the menu and hand back its entry rows (title row first).
   sandbox.toggleVoiceBackendMenu();

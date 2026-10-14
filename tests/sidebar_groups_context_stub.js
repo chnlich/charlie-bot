@@ -10,11 +10,12 @@
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
+const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
 const BACKEND_OPTIONS = {
   'claude-opus-5': 'CC · Opus 5',
@@ -40,12 +41,23 @@ function loadGroups() {
     renderPendingTriggerIndicator: () => '',
     renderPendingPlanApprovalIndicator: () => '',
     recordRenderedSessionStatus: () => {},
+    recordTreeShape: () => {},
   };
   context.globalThis = context;
   vm.createContext(context);
   // namespace.js first, as on the page: it supplies the shared sidebar namespace.
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
+  return context;
+}
+
+// loadGroups plus the cron script, run after groups.js as the page runs a
+// package's script after core. The script also registers its Workspace badge
+// with filters.js, which this harness does not load, so a stub takes it.
+function loadGroupsWithCron() {
+  const context = loadGroups();
+  context.registerWorkspaceBadge = () => {};
+  vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
   return context;
 }
 
@@ -59,4 +71,4 @@ function row(session) {
   );
 }
 
-module.exports = {loadGroups, row};
+module.exports = {loadGroups, loadGroupsWithCron, row};

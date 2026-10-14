@@ -1,5 +1,7 @@
-"""Session memory-cap cgroup helpers: config schema, naming, degradation, attribution."""
+"""Process helpers: session cgroups (config schema, naming, limit files, degradation, attribution) and
+wait_or_kill_group's no-limit path."""
 
+import asyncio
 import pathlib
 
 import pytest
@@ -34,17 +36,26 @@ def fake_app_slice(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> p
 
 
 def test_ensure_session_cgroup_creates_with_limit_files(fake_app_slice: pathlib.Path) -> None:
-  path = process.ensure_session_cgroup(SESSION_ID, 64, 32)
+  path = process.ensure_session_cgroup(SESSION_ID, 64, 32, config.ServerConfig().session_tasks_max)
   assert path == fake_app_slice / "charliebot-sess-abcd1234"
   assert path.is_dir()
   assert (path / "memory.max").read_text() == str(64 * 1024 * 1024)
   assert (path / "memory.swap.max").read_text() == str(32 * 1024 * 1024)
+  assert (path / "pids.max").read_text() == "4096"
+
+
+def test_ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it(fake_app_slice: pathlib.Path) -> None:
+  path = process.ensure_session_cgroup(SESSION_ID, 64, 32, 50)
+  assert path is not None
+  assert (path / "pids.max").read_text() == "50"
+  assert process.ensure_session_cgroup(SESSION_ID, 64, 32, 0) == path
+  assert (path / "pids.max").read_text() == "max"
 
 
 def test_ensure_session_cgroup_degrades_when_base_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   monkeypatch.setattr(process, "CGROUP_V2_APP_SLICE", str(tmp_path / "missing" / "app.slice"))
-  assert process.ensure_session_cgroup(SESSION_ID, 64, 32) is None
+  assert process.ensure_session_cgroup(SESSION_ID, 64, 32, 4096) is None
 
 
 # ---------------------------------------------------------------------------
@@ -58,3 +69,20 @@ def test_classify_cap_kill_on_max_growth() -> None:
   assert "session 内存上限触发" in msg
   assert "12288" in msg
   assert "gpuq" in msg
+
+
+# ---------------------------------------------------------------------------
+# wait_or_kill_group: timeout=None waits without a limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_or_kill_group_without_a_limit_returns_the_result() -> None:
+
+  async def answer() -> str:
+    await asyncio.sleep(0.05)
+    return "done"
+
+  stderr_task = asyncio.create_task(asyncio.sleep(3600))
+  assert await process.wait_or_kill_group(answer(), None, -1, stderr_task) == "done"
+  assert stderr_task.cancelled()

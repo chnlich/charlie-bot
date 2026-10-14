@@ -9,37 +9,19 @@ auto-bind archives at migration.
 """
 
 import asyncio
+import datetime
 import traceback
-from datetime import datetime, timedelta
+import zoneinfo
 from typing import Any
-from zoneinfo import ZoneInfo
 
-from src.features.cron.config import ScheduledTaskConfig
-from src.features.cron.cron_files import write_cron_key
-from src.features.cron.cron_sequence import (
-    check_fireable_binding,
-    effective_scheduled_task_backend,
-    ensure_firing_leaf,
-    fire_bound_master,
-    launch_and_settle,
-    register_leaf_run,
-    resolved_backend_model,
-    run_firing_steps,
-)
-from src.features.cron.loader import get_scheduled_tasks
+from src.features.cron import config as cron_config
+from src.features.cron import cron_files, cron_sequence, loader
+from src.infra import config, log_once, models, tasks
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, load_config
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
-from src.infra.tasks import cancel_and_wait, create_logged_task
+from src.runtime import session_events, session_lifecycle, session_listing, session_store, task_execution
 from src.runtime.hooks import scheduled_handlers
-from src.runtime.session_events import SessionEvents
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_store import SessionStore
-from src.runtime.task_execution import task_manager
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _TICK_INTERVAL = 60  # seconds between scheduler ticks
 
@@ -69,11 +51,11 @@ class Scheduler:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
-      store: SessionStore,
-      events: SessionEvents,
-      listing: SessionListing,
-      lifecycle: SessionLifecycle,
+      cfg: config.CharlieBotConfig,
+      store: session_store.SessionStore,
+      events: session_events.SessionEvents,
+      listing: session_listing.SessionListing,
+      lifecycle: session_lifecycle.SessionLifecycle,
   ) -> None:
     """Take the process-wide session blocks; a private events block would keep its own
     chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
@@ -95,19 +77,19 @@ class Scheduler:
     log.info("scheduler_started")
 
   async def stop(self) -> None:
-    await cancel_and_wait(self._task)
+    await tasks.cancel_and_wait(self._task)
     log.info("scheduler_stopped")
 
   async def run_task_now(self, task_name: str) -> dict:
     """Manually trigger a task by name. Returns session_id and thread_id."""
     self._reload_config()
-    task_map = {t.name: t for t in get_scheduled_tasks()}
+    task_map = {t.name: t for t in loader.get_scheduled_tasks()}
     task_cfg = task_map.get(task_name)
     if task_cfg is None:
       raise ValueError(f"No scheduled task named '{task_name}'")
     # A manual run is an intentional new firing: its identity (the fire time)
     # is distinct from every cron occurrence's due-time identity.
-    return await self._execute_task(task_cfg, firing=utc_now_iso())
+    return await self._execute_task(task_cfg, firing=models.utc_now_iso())
 
   # ---------------------------------------------------------------------------
   # Main loop
@@ -125,13 +107,13 @@ class Scheduler:
 
   async def _tick(self) -> None:
     cfg = self._reload_config()
-    tasks = get_scheduled_tasks()
-    if not tasks:
+    scheduled_tasks = loader.get_scheduled_tasks()
+    if not scheduled_tasks:
       return
 
     # Cache the scheduled sessions once to avoid O(tasks) list_sessions() calls per tick.
     scheduled_sessions = await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
-    session_cache: dict[str, list[SessionMetadata]] = {}
+    session_cache: dict[str, list[models.SessionMetadata]] = {}
     for s in scheduled_sessions:
       assert s.scheduled_task is not None
       session_cache.setdefault(s.scheduled_task, []).append(s)
@@ -141,7 +123,7 @@ class Scheduler:
     # session_id, and a disabled task must still show as a node), and a bound
     # task never keeps an active cron session. One task's failure must not
     # starve the others' binding or firing.
-    for task_cfg in tasks:
+    for task_cfg in scheduled_tasks:
       try:
         if not task_cfg.session_id:
           await self._auto_bind(task_cfg, cfg, session_cache)
@@ -153,7 +135,7 @@ class Scheduler:
     # Backend pass: the bound node's backend follows the task config (a
     # cron-editor change, or a hand-edited yaml seen by this tick), switched in
     # place — never by creating a session.
-    for task_cfg in tasks:
+    for task_cfg in scheduled_tasks:
       if not task_cfg.session_id:
         continue  # the binding pass already reported this task's error
       try:
@@ -161,7 +143,7 @@ class Scheduler:
       except Exception as e:
         log.error("scheduler_backend_align_error", task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
 
-    for task_cfg in tasks:
+    for task_cfg in scheduled_tasks:
       if not task_cfg.enabled or not task_cfg.session_id:
         continue  # disabled tasks fire nothing; an unbound one already errored above
       try:
@@ -175,9 +157,9 @@ class Scheduler:
 
   async def _auto_bind(
       self,
-      task_cfg: ScheduledTaskConfig,
-      cfg: CharlieBotConfig,
-      session_cache: dict[str, list[SessionMetadata]] | None = None,
+      task_cfg: cron_config.ScheduledTaskConfig,
+      cfg: config.CharlieBotConfig,
+      session_cache: dict[str, list[models.SessionMetadata]] | None = None,
   ) -> None:
     """Bind an unbound task to its task-tree manager node, replacing the
     cron-session creation path.
@@ -188,8 +170,8 @@ class Scheduler:
     only after the write-back lands, so the same tick's fire evaluates against
     the node instead of routing back to a cron session.
     """
-    tree = task_manager()
-    backend = effective_scheduled_task_backend(task_cfg, cfg)
+    tree = task_execution.task_manager()
+    backend = cron_sequence.effective_scheduled_task_backend(task_cfg, cfg)
     # Step 1 — create or reattach the node. The request id derives from the
     # task name alone, so a crash replays into the same node, and a task
     # deleted and re-created under the same name reattaches to its original
@@ -207,7 +189,7 @@ class Scheduler:
         group=task_cfg.project,
         caller="system",
     )
-    if node.status == SessionStatus.ARCHIVED:
+    if node.status == models.SessionStatus.ARCHIVED:
       unarchived = await self._session_lifecycle.unarchive_session(node.id)
       if unarchived is None:
         raise RuntimeError(f"scheduled task '{task_cfg.name}' node {node.id} vanished during unarchive")
@@ -227,7 +209,7 @@ class Scheduler:
           node.id, old, "cron", fields=("last_scheduled_run", "last_scheduled_cron", "last_run_status"))
     # Step 3 — write the binding back through the single-key write: only the
     # session_id key changes.
-    await asyncio.to_thread(write_cron_key, task_cfg.name, "session_id", node.id)
+    await asyncio.to_thread(cron_files.write_cron_key, task_cfg.name, "session_id", node.id)
     task_cfg.session_id = node.id
     # Step 4 — archive every active cron session of the task, unconditionally
     # (no busy gate: a cron session stuck at running must not hold the
@@ -239,8 +221,8 @@ class Scheduler:
   async def _newest_active_cron_session(
       self,
       task_name: str,
-      session_cache: dict[str, list[SessionMetadata]] | None = None,
-  ) -> SessionMetadata | None:
+      session_cache: dict[str, list[models.SessionMetadata]] | None = None,
+  ) -> models.SessionMetadata | None:
     """The task's newest active cron session, or None when it has none.
 
     Sorted by created_at, not updated_at: unarchiving refreshes updated_at, so
@@ -253,13 +235,14 @@ class Scheduler:
           s for s in await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
           if s.scheduled_task == task_name
       ]
-    active = sorted((s for s in sessions if s.status == SessionStatus.ACTIVE), key=lambda s: s.created_at, reverse=True)
+    active = sorted(
+        (s for s in sessions if s.status == models.SessionStatus.ACTIVE), key=lambda s: s.created_at, reverse=True)
     return active[0] if active else None
 
   async def _archive_active_cron_sessions(
       self,
       task_name: str,
-      session_cache: dict[str, list[SessionMetadata]] | None = None,
+      session_cache: dict[str, list[models.SessionMetadata]] | None = None,
   ) -> list[str]:
     """Archive every active cron session of *task_name*, unconditionally.
 
@@ -275,16 +258,16 @@ class Scheduler:
       ]
     archived: list[str] = []
     for session in sessions:
-      if session.status != SessionStatus.ACTIVE:
+      if session.status != models.SessionStatus.ACTIVE:
         continue
       await self._session_lifecycle.archive_session(session.id)
-      session.status = SessionStatus.ARCHIVED  # the tick's cache copy stays honest
+      session.status = models.SessionStatus.ARCHIVED  # the tick's cache copy stays honest
       archived.append(session.id)
     if archived:
       log.info("scheduled_cron_sessions_archived", task=task_name, sessions=archived)
     return archived
 
-  async def _align_bound_backend(self, task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig) -> None:
+  async def _align_bound_backend(self, task_cfg: cron_config.ScheduledTaskConfig, cfg: config.CharlieBotConfig) -> None:
     """The bound node's backend follows the task config, switched in place.
 
     A cron-editor backend change or a hand-edited yaml reaches the node here:
@@ -292,7 +275,7 @@ class Scheduler:
     the backend from the task config independently, so a switched node and a
     due fire in the same tick agree.
     """
-    backend = effective_scheduled_task_backend(task_cfg, cfg)
+    backend = cron_sequence.effective_scheduled_task_backend(task_cfg, cfg)
     node = await self._store.get_session(task_cfg.session_id)
     if node is None or node.backend == backend:
       return
@@ -301,14 +284,14 @@ class Scheduler:
 
   async def _maybe_run(
       self,
-      task_cfg: ScheduledTaskConfig,
-      session_events: SessionEvents,
-      session_cache: dict[str, list[SessionMetadata]],
-      cfg: CharlieBotConfig | None,
+      task_cfg: cron_config.ScheduledTaskConfig,
+      events: session_events.SessionEvents,
+      session_cache: dict[str, list[models.SessionMetadata]],
+      cfg: config.CharlieBotConfig | None,
   ) -> None:
     cfg = cfg or self._cfg
-    tz = ZoneInfo(task_cfg.timezone)
-    now = datetime.now(tz)
+    tz = zoneinfo.ZoneInfo(task_cfg.timezone)
+    now = datetime.datetime.now(tz)
 
     if not task_cfg.session_id:
       # An unbound task binds on the tick that sees it (auto-bind); a binding
@@ -317,8 +300,8 @@ class Scheduler:
     # A bound task fires against its stable task-tree node: the binding is
     # validated here (a missing/legacy node fails the tick visibly), never
     # discovered or replaced.
-    tree = task_manager()
-    session = await check_fireable_binding(task_cfg, tree)
+    tree = task_execution.task_manager()
+    session = await cron_sequence.check_fireable_binding(task_cfg, tree)
 
     # Detect cron expression change — reset last_scheduled_run to now and skip tick
     if session.last_scheduled_cron is not None and session.last_scheduled_cron != task_cfg.cron:
@@ -329,29 +312,29 @@ class Scheduler:
 
     if session.last_scheduled_run:
       try:
-        last_run_at = parse_utc_datetime(session.last_scheduled_run)
+        last_run_at = models.parse_utc_datetime(session.last_scheduled_run)
       except ValueError as e:
         log.warning("scheduler_bad_last_run", task=task_cfg.name, value=session.last_scheduled_run, error=str(e))
-        last_run_at = now - timedelta(seconds=_TICK_INTERVAL)
+        last_run_at = now - datetime.timedelta(seconds=_TICK_INTERVAL)
     else:
       # Never run: use a reference 60s before now so it fires immediately if due
-      last_run_at = now - timedelta(seconds=_TICK_INTERVAL)
+      last_run_at = now - datetime.timedelta(seconds=_TICK_INTERVAL)
 
     if "croniter" not in globals():
       load_croniter(globals())
-    next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime)  # noqa: F821  # bound by load_croniter
+    next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime.datetime)  # noqa: F821  # bound by load_croniter
     if next_fire <= now:
       handle = self._handles.get(task_cfg.name)
       if handle is not None and not handle.done():
         await tree.update_slot_fields(
-            session.id, "cron", last_scheduled_run=now.isoformat(), last_run_status=LastRunStatus.SKIPPED)
+            session.id, "cron", last_scheduled_run=now.isoformat(), last_run_status=models.LastRunStatus.SKIPPED)
         event = {
             'type': ET.SCHEDULED_RUN_SKIPPED,
             'task': task_cfg.name,
             'skipped_at': now.isoformat(),
             'reason': f"previous round still running ({handle.get_name()})",
         }
-        await session_events.persist_and_broadcast(session.id, event)
+        await events.persist_and_broadcast(session.id, event)
         log.info(
             "scheduler_run_skipped",
             task=task_cfg.name,
@@ -368,7 +351,7 @@ class Scheduler:
 
   async def _execute_task(
       self,
-      task_cfg: ScheduledTaskConfig,
+      task_cfg: cron_config.ScheduledTaskConfig,
       record_handle: bool = False,
       firing: str | None = None,
   ) -> dict:
@@ -384,7 +367,7 @@ class Scheduler:
     """
     if not task_cfg.session_id:
       await self._auto_bind(task_cfg, self._reload_config())
-    return await self._execute_bound_task(task_cfg, record_handle=record_handle, firing=firing or utc_now_iso())
+    return await self._execute_bound_task(task_cfg, record_handle=record_handle, firing=firing or models.utc_now_iso())
 
   # ---------------------------------------------------------------------------
   # Bound (task-tree) execution — the v2 path
@@ -392,7 +375,7 @@ class Scheduler:
 
   async def _execute_bound_task(
       self,
-      task_cfg: ScheduledTaskConfig,
+      task_cfg: cron_config.ScheduledTaskConfig,
       *,
       record_handle: bool,
       firing: str,
@@ -402,8 +385,8 @@ class Scheduler:
     The binding resolves strictly by the task's ``session_id``.
     """
     self._reload_config()
-    tree = task_manager()
-    meta = await check_fireable_binding(task_cfg, tree)
+    tree = task_execution.task_manager()
+    meta = await cron_sequence.check_fireable_binding(task_cfg, tree)
 
     if task_cfg.mode == 'master':
       # mode: master wakes the bound manager node — the durable input IS the
@@ -411,7 +394,7 @@ class Scheduler:
       # exists durably, so a crash or admission failure in between leaves the
       # occurrence unconsumed and the replay re-admits the SAME input (stable
       # firing identity), never a duplicate.
-      await fire_bound_master(task_cfg, meta, tree, firing)
+      await cron_sequence.fire_bound_master(task_cfg, meta, tree, firing)
       await self._record_bound_fire(meta, task_cfg)
       return {"session_id": meta.id, "firing": firing}
 
@@ -432,11 +415,12 @@ class Scheduler:
       # The firing's first durable product is the leaf's first step Run: the
       # checkpoint advances only after it exists, so a replayed occurrence
       # re-admits the same leaf/Run (stable firing identity).
-      await register_leaf_run(
+      await cron_sequence.register_leaf_run(
           tree, leaf.id, task_cfg, firing, kind="scheduled_step", position=0, backend=backend, model=model)
       await self._record_bound_fire(meta, task_cfg)
-      handle = create_logged_task(
-          run_firing_steps(task_cfg, meta, tree, firing, leaf.id), name=f"bound_steps_{task_cfg.name}_{firing}")
+      handle = tasks.create_logged_task(
+          cron_sequence.run_firing_steps(task_cfg, meta, tree, firing, leaf.id),
+          name=f"bound_steps_{task_cfg.name}_{firing}")
       if record_handle:
         self._handles[task_cfg.name] = handle
       return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
@@ -453,8 +437,14 @@ class Scheduler:
     # applies with the repo's default branch as the merge target. Every other
     # action stays a type-less leaf whose success closes it.
     leaf = await self._bound_leaf(
-        task_cfg, meta, tree, firing, goal=prompt, task_type=TaskType.IMPLEMENT if action == "implement" else None)
-    await register_leaf_run(tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
+        task_cfg,
+        meta,
+        tree,
+        firing,
+        goal=prompt,
+        task_type=models.TaskType.IMPLEMENT if action == "implement" else None)
+    await cron_sequence.register_leaf_run(
+        tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
     await self._record_bound_fire(meta, task_cfg)
     handle = await self._launch_bound_round(
         task_cfg, meta, tree, firing, leaf.id, backend=backend, model=model, record_handle=record_handle)
@@ -462,8 +452,8 @@ class Scheduler:
 
   async def _record_bound_fire(
       self,
-      meta: SessionMetadata,
-      task_cfg: ScheduledTaskConfig,
+      meta: models.SessionMetadata,
+      task_cfg: cron_config.ScheduledTaskConfig,
   ) -> None:
     """The scheduler's per-fire bookkeeping on the firing's node.
 
@@ -472,22 +462,22 @@ class Scheduler:
     and this write is preserved instead of being overwritten by the stale
     SessionMetadata snapshot. The node is the bound task's stable binding.
     """
-    tz = ZoneInfo(task_cfg.timezone)
-    now = datetime.now(tz)
-    await task_manager().update_slot_fields(
+    tz = zoneinfo.ZoneInfo(task_cfg.timezone)
+    now = datetime.datetime.now(tz)
+    await task_execution.task_manager().update_slot_fields(
         meta.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron=task_cfg.cron)
 
   def _resolve_bound_backend_model(
       self,
-      task_cfg: ScheduledTaskConfig,
+      task_cfg: cron_config.ScheduledTaskConfig,
       tree,
   ) -> tuple[str, str | None]:
-    return resolved_backend_model(task_cfg, tree, task_cfg.backend)
+    return cron_sequence.resolved_backend_model(task_cfg, tree, task_cfg.backend)
 
   async def _resolve_bound_prompt(
       self,
-      task_cfg: ScheduledTaskConfig,
-      meta: SessionMetadata,
+      task_cfg: cron_config.ScheduledTaskConfig,
+      meta: models.SessionMetadata,
   ) -> tuple[str | None, str | None]:
     """The fire's prompt: the loop action's decision, or the task prompt verbatim.
 
@@ -498,7 +488,8 @@ class Scheduler:
       action_type, prompt = await scheduled_handlers.loop_action()(
           name=task_cfg.name, repo=task_cfg.repo, loop=task_cfg.loop)
       if prompt is None:
-        await task_manager().update_slot_fields(meta.id, "cron", last_run_status=LastRunStatus.SUCCESS)
+        await task_execution.task_manager().update_slot_fields(
+            meta.id, "cron", last_run_status=models.LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
         return None, action_type
       return prompt, action_type
@@ -506,20 +497,20 @@ class Scheduler:
 
   async def _bound_leaf(
       self,
-      task_cfg: ScheduledTaskConfig,
-      meta: SessionMetadata,
+      task_cfg: cron_config.ScheduledTaskConfig,
+      meta: models.SessionMetadata,
       tree,
       firing: str,
       *,
       goal: str,
-      task_type: TaskType | None = None,
+      task_type: models.TaskType | None = None,
   ):
-    return await ensure_firing_leaf(task_cfg, meta, tree, firing, goal, task_type=task_type)
+    return await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, firing, goal, task_type=task_type)
 
   async def _launch_bound_round(
       self,
-      task_cfg: ScheduledTaskConfig,
-      meta: SessionMetadata,
+      task_cfg: cron_config.ScheduledTaskConfig,
+      meta: models.SessionMetadata,
       tree,
       firing: str,
       leaf_id: str,
@@ -535,9 +526,9 @@ class Scheduler:
     record and blocked report, and only releases the overlap handle."""
 
     async def _round() -> None:
-      run = await register_leaf_run(
+      run = await cron_sequence.register_leaf_run(
           tree, leaf_id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
-      observation = await launch_and_settle(tree, leaf_id, run.id, prompt=None)
+      observation = await cron_sequence.launch_and_settle(tree, leaf_id, run.id, prompt=None)
       if observation.withheld is not None:
         # No process started and no terminal fact will arrive. The launch
         # itself recorded the durable run_launch_withheld fact and delivered
@@ -546,7 +537,7 @@ class Scheduler:
         log.info(
             "bound_round_launch_withheld", task=task_cfg.name, leaf=leaf_id, run=run.id, reason=observation.withheld)
 
-    handle = create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
+    handle = tasks.create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
     if record_handle:
       self._handles[task_cfg.name] = handle
     log.info("bound_task_fired", task=task_cfg.name, session=meta.id, leaf=leaf_id, firing=firing)
@@ -554,8 +545,8 @@ class Scheduler:
 
   async def _execute_handler_on_bound(
       self,
-      task_cfg: ScheduledTaskConfig,
-      meta: SessionMetadata,
+      task_cfg: cron_config.ScheduledTaskConfig,
+      meta: models.SessionMetadata,
   ) -> dict:
     """The built-in handler modes on a bound node: inline execution, bound bookkeeping."""
     handler = scheduled_handlers.handler(task_cfg.handler)
@@ -571,7 +562,7 @@ class Scheduler:
           'status': ET.HANDLER_STATUS_OK,
           'message': str(result) if result is not None else 'done',
       }
-      status = LastRunStatus.SUCCESS
+      status = models.LastRunStatus.SUCCESS
     except Exception as e:
       log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
       event = {
@@ -580,8 +571,8 @@ class Scheduler:
           'status': ET.HANDLER_STATUS_ERROR,
           'message': str(e),
       }
-      status = LastRunStatus.FAILED
-    await task_manager().update_slot_fields(session.id, "cron", last_run_status=status)
+      status = models.LastRunStatus.FAILED
+    await task_execution.task_manager().update_slot_fields(session.id, "cron", last_run_status=status)
     await self._session_events.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
@@ -589,10 +580,10 @@ class Scheduler:
   # Config reload
   # ---------------------------------------------------------------------------
 
-  def _reload_config(self) -> CharlieBotConfig:
+  def _reload_config(self) -> config.CharlieBotConfig:
     """Re-read config.yaml from disk so new tasks are picked up dynamically."""
     try:
-      self._cfg = load_config()
+      self._cfg = config.load_config()
       return self._cfg
     except Exception as e:
       log.warning("scheduler_config_reload_failed", error=str(e))

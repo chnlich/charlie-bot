@@ -174,18 +174,21 @@ def test_the_panel_lists_claude_accounts_before_codex() -> None:
 
 
 def test_the_backend_packages_register_their_sources() -> None:
-  """A retired backend id attributes through these prefixes, and the capture reads each module's logs."""
+  """A retired backend id attributes through these prefixes (short spelling included), and the
+  capture reads each module's logs."""
   registered = {s.name: (s.id_prefixes, s.run_logs_only, s.module) for s in usage_source_registration.sources()}
   assert registered == {
+      "Antigravity": (("antigravity-", "agy-"), True, None),
       "Claude Code": (("claude-",), False, "src.backends.claude_code.usage_logs"),
       "Codex": (("codex-",), False, "src.backends.codex.usage_logs"),
-      "opencode": (("opencode-",), False, "src.backends.opencode.usage_logs"),
-      "CLC": (("charlie-code-",), True, None),
+      "opencode": (("opencode-", "oc-"), False, "src.backends.opencode.usage_logs"),
+      "CLC": (("charlie-code-", "clc-"), True, None),
   }
 
 
 def test_every_backend_type_attributes_to_the_cli_that_logs_it() -> None:
   expected = {
+      "antigravity": "Antigravity",
       "cc-claude": "Claude Code",
       "cc-kimi": "Claude Code",
       "cc-openai-compatible": "Claude Code",

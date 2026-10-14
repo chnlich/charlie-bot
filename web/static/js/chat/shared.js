@@ -160,8 +160,8 @@ function toolNameChipHtml(name) {
 // One-line summary of a tool call's input: the argument that names what the tool
 // acts on (command, file path, pattern), else the first input value. `limit` caps
 // the visible text (0 = never truncated) and both consumers truncate on it. Tool
-// names arrive in both cases — 'Bash' from Claude Code transcripts, 'bash' from
-// opencode events — so both spellings map to the command line.
+// names arrive in either case, depending on the backend, so both 'Bash' and 'bash'
+// map to the command line.
 function toolInputSummary(toolName, input) {
   input = input || {};
   const name = String(toolName || '');
@@ -204,6 +204,17 @@ function isRenderedMessage(msg) {
   return document.querySelector('[data-message-id="' + CSS.escape(id) + '"]') !== null;
 }
 
+// The mounted turn engine of each message container. turn-engine.js mounts
+// and disposes the engines in this map, and every reader asks
+// activeTurnEngineFor, so the chat files below turn-engine.js reach the
+// engine too.
+const turnEngines = new WeakMap();
+
+function activeTurnEngineFor(container) {
+  const engine = turnEngines.get(container);
+  return engine && engine.alive ? engine : null;
+}
+
 const GLOBALS = {
   splitTurnSpan,
   shouldAutoScroll,
@@ -223,6 +234,8 @@ const CHAT_ONLY = {
   escapeJsSingleQuoted,
   messageIdentityAttrs,
   toolInputSummary,
+  turnEngines,
+  activeTurnEngineFor,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

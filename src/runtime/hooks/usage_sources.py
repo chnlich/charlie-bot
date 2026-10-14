@@ -92,17 +92,23 @@ class UsageRecord:
 
 # Keys of the quota panel payload and of one window entry in it. A source's accounts build the payload
 # from their provider's quota data, src/backends/claude_code/claude_accounts.py folds it into the
-# account readings, and web/static/js/ext_usage.js renders it: one home per key keeps the producers,
+# account readings, and src/features/usage/static/ext_usage.js renders it: one home per key keeps the producers,
 # the consumer and the browser in step. A window's ``utilization`` is a percentage as reported;
 # ``resets_at`` is an ISO-8601 UTC string, empty when upstream reported none; ``scope_label`` names a
-# model-scoped window and is absent on plan-wide ones.
+# model-scoped window and is absent on plan-wide ones; ``expired`` is true on a window whose reading
+# ``panel_window_expired`` judged expired at emit time. ``provider_label`` is the provider's display
+# name on every entry; ``state_label`` is the display text of an account state and is absent when the
+# account reports none.
 PANEL_WINDOWS = "windows"
 PANEL_FETCHED_AT = "fetched_at"
 PANEL_PROVIDER = "provider"
+PANEL_PROVIDER_LABEL = "provider_label"
+PANEL_STATE_LABEL = "state_label"
 PANEL_WINDOW_MINUTES = "window_minutes"
 PANEL_UTILIZATION = "utilization"
 PANEL_RESETS_AT = "resets_at"
 PANEL_SCOPE_LABEL = "scope_label"
+PANEL_EXPIRED = "expired"
 
 # The poller re-reads an unchanged response every round, so one sighting of an unmapped shape is the
 # whole alarm; every later round repeats a fired alarm.
@@ -118,6 +124,54 @@ def as_utilization(value: Any) -> float | None:
   if isinstance(value, bool) or not isinstance(value, (int, float)):
     return None
   return float(value)
+
+
+def parse_iso_utc(value: Any) -> datetime.datetime | None:
+  """UTC datetime from an ISO-8601 string, or None when missing or unparseable."""
+  if not isinstance(value, str) or not value:
+    return None
+  try:
+    parsed = datetime.datetime.fromisoformat(value)
+  except ValueError:
+    return None
+  return parsed.replace(tzinfo=datetime.UTC) if parsed.tzinfo is None else parsed
+
+
+def panel_window_expired(window: dict[str, Any], sampled: datetime.datetime | None, now: datetime.datetime) -> bool:
+  """Whether one stored usage-panel window's reading is expired at *now*.
+
+  The single expiry rule shared by the Claude account pool's fold and the usage
+  panel's emit-time annotation: a window is expired when its reset has passed
+  while the sample predates it, or when the sample is older than the window is
+  long. An unparseable ``resets_at`` leaves only the age rule; a missing or
+  unparseable sample time reads as live (never expired on a guess).
+  """
+  if sampled is None:
+    return False
+  resets_at = parse_iso_utc(window.get(PANEL_RESETS_AT))
+  if resets_at is not None and resets_at <= now and sampled < resets_at:
+    return True
+  window_minutes = window.get(PANEL_WINDOW_MINUTES)
+  if isinstance(window_minutes, int) and not isinstance(window_minutes, bool):
+    return now - sampled > datetime.timedelta(minutes=window_minutes)
+  return False
+
+
+def mark_expired_windows(entry: dict[str, Any], sampled: datetime.datetime | None,
+                         now: datetime.datetime) -> dict[str, Any]:
+  """A copy of *entry* whose windows that ``panel_window_expired`` judges expired at *now* carry ``expired: true``.
+
+  Live windows carry no key. An entry without windows (a pending marker or an error) comes back unchanged.
+  """
+  windows = entry.get(PANEL_WINDOWS)
+  if not isinstance(windows, list):
+    return entry
+  annotated = [
+      {
+          **window, PANEL_EXPIRED: True
+      } if panel_window_expired(window, sampled, now) else window for window in windows
+  ]
+  return {**entry, PANEL_WINDOWS: annotated}
 
 
 def warn_unknown_limit_shape(*, provider: str, account: str, slot: str | int, reason: str) -> None:
@@ -142,12 +196,14 @@ class QuotaAccount(abc.ABC):
   """One account of a source on the quota panel, kept by the source's module between rounds.
 
   ``provider`` is the panel key of the account's entries (``"claude"``, ``"codex"``); with ``label`` it
-  forms the cache key ``<provider>:<label>``. ``last_error`` says why the last ``fetch`` returned None.
+  forms the cache key ``<provider>:<label>``. ``provider_label`` is the provider's display name on the
+  panel. ``last_error`` says why the last ``fetch`` returned None.
   ``mark_login_required`` and ``mark_expired`` carry the marks only some providers put on an entry; the
   defaults mark nothing.
   """
 
   provider: str
+  provider_label: str
   label: str
   last_error: str
 

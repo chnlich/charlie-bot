@@ -23,7 +23,7 @@ Known-alive symbols:
   `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` includes
   each router with `include_router(prefix=...)` (the package routers through the wiring registry,
   `src/app/registrations.py`) and `web/static/js/` fetches the composed paths
-  (e.g. `/rounds/{id}/rate` from `chat/ratings-explain.js`). The Python function names have exactly zero whole-repo matches outside
+  (e.g. `/rounds/{id}/rate` from `chat/ratings.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
@@ -66,7 +66,7 @@ Known-alive symbols:
   (`terminal_websocket`, in `src/features/terminal/api.py`, needs no entry: `tests/test_terminal_backend.py`
   imports it by name, so the Step 3 grep finds it.)
 - `voice_preview_websocket` — `@ws_router.websocket` handler in `src/features/voice/api.py` (`/ws/voice/{session_id}`),
-  reached by URL string: `web/static/js/voice-input.js` dials `/ws/voice/${sessionId}` with the
+  reached by URL string: `src/features/voice/static/voice-input.js` dials `/ws/voice/${sessionId}` with the
   transcription backend named in the `?backend=` query, and `tests/voice_input_run.test.js`
   asserts the composed URL. The Python name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused function. Same class as the `session_websocket`
@@ -181,7 +181,7 @@ Known-alive symbols:
   ``file-chip file-chip--${file.status}``, and `tests/chat_attachments_render.test.js` asserts
   the failed and uploaded variants by name. A dead-selector scan that greps each full class
   name finds no template or JS literal, so it flags them as unused CSS.
-- `d2h-wrapper`, `d2h-file-header`, `d2h-del`, `d2h-ins` (`web/static/css/styles.css`, scoped
+- `d2h-wrapper`, `d2h-file-header`, `d2h-del`, `d2h-ins` (`src/features/latex/static/latex.css`, scoped
   under `.diff-modal-body`) — reached by library DOM construction: the diff2html bundle both
   templates load from jsdelivr CDN emits every one of these class names when it renders the
   diff, and the rules restyle that output. A dead-selector scan that greps each full class
@@ -194,7 +194,7 @@ Known-alive symbols:
   `You`/`Turn`/`Worker`/`Trigger` supplying the suffixes; `tests/chat_session_bump.test.js`
   asserts the wrapper class by name. A dead-selector scan grepping each full class name
   finds only its definition, so it flags them as unused CSS.
-- `activate` (`web/static/js/terminal_clipboard.js`, the object addon passed to
+- `activate` (`src/features/terminal/static/terminal_clipboard.js`, the object addon passed to
   `term.loadAddon`) — xterm.js lifecycle dispatch: the library's `_addonManager.loadAddon`
   ends with `t.activate(e)`, invoking the addon's `activate` method by that name
   (verified against the CDN build the template loads, xterm 5.3.0). It is what attaches
@@ -237,8 +237,8 @@ Known-alive symbols:
   the parameter, so vulture flags it as an unused variable at that request site. Same
   fixture-name-discovery class as the autouse block above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
-  `src.runtime.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
-  instead of the host profile), requested by name in three tests' parameter lists; the bodies
+  `src.features.artifacts.cli.home.charliebot_home_dir` so the wrap verb's home resolution lands
+  under the pytest tmp tree instead of the host profile), requested by name in three tests' parameter lists; the bodies
   never reference the parameter, so vulture flags it as an unused variable at each request site.
   Same fixture-name-discovery class as `isolated_config` above.
 - `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
@@ -318,12 +318,12 @@ Known-alive symbols:
   `monkeypatch.setattr(autonamer, "build_backend", ...)` in `tests/test_master_cc_consumer.py`,
   whose existence check reads the attribute before the loader runs. Vulture flags each hook as an
   unused function at 60% confidence.
-- `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
+- `open_connection`, `post_message`, `add_reaction`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
   `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
   `tests/core/test_slack_thread_follow.py`) — the summon, reply, follow, and ack paths in
   `src/features/slack/slack_listener.py` dispatch every Slack Web API call on the injected client
-  (`client.post_message(...)`, `client.get_permalink(...)`, `client.get_thread_replies(...)`,
+  (`client.post_message(...)`, `client.get_thread_replies(...)`,
   `client.add_reaction(...)`, `client.open_connection()`), so each method is reached
   only through that dynamic dispatch. The double's docstring pins the surface ("implements only
   what the listener paths may call"), so a missing method fails with an AttributeError by
@@ -435,3 +435,18 @@ Known-alive symbols:
   NotImplementedError without the override. The subprocess-stdin close path
   (`src/runtime/agent_process/base.py` awaits `stdin.wait_closed()`) dispatches through it.
   A whole-repo grep finds only the definition, so vulture flags it as an unused method.
+- `run_scheduled_backup` (`src/features/backup/backup.py`), `run_scheduled_usage_ledger`
+  (`src/features/usage/usage_ledger.py`) and `run_scheduled_cool_storage`
+  (`src/features/usage/storage_cool.py`) — reached by string: each feature package's
+  `register()` passes the function to `scheduled_handlers.register_handler(<name>, <module>,
+  attr=<attr>)` (`src/features/backup/__init__.py`, `src/features/usage/__init__.py`), and a
+  registered task with `handler: <name>` awaits `getattr(import_module(module), attr)()`
+  (`src/runtime/hooks/scheduled_handlers.py`). `scheduled_loop_action`
+  (`src/features/backlog/backlog_loop.py`) is the same class under
+  `scheduled_handlers.register_loop_action` (`src/features/backlog/__init__.py`): a task with a
+  `loop:` section awaits `getattr(import_module(module), attr)(name=, repo=, loop=)` on each
+  fire. Vulture flags each of the four as an unused function at 60% confidence.
+- `set_task_manager` (`src/runtime/task_execution.py`) — kept deliberately as the test
+  injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
+  swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep
+  finds only the definition and that test file, so vulture flags it as an unused function.

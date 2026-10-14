@@ -3,7 +3,7 @@
 The improve, Slack, Discord, plan and explain routes live in ``src/features/<package>/api.py``.
 The checks here pin what moving them out of the runtime routers must not change: the access key
 still gates every moved path, no earlier route answers a moved path, and deleting a package's line
-in PACKAGES removes exactly the routes its api module serves.
+in PACKAGES removes exactly the routes its api module serves and its /static/<kind>/<name> mount.
 """
 
 import json
@@ -161,7 +161,7 @@ print(json.dumps([[route.path, sorted(getattr(route, "methods", None) or [])] fo
 
 
 @pytest.mark.parametrize("package", PACKAGES)
-def test_deleting_a_package_line_removes_exactly_the_routes_its_api_module_serves(package: str) -> None:
+def test_deleting_a_package_line_removes_exactly_its_api_routes_and_its_static_mount(package: str) -> None:
   probe = subprocess.run(
       [sys.executable, "-c", PROBE.format(deleted=package)],
       cwd=conftest.ROOT,
@@ -172,6 +172,7 @@ def test_deleting_a_package_line_removes_exactly_the_routes_its_api_module_serve
   assert probe.returncode == 0, probe.stderr
   without_package = json.loads(probe.stdout.splitlines()[-1])
   own = {route.path.partition("?")[0] for route in MOVED_ROUTES if route.package == package}
+  own.add("/static/" + package.removeprefix("src.").replace(".", "/"))
   with_package = [[route.path, sorted(getattr(route, "methods", None) or [])] for route in server.app.routes]
 
   assert any(path in own for path, _ in with_package)

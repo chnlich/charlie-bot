@@ -7,10 +7,10 @@
   // turn window near the viewport, with one height spacer above and below.
   //
   // Fetched messages live in an in-memory store; HTML build / markdown /
-  // math / artifact / timestamp post-process run in scroll-gated idle slices
+  // math / file-link / package / timestamp post-process run in scroll-gated idle slices
   // producing ready fragments. Collapsed turn bodies and out-of-window turns
   // are never in the DOM. Open/override, expanded `N steps` bars and open
-  // explain panels live in a registry keyed by turn key (head|conclusion|
+  // separator panels live in a registry keyed by turn key (head|conclusion|
   // separator message ids). Spacer heights come from measurements once a turn
   // has materialized, from estimates otherwise, with scroll position corrected
   // whenever a measurement refines an estimate above the viewport.
@@ -39,9 +39,10 @@
   const CHARS_PER_LINE_EST = 75;
   const FOLDED_MEASURE_MEMORY = 32;
 
+  // The engines live in chat/shared.js's map, which Chat.activeTurnEngineFor
+  // reads.
   function activeEngines() {
-    if (!globalThis.__turnEngineInstances) globalThis.__turnEngineInstances = new WeakMap();
-    return globalThis.__turnEngineInstances;
+    return Chat.turnEngines;
   }
 
   function supportsTurnEngine(container) {
@@ -215,7 +216,7 @@
     state(key) {
       let state = this.registry.get(key);
       if (!state) {
-        state = {override: null, nStepsExpanded: false, explainOpen: false};
+        state = {override: null, nStepsExpanded: false, openPanels: new Set()};
         this.registry.set(key, state);
       }
       return state;
@@ -411,19 +412,22 @@
         const bar = wrap.querySelector('.turn-fold-bar');
         if (bar) Chat.setTurnFoldExpanded(bar, true);
       }
-      this.restoreExplainPanel(wrap, seg);
+      this.restoreSeparatorPanels(seg);
       this.stats.segmentMaterializations++;
       return wrap;
     }
 
-    restoreExplainPanel(wrap, seg) {
+    restoreSeparatorPanels(seg) {
       const state = this.registry.get(seg.key);
-      if (!state || !state.explainOpen) return;
+      if (!state || !state.openPanels.size) return;
       const eventIndex = seg.separatorEntry.msg.event_index;
-      if (eventIndex == null) throw new Error('explain-open turn without separator event_index');
-      const btn = seg.separatorEntry.node.querySelector('.explain-toggle');
-      if (!btn) throw new Error('explain toggle button missing on separator');
-      Chat.toggleExplainPanel(btn, this.sessionId, eventIndex);
+      if (eventIndex == null) throw new Error('panel-open turn without separator event_index');
+      separatorPanels.forEach((kind) => {
+        if (!state.openPanels.has(kind.panelClass)) return;
+        const btn = seg.separatorEntry.node.querySelector(kind.toggleSelector);
+        if (!btn) throw new Error(kind.toggleSelector + ' button missing on separator');
+        kind.toggle(btn, this.sessionId, eventIndex);
+      });
     }
 
     buildPlaceholder(seg) {
@@ -1330,14 +1334,16 @@
       }
     }
 
-    noteExplainToggle(btn) {
+    notePanelToggle(kind, btn) {
       if (!this.alive || !btn.closest) return;
       const wrap = btn.closest('.turn-wrap');
       if (!wrap || !wrap.dataset.turnKey) return;
       const sep = btn.closest('.separator-line');
       const open = Boolean(
-        sep && sep.nextElementSibling && sep.nextElementSibling.classList.contains('explain-panel'));
-      this.state(wrap.dataset.turnKey).explainOpen = open;
+        sep && sep.nextElementSibling && sep.nextElementSibling.classList.contains(kind.panelClass));
+      const openPanels = this.state(wrap.dataset.turnKey).openPanels;
+      if (open) openPanels.add(kind.panelClass);
+      else openPanels.delete(kind.panelClass);
     }
 
     setDepth(depth) {
@@ -1353,20 +1359,31 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Explain toggle wrapping: after the original toggle runs, record the panel's
-  // open state in the active engine's registry so it can be restored on
-  // re-materialization.
+  // Separator panels: a package's panel that opens right after a turn's
+  // separator line. A package registers its kind ({panelClass, toggleSelector,
+  // toggle(btn, sessionId, eventIndex)}) when its script loads, and opens and
+  // closes the panel through the tracked toggle it gets back: after the toggle
+  // runs, the active engine records the panel's open state, and it reopens the
+  // panel when the turn re-materializes.
   // ---------------------------------------------------------------------------
-  const originalToggleExplainPanel = Chat.toggleExplainPanel;
-  function toggleExplainPanelTracked(btn, sessionId, eventIndex) {
-    const result = originalToggleExplainPanel.apply(this, arguments);
-    const container = document.getElementById('messages');
-    const engine = activeEngines().get(container);
-    if (engine) engine.noteExplainToggle(btn);
-    return result;
+  const separatorPanels = [];
+  function registerSeparatorPanel(kind) {
+    if (!kind || !kind.panelClass || !kind.toggleSelector || typeof kind.toggle !== 'function') {
+      throw new Error('Invalid separator panel registration');
+    }
+    if (separatorPanels.some((known) => known.panelClass === kind.panelClass)) {
+      throw new Error('Duplicate separator panel: ' + kind.panelClass);
+    }
+    separatorPanels.push(kind);
+    return function togglePanelTracked(btn, sessionId, eventIndex) {
+      const result = kind.toggle.apply(this, arguments);
+      const container = document.getElementById('messages');
+      const engine = activeEngines().get(container);
+      if (engine) engine.notePanelToggle(kind, btn);
+      return result;
+    };
   }
-  Chat.toggleExplainPanel = toggleExplainPanelTracked;
-  globalThis.toggleExplainPanel = toggleExplainPanelTracked;
+  Chat.registerSeparatorPanel = registerSeparatorPanel;
 
   function mountIfAvailable(container, messages, sessionId, options) {
     if (!supportsTurnEngine(container)) return null;
@@ -1378,17 +1395,11 @@
     return engine;
   }
 
-  function activeFor(container) {
-    const engine = activeEngines().get(container);
-    return engine && engine.alive ? engine : null;
-  }
-
   Chat.TurnEngine = {
     MAX_WINDOW_TURNS,
     mountIfAvailable,
-    activeFor,
     debug(container) {
-      const engine = activeFor(container);
+      const engine = Chat.activeTurnEngineFor(container);
       if (!engine) return null;
       engine.ensureOffsets();
       return {

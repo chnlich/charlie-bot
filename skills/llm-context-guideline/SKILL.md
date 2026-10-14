@@ -80,6 +80,7 @@ whether the entry belongs in the store at all, and such a candidate is rejected:
   presented text (the new body, or the whole entry after a merge) to the Entry form brevity
   bar before presenting, and the answer names what the trim removed, or states the body's
   line count when the draft already sat at the bar.
+  When the trim removes a line that another home owns, the Brevity line names that home.
 
 A candidate's text is a claim: verify its figures against the live system before presenting them.
 A revise re-verifies the surviving claims of the entry it edits.
@@ -135,10 +136,14 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
-Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Keep
-code, paths, identifiers, and commands verbatim. When a semicolon joins two clauses, write them as
-two sentences. Entry prose follows the Writing Style section of prompts/master.md, its "Text a
-model reads" subsection included. Apply the admission test line by line as well as entry by entry.
+Skip decision-attribution labels (`（用户定）`, `（用户裁定）`): every entry stands by user
+approval, so the label carries no information.
+Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Line
+width is terminal display width: a character whose `east_asian_width` is W or F counts two columns,
+so one Chinese character counts two. Keep code, paths, identifiers, and commands verbatim. When
+a semicolon joins two clauses, write them as two sentences. Entry prose follows the Writing Style
+section of prompts/master.md, its "Text a model reads" subsection included. Apply the admission
+test line by line as well as entry by entry.
 Keep each line whose removal changes what a capable model does.
 Brevity is part of the admission bar: lead with the action and keep the mechanism the action is
 unintelligible without; session reports and run dirs hold the receipts, verification notes, and

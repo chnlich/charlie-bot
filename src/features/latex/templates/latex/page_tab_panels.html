@@ -1,0 +1,26 @@
+      <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
+
+      <!-- ===== LATEX PANEL ===== -->
+
+      <div id="latex-panel" class="hidden latex-panel flex flex-col" style="width: 60%">
+        <!-- Panel header -->
+        <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-700 bg-slate-800/50">
+          <div class="flex gap-1 bg-slate-800 rounded-lg p-0.5">
+            <button onclick="switchLatexView('pdf')" id="btn-latex-pdf" class="px-3 py-1 text-xs rounded-md font-medium transition-colors latex-toggle-active">PDF</button>
+            <button onclick="switchLatexView('tex')" id="btn-latex-tex" class="px-3 py-1 text-xs rounded-md font-medium transition-colors text-slate-400 hover:text-slate-200">TeX</button>
+          </div>
+          <button onclick="compileLatex()" id="btn-compile" class="px-3 py-1.5 text-xs rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Compile</button>
+          <span id="compile-status" class="text-xs text-slate-500"></span>
+          <span id="latex-git-info" class="text-xs text-slate-400 font-mono" title=""></span>
+          <div class="flex-1"></div>
+          {{ close_button('toggleLatexPanel()', 'Close panel', close_btn_class) }}
+        </div>
+        <!-- PDF view -->
+        <div id="latex-pdf-view" class="flex-1 min-h-0">
+          <div id="latex-pdf-canvas-container" class="w-full h-full overflow-auto bg-slate-900 flex flex-col items-center gap-2 p-2"></div>
+        </div>
+        <!-- TeX source view -->
+        <div id="latex-tex-view" class="flex-1 min-h-0 hidden overflow-auto">
+          <textarea id="latex-editor" class="w-full h-full bg-slate-900 text-slate-200 font-mono text-sm p-4 resize-none focus:outline-none" spellcheck="false"></textarea>
+        </div>
+      </div>

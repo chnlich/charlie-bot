@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 import pydantic
 
-from src.infra import config, git, log_once, models, ndjson, timeouts
+from src.infra import config, git, json_utils, log_once, models, ndjson, timeouts
 from src.infra import event_types as ET
 from src.runtime import message_aggregator
 
@@ -198,10 +198,13 @@ async def require_loop_state(session_id: str, loop_id: int, cfg: config.CharlieB
 
 
 async def save_loop_state(session_id: str, state: ImproveState, cfg: config.CharlieBotConfig) -> None:
-  """Write the loop state file."""
-  path = _loop_state_path(session_id, state.loop_id, cfg)
-  await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-  await asyncio.to_thread(path.write_text, state.model_dump_json(indent=2))
+  """Write the loop state file.
+
+  Readers poll the file with no coordination (the server, the CLI, the
+  startup reconcile), so the publish stays the atomic swap: a plain
+  truncate-write lets them observe an empty or partial file.
+  """
+  await json_utils.write_model_json_atomically(_loop_state_path(session_id, state.loop_id, cfg), state)
 
 
 async def clear_active_loop_lock(session_id: str, cfg: config.CharlieBotConfig) -> None:

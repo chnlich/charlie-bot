@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, runStaticModules} = require('./read_static');
 const { createClassList, createEscapingElement } = require('./dom_element_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
@@ -81,6 +81,7 @@ function loadChatScript() {
 
   vm.createContext(context);
   runStaticModules(context, chatModules());
+  vm.runInContext(readPackageStatic('features', 'artifacts', 'artifact-cards.js'), context, {filename: 'artifact-cards.js'});
   return context;
 }
 
@@ -152,8 +153,9 @@ test('normalizeUserMessage strips legacy attachment footers and keeps file names
   assert.match(html, /report\.pdf/);
 });
 
-test('renderUserMessageBubble shows the voice marker for a dictated message only', () => {
+test('renderUserMessageBubble shows a registered input mode\'s badge, and none for a typed message', () => {
   const context = loadChatScript();
+  context.Chat.registerInputMode('voice', '&#127908; Voice');
 
   assert.match(context.renderUserMessageBubble('hello', 'voice', null, null), /Voice/);
   assert.doesNotMatch(context.renderUserMessageBubble('hello', null, null, null), /Voice/);

@@ -8,9 +8,9 @@ import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from conftest import (
-    ROOT,
     FakeSlackClient,
     SessionBlocks,
     WsServerNeverAnswersClose,
@@ -25,9 +25,12 @@ from conftest import (
 
 from src.features.slack.slack_listener import (
     _REPLY_COMMAND,
-    _build_follow_wake_message,
+    SLACK,
+    SlackClient,
+    SlackThreadAdapter,
     handle_app_mention,
     summon_session_id,
+    thread_contract_part,
 )
 from src.infra import event_types as ET
 from src.infra import metadata_slots
@@ -35,16 +38,6 @@ from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
 
 _TS = "1700000000.000100"
-
-# The approved scope, red-line, and reply-format texts, read from the same
-# prompts docs the builder reads and stripped exactly like the builder, so the
-# tail assertions pin exact bytes.
-_SCOPE_PATH = ROOT / "prompts" / "slack_reply_scope.md"
-_SLACK_SCOPE = _SCOPE_PATH.read_text(encoding="utf-8").strip()
-_RED_LINE_PATH = ROOT / "prompts" / "thread_reply_redline.md"
-_RED_LINE = _RED_LINE_PATH.read_text(encoding="utf-8").strip()
-_FORMAT_PATH = ROOT / "prompts" / "thread_reply_format.md"
-_REPLY_FORMAT = _FORMAT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _spawn_round_tasks() -> list[asyncio.Task]:
@@ -112,25 +105,19 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
   assert origin.channel_id == "C_TEST"
   assert origin.thread_ts == _TS
 
-  # The Slack traffic is exactly one eyes reaction on the mention, one
-  # permalink lookup for the mention's own ts, plus one channel-name lookup
-  # for the auto-grouping — no thread-content read of any kind, and no posted
-  # acceptance message. The completeness assertion below fails on any other
-  # client call, so a summon path that started reading thread content or
+  # The Slack traffic is exactly one eyes reaction on the mention plus one
+  # channel-name lookup for the auto-grouping — no permalink lookup (the
+  # summon input carries no link), no thread-content read of any kind, and no
+  # posted acceptance message. The completeness assertion below fails on any
+  # other client call, so a summon path that started reading thread content or
   # removing reactions fails here.
   posts = [c for name, c in client.calls if name == "post_message"]
   assert not posts
   reactions = [c for name, c in client.calls if name == "add_reaction"]
   assert reactions == [{"channel": "C_TEST", "name": "eyes", "ts": _TS}]
-  permalinks = [c for name, c in client.calls if name == "get_permalink"]
-  assert permalinks == [{"channel": "C_TEST", "ts": _TS}]
   name_lookups = [c for name, c in client.calls if name == "get_channel_name"]
   assert name_lookups == [{"channel": "C_TEST"}]
-  assert len(client.calls) == len(reactions) + len(permalinks) + len(name_lookups)
-
-  # The persisted content carries exactly the URL the client produced for this
-  # mention, and nothing else Slack-derived beyond the citation boundary.
-  expected_url = f"https://fake.slack.test/archives/C_TEST/p{_TS}"
+  assert len(client.calls) == len(reactions) + len(name_lookups)
 
   events = session_blocks.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
@@ -140,65 +127,65 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
       "thread_ts": _TS,
       "mention_ts": _TS,
   }
-  assert expected_url in agent_messages[0]["content"]
-  assert agent_messages[0]["content"].endswith(f"{_SLACK_SCOPE}\n{_RED_LINE}\n{_REPLY_FORMAT}")
+  # The summon input is the one fixed line: the rules ride the session's
+  # managed instructions (the thread reply contract), not the input.
+  assert agent_messages[0]["content"] == SLACK.summon_line
+  assert agent_messages[0]["content"] == "Slack 线程召唤"
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
-  assert expected_url in trigger.await_args.args[1]
+  assert trigger.await_args.args[1] == SLACK.summon_line
 
 
-@pytest.mark.asyncio
-async def test_summon_prompt_carries_the_platform_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
-  event = _make_event()
-  tasks = _spawn_round_tasks()
+def test_contract_part_carries_the_platform_line_the_address_and_the_rules() -> None:
+  """The Slack contract part states the platform line, this thread's address, the
+  summon rule, and the wake's read and ack rules."""
+  from src.features.slack.metadata import SlackOrigin
 
-  with mention_seam(tasks):
-    await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
-    await asyncio.gather(*tasks)
-
-  events = session_blocks.events.load_chat_events_sync(_sid(event))
-  agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
-  content = agent_messages[0]["content"]
-  # The platform line sits between the fetch hint and the citation boundary
-  # and carries the facts the shared reply-format contract defers to it: the
-  # reply command the round-end audit gate reads off the summon, and the
-  # per-message limit.
+  part = thread_contract_part(SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS))
+  # The platform line carries the facts the shared reply-format contract defers
+  # to it: the reply command and the per-message limit.
   expected_platform_line = (
       f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
       "Per-message limit: 40000 characters. "
       "Linked pages: publish each page with `charliebot publish <path>` and write the URL it prints "
       "into the reply; a CharlieBot file-server link refuses the reply.")
-  assert f"\n{expected_platform_line}\n" in content
+  assert expected_platform_line in part
+  # The thread address replaces the old summon link: the skill reads this thread
+  # by its ids.
+  assert f"channel `C_TEST`、thread_ts `{_TS}`" in part
+  assert "conversations.replies" in part
+  # The summon is the newest bot mention in the thread.
+  assert "本次召唤是线程里最新一条 @ 机器人的消息" in part
+  # The wake reads from the floor and acks what it read, silence included.
+  assert "slack-thread-follow floor=<ts>" in part
+  assert "从 floor 标注的消息读起" in part
+  assert "`charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack" in part
 
 
 @pytest.mark.asyncio
-async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Slack's citation-boundary and summoner-PII sentences survive verbatim in the scope-doc slot."""
-  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
-  event = _make_event()
-  tasks = _spawn_round_tasks()
+async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messages(tmp_path: Path) -> None:
+  """The eligible readback through a real SlackClient: the thread is read with conversations.replies
+  on its channel and ts, and only the allowed human's message comes back."""
+  from src.features.slack.metadata import SlackOrigin
 
-  with mention_seam(tasks):
-    await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
-    await asyncio.gather(*tasks)
+  reply = {"type": "message", "user": "U_ALLOWED", "ts": "1700000000.000200", "text": "hi"}
+  bot = {"type": "message", "subtype": "bot_message", "bot_id": "B_TEST", "ts": "1700000000.000300", "text": "bot"}
+  requests: list[httpx.Request] = []
 
-  events = session_blocks.events.load_chat_events_sync(_sid(event))
-  content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
-  assert ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
-          "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。") in content
-  assert "Keep the summoner's PII out of everything this session posts to the thread." in content
+  def handler(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json={"ok": True, "messages": [reply, bot]})
 
+  async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")
+    origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS)
+    messages = await SlackThreadAdapter(client).read_eligible(origin, build_slack_cfg(tmp_path))
 
-def test_follow_wake_message_names_thread_reply_docs_and_reply_command() -> None:
-  msg = _build_follow_wake_message(_TS, "https://fake.slack.test/archives/C_TEST/p1700000000000100")
-  assert msg.startswith("slack-thread-follow floor=1700000000.000100\n")
-  assert "prompts/slack_reply_scope.md" in msg
-  assert "prompts/thread_reply_redline.md" in msg
-  assert "prompts/thread_reply_format.md" in msg
-  assert msg.endswith(f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
+  [request] = requests
+  assert request.url.path == "/api/conversations.replies"
+  assert dict(request.url.params) == {"channel": "C_TEST", "ts": _TS}
+  assert [(m.id, m.user, m.text) for m in messages] == [("1700000000.000200", "U_ALLOWED", "hi")]
 
 
 @pytest.mark.asyncio

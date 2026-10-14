@@ -115,7 +115,8 @@ class BackendLifecycle:
     """Plan the first process of the run, or raise ``LaunchRefused``.
 
     turn: ``held_native_id`` is the conversation this turn may resume. The default resumes it as it is.
-    task: ``held_native_id`` is None, so the default starts a fresh conversation.
+    task: ``held_native_id`` is the previous run's conversation when the run continues it (a worker-node
+    continuation), None for an independent run; the default resumes whatever it holds.
     """
     return Launch(backend_kwargs={}, resume_id=ctx.held_native_id)
 

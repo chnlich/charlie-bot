@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -36,6 +37,7 @@ from src.features.artifacts import cli as artifact_cli
 from src.features.artifacts.artifact_check import run_assertions
 from src.features.artifacts.cli import main as artifact_main
 from src.infra.config import CharlieBotConfig
+from src.runtime.cli import launcher
 
 
 def _genre_doc(genre: str, body: str) -> str:
@@ -169,15 +171,15 @@ def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespa
 
 class _FakeBackend:
 
-  def __init__(self, answer: str | None = None, error: str | None = None) -> None:
+  def __init__(self, answer: str | None = None, error: str | BaseException | None = None) -> None:
     self._answer = answer
-    self._error = error
+    self._error = RuntimeError(error) if isinstance(error, str) else error
     self.calls: list[dict] = []
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     self.calls.append({"prompt": prompt, "system_prompt": system_prompt, "timeout": timeout})
     if self._error is not None:
-      raise RuntimeError(self._error)
+      raise self._error
     assert self._answer is not None
     return self._answer
 
@@ -200,7 +202,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   lines = capsys.readouterr().out.splitlines()
   assert lines[-5:] == [
       "--- cold read ---",
-      "attempt alpha failed: boom",
+      "attempt alpha failed: RuntimeError: boom",
       "backend beta",
       "(1) The reader's problem.",
       "(2)-(6) fine.",
@@ -211,7 +213,19 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   assert '"where are we?"' in prompt
   assert "(7) Read as an engineer who knows the domain" in prompt
   assert "<trigger message verbatim>" not in prompt
-  assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
+  assert backends["beta"].calls[0]["timeout"] is None
+
+
+def test_probe_records_each_failed_attempt_with_its_exception_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An exception with an empty message still names its type in the attempt record."""
+  artifact = _write(tmp_path, _sitrep_ok_doc())
+  cfg, _options = _probe_cfg(tmp_path)
+  backends = {"alpha": _FakeBackend(error=TimeoutError()), "beta": _FakeBackend(error="kaput")}
+  _patch_backends(monkeypatch, backends)
+  result = artifact_check.run_probe(cfg, artifact, "where are we?")
+  assert result.attempts == [("alpha", "TimeoutError: "), ("beta", "RuntimeError: kaput")]
+  assert result.backend_id is None
 
 
 def test_cli_assertions_only_passes_a_page_over_the_height_target(
@@ -238,11 +252,13 @@ def test_cli_unknown_genre_is_usage_error() -> None:
 # ---------------------------------------------------------------------------
 # CLI: charliebot artifact check --background
 #
-# The detached child is doubled out on every path: _spawn_cold_read stand-ins either start a
+# The detached child is doubled out on every path: launch_local stand-ins either start a
 # real sleep 30 in a new session (payload pid, kill checks) or capture their arguments; the
 # child output itself runs in process below, against the stub backends. post_internal_api is
 # doubled too, so no test calls a server or registers a real trigger.
 # ---------------------------------------------------------------------------
+
+LAUNCH_LOCAL_PATCH_TARGET = "src.runtime.cli.launcher.launch_local"
 
 
 def _enter_via_unified_cli(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -250,10 +266,10 @@ def _enter_via_unified_cli(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr("src.runtime.cli.common._CLI_ENTRY_MODULE", "src.app.main")
 
 
-def _sleep_spawn(tracked: list[subprocess.Popen]) -> Callable:
-  """_spawn_cold_read stand-in starting a real sleep 30 in a new session."""
+def _sleep_launch(tracked: list[subprocess.Popen]) -> Callable:
+  """launch_local stand-in starting a real sleep 30 in a new session."""
 
-  def spawn(argv: list[str], log_path: Path, cwd: Path) -> subprocess.Popen:
+  def launch(cmd: str, *, cwd: str, log_path: Path, exit_file: Path) -> launcher.Launch:
     proc = subprocess.Popen(
         ["sleep", "30"],
         stdin=subprocess.DEVNULL,
@@ -261,9 +277,9 @@ def _sleep_spawn(tracked: list[subprocess.Popen]) -> Callable:
         stderr=subprocess.DEVNULL,
         start_new_session=True)
     tracked.append(proc)
-    return proc
+    return launcher.Launch(pid=proc.pid, host=None, log=str(log_path), exit_file=str(exit_file))
 
-  return spawn
+  return launch
 
 
 def _reap_spawned(tracked: list[subprocess.Popen]) -> None:
@@ -316,22 +332,22 @@ def test_background_with_a_failing_assertion_starts_no_process(
   cfg, _options = _probe_cfg(tmp_path)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-coldread-fail")
-  spawn = MagicMock()
-  monkeypatch.setattr(artifact_cli, "_spawn_cold_read", spawn)
+  launch = MagicMock()
+  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
   post = MagicMock()
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
 
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 1
   assert "FAIL sections-numbered" in capsys.readouterr().out
-  spawn.assert_not_called()
+  launch.assert_not_called()
   post.assert_not_called()
 
 
 def test_background_starts_the_cold_read_and_registers_its_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """Passing assertions: the command returns at once (the sleep outlives it), one trigger
-  watches the detached pid with backends x 300 + 60 seconds of max wait and a label holding
-  the log path, and the log's first line names the page and its sha256."""
+  watches the detached pid with a one-hour max wait and a label holding the log path, and
+  the log's first line names the page and its sha256."""
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -339,7 +355,7 @@ def test_background_starts_the_cold_read_and_registers_its_wake(
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
   _enter_via_unified_cli(monkeypatch)
   spawned: list[subprocess.Popen] = []
-  monkeypatch.setattr(artifact_cli, "_spawn_cold_read", _sleep_spawn(spawned))
+  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
   calls: list[dict] = []
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", _registering_post(cfg, session_id, calls))
   try:
@@ -354,8 +370,15 @@ def test_background_starts_the_cold_read_and_registers_its_wake(
   log_path = Path(payload["message"].removeprefix("cold read: "))
   assert call["endpoint"] == "/api/internal/schedule-trigger"
   assert payload["session_id"] == session_id
-  assert payload["delay_seconds"] == 2 * 300 + 60
-  assert payload["watch_targets"] == [{"kind": "local_pid", "pid": proc.pid}]
+  assert payload["delay_seconds"] == 3600
+  assert payload["watch_targets"] == [
+      {
+          "kind": "local_pid",
+          "pid": proc.pid,
+          "exit_file": str(log_path.with_suffix(".exit")),
+          "log": str(log_path),
+      }
+  ]
   assert len(payload["message"]) <= 200
   assert f"cold read started: pid {proc.pid} log {log_path} trigger trig-1" in out
   assert log_path.parent == Path("/tmp/charliebot-coldread") / session_id[:8]
@@ -371,7 +394,7 @@ def test_background_log_first_line_names_the_page_and_its_sha256(
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
   _enter_via_unified_cli(monkeypatch)
   spawned: list[subprocess.Popen] = []
-  monkeypatch.setattr(artifact_cli, "_spawn_cold_read", _sleep_spawn(spawned))
+  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
   calls: list[dict] = []
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", _registering_post(cfg, session_id, calls))
   try:
@@ -393,7 +416,7 @@ def test_background_kills_the_process_group_when_the_wake_is_rejected(
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
   _enter_via_unified_cli(monkeypatch)
   spawned: list[subprocess.Popen] = []
-  monkeypatch.setattr(artifact_cli, "_spawn_cold_read", _sleep_spawn(spawned))
+  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
   reason = f"session {session_id} has 5 pending triggers (limit 5); trigger rejected"
 
   def rejecting_post(
@@ -422,24 +445,26 @@ def test_background_child_argv_runs_the_same_tree_and_interpreter(
   session_id = "sess-coldread-argv"
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
   _enter_via_unified_cli(monkeypatch)
-  captured_spawn: dict = {}
+  captured_launch: dict = {}
 
-  def spawn(argv: list[str], log_path: Path, cwd: Path) -> SimpleNamespace:
-    captured_spawn.update(argv=argv, log_path=log_path, cwd=cwd)
-    return SimpleNamespace(pid=43210)
+  def launch(cmd: str, *, cwd: str, log_path: Path, exit_file: Path) -> launcher.Launch:
+    captured_launch.update(cmd=cmd, cwd=cwd, log_path=log_path, exit_file=exit_file)
+    return launcher.Launch(pid=43210, host=None, log=str(log_path), exit_file=str(exit_file))
 
-  monkeypatch.setattr(artifact_cli, "_spawn_cold_read", spawn)
+  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
   calls: list[dict] = []
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", _registering_post(cfg, session_id, calls))
   try:
     assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
   finally:
     _clean_coldread_dir(session_id)
-  assert captured_spawn["argv"] == [
+  assert shlex.split(captured_launch["cmd"]) == [
       sys.executable, "-m", "src.app.main", "artifact", "check",
       str(artifact), "--genre", "sitrep", "--trigger", "where are we?"
   ]
-  assert captured_spawn["cwd"] == Path(artifact_cli.__file__).resolve().parents[3]
+  assert captured_launch["cwd"] == str(Path(artifact_cli.__file__).resolve().parents[3])
+  # The exit file lands beside the log so the wake can read the cold read's exit code.
+  assert captured_launch["exit_file"] == captured_launch["log_path"].with_suffix(".exit")
 
 
 def test_background_label_over_the_trigger_limit_exits_before_the_spawn(
@@ -448,12 +473,12 @@ def test_background_label_over_the_trigger_limit_exits_before_the_spawn(
   cfg, _options = _probe_cfg(tmp_path)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-coldread-long")
-  spawn = MagicMock()
-  monkeypatch.setattr(artifact_cli, "_spawn_cold_read", spawn)
+  launch = MagicMock()
+  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
 
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "t", "--background"]) == 1
   assert "at most 200 characters" in capsys.readouterr().err
-  spawn.assert_not_called()
+  launch.assert_not_called()
   _clean_coldread_dir("sess-coldread-long")
 
 
@@ -476,7 +501,7 @@ def test_cold_read_log_holds_the_header_then_the_probe_output(tmp_path: Path, mo
   assert lines[0] == f"page {artifact} sha256 {hashlib.sha256(artifact.read_bytes()).hexdigest()}"
   assert lines[-5:] == [
       "--- cold read ---",
-      "attempt alpha failed: boom",
+      "attempt alpha failed: RuntimeError: boom",
       "backend beta",
       "(1) The reader's problem.",
       "(2)-(6) fine.",

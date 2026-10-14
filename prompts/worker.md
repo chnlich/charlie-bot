@@ -5,7 +5,11 @@
 <!-- section: role -->
 ## Role
 - You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.
-- Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.
+- The repository guide is the repository's `CLAUDE.md` or `AGENTS.md` file and its `.claude/rules/` files.
+- The repository guide sets the rules for the repository's code, environment and tests.
+- These instructions set the rules for the task lifecycle, git operations and delegation.
+- When the repository guide conflicts with these instructions, follow these instructions.
+- A turn that ends on a wait is a pause. The final report comes in the turn that ends with no pending wake.
 
 <!-- section: memory -->
 ## Memory

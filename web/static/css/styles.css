@@ -6,7 +6,7 @@
 .prose-msg code { background: #0f172a; border: 1px solid #92400e; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.8rem; font-family: 'Fira Code', ui-monospace, monospace; color: #fbbf24; overflow-wrap: break-word; word-break: break-all; }
 .prose-msg pre code { background: transparent; padding: 0; }
 /* Wide chars in code blocks and tool-output pres sit in fixed 2ch boxes so
-   terminal-style CJK ASCII diagrams keep their column grid (wrapped by
+   monospace CJK ASCII diagrams keep their column grid (wrapped by
    wrapWideChars in markdown-renderer.js). Glyph stays left in its box. */
 .wc2ch { display: inline-block; white-space: pre; width: 2ch; }
 /* Code block with header bar */
@@ -116,117 +116,6 @@
   background: #3b82f6;
 }
 body.resizing { cursor: col-resize; user-select: none; }
-/* LaTeX panel */
-.latex-panel { border-left: none; }
-.latex-toggle-active { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
-/* HTML artifact iframe cards */
-.html-artifact { margin: 0.5rem 0; }
-/* One toolbar shape for the inline card and the fullscreen modal. */
-.html-artifact-toolbar,
-.html-artifact-modal-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  color: #94a3b8;
-  background: rgba(15, 23, 42, 0.5);
-}
-/* Only the card toolbar frames the iframe below it; the modal toolbar floats
-   over the overlay, so no border and no max-width cap. */
-.html-artifact-toolbar {
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-bottom: none;
-  border-radius: 0.5rem 0.5rem 0 0;
-  max-width: 100%;
-}
-/* A compact card is toolbar-only until it is expanded — close its bottom edge. */
-.html-artifact:not([data-artifact-expanded="1"]) > .html-artifact-toolbar {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 0.5rem;
-}
-.html-artifact-toolbar .filename,
-.html-artifact-modal-toolbar .filename { font-weight: 500; color: #cbd5e1; }
-.html-artifact-toolbar a,
-.html-artifact-toolbar button,
-.html-artifact-modal-toolbar button {
-  color: #60a5fa;
-  cursor: pointer;
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: inherit;
-}
-.html-artifact-toolbar a:hover,
-.html-artifact-toolbar button:hover,
-.html-artifact-modal-toolbar button:hover { text-decoration: underline; }
-.html-artifact-frame { display: block; width: 100%; }
-.html-artifact-frame-wrap {
-  display: grid;
-  grid-template-rows: auto 10px;
-  grid-template-columns: 1fr 10px;
-  width: 100%;
-  max-width: 100%;
-}
-.html-artifact-resize-handle {
-  background: rgba(15, 23, 42, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  position: relative;
-  user-select: none;
-  touch-action: none;
-}
-.html-artifact-resize-s {
-  grid-row: 2; grid-column: 1;
-  cursor: ns-resize;
-  border-top: none;
-  border-right: none;
-  border-radius: 0 0 0 0.5rem;
-}
-.html-artifact-resize-s::after {
-  content: '';
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 32px; height: 2px;
-  background: rgba(148, 163, 184, 0.5);
-  border-radius: 1px;
-}
-.html-artifact-resize-s:hover::after { background: rgba(148, 163, 184, 0.9); }
-.html-artifact-resize-e {
-  grid-row: 1; grid-column: 2;
-  cursor: ew-resize;
-  border-left: none;
-  border-bottom: none;
-}
-.html-artifact-resize-e::after {
-  content: '';
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 2px; height: 32px;
-  background: rgba(148, 163, 184, 0.5);
-  border-radius: 1px;
-}
-.html-artifact-resize-e:hover::after { background: rgba(148, 163, 184, 0.9); }
-.html-artifact-resize-se {
-  grid-row: 2; grid-column: 2;
-  cursor: nwse-resize;
-  border-top: none;
-  border-left: none;
-  border-radius: 0 0 0.5rem 0;
-}
-.html-artifact-resize-se::after {
-  content: '';
-  position: absolute;
-  right: 2px; bottom: 2px;
-  width: 5px; height: 5px;
-  border-right: 2px solid rgba(148, 163, 184, 0.5);
-  border-bottom: 2px solid rgba(148, 163, 184, 0.5);
-}
-.html-artifact-resize-se:hover::after {
-  border-right-color: rgba(148, 163, 184, 0.9);
-  border-bottom-color: rgba(148, 163, 184, 0.9);
-}
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
    warning without hiding the link, which stays clickable. */
 .file-link-missing {
@@ -241,41 +130,6 @@ body.resizing { cursor: col-resize; user-select: none; }
   background: rgba(127, 29, 29, 0.25);
   white-space: nowrap;
   vertical-align: baseline;
-}
-.html-artifact-source {
-  display: none;
-  max-height: 80vh;
-  overflow: auto;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-top: none;
-  border-radius: 0 0 0.5rem 0.5rem;
-}
-.html-artifact-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.html-artifact-modal-content {
-  width: 90vw;
-  height: 90vh;
-  background: #0f172a;
-  border-radius: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-/* The modal's single Close button right-aligns; the card toolbar's controls
-   keep natural order. */
-.html-artifact-modal-toolbar button { margin-left: auto; }
-.html-artifact-modal-content > iframe {
-  flex: 1;
-  width: 100%;
-  border: 0;
-  background: white;
 }
 /* User message attachments */
 .message-attachments { display: flex; flex-direction: column; gap: 0.375rem; }
@@ -334,9 +188,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .input-buttons { position: relative; }
 .sidebar-overlay { display: none; }
 .hamburger-btn { display: none !important; }
-.provider-pill { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
-.provider-claude { background: #1e3a5f; color: #93c5fd; }
-.provider-codex { background: #14532d; color: #86efac; }
 @media (max-width: 768px) {
   .input-row { flex-wrap: wrap; }
   .input-row textarea { width: 100% !important; min-width: 100% !important; flex-basis: 100%; }
@@ -347,61 +198,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: min(320px, 100vw) !important; }
   #sidebar.open { display: flex; }
   #resize-handle { display: none; }
-  #latex-resize-handle { display: none !important; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
-  #backlog-panel:not(.hidden) { width: 100% !important; }
-  #latex-panel:not(.hidden) { width: 100% !important; }
   /* Tabs on their own row on mobile */
   main > header { flex-wrap: wrap; }
   #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
   #usage-indicator { display: none !important; }
   .input-buttons button { min-width: 44px; min-height: 44px; }
-  #ext-usage-strip [data-field$="-reset"] { display: none; }  /* hide verbose reset timestamps */
-  #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */
-}
-/* Account rows are single-line flex and can exceed a narrow viewport, and body is
-   overflow:hidden — without a scroll container here the row tail is clipped and
-   unreachable. */
-#ext-usage-strip { overflow-x: auto; }
-/* Quota-strip collapse chip: floats over the strip's top-right corner from a
-   position:relative wrapper, so the strip's horizontal scrolling never drags
-   it along (same pattern as #scroll-to-bottom inside #tab-chat). The template
-   reuses #scroll-to-bottom's class list for look and feel; the geometry that
-   has no existing utility class lives here. */
-#ext-usage-toggle {
-  top: 2px;
-  right: 2px;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-/* Specificity: plain .hidden cannot beat the id selector above. */
-#ext-usage-toggle.hidden { display: none; }
-/* Collapsed hides the detail rows, expanded hides the summary row; both key
-   off the strip's .collapsed class, which renderExtUsage reapplies from the
-   in-memory boolean on every render (initial load, websocket push, 10-minute
-   poll). The 60s repaint never rebuilds children and stays unaware of it. */
-#ext-usage-strip.collapsed [data-key] { display: none; }
-#ext-usage-strip:not(.collapsed) [data-field="summary"] { display: none; }
-/* Reserve the chip's corner on every row so resting content never sits under
-   it; horizontally scrolled content may briefly pass beneath the chip — the
-   accepted trade-off for any control that does not scroll with the content. */
-#ext-usage-strip [data-key],
-#ext-usage-strip [data-field="summary"] { padding-right: 44px; }
-/* The summary row is the collapsed-state expand affordance: whole-row click
-   on a 44px touch target. */
-#ext-usage-strip [data-field="summary"] {
-  min-height: 44px;
-  cursor: pointer;
-  user-select: none;
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -421,16 +225,6 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex; gap: 0.5rem; justify-content: flex-end;
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
-.diff-modal-body .d2h-wrapper { background: #0f172a; color: #e2e8f0; }
-.diff-modal-body .d2h-file-header { background: #1e293b; border-color: #475569; }
-.diff-modal-body .d2h-code-linenumber { background: #1e293b; color: #64748b; border-color: #334155; }
-.diff-modal-body .d2h-code-line { background: #0f172a; color: #e2e8f0; }
-.diff-modal-body .d2h-ins { background: rgba(34, 197, 94, 0.1); }
-.diff-modal-body .d2h-del { background: rgba(239, 68, 68, 0.1); }
-.diff-modal-body .d2h-ins .d2h-code-line-ctn { background: rgba(34, 197, 94, 0.15); }
-.diff-modal-body .d2h-del .d2h-code-line-ctn { background: rgba(239, 68, 68, 0.15); }
-.diff-modal-body .d2h-file-diff { border-color: #475569; }
-.diff-modal-body .d2h-code-side-line { background: #0f172a; }
 /* Session-row action buttons, the hover reveal: at rest a row's buttons sit
    out of flow at the row's right end, so the name and the second-line spans
    reach the row's right edge and no width is reserved for actions. On hover
@@ -536,17 +330,7 @@ body { overscroll-behavior: none; }
   .tab-btn { font-size: 0.7rem; padding: 0.375rem 0.5rem; }
   #session-list a { min-height: 44px; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
-  /* ext-usage-strip: hide 7d bars, shrink further */
-  #ext-usage-strip div:has(> [data-field^="7d-"]) { display: none; }
-  #ext-usage-strip .w-24 { width: 3rem; }
 }
-/* Voice input overlay: client-side level bar + timer above the message input.
-   The bar/fill/hint elements are built by voice-input.js's ensureVoiceOverlay. */
-.voice-level-bar { height: 0.375rem; margin-bottom: 0.25rem; border-radius: 9999px; background: #1e293b; overflow: hidden; }
-.voice-level-fill { height: 100%; width: 0%; border-radius: 9999px; background: #4ade80; transition: width 0.12s linear; }
-.voice-meta { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
-.voice-timer { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: #94a3b8; }
-.voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Pending triggers tray (chat column, chat/triggers-tray.js): dashed amber
    border and the --watch spellings' mono face, per the reviewed mockup. */
 .tray-border { border: 1px dashed rgba(245, 158, 11, .55); }

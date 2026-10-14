@@ -1,82 +1,52 @@
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
-let _backlogLoaded = false;
+// Each tab registers its id, its layout and its callbacks. showsChat keeps the
+// chat column beside the tab's panel; fullScreenOnMobile hides the chat column
+// on a phone; keepOnSessionSwitch keeps the tab open when the user opens
+// another session; onShow and onHide run on every switch, after the chat
+// column is laid out. A package registers its tab when its script loads, and
+// its tab button (id btn-<id>) is one of its page parts.
+const registeredTabs = new Map();
+let activeTabId = 'chat';
+
+function registerTab(tab) {
+  if (!tab || typeof tab.id !== 'string' || !tab.id || typeof tab.showsChat !== 'boolean'
+      || typeof tab.fullScreenOnMobile !== 'boolean' || typeof tab.keepOnSessionSwitch !== 'boolean'
+      || typeof tab.onShow !== 'function' || typeof tab.onHide !== 'function') {
+    throw new Error('Invalid tab registration');
+  }
+  if (registeredTabs.has(tab.id)) throw new Error('Duplicate tab: ' + tab.id);
+  registeredTabs.set(tab.id, tab);
+}
+
+registerTab({
+  id: 'chat',
+  showsChat: true,
+  fullScreenOnMobile: false,
+  keepOnSessionSwitch: true,
+  onShow() {},
+  onHide() {},
+});
 
 function switchTab(tab) {
-  const allTabs = ['terminal', 'chat-tex', 'chat', 'chat-backlog', 'chat-plans'];
-  // chat-tex, chat, and chat-backlog show the chat content; chat-plans is a
-  // full-area view and hides chat. A worker node renders its Run transcript
-  // through the same chat column (session-view.js), so no leaf swap exists.
-  const chatFamily = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog');
-  document.getElementById('tab-chat').classList.toggle('hidden', !chatFamily);
-  document.getElementById('tab-plans').classList.toggle('hidden', tab !== 'chat-plans');
-  const terminalTab = document.getElementById('tab-terminal');
-  if (terminalTab) {
-    terminalTab.classList.toggle('hidden', tab !== 'terminal');
-  }
+  const shown = registeredTabs.get(tab);
+  if (!shown) throw new Error('Unknown tab: ' + tab);
+  // A worker node renders its Run transcript through the same chat column
+  // (session-view.js), so no leaf swap exists.
+  const chatEl = document.getElementById('tab-chat');
+  chatEl.classList.toggle('hidden', !shown.showsChat);
+  if (platform.isMobile && shown.fullScreenOnMobile) chatEl.classList.add('hidden');
 
-  // LaTeX panel visible only in chat-tex
-  const latexPanel = document.getElementById('latex-panel');
-  if (latexPanel) {
-    latexPanel.classList.toggle('hidden', tab !== 'chat-tex');
-  }
-  const latexHandle = document.getElementById('latex-resize-handle');
-  if (latexHandle) {
-    latexHandle.style.display = (tab === 'chat-tex') ? '' : 'none';
-  }
-
-  // Backlog panel visible only in chat-backlog
-  const backlogPanelEl = document.getElementById('backlog-panel');
-  if (backlogPanelEl) {
-    backlogPanelEl.classList.toggle('hidden', tab !== 'chat-backlog');
-  }
-  const backlogHandle = document.getElementById('backlog-resize-handle');
-  if (backlogHandle) {
-    backlogHandle.style.display = (tab === 'chat-backlog') ? '' : 'none';
-  }
-
-  // Plan panel visible only in chat-plans
-  // (handled above via the full-area tab-plans toggle; no split panel remains)
-
-  // Mobile: backlog and latex take full screen, hide chat area
-  const isMobile = platform.isMobile;
-  if (isMobile) {
-    const chatEl = document.getElementById('tab-chat');
-    if (tab === 'chat-backlog' || tab === 'chat-tex') {
-      chatEl.classList.add('hidden');
-    } else if (chatFamily) {
-      chatEl.classList.remove('hidden');
-    }
-  }
-
-  if (tab === 'chat-tex') {
-    latexPanelOpen = true;
-    loadLatexPdf();
-    loadLatexGitInfo();
-  } else {
-    latexPanelOpen = false;
-  }
-
-  if (tab === 'chat-backlog' && !_backlogLoaded) {
-    _backlogLoaded = true;
-    backlogPanel.refresh();
-  }
-
-  if (tab === 'chat-plans') {
-    planPanel.onTabShown();
-  }
-
-  if (globalThis.TerminalPanel) {
-    if (tab === 'terminal') globalThis.TerminalPanel.show();
-    else globalThis.TerminalPanel.hide();
-  }
+  registeredTabs.forEach((entry, id) => { if (id !== tab) entry.onHide(); });
+  shown.onShow();
+  activeTabId = tab;
 
   // Highlight active tab button
-  allTabs.forEach(t => {
-    const btn = document.getElementById('btn-' + t);
+  registeredTabs.forEach((entry, id) => {
+    const btn = document.getElementById('btn-' + id);
     if (!btn) return;
-    if (t === tab) {
+    if (id === tab) {
       btn.classList.add('bg-blue-600/20', 'text-blue-300');
       btn.classList.remove('text-slate-400');
     } else {
@@ -84,6 +54,12 @@ function switchTab(tab) {
       btn.classList.add('text-slate-400');
     }
   });
+}
+
+// The tab to show after the user opens another session: the open tab when it
+// keeps across a session switch, otherwise chat.
+function tabAfterSessionSwitch() {
+  return registeredTabs.get(activeTabId).keepOnSessionSwitch ? activeTabId : 'chat';
 }
 
 // ---------------------------------------------------------------------------

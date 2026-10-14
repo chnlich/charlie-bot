@@ -61,11 +61,12 @@ def cc_transcript_exists(config_dir: pathlib.Path, cc_session_id: str) -> bool:
 
 def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -> dict[str, Any]:
   """The factory arguments of one process: every process of a turn carries the dynamic-sections flag, and the
-  first process of a task opens the conversation id the runtime chose (a later one resumes it)."""
+  first process of a task opens the conversation id the runtime chose (a later one resumes it). A task run
+  that resumes a held conversation (a worker-node continuation) opens no new id — the resume flag names it."""
   if ctx.kind == "turn":
     return {"extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
   if ctx.kind == "task":
-    if first_process and ctx.preassigned_native_id:
+    if first_process and ctx.preassigned_native_id and ctx.held_native_id is None:
       return {"claude_session_id": ctx.preassigned_native_id}
     return {}
   raise ValueError(f"unknown launch kind {ctx.kind!r}")
@@ -165,13 +166,25 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
 
   def _place_task(self, ctx: backend_lifecycle.LaunchContext) -> backend_lifecycle.Launch:
     # The login with the most headroom, so the relay loop can move the run when that login is
-    # rejected mid-run.
+    # rejected mid-run. A run resuming a held conversation (a worker-node continuation) starts
+    # on the login holding its transcript: each pool login sees only its own store, so a resume
+    # anywhere else finds nothing. No holder anywhere refuses the launch: the continued run's
+    # prompt is only the new input, so a fresh process would work without the task spec.
     account_pool = claude_accounts.option_pool(ctx.option)
+    resume_id = ctx.held_native_id
+    if resume_id is not None:
+      holder = claude_accounts.find_transcript_account(ctx.cfg, resume_id)
+      if holder is None:
+        raise backend_lifecycle.LaunchRefused(
+            f"the held conversation {resume_id} has no transcript on any pool login "
+            f"({', '.join(account.label for account in claude_accounts.pool(ctx.cfg))})",
+            quota_exhausted=False)
+      return self._pooled_launch(ctx, holder, resume_id=resume_id, prompt=None, relays=0)
     account = claude_accounts.select(ctx.cfg, ctx.option.model, account_pool=account_pool)
     if account is None:
       raise backend_lifecycle.LaunchRefused(
           claude_relay.pool_exhausted_message(ctx.cfg, account_pool=account_pool), quota_exhausted=True)
-    return self._pooled_launch(ctx, account, resume_id=ctx.held_native_id, prompt=None, relays=0)
+    return self._pooled_launch(ctx, account, resume_id=None, prompt=None, relays=0)
 
   def _pooled_resume_id(self, ctx: backend_lifecycle.LaunchContext) -> str | None:
     """The held conversation id when a pool login holds its transcript, else None.

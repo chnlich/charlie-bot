@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readPackageStatic } = require('./read_static');
 
-const TERMINAL_B64_JS = readStatic('terminal_b64.js');
+const TERMINAL_B64_JS = readPackageStatic('features', 'terminal', 'terminal_b64.js');
 
 function loadHelpers() {
   const context = {atob, btoa, TextEncoder};

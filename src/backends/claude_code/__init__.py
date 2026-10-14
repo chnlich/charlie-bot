@@ -35,6 +35,8 @@ def register() -> None:
           preassigned_session_id=True,
           reads_context_window=False,
           family_prefix=None,
+          manual_compact=True,
+          compact_hint=None,
       ),
       lifecycle="src.backends.claude_code.claude_lifecycle:ClaudeCodeLifecycle",
       translate_fallback=True,

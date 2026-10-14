@@ -6,9 +6,10 @@ const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
 const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
-  makeSessionMeta, SWITCH_TELEMETRY_URL } = require('./session_context_stub');
+  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
+const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 // The usage payload the usage-header tests render: the fields every test shares
 // with one value. Each call passes the fields it varies (context_tokens, model,
@@ -81,6 +82,7 @@ function buildContext(overrides = {}) {
   context.confirm = overrides.confirm || (() => true);
 
   createChatSidebarContext(context);
+  loadCronPackage(context);
   return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements, localStorageData};
 }
 
@@ -203,6 +205,7 @@ test('a result WebSocket event forces a poll without writing the header directly
   ]);
   const {context} = buildContext({elements});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 
   let pollCall = null;
   context.pollActiveSessionView = (opts) => { pollCall = opts; };
@@ -478,8 +481,8 @@ test('renderSessionList limits each grouped session section to five visible sess
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
   // The named header's direct buttons: the create and the Settings gear (the
   // scheduled-task, rename and delete actions moved into the gear's menu).
-  assert.match(nav.innerHTML, /createSessionInGroup\(this\.dataset\.groupName\)/);
-  assert.match(nav.innerHTML, /openGroupHeaderMenu\(this\)/);
+  assert.match(nav.innerHTML, /sidebarControl\('createSessionInGroup', this\.dataset\.groupName\)/);
+  assert.match(nav.innerHTML, /sidebarControl\('openGroupHeaderMenu', this\)/);
 });
 
 test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pill enter path', async () => {
@@ -593,6 +596,7 @@ test('in-place refresh paths preserve group expansion', async () => {
       name: 'websocket session_group_changed event',
       setup(context) {
         vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+        vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
       },
       drive(context) {
         context.handleWSEvent({type: 'session_group_changed', session_id: 'session-a', group: 'Work'}, 'session-a', 0);
@@ -1052,10 +1056,6 @@ test('archiveSession removes the row inline and switches to the next rendered se
       assert.equal(opts.method, 'DELETE');
       return {ok: true, async json() { return {}; }};
     }
-    if (url === SWITCH_TELEMETRY_URL) {
-      assert.equal(opts.method, 'POST');
-      return {ok: true, async json() { return {ok: true}; }};
-    }
     if (url === '/api/sessions/session-b/bootstrap') {
       return {
         ok: true,
@@ -1086,10 +1086,8 @@ test('archiveSession removes the row inline and switches to the next rendered se
 
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a',
-    SWITCH_TELEMETRY_URL,
     '/api/sessions/session-b/bootstrap',
     '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
-    SWITCH_TELEMETRY_URL,
   ]);
   assert.equal(rowA.removed, true);
   assert.equal(context.location.href, '');

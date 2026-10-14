@@ -1,6 +1,5 @@
-from src.runtime.hooks import page_render, wiring
+from src.runtime.hooks import wiring
 
 
 def register() -> None:
   wiring.register_router("src.features.ncu.api", tags=("pages",))
-  page_render.register_templates("src.features.ncu")

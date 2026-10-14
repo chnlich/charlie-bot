@@ -3,8 +3,10 @@
 A Discord-summoned session reads its own thread through ``read_thread`` (the
 internal ``/discord/read`` endpoint): the read pages the whole thread
 oldest-first through the bot client, prepends the thread's starter message
-when it lives in the parent channel, and marks exactly the unread messages it
-returns as read — Discord has no separate ack verb, so the read is the ack.
+when it lives in the parent channel, marks exactly the unread messages it
+returns as read (Discord has no separate ack verb, so the read is the ack),
+and flags the pending summon's mention with ``summon: true`` — the one fact
+the one-line summon input no longer carries.
 With a channel link it reads that channel instead and marks nothing. Every
 Discord call runs inside the server process through the client
 ``discord_listener._bot_client`` builds — the token never reaches the CLI.
@@ -17,22 +19,27 @@ endpoint maps onto the response.
 
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 
 from src.features.chat_threads import thread_entry
 from src.features.discord import discord_client, discord_listener, metadata
 from src.infra import config, metadata_slots
+from src.infra import event_types as ET
 from src.runtime import session_events, session_store
+from src.runtime.api.message_utils import master_done_input_event_ids
 
 
-def _message_view(message: dict, *, unread: bool, allowed_users: dict[str, str]) -> dict:
-  """One thread message as the readback states it: ids, author name, person, text, attachments, unread flag.
+def _message_view(message: dict, *, unread: bool, summon: bool, allowed_users: dict[str, str]) -> dict:
+  """One thread message as the readback states it: ids, author name, person, text, attachments, unread and summon flags.
 
   The author name is the author's ``global_name`` when set, else its
   ``username``; ``person`` is the name the ``discord.allowed_users`` map gives
   the author's id, None when the author's id is not in the map. ``content``
   and ``attachments`` arrive possibly empty, never absent, from the REST
-  readback.
+  readback. ``summon`` marks the mention message of a pending summon — the
+  summon this round answers (the readback of a linked channel carries no
+  session, so it names none).
   """
   author = message["author"]
   return {
@@ -44,7 +51,37 @@ def _message_view(message: dict, *, unread: bool, allowed_users: dict[str, str])
       "content": message.get("content") or "",
       "attachments": [a["url"] for a in message.get("attachments") or []],
       "unread": unread,
+      "summon": summon,
   }
+
+
+def _pending_summon_mention_ids(events: list[dict]) -> set[str]:
+  """The mention message ids of the session's pending summons, as the readback flags them.
+
+  A summon is pending while its event carries the discord block, no
+  ``nudge_of``, and no master_done names its id (a nudge carries the block
+  with ``nudge_of``, so it never counts); a lost summon the boot backfill
+  marked is not pending either — the marker names its event id, and a lost
+  summon never gets a master_done. A block without a mention id names no
+  message to flag.
+  """
+  answered: set[str] = set()
+  marked: set[str] = set()
+  backfill_key = discord_listener.DISCORD.backfill_key
+  for ev in events:
+    if ev.get("type") == ET.MASTER_DONE:
+      answered.update(master_done_input_event_ids(ev))
+    elif backfill_key in ev:
+      marked.add(ev[backfill_key].get(ET.INPUT_EVENT_ID))
+  pending: set[str] = set()
+  for ev in events:
+    if ev.get("type") != ET.AGENT_MESSAGE or not isinstance(ev.get("discord"), dict):
+      continue
+    block = ev["discord"]
+    if "nudge_of" in block or ev["id"] in answered or ev["id"] in marked or block.get("mention_id") is None:
+      continue
+    pending.add(str(block["mention_id"]))
+  return pending
 
 
 async def _read_thread_messages(client: discord_client.DiscordClient, thread_id: str) -> list[dict]:
@@ -76,10 +113,17 @@ async def _read_own_thread(
   The thread's starter rides first, outside the window count, when it lives in
   the parent channel — a 404 there means the thread has none (a forum post, or
   a thread not started from a message). The window is *limit* messages
-  starting at the oldest unread one, or the newest *limit* when nothing is
-  unread. The unread messages inside the window are acked through
-  ``thread_entry.ack_messages``, which advances the watermark; ``more_unread``
-  counts the unread left outside the window.
+  starting at the earlier of the oldest unread message and the oldest pending
+  summon's mention — or the newest *limit* when neither exists — so the read
+  always shows the summon this round answers even though the summon step
+  marked it read. A pending summon is a summon event in the session log that
+  no master_done names yet and no lost-summon backfill marker marks
+  (:func:`_pending_summon_mention_ids`); its mention
+  message carries ``summon: true``, every other message ``summon: false``
+  (the starter included when the mention is the starter). The unread messages
+  inside the window are acked through ``thread_entry.ack_messages``, which
+  advances the watermark; ``more_unread`` counts the unread left outside the
+  window.
   """
   meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, store)
   fields = cast(metadata.DiscordSessionFields, metadata_slots.fields_of(meta, "discord"))
@@ -105,19 +149,30 @@ async def _read_own_thread(
           watermark=watermark,
           id_key=discord_client.snowflake_key)
   }
+  pending_ids = _pending_summon_mention_ids(await asyncio.to_thread(events.load_chat_events_sync, session_id))
+  starts = []
   if unread_ids:
-    start = next(i for i, m in enumerate(thread_messages) if m["id"] in unread_ids)
-    window = thread_messages[start:start + limit]
-  else:
-    window = thread_messages[-limit:]
+    starts.append(next(i for i, m in enumerate(thread_messages) if m["id"] in unread_ids))
+  if pending_ids:
+    # A summon whose mention started the thread has its mention in the parent
+    # channel, so it names no window start here: the starter view carries it.
+    first_summon = next((i for i, m in enumerate(thread_messages) if m["id"] in pending_ids), None)
+    if first_summon is not None:
+      starts.append(first_summon)
+  start = min(starts) if starts else None
+  window = thread_messages[-limit:] if start is None else thread_messages[start:start + limit]
   window_unread_ids = [m["id"] for m in window if m["id"] in unread_ids]
   watermark_id: str | None = watermark
   if window_unread_ids:
     ack = await thread_entry.ack_messages(adapter, session_id, window_unread_ids, cfg, store, events)
     watermark_id = ack["watermark_id"]
   allowed_users = cfg.discord.allowed_users
-  messages = [] if starter is None else [_message_view(starter, unread=False, allowed_users=allowed_users)]
-  messages.extend(_message_view(m, unread=m["id"] in unread_ids, allowed_users=allowed_users) for m in window)
+  messages = [] if starter is None else [
+      _message_view(starter, unread=False, summon=starter["id"] in pending_ids, allowed_users=allowed_users)
+  ]
+  messages.extend(
+      _message_view(m, unread=m["id"] in unread_ids, summon=m["id"] in pending_ids, allowed_users=allowed_users)
+      for m in window)
   return {"messages": messages, "watermark_id": watermark_id, "more_unread": len(unread_ids) - len(window_unread_ids)}
 
 
@@ -141,7 +196,7 @@ async def _read_linked_channel(url: str, limit: int, cfg: config.CharlieBotConfi
     raise thread_entry.ThreadReplyError(502, str(e)) from e
   allowed_users = cfg.discord.allowed_users
   return {
-      "messages": [_message_view(m, unread=False, allowed_users=allowed_users) for m in newest],
+      "messages": [_message_view(m, unread=False, summon=False, allowed_users=allowed_users) for m in newest],
       "watermark_id": None,
       "more_unread": 0,
   }
@@ -159,12 +214,14 @@ async def read_thread(
 
   Without *url*, the session's own thread (404 unknown session, 409 no
   Discord thread): the starter message rides first when the thread has one in
-  the parent channel, the window is *limit* messages starting at the oldest
-  unread one — or the newest *limit* when nothing is unread — and the unread
-  messages in the window are marked read, so reading is the ack. The readback
-  carries ``watermark_id`` (after the ack) and ``more_unread`` (unread
-  messages left outside the window); every message view names its author's
-  configured ``person``. With *url*, a discord.com channel link:
+  the parent channel, the window is *limit* messages starting at the earlier
+  of the oldest unread message and the oldest pending summon's mention — or
+  the newest *limit* when neither exists — and the unread messages in the
+  window are marked read, so reading is the ack. The readback carries
+  ``watermark_id`` (after the ack) and ``more_unread`` (unread messages left
+  outside the window); every message view names its author's configured
+  ``person`` and flags a pending summon's mention with ``summon: true``.
+  With *url*, a discord.com channel link:
   the newest *limit* messages of that channel, all with ``unread: false``,
   nothing marked. A Discord refusal beyond the mapped statuses above is 502;
   its text names the failing call, never the token.

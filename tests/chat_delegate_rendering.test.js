@@ -1,9 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const { escapeHtml } = require('./escape_html_stub');
 const {createEscapingElement} = require('./dom_element_stub');
 const {loadChatRendering} = require('./chat_rendering_context_stub');
+const {readPackageStatic} = require('./read_static');
 
 function assertWellFormedMarkup(html, label = 'html') {
   assert.doesNotMatch(html, /<[^>]*</, `${label} contains a nested tag opener`);
@@ -58,6 +60,8 @@ test('task_delegated renders CLI-style metadata without full task spec', () => {
   assert.match(html, /thread-123/);
   assert.match(html, /\/tmp\/repo/);
   assert.match(html, /\/tmp\/task\.md/);
+  assert.match(html, /reviewer context file/);
+  assert.match(html, /\/tmp\/reviewer\.md/);
   assert.match(html, /codex-o3 \/ o3/);
   assert.match(html, /keep worktree/);
   assert.doesNotMatch(html, /Secret implementation details/);
@@ -108,6 +112,7 @@ test('a new-style delegation links its child session and shows the live state li
   // The child link rides the status poll's scope; the dead panel pointer is gone.
   assert.match(html, /href="\/\?session=child-session-9"/);
   assert.match(html, /data-delegate-session="child-session-9"/);
+  assert.doesNotMatch(html, /reviewer context file/);
   assert.doesNotMatch(html, /Workers panel/);
 });
 
@@ -251,6 +256,9 @@ test('a launch-failed Run header shows the no-output-log note and the ref link r
 
 test('run_delivery closes the transcript with the summary and the four evidence links', () => {
   const context = loadChatRendering();
+  // The Diff link registers from the diff_view package.
+  vm.runInContext(readPackageStatic('features', 'diff_view', 'delivery-diff-link.js'), context,
+                  {filename: 'delivery-diff-link.js'});
 
   const delivered = context.renderMessage({
     role: 'run_delivery',

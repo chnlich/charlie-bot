@@ -4,8 +4,6 @@
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initSidebarResize();
-  initLatexResize();
-  initBacklogResize();
   restoreSidebarFromUrl();
   updateRelativeTimes();
 
@@ -27,8 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // engine owns the position instead — its mount pinned the bottom or
   // restored the reading anchor, and this write would undo the anchor.
   const msgs = document.getElementById('messages');
-  const mountedEngine = globalThis.Chat && Chat.TurnEngine
-    ? Chat.TurnEngine.activeFor(msgs) : null;
+  const mountedEngine = Chat.activeTurnEngineFor(msgs);
   if (msgs && !mountedEngine) msgs.scrollTop = msgs.scrollHeight;
 
   // Restore draft message from localStorage
@@ -40,31 +37,6 @@ document.addEventListener('DOMContentLoaded', () => {
       autoResize(inp);
     }
   }
-
-  // LaTeX editor: track dirty state + Ctrl+S to compile
-  const latexEditor = document.getElementById('latex-editor');
-  if (latexEditor) {
-    latexEditor.addEventListener('input', () => { latexEditorDirty = true; });
-    latexEditor.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        compileLatex();
-      }
-    });
-  }
-
-  // Re-evaluate mobile layout on platform mode change
-  platform.onChange((mode) => {
-    const backlogPanel = document.getElementById('backlog-panel');
-    const chatEl = document.getElementById('tab-chat');
-    if (!backlogPanel || backlogPanel.classList.contains('hidden')) return;
-    // Backlog visible: fullscreen on mobile, side-panel on desktop
-    if (mode === 'desktop') {
-      chatEl.classList.remove('hidden');
-    } else {
-      chatEl.classList.add('hidden');
-    }
-  });
 
   // Init scroll-to-top pagination for tail-loaded sessions
   initScrollPagination();

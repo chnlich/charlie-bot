@@ -4,7 +4,8 @@ from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.infra import constants, event_types as ET, text_length
+from src.infra import constants, text_length
+from src.infra import event_types as ET
 from src.infra.buildinfo import build_info
 from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger
@@ -148,7 +149,6 @@ async def _delegate_task_tree(
     request_id = delegate_request_id(req)
     task_spec = TaskSpec(
         goal=req.description,
-        context_refs=[req.context] if req.context else [],
         repo_path=req.repo_path,
         base_branch=req.base_branch,
         task_type=req.task_type,

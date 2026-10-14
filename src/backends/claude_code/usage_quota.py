@@ -140,6 +140,7 @@ class ClaudeQuotaAccount(usage_sources.QuotaAccount):
   """
 
   provider = "claude"
+  provider_label = "Claude"
 
   def __init__(self, label: str, credentials_path: pathlib.Path) -> None:
     self.label = label
@@ -207,21 +208,9 @@ class ClaudeQuotaAccount(usage_sources.QuotaAccount):
       entry["login_required"] = self.login_dir
 
   def mark_expired(self, entry: dict[str, Any], now: datetime.datetime) -> dict[str, Any]:
-    """The entry with each window the shared ``claude_accounts.panel_window_expired`` rule marks expired at *now*.
-
-    Expired windows carry ``expired: true`` and live windows carry no key. An entry without
-    windows (a pending marker or an error) comes back unchanged.
-    """
-    windows = entry.get(usage_sources.PANEL_WINDOWS)
-    if not isinstance(windows, list):
-      return entry
-    sampled = claude_accounts.parse_iso_utc(entry.get(usage_sources.PANEL_FETCHED_AT))
-    annotated = [
-        {
-            **window, "expired": True
-        } if claude_accounts.panel_window_expired(window, sampled, now) else window for window in windows
-    ]
-    return {**entry, usage_sources.PANEL_WINDOWS: annotated}
+    """The entry with its expired windows marked at *now*; the reading was sampled at ``fetched_at``."""
+    sampled = usage_sources.parse_iso_utc(entry.get(usage_sources.PANEL_FETCHED_AT))
+    return usage_sources.mark_expired_windows(entry, sampled, now)
 
   async def _get_usage(self, access_token: str) -> Any:
     client = http.get_http_client()

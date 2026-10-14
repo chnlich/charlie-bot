@@ -3,40 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import pathlib
 import subprocess
-from datetime import UTC, datetime
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import (
-    OPERATOR,
-    build_env,
-    create_task,
-)
 
 from src.infra import event_types as ET
-from src.infra.models import RunRecord, TaskSpec
-from src.runtime.run_token import CallerIdentity, RunTokenClaims
-from src.runtime.task_completion import CompletionEvidence, LandingEvidence
-from src.runtime.task_errors import TaskConflictError, TaskForbiddenError
-from src.runtime.task_sessions import TaskTreeManager
+from src.infra import models
+from src.runtime import run_token, task_completion, task_errors, task_sessions
 
 
-def live_identity() -> tuple[int, str, datetime]:
+def live_identity() -> tuple[int, str, datetime.datetime]:
   """An owned, isolated live process identity (never a zombie or a fake)."""
   proc = subprocess.Popen(["/bin/sleep", "30"])
-  from src.runtime.runs import read_pid_stat
-  pair = read_pid_stat(proc.pid)
+  from src.runtime import runs
+  pair = runs.read_pid_stat(proc.pid)
   assert pair is not None
-  return proc.pid, pair[0], datetime.now(UTC)
+  return proc.pid, pair[0], datetime.datetime.now(datetime.UTC)
 
 
-async def finish_worker_run(tree: TaskTreeManager, session_id: str, run_id: str) -> None:
+async def finish_worker_run(tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> None:
   """Land one successful worker work run: the automatic completion path."""
   await tree.dispatch.finish_run(session_id, run_id, outcome="success")
 
 
-def persisted_close_and_report(tree: TaskTreeManager, parent_id: str, child_id: str,
+def persisted_close_and_report(tree: task_sessions.TaskTreeManager, parent_id: str, child_id: str,
                                outcome: str) -> tuple[list[dict], list[dict]]:
   child_events = tree.events.load_events(child_id)
   closes = [e for e in child_events if e["type"] == ET.TASK_CLOSED and e["outcome"] == outcome]
@@ -51,15 +44,15 @@ def persisted_close_and_report(tree: TaskTreeManager, parent_id: str, child_id: 
 
 
 @pytest.mark.asyncio
-async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_path: Path) -> None:
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  project = await create_task(tree, parent=None, request_id="project")
-  feature = await create_task(tree, parent=project.id, request_id="feature")
-  worker_1 = await create_task(tree, parent=feature.id, request_id="w1", profile="worker")
-  worker_2 = await create_task(tree, parent=feature.id, request_id="w2", profile="worker")
+async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  project = await conftest.create_task(tree, parent=None, request_id="project")
+  feature = await conftest.create_task(tree, parent=project.id, request_id="feature")
+  worker_1 = await conftest.create_task(tree, parent=feature.id, request_id="w1", profile="worker")
+  worker_2 = await conftest.create_task(tree, parent=feature.id, request_id="w2", profile="worker")
 
   assert tree.work_state_of(worker_1.id) == "idle"  # no runs yet
-  await tree.runs.register_run(RunRecord(id="run-w1", session_id=worker_1.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-w1", session_id=worker_1.id, kind="work"))
   await finish_worker_run(tree, worker_1.id, "run-w1")
   # Delivery evidence closed the worker and its report is on the parent.
   assert tree.task_state(worker_1.id) == "completed"
@@ -67,7 +60,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   reports = [e for e in feature_events if e["type"] == ET.CHILD_REPORT]
   assert [r["child_session_id"] for r in reports] == [worker_1.id]
 
-  await tree.runs.register_run(RunRecord(id="run-w2", session_id=worker_2.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-w2", session_id=worker_2.id, kind="work"))
   await finish_worker_run(tree, worker_2.id, "run-w2")
   # Auto-archived after receipt (presentation=auto), and receipt only.
   index = await tree._get_index()
@@ -80,7 +73,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
   # The feature's manager consumes its two child reports before closing: they
   # are unprocessed input, and closure blocks on them.
-  await tree.runs.register_run(RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run(models.RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
@@ -88,9 +81,10 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
   # Explicitly closing the feature leaves the project open; the feature's
   # report lands on the project with summary, evidence refs, and its node id.
-  evidence = CompletionEvidence(summary="feature delivered", result_refs=["run:run-w1"], run_ids=["run-w1"])
+  evidence = task_completion.CompletionEvidence(
+      summary="feature delivered", result_refs=["run:run-w1"], run_ids=["run-w1"])
   status, payload = await tree.completion.complete_task(
-      feature.id, request_id="close-feature", evidence=evidence, caller=OPERATOR)
+      feature.id, request_id="close-feature", evidence=evidence, caller=conftest.OPERATOR)
   assert status == 200
   assert tree.task_state(feature.id) == "completed"
   assert tree.task_state(project.id) == "open"
@@ -104,30 +98,30 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   # project cannot close while the feature was open — now it is closed, and a
   # second attempt with the same request id replays the original outcome.
   status_again, payload_again = await tree.completion.complete_task(
-      feature.id, request_id="close-feature", evidence=evidence, caller=OPERATOR)
+      feature.id, request_id="close-feature", evidence=evidence, caller=conftest.OPERATOR)
   assert (status_again, payload_again["closed_event_id"]) == (200, payload["closed_event_id"])
   close_events = [e for e in tree.events.load_events(feature.id) if e["type"] == ET.TASK_CLOSED]
   assert len(close_events) == 1
 
 
 @pytest.mark.asyncio
-async def test_implement_completion_requires_review_and_landing_evidence(tmp_path: Path) -> None:
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  worker = await create_task(
+async def test_implement_completion_requires_review_and_landing_evidence(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(
       tree,
       parent=root.id,
       request_id="w",
       profile="worker",
-      task=TaskSpec(task_type="implement", base_branch="main", keep_worktree=True))
+      task=models.TaskSpec(task_type="implement", base_branch="main", keep_worktree=True))
 
   await tree.runs.register_run(
-      RunRecord(id="run-work", session_id=worker.id, kind="work", task_spec_hash="a" * 64, base_branch="main"))
+      models.RunRecord(id="run-work", session_id=worker.id, kind="work", task_spec_hash="a" * 64, base_branch="main"))
   # The successful work run does NOT close an implement worker: pending review
   # blocks the automatic close, and the task stays open with its evidence.
   await finish_worker_run(tree, worker.id, "run-work")
   assert tree.task_state(worker.id) == "open"
-  with pytest.raises(TaskConflictError, match="review"):
+  with pytest.raises(task_errors.TaskConflictError, match="review"):
     await tree.completion.evaluate_automatic_completion(worker.id, run_id="run-work")
   index = await tree._get_index()
   assert index.metas[worker.id].task is not None
@@ -135,7 +129,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
 
   # Mismatched task-spec result evidence blocks: the spec hash is not pinned by
   # this task's runs, and the landing branch is not a branch its runs target.
-  bad = CompletionEvidence(
+  bad = task_completion.CompletionEvidence(
       summary="s",
       result_refs=["run:run-work", "spec:" + "b" * 64, f"landed:other-branch@{'c' * 40}"],
       run_ids=["run-work"])
@@ -146,18 +140,18 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   # A review run that chains to a different work Run is not this delivery's
   # evidence (the work/spec/review pin): it names work this claim does not.
   await tree.runs.register_run(
-      RunRecord(id="run-misreview", session_id=worker.id, kind="review", review_of_run_id="run-earlier-attempt"))
+      models.RunRecord(id="run-misreview", session_id=worker.id, kind="review", review_of_run_id="run-earlier-attempt"))
   await tree.runs.record_finish(worker.id, "run-misreview", "success")
-  mischained = CompletionEvidence(
+  mischained = task_completion.CompletionEvidence(
       summary="s", result_refs=["review:run-misreview"], run_ids=["run-work"], review_run_ids=["run-misreview"])
   blockers = tree.completion.evidence_blockers(index, index.metas[worker.id], mischained)
   assert any("reviews work run run-earlier-attempt" in b for b in blockers)
 
   # A review run of ANOTHER task is not review evidence.
-  stranger = await create_task(tree, parent=None, request_id="stranger")
-  await tree.runs.register_run(RunRecord(id="run-stranger-review", session_id=stranger.id, kind="review"))
+  stranger = await conftest.create_task(tree, parent=None, request_id="stranger")
+  await tree.runs.register_run(models.RunRecord(id="run-stranger-review", session_id=stranger.id, kind="review"))
   await tree.runs.record_finish(stranger.id, "run-stranger-review", "success")
-  wrong_owner = CompletionEvidence(
+  wrong_owner = task_completion.CompletionEvidence(
       summary="s",
       result_refs=["review:run-stranger-review"],
       run_ids=["run-work"],
@@ -185,28 +179,29 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
       ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 
   await tree.runs.register_run(
-      RunRecord(id="run-review", session_id=worker.id, kind="review", base_branch="main", review_of_run_id="run-work"))
+      models.RunRecord(
+          id="run-review", session_id=worker.id, kind="review", base_branch="main", review_of_run_id="run-work"))
   await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
-  good = CompletionEvidence(
+  good = task_completion.CompletionEvidence(
       summary="implemented",
       result_refs=["run:run-work", f"spec:{'a' * 64}", f"landed:main@{landed_commit}"],
       run_ids=["run-work"],
       review_run_ids=["run-review"],
-      landing=LandingEvidence(branch="main", commit=landed_commit, repo_path=str(repo)))
+      landing=task_completion.LandingEvidence(branch="main", commit=landed_commit, repo_path=str(repo)))
 
   # The forged variant of the same shape — a hash that exists nowhere — is an
   # explicit verified blocker on the manual path.
-  forged = CompletionEvidence(
+  forged = task_completion.CompletionEvidence(
       summary="forged",
       result_refs=["run:run-work", f"landed:main@{'d' * 40}"],
       run_ids=["run-work"],
       review_run_ids=["run-review"],
-      landing=LandingEvidence(branch="main", commit="d" * 40, repo_path=str(repo)))
-  with pytest.raises(TaskConflictError, match="landing evidence unverified"):
-    await tree.completion.complete_task(worker.id, request_id="close-forged", evidence=forged, caller=OPERATOR)
+      landing=task_completion.LandingEvidence(branch="main", commit="d" * 40, repo_path=str(repo)))
+  with pytest.raises(task_errors.TaskConflictError, match="landing evidence unverified"):
+    await tree.completion.complete_task(worker.id, request_id="close-forged", evidence=forged, caller=conftest.OPERATOR)
   assert tree.task_state(worker.id) == "open"
   status, _payload = await tree.completion.complete_task(
-      worker.id, request_id="close-implement", evidence=good, caller=OPERATOR)
+      worker.id, request_id="close-implement", evidence=good, caller=conftest.OPERATOR)
   assert status == 200
   assert tree.task_state(worker.id) == "completed"
   # The run records survive the close (evidence preserved).
@@ -218,31 +213,34 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
 # ---------------------------------------------------------------------------
 
 
-async def live_manager_caller(tree: TaskTreeManager, session_id: str, run_id: str) -> CallerIdentity:
+async def live_manager_caller(
+    tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> run_token.CallerIdentity:
   """Register one live manager_turn Run and return the agent caller its token binds."""
   pid, pid_start, started_at = live_identity()
   await tree.runs.register_run(
-      RunRecord(
+      models.RunRecord(
           id=run_id, session_id=session_id, kind="manager_turn", pid=pid, pid_start=pid_start, started_at=started_at))
-  return CallerIdentity(kind="agent", claims=RunTokenClaims(run_id=run_id, session_id=session_id, agent="manager"))
+  return run_token.CallerIdentity(
+      kind="agent", claims=run_token.RunTokenClaims(run_id=run_id, session_id=session_id, agent="manager"))
 
 
-def close_requests_of(tree: TaskTreeManager, session_id: str) -> list[dict]:
+def close_requests_of(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return [e for e in tree.events.load_events(session_id) if e["type"] == ET.TASK_CLOSE_REQUESTED]
 
 
 @pytest.mark.asyncio
-async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp_path: Path) -> None:
+async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp_path: pathlib.Path) -> None:
   """A run id that is not a Run of the task or its children (the 9/27 shape: a
   backend's own run id) is refused at request time instead of a 202 the
   re-evaluation could only block."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  manager = await create_task(tree, parent=root.id, request_id="mgr")
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=root.id, request_id="mgr")
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
 
-  evidence = CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr", "rollout-1"])
-  with pytest.raises(TaskConflictError) as refused:
+  evidence = task_completion.CompletionEvidence(
+      summary="done", result_refs=["report:done"], run_ids=["run-mgr", "rollout-1"])
+  with pytest.raises(task_errors.TaskConflictError) as refused:
     await tree.completion.complete_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
   assert any("rollout-1 is not a Run of task" in b for b in refused.value.blockers)
   # The caller's own still-active Run is no blocker: it is judged as the success it must become.
@@ -252,15 +250,15 @@ async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp
 
 
 @pytest.mark.asyncio
-async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_path: Path) -> None:
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  manager = await create_task(tree, parent=root.id, request_id="mgr")
-  child = await create_task(tree, parent=manager.id, request_id="child", profile="worker")
+async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=root.id, request_id="mgr")
+  child = await conftest.create_task(tree, parent=manager.id, request_id="child", profile="worker")
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
 
-  evidence = CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
-  with pytest.raises(TaskConflictError) as refused:
+  evidence = task_completion.CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
+  with pytest.raises(task_errors.TaskConflictError) as refused:
     await tree.completion.complete_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
   assert f"has open descendant task {child.id}" in refused.value.blockers
   assert close_requests_of(tree, manager.id) == []
@@ -268,19 +266,19 @@ async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_path: Path) -> None:
+async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_path: pathlib.Path) -> None:
   """A valid request is saved; input arriving during the requesting Run blocks
   the close after that Run succeeds. The requester gets one wake input naming
   the request and its blockers — never a user event — and a recovery replay of
   the same request adds no second notice."""
-  from src.runtime.task_recovery import reconcile_task_tree
+  from src.runtime import task_recovery
 
-  cfg, _session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  manager = await create_task(tree, parent=root.id, request_id="mgr")
+  cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=root.id, request_id="mgr")
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
 
-  evidence = CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
+  evidence = task_completion.CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
   status, payload = await tree.completion.complete_task(
       manager.id, request_id="close-1", evidence=evidence, caller=agent)
   assert (status, payload["status"]) == (202, "pending_run_finish")
@@ -297,7 +295,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   assert "close-1" in notice["content"]
   assert f"has unprocessed input: {late['id']}" in notice["content"]
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
   assert tree.task_state(manager.id) == "open"
   assert [e["id"] for e in tree.events.load_events(manager.id) if e["type"] == notice["type"]] == [notice["id"]]
 
@@ -308,27 +306,27 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
 
 
 @pytest.mark.asyncio
-async def test_agent_cancels_only_its_own_direct_child(tmp_path: Path) -> None:
+async def test_agent_cancels_only_its_own_direct_child(tmp_path: pathlib.Path) -> None:
   """An agent cancels a direct child of its own task (the close fact records
   the agent as the actor); every other target — grandchild, sibling, parent,
   self, unrelated root — is refused, and an active run still blocks."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  manager = await create_task(tree, parent=root.id, request_id="mgr")
-  sibling = await create_task(tree, parent=root.id, request_id="sib")
-  worker = await create_task(tree, parent=manager.id, request_id="worker", profile="worker")
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=root.id, request_id="mgr")
+  sibling = await conftest.create_task(tree, parent=root.id, request_id="sib")
+  worker = await conftest.create_task(tree, parent=manager.id, request_id="worker", profile="worker")
   # The grandchild shape: a logical-manager child of the agent's own task with
   # a child of its own — two levels below the agent's task, never a direct one.
-  sub = await create_task(tree, parent=manager.id, request_id="sub")
-  grandchild = await create_task(tree, parent=sub.id, request_id="grand")
-  unrelated = await create_task(tree, parent=None, request_id="unrelated")
-  agent = CallerIdentity(
-      kind="agent", claims=RunTokenClaims(run_id="run-mgr", session_id=manager.id, agent="manager-agent"))
+  sub = await conftest.create_task(tree, parent=manager.id, request_id="sub")
+  grandchild = await conftest.create_task(tree, parent=sub.id, request_id="grand")
+  unrelated = await conftest.create_task(tree, parent=None, request_id="unrelated")
+  agent = run_token.CallerIdentity(
+      kind="agent", claims=run_token.RunTokenClaims(run_id="run-mgr", session_id=manager.id, agent="manager-agent"))
 
   # Out of scope: grandchild, sibling, parent, self, and an unrelated root.
   for target, request_id in ((grandchild, "cancel-g"), (sibling, "cancel-s"), (root, "cancel-p"),
                              (manager, "cancel-self"), (unrelated, "cancel-u")):
-    with pytest.raises(TaskForbiddenError, match="direct child"):
+    with pytest.raises(task_errors.TaskForbiddenError, match="direct child"):
       await tree.completion.cancel_task(target.id, request_id=request_id, reason="x", caller=agent)
 
   # Its own direct child cancels; the close fact's actor is the agent, and the
@@ -344,29 +342,31 @@ async def test_agent_cancels_only_its_own_direct_child(tmp_path: Path) -> None:
 
   # An active run on the direct child still refuses the agent (same 409 shape
   # as the operator path: agents never stop a child's run).
-  worker2 = await create_task(tree, parent=manager.id, request_id="worker2", profile="worker")
+  worker2 = await conftest.create_task(tree, parent=manager.id, request_id="worker2", profile="worker")
   pid, pid_start, started_at = live_identity()
   await tree.runs.register_run(
-      RunRecord(id="run-w2", session_id=worker2.id, kind="work", pid=pid, pid_start=pid_start, started_at=started_at))
-  with pytest.raises(TaskConflictError):
+      models.RunRecord(
+          id="run-w2", session_id=worker2.id, kind="work", pid=pid, pid_start=pid_start, started_at=started_at))
+  with pytest.raises(task_errors.TaskConflictError):
     await tree.completion.cancel_task(worker2.id, request_id="cancel-w2", reason="x", caller=agent)
 
 
 @pytest.mark.asyncio
-async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_path: Path) -> None:
+async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_path: pathlib.Path) -> None:
   """A queued (pid-less) run blocks the cancel like any unresolved execution;
   a durable stop request settles it and the cancel succeeds."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
-  await tree.runs.register_run(RunRecord(id="run-queued", session_id=child.id, kind="work"))
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  child = await conftest.create_task(tree, parent=root.id, request_id="child", profile="worker")
+  await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=child.id, kind="work"))
 
-  with pytest.raises(TaskConflictError, match="queued"):
-    await tree.completion.cancel_task(child.id, request_id="cancel-1", reason="not yet", caller=OPERATOR)
+  with pytest.raises(task_errors.TaskConflictError, match="queued"):
+    await tree.completion.cancel_task(child.id, request_id="cancel-1", reason="not yet", caller=conftest.OPERATOR)
 
   stop = await tree.runs.request_stop(child.id, "run-queued", "stop-1")
   assert stop.stop_requested is True and stop.outcome is None
-  await tree.completion.cancel_task(child.id, request_id="cancel-2", reason="stopped work is settled", caller=OPERATOR)
+  await tree.completion.cancel_task(
+      child.id, request_id="cancel-2", reason="stopped work is settled", caller=conftest.OPERATOR)
   close = [e for e in tree.events.load_events(child.id) if e["type"] == ET.TASK_CLOSED]
   assert len(close) == 1 and close[0]["outcome"] == "cancelled"
   # The queued run keeps its no-terminal-fact shape: settled by request, not
@@ -383,16 +383,16 @@ async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_pat
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_path: Path) -> None:
+async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_path: pathlib.Path) -> None:
   """Cancelling a worker preserves its close fact and reports the result to its manager node."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="manager")
-  child = await create_task(tree, parent=manager.id, request_id="child", profile="worker")
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  manager = await conftest.create_task(tree, parent=None, request_id="manager")
+  child = await conftest.create_task(tree, parent=manager.id, request_id="child", profile="worker")
   payload = await tree.completion.cancel_task(
       child.id,
       request_id="cancel-1",
       reason="no longer needed",
-      caller=CallerIdentity(kind="operator", session_id=manager.id))
+      caller=run_token.CallerIdentity(kind="operator", session_id=manager.id))
 
   assert payload["closed_event_id"]
   closes, reports = persisted_close_and_report(tree, manager.id, child.id, "cancelled")
@@ -405,14 +405,16 @@ async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_p
 # ---------------------------------------------------------------------------
 
 
-async def _sequence_child(tree: TaskTreeManager) -> tuple[object, object]:
+async def _sequence_child(tree: task_sessions.TaskTreeManager) -> tuple[object, object]:
   """One root with one open worker child, the shape a sequence close targets."""
-  root = await create_task(tree, parent=None, request_id="root")
-  child = await create_task(tree, parent=root.id, request_id="child", profile="worker", task=TaskSpec(goal="loop"))
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  child = await conftest.create_task(
+      tree, parent=root.id, request_id="child", profile="worker", task=models.TaskSpec(goal="loop"))
   return root, child
 
 
-def _sequence_close_and_reports(tree: TaskTreeManager, root_id: str, child_id: str) -> tuple[list[dict], list[dict]]:
+def _sequence_close_and_reports(tree: task_sessions.TaskTreeManager, root_id: str,
+                                child_id: str) -> tuple[list[dict], list[dict]]:
   """The child's task_closed facts and the parent's child_reports from it."""
   closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
   reports = [
@@ -422,16 +424,17 @@ def _sequence_close_and_reports(tree: TaskTreeManager, root_id: str, child_id: s
 
 
 @pytest.mark.asyncio
-async def test_close_sequence_child_completed_on_proven_run_evidence(tmp_path: Path) -> None:
+async def test_close_sequence_child_completed_on_proven_run_evidence(tmp_path: pathlib.Path) -> None:
   """A completed loop outcome with a successful named Run closes completed: the
   close fact carries the loop outcome as sequence_outcome, records the system
   actor, and the one delivered report takes the sequence outcome."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
-  await tree.runs.register_run(RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
+  await tree.runs.register_run(models.RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
   await tree.dispatch.finish_run(child.id, "run-iter-1", outcome="success")
 
-  evidence = CompletionEvidence(summary="[Improve loop 1] landed", result_refs=["loop:1"], run_ids=["run-iter-1"])
+  evidence = task_completion.CompletionEvidence(
+      summary="[Improve loop 1] landed", result_refs=["loop:1"], run_ids=["run-iter-1"])
   status, payload = await tree.completion.close_sequence_child(
       child.id, request_id="improve:1:close", outcome="completed", evidence=evidence)
 
@@ -450,14 +453,14 @@ async def test_close_sequence_child_completed_on_proven_run_evidence(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_close_sequence_child_completed_without_a_successful_run_closes_cancelled(tmp_path: Path) -> None:
+async def test_close_sequence_child_completed_without_a_successful_run_closes_cancelled(tmp_path: pathlib.Path) -> None:
   """The completed loop outcome without a named successful Run writes the
   cancelled lifecycle (an empty-handed delivery is never completed) while the
   report still tells the parent the loop completed."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
 
-  evidence = CompletionEvidence(summary="[Improve loop 1] landed", result_refs=["loop:1"], run_ids=[])
+  evidence = task_completion.CompletionEvidence(summary="[Improve loop 1] landed", result_refs=["loop:1"], run_ids=[])
   status, _payload = await tree.completion.close_sequence_child(
       child.id, request_id="improve:1:close", outcome="completed", evidence=evidence)
 
@@ -471,16 +474,17 @@ async def test_close_sequence_child_completed_without_a_successful_run_closes_ca
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["blocked", "failed", "cancelled"])
 async def test_close_sequence_child_non_completed_outcomes_record_evidence_as_content(
-    tmp_path: Path, outcome: str) -> None:
+    tmp_path: pathlib.Path, outcome: str) -> None:
   """blocked/failed/cancelled close as cancelled with the evidence carried as
   content only: a failed Run named in run_ids is never read as completion
   evidence, and the report outcome is the loop's own."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
-  await tree.runs.register_run(RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
+  await tree.runs.register_run(models.RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
   await tree.dispatch.finish_run(child.id, "run-iter-1", outcome="failed")
 
-  evidence = CompletionEvidence(summary=f"[Improve loop 1] {outcome}", result_refs=["loop:1"], run_ids=["run-iter-1"])
+  evidence = task_completion.CompletionEvidence(
+      summary=f"[Improve loop 1] {outcome}", result_refs=["loop:1"], run_ids=["run-iter-1"])
   status, _payload = await tree.completion.close_sequence_child(
       child.id, request_id="improve:1:close", outcome=outcome, evidence=evidence)
 
@@ -494,17 +498,17 @@ async def test_close_sequence_child_non_completed_outcomes_record_evidence_as_co
 
 
 @pytest.mark.asyncio
-async def test_close_sequence_child_blocks_on_execution_only(tmp_path: Path) -> None:
+async def test_close_sequence_child_blocks_on_execution_only(tmp_path: pathlib.Path) -> None:
   """The cancellation blocker rule: a queued Run without a stop request blocks
   (an active Run and an open descendant read the same way); unprocessed input
   never does."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   _root, child = await _sequence_child(tree)
-  await tree.runs.register_run(RunRecord(id="run-queued", session_id=child.id, kind="iteration"))
+  await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=child.id, kind="iteration"))
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="unconsumed note", actor="user")
-  evidence = CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
+  evidence = task_completion.CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
 
-  with pytest.raises(TaskConflictError, match="queued"):
+  with pytest.raises(task_errors.TaskConflictError, match="queued"):
     await tree.completion.close_sequence_child(
         child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)
 
@@ -519,14 +523,14 @@ async def test_close_sequence_child_blocks_on_execution_only(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_close_sequence_child_replays_raced_repeated_and_post_reopen_calls(tmp_path: Path) -> None:
+async def test_close_sequence_child_replays_raced_repeated_and_post_reopen_calls(tmp_path: pathlib.Path) -> None:
   """One request id lands one close fact and one report: two raced calls
   converge, a repeated call replays the first result, and a call arriving
   after the operator reopened the node replays it too (the node stays open).
   """
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
-  evidence = CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
+  evidence = task_completion.CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
 
   first, second = await asyncio.gather(
       tree.completion.close_sequence_child(
@@ -539,12 +543,15 @@ async def test_close_sequence_child_replays_raced_repeated_and_post_reopen_calls
   assert len(closes) == 1 and len(reports) == 1
 
   repeated = await tree.completion.close_sequence_child(
-      child.id, request_id="improve:1:close", outcome="failed", evidence=CompletionEvidence(summary="other"))
+      child.id,
+      request_id="improve:1:close",
+      outcome="failed",
+      evidence=task_completion.CompletionEvidence(summary="other"))
   assert repeated[1]["closed_event_id"] == first[1]["closed_event_id"]
   closes, reports = _sequence_close_and_reports(tree, root.id, child.id)
   assert len(closes) == 1 and len(reports) == 1
 
-  await tree.completion.restore_task(child.id, request_id="reopen-1", reason="operator retry", caller=OPERATOR)
+  await tree.completion.restore_task(child.id, request_id="reopen-1", reason="operator retry", caller=conftest.OPERATOR)
   assert tree.task_state(child.id) == "open"
   after_reopen = await tree.completion.close_sequence_child(
       child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)
@@ -556,11 +563,11 @@ async def test_close_sequence_child_replays_raced_repeated_and_post_reopen_calls
 
 @pytest.mark.asyncio
 async def test_recovered_sequence_close_report_takes_the_sequence_outcome(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The crash window close-fact-written/report-not-delivered: recovery
   re-derives the report from the close fact and its outcome is the fact's
   sequence_outcome, not its lifecycle outcome."""
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
 
   original = tree.dispatch.deliver_child_report_locked
@@ -569,7 +576,7 @@ async def test_recovered_sequence_close_report_takes_the_sequence_outcome(
     raise RuntimeError("simulated crash after the close fact")
 
   monkeypatch.setattr(tree.dispatch, "deliver_child_report_locked", crash_before_report)
-  evidence = CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
+  evidence = task_completion.CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
   with pytest.raises(RuntimeError, match="simulated crash"):
     await tree.completion.close_sequence_child(
         child.id, request_id="improve:1:close", outcome="blocked", evidence=evidence)

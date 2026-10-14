@@ -20,8 +20,24 @@ const renderedSessionStatuses = {};
 const renderedWorkerRows = new Set();
 // Rows painted as task-tree nodes (profile not null): their own running state
 // is a live Run of their own and paints as the spinner too — the gear is
-// exclusively a parent row's stand-in for a running descendant.
+// exclusively a parent row's stand-in for a running descendant or a paused
+// worker.
 const renderedTaskTreeRows = new Set();
+
+// The paused-worker fact per row: a worker whose Run ended with its wake-up
+// trigger (a charliebot schedule-trigger registration) still pending has no
+// live Run and no running turn, so its own state reads idle — yet it
+// delivers nothing until the trigger fires, and the gear stands in for it
+// on every ancestor row for the whole pause. The list paint records the
+// fact from the row's own profile and has_pending_trigger; the status
+// poll's reply carries no profile, so the poll path takes the worker
+// identity from renderedWorkerRows.
+const pausedWorkerRows = new Set();
+
+function recordPausedWorkerFact(sid, isWorkerRow, hasPendingTrigger) {
+  if (isWorkerRow && hasPendingTrigger) pausedWorkerRows.add(sid);
+  else pausedWorkerRows.delete(sid);
+}
 
 function isTaskTreeRow(session) {
   return !!session && session.profile != null;
@@ -33,6 +49,8 @@ function recordRenderedSessionStatus(session) {
   ownIndicatorState[session.id] = getSessionIndicatorState(session);
   if (session && session.profile === 'worker') renderedWorkerRows.add(session.id);
   else renderedWorkerRows.delete(session.id);
+  recordPausedWorkerFact(session.id,
+      !!(session && session.profile === 'worker'), !!(session && session.has_pending_trigger));
   if (isTaskTreeRow(session)) renderedTaskTreeRows.add(session.id);
   else renderedTaskTreeRows.delete(session.id);
 }
@@ -95,17 +113,20 @@ async function fetchScopedStatus(path, ids) {
   return merged;
 }
 
-function compactButtonTitle(backendType) {
-  if (backendType === 'cc-claude') return '';
-  if (backendType === 'codex') return 'codex only compacts automatically — tune model_auto_compact_token_limit';
-  return 'Manual compaction is not supported on this backend';
+// The compact button's facts come from the server, by backend type (BACKEND_COMPACT):
+// a type that runs manual compaction enables the button; any other type, a type
+// the configuration no longer lists included, shows its hint or the generic title.
+function compactButtonTitle(compact) {
+  if (compact && compact.manual) return '';
+  return (compact && compact.hint) || 'Manual compaction is not supported on this backend';
 }
 
 function updateBackendHeaderControls(backendType) {
   const compactBtn = document.getElementById('compact-btn');
   if (compactBtn) {
-    compactBtn.disabled = backendType !== 'cc-claude';
-    compactBtn.title = compactButtonTitle(backendType);
+    const compact = BACKEND_COMPACT[backendType];
+    compactBtn.disabled = !(compact && compact.manual);
+    compactBtn.title = compactButtonTitle(compact);
   }
 }
 
@@ -171,22 +192,26 @@ function rowUnreadState(sessionId, serverValue) {
 const SPINNER_SVG_INNER =
   '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
   + '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>';
+// The one cog-outline body: the worker indicator below and, through the
+// namespace, groups.js's Settings buttons (Sidebar.GEAR_SVG_PATH). Each call
+// site keeps its own center markup.
+const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
 const GEAR_CENTER_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
 const SPINNER_TITLE = 'Task is running';
-const GEAR_TITLE = 'Delegated work running in subtasks';
+const GEAR_TITLE = 'Delegated work running or waiting in subtasks';
 // The waiting clock completes the visual language: one activity icon per row
 // — the activity family, beside which the unread marks ride independently —
 // chosen by the priority table in paintSessionIndicator (own state first,
-// then a parent's gear for a running descendant — the clock always describes
-// the row itself, never its subtree).
+// then a parent's gear for a running descendant or a paused worker — the
+// clock always describes the row itself, never its subtree).
 const CLOCK_TITLE = 'Task waiting to run';
 const CLOCK_SVG_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
   + 'd="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>';
 
 function gearSvgContent() {
-  return (Sidebar.GEAR_SVG_PATH || '') + GEAR_CENTER_PATH;
+  return GEAR_SVG_PATH + GEAR_CENTER_PATH;
 }
 
 // The unread dot: the row's own unread reply — never a descendant's. Pinned
@@ -214,11 +239,6 @@ function renderSessionIndicators(session) {
     <span id="subtree-unread-${session.id}" title="${escapeHtmlAttr(SUBTREE_UNREAD_TITLE)}" class="w-2 h-2 rounded-full border border-yellow-400 flex-shrink-0 hidden"></span>`;
 }
 
-// The pending-trigger bell's body: the chat column's tray
-// (chat/triggers-tray.js) renders the same glyph, so the two surfaces of one
-// fact read as one signal. Wired sidebarOnly for the tray's bellSvg().
-const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/>';
-
 function pendingTriggerTitle(count, nextTriggerAt) {
   const normalized = Number(count) || 0;
   let title;
@@ -231,8 +251,8 @@ function pendingTriggerTitle(count, nextTriggerAt) {
 
 function renderPendingTriggerIndicator(session) {
   const count = Number(session.pending_trigger_count) || 0;
-  const click = `event.preventDefault(); event.stopPropagation(); expandPendingTriggersTray('${session.id}')`;
-  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
+  const click = `event.preventDefault(); event.stopPropagation(); sidebarControl('openPendingTriggers', '${session.id}')`;
+  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${Chat.PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
 }
 
 function renderPendingPlanApprovalIndicator(session) {
@@ -268,35 +288,59 @@ function updateSidebarHighlight(newSessionId) {
 // legacy row's own delegated work keeps the gear, own waiting (queued, not
 // launched) the muted clock; a parent row whose own state is idle then stands
 // in for its subtree with one icon only: a running descendant at any depth
-// shows the gear, and the clock never stands in for a subtree. The unread
-// family reads the unread facts alone, gated by no activity state: the row's
-// own unread paints the filled dot, otherwise an unread reply anywhere below
-// paints the subtree's hollow mark. The facts are the latest applied state
-// per row (list paint, status poll, task_tree_changed / running_changed
-// broadcasts) and the shared unread map; the tree shape comes from the last
-// grouped paint.
+// shows the gear, so does a paused worker (a worker row whose latest fact is
+// idle with a pending wake-up trigger), and the clock never stands in for a
+// subtree. The unread family reads the unread facts alone, gated by no
+// activity state: the row's own unread paints the filled dot, otherwise an
+// unread reply anywhere below paints the subtree's hollow mark. The facts
+// are the latest applied state per row (list paint, status poll,
+// task_tree_changed / running_changed broadcasts), the paused-worker fact
+// the list paint and the status poll record, and the shared unread map; the
+// tree shape comes from the last grouped paint, which groups.js records
+// here.
 const ownIndicatorState = {};
+let lastTreeChildrenOf = new Map();
+let lastTreeParentOf = new Map();
 
-function treeChildIdsOf(sid) {
-  return Sidebar.treeChildIds ? Sidebar.treeChildIds(sid) : [];
+function recordTreeShape(childrenOf, parentOf) {
+  lastTreeChildrenOf = childrenOf;
+  lastTreeParentOf = parentOf;
+}
+
+// The children of the last grouped paint, for indicator aggregation.
+function treeChildIds(sessionId) {
+  return (lastTreeChildrenOf.get(sessionId) || []).map(s => s.id);
+}
+
+// The parent of a nested row in the last grouped paint (null for a root).
+function treeParentId(sessionId) {
+  return lastTreeParentOf.get(sessionId) || null;
 }
 
 function subtreeHasState(sid, state) {
-  return treeChildIdsOf(sid).some(
+  return treeChildIds(sid).some(
       child => (ownIndicatorState[child] || 'idle') === state || subtreeHasState(child, state));
 }
 
 function subtreeUnread(sid) {
-  return treeChildIdsOf(sid).some(child => !!sessionUnread[child] || subtreeUnread(child));
+  return treeChildIds(sid).some(child => !!sessionUnread[child] || subtreeUnread(child));
+}
+
+// A paused worker anywhere below the row: the same walk as subtreeHasState,
+// over the trigger fact the list paint and the status poll record.
+function subtreeHasPausedWorker(sid) {
+  return treeChildIds(sid).some(child => pausedWorkerRows.has(child) || subtreeHasPausedWorker(child));
 }
 
 // The subtree stand-in, in the same priority position as the row's own state:
 // a running descendant at any depth — one whose own state is worker_only or
 // thinking, a manager's turn or a worker's live Run, whose header timer
-// (thinking_since) paints its own row's spinner — shows the gear. The clock
-// never stands in for a subtree: a queued Run marks its own row only.
+// (thinking_since) paints its own row's spinner — shows the gear, and so
+// does a paused worker at any depth. The clock never stands in for a
+// subtree: a queued Run marks its own row only.
 function subtreeStandInState(sid) {
-  if (subtreeHasState(sid, 'worker_only') || subtreeHasState(sid, 'thinking')) return 'worker_only';
+  if (subtreeHasState(sid, 'worker_only') || subtreeHasState(sid, 'thinking')
+      || subtreeHasPausedWorker(sid)) return 'worker_only';
   return 'idle';
 }
 
@@ -315,7 +359,7 @@ function ownUnread(sid) {
 function paintSessionIndicator(sid) {
   // The display mapping (a row's own running Run reads as the spinner) applies
   // only to the row's own state; the subtree stand-in keeps its own icon —
-  // the gear for a running descendant.
+  // the gear for a running descendant or a paused worker.
   const own = ownIndicatorState[sid] || 'idle';
   const state = own !== 'idle' ? displayIndicatorState(sid, own) : subtreeStandInState(sid);
   const spinner = document.getElementById('spinner-' + sid);
@@ -340,8 +384,7 @@ function paintSessionIndicator(sid) {
 // row's dot and every ancestor's subtree mark clear in one paint.
 function refreshSessionIndicator(sid) {
   paintSessionIndicator(sid);
-  if (!Sidebar.treeParentId) return;
-  for (let parent = Sidebar.treeParentId(sid); parent; parent = Sidebar.treeParentId(parent)) {
+  for (let parent = treeParentId(sid); parent; parent = treeParentId(parent)) {
     paintSessionIndicator(parent);
   }
 }
@@ -355,7 +398,7 @@ function setSessionIndicator(sid, state) {
 // their stand-in gear and their subtree marks here, once the rows exist.
 function refreshTreeIndicators() {
   Object.keys(ownIndicatorState).forEach(sid => {
-    if (treeChildIdsOf(sid).length) paintSessionIndicator(sid);
+    if (treeChildIds(sid).length) paintSessionIndicator(sid);
   });
 }
 
@@ -392,51 +435,6 @@ function updateSpinner() {
   return refreshSessionStatusNow();
 }
 
-let activeSessionViewPollInflight = false;
-const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
-
-function stopActiveSessionViewPolling() {
-  stopPageTimer('active-session-view');
-}
-
-function ensureActiveSessionViewPolling() {
-  if (!SESSION_ID || (!masterThinking && !THINKING_SINCE)) {
-    stopActiveSessionViewPolling();
-    return;
-  }
-  if (pageTimerRegistered('active-session-view')) return;
-  startPageTimer('active-session-view', pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
-}
-
-async function pollActiveSessionView(opts) {
-  const force = opts && opts.force;
-  if (activeSessionViewPollInflight || !SESSION_ID || (!force && !masterThinking && !THINKING_SINCE)) return;
-
-  const pollSessionId = SESSION_ID;
-  activeSessionViewPollInflight = true;
-  try {
-    const res = await fetch('/api/sessions/' + pollSessionId + '/usage');
-    if (!res.ok) throw new Error(res.status);
-    const data = await res.json();
-    if (pollSessionId !== SESSION_ID) return;
-
-    THINKING_SINCE = data.session.thinking_since || null;
-    setActiveBackendId(data.active_backend);
-    setSwitchableBackends(data.switchable_backends);
-    updateActiveBackendBadges();
-    globalThis.renderUsageFromData(data.usage);
-
-    if (!THINKING_SINCE && masterThinking) {
-      globalThis.stopThinking();
-    }
-  } catch (err) {
-    console.error('pollActiveSessionView failed:', err);
-  } finally {
-    activeSessionViewPollInflight = false;
-    globalThis.ensureActiveSessionViewPolling();
-  }
-}
-
 // Poll-based sidebar status (corrects WS drift)
 let statusPollInflight = false;
 let statusPollPromise = Promise.resolve(false);
@@ -446,11 +444,34 @@ function applySessionStatus(sid, status, requestSeq) {
   // A reply captured before a newer applied fact may not overwrite it: the
   // poll's snapshot can predate an unread_changed broadcast already rendered.
   if (unreadReplyIsCurrent(sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
+  // The paused-worker fact lands before the repaint below reads it; the poll
+  // reply carries no profile, so the worker identity comes from the list
+  // paint's renderedWorkerRows.
+  recordPausedWorkerFact(sid, renderedWorkerRows.has(sid), !!(status && status.has_pending_trigger));
   globalThis.setSessionIndicator(sid, getSessionIndicatorState(status));
   globalThis.setSessionPendingTriggerIndicator(sid, status);
   globalThis.setSessionPendingTriggerTrayStatus(sid, status);
   globalThis.setSessionPendingPlanApprovalIndicator(sid, status);
   paintDelegateCardState(sid, status);
+}
+
+// The running_changed seam. A worker row's Run ending usually means a pause:
+// the worker registers its wake-up trigger just before its turn ends, so the
+// event reaches the browser before any poll could carry the new trigger
+// fact. Repainting the row idle on the event would blink the row's spinner
+// and the ancestors' gear off until the next poll, so that repaint is left
+// to the status poll the handler starts right after — it applies the new
+// state and the trigger fact in one write. A really finished worker pays
+// one status round trip of stale spinner and gear for this. Every other
+// event — a busy start, any non-worker row — repaints at once.
+function applyRunningChanged(ev) {
+  const runEnded = !ev.thinking_since && !ev.has_running_tasks;
+  if (runEnded && renderedWorkerRows.has(ev.session_id)) return;
+  setSessionIndicator(ev.session_id, getSessionIndicatorState({
+    thinking_since: ev.thinking_since,
+    has_running_tasks: ev.has_running_tasks,
+    work_state: ev.work_state,
+  }));
 }
 
 // The Delegated cards' live line: "running · <model>" while the delegation
@@ -505,88 +526,9 @@ function pollSessionStatus() {
 }
 
 
-// ---------------------------------------------------------------------------
-// Thinking indicator
-// ---------------------------------------------------------------------------
-// The thinking indicator owns only the header timer and the session-view poll:
-// it never touches the send button. The button's disabled state has one writer
-// — the in-flight lock (refreshSendLock in file-upload.js) — so a master run
-// leaves typing available no matter how long it runs. The keepSendEnabled
-// option stays in the call convention every start site passes; nothing reads
-// it any more.
-function startThinking(opts) {
-  masterThinking = true;
-  thinkingStart = thinkingStart || Date.now();
-  document.getElementById('thinking').classList.remove('hidden');
-  updateThinkingTime();
-  startPageTimer('thinking-tick', updateThinkingTime, 1000);
-  globalThis.ensureActiveSessionViewPolling();
-}
-
-// Resumes the indicator when a page load or SPA switch lands while the master
-// is mid-thought. THINKING_SINCE is the server-stamped start the session view
-// and status polls refresh; the send button stays with the in-flight lock, so
-// typing remains available while the run is still processing.
-function resumeThinkingIfMidThought() {
-  if (THINKING_SINCE) {
-    thinkingStart = new Date(THINKING_SINCE).getTime();
-    startThinking({keepSendEnabled: true});
-  }
-}
-
-function stopThinking(opts) {
-  masterThinking = false;
-  document.getElementById('thinking').classList.add('hidden');
-  stopPageTimer('thinking-tick');
-  thinkingStart = null;
-  // No button write here: master_done or assistant_error can land inside an
-  // upload/voice window, and re-enabling would punch through the in-flight
-  // lock. Only refreshSendLock writes the button.
-  stopActiveSessionViewPolling();
-  if (!switching && !(opts && opts.preserveSessionIndicator)) updateSpinner();
-}
-
-function updateThinkingTime() {
-  if (!thinkingStart) return;
-  const secs = Math.floor((Date.now() - thinkingStart) / 1000);
-  document.getElementById('thinking-time').textContent = secs + 's';
-}
-
-async function cancelMaster() {
-  // A worker node's stop button signals the active Run through its own
-  // cancel route (session-view.js), not the chat cancel.
-  if (typeof transcriptTarget === 'function' && transcriptTarget()) {
-    return cancelTranscriptTarget();
-  }
-  try {
-    const res = await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
-    if (res.ok) return;
-
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.error || body.message || '';
-    } catch (_err) {
-      detail = '';
-    }
-
-    if (res.status === 404 && detail === 'No active master agent') {
-      // Backend already broadcasts a visible assistant_error for this case.
-      return;
-    }
-
-    const suffix = detail || (`HTTP ${res.status}`);
-    showToast(`Cancel failed: ${suffix}`, true);
-    console.error('Cancel master failed:', res.status, detail || res.statusText);
-  } catch (err) {
-    showToast('Cancel failed: network error. Please try again.', true);
-    console.error('Cancel master failed:', err);
-  }
-}
-
-
 const API = {
   recordRenderedSessionStatus,
+  recordTreeShape,
   updateBackendHeaderControls,
   updateSidebarSessionName,
   getSessionIndicatorState,
@@ -608,21 +550,16 @@ const API = {
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,
   paintDelegateCardState,
-  stopActiveSessionViewPolling,
-  ensureActiveSessionViewPolling,
-  pollActiveSessionView,
   refreshSessionStatusNow,
   pollSessionStatus,
-  startThinking,
-  resumeThinkingIfMidThought,
-  stopThinking,
-  updateThinkingTime,
-  cancelMaster,
+  applyRunningChanged,
 };
 Sidebar.wire(API, {
   sidebarSessionIds,
   updateSpinner,
-  PENDING_TRIGGER_BELL_SVG_PATH,
+  GEAR_SVG_PATH,
+  treeChildIds,
+  treeParentId,
 });
 
 })();

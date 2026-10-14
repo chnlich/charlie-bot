@@ -129,7 +129,7 @@ class CharlieCodeBackend(base.AgentBackend):
       base.apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env
 
-  # charlie-code appends the cwd AGENTS.md to its system message.
+  # charlie-code appends the session cwd's AGENTS.md to its system message on a manager turn.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "charlie_code_wrote_agents_md")
 
   def _build_command(self, prompt: str) -> list[str]:
@@ -150,6 +150,8 @@ class CharlieCodeBackend(base.AgentBackend):
       cmd += ["--temperature", str(self._temperature)]
     if self._resume_session_id:
       cmd += ["--resume", self._resume_session_id]
+    if self._instructions_file is not None:
+      cmd += ["--instructions-file", str(self._instructions_file)]
     cmd += self._extra_flags
     for image_path in self._image_paths:
       cmd += ["--image", image_path]
@@ -159,8 +161,8 @@ class CharlieCodeBackend(base.AgentBackend):
   def _effective_prompt(self, prompt: str) -> str:
     # Identity override: base's _effective_prompt re-adds the <system-instructions>
     # frame whenever instructions_content is set, so deleting this override would
-    # re-enable it; instructions ride the cwd AGENTS.md system channel instead
-    # (see _prepare_cwd) and task.md must carry the bare prompt.
+    # re-enable it; instructions ride the --instructions-file flag (a worker run) or
+    # the session cwd's AGENTS.md (a manager turn), and task.md must carry the bare prompt.
     return prompt
 
   def translate_event(self, event: dict) -> list[dict]:

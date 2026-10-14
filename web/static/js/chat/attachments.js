@@ -68,6 +68,16 @@ function renderUserAttachments(uploadedFiles, withTopMargin) {
     + '</div>';
 }
 
+// The user bubble's input-mode badge: a package that sets an input mode
+// registers the badge HTML for it when its script loads.
+const inputModeBadges = new Map();
+
+function registerInputMode(mode, badgeHtml) {
+  if (!mode || !badgeHtml) throw new Error('Invalid input mode registration');
+  if (inputModeBadges.has(mode)) throw new Error('Duplicate input mode: ' + mode);
+  inputModeBadges.set(mode, badgeHtml);
+}
+
 function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles) {
   const normalized = normalizeUserMessage(content, uploadedFiles);
   const timeHtml = timestamp ? '<div class="text-[10px] text-slate-400/60 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
@@ -76,7 +86,9 @@ function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles) {
     : '';
   const attachmentsHtml = renderUserAttachments(normalized.uploadedFiles, Boolean(textHtml));
   return `<div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">`
-    + (inputMode === 'voice' ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : '')
+    + (inputModeBadges.has(inputMode)
+      ? '<span class="text-xs text-blue-200 block mb-1">' + inputModeBadges.get(inputMode) + '</span>'
+      : '')
     + textHtml
     + attachmentsHtml
     + timeHtml
@@ -87,6 +99,7 @@ Chat.wire({
   renderUserMessageBubble,
 }, {
   normalizeUserMessage,
+  registerInputMode,
 });
 
 })();

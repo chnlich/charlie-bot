@@ -13,45 +13,38 @@ specific wrong implementation.
 """
 
 import asyncio
+import pathlib
 import threading
 import time
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+import types
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    JSON_UTILS_OS_REPLACE_PATCH_TARGET,
-    OPUS_BACKEND_ID,
-    REAL_OS_REPLACE,
-    make_os_replace_spy,
-    make_read_at_os_replace,
-)
-from conftest import make_session_blocks as _make_session_blocks
 
-from src.infra.memo import stat_signature
-from src.infra.models import SessionMetadata
-from src.runtime.session_store import SessionStore
+from src.infra import memo, models
+from src.runtime import session_store
 
-_REAL_REPLACE = REAL_OS_REPLACE
+_REAL_REPLACE = conftest.REAL_OS_REPLACE
 
 
 @pytest.mark.asyncio
-async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
+async def test_atomic_write_swaps_target_via_os_replace(tmp_path: pathlib.Path) -> None:
   """The swap goes through os.replace on the target metadata.json path.
 
   A write side that never calls os.replace (an in-place truncating write-through)
   fails here because the hook never fires against the target -- killing the
   vacuous pass where the hook is never reached.
   """
-  mgr = _make_session_blocks(tmp_path)
-  meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
+  mgr = conftest.make_session_blocks(tmp_path)
+  meta = models.SessionMetadata(profile="manager", name="seed", backend=conftest.OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   target = mgr.store.metadata_path(meta.id)
 
   replaced_targets: list[str] = []
 
-  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_os_replace_spy(replaced_targets)):
+  with mock.patch(conftest.JSON_UTILS_OS_REPLACE_PATCH_TARGET,
+                  side_effect=conftest.make_os_replace_spy(replaced_targets)):
     updated = meta.model_copy()
     updated.name = "changed"
     await mgr.store.save_metadata(updated)
@@ -60,21 +53,22 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) -> None:
+async def test_atomic_read_observes_previous_document_at_swap(tmp_path: pathlib.Path) -> None:
   """At the instant of the swap the target still holds the previous document.
 
   Reading the target at that moment must yield the old complete document -- not
   empty and not a parse failure -- proving the previous inode stays intact right
   up to the rename. An in-place truncating write side would read empty here.
   """
-  mgr = _make_session_blocks(tmp_path)
-  meta = SessionMetadata(profile="manager", name="before", backend=OPUS_BACKEND_ID)
+  mgr = conftest.make_session_blocks(tmp_path)
+  meta = models.SessionMetadata(profile="manager", name="before", backend=conftest.OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   target = mgr.store.metadata_path(meta.id)
 
   read_at_swap: list[str] = []
 
-  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_read_at_os_replace(read_at_swap, target)):
+  with mock.patch(conftest.JSON_UTILS_OS_REPLACE_PATCH_TARGET,
+                  side_effect=conftest.make_read_at_os_replace(read_at_swap, target)):
     updated = meta.model_copy()
     updated.name = "after"
     await mgr.store.save_metadata(updated)
@@ -112,7 +106,7 @@ class _InterleaveController:
 
 
 @pytest.mark.asyncio
-async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_path: Path) -> None:
+async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_path: pathlib.Path) -> None:
   """Two writes to the same session interleave; both must return normally.
 
   With a shared temp name the delayed first replacer would raise
@@ -123,9 +117,9 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   its own writers, so the defect window the unique temp name covers is between
   independent writers sharing the sessions directory.
   """
-  mgr = _make_session_blocks(tmp_path)
-  other_store = SessionStore(SimpleNamespace(sessions_dir=tmp_path / "sessions"))
-  meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
+  mgr = conftest.make_session_blocks(tmp_path)
+  other_store = session_store.SessionStore(types.SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  meta = models.SessionMetadata(profile="manager", name="seed", backend=conftest.OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   target = mgr.store.metadata_path(meta.id)
 
@@ -139,7 +133,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   def _coordinated_replace(src: str, dst: str) -> None:
     return harness.replace(src, dst)
 
-  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=_coordinated_replace):
+  with mock.patch(conftest.JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=_coordinated_replace):
     results = await asyncio.gather(
         mgr.store.save_metadata(first),
         other_store.save_metadata(second),
@@ -153,7 +147,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: Path) -> None:
+async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: pathlib.Path) -> None:
   """A funnel save's cache entry carries the published file's stat signature.
 
   The signature is what the TTL expiry's revalidation stats: with it, an
@@ -163,12 +157,12 @@ async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: Pat
   30 s TTL. The discriminating assertion is the survived entry: an entry keyed
   with a foreign or absent signature fails here.
   """
-  mgr = _make_session_blocks(tmp_path)
-  meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
+  mgr = conftest.make_session_blocks(tmp_path)
+  meta = models.SessionMetadata(profile="manager", name="seed", backend=conftest.OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   stored_sig = mgr.store.metadata_cache[meta.id][2]
   assert stored_sig is not None
-  assert stored_sig == stat_signature(mgr.store.metadata_path(meta.id))
+  assert stored_sig == memo.stat_signature(mgr.store.metadata_path(meta.id))
 
   # Past the TTL, the revalidation stats and re-times instead of evicting:
   # the entry survives and the listings revision stands.

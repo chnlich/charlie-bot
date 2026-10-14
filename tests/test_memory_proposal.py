@@ -354,9 +354,11 @@ def test_commit_refuses_a_new_sentence_over_25_words(store: Path, monkeypatch, c
 
 def test_commit_ignores_an_unchanged_long_sentence_in_an_old_entry(store: Path, monkeypatch, capsys) -> None:
   """A bullet the base already holds verbatim escapes the sentence checks, so old long
-  sentences never block a commit that edits other lines of their entry."""
+  sentences never block a commit that edits other lines of their entry. The long
+  sentence rides a continuation line so the fixture stays inside the column limit."""
   rel = Path("entries/profile/legacy-long.md")
-  base_text = _entry_text("legacy-long", f"- {_long_sentence()}\n")
+  first, second = _long_sentence().split(" shows ", 1)
+  base_text = _entry_text("legacy-long", f"- {first}\n  shows {second}\n")
   _live_commit(store, rel, base_text, "base holds the long sentence")
   _run_cli(monkeypatch, capsys, "proposal", "open")
   worktree = memory_proposal.proposal_worktree(store)
@@ -441,7 +443,8 @@ def test_commit_refuses_a_long_sentence_in_an_entry_without_bullets(store: Path,
 
 def test_commit_ignores_an_unchanged_long_sentence_in_an_old_lead(store: Path, monkeypatch, capsys) -> None:
   rel = Path("entries/profile/legacy-lead.md")
-  base_text = _entry_text("legacy-lead", f"{_long_sentence()}\n- Legacy bullet stands.\n")
+  first, second = _long_sentence().split(" shows ", 1)
+  base_text = _entry_text("legacy-lead", f"{first}\nshows {second}\n- Legacy bullet stands.\n")
   _live_commit(store, rel, base_text, "base lead holds the long sentence")
   _run_cli(monkeypatch, capsys, "proposal", "open")
   worktree = memory_proposal.proposal_worktree(store)
@@ -500,6 +503,147 @@ def test_commit_refuses_a_15_line_body_that_stays_at_15_lines(store: Path, monke
   assert "body has 15 lines (limit 12)" in err
   assert "Line seven stands rewritten" not in err
   assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+# --- column limit -------------------------------------------------------------
+
+
+def _wide_line(char: str) -> str:
+  """One bullet line 121 terminal columns wide: the two-column "- " prefix plus 119 chars."""
+  return "- " + char * 119
+
+
+def test_commit_refuses_a_body_line_over_120_columns(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/wide-line.md")
+  line = _wide_line("a")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("wide-line", f"{line}\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert "prose check failed:" in err
+  assert f"body line over 120 columns (121): {line[:60]}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_allows_a_body_line_of_exactly_120_columns(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/at-the-limit.md")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("at-the-limit", "- " + "b" * 118 + "\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert "prose check" not in err
+
+
+def test_commit_counts_a_cjk_character_as_two_columns(store: Path, monkeypatch, capsys) -> None:
+  """One lead line of 61 hanzi: 61 characters but 122 terminal columns, so the line refuses."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/cjk-line.md")
+  line = "汉" * 61
+  assert len(line) == 61
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("cjk-line", f"{line}\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert f"body line over 120 columns (122): {line[:60]}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_refuses_a_base_verbatim_line_over_120_columns(store: Path, monkeypatch, capsys) -> None:
+  """The column limit has no base exemption: an over-wide line the base already holds
+  verbatim refuses, unlike the sentence checks' next-edit escape."""
+  rel = Path("entries/profile/legacy-wide.md")
+  line = _wide_line("c")
+  base_text = _entry_text("legacy-wide", f"{line}\n")
+  _live_commit(store, rel, base_text, "base holds the wide line")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text + "- Short added line.\n", encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "append")))
+  assert code == 1
+  assert f"body line over 120 columns (121): {line[:60]}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_allows_a_wide_line_folded_into_continuation_lines(store: Path, monkeypatch, capsys) -> None:
+  """The width check reads physical lines without joining: a 122-column bullet folded
+  into two lines of 61 columns each passes."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/folded-line.md")
+  words = ["word"] * 24
+  first = "- " + " ".join(words[:12])
+  second = "  " + " ".join(words[12:])
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("folded-line", f"{first}\n{second}\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert "prose check" not in err
+
+
+# --- body line limit: pure deletions ------------------------------------------
+
+
+def _body_lines(count: int) -> str:
+  """*count* short one-sentence bullet lines: a canon body of the v5-gap entry's shape."""
+  return "".join(f"- Body line {i} stands.\n" for i in range(1, count + 1))
+
+
+def test_commit_allows_a_pure_deletion_from_a_50_line_body(store: Path, monkeypatch, capsys) -> None:
+  """The line limit prices new verbosity: deleting one line from a 50-line body canon
+  already holds (the v5-gap entry's shape) adds nothing, so the commit passes."""
+  rel = Path("entries/profile/v5-gap.md")
+  base_text = _entry_text("v5-gap", _body_lines(50))
+  _live_commit(store, rel, base_text, "canon body of 50 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text.replace("- Body line 25 stands.\n", ""), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "trim")))
+  assert code == 0, err
+  assert "prose check" not in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
+
+
+def test_commit_refuses_a_deletion_that_also_adds_a_line(store: Path, monkeypatch, capsys) -> None:
+  """The exemption covers only commits that add no body line: swap one line for another
+  and the worktree body leaves the head version's multiset, so the limit still binds."""
+  rel = Path("entries/profile/swapped-line.md")
+  base_text = _entry_text("swapped-line", _body_lines(50))
+  _live_commit(store, rel, base_text, "canon body of 50 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  edited = base_text.replace("- Body line 25 stands.\n", "- The replacement line stands.\n")
+  (worktree / rel).write_text(edited, encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "swap")))
+  assert code == 1
+  assert "body has 50 lines (limit 12)" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_allows_trimming_a_13_line_body_to_12(store: Path, monkeypatch, capsys) -> None:
+  """A pure deletion that lands exactly at the limit passes: 13 lines down to 12."""
+  rel = Path("entries/profile/trim-to-limit.md")
+  base_text = _entry_text("trim-to-limit", _body_lines(13))
+  _live_commit(store, rel, base_text, "canon body of 13 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text.replace("- Body line 7 stands.\n", ""), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "trim")))
+  assert code == 0, err
+  assert "prose check" not in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
 
 
 def test_commit_replace_pr_lines_commits_and_lists_the_replaced_lines(store: Path, monkeypatch, capsys) -> None:

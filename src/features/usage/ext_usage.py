@@ -118,7 +118,7 @@ async def _poll_loop() -> None:
 
 
 def _annotated_providers(now: datetime.datetime | None = None) -> dict[str, dict[str, Any]]:
-  """The cached snapshot with each entry's expiry marks judged at emit time.
+  """The cached snapshot with each entry's expiry marks judged at emit time and its provider's display label.
 
   Each account's ``mark_expired`` decides what its entry shows at the server clock. The
   judgement is recomputed per emit on copies — a frozen cache flips as the clock crosses a
@@ -126,7 +126,11 @@ def _annotated_providers(now: datetime.datetime | None = None) -> dict[str, dict
   ``_cached_usage``.
   """
   moment = now if now is not None else datetime.datetime.now(datetime.UTC)
-  return {key: _accounts[key].mark_expired(entry, moment) for key, entry in _cached_usage.items()}
+  snapshot = {}
+  for key, entry in _cached_usage.items():
+    account = _accounts[key]
+    snapshot[key] = {**account.mark_expired(entry, moment), usage_sources.PANEL_PROVIDER_LABEL: account.provider_label}
+  return snapshot
 
 
 # ---------------------------------------------------------------------------

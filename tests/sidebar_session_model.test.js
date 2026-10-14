@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {loadGroups, row} = require('./sidebar_groups_context_stub');
+const {loadGroupsWithCron, row} = require('./sidebar_groups_context_stub');
 
 // The model element must be a sibling of .session-time, never inside it:
 // updateRelativeTimes() (web/static/js/utils.js) reassigns .session-time's
@@ -53,7 +53,7 @@ test('.session-time holds only the timestamp, so the time refresh cannot erase t
 
 test('a bound node row shows its cron lines in place of the time line, in every view', () => {
   const html = row({backend: 'claude-opus-5', schedule_cron: '0 9 * * *', schedule_timezone: 'PT'});
-  const bound = loadGroups().Sidebar.renderSessionItem(
+  const bound = loadGroupsWithCron().Sidebar.renderSessionItem(
     {id: 's1', name: 'demo', updated_at: '2026-07-29T17:12:00Z', backend: 'claude-opus-5',
      schedule_task: 'nightly', schedule_cron: '0 9 * * *', schedule_timezone: 'PT',
      schedule_enabled: true, schedule_next_run: '2026-07-30T09:00:00Z'},
@@ -63,7 +63,7 @@ test('a bound node row shows its cron lines in place of the time line, in every 
   assert.ok(bound.includes('0 9 * * *'));
   assert.equal(modelSpan(bound), null);
   // The same bound row form rides the Later and Archive views.
-  assert.equal(modelSpan(loadGroups().Sidebar.renderSessionItem(
+  assert.equal(modelSpan(loadGroupsWithCron().Sidebar.renderSessionItem(
     {id: 's1', name: 'demo', updated_at: '2026-07-29T17:12:00Z',
      schedule_task: 'nightly', schedule_cron: '0 9 * * *', schedule_timezone: 'PT',
      schedule_enabled: true, schedule_next_run: '2026-07-30T09:00:00Z'}, 'starred')), null);

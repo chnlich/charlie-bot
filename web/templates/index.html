@@ -9,23 +9,13 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/diff/dist/diff.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <link rel="stylesheet" href="/static/css/styles.css?v={{ static_asset_version|urlencode }}">
+  {% for part in page_parts('head') %}{% include part %}{% endfor %}
   <!-- Loaded after styles.css so Tailwind's `.hidden` utility (display:none) wins the
        cascade over styles.css's unconditional `display:flex` modal-overlay rules --
        matching the Play CDN's effective load order, which injected its stylesheet
        after styles.css had already been parsed. -->
   <link rel="stylesheet" href="/static/css/tailwind.css?v={{ static_asset_version|urlencode }}">
-  <script type="module">
-    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs';
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs';
-    window.pdfjsLib = pdfjsLib;
-  </script>
   <script>
     let SESSION_ID = {{ active_session.id|tojson if active_session else 'null' }};
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
@@ -44,28 +34,18 @@
       {{ opt.id|tojson }}: {{ opt.type|tojson }},
       {% endfor %}
     };
-    const VOICE_BACKENDS = [
-      {% for backend in (voice_backends() if voice_backends is defined else []) %}
-      {id: {{ backend.id|tojson }}, label: {{ backend.label|tojson }}, livePartials: {{ backend.live_partials|tojson }}, unavailableReason: {{ backend.unavailable_reason|tojson }}},
-      {% endfor %}
-    ];
-    const VOICE_DEFAULT_BACKEND = {{ (voice_default_backend() if voice_default_backend is defined else none)|tojson }};
+    const BACKEND_COMPACT = {{ backend_compact|tojson }};
+    const DEFAULT_BACKEND_ID = {{ default_backend_id|tojson }};
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
-    const PREVIEW_MODE = {{ (preview_mode() if preview_mode is defined else false)|tojson }};
-    globalThis.__CHARLIEBOT_PREVIEW__ = PREVIEW_MODE;
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
-  {# Shared chrome literals: form_label_class for the scheduled-task modal
-     labels below, close_btn_class for the close_button calls below,
-     cron_field_class for the scheduled-task modal input/select fields below.
-     Each literal stays a complete token run:
-     Tailwind extracts class candidates from source text, never split across
-     template syntax. #}
-  {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
+  {# Shared chrome literal: close_btn_class for the close_button calls below
+     and in the package parts. It stays a complete token run: Tailwind
+     extracts class candidates from source text, never split across template
+     syntax. #}
   {% set close_btn_class = 'text-slate-500 hover:text-slate-300 p-1' %}
-  {% set cron_field_class = 'w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200' %}
   {% from 'partials/close_button.html' import close_button %}
   <!-- Auth overlay (shown when access key is required but not yet provided) -->
   <div id="auth-overlay" class="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center" style="display:none">
@@ -87,9 +67,6 @@
       <!-- Logo -->
       <div class="p-4 border-b border-slate-700">
         <h1 class="text-lg font-bold text-blue-400">CharlieBot{% if version %} <span class="text-xs text-slate-500 font-normal hidden sm:inline">{{ version }}</span>{% endif %}</h1>
-        {% if preview_mode is defined and preview_mode() %}
-        <p id="preview-indicator" class="mt-1 text-xs font-medium text-amber-300">Preview — isolated trial instance</p>
-        {% endif %}
       </div>
 
       <!-- New session -->
@@ -194,7 +171,7 @@
         <button id="compact-btn"
                 onclick="compactContext()"
                 class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-                {% if active_backend_type != 'cc-claude' %}disabled{% endif %}>Compact</button>
+                {% set compact = backend_compact.get(active_backend_type) %}{% if not (compact and compact.manual) %}disabled{% endif %}>Compact</button>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,27 +180,14 @@
           </svg>
         </a>
         <div id="tab-buttons" class="flex gap-1">
-          {% if preview_mode is not defined or not preview_mode() %}
-          <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
-          {% endif %}
-          <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
-          <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
-          <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
+          {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
         </div>
       </header>
+      {% for part in page_parts('below_header') %}{% include part %}{% endfor %}
 
-      <div class="relative">
-      <div id='ext-usage-strip' class='hidden flex flex-col gap-1.5 px-4 py-1.5 bg-slate-800/80 border-b border-slate-700/50 text-xs text-slate-400'>
-      </div>
-        <button id="ext-usage-toggle"
-                class="hidden absolute z-10 p-2 rounded-full bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 hover:text-white shadow-lg transition-all"
-                title="Hide quota details">▾</button>
-      </div>
-
-      <!-- Tab content wrapper (terminal + chat + worker leaf + side panels) -->
+      <!-- Tab content wrapper (chat + worker leaf + package tab panels) -->
       <div class="flex-1 flex min-h-0">
-        <div id="tab-terminal" class="hidden flex-1 min-h-0 min-w-0 bg-black"></div>
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
         <!-- Messages -->
@@ -262,6 +226,9 @@
         <div id="input-area" class="border-t border-slate-700 p-4 {% if active_session.profile == 'worker' %}hidden{% endif %}">
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
+          <!-- Composer note line: a package writes where the inserted text came
+               from through Chat.setInputNote; the input mode's clears hide it. -->
+          <div id="input-note" class="hidden text-xs text-amber-400 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
           <div class="flex gap-2 items-end input-row">
             <span
@@ -285,14 +252,7 @@
               <button class="overflow-toggle p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="More options" onclick="document.getElementById('overflow-menu').classList.toggle('show')">
                 <svg class="w-5 h-5 text-slate-400" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
               </button>
-              <div class="relative flex items-center">
-                <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
-                  <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
-                </button>
-                <button id="voice-backend-btn" onclick="toggleVoiceBackendMenu()" class="-ml-1 p-1.5 rounded-lg bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Voice backend">
-                  <svg class="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                </button>
-              </div>
+              {% for part in page_parts('input_buttons') %}{% include part %}{% endfor %}
               <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send (Ctrl+Enter)">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
               </button>
@@ -300,80 +260,7 @@
           </div>
         </div>
       </div>
-
-
-      <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
-
-      <!-- ===== LATEX PANEL ===== -->
-
-      <div id="latex-panel" class="hidden latex-panel flex flex-col" style="width: 60%">
-        <!-- Panel header -->
-        <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-700 bg-slate-800/50">
-          <div class="flex gap-1 bg-slate-800 rounded-lg p-0.5">
-            <button onclick="switchLatexView('pdf')" id="btn-latex-pdf" class="px-3 py-1 text-xs rounded-md font-medium transition-colors latex-toggle-active">PDF</button>
-            <button onclick="switchLatexView('tex')" id="btn-latex-tex" class="px-3 py-1 text-xs rounded-md font-medium transition-colors text-slate-400 hover:text-slate-200">TeX</button>
-          </div>
-          <button onclick="compileLatex()" id="btn-compile" class="px-3 py-1.5 text-xs rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Compile</button>
-          <span id="compile-status" class="text-xs text-slate-500"></span>
-          <span id="latex-git-info" class="text-xs text-slate-400 font-mono" title=""></span>
-          <div class="flex-1"></div>
-          {{ close_button('toggleLatexPanel()', 'Close panel', close_btn_class) }}
-        </div>
-        <!-- PDF view -->
-        <div id="latex-pdf-view" class="flex-1 min-h-0">
-          <div id="latex-pdf-canvas-container" class="w-full h-full overflow-auto bg-slate-900 flex flex-col items-center gap-2 p-2"></div>
-        </div>
-        <!-- TeX source view -->
-        <div id="latex-tex-view" class="flex-1 min-h-0 hidden overflow-auto">
-          <textarea id="latex-editor" class="w-full h-full bg-slate-900 text-slate-200 font-mono text-sm p-4 resize-none focus:outline-none" spellcheck="false"></textarea>
-        </div>
-      </div>
-      <div id="backlog-resize-handle" class="resize-handle" style="display:none"></div>
-
-      <!-- ===== BACKLOG PANEL ===== -->
-      <div id="backlog-panel" class="hidden flex flex-col bg-gray-900 border-l border-gray-700 overflow-hidden" style="width: 40%">
-        <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800">
-          <select id="backlog-repo-selector" onchange="backlogPanel.switchRepo(this.value)"
-                  class="text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
-          <div class="flex gap-2 items-center">
-            <button onclick="backlogPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
-            <select id="backlog-module-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
-              <option value="all">All modules</option>
-            </select>
-            <select id="backlog-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
-              <option value="pending">Active</option>
-              <option value="all">All</option>
-              <option value="done">Done</option>
-              <option value="rejected">Rejected</option>
-              <option value="failed">Failed</option>
-            </select>
-          </div>
-        </div>
-        <div id="backlog-list" class="flex-1 overflow-y-auto p-3 space-y-3"></div>
-      </div>
-      <!-- ===== PLANS TAB (full-area, workers-pattern) ===== -->
-      <div id="tab-plans" class="flex-1 flex flex-col min-h-0 min-w-0 bg-gray-900 overflow-hidden hidden">
-        <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-700 bg-gray-800">
-          <select id="plan-selector" onchange="planPanel.selectPlan(this.value)"
-                  class="flex-1 min-w-0 text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
-          <select id="plan-version-selector" onchange="planPanel.selectVersion(this.value)"
-                  class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
-          <label id="plan-diff-toggle-wrap" class="hidden text-xs text-gray-400 cursor-pointer select-none whitespace-nowrap">
-            <input id="plan-diff-toggle" type="checkbox" onchange="planPanel.setDiffEnabled(this.checked)" class="accent-blue-500">
-            Compare with previous
-          </label>
-          <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Refresh</button>
-          <button onclick="planPanel.openCurrentInTab()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Open in tab</button>
-        </div>
-        <div id="plan-stale-notice" class="hidden px-4 py-1.5 text-xs text-yellow-400 bg-yellow-900/20 border-b border-yellow-700/40">
-          Viewing an older version — the latest version may differ.
-        </div>
-        <div id="plan-empty-state" class="flex-1 flex items-center justify-center text-sm text-gray-500">
-          No plans registered for this session.
-        </div>
-        <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
-        <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>
-      </div>
+      {% for part in page_parts('tab_panels') %}{% include part %}{% endfor %}
       </div><!-- end tab content wrapper -->
 
       {% else %}
@@ -433,95 +320,33 @@
   <script src="/static/js/config.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/page-timers.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/tabs.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/namespace.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/sidebar/namespace.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/shared.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/ratings-explain.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/tabs.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat/ratings.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/attachments.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/artifacts.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat/file-links.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/scroll.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/rendering.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/turn-engine.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/chat/input.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/triggers-tray.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_b64.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_clipboard.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_mount.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/terminal_panel.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/namespace.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/row-menu.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/status.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/filters.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/groups.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/archived.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/sidebar/filters.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/latex-panel.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/backlog-panel.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/plan-panel.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/ext_usage.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/sidebar/session-actions.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/sidebar/session-menus.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat/input.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/websocket-handlers.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
-
-  <div id="cron-modal" class="diff-modal-overlay hidden">
-    <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
-      <div class="diff-modal-header">
-        <span class="text-sm font-semibold text-slate-200" id="cron-modal-title">Edit Scheduled Task</span>
-        {{ close_button('closeCronModal()', '', close_btn_class) }}
-      </div>
-      <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
-        <form class="flex flex-col gap-3 h-full">
-          <div id="cron-error-box" class="hidden whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
-          <div>
-            <label class="{{ form_label_class }}">Name</label>
-            <input id="cron-name" type="text" class="{{ cron_field_class }}" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Cron Expression</label>
-            <input id="cron-expr" type="text" class="{{ cron_field_class }} font-mono" placeholder="0 2 * * *" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Prompt file (path to the file owning the prompt body)</label>
-            <input id="cron-prompt-file" type="text" class="{{ cron_field_class }} font-mono" placeholder="prompts/example.md" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Repo (optional)</label>
-            <input id="cron-repo" type="text" class="{{ cron_field_class }}" placeholder="~/workspace/my-repo" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Backend</label>
-            <select id="cron-backend" class="{{ cron_field_class }}">
-              <option value="">Inherit / default</option>
-              {% for opt in backend_options %}
-              <option value="{{ opt.id }}">{{ opt.label }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Project (optional)</label>
-            <input id="cron-project" type="text" class="{{ cron_field_class }}" placeholder="e.g. alpha-lab" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Timezone</label>
-            <input id="cron-timezone" type="text" class="{{ cron_field_class }}" value="America/Los_Angeles" />
-          </div>
-          <div class="flex items-center gap-2">
-            <input id="cron-enabled" type="checkbox" checked class="rounded bg-slate-800 border-slate-600" />
-            <label for="cron-enabled" class="text-xs text-slate-400">Enabled</label>
-          </div>
-        </form>
-      </div>
-      <div class="diff-modal-footer">
-        <button onclick="deleteCronTask()" id="cron-delete-btn" class="px-4 py-1.5 text-sm rounded-lg bg-red-800 hover:bg-red-700 text-slate-200 font-medium hidden">Delete</button>
-        <div class="flex-1"></div>
-        <button onclick="closeCronModal()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 text-slate-200 font-medium">Cancel</button>
-        <button onclick="saveCronTask()" id="cron-save-btn" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
-      </div>
-    </div>
-  </div>
+  {% for part in page_parts('scripts') %}{% include part %}{% endfor %}
 
   <div id="text-modal-overlay" class="diff-modal-overlay" style="display:none" onclick="closeTextModal()">
     <div class="diff-modal" style="max-width:700px" onclick="event.stopPropagation()">
@@ -535,18 +360,6 @@
     </div>
   </div>
 
-  <div id="diff-modal" class="diff-modal-overlay hidden">
-    <div class="diff-modal">
-      <div class="diff-modal-header">
-        <span class="text-sm font-semibold text-slate-200">AI proposed changes to TeX source</span>
-        {{ close_button('rejectTexEdit()', 'Close', close_btn_class) }}
-      </div>
-      <div class="diff-modal-body" id="diff-modal-body"></div>
-      <div class="diff-modal-footer">
-        <button onclick="rejectTexEdit()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 font-medium transition-colors">Reject</button>
-        <button onclick="acceptTexEdit()" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Accept</button>
-      </div>
-    </div>
-  </div>
+  {% for part in page_parts('modals') %}{% include part %}{% endfor %}
 </body>
 </html>

@@ -34,8 +34,9 @@ closes it.
 Thread follow: after the first summon, eligible thread messages (human, allowed,
 newer than the session's ``slack_watermark_ts``) arriving over the same Socket
 Mode connection — or found by the reconnect backfill on every (re)connection —
-arm one persisted per-session trigger whose wake label names the chain's floor
-ts and the thread link. The reply path is gated on freshness:
+arm one persisted per-session trigger whose wake label is the one line
+``slack-thread-follow floor=<ts>`` (the chain's floor ts). The reply path is
+gated on freshness:
 ``assert_thread_fresh`` refuses with 412 until every eligible message is acked
 (``ack_messages`` advances the watermark); silence stays a legal round outcome
 because trigger wakes enter the log as scheduled-trigger events with no slack
@@ -54,8 +55,6 @@ from src.features.chat_threads.thread_entry import (
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
-    follow_wake_label,
-    summon_prompt_tail,
 )
 from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
@@ -114,7 +113,7 @@ SLACK = ThreadPlatform(
     id_label="ts",
     mention_key="mention_ts",
     block_keys=("channel_id", "thread_ts", "mention_ts"),
-    thread_fallback="(channel {channel_id}, thread {thread_ts})",
+    summon_line="Slack 线程召唤",
 )
 
 
@@ -124,7 +123,7 @@ def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
 
 
 class SlackClient:
-  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / get_thread_replies /
+  """Thin Slack Web API wrapper: open_connection / post_message / get_thread_replies /
   add_reaction / remove_reaction / get_channel_name."""
 
   def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
@@ -178,18 +177,6 @@ class SlackClient:
       raise RuntimeError(f"reactions.remove failed: {payload}")
     return payload
 
-  async def get_permalink(self, channel: str, ts: str) -> str:
-    """GET chat.getPermalink for one message; return its permalink url."""
-    resp = await self._http.get(
-        "https://slack.com/api/chat.getPermalink",
-        headers=self._bot_headers,
-        params={
-            "channel": channel,
-            "message_ts": ts
-        },
-    )
-    return self._checked_payload(resp, "chat.getPermalink")["permalink"]
-
   async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
     """GET conversations.replies for one thread; return its messages in order."""
     resp = await self._http.get(
@@ -231,22 +218,27 @@ class SlackClient:
     return name
 
 
-def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
-  """The persisted summon: the thread link plus a self-fetch hint, ending at the fixed notices.
+def thread_contract_part(origin: SlackOrigin) -> str:
+  """The Slack part of the thread reply contract: the platform line, this thread's address, and the read/ack rules.
 
-  Only the permalink is stored because the master reads the thread itself via
-  its slack skill when the round runs — a snapshot persisted here would go
-  stale as the thread keeps changing after the mention.
-
-  The tail after the platform line (the platform's scope doc, the PII red
-  line, the reply-format contract) is the shared one from thread_entry, read
-  fresh from prompts/ on every call — no caching, so an edit takes effect on
-  the next summon.
+  The thread session's managed instructions carry this part once, joined with
+  the three rule docs by ``thread_entry.thread_reply_contract`` — so the
+  summon input stays the one line ``SLACK.summon_line`` and a rule edit takes
+  effect on the next round. The platform line and the read and ack sentences
+  move here from the old summon prompt and follow wake, with the session's
+  thread address (the ``slack_origin`` ids) in place of the summon link —
+  the master reads the thread itself via its slack skill when the round runs.
+  The summon rule sentence is new: the newest bot mention in the thread is
+  the summon this round answers.
   """
   return (
-      f"Slack 线程召唤：{permalink}\n\n"
-      "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-      f"{summon_prompt_tail(SLACK, _PLATFORM_LINE, cfg)}")
+      f"{_PLATFORM_LINE}\n"
+      f"本线程：channel `{origin.channel_id}`、thread_ts `{origin.thread_ts}`；"
+      "用 slack 技能读线程（conversations.replies，channel 与 thread_ts 取上面的值）。"
+      "本次召唤是线程里最新一条 @ 机器人的消息。\n"
+      f"跟帖唤醒（`{_FOLLOW_TRIGGER_PREFIX} floor=<ts>`）：用 slack 技能从 floor 标注的消息读起"
+      "（conversations.replies）；"
+      "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack。")
 
 
 async def handle_app_mention(
@@ -274,9 +266,9 @@ async def handle_app_mention(
   caller passes no trigger manager, an in-process one is constructed, so
   existing four-argument call sites exercise the identical path.
 
-  The permalink and the summon block are resolved here — the session lookup in
-  the shared accept path reads neither — and the summon prompt is built from
-  the permalink before the shared path persists it. The session resolution
+  The summon block is resolved here — the session lookup in the shared accept
+  path reads none of it — and the summon is persisted as the one line
+  ``SLACK.summon_line``. The session resolution
   (create with the ``slack_origin``, unarchive, or reuse), the watermark step,
   the group assignment, the summon persistence, and the round and ack tasks
   are the shared core's (``thread_entry.accept_summon``).
@@ -296,7 +288,6 @@ async def handle_app_mention(
   name = await client.get_channel_name(channel_id)
   label = f"Slack #{name or channel_id}"
 
-  permalink = await client.get_permalink(channel_id, event["ts"])
   block = {
       "channel_id": channel_id,
       "thread_ts": thread_ts,
@@ -314,7 +305,7 @@ async def handle_app_mention(
       label=label,
       origin=SlackOrigin(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts),
       block=block,
-      content=_build_summon_prompt(permalink, cfg),
+      content=SLACK.summon_line,
       user=slack_user,
   )
 
@@ -334,17 +325,6 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
   event.
   """
   return (message.get("subtype") is None and message.get("bot_id") is None and message.get("user") in allowed_user_ids)
-
-
-def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
-  """The Slack follow-wake label: the shared frame with Slack's read and ack rules.
-
-  The skill read does not advance the watermark by itself, so the label also
-  carries the ack rule: the round acks what it read even when it stays silent.
-  """
-  return follow_wake_label(
-      SLACK, floor_ts, permalink, "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；",
-      "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；")
 
 
 async def handle_thread_message(
@@ -473,12 +453,6 @@ class SlackThreadAdapter(ThreadAdapter):
 
   def log_fields(self, address: dict) -> dict:
     return {"channel": address["channel_id"], "thread_ts": address["thread_ts"]}
-
-  async def thread_link(self, origin: SlackOrigin) -> str:
-    return await self._client.get_permalink(origin.channel_id, origin.thread_ts)
-
-  def follow_wake_message(self, floor: str, link: str) -> str:
-    return _build_follow_wake_message(floor, link)
 
 
 # ---------------------------------------------------------------------------

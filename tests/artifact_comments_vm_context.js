@@ -7,10 +7,10 @@
 
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 const { makeElement } = require('./artifact_comments_dom_stub');
 
-const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
+const ARTIFACT_COMMENTS_JS = readPackageStatic('features', 'artifacts', 'artifact-comments.js');
 const COMMENT_POST_JS = readStatic('comment_post.js');
 
 function loadArtifactCommentsContext(opts = {}) {

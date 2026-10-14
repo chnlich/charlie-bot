@@ -119,8 +119,8 @@ function paint(context, draft) {
 // seam it reads loaded in page order: namespace, then shared
 // (thinkingToggleHtml, shouldAutoScroll), then scroll (restoreBottomPin).
 // opts.document supplies the streaming-msg / streaming-content / messages
-// elements the paint looks up; the caller installs an engine under
-// Chat.TurnEngine.activeFor to drive the follow decision.
+// elements the paint looks up; the caller installs an engine as
+// Chat.activeTurnEngineFor's answer to drive the follow decision.
 async function loadStreamPaintContext(opts) {
   const o = opts || {};
   const markedSrc = await loadMarkedSrc();

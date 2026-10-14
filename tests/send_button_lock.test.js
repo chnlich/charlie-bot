@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Send-button lock: #send-btn's disabled state has one writer — the in-flight
-// count lock (file-upload.js refreshSendLock) driven by attachment uploads plus
-// voice transcription windows. Thinking state never writes the button, so a
+// lock (file-upload.js refreshSendLock) driven by attachment uploads plus the
+// input-work window voice opens for each transcription. Thinking state never
+// writes the button, so a
 // master run leaves it sendable; each optimistic send's server echo is skipped
 // exactly once via the pendingUserEchoes count. Driven through the real chat,
 // sidebar, websocket, file-upload and voice-input modules on the
@@ -12,7 +13,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, sidebarModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules} = require('./read_static');
 const {createElement, createClassList} = require('./dom_element_stub');
 const {
   baseSessionContext,
@@ -23,7 +24,8 @@ const {
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
-const VOICE_INPUT_JS = readStatic('voice-input.js');
+const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
+const VOICE_INPUT_JS = readPackageStatic('features', 'voice', 'voice-input.js');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const flush = async () => { await tick(); await tick(); };
@@ -117,6 +119,7 @@ function buildLockHarness() {
   // at call time, so the load order only mirrors the page's dependency.
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   vm.runInContext(VOICE_INPUT_JS, context, {filename: 'voice-input.js'});
   // The voice slot and the echo count are the modules' top-level lets: their
   // lexical bindings shadow any context property, so tests claim and read them

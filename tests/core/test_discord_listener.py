@@ -195,8 +195,8 @@ async def test_text_channel_summon_starts_thread_and_session(
   assert client.reactions[(_PARENT, _MENTION)] == {"👀"}
 
   # The summon is persisted under the platform key with the block, and its
-  # content carries the mention-message link plus the reply command the
-  # round-end audit gates on.
+  # content is the one fixed line: the rules ride the session's managed
+  # instructions (the thread reply contract), not the input.
   events = session_blocks.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   assert len(agent_messages) == 1
@@ -206,50 +206,24 @@ async def test_text_channel_summon_starts_thread_and_session(
       "thread_id": _THREAD,
       "mention_id": _MENTION,
   }
-  link = f"https://discord.com/channels/{_GUILD}/{_PARENT}/{_MENTION}"
-  assert agent_messages[0]["content"].startswith(f"Discord 线程召唤：{link}\n\n")
-  assert f"Reply command: `{discord_listener._REPLY_COMMAND} --file <path>`" in agent_messages[0]["content"]
+  assert agent_messages[0]["content"] == discord_listener.DISCORD.summon_line
+  assert agent_messages[0]["content"] == "Discord 线程召唤"
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
-  assert link in trigger.await_args.args[1]
+  assert trigger.await_args.args[1] == discord_listener.DISCORD.summon_line
 
 
-@pytest.mark.asyncio
-async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_citation_boundary(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The tail's scope slot holds the Discord scope doc verbatim; the Slack scope's citation boundary is not appended."""
-  cfg, session_blocks, trigger_mgr, client = _summon_rig(
-      tmp_path, monkeypatch, channels={_PARENT: {
-          "id": _PARENT,
-          "type": 0,
-          "name": "general"
-      }})
-  tasks: list[asyncio.Task] = []
-
-  with conftest.mention_seam(tasks):
-    sid = await discord_listener.handle_message_create(
-        _message(), cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
-    await _drain(tasks)
-
-  events = session_blocks.events.load_chat_events_sync(sid)
-  content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
-  scope = (conftest.ROOT / "prompts" / "discord_reply_scope.md").read_text(encoding="utf-8").strip()
-  red_line = (conftest.ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
-  reply_format = (conftest.ROOT / "prompts" / "thread_reply_format.md").read_text(encoding="utf-8").strip()
-  assert content.endswith(f"{scope}\n{red_line}\n{reply_format}")
-  # The citation boundary lives only in the Slack scope doc; the Discord prompt
-  # carries just its own three docs and must not inherit it.
-  assert "已成文的私有内容不引用" not in content
-
-
-def test_follow_wake_names_the_discord_scope_doc_and_the_shared_docs() -> None:
-  """The wake orders the scope doc, the red line, and the reply format re-read before any reply."""
-  msg = discord_listener._build_follow_wake_message(
-      "1000000000000000100", f"https://discord.com/channels/{_GUILD}/{_PARENT}")
-  assert "prompts/discord_reply_scope.md" in msg
-  assert "prompts/thread_reply_redline.md" in msg
-  assert "prompts/thread_reply_format.md" in msg
+def test_contract_part_names_the_read_command_and_the_summon_mark() -> None:
+  """The Discord contract part states the server-side read and flags the pending summon."""
+  part = discord_listener.thread_contract_part()
+  assert f"Platform: Discord. Reply command: `{discord_listener._REPLY_COMMAND} --file <path>`" in part
+  assert f"用 `{discord_listener._READ_COMMAND}` 读这条线程" in part
+  assert "`summon: true`" in part
+  assert f"`{discord_listener._FOLLOW_TRIGGER_PREFIX} floor=<id>`" in part
+  # Both read rules ride the part: the summon round's read and the wake's read.
+  assert "读这条线程" in part
+  assert "读线程里的新消息" in part
 
 
 @pytest.mark.asyncio
@@ -420,8 +394,9 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
     ]
     assert sid == meta.id
     assert len(armed) == 1
-    assert armed[0].message.startswith(f"discord-thread-follow floor={message_id}\n")
-    assert f"https://discord.com/channels/{_GUILD}/{_THREAD}" in armed[0].message
+    # The label is the one machine-read line; the rules ride the session's
+    # managed instructions.
+    assert armed[0].message == f"discord-thread-follow floor={message_id}"
     # The arm reads no thread content: the wake does that when it fires.
     assert not client.calls
   finally:

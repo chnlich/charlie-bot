@@ -75,13 +75,14 @@ An understanding page precedes the plan when the master must first align the rea
 - Facts before design: when the fix follows from why something happened, settle the
   root cause before drafting and state the case for it in one block between goal and
   deliverable, each claim carrying its evidence anchor.
-- Not registered in the plan registry, no verify worker, and the understanding confirmation does
-  not use take off. The user confirms by answering the numbered divergences in chat; unmentioned
+- The plan registry, the plan verify round, and take off start with the plan that follows.
+  The user confirms by answering the numbered divergences in chat; unmentioned
   items take their recommendation. Confirmation is ordinary feedback and introduces no new
   approval token. External system writes follow the master prompt's External System Writes rule.
 - Before sharing, the page passes the mechanical assertions with
   `--genre understanding`. Its cold read runs after sharing, with the originating request as the
-  trigger, per the Cold-Read Gate of the file-server skill.
+  trigger, per the Cold-Read Gate of the file-server skill. When the page states a root cause,
+  it passes the Source Check of the file-server skill before sharing.
 - The subsequent plan carries the confirmed understanding's file path as a header
   meta chip; section 1 states the goal in its own words.
 - The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in

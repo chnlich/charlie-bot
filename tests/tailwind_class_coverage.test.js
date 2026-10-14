@@ -23,7 +23,7 @@ const BUILD_ENV = Object.assign({}, process.env, {
 
 const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
-const { readStatic } = require('./read_static');
+const { readStatic, readPackageStatic } = require('./read_static');
 const { loadArtifactsScript } = require('./artifacts_context_stub');
 const { makeChatRenderContext } = require('./chat_rendering_context_stub');
 
@@ -33,6 +33,7 @@ function makeDocument(elements) {
     createElement(tag) { return new FakeElement(tag); },
     querySelector() { return null; },
     querySelectorAll() { return []; },
+    addEventListener() {},
   };
 }
 
@@ -47,9 +48,12 @@ function loadChatContext(elements) {
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });
   context.Chat.renderRoundRatingButtons = () => '<button class="round-rating-btn text-slate-500 hover:text-green-400"></button>';
-  context.Chat.renderExplainButton = () => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>';
-  context.Chat.embedLinkedHtmlArtifacts = () => {};
+  context.Chat.markFileLinks = () => {};
+  // The voice package registers the badge a dictated message's bubble carries.
+  context.Chat.registerInputMode('voice', '&#127908; Voice');
   vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
+  // The explain package's separator button.
+  context.Chat.registerSeparatorButton(() => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>');
   return context;
 }
 
@@ -59,13 +63,14 @@ function loadBacklogContext(elements, fetchImpl) {
     console: { error: () => {} },
     fetch: fetchImpl,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
+    registerTab: () => {},
   };
   vm.createContext(context);
   // backlog-panel.js declares `const backlogPanel = (() => {...})();` at top
   // level -- a `const` binding is not a property of the vm context object, so
   // bridge it onto the context in the same script (same lexical scope).
   vm.runInContext(
-      readStatic('backlog-panel.js') + '\nglobalThis.backlogPanel = backlogPanel;',
+      readPackageStatic('features', 'backlog', 'backlog-panel.js') + '\nglobalThis.backlogPanel = backlogPanel;',
       context,
       { filename: 'backlog-panel.js' });
   return context;

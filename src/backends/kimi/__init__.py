@@ -18,6 +18,8 @@ def register() -> None:
           preassigned_session_id=False,
           reads_context_window=False,
           family_prefix=None,
+          manual_compact=False,
+          compact_hint=None,
       ),
       lifecycle="src.backends.claude_code.claude_lifecycle:ClaudeCliLifecycle",
   )

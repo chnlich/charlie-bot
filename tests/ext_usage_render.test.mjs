@@ -159,13 +159,14 @@ function loadExtUsageScript(options = {}) {
       return 0;
     },
     clearInterval() {},
+    registerWsMessageHandler() {},
   };
   context.window = context;
   if (options.platform !== undefined) {
     context.platform = options.platform;
   }
 
-  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/js/ext_usage.js');
+  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/features/usage/static/ext_usage.js');
   const scriptSource = fs.readFileSync(scriptPath, 'utf8');
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
@@ -216,6 +217,7 @@ function _iso(offsetMs) {
 function _claudePayload(overrides = {}) {
   return {
     provider: 'claude',
+    provider_label: 'Claude',
     account: 'main',
     windows: [
       { window_minutes: 300, utilization: 42.0, resets_at: _iso(2 * HOUR) },
@@ -229,10 +231,12 @@ function _claudePayload(overrides = {}) {
 function _codexPayload(overrides = {}) {
   return {
     provider: 'codex',
+    provider_label: 'Codex',
     account: 'main',
     windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY) }],
     fetched_at: _iso(-1 * MINUTE),
     token_count_observed_at: _iso(-2 * MINUTE),
+    spend: null,
     ...overrides,
   };
 }
@@ -243,7 +247,7 @@ test('renderExtUsage shows business/unlimited Codex state with no quota bars', (
   context.renderExtUsage({
     providers: {
       'claude:main': _claudePayload(),
-      'codex:main': _codexPayload({ windows: [], rate_limits_state: 'business-unlimited' }),
+      'codex:main': _codexPayload({ windows: [], state_label: 'business / unlimited' }),
     },
   });
 
@@ -318,7 +322,7 @@ test('renderExtUsage keeps the unlimited badge and no-cap marker for unlimited c
       'codex:main': _codexPayload({
         windows: [],
         credits: { unlimited: true },
-        rate_limits_state: 'business-unlimited',
+        state_label: 'business / unlimited',
       }),
     },
   });
@@ -405,18 +409,19 @@ test('renderExtUsage shows unknown utilization as ? instead of 0%', () => {
   assert.ok(_field(row, '7d-bar').classList.contains('bg-slate-600'), 'unknown bar is grey, not green');
 });
 
-test('renderExtUsage marks a reading older than its window as expired', () => {
+// Sampled 9 days ago, the 7d window has certainly rolled over; the server's
+// annotation, not the browser's clock math, expires it.
+test('renderExtUsage expires a codex window only on the server annotation', () => {
   const { context, strip } = loadExtUsageScript();
-
-  context.renderExtUsage({
-    providers: {
-      'codex:main': _codexPayload({
-        // Sampled 9 days ago: the 7d window has certainly rolled over since.
-        token_count_observed_at: _iso(-9 * DAY),
-        windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY) }],
-      }),
-    },
+  const stalePayload = (extra) => _codexPayload({
+    token_count_observed_at: _iso(-9 * DAY),
+    windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY), ...extra }],
   });
+
+  context.renderExtUsage({ providers: { 'codex:main': stalePayload({}) } });
+  assert.equal(_field(_rowByKey(strip, 'codex:main'), '7d-pct').textContent, '96%');
+
+  context.renderExtUsage({ providers: { 'codex:main': stalePayload({ expired: true }) } });
 
   const row = _rowByKey(strip, 'codex:main');
   assert.equal(_field(row, '7d-pct').textContent, '\u2014');
@@ -432,6 +437,7 @@ test('renderExtUsage expires a claude window only on the server annotation', () 
 
   const stalePayload = (windows) => ({
     provider: 'claude',
+    provider_label: 'Claude',
     account: 'main',
     windows,
     // Stale enough to fail every codex rule: sampled 2d ago, reset passed 1h ago.
@@ -456,7 +462,7 @@ test('renderExtUsage expires a claude window only on the server annotation', () 
     'the expired reading drops out of the collapsed summary');
 });
 
-test('renderExtUsage shows reading age on Codex rows only', () => {
+test('renderExtUsage shows reading age and spend only on rows that carry them', () => {
   const { context, strip } = loadExtUsageScript();
 
   context.renderExtUsage({
@@ -468,9 +474,10 @@ test('renderExtUsage shows reading age on Codex rows only', () => {
 
   assert.equal(_field(_rowByKey(strip, 'codex:main'), 'as-of').textContent, 'as of 5d ago');
   assert.equal(_field(_rowByKey(strip, 'claude:main'), 'as-of'), null, 'live Claude query carries no age');
+  assert.equal(_field(_rowByKey(strip, 'claude:main'), 'spend-24h'), null, 'Claude payload carries no spend');
 });
 
-test('renderExtUsage formats Codex spend values and dashes when absent', () => {
+test('renderExtUsage formats Codex spend values and dashes a null reading', () => {
   const { context, strip } = loadExtUsageScript();
 
   context.renderExtUsage({
@@ -495,7 +502,7 @@ test('renderExtUsage clears the Codex business/unlimited state when caps return'
 
   context.renderExtUsage({
     providers: {
-      'codex:main': _codexPayload({ windows: [], rate_limits_state: 'business-unlimited' }),
+      'codex:main': _codexPayload({ windows: [], state_label: 'business / unlimited' }),
     },
   });
 
@@ -516,6 +523,7 @@ test('renderExtUsage renders error rows greyed with the error text', () => {
     providers: {
       'claude:invite-1': {
         provider: 'claude',
+        provider_label: 'Claude',
         account: 'invite-1',
         error: 'credentials not found',
       },
@@ -593,9 +601,9 @@ test('mobile CSS selectors for the strip match the attributes the renderer emits
   collect(strip);
   assert.ok(emitted.size > 0, 'renderer emitted data-field attributes');
 
-  const css = _readStylesCss();
+  const css = _readUsageCss();
   const selectors = [...css.matchAll(/#ext-usage-strip[^{}]*?\[([a-z-]+)([$^*]?=)"([^"]+)"\]/g)];
-  assert.ok(selectors.length > 0, 'styles.css scopes attribute selectors to #ext-usage-strip');
+  assert.ok(selectors.length > 0, 'usage.css scopes attribute selectors to #ext-usage-strip');
 
   for (const [whole, attr, op, value] of selectors) {
     assert.equal(attr, 'data-field',
@@ -620,7 +628,7 @@ test('renderExtUsage renders a not-yet-read account as loading, never as no-cap'
   context.renderExtUsage({
     providers: {
       'claude:main': _claudePayload(),
-      'codex:personal': { provider: 'codex', account: 'personal', pending: true },
+      'codex:personal': { provider: 'codex', provider_label: 'Codex', account: 'personal', pending: true },
     },
   });
 
@@ -653,6 +661,7 @@ test('renderExtUsage binds each scoped reading to its own label and percent', ()
     providers: {
       'claude:main': {
         provider: 'claude',
+        provider_label: 'Claude',
         account: 'main',
         windows: [
           { window_minutes: 10080, utilization: 22.0, resets_at: _iso(3 * DAY) },
@@ -692,6 +701,7 @@ test('every data-field within a scoped row is unique', () => {
 function scopedClaudeFixture() {
   return {
     provider: 'claude',
+    provider_label: 'Claude',
     account: 'main',
     windows: [
       { window_minutes: 300, utilization: 42.0, resets_at: _iso(2 * HOUR) },
@@ -774,9 +784,9 @@ test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () =>
   };
   collect(strip);
 
-  const css = _readStylesCss();
+  const css = _readUsageCss();
   assert.ok(css.includes('[data-field^="7d-"]'),
-      'styles.css must still key the narrow-screen 7d group off the data-field prefix');
+      'usage.css must still key the narrow-screen 7d group off the data-field prefix');
 
   const scopedFields = [...emitted].filter((f) => f.startsWith('7d-') && f !== '7d-bar' && f !== '7d-pct' && f !== '7d-reset');
   assert.ok(scopedFields.length > 0,
@@ -789,15 +799,15 @@ test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () =>
 // here — the key name is the persistence contract and a silent rename must
 // fail these tests. In the fake DOM there is no CSS engine, so "visibility"
 // is asserted as the class contract the two collapse rules implement; the
-// rules' presence in styles.css is pinned separately.
+// rules' presence in usage.css is pinned separately.
 // ---------------------------------------------------------------------------
 const COLLAPSE_STORAGE_KEY = 'ext_usage_strip_collapsed_v1';
 const COLLAPSED_CSS_RULE = '#ext-usage-strip.collapsed [data-key]';
 const EXPANDED_CSS_RULE = '#ext-usage-strip:not(.collapsed) [data-field="summary"]';
 
-function _readStylesCss() {
+function _readUsageCss() {
   return fs.readFileSync(
-      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/css/styles.css'), 'utf8');
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/features/usage/static/usage.css'), 'utf8');
 }
 
 // The in-memory boolean, the stored preference, the strip class, row
@@ -838,9 +848,9 @@ function _assertCollapseConsistent(harness, expect, label) {
 
 test('collapse state stays internally consistent across render and toggle sequences', () => {
   // Pin the two CSS rules the class contract stands for.
-  const css = _readStylesCss();
-  assert.ok(css.includes(COLLAPSED_CSS_RULE), 'styles.css hides detail rows when collapsed');
-  assert.ok(css.includes(EXPANDED_CSS_RULE), 'styles.css hides the summary row when expanded');
+  const css = _readUsageCss();
+  assert.ok(css.includes(COLLAPSED_CSS_RULE), 'usage.css hides detail rows when collapsed');
+  assert.ok(css.includes(EXPANDED_CSS_RULE), 'usage.css hides the summary row when expanded');
 
   const harness = loadExtUsageScript({ platform: { isMobile: false } });
   const { context, strip } = harness;
@@ -848,12 +858,12 @@ test('collapse state stays internally consistent across render and toggle sequen
 
   const payloads = [
     ['scoped windows', { providers: { 'claude:main': scopedClaudeFixture(), 'codex:main': _codexPayload() } }],
-    ['error account', { providers: { 'claude:invite-1': { provider: 'claude', account: 'invite-1', error: 'credentials not found' } } }],
-    ['pending account', { providers: { 'codex:personal': { provider: 'codex', account: 'personal', pending: true } } }],
-    ['no-cap account', { providers: { 'codex:main': _codexPayload({ windows: [], rate_limits_state: 'business-unlimited' }) } }],
+    ['error account', { providers: { 'claude:invite-1': { provider: 'claude', provider_label: 'Claude', account: 'invite-1', error: 'credentials not found' } } }],
+    ['pending account', { providers: { 'codex:personal': { provider: 'codex', provider_label: 'Codex', account: 'personal', pending: true } } }],
+    ['no-cap account', { providers: { 'codex:main': _codexPayload({ windows: [], state_label: 'business / unlimited' }) } }],
     ['expired reading', { providers: { 'codex:main': _codexPayload({
       token_count_observed_at: _iso(-9 * DAY),
-      windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY) }],
+      windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY), expired: true }],
     }) } }],
     ['unknown utilization', { providers: { 'codex:main': _codexPayload({
       windows: [{ window_minutes: 10080, utilization: null, resets_at: _iso(2 * DAY) }],
@@ -951,13 +961,13 @@ test('summary worst reading is the max live utilization across all reported wind
       ],
     }),
     'codex:main': _codexPayload(),
-    // Sampled 2h ago: the window whose reset already passed while the sample
-    // predates it is expired; the live 12% must win over the expired 96%.
+    // Sampled 2h ago: the server marked the window whose reset already passed
+    // while the sample predates it; the live 12% must win over the expired 96%.
     'codex:rolled': _codexPayload({
       account: 'rolled',
       token_count_observed_at: _iso(-2 * HOUR),
       windows: [
-        { window_minutes: 10080, utilization: 96.0, resets_at: _iso(-1 * HOUR) },
+        { window_minutes: 10080, utilization: 96.0, resets_at: _iso(-1 * HOUR), expired: true },
         { window_minutes: 10080, utilization: 12.0, resets_at: _iso(2 * DAY) },
       ],
     }),
@@ -968,11 +978,11 @@ test('summary worst reading is the max live utilization across all reported wind
     'codex:expired': _codexPayload({
       account: 'expired',
       token_count_observed_at: _iso(-9 * DAY),
-      windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY) }],
+      windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY), expired: true }],
     }),
-    'codex:unlimited': _codexPayload({ account: 'unlimited', windows: [], rate_limits_state: 'business-unlimited' }),
-    'codex:loading': { provider: 'codex', account: 'loading', pending: true },
-    'claude:broken': { provider: 'claude', account: 'broken', error: 'credentials not found' },
+    'codex:unlimited': _codexPayload({ account: 'unlimited', windows: [], state_label: 'business / unlimited' }),
+    'codex:loading': { provider: 'codex', provider_label: 'Codex', account: 'loading', pending: true },
+    'claude:broken': { provider: 'claude', provider_label: 'Claude', account: 'broken', error: 'credentials not found' },
   };
   context.renderExtUsage({ providers: accounts });
 
@@ -1019,15 +1029,9 @@ test('summary worst reading is the max live utilization across all reported wind
     } else if (!Array.isArray(providerData.windows) || providerData.windows.length === 0) {
       wantText = 'no cap';
     } else {
-      const sampled = Date.parse(providerData.token_count_observed_at || providerData.fetched_at);
       const live = providerData.windows.filter((win) => {
         if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) return false;
-        if (providerData.provider === 'codex' && Number.isFinite(sampled)) {
-          const reset = Date.parse(win.resets_at);
-          if (Number.isFinite(reset) && reset <= Date.now() && sampled < reset) return false;
-          if (Number.isFinite(win.window_minutes) && Date.now() - sampled > win.window_minutes * 60000) return false;
-        }
-        return true;
+        return win.expired !== true;
       });
       if (live.length === 0) {
         wantText = '—';

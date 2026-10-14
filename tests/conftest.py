@@ -282,7 +282,6 @@ from src.runtime.api.deps import (  # noqa: E402
     get_session_listing,
     get_session_search,
     get_session_sidebar,
-    get_session_successor,
 )
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
@@ -1274,7 +1273,6 @@ def override_session_blocks(app: FastAPI, session_blocks: Any) -> None:
   app.dependency_overrides[get_session_lifecycle] = lambda: session_blocks.lifecycle
   app.dependency_overrides[get_session_fork] = lambda: session_blocks.fork
   app.dependency_overrides[get_session_anchors] = lambda: session_blocks.anchors
-  app.dependency_overrides[get_session_successor] = lambda: session_blocks.successor
 
 
 def make_router_client(
@@ -1647,11 +1645,11 @@ CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.runtime.cli.common._sessions_dir"
 # time, so mock setattrs the stand-in on the src.runtime.cli.common module attribute.
 CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.runtime.cli.common._maybe_version_skew_hint"
 
-# Import-path patch target for the CLI connect-retry budget. src/runtime/cli/common.py binds the name
-# at import scope (`from src.infra.timeouts import CLI_CONNECT_TOTAL_TIMEOUT`), so mock setattrs
-# the test budget on the src.runtime.cli.common module attribute and post_internal_api's retry loop
-# reads it as a module global at call time; the source value stays the timeouts module's own.
-CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.runtime.cli.common.CLI_CONNECT_TOTAL_TIMEOUT"
+# Import-path patch target for the CLI connect-retry budget. src/runtime/cli/common.py reads the
+# budget through the timeouts module at call time (`timeouts.CLI_CONNECT_TOTAL_TIMEOUT`), so mock
+# setattrs the test budget on the src.infra.timeouts module attribute and post_internal_api's retry
+# loop picks it up from there.
+CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.infra.timeouts.CLI_CONNECT_TOTAL_TIMEOUT"
 
 # Import-path patch target for the logged-task spawner the shared thread core
 # (src/features/chat_threads/thread_entry.py) fires: the round side's ack-clear and nudge tasks
@@ -1671,13 +1669,12 @@ THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.features.chat_threads.thread_ent
 SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot_client"
 DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
-# Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py binds
-# both names at import scope (`from src.infra.config import load_config`,
-# `from src.features.cron.loader import get_scheduled_tasks`), so monkeypatch.setattr lands the
-# stand-in on the src.features.cron.scheduler module attribute and
-# _maybe_run/_reload_config resolve it at call time.
-SCHEDULER_LOAD_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.load_config"
-SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.scheduler.get_scheduled_tasks"
+# Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py reads
+# both through their home modules at call time (`config.load_config`,
+# `loader.get_scheduled_tasks`), so monkeypatch.setattr lands the stand-in on the home module's
+# attribute and _maybe_run/_reload_config resolve it from there.
+SCHEDULER_LOAD_CONFIG_PATCH_TARGET = "src.infra.config.load_config"
+SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.loader.get_scheduled_tasks"
 
 
 @contextlib.contextmanager
@@ -2050,7 +2047,7 @@ class FakeSlackClient:
   assertions built on it fail on any call a path was not expected to make.
   ``reactions`` models the live per-message reaction set the ack-clear path
   reads back, ``thread`` is what the conversations.replies seam returns, and
-  permalinks and channel names are fabricated. Implements only what the
+  channel names are fabricated. Implements only what the
   listener paths may call: a regression to reading anything else fails here
   with an AttributeError by construction.
   """
@@ -2096,10 +2093,6 @@ class FakeSlackClient:
       return {"ok": False, "error": "no_reaction"}
     names.discard(name)
     return {"ok": True}
-
-  async def get_permalink(self, channel: str, ts: str) -> str:
-    self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
-    return f"https://fake.slack.test/archives/{channel}/p{ts}"
 
   async def get_channel_name(self, channel_id: str) -> str | None:
     self.calls.append(("get_channel_name", {"channel": channel_id}))

@@ -86,172 +86,11 @@ function initSidebarResize() {
       localStorage.setItem('sidebar-width', sidebar.offsetWidth);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      if (latexPanelOpen) {
-        loadLatexPdf(true);
-      } else if (typeof pdfNeedsReload !== 'undefined') {
-        pdfNeedsReload = true;
-      }
+      document.dispatchEvent(new CustomEvent('charliebot:sidebar-resized'));
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Cron task editor modal
-// ---------------------------------------------------------------------------
-let cronEditMode = null; // 'edit' or 'add'
-let cronOriginalName = null;
-// The node a create-mode editor binds: set by Add schedule / New scheduled
-// task, saved with the task, and cleared by any other open path. An edit-mode
-// save never sends it (the PUT body leaves the task's binding untouched).
-let cronAddSessionId = null;
-
-// Fields (besides the always-readonly name) that a broken task locks down: a
-// broken file's truth is the raw yaml on disk, never an edit form.
-const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone'];
-
-// Switch the modal between the broken read-only error view (task.broken) and
-// today's editable form. Broken: every field read-only, Enabled disabled and
-// rendering the file's raw value (indeterminate when the file was
-// unparseable), the full load error + path in the error box, Save hidden,
-// Delete kept. Normal/add: byte-identical behavior to the pre-broken form.
-function applyCronBrokenView(task) {
-  const isBroken = !!(task && task.broken);
-  CRON_EDITABLE_FIELD_IDS.forEach(id => { document.getElementById(id).readOnly = isBroken; });
-  document.getElementById('cron-backend').disabled = isBroken;
-  const enabledEl = document.getElementById('cron-enabled');
-  enabledEl.disabled = isBroken;
-  enabledEl.indeterminate = isBroken && task.enabled === null;
-  if (isBroken) enabledEl.checked = task.enabled === true;
-  document.getElementById('cron-save-btn').classList.toggle('hidden', isBroken);
-  const errorBox = document.getElementById('cron-error-box');
-  if (isBroken) {
-    errorBox.textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
-    errorBox.classList.remove('hidden');
-  } else {
-    errorBox.textContent = '';
-    errorBox.classList.add('hidden');
-  }
-}
-
-async function openCronEditor(taskName) {
-  cronAddSessionId = null;
-  let task;
-  try {
-    const res = await fetch('/api/cron/tasks');
-    if (!res.ok) throw new Error(await res.text());
-    const tasks = await res.json();
-    task = tasks.find(t => t.name === taskName);
-  } catch (err) {
-    console.error('Failed to load cron tasks:', err);
-    alert('Failed to load task: ' + err);
-    return;
-  }
-  if (!task) {
-    alert('Task "' + taskName + '" not found');
-    return;
-  }
-  cronEditMode = 'edit';
-  cronOriginalName = taskName;
-  document.getElementById('cron-modal-title').textContent = 'Edit Scheduled Task';
-  document.getElementById('cron-name').value = task.name;
-  document.getElementById('cron-name').readOnly = true;
-  document.getElementById('cron-expr').value = task.cron || '';
-  document.getElementById('cron-prompt-file').value = task.prompt_file || '';
-  document.getElementById('cron-repo').value = task.repo || '';
-  document.getElementById('cron-backend').value = task.backend || '';
-  document.getElementById('cron-project').value = task.project || '';
-  document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
-  document.getElementById('cron-enabled').checked = task.enabled !== false;
-  applyCronBrokenView(task);
-  document.getElementById('cron-delete-btn').classList.remove('hidden');
-  document.getElementById('cron-modal').classList.remove('hidden');
-}
-
-function openCronAdder(options = {}) {
-  cronEditMode = 'add';
-  cronOriginalName = null;
-  cronAddSessionId = options.sessionId || null;
-  document.getElementById('cron-modal-title').textContent = 'New Scheduled Task';
-  document.getElementById('cron-name').value = '';
-  document.getElementById('cron-name').readOnly = false;
-  document.getElementById('cron-expr').value = '';
-  document.getElementById('cron-prompt-file').value = '';
-  document.getElementById('cron-repo').value = '';
-  document.getElementById('cron-backend').value = '';
-  document.getElementById('cron-project').value = options.project || '';
-  document.getElementById('cron-timezone').value = 'America/Los_Angeles';
-  document.getElementById('cron-enabled').checked = true;
-  applyCronBrokenView(null);
-  document.getElementById('cron-delete-btn').classList.add('hidden');
-  document.getElementById('cron-modal').classList.remove('hidden');
-}
-
-function closeCronModal() {
-  document.getElementById('cron-modal').classList.add('hidden');
-}
-
-// Cron-modal mutations share one failure surface: alert on transport error or
-// non-OK response and leave the modal open. A null return means the caller
-// stops before the close-and-refresh.
-async function cronModalRequest(promise) {
-  let res;
-  try {
-    res = await promise;
-  } catch (err) {
-    alert('Failed: ' + err);
-    return null;
-  }
-  if (!res.ok) {
-    alert('Failed: ' + await res.text());
-    return null;
-  }
-  return res;
-}
-
-async function saveCronTask() {
-  const name = document.getElementById('cron-name').value.trim();
-  const cron = document.getElementById('cron-expr').value.trim();
-  const prompt_file = document.getElementById('cron-prompt-file').value.trim() || null;
-  const repo = document.getElementById('cron-repo').value.trim() || null;
-  const backend = document.getElementById('cron-backend').value || null;
-  const project = document.getElementById('cron-project').value.trim() || null;
-  const timezone = document.getElementById('cron-timezone').value.trim();
-  const enabled = document.getElementById('cron-enabled').checked;
-
-  let promise;
-  if (cronEditMode === 'edit') {
-    promise = fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
-    });
-  } else {
-    promise = fetch('/api/cron/tasks', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      // A created task with a prefilled binding is born bound (its node
-      // exists); a null binding drops out of the body and the scheduler's
-      // auto-bind creates the node.
-      body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled, session_id: cronAddSessionId}),
-    });
-  }
-  if ((await cronModalRequest(promise)) === null) return;
-  closeCronModal();
-  // The saved schedule shows on its node row in the view the editor was
-  // opened from (the Scheduled view is gone).
-  switchSidebarFilter(currentFilter);
-}
-
-async function deleteCronTask() {
-  const name = cronOriginalName;
-  if (!confirm(`Delete task "${name}"?`)) return;
-  const promise = fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
-  if ((await cronModalRequest(promise)) === null) return;
-  closeCronModal();
-  // Deletion archives nothing: the node stays, its clock row goes.
-  switchSidebarFilter(currentFilter);
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +114,9 @@ function populateSessionActionBackendSelect(selectedBackendId) {
   }
 }
 
+// The backend-choice modal of a session action. Without onConfirm, the confirm
+// POSTs /api/sessions/<id>/<action> and opens the session it creates. A package
+// passes onConfirm(backend) for an action that stays on this session.
 function openSessionActionModal({
   action,
   sessionId,
@@ -283,13 +125,14 @@ function openSessionActionModal({
   bodyText,
   confirmLabel,
   failureLabel,
+  onConfirm = null,
 }) {
   const overlay = document.getElementById('session-action-modal-overlay');
   const titleEl = document.getElementById('session-action-modal-title');
   const bodyEl = document.getElementById('session-action-modal-body');
   const confirmEl = document.getElementById('session-action-modal-confirm');
 
-  sessionActionModalState = {action, sessionId, eventIndex, failureLabel};
+  sessionActionModalState = {action, sessionId, eventIndex, failureLabel, onConfirm};
   populateSessionActionBackendSelect(getActiveBackendId());
 
   if (titleEl) titleEl.textContent = title;
@@ -313,23 +156,16 @@ function closeSessionActionModal() {
 async function submitSessionActionModal() {
   if (!sessionActionModalState) return;
 
-  const {action, sessionId, eventIndex, failureLabel} = sessionActionModalState;
+  const {action, sessionId, eventIndex, failureLabel, onConfirm} = sessionActionModalState;
   const backendSelect = document.getElementById('session-action-backend');
   const backend = backendSelect ? backendSelect.value : getActiveBackendId();
 
   try {
-    if (action === 'explain') {
-      // Explain stays on this session: POST registers the async generation, the
-      // button goes pending, and the panel skeleton opens under the divider.
-      const res = await fetch('/api/sessions/' + sessionId + '/explain', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({event_index: eventIndex, backend}),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await res.json();
+    if (onConfirm) {
+      // A package's action stays on this session: its handler runs the request
+      // and its follow-up, and the modal closes after it.
+      await onConfirm(backend);
       closeSessionActionModal();
-      markExplainPending(sessionId, eventIndex, backend);
       return;
     }
     const res = await fetch('/api/sessions/' + sessionId + '/' + action, {
@@ -345,18 +181,6 @@ async function submitSessionActionModal() {
     console.error(failureLabel + ' failed:', err);
     alert(failureLabel + ' failed: ' + err.message);
   }
-}
-
-function explainSession(sessionId, eventIndex) {
-  openSessionActionModal({
-    action: 'explain',
-    sessionId,
-    eventIndex,
-    title: 'Explain This Round',
-    bodyText: 'Choose the model that explains this round. The explanation is kept with the session; nothing is written to the chat history.',
-    confirmLabel: 'Explain',
-    failureLabel: 'Explain',
-  });
 }
 
 function forkSession(sessionId, eventIndex = null) {
@@ -385,6 +209,20 @@ function eloneSession(sessionId, eventIndex) {
     failureLabel: 'Elon-e',
   });
 }
+
+// The separator line's Clone to here and Elon-e buttons. modals.js is the one
+// core file that registers separator buttons, and core loads before every
+// package, so these two lead the line.
+Chat.registerSeparatorButton(function(sessionId, eventIndex) {
+  return "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + eventIndex + ")\""
+    + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
+    + Chat.CLONE_SVG
+    + "</button>"
+    + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + eventIndex + ")\""
+    + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
+    + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
+    + "</button>";
+});
 
 
 // ---------------------------------------------------------------------------
@@ -547,26 +385,22 @@ function closeTaskContextModal() {
   taskContextModalSession = null;
 }
 
+// The session row's double-click (groups.js).
+registerSidebarControl('startRename', startRename);
 
 const GLOBALS = {
   startRename,
   handleRenameKey,
   commitRename,
   initSidebarResize,
-  openCronEditor,
-  openCronAdder,
-  closeCronModal,
-  saveCronTask,
-  deleteCronTask,
+  openSessionActionModal,
   closeSessionActionModal,
   submitSessionActionModal,
   forkSession,
   eloneSession,
   openTaskContextModal,
   closeTaskContextModal,
-  explainSession,
 };
-const SIDEBAR_ONLY = { applyCronBrokenView };
-Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
+Sidebar.wire(GLOBALS);
 
 })();

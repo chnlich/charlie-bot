@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { readStatic } = require('./read_static');
+const { readPackageStatic } = require('./read_static');
 
 const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
@@ -10,7 +10,7 @@ const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
 const {mulberry32} = require('./mulberry32');
 
 // Source of the script under test, for the assertions that pin constants in it.
-const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
+const ARTIFACT_COMMENTS_JS = readPackageStatic('features', 'artifacts', 'artifact-comments.js');
 
 const SESSION_270_PLAN_PATH =
   '/absolute_filepath/data/home/user/.charliebot/sessions/session-270/artifacts/plan.html';

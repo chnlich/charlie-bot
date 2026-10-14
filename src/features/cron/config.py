@@ -8,9 +8,10 @@ from src.infra import config
 from src.runtime.hooks import scheduled_handlers
 
 # The API request model TaskCreate (src/features/cron/api.py) inherits this default through
-# ScheduledTaskFields; the web UI re-pins the value in literals (index.html and
-# fallbacks in sidebar/modals.js) that cannot import from Python — a change moves
-# every re-pinning site.
+# ScheduledTaskFields; the web UI re-pins the value in literals (the cron-timezone input's
+# value in src/features/cron/templates/cron/page_modals.html and the modal fallbacks in
+# src/features/cron/static/cron.js) that cannot import from Python — a change moves every
+# re-pinning site.
 DEFAULT_TIMEZONE = config.HOUSE_TIMEZONE
 
 

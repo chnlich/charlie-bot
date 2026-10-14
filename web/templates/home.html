@@ -33,6 +33,7 @@
   .badge-up { color:var(--up-fg); background:var(--up-bg); border-color:var(--up-bd) }
   .badge-down { color:var(--down-fg); background:var(--down-bg); border-color:var(--down-bd) }
   .foot { color:var(--mut2); font-size:12.5px; margin-top:26px; max-width:82ch; line-height:1.6 }
+  ul.foot { margin-top:6px; padding-left:1.4em }
   @media (max-width:760px) { body { padding:18px 14px 30px } }
 </style>
 </head>
@@ -70,9 +71,13 @@
   </div>
   {% endif %}
 
-  <p class="foot">Three viewers are <b>not</b> listed above because they each need an input first:
-  <b>Perfetto</b> needs a trace file, <b>Nsight Compute</b> needs a <code>.ncu-rep</code> report, and
-  <b>Session events</b> need a session. Open them from the file browser or from a chat session.</p>
+  <p class="foot">The viewers below are <b>not</b> listed above because each needs an input first.
+  Open them from the file browser or from a chat session.</p>
+  {# Each home_notes part is one <li>: a viewer that needs an input first, and the input it needs. #}
+  <ul class="foot">
+    <li><b>Session events</b> need a session.</li>
+    {% for part in page_parts('home_notes') %}{% include part %}{% endfor %}
+  </ul>
 </div>
 </body>
 </html>

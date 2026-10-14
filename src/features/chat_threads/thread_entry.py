@@ -82,15 +82,15 @@ class ThreadPlatform:
   display_name: str
   reply_event_type: str
   # The command the reply-format contract (prompts/thread_reply_format.md)
-  # names for posting a reply. A summon prompt embeds that contract, so a
-  # summon whose content names the command was issued under it; the
-  # round-end audit enforces only that contract and leaves rounds issued
-  # under the earlier one alone.
+  # names for posting a reply. The thread reply contract embeds that
+  # contract, and the round-end audit reads the command off a summon's
+  # content to recognize a summon issued under it (the older full-prompt
+  # format; the current one is ``summon_line``).
   reply_command: str
   max_post_chars: int
   # The platform's scope doc under prompts/ (what personal information may
-  # enter the platform's threads): read fresh into every summon prompt and
-  # named by every follow wake.
+  # enter the platform's threads): read fresh into the session's thread
+  # reply contract.
   scope_doc: str
   follow_trigger_prefix: str
   id_key: Callable[[str], Any]
@@ -107,8 +107,10 @@ class ThreadPlatform:
   mention_key: str
   # The summon-block keys a nudge copies from the summon it re-asks.
   block_keys: tuple[str, ...]
-  # Formatted with the summon block when a summon prompt carries no link.
-  thread_fallback: str
+  # The whole summon input: one fixed line naming the platform and the
+  # event (no link, no rules). The round-end audit reads it to recognize a
+  # summon issued under the current contract.
+  summon_line: str
 
   @property
   def notice_key(self) -> str:
@@ -145,10 +147,10 @@ class ThreadAdapter(abc.ABC):
 
   One subclass per entrypoint wraps the platform's client: posting into the
   thread, lighting and clearing the summon ack, reading the thread's eligible
-  messages, naming the thread (the ``address`` dict ``post`` accepts),
-  shaping the log fields that point at the thread, and naming the follow
-  wake. The platform description rides on the class, so every core helper
-  reads it off the adapter it was handed.
+  messages, naming the thread (the ``address`` dict ``post`` accepts), and
+  shaping the log fields that point at the thread. The platform description
+  rides on the class, so every core helper reads it off the adapter it was
+  handed.
   """
 
   platform: ThreadPlatform
@@ -176,14 +178,6 @@ class ThreadAdapter(abc.ABC):
   @abc.abstractmethod
   def log_fields(self, address: dict) -> dict:
     """The log fields naming the thread *address* points at."""
-
-  @abc.abstractmethod
-  async def thread_link(self, origin: Any) -> str:
-    """The permalink naming the thread *origin* points at: the link a wake label names."""
-
-  @abc.abstractmethod
-  def follow_wake_message(self, floor: str, link: str) -> str:
-    """The armed follow trigger's label: the chain *floor* id, the thread *link*, and the wake contract."""
 
 
 class ThreadReplyError(Exception):
@@ -214,20 +208,21 @@ def load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
     raise ValueError(f"{name} prompt not found at {path} — {likely_cause}") from e
 
 
-def summon_prompt_tail(platform: ThreadPlatform, platform_line: str, cfg: CharlieBotConfig) -> str:
-  """The summon prompt's fixed tail: the platform's scope doc, the PII red line, and the reply-format contract.
+def thread_reply_contract(platform: ThreadPlatform, platform_part: str, cfg: CharlieBotConfig) -> str:
+  """The thread reply contract: *platform_part* joined with the three rule docs.
 
-  All three docs (the platform's scope doc, prompts/thread_reply_redline.md,
+  A thread session's managed instructions carry this contract once, so the
+  summon input stays one line and a rule edit takes effect on the next round.
+  The three docs (the platform's scope doc, prompts/thread_reply_redline.md,
   prompts/thread_reply_format.md) are read fresh from prompts/ on every call —
-  no caching, so an edit takes effect on the next summon. A missing or
-  unreadable doc raises a ValueError naming the path; a prompt without all
-  three docs is never built. The reply-format contract defers the
-  platform-specific facts to *platform_line* — platform name, reply command,
-  per-message limit, and how linked pages reach readers (the shared
-  ``LINKED_PAGES_LINE``) — and each platform's entrypoint states its own line
-  and reuses the contract unchanged. The scope doc name rides in through
-  *platform*; the red line and the reply-format contract are shared unchanged
-  across platforms.
+  no caching. A missing or unreadable doc raises a ValueError naming the
+  path; a session without all three docs is never launched. *platform_part*
+  is the platform's own text — the platform line (reply command, per-message
+  limit, how linked pages reach readers) and how the round reads the thread
+  and finds the summon — and each platform's turn contribution states it and
+  reuses the join unchanged. The scope doc name rides in through *platform*;
+  the red line and the reply-format contract are shared unchanged across
+  platforms.
   """
   scope_doc = load_prompt_doc(
       cfg.charlie_bot_repo,
@@ -241,27 +236,19 @@ def summon_prompt_tail(platform: ThreadPlatform, platform_line: str, cfg: Charli
       cfg.charlie_bot_repo,
       "thread_reply_format.md",
       likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
-  return f"{platform_line}\n\n{scope_doc}\n{red_line}\n{reply_format}"
+  return f"{platform_part}\n\n{scope_doc}\n{red_line}\n{reply_format}"
 
 
-def follow_wake_label(platform: ThreadPlatform, floor: str, link: str, read_rule: str, ack_rule: str) -> str:
-  """The armed follow trigger's label: the chain *floor* id, the thread *link*, and the wake contract.
+def follow_wake_label(platform: ThreadPlatform, floor: str) -> str:
+  """The armed follow trigger's label: the platform prefix and the chain *floor* id.
 
-  ``floor=<id>`` on the first line is machine-readable: a re-arm parses it back
-  so the wake always reads from the chain's oldest unacked message, independent
-  of watermark state. *read_rule* and *ack_rule* are the platform's own
-  sentences — how the wake reads the thread, and how the round acks what it
-  read — and the frame around them is shared: the trigger prefix, the link
-  line, the docs the round re-reads before replying, and the reply command.
+  ``floor=<id>`` is machine-readable: a re-arm parses it back
+  (:func:`follow_floor`) so the wake always reads from the chain's oldest
+  unacked message, independent of watermark state. The label carries no link
+  and no rule text — the session's thread reply contract states how the round
+  reads the thread and replies.
   """
-  return (
-      f"{platform.follow_trigger_prefix} floor={floor}\n"
-      f"{platform.display_name} 线程跟帖唤醒：{link}\n"
-      f"{read_rule}"
-      f"回复之前从仓库重读 prompts/{platform.scope_doc}、prompts/thread_reply_redline.md 与 "
-      "prompts/thread_reply_format.md；"
-      f"{ack_rule}"
-      f"只在值得时用 `{platform.reply_command} --file <path>` 回复。")
+  return f"{platform.follow_trigger_prefix} floor={floor}"
 
 
 def chunk_text(text: str, limit: int) -> list[str]:
@@ -657,12 +644,13 @@ async def ack_messages(
 
 
 # Nudge event content: the summon round ended without a reply, so the master is
-# asked once whether the thread should hear something.
+# asked once whether the thread should hear something. No link and no command
+# usage: the thread reply contract in the session's managed instructions
+# states the reply path.
 _NUDGE_TEMPLATE = (
-    "{platform} thread {link}: the round answering this mention ended without posting a reply\n"
-    "(no `{command}` call). Decide now: when the thread should hear something, post it with\n"
-    "`{command} --file <path>`; when there is nothing to say, end this round and the thread\n"
-    "gets a one-line notice pointing to this session.")
+    "{platform} thread: the round answering this mention ended without posting a reply. Decide now:\n"
+    "when the thread should hear something, post a reply; when there is nothing to say, end this\n"
+    "round and the thread gets a one-line notice pointing to this session.")
 
 # Thread-visible end state after a summon round and its nudge round both posted nothing.
 _NO_REPLY_NOTICE = (
@@ -671,14 +659,6 @@ _NO_REPLY_NOTICE = (
 
 # Session-log content of the notice marker; its notice payload names the summon it closes.
 _NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the nudge round; the thread was told so."
-
-
-def thread_link(platform: ThreadPlatform, summon: dict | None, block: dict) -> str:
-  """The thread link as the summon prompt states it; the platform's fallback ids when it has none."""
-  match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
-  if match is not None:
-    return match.group(0)
-  return platform.thread_fallback.format(**block)
 
 
 async def audit_round(
@@ -692,13 +672,18 @@ async def audit_round(
   summon finds the nudge event); a nudge round without one gets the thread
   notice (once: the notice marker, persisted only after the post
   succeeded, so a failed post leaves the boot audit a retry). A summon issued
-  under the marker contract (its prompt names no reply command) is outside
+  under the earlier marker contract (its content is neither the platform's
+  summon line nor the older full prompt naming the reply command) is outside
   this audit.
   """
   platform = adapter.platform
   summon_id = summon_of(target, input_event_id)
   summon = event_by_id(events, summon_id)
-  if platform.reply_command not in ((summon or {}).get("content") or ""):
+  # The current contract's summon is the one-line input; the older full-prompt
+  # format named the reply command in its content. A summon from the earlier
+  # marker contract (neither) stays outside this audit.
+  content = (summon or {}).get("content") or ""
+  if content != platform.summon_line and platform.reply_command not in content:
     return False
   if replied(platform, events, summon_id):
     return False
@@ -706,8 +691,7 @@ async def audit_round(
   if "nudge_of" not in target:
     if nudged(platform, events, summon_id):
       return False
-    content = _NUDGE_TEMPLATE.format(
-        platform=platform.display_name, link=thread_link(platform, summon, target), command=platform.reply_command)
+    content = _NUDGE_TEMPLATE.format(platform=platform.display_name)
     nudge = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
     nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
     nudge[platform.name]["nudge_of"] = summon_id
@@ -884,7 +868,6 @@ async def arm_follow_trigger(
     session_id: str,
     *,
     floor: str,
-    wake_label: Callable[[str], str],
     log_fields: dict,
 ) -> PendingTrigger | None:
   """Cancel-then-create the session's one persisted follow trigger; return the fresh record.
@@ -893,10 +876,10 @@ async def arm_follow_trigger(
   the new record is stamped with that same ``created_at`` — the chain's start —
   so a steady trickle still flushes at ``chain_start + _FOLLOW_CHAIN_CAP_SECONDS``
   no matter how many re-arms land, and the label keeps the chain's oldest
-  unacked id as the floor — *wake_label* builds it after that re-arm floor is
-  resolved. *log_fields* names the thread in the arm logs. Returns None without
-  arming when the session was archived mid-flight: the thread-follow stops with
-  its session.
+  unacked id as the floor (:func:`follow_wake_label` builds it after that
+  re-arm floor is resolved). *log_fields* names the thread in the arm logs.
+  Returns None without arming when the session was archived mid-flight: the
+  thread-follow stops with its session.
   """
   chain_start: datetime | None = None
   for old in await armed_follow_triggers(platform, trigger_mgr, session_id):
@@ -917,7 +900,7 @@ async def arm_follow_trigger(
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay,
-        wake_label(floor),
+        follow_wake_label(platform, floor),
         created_at=start,
         enforce_pending_limit=False,
     )
@@ -1005,7 +988,7 @@ async def accept_summon(
   The entrypoint has already dropped the disallowed mention and resolved
   everything this path reads: the deterministic *session_id*, the *label*
   naming both the session and its group, the thread *origin*, the summon
-  *block* (the platform's persisted marker payload), the summon prompt
+  *block* (the platform's persisted marker payload), the summon line
   *content*, and the mentioning *user*. The session is created — a manager
   root named ``<label> <local time>``, born with *origin* under the platform's
   origin field —, unarchived, or reused; the mention round consumes its own id and
@@ -1072,7 +1055,6 @@ async def accept_summon(
 
 async def revive_and_arm_follow(
     platform: ThreadPlatform,
-    adapter: ThreadAdapter,
     lifecycle: SessionLifecycle,
     session_events: SessionEvents,
     trigger_mgr: TriggerManager,
@@ -1098,15 +1080,7 @@ async def revive_and_arm_follow(
     await lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_follow_session_unarchived", session=session_id, **log_fields)
     await session_events.broadcast_task_tree_changed(session_id, "session_unarchived")
-  origin = getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field)
-  link = await adapter.thread_link(origin)
-  return await arm_follow_trigger(
-      platform,
-      trigger_mgr,
-      session_id,
-      floor=floor,
-      wake_label=lambda floor: adapter.follow_wake_message(floor, link),
-      log_fields=log_fields)
+  return await arm_follow_trigger(platform, trigger_mgr, session_id, floor=floor, log_fields=log_fields)
 
 
 async def follow_message(
@@ -1128,10 +1102,10 @@ async def follow_message(
   first (:func:`revive_and_arm_follow` — unarchived, logged, its task-tree
   change broadcast), so the arm lands exactly as for an active session and the
   revived session reappears on the Threads view. A passed message arms (or
-  re-arms) the session's one persisted follow trigger — the chain floor is the
-  message id, the wake label names the thread link — with guards 1 to 3 (the
-  event's own shape: subtype, thread targeting, human sender) staying in the
-  entrypoint, which reads them off the raw event.
+  re-arms) the session's one persisted follow trigger — the chain floor is
+  the message id — with guards 1 to 3 (the event's own shape: subtype, thread
+  targeting, human sender) staying in the entrypoint, which reads them off
+  the raw event.
   """
   platform = adapter.platform
   meta = await store.get_session(session_id)
@@ -1146,7 +1120,6 @@ async def follow_message(
     return None
   trigger = await revive_and_arm_follow(
       platform,
-      adapter,
       lifecycle,
       session_events,
       trigger_mgr,
@@ -1191,7 +1164,6 @@ async def backfill_followed_threads(
         continue
       trigger = await revive_and_arm_follow(
           platform,
-          adapter,
           lifecycle,
           session_events,
           trigger_mgr,

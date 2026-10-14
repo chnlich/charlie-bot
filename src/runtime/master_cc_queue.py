@@ -86,7 +86,7 @@ async def _broadcast_running_changed(
   """Notify the sidebar of a busy-state change.
 
   Single construction site for the RUNNING_CHANGED payload keys;
-  web/static/js/websocket.js reads them off the event verbatim.
+  web/static/js/websocket-handlers.js reads them off the event verbatim.
   """
   await streaming.streaming_manager.broadcast(
       streaming.SIDEBAR_CHANNEL,

@@ -739,11 +739,6 @@ def run_assertions(genre: str, artifact: pathlib.Path, cfg: config.CharlieBotCon
 
 _PROBE_SYSTEM_PROMPT = "You are a careful cold reader. Answer every question from the page alone."
 
-# One-shot model pass over an entire artifact page (sitrep / debug / explain
-# cold-read gate); the page text alone dwarfs a naming prompt, so the 30 s
-# light one-shot budget does not apply.
-ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
-
 # The single canonical copy of the cold-read seven-question prompt. skills/file-server/SKILL.md's
 # Cold-Read Gate section points at this module instead of restating the text.
 _PROBE_QUESTIONS = """You are reading one HTML page cold: the page source is the piped input, and you have no
@@ -765,8 +760,8 @@ Write none when there is none."""
 
 @dataclasses.dataclass
 class ProbeResult:
-  """Cold-read probe outcome: one (backend id, failure) per tried backend, then the answering
-  backend's id and its verbatim answer — both None when every backend failed."""
+  """Cold-read probe outcome: one (backend id, ``ExceptionType: message``) per tried backend, then the
+  answering backend's id and its verbatim answer — both None when every backend failed."""
 
   attempts: list[tuple[str, str]]
   backend_id: str | None
@@ -794,10 +789,10 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
     try:
       # No cgroup_session_id: the artifact probe runs from the CLI with no
       # CharlieBot session home, so it cannot enter any session's cgroup.
+      # timeout=None: a time limit would drop a slow answer and retry on the next backend.
       answer = asyncio.run(
-          backend_types.build_backend(option,
-                                      cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=ARTIFACT_PROBE_TIMEOUT))
+          backend_types.build_backend(option, cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=None))
       return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)
     except Exception as e:
-      attempts.append((option.id, str(e)))
+      attempts.append((option.id, f"{type(e).__name__}: {e}"))
   return ProbeResult(attempts=attempts, backend_id=None, answer=None)

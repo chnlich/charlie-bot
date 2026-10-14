@@ -50,6 +50,7 @@ class CodexQuotaAccount(usage_sources.QuotaAccount):
   """
 
   provider = "codex"
+  provider_label = "Codex"
 
   def __init__(self, label: str, home_dir: str) -> None:
     self.label = label
@@ -78,6 +79,17 @@ class CodexQuotaAccount(usage_sources.QuotaAccount):
       spend = None
     usage["spend"] = spend
     return usage
+
+  def mark_expired(self, entry: dict[str, Any], now: datetime.datetime) -> dict[str, Any]:
+    """The entry with its expired windows marked at *now*.
+
+    The reading was sampled when Codex wrote the token_count event, which can be long before the
+    poller read the rollout; an entry without the event time is dated by ``fetched_at``.
+    """
+    sampled = (
+        usage_sources.parse_iso_utc(entry.get("token_count_observed_at")) or
+        usage_sources.parse_iso_utc(entry.get(usage_sources.PANEL_FETCHED_AT)))
+    return usage_sources.mark_expired_windows(entry, sampled, now)
 
   def _fetch_usage(self, rollout_paths: list[pathlib.Path]) -> dict[str, Any] | None:
     """Return the newest plan-pool quota reading across the recently-written rollouts.
@@ -443,5 +455,5 @@ def _transform_codex_response(
   if ("primary" in rate_limits and "secondary" in rate_limits and primary is None and secondary is None and
       ((credits_reading is not None and credits_reading["unlimited"] is True) or
        ("credits" not in rate_limits and rate_limits.get("plan_type") == "business"))):
-    usage["rate_limits_state"] = "business-unlimited"
+    usage[usage_sources.PANEL_STATE_LABEL] = "business / unlimited"
   return usage

@@ -16,6 +16,8 @@ def register() -> None:
           preassigned_session_id=False,
           reads_context_window=False,
           family_prefix=None,
+          manual_compact=False,
+          compact_hint=None,
       ),
   )
   config_registry.register_legacy_keys(

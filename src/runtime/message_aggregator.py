@@ -21,9 +21,8 @@ the output and emits no ``message`` delta. The next ``stream`` delta
 from collections.abc import Callable, Iterator
 
 from src.infra import event_types as ET
-from src.runtime import message_events
+from src.runtime import message_events, model_family
 from src.runtime.hooks import turn_contributions
-from src.runtime.model_family import model_family
 
 # The renderer's preview bound for one tool row (renderToolActivity,
 # web/static/js/chat/rendering.js): an output's first 500 characters render
@@ -152,7 +151,7 @@ def _compacting_model_note(ev: dict) -> str:
   model = ev.get('model')
   if not isinstance(model, str) or not model:
     return ''
-  return f'by {model_family(model).capitalize()}'
+  return f'by {model_family.model_family(model).capitalize()}'
 
 
 def _format_k_tokens(count: float) -> str:

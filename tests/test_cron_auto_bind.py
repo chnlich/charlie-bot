@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import types
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,26 @@ def _write_task_body(home: Path, name: str, body: dict) -> None:
   path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
 
 
+# The tick clock for every test in this file, pinned to a Monday 12:30 PT:
+# outside the 60-second catch-up window after any occurrence of the cron
+# expressions used here ("0 3 * * *" and "0 4 * * *", America/Los_Angeles).
+# _maybe_run derives a never-run task's next-fire reference from now minus one
+# tick interval, so a wall-clock tick landing inside the minute after an
+# occurrence fires the just-bound task at the migration the tests assert to be
+# idle. A test that needs a fire sets an explicit past anchor, which stays due
+# under the pin; an added cron expression must keep its occurrences away from
+# the pinned minute.
+_TICK_TEST_NOW = datetime(2026, 6, 8, 19, 30, tzinfo=UTC)
+
+
+class _TickTestDateTime(datetime):
+  """The scheduler's clock in this file: ``now`` is the pinned instant."""
+
+  @classmethod
+  def now(cls, tz=None):
+    return _TICK_TEST_NOW.astimezone(tz)
+
+
 @pytest.fixture()
 def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic home the scheduler tick reads: cron.d under HOME's profile,
@@ -80,6 +101,12 @@ def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  # The scheduler qualifies through the datetime module (`datetime.datetime.now`), so the
+  # stand-in binds the module attribute to a namespace carrying the fake class; patching the
+  # stdlib module's own `datetime` attribute would leak the fake into croniter/dateutil, whose
+  # deferred import (load_croniter) resolves inside this window.
+  monkeypatch.setattr(
+      "src.features.cron.scheduler.datetime", types.SimpleNamespace(datetime=_TickTestDateTime, timedelta=timedelta))
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   session_blocks = build_session_blocks(cfg)
   tree = build_task_tree(cfg, session_blocks)
@@ -299,7 +326,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
     elif fail_after == "copy":
       # Node + bookkeeping exist; the write-back never ran.
       from src.features.cron import scheduler as scheduler_module
-      crash.setattr(scheduler_module, "write_cron_key", _boom)
+      crash.setattr(scheduler_module.cron_files, "write_cron_key", _boom)
     else:
       # The binding is on disk; the archive never ran (the next tick's sweep
       # covers exactly this).

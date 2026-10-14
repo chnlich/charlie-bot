@@ -14,7 +14,7 @@ from src.infra import config, deferred, log_once, models, ndjson, process
 from src.infra import event_types as ET
 from src.runtime import launch_loop, runs, session_usage, streaming
 from src.runtime.agent_process import base, deferred_build
-from src.runtime.hooks import backend_lifecycle, backend_types
+from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
 
 log = log_once.LazyStructlogLogger()
 
@@ -103,6 +103,7 @@ class Worker:
       on_spawned: Callable | None = None,
       instructions_content: str | None = None,
       session_meta: models.SessionMetadata | None = None,
+      held_native_id: str | None = None,
   ) -> None:
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -113,7 +114,13 @@ class Worker:
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
     self._instructions_content = instructions_content
+    # The run's instructions file sits beside its events log, in the Run directory: the
+    # worktree the run works in never receives it.
+    self._instructions_file = events_log_path.parent / runs.HARNESS_INSTRUCTIONS_NAME
     self._session_meta = session_meta
+    # The conversation this task run resumes (a worker-node continuation);
+    # None starts a fresh one, as every task run did before continuations.
+    self._held_native_id = held_native_id
     self._backend: base.AgentBackend | None = None
     # The plan and the watch of the process now running; None outside a launched run.
     self._launch: backend_lifecycle.Launch | None = None
@@ -151,15 +158,21 @@ class Worker:
           "buffer_limit": self._cfg.subprocess_buffer_limit,
           "on_spawn": on_spawn,
           "instructions_content": self._instructions_content,
+          "instructions_file": self._instructions_file,
           "log_dir": self._events_log.parent,
           "cgroup_session_id": self._thread.session_id,
           **launch_kwargs,
       }
-      # The runtime chose this task's session id before the first process (the lifecycle hands it
-      # to that process): a relay resumes it with --resume.
-      if (backend_types.traits_for(self._backend_option.type).preassigned_session_id and launch is not None and
-          launch.resume_id):
-        extra_flags = ["--resume", launch.resume_id, *extra_flags]
+      # A resume id rides the backend type's own resume style: the native-id
+      # factory argument, or the --resume CLI flag. The style mapping is the
+      # master turn's (_route_resume_session); a relay's resume and a
+      # continued run's first process take the same path here.
+      if launch is not None and launch.resume_id:
+        resume_style = backend_types.traits_for(self._backend_option.type).resume
+        if resume_style == backend_type_registration.RESUME_NATIVE_ID:
+          backend_kwargs["resume_session_id"] = launch.resume_id
+        else:
+          extra_flags = ["--resume", launch.resume_id, *extra_flags]
       if extra_flags:
         backend_kwargs["extra_flags"] = extra_flags
       try:
@@ -180,6 +193,7 @@ class Worker:
         buffer_limit=self._cfg.subprocess_buffer_limit,
         on_spawn=on_spawn,
         instructions_content=self._instructions_content,
+        instructions_file=self._instructions_file,
         log_dir=self._events_log.parent,
         cgroup_session_id=self._thread.session_id,
     )
@@ -206,7 +220,7 @@ class Worker:
         session_meta=self._session_meta,
         kind="task",
         cwd=str(self._worktree),
-        held_native_id=None,
+        held_native_id=self._held_native_id,
         preassigned_native_id=lifecycle.thread_native_id(self._thread),
         emit=emit,
         record_account=record_account,

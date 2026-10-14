@@ -35,9 +35,9 @@ The fallback rule: the charlie-bot source and the CLI sources describe overlappi
 thread's or run's CLI log can disappear (history pruned) after the capture. The backend id of a
 thread or run names its usage source: a registered id through its backend type's attribution, an
 id that left config through the source's id prefix. A backend with no source contributes nothing.
-  NATIVE     a source with ``run_logs_only``: usage only the charlie-bot log holds (CLC thread
-             results, master-run captures, a CLC Run's trailing result line). No sessions;
-             nothing can restate it.
+  NATIVE     a source with ``run_logs_only``: usage only the charlie-bot log holds (CLC and
+             Antigravity thread results and Run trailing results, master-run captures). No
+             sessions; nothing can restate it.
   FALLBACK   every other source: the CLI's own log may still exist. The record carries the session
              ids its log names, and the ledger's any-match exclusion retires it the moment any of
              those ids has a NATIVE record of its own. A candidate with no ids cannot key that
@@ -70,7 +70,8 @@ from src.runtime import runs
 from src.runtime.hooks import usage_source_registration, usage_sources
 
 # Account label for a master-run capture whose context model matches no run_logs_only backend
-# in config.yaml (a retired backend's master runs, or an ad-hoc model).
+# in config.yaml (a retired backend's master runs, or an ad-hoc model). The name carries the
+# CLC id prefix, the prefix attribution (``backend_page_source``) resolves it through.
 _CLC_MASTER_ACCOUNT = "clc-master"
 
 
@@ -103,14 +104,12 @@ def backend_source(backend: str, registry: dict) -> usage_source_registration.Us
 
 def backend_page_source(backend: str, registry: dict) -> str:
   """One charlie-bot record's account id attributed to the usage source of the CLI that ran the
-  call, the card the usage page counts it under. ``clc-master`` is the master-run account for a
-  context model matching no registered run_logs_only backend. Every other type or id with no
-  source raises: a backend with no collection rule must not land silently under a wrong CLI.
+  call, the card the usage page counts it under. The ``clc-master`` master-run account (a
+  context model matching no registered run_logs_only backend) attributes through its ``clc-``
+  prefix. Every type or id with no source raises: a backend with no collection rule must not
+  land silently under a wrong CLI.
   """
-  if backend == _CLC_MASTER_ACCOUNT:
-    source = next((s for s in usage_source_registration.sources() if s.run_logs_only), None)
-  else:
-    source = backend_source(backend, registry)
+  source = backend_source(backend, registry)
   if source is None:
     raise ValueError(f"{backend}: neither a registered backend type nor a known type prefix has a usage source")
   return source.name

@@ -6,22 +6,15 @@ correctness, no-file-reads on the paging path, and archive fallback.
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BROADCAST_PATCH_TARGET,
-    bind_session_blocks,
-    make_home_session,
-    recycle_archive_cutoff_events,
-)
-from conftest import assistant_event as _assistant_event
-from conftest import queued_user_reorder_events as _reorder_events
 
 from src.infra import event_types as ET
-from src.runtime.api.message_utils import events_to_messages
-from src.runtime.message_projection import MessageProjection
+from src.runtime import message_projection
+from src.runtime.api import message_utils
 
 # ---------------------------------------------------------------------------
 # Fixture event builders
@@ -38,7 +31,7 @@ def _pending_draft_events() -> list[dict]:
           "timestamp": "t1"
       },
       {
-          **_assistant_event("draft response", event_id="assistant-1"), "timestamp": "t2"
+          **conftest.assistant_event("draft response", event_id="assistant-1"), "timestamp": "t2"
       },
   ]
 
@@ -72,7 +65,7 @@ def _turned_messages_events(turn_lengths: list[int]) -> list[dict]:
         "content": f"q{turn_i}",
         "timestamp": f"t{turn_i}-u",
     })
-    events.extend(_assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}") for j in range(length - 1))
+    events.extend(conftest.assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}") for j in range(length - 1))
     events.append(
         {
             "id": f"done{turn_i}",
@@ -93,7 +86,7 @@ def _identity_tuple(msg: dict) -> tuple:
 
 
 FIXTURE_EVENTS: list[tuple[str, list[dict]]] = [
-    ("reorder", _reorder_events()),
+    ("reorder", conftest.queued_user_reorder_events()),
     ("pending_draft", _pending_draft_events()),
     ("many_messages", _many_messages_events(60)),
     ("empty", []),
@@ -105,8 +98,8 @@ FIXTURE_EVENTS: list[tuple[str, list[dict]]] = [
 
 
 def _assert_history_equals_events_to_messages(name: str, events: list[dict]) -> None:
-  projection = MessageProjection(events)
-  reference = events_to_messages(events)
+  projection = message_projection.MessageProjection(events)
+  reference = message_utils.events_to_messages(events)
   proj_identities = [_identity_tuple(m) for m in projection.history]
   ref_identities = [_identity_tuple(m) for m in reference]
   assert proj_identities == ref_identities, f"mismatch in '{name}'"
@@ -126,7 +119,8 @@ def test_projection_history_equals_events_to_messages(name: str, events: list[di
 @pytest.mark.parametrize("limit", [1, 7, 40, 100])
 def test_lossless_backwards_walk_returns_full_id_set(limit: int) -> None:
   """Full backwards walk with slice_before returns exactly the full message-id set."""
-  projection = MessageProjection(_turned_messages_events([3, 1, 6, 2] * 60))  # 240 turns, 960 messages
+  projection = message_projection.MessageProjection(
+      _turned_messages_events([3, 1, 6, 2] * 60))  # 240 turns, 960 messages
   committed = projection.committed
   full_ids = [m["id"] for m in committed]
 
@@ -153,14 +147,14 @@ def test_lossless_backwards_walk_returns_full_id_set(limit: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_paint_surfaces_are_disjoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_first_paint_surfaces_are_disjoint(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The bubble list and the streaming preview never carry the same message."""
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  bind_session_blocks(monkeypatch, mgr)  # the MASTER_DONE below runs every contribution's after_turn
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
+  conftest.bind_session_blocks(monkeypatch, mgr)  # the MASTER_DONE below runs every contribution's after_turn
 
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+  with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()):
     await mgr.events.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})
-    await mgr.events.persist_and_broadcast(session.id, _assistant_event("reply1", "a1"))
+    await mgr.events.persist_and_broadcast(session.id, conftest.assistant_event("reply1", "a1"))
     await mgr.events.persist_and_broadcast(
         session.id, {
             "type": ET.MASTER_DONE,
@@ -168,7 +162,7 @@ async def test_first_paint_surfaces_are_disjoint(tmp_path: Path, monkeypatch: py
             "timestamp": "t2"
         })
     await mgr.events.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q2", "timestamp": "t3"})
-    await mgr.events.persist_and_broadcast(session.id, _assistant_event("IN PROGRESS", "a2"))
+    await mgr.events.persist_and_broadcast(session.id, conftest.assistant_event("IN PROGRESS", "a2"))
 
   projection = mgr.events.get_message_projection(session.id)
   assert projection is not None
@@ -202,7 +196,7 @@ def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.Monkey
   monkeypatch.setattr(ndjson, "parse_ndjson_range", _boom)
 
   events = _many_messages_events(100)
-  projection = MessageProjection(events)
+  projection = message_projection.MessageProjection(events)
   # Multiple slice_before calls — none should trigger file I/O.
   for before in [100, 60, 20, 0]:
     projection.slice_before(before, 10)
@@ -215,13 +209,13 @@ def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_projection_memo_hit_archived_session_is_always_miss(tmp_path: Path) -> None:
+async def test_projection_memo_hit_archived_session_is_always_miss(tmp_path: pathlib.Path) -> None:
   """The projection cache never holds an archived session's entry, so the hit
   helper needs no archive check of its own — the miss sends the caller to the
   threaded getter, whose None routes to the legacy cursor path."""
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
 
-  await recycle_archive_cutoff_events(mgr, session.id)
+  await conftest.recycle_archive_cutoff_events(mgr, session.id)
   meta = await mgr.store.get_session(session.id)
   assert meta is not None and meta.archive_offset > 0
   assert mgr.events.get_message_projection(session.id) is None

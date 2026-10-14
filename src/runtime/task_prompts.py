@@ -541,25 +541,27 @@ def repo_less_review_task_context(
     *,
     chat_log_path: Path,
     worker_log_path: Path,
-    spec_text: str | None,
+    spec_text: str,
+    later_messages: str,
     work_report: str | None,
 ) -> str:
-  """The repo-less review run's volatile half: the spec, the reported paths, no git.
+  """The repo-less review run's volatile half: the spec, the later messages, the reported paths, no git.
 
   The reviewer's stable contract rides the managed instructions
   (review_rules_text); this context carries the task spec (its acceptance
-  tests included) and the work report's path list, and states the repo-less
-  judgment: the current state of those paths against the acceptance tests —
-  no diff to read, nothing to merge or push.
+  tests included), the Later Messages section when the node's work runs
+  claimed input after it, and the work report's path list, and states the
+  repo-less judgment: the current state of those paths against the
+  acceptance tests — no diff to read, nothing to merge or push.
   """
-  spec = spec_text if spec_text and spec_text.strip() else "(the task spec text was not recorded)"
   report = (
       work_report
       if work_report and work_report.strip() else "(the work Run left no final report; judge the paths the task names)")
+  later = f"\n\n{later_messages}" if later_messages else ""
   return (
       f"## Context\n"
       f"This task changed host paths directly; it has no repository, so there is no diff to read and\n"
       f"nothing to merge or push. Review the CURRENT state of the paths the work report lists.\n\n"
-      f"### Task spec (acceptance tests included)\n{spec}\n\n"
+      f"### Task spec (acceptance tests included)\n{spec_text}{later}\n\n"
       f"### Work report (every created, modified and deleted path, and each acceptance test's result)\n{report}\n\n"
       f"{review_log_pointer(chat_log_path, worker_log_path)}")

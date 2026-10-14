@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 
 from src.infra import config, log_once
 from src.runtime import runs, task_execution
-from src.runtime.hooks.sequence_controllers import sequence_controllers
+from src.runtime.hooks import sequence_controllers
 
 if TYPE_CHECKING:
   from src.runtime import task_sessions
@@ -56,7 +56,7 @@ async def reconcile_task_tree(
 
   # The sequence controllers' honest verdicts come first: a recovered
   # "interrupted" sequence state must not race the Run reconciliation below.
-  for controller in sequence_controllers():
+  for controller in sequence_controllers.sequence_controllers():
     await controller.reconcile_interrupted(cfg, tree)
 
   for session_dir in sorted(cfg.sessions_dir.iterdir()):

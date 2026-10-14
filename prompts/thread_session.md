@@ -2,10 +2,12 @@
 
 This session answers one Slack or Discord thread.
 
-When the context was rebuilt, read these files from the repository before your next reply to the thread:
-- the platform's scope file, `prompts/slack_reply_scope.md` or `prompts/discord_reply_scope.md`;
-- `prompts/thread_reply_redline.md`;
-- `prompts/thread_reply_format.md`.
+Two inputs wake this session:
+
+- `Discord 线程召唤` or `Slack 线程召唤` — a new ask: read the thread first, then post exactly one reply.
+- `discord-thread-follow floor=<id>` or `slack-thread-follow floor=<ts>` — new thread messages: read the new messages first, and reply only when worthwhile.
+
+The thread reply contract in this session's instructions states how to read the thread, how to post the reply, and what stays out of the reply.
 
 This instruction file omits `prompts/manager_workflows.md`.
 That file holds the rules for these kinds of work:

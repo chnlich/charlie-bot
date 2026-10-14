@@ -1,14 +1,18 @@
-"""The composition root: the one list of packages that register routers, CLI commands and background services.
+"""The composition root: the one list of packages that register routers, CLI commands, background services and page parts.
 
 Each listed package defines ``register()`` in its ``__init__.py``. Deleting a package's line
-removes its routes, commands and services from the server and the CLI.
+removes its routes, commands and services from the server and the CLI, and its static files,
+templates and page parts from the pages (``src.runtime.hooks.page_render``).
 """
 
 import importlib
 from collections.abc import Iterable
 
-# Registration order is route inclusion order, service start order, home-page card order and
-# metadata-slot order. The file server's catch-all routes come last among the feature lines.
+from src.runtime.hooks import page_render
+
+# Registration order is route inclusion order, service start order, home-page card order,
+# metadata-slot order and page-part order. The file server's catch-all routes come last among
+# the feature lines.
 PACKAGES = (
     "src.features.artifacts",
     "src.features.backlog",
@@ -26,8 +30,6 @@ PACKAGES = (
     "src.features.latex",
     "src.features.memory",
     "src.features.ncu",
-    "src.features.remote_launch",
-    "src.features.session_tree_preview",
     "src.features.terminal",
     "src.features.trace",
     "src.features.usage",
@@ -51,6 +53,7 @@ def _register_packages(packages: Iterable[str]) -> None:
   for package in packages:
     if package not in _registered_packages:
       importlib.import_module(package).register()
+      page_render.register_page_package(package)
       _registered_packages.add(package)
 
 

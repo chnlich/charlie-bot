@@ -5,8 +5,10 @@
 // wsUrlWithToken page-load order, and a no-op for every hook websocket.js
 // calls into the chat/sidebar modules), the harness's own globals spread
 // over that base (SESSION_ID, document, setTimeout, the recorders), then
-// one load sequence — createContext, websocket.js — so the load order both
-// suites depend on lives in one place.
+// one load sequence — createContext, websocket.js, websocket-handlers.js — so
+// the load order both suites depend on lives in one place. A harness with a
+// context of its own (the sidebar indicator harness loading the real
+// status.js) takes the same load sequence through loadWebsocketModules.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 
@@ -14,6 +16,7 @@ const { createFakeWebSocketClass } = require('./fake_websocket');
 const { readStatic } = require('./read_static');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
+const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 function loadWebsocketContext(extraContext) {
   const context = {
@@ -35,13 +38,10 @@ function loadWebsocketContext(extraContext) {
     startThinking: () => {},
     stopThinking: () => {},
     pollActiveSessionView: () => {},
-    renderExtUsage: () => {},
     refreshSessionStatusNow: () => {},
-    setSessionIndicator: () => {},
-    getSessionIndicatorState: () => ({}),
+    applyRunningChanged: () => {},
     setSessionPendingTriggerIndicator: () => {},
     updateSidebarSessionName: () => {},
-    showDiffModal: () => {},
     handleSidebarSearch: () => {},
     switchSidebarFilter: () => {},
     currentFilter: 'all',
@@ -49,8 +49,17 @@ function loadWebsocketContext(extraContext) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  loadWebsocketModules(context);
   return {context, FakeWebSocket: context.WebSocket};
 }
 
-module.exports = { loadWebsocketContext };
+// The two-file load sequence on its own, for a harness whose vm context
+// already exists: websocket.js's transport, then the core handlers whose
+// registrations it accepts. The caller's context supplies the page globals
+// the files read (SESSION_ID, WebSocket, wsUrlWithToken, the sidebar hooks).
+function loadWebsocketModules(context) {
+  vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
+}
+
+module.exports = { loadWebsocketContext, loadWebsocketModules };

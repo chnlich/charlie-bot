@@ -6,18 +6,18 @@ embedded-text fallback), section assembly order, and reviewer-prompt sourcing
 from the same file.
 """
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import cfg_with_repo as _cfg_with_repo
 
 from src.runtime import spawner
 
 # --- Fail-loud loader semantics -----------------------------------------------
 
 
-def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -> None:
-  cfg = _cfg_with_repo(tmp_path)
+def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.cfg_with_repo(tmp_path)
   missing_path = tmp_path / "prompts" / "worker.md"
 
   with pytest.raises(FileNotFoundError, match="predates the worker-prompt extraction commit") as exc_info:

@@ -27,10 +27,12 @@ def register() -> None:
           preassigned_session_id=False,
           reads_context_window=True,
           family_prefix=None,
+          manual_compact=False,
+          compact_hint=None,
       ),
   )
   usage_source_registration.register_source(
       usage_source_registration.UsageSource(
-          name=USAGE_SOURCE, id_prefixes=("charlie-code-",), run_logs_only=True, module=None))
+          name=USAGE_SOURCE, id_prefixes=("charlie-code-", "clc-"), run_logs_only=True, module=None))
   usage_source_registration.attribute_backend_type("charlie-code", USAGE_SOURCE)
   identity_env.register_identity_env_var(CHARLIE_CODE_API_KEY_ENV)

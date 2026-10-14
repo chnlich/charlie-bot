@@ -4,7 +4,7 @@
 // pin intent when an engine hosts #messages, never the 150px geometry band:
 // a fitting reply opens at the bottom unpinned, and a late card or frame
 // landing there must not yank the view down. The stub has no real engine, so
-// the cases install a minimal fake under Chat.TurnEngine.activeFor that
+// the cases install a minimal fake as Chat.activeTurnEngineFor's answer that
 // exposes pinnedIntent and records jumpToBottom calls; the real
 // restoreBottomPin (chat/scroll.js) routes the jump through it.
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ function installFakeEngine(context, container, pinnedIntent) {
       container.scrollTop = container.scrollHeight;
     },
   };
-  context.Chat.TurnEngine = { activeFor: (el) => (el === container ? engine : null) };
+  context.Chat.activeTurnEngineFor = (el) => (el === container ? engine : null);
   return engine;
 }
 

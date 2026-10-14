@@ -118,8 +118,15 @@ class OpenCodeBackend(base.AgentBackend):
     self._sleep = asyncio.sleep
     self._reset_run_state()
 
-  # opencode auto-detects AGENTS.md in the run cwd.
+  # A manager turn's session cwd holds this AGENTS.md, which opencode auto-detects.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "opencode_wrote_agents_md")
+
+  def _effective_prompt(self, prompt: str) -> str:
+    # opencode reads the instructions from the cwd's AGENTS.md, which a worker or review run
+    # never writes, so that run frames them into the prompt. A manager turn's prompt goes out bare.
+    if self._instructions_file is None:
+      return prompt
+    return super()._effective_prompt(prompt)
 
   def _build_command(self, prompt: str) -> list[str]:
     del prompt
@@ -205,7 +212,8 @@ class OpenCodeBackend(base.AgentBackend):
             response.raise_for_status()
             sse_events = self._with_sse_progress_watchdog(self._iter_sse_events(response))
             await self._wait_for_server_connected(sse_events)
-            await self._send_prompt(client, self._session_id, prompt, uploaded_files=uploaded_files)
+            await self._send_prompt(
+                client, self._session_id, self._effective_prompt(prompt), uploaded_files=uploaded_files)
 
             async for translated in self._consume_sse_events(sse_events):
               if self._failed and translated.get("type") == ET.ERROR:
@@ -757,7 +765,7 @@ class OpenCodeBackend(base.AgentBackend):
     await self._abort_session()
     await super().terminate()
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text via `opencode run --format json` with all tools denied.
 
     Uses the one-shot ``run`` command (not the ``serve`` server the agent loop
@@ -771,7 +779,7 @@ class OpenCodeBackend(base.AgentBackend):
     uses (which nest the part under ``properties``). The parser therefore feeds
     the top-level ``part`` directly to ``_translate_part`` so ``_part_delta``'s
     cumulative logic applies to ``text``-type parts. The process group is killed
-    on timeout.
+    on timeout; ``None`` waits without a limit.
     """
     self._reset_run_state()
     framed = self._frame_system_prompt(system_prompt, prompt)

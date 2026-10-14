@@ -23,12 +23,13 @@ import pytest
 from src.features.usage import api, usage_ledger
 from src.runtime.hooks import usage_source_registration, usage_sources
 
-CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
+CC, CODEX, OC, AGY, CLC = "Claude Code", "Codex", "opencode", "Antigravity", "CLC"
 CB = "charlie-bot"  # the ledger's stored spelling for its own-log records
 CC_TS, CODEX_TS, OC_TS, CB_TS = (
     "2026-01-10T08:00:00+00:00", "2026-01-11T09:00:00+00:00", "2026-01-12T10:00:00+00:00", "2026-01-13T11:00:00+00:00")
-# A card's slot is its position in registration order, from 1, with CLC last (run_logs_only).
-SLOT = {CC: 1, CODEX: 2, OC: 3, CLC: 4}
+# A card's slot is its position in registration order, from 1, with the run_logs_only cards
+# last (Antigravity registered before CLC).
+SLOT = {CC: 1, CODEX: 2, OC: 3, AGY: 4, CLC: 5}
 
 
 def _record(
@@ -289,6 +290,36 @@ def test_charlie_bot_native_accounts_read_as_clc() -> None:
   assert ctx["per_src"][CLC]["native_start"] == "2026-01-01"
 
 
+def test_charlie_bot_antigravity_accounts_read_as_antigravity() -> None:
+  """A charlie-bot row's antigravity account attributes to the Antigravity card: one
+  Antigravity segment, the Antigravity · account sub-row, the Antigravity tile — and
+  Antigravity's native start is the ledger's charlie-bot span, like CLC's."""
+  rows = [_ledger_row(CB, "gem-2-5", output=40, accounts=[usage_ledger.LedgerAccount("agy-antigravity", 2, 40, 140)])]
+  (row,) = _payload_rows(rows)
+  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(SLOT[AGY], 140)]
+  assert [a["name"] for a in row["accounts"]] == ["Antigravity · agy-antigravity"]
+  ctx = api._token_usage_context(rows, {CB: "2026-01-01"}, None, 0.0, {})["ctx"]
+  assert ctx["per_src"][AGY]["t_comp"] == api._compact(140)
+  assert ctx["per_src"][AGY]["native_start"] == "2026-01-01"
+
+
+@pytest.mark.asyncio
+async def test_page_builds_with_a_ledger_row_attributed_to_antigravity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  """The page builds (200) with a charlie-bot row whose account is an antigravity id, and the
+  row's tokens land under the Antigravity card."""
+  ledger_path = _seeded_ledger(monkeypatch, tmp_path)
+  with usage_ledger.UsageLedger(ledger_path) as ledger:
+    ledger.record_file(
+        "host", "/logs/agy.jsonl", "sig-agy", [_record("agy-1", CB, "gem-2-5", CB_TS, 50, account="agy-antigravity")])
+  response = await api.token_usage_viewer(conftest.make_page_request("/token-usage"))
+  assert response.status_code == 200
+  rows = {r["model"]: r for r in _data_rows(response.body.decode("utf-8"))}
+  assert rows["gem-2-5"]["output"] == 50
+  assert [s["slot"] for s in rows["gem-2-5"]["segments"]] == [SLOT[AGY]]
+  assert [a["name"] for a in rows["gem-2-5"]["accounts"]] == ["Antigravity · agy-antigravity"]
+
+
 def test_charlie_bot_fallback_accounts_join_their_cli_s_source() -> None:
   """A charlie-bot row's fallback account merges into the CLI that ran it: model gpt-z's
   Codex row and charlie-bot fallback row give one row of 40 with a single Codex segment,
@@ -311,9 +342,9 @@ def test_charlie_bot_fallback_accounts_join_their_cli_s_source() -> None:
   assert ctx["per_src"][CLC]["total"] == 0
 
 
-def test_four_tile_totals_sum_to_the_page_total() -> None:
-  """Every token lands in exactly one tile: the four attributed tile totals sum to the
-  page total across all rows."""
+def test_every_tile_total_sums_to_the_page_total() -> None:
+  """Every token lands in exactly one tile: the attributed tile totals (the empty Antigravity
+  tile included) sum to the page total across all rows."""
   rows = [
       _ledger_row(
           CC, "claude-sonnet-4", in_fresh=7, output=4, accounts=[usage_ledger.LedgerAccount("acct-a", 1, 4, 11)]),
@@ -324,17 +355,18 @@ def test_four_tile_totals_sum_to_the_page_total() -> None:
       _ledger_row(OC, "o3", output=300, accounts=[usage_ledger.LedgerAccount("acct-a", 3, 300, 300)]),
   ]
   ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
-  assert sum(ctx["per_src"][src]["total"] for src in (CC, CODEX, OC, CLC)) == sum(r.total for r in rows)
+  assert sum(ctx["per_src"][src]["total"] for src in (CC, CODEX, OC, AGY, CLC)) == sum(r.total for r in rows)
+  assert ctx["per_src"][AGY]["total"] == 0
 
 
 @pytest.mark.asyncio
-async def test_page_legend_names_the_four_cli_sources_without_charlie_bot(
+async def test_page_legend_names_the_cli_sources_without_charlie_bot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  """The rendered legend lists Claude Code, Codex, opencode, CLC in slot order and no
-  charlie-bot text reaches the page."""
+  """The rendered legend lists Claude Code, Codex, opencode, Antigravity, CLC in slot order and
+  no charlie-bot text reaches the page."""
   body = await _get_page(monkeypatch, tmp_path)
   leg = re.search(r"const LEG = (\[[^\]]*\])", body).group(1)
-  assert json.loads(leg) == [CC, CODEX, OC, CLC]
+  assert json.loads(leg) == [CC, CODEX, OC, AGY, CLC]
   assert "charlie-bot" not in body
 
 

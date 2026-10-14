@@ -134,7 +134,7 @@ async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> N
   import fastapi
   server_module = lifespan_env
   home = server_module.get_config().charliebot_home
-  apply_fence = home_writer_fence.acquire_home_writer_fence(home, purpose="session-tree preview --add-backend")
+  apply_fence = home_writer_fence.acquire_home_writer_fence(home, purpose="apply --add-backend")
   try:
     with pytest.raises(home_writer_fence.HomeWriterActiveError) as excinfo:
       async with server_module.lifespan(fastapi.FastAPI()):

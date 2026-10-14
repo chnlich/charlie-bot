@@ -9,11 +9,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const APP_JS = readStatic('app.js');
-const EXT_USAGE_JS = readStatic('ext_usage.js');
+const EXT_USAGE_JS = readPackageStatic('features', 'usage', 'ext_usage.js');
 
 function createFakeDocument() {
   const listeners = new Map();
@@ -244,13 +244,13 @@ function buildAppContext() {
     reconnectDelay: 1000,
     WebSocket: {OPEN: 1},
     autoResize() {},
+    // The chat bundle is not loaded, so the engine lookup sees no engine.
+    Chat: {activeTurnEngineFor: () => null},
     setInterval: timers.setInterval,
     clearInterval: timers.clearInterval,
     console: {error() {}, warn() {}, log() {}},
     initAuth: noop('initAuth'),
     initSidebarResize: noop('initSidebarResize'),
-    initLatexResize: noop('initLatexResize'),
-    initBacklogResize: noop('initBacklogResize'),
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
     updateRelativeTimes: noop('updateRelativeTimes'),
     postProcessRenderedMessages: noop('postProcessRenderedMessages'),
@@ -315,6 +315,7 @@ function buildExtUsageContext() {
     // Today's [] payload never paints a bucket, but a provider-bearing fixture
     // must fail on assertions, not on a missing global.
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
+    registerWsMessageHandler() {},
   };
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});

@@ -5,12 +5,11 @@
   const escapeHtmlAttr = Chat.escapeHtmlAttr;
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
-  const renderExplainButton = Chat.renderExplainButton;
-  const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
+  const markFileLinks = Chat.markFileLinks;
   const toolInputSummary = Chat.toolInputSummary;
 
-// The one branch glyph: the clone_start banner's "Cloned from" marker and the
-// separator's "Clone to here" fork button below.
+// The one branch glyph: the clone_start banner's "Cloned from" marker below
+// and the separator's "Clone to here" button (sidebar/modals.js).
 const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
 
 // The one down-chevron glyph, path-only because its consuming sites keep different
@@ -78,7 +77,7 @@ function renderToolActivity(tools) {
 }
 
 function renderRawBackendOutput(text) {
-  // Keep literal protocol paths inert during linked-artifact post-processing.
+  // Keep literal protocol paths inert during the file-link post-processing.
   return '<details class="prose-msg border border-slate-600/30 rounded-lg overflow-hidden">'
     + '<summary class="cursor-pointer flex items-center justify-between gap-3 px-3 py-2 bg-slate-800/50 text-xs text-slate-300">'
     + '<span class="font-medium">Raw backend output</span>'
@@ -111,7 +110,7 @@ function isStableRenderedMessage(el) {
 // plus one `.turn-row`. Folded shows the row and hides the span; open does the
 // reverse. Nothing is ever unwrapped, and the only nodes that ever move after
 // wrapping are a span's carried inputs (queued for the next round) — so a
-// reader-expanded `N steps` bar, an open explain panel and embedded artifact
+// reader-expanded `N steps` bar, an open separator panel and embedded package
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
 const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker', child_report: 'Report'};
@@ -263,7 +262,7 @@ function renderedNodeText(node) {
 
 // `.prose-msg[data-raw]` carries the message's own unrendered markdown; a plain
 // bubble keeps its text in `.whitespace-pre-wrap`, which is also what leaves the
-// voice badge and the time div out of the first line.
+// input-mode badge and the time div out of the first line.
 function messageSourceText(el) {
   const prose = el.querySelector('.prose-msg');
   if (prose) return prose.dataset.raw != null ? prose.dataset.raw : renderedNodeText(prose);
@@ -358,7 +357,7 @@ function buildTurnRow(turn) {
 }
 
 // The fold-back control shares the separator line with clone-to-here, Elon-e,
-// Explain and the round rating.
+// the package separator buttons and the round rating.
 function installTurnCollapseControl(separator) {
   if (separator.querySelector('.turn-collapse')) return;
   const btn = document.createElement('button');
@@ -409,8 +408,8 @@ function turnIsOpen(wrap, isLast) {
 // Engine-hosted wraps route open/fold through the engine's registry; legacy
 // wraps keep the dataset implementation.
 function turnEngineForWrap(wrap) {
-  if (!wrap || !wrap.dataset || !wrap.dataset.turnKey || !Chat.TurnEngine) return null;
-  return Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  if (!wrap || !wrap.dataset || !wrap.dataset.turnKey) return null;
+  return Chat.activeTurnEngineFor(document.getElementById('messages'));
 }
 
 function setTurnOverride(wrap, open) {
@@ -458,7 +457,7 @@ function setPageDepth(depth) {
   pageDepth = depth;
   Chat.pageDepth = depth;
   const root = document.getElementById('messages');
-  const engine = Chat.TurnEngine && Chat.TurnEngine.activeFor(root);
+  const engine = Chat.activeTurnEngineFor(root);
   if (engine) {
     engine.setDepth(depth);
     updatePageDepthControl();
@@ -480,9 +479,32 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
   globalThis.applyTurnOutline(container);
 }
 
+// Separator buttons follow core's Clone and Elon-e buttons on each separator line, in
+// registration order: render(sessionId, eventIndex) returns one button's HTML. A package
+// registers its renderer when its script loads.
+const separatorButtons = [];
+
+function registerSeparatorButton(render) {
+  if (typeof render !== 'function') throw new Error('Invalid separator button registration');
+  if (separatorButtons.includes(render)) throw new Error('Duplicate separator button');
+  separatorButtons.push(render);
+}
+
+// Message post-processors run over each freshly rendered root in registration order, after
+// core's math and file-link passes and before code highlighting. A package registers its
+// processor when its script loads.
+const messagePostProcessors = [];
+
+function registerMessagePostProcessor(processor) {
+  if (typeof processor !== 'function') throw new Error('Invalid message post-processor registration');
+  if (messagePostProcessors.includes(processor)) throw new Error('Duplicate message post-processor');
+  messagePostProcessors.push(processor);
+}
+
 function postProcessRenderedMessages(root) {
   root.querySelectorAll('.prose-msg').forEach(renderChatMath);
-  embedLinkedHtmlArtifacts(root);
+  markFileLinks(root);
+  messagePostProcessors.forEach((processor) => processor(root));
   scheduleCodeHighlightFlush(root);
   root.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
     el.textContent = formatBubbleTime(el.dataset.ts);
@@ -501,18 +523,22 @@ function renderMessagesToDetachedContainer(messages, sessionId) {
 }
 
 // The delivery banner's evidence links. A host-absolute ref rides the
-// file-server route; the diff page compares the run's work branch against its
-// base branch.
+// file-server route.
 function evidenceHref(ref) {
   return typeof ref === 'string' && ref.startsWith('/') ? '/absolute_filepath' + ref : null;
 }
 
-function deliveryDiffHref(msg, sessionId) {
-  if (!msg || !msg.repo_path || !msg.base_branch || !msg.branch_name) return null;
-  return '/diff?repo=' + encodeURIComponent(msg.repo_path)
-    + '&base=' + encodeURIComponent(msg.base_branch)
-    + '&head=' + encodeURIComponent(msg.branch_name)
-    + '&session=' + encodeURIComponent(sessionId || '');
+// The banner's package links follow core's three, in registration order. A
+// package registers {label, href} when its script loads: href(msg, sessionId)
+// returns the link's URL, or null for a gray label.
+const deliveryLinks = [];
+
+function registerDeliveryLink(link) {
+  if (!link || !link.label || typeof link.href !== 'function') throw new Error('Invalid delivery link registration');
+  if (deliveryLinks.some((existing) => existing.label === link.label)) {
+    throw new Error('Duplicate delivery link: ' + link.label);
+  }
+  deliveryLinks.push(link);
 }
 
 // A worker transcript's per-Run header (a system line of kind run_header):
@@ -640,7 +666,7 @@ function renderDelegateMetadata(msg, sessionId) {
       ['repo', displayMetadataValue(invocation.repo_path, repoEmpty)],
       ['base', displayMetadataValue(invocation.base_branch, baseEmpty)],
       ['task spec file', displayMetadataValue(invocation.task_spec_file, '(unknown)')],
-      ['reviewer context file', displayMetadataValue(invocation.reviewer_context_file, '(none)')],
+      ...(invocation.reviewer_context_file ? [['reviewer context file', invocation.reviewer_context_file]] : []),
       ['backend/model', delegateBackendModel(invocation, msg)],
       ['keep worktree', invocation.keep_worktree ? 'true' : 'false'],
     ];
@@ -669,7 +695,7 @@ function openMessageWrapper(layoutClass, msg) {
   return "<div class=\"" + layoutClass + "\"" + messageIdentityAttrs(msg) + ">";
 }
 
-// The one markdown bubble body: chat bubbles and the explain panel's answer body
+// The one markdown bubble body: chat bubbles and a separator panel's answer body
 // render through the same escape + renderProseMarkdown + data-raw round-trip.
 function mdDiv(text) {
   var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
@@ -717,8 +743,8 @@ function renderMessage(msg, sessionId) {
       + renderDelegateMetadata(msg, sessionId) + timeDiv() + "</div></div>";
   }
   if (msg.role === "run_delivery") {
-    // The worker transcript's close: the delivery summary and the four
-    // evidence links.
+    // The worker transcript's close: the delivery summary and the evidence
+    // links.
     var delivered = msg.completed;
     var palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
     var labelClass = delivered ? 'text-green-300' : 'text-slate-400';
@@ -727,8 +753,7 @@ function renderMessage(msg, sessionId) {
       evidenceLinkHtml('Raw log', evidenceHref(msg.raw_log_ref)),
       evidenceLinkHtml('Events', evidenceHref(msg.events_ref)),
       evidenceLinkHtml('Result', evidenceHref(msg.result_ref)),
-      evidenceLinkHtml('Diff', deliveryDiffHref(msg, sessionId)),
-    ];
+    ].concat(deliveryLinks.map(function(link) { return evidenceLinkHtml(link.label, link.href(msg, sessionId)); }));
     var refsHtml = '';
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     if (refs.length) {
@@ -810,15 +835,7 @@ function renderMessage(msg, sessionId) {
     var buttons = "";
     if (sessionId) {
       if (msg.event_index != null) {
-        buttons = "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
-          + CLONE_SVG
-          + "</button>"
-          + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
-          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
-          + "</button>"
-          + renderExplainButton(sessionId, msg.event_index);
+        buttons = separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
       }
       if (msg.id != null) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
@@ -840,7 +857,7 @@ function renderMessage(msg, sessionId) {
 // the projection and pins the bottom when the reader is there.
 function ingestLiveMessage(msg, sessionId, forceScroll) {
   var container = document.getElementById("messages");
-  var engine = Chat.TurnEngine && Chat.TurnEngine.activeFor(container);
+  var engine = Chat.activeTurnEngineFor(container);
   if (engine) {
     engine.appendMessage(msg, forceScroll);
     return true;
@@ -902,6 +919,10 @@ const GLOBALS = {
 // the fold bar's click handler closes over the module scope. Legacy callers go
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
+  registerMessagePostProcessor,
+  registerSeparatorButton,
+  registerDeliveryLink,
+  CLONE_SVG,
   buildTurnRowFromSpec,
   installTurnFold,
   installTurnCollapseControl,

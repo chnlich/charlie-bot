@@ -3,13 +3,10 @@
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
-from starlette.responses import Response
+from fastapi import APIRouter, Query, Request, responses
 
-from src.features.ncu.ncu_parsing import NcuParseError, parse_ncu_report
-from src.runtime import templating
-from src.runtime.file_urls import FILE_SERVER_MOUNTS
+from src.features.ncu import ncu_parsing
+from src.runtime import file_urls, templating
 
 router = APIRouter()
 
@@ -18,7 +15,7 @@ router = APIRouter()
 NCU_VIEWER_PATH = "/ncu"
 
 
-def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLResponse:
+def _ncu_error_page(request: Request, message: str, status_code: int) -> responses.HTMLResponse:
   """Render ncu.html with a clean error message and a 4xx status."""
   return templating.templates().TemplateResponse(
       request,
@@ -31,11 +28,11 @@ def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLRes
   )
 
 
-@router.get(NCU_VIEWER_PATH, response_class=HTMLResponse)
+@router.get(NCU_VIEWER_PATH, response_class=responses.HTMLResponse)
 async def ncu_viewer(
     request: Request,
     file: list[str] = Query(default=[]),
-) -> Response:
+) -> responses.Response:
   """Render the Nsight Compute (.ncu-rep) report viewer page.
 
   `file` is a repeatable list of absolute paths. Single-report clients render the first report;
@@ -57,11 +54,11 @@ async def ncu_viewer(
     return _ncu_error_page(request, f"Report not found: {target}", 404)
 
   try:
-    report = await asyncio.to_thread(parse_ncu_report, str(path))
-  except NcuParseError as exc:
+    report = await asyncio.to_thread(ncu_parsing.parse_ncu_report, str(path))
+  except ncu_parsing.NcuParseError as exc:
     return _ncu_error_page(request, str(exc), 422)
 
-  download_url = FILE_SERVER_MOUNTS[0] + str(path)
+  download_url = file_urls.FILE_SERVER_MOUNTS[0] + str(path)
   return templating.templates().TemplateResponse(
       request,
       "ncu.html",

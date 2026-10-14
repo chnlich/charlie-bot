@@ -63,11 +63,12 @@ function loadChatContext(elements) {
     JSON_HEADERS: {'Content-Type': 'application/json'},
   };
   vm.createContext(context);
-  // The real file-upload.js rides the page before the chat modules; its gate
+  // The real file-upload.js rides the page before chat/input.js; its gate
   // (blockIfUploadsInFlight) is what compactContext and sendMessage share.
   vm.runInContext(FILE_UPLOAD_JS, context, { filename: 'file-upload.js' });
   loadChatRenderingModules(context);
   vm.runInContext(readStatic('websocket.js'), context, { filename: 'websocket.js' });
+  vm.runInContext(readStatic('websocket-handlers.js'), context, { filename: 'websocket-handlers.js' });
   vm.runInContext(readStatic('chat/input.js'), context, { filename: 'chat/input.js' });
   return context;
 }
@@ -82,31 +83,31 @@ function fireClick(btn, handler) {
 // ---------------------------------------------------------------------------
 // 1. Gate is exhaustive over the backend-type enumeration.
 // ---------------------------------------------------------------------------
-test('updateBackendHeaderControls gates #compact-btn to exactly cc-claude, for every type in the BACKEND_TYPES fixture', () => {
-  const BACKEND_TYPES = {
-    'claude-opus-4.6': 'cc-claude',
-    'claude-sonnet-5': 'cc-claude',
-    'codex-o3': 'codex',
-    'opencode-glm': 'opencode',
+test('updateBackendHeaderControls reads #compact-btn state and title from BACKEND_COMPACT, unlisted types included', () => {
+  const BACKEND_COMPACT = {
+    'cc-claude': {manual: true, hint: null},
+    codex: {manual: false, hint: 'codex only compacts automatically — tune model_auto_compact_token_limit'},
+    opencode: {manual: false, hint: null},
   };
   const compactBtn = fakeHeaderButton();
   const elements = new Map([['compact-btn', compactBtn]]);
   const context = loadSidebarStatusContext({
     document: { getElementById: (id) => elements.get(id) || null },
+    BACKEND_COMPACT,
   });
 
-  const uniqueTypes = Array.from(new Set(Object.values(BACKEND_TYPES)));
-  assert.ok(uniqueTypes.length >= 3, 'fixture should exercise more than one non-cc-claude type');
-
-  for (const type of uniqueTypes) {
+  const expected = [
+    ['cc-claude', false, ''],
+    ['codex', true, 'codex only compacts automatically — tune model_auto_compact_token_limit'],
+    ['opencode', true, 'Manual compaction is not supported on this backend'],
+    // A session whose type the configuration no longer lists, and one with no type.
+    ['gemini', true, 'Manual compaction is not supported on this backend'],
+    ['', true, 'Manual compaction is not supported on this backend'],
+  ];
+  for (const [type, disabled, title] of expected) {
     context.updateBackendHeaderControls(type);
-    assert.equal(compactBtn.disabled, type !== 'cc-claude', `type ${type}`);
-    const expectedTitle = type === 'cc-claude'
-      ? ''
-      : type === 'codex'
-        ? 'codex only compacts automatically — tune model_auto_compact_token_limit'
-        : 'Manual compaction is not supported on this backend';
-    assert.equal(compactBtn.title, expectedTitle, `title for type ${type}`);
+    assert.equal(compactBtn.disabled, disabled, `type ${type}`);
+    assert.equal(compactBtn.title, title, `title for type ${type}`);
   }
 });
 
@@ -211,7 +212,7 @@ test('a dictated message posts input_mode voice and the next typed message posts
   const calls = [];
   context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
 
-  context.Chat.setVoiceContributed(true);
+  context.Chat.setInputMode('voice');
   input.value = 'dictated words';
   await context.sendMessage();
   input.value = 'typed words';
@@ -223,6 +224,78 @@ test('a dictated message posts input_mode voice and the next typed message posts
       { content: 'dictated words', uploaded_files: [], input_mode: 'voice' },
       { content: 'typed words', uploaded_files: [], input_mode: null },
     ]);
+});
+
+// ---------------------------------------------------------------------------
+// 3d. The composer note shows on demand and dies with the input mode's clears.
+// ---------------------------------------------------------------------------
+function loadNoteContext() {
+  const input = createElement({id: 'msg-input'});
+  input.style = {};
+  const note = createElement({id: 'input-note', className: 'hidden text-xs text-amber-400 mb-2'});
+  const elements = new Map([
+    ['messages', new FakeElement('DIV')],
+    ['msg-input', input],
+    ['input-note', note],
+  ]);
+  const context = loadChatContext(elements);
+  context.DRAFT_KEY = null;
+  context.startThinking = () => {};
+  context.stopThinking = () => {};
+  context.fetch = () => Promise.resolve({ ok: true });
+  return { context, input, note };
+}
+
+const noteHidden = (note) => note.classList.contains('hidden');
+
+test('setInputNote shows the note line with its text', () => {
+  const { context, note } = loadNoteContext();
+  assert.ok(noteHidden(note)); // the note line starts hidden
+
+  context.Chat.setInputNote('note words');
+  assert.equal(note.textContent, 'note words');
+  assert.ok(!noteHidden(note));
+});
+
+test('a send clears the note with the composer', async () => {
+  const { context, input, note } = loadNoteContext();
+  input.value = 'words';
+  context.Chat.setInputNote('note words');
+  assert.ok(!noteHidden(note));
+
+  await context.sendMessage();
+  assert.equal(note.textContent, '');
+  assert.ok(noteHidden(note));
+});
+
+test('emptying the composer clears the note', () => {
+  const { context, input, note } = loadNoteContext();
+  input.value = 'words';
+  context.Chat.setInputNote('note words');
+
+  input.value = '';
+  for (const handler of input._listeners.input) handler();
+  assert.equal(note.textContent, '');
+  assert.ok(noteHidden(note));
+});
+
+test('setInputMode(null) clears the note', () => {
+  const { context, note } = loadNoteContext();
+  context.Chat.setInputNote('note words');
+  assert.ok(!noteHidden(note));
+
+  context.Chat.setInputMode(null);
+  assert.equal(note.textContent, '');
+  assert.ok(noteHidden(note));
+});
+
+test("setInputMode('voice') keeps the note", () => {
+  const { context, note } = loadNoteContext();
+  context.Chat.setInputNote('note words');
+
+  context.Chat.setInputMode('voice');
+  assert.equal(note.textContent, 'note words');
+  assert.ok(!noteHidden(note));
 });
 
 // ---------------------------------------------------------------------------

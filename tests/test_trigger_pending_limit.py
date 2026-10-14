@@ -34,7 +34,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.features.chat_threads.thread_entry import arm_follow_trigger
-from src.features.slack.slack_listener import SLACK, SlackThreadAdapter
+from src.features.slack.slack_listener import SLACK
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.runtime.api.deps import get_session_store, get_trigger_manager
@@ -171,13 +171,11 @@ async def test_slack_follow_rearm_succeeds_on_a_full_session(tmp_path: Path) -> 
       patch(BROADCAST_PATCH_TARGET, new=MagicMock()),
       patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=MagicMock()),
   ):
-    adapter = SlackThreadAdapter()
     trigger = await arm_follow_trigger(
         SLACK,
         trigger_mgr,
         session_id,
         floor="1700000000.000100",
-        wake_label=lambda floor: adapter.follow_wake_message(floor, "https://slack/p"),
         log_fields={
             "channel": "C1",
             "thread_ts": "1700000000.000100"

@@ -6,15 +6,42 @@
 // events. Rendering is fully driven by deltas; raw assistant/user/
 // scheduled_trigger events are not sent. Other raw events (master_done,
 // task_delegated, …) flow but only for state side-effects (stopThinking,
-// spinner, etc).
+// spinner, etc), which the handlers of websocket-handlers.js apply.
 let ws = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 // User echoes still awaiting their skip: one ++ per local optimistic send, one
-// -- per server echo consumed in _commitMessage. A count, not a boolean, so
-// two sends fired before the first echo arrives each skip exactly their own.
+// -- per server echo consumed in _commitMessage (websocket-handlers.js). A
+// count, not a boolean, so two sends fired before the first echo arrives each
+// skip exactly their own.
 let pendingUserEchoes = 0;
 let wsGeneration = 0;
+
+// Event type -> {handler, advancesCursor}. A package registers the handlers of
+// its own event types when its script loads, and websocket-handlers.js
+// registers core's. A handler runs for an event of this session after the
+// event cursor advances. A handler registered with {advancesCursor: false}
+// runs before that point, and its event leaves the cursor where it is.
+const wsMessageHandlers = new Map();
+
+function registerWsMessageHandler(type, handler, {advancesCursor = true} = {}) {
+  if (typeof type !== 'string' || !type || typeof handler !== 'function' || typeof advancesCursor !== 'boolean') {
+    throw new Error('Invalid WebSocket message handler registration');
+  }
+  if (wsMessageHandlers.has(type)) throw new Error('Duplicate WebSocket message handler: ' + type);
+  wsMessageHandlers.set(type, {handler, advancesCursor});
+}
+
+// Handlers that run on every (re)connect of this session's socket, after the
+// cursor is sent, so a package re-syncs the state it derives from the event
+// stream. A package registers its handler when its script loads.
+const wsConnectHandlers = [];
+
+function registerWsConnectHandler(handler) {
+  if (typeof handler !== 'function') throw new Error('Invalid WebSocket connect handler registration');
+  if (wsConnectHandlers.includes(handler)) throw new Error('Duplicate WebSocket connect handler');
+  wsConnectHandlers.push(handler);
+}
 
 function isStaleSocket(socket, targetSession, generation) {
   return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
@@ -64,9 +91,7 @@ function connectWS() {
     reconnectDelay = 1000;
     // Send cursor so the server only replays events beyond this index.
     socket.send(JSON.stringify({type: 'cursor', index: eventCursor}));
-    // Re-sync plan panel state on (re)connect.
-    if (typeof planPanel !== 'undefined') planPanel.invalidate();
-    if (typeof planPanel !== 'undefined') planPanel.onReconnect();
+    wsConnectHandlers.forEach((handler) => handler());
   };
 
   socket.onmessage = (e) => {
@@ -98,27 +123,6 @@ function _bumpEventCursor(ev) {
   }
 }
 
-function _commitMessage(msg) {
-  // Catchup frames are rendered exactly like live frames: the cursor the client
-  // reports is the snapshot the first paint was built from, so every frame the
-  // server replays is one the client does not already have. There is no
-  // connection-phase state to gate rendering on.
-  if (msg.role === 'user' && pendingUserEchoes > 0) {
-    // The local tab already rendered this user message optimistically; each
-    // pending send consumes exactly one server-side echo so the bubble doesn't
-    // double up.
-    pendingUserEchoes--;
-    return;
-  }
-  // A committed bubble supersedes the streaming preview: the draft it carries is
-  // the same text the preview holds. The message arrived over the wire — the
-  // local tab did not produce it — so it never forces the follow; a reader
-  // pinned at the bottom follows through their pin intent, one reading
-  // history keeps their place.
-  hideStreaming();
-  appendMessageObject(msg, SESSION_ID, false);
-}
-
 function handleWSEvent(ev, socketSessionId, socketGeneration) {
   if (socketSessionId !== SESSION_ID || socketGeneration !== wsGeneration) return;
   const t = ev.type;
@@ -129,117 +133,13 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   }
   if (t === 'ping') return;
 
-  // Session rename can arrive at any time
-  if (t === 'session_renamed') {
-    const sid = ev.session_id || SESSION_ID;
-    if (typeof updateSidebarSessionName === 'function') {
-      updateSidebarSessionName(sid, ev.name);
-    } else {
-      const link = document.getElementById('session-' + sid);
-      if (link) link.querySelector('.session-name').textContent = ev.name;
-    }
-    if (sid === SESSION_ID) {
-      const header = document.getElementById('header-session-name');
-      if (header) header.textContent = ev.name;
-    }
-    return;
-  }
-
-  // Explain (btw-style) state change for one divider: repaint the button from the
-  // frame; a frame carries no body, so an open panel re-fetches the single entry.
-  if (t === 'explain_status') {
-    updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend);
-    return;
-  }
-
-  // A changed task node re-fetches the list the same way a group change does.
-  if (t === 'session_group_changed' || t === 'task_tree_changed') {
-    const searchInput = document.getElementById('sidebar-search');
-    const query = searchInput ? searchInput.value.trim() : '';
-    if (query) handleSidebarSearch(query);
-    else switchSidebarFilter(currentFilter);
-    return;
-  }
-
-  // Sidebar unread indicator. Broadcasts are socket-ordered and always apply
-  // (they stamp the newest fact, so any in-flight poll or tree-page reply
-  // captured earlier is refused by the shared gate). The unread marks read the
-  // facts only, for both row kinds: the dot shows beside any activity icon,
-  // and the flag survives every paint.
-  if (t === 'unread_changed') {
-    recordUnreadFact(ev.session_id, ev.has_unread);
-    if (ev.session_id === SESSION_ID) return;
-    // The row and its collapsed ancestors repaint from the shared facts.
-    refreshSessionIndicator(ev.session_id);
-    return;
-  }
-
-  // Sidebar activity update. The same state mapping the status poll and the
-  // list paint apply: a task-tree row's work_state verdict rides the event
-  // when the broadcaster knows it, and the 3 s poll corrects any drift.
-  if (t === 'running_changed') {
-    setSessionIndicator(ev.session_id, getSessionIndicatorState({
-      thinking_since: ev.thinking_since,
-      has_running_tasks: ev.has_running_tasks,
-      work_state: ev.work_state,
-    }));
-    if (ev.session_id === SESSION_ID) {
-      if (ev.thinking_since) {
-        startThinking({keepSendEnabled: true});
-      } else if (!ev.has_running_tasks) {
-        stopThinking({preserveSessionIndicator: true});
-      }
-    }
-    refreshSessionStatusNow();
-    return;
-  }
-
-  // A backend switch on the active session: the header badge/dropdown must
-  // reflect the new value immediately (the initiating tab already did this via
-  // its own fetch; other tabs reach this through the shared session/sidebar
-  // channels). `to` is the audit shape (session channel, always this session);
-  // `backend`+`session_id` is the sidebar broadcast shape, which every open
-  // tab receives regardless of which session it's viewing — only apply it
-  // when it names this tab's own session.
-  if (t === 'backend_switched') {
-    const sid = ev.session_id || SESSION_ID;
-    const newBackend = ev.to || ev.backend;
-    if (sid === SESSION_ID && newBackend) {
-      setActiveBackendId(newBackend);
-      updateActiveBackendBadges();
-    }
+  const registered = wsMessageHandlers.get(t);
+  if (registered && !registered.advancesCursor) {
+    registered.handler(ev);
     return;
   }
 
   _bumpEventCursor(ev);
 
-  if (t === 'message') {
-    _commitMessage(ev.message || {});
-  } else if (t === 'stream') {
-    const draft = ev.message || {};
-    if (draft.content || draft.thinking) showStreaming(draft);
-  } else if (t === 'master_done') {
-    if (!ev.still_thinking) {
-      stopThinking({preserveSessionIndicator: true});
-    }
-  } else if (t === 'assistant_error') {
-    hideStreaming();
-    stopThinking();
-  } else if (t === 'error') {
-    hideStreaming();
-  } else if (t === 'task_delegated') {
-    refreshSessionStatusNow();
-  } else if (t === 'worker_summary') {
-    refreshSessionStatusNow();
-  } else if (t === 'result') {
-    // The usage header is a projection over the full event list, so the forced
-    // poll is what updates it — the WebSocket handler must not write the header.
-    pollActiveSessionView({force: true});
-  } else if (t === 'tex_edit_proposed') {
-    showDiffModal();
-  } else if (t === 'ext_usage') {
-    renderExtUsage(ev);
-  } else if (t === 'plan_updated') {
-    if (typeof planPanel !== 'undefined') planPanel.onPlanUpdated(ev.plan_id);
-  }
+  if (registered) registered.handler(ev);
 }

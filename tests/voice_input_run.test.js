@@ -2,13 +2,13 @@
 // voice-input.js record-then-upload tests. Each recording is one run object
 // owned through the module-level slot; these tests drive toggleVoice() against
 // fake mic/XHR/worklet/WebSocket doubles and assert the click-cadence, upload,
-// guard, backend-menu, and preview-relay contracts from the inside.
+// stop-state, guard, backend-menu, and preview-relay contracts from the inside.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -51,6 +51,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     micPending: null,
     input: {value: '', focus() {}, addEventListener() {}},
     chatFlags: [],
+    chatNotes: [],
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
     overlayMap: new Map(),
     beforeunloadCount: 0,
@@ -282,10 +283,15 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
         return state.overlayMap.get(id) || null;
       },
       createElement: () => makeEl(),
+      addEventListener() {},
     },
     showToast: (message, isError) => state.toasts.push({msg: message, isError: !!isError}),
     accessTokenAuthorization: () => null,
-    Chat: {setVoiceContributed: (v) => state.chatFlags.push(v)},
+    Chat: {
+      setInputMode: (mode) => state.chatFlags.push(mode),
+      setInputNote: (text) => state.chatNotes.push(text),
+      registerInputMode() {},
+    },
     autoResize() {},
     saveDraft() {},
   };
@@ -301,19 +307,19 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   // Page order: file-upload.js lands before voice-input.js and owns the
   // send-button lock the transcription windows report to.
   vm.runInContext(readStatic('file-upload.js'), context, {filename: 'file-upload.js'});
-  vm.runInContext(readStatic('voice-input.js'), context, {filename: 'voice-input.js'});
+  vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), context, {filename: 'voice-input.js'});
 
   // Wrap the lock's open/close so tests can assert a path never engaged it
   // while the real counting behavior stays live for every other path.
-  const realStarted = context.voiceTranscriptionStarted;
-  const realSettled = context.voiceTranscriptionSettled;
-  context.voiceTranscriptionStarted = () => {
+  const realStarted = context.inputWorkStarted;
+  const realSettled = context.inputWorkSettled;
+  context.inputWorkStarted = (message) => {
     state.sendLockOpens += 1;
-    realStarted();
+    realStarted(message);
   };
-  context.voiceTranscriptionSettled = () => {
+  context.inputWorkSettled = (message) => {
     state.sendLockSettles += 1;
-    realSettled();
+    realSettled(message);
   };
 
   // Click once and drive the arming chain to `recording`: mic -> audio context
@@ -339,6 +345,18 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     return state.xhrs[state.xhrs.length - 1];
   };
 
+  // Click stop and complete the flush handshake without expecting an upload:
+  // a live stop waits for the relay's final or lands in the stop state.
+  const stopLive = async () => {
+    context.toggleVoice();
+    const worklet = state.workletNodes[state.workletNodes.length - 1];
+    const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
+    assert.equal(flush.type, 'flush');
+    worklet.replyFlushed(flush.id);
+    await tick();
+    await tick();
+  };
+
   // The overlay's indicator elements, found through the fake DOM tree.
   state.voiceUi = () => {
     const overlay = state.overlayMap.get('voice-partial-overlay');
@@ -353,10 +371,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     };
   };
 
-  // The relay wait's budget timer, found the way the code set it (2 s).
-  state.relayTimeoutTimer = () => state.timers.find((timer) => timer.ms === 2000 && !timer.cleared);
+  // A pending timer by its delay, the way the code under test set it.
+  state.timerByMs = (ms) => state.timers.find((timer) => timer.ms === ms && !timer.cleared);
   state.arm = arm;
   state.stopWithFlush = stopWithFlush;
+  state.stopLive = stopLive;
   state.FakeStream = FakeStream;
 
   return {context, state};
@@ -524,7 +543,7 @@ test('the confirm probe fires exactly once at 5 s and inserts its words', async 
   await tick();
   await tick();
   assert.equal(state.input.value, '你好今天');
-  assert.deepEqual(state.chatFlags, [true]);
+  assert.deepEqual(state.chatFlags, ['voice']);
   assert.equal(state.voiceUi().hint.textContent, '你好今天');
 });
 
@@ -575,7 +594,7 @@ test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decodin
   await tick();
   await tick();
   assert.equal(state.input.value, '你好今天天气不错');
-  assert.deepEqual(state.chatFlags, [true]); // the unanswered confirm inserted nothing
+  assert.deepEqual(state.chatFlags, ['voice']); // the unanswered confirm inserted nothing
   assert.equal(state.beforeunloadCount, 0); // idle again
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
 
@@ -768,7 +787,7 @@ test('teardown aborts an in-flight upload and frees the slot', async () => {
   assert.equal(state.beforeunloadCount, 0);
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
   assert.equal(state.voiceUi(), null);
-  assert.deepEqual(state.chatFlags, [false]);
+  assert.deepEqual(state.chatFlags, [null]);
 
   upload.respond(200, {text: 'late'});
   await tick();
@@ -940,6 +959,7 @@ test('a final inside the budget inserts once and ends the run with no upload', a
   assert.equal(state.sendLockOpens, 0); // the send lock never engaged
   assert.equal(state.sendLockSettles, 0);
   assert.equal(state.beforeunloadCount, 0);
+  assert.deepEqual(state.chatNotes, []); // the relay's words carry no note
 
   await state.arm(); // the slot is free: the next click starts a new recording
   assert.equal(state.micCalls, 2);
@@ -970,41 +990,55 @@ test('an empty final inside the budget toasts and inserts nothing', async () => 
   assert.equal(state.micCalls, 2);
 });
 
-test('a final past the budget is discarded and the fallback upload runs', async () => {
-  const {context, state} = buildHarness();
-  const {worklet, socket} = await armLive(state);
-  socket.openSocket();
-  worklet.emitPcmCount(RATE);
+test('the relay final budget scales with the recording length', async () => {
+  // Base 2000 ms plus 20 ms per recorded second, at the measured points and
+  // at the cap (the 300 s recording auto-stops itself).
+  for (const [seconds, budgetMs] of [[12.5, 2250], [201.6, 6032], [300, 8000]]) {
+    const {context, state} = buildHarness();
+    const {worklet, socket} = await armLive(state);
+    socket.openSocket();
+    worklet.emitPcmCount(seconds * RATE);
 
-  context.toggleVoice();
-  const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
-  worklet.replyFlushed(flush.id);
-  await tick();
-  await tick();
+    const lastFrame = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
+    if (!lastFrame || lastFrame.type !== 'flush') context.toggleVoice(); // the cap already stopped
+    const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
+    assert.equal(flush.type, 'flush');
+    worklet.replyFlushed(flush.id);
+    await tick();
+    await tick();
 
-  const timeout = state.relayTimeoutTimer();
-  assert.equal(timeout.ms, 2000); // the bounded final budget
-  timeout.fn();
-  await tick();
-  await tick();
-  assert.ok(socket.closed); // the relay closed with the timeout
-
-  const upload = state.xhrs[state.xhrs.length - 1];
-  assert.equal(upload.sentBody.has('transcript'), false); // the fallback decode path owns the text
-  assert.equal(upload.sentBody.get('backend'), 'gemini');
-
-  socket.receiveMessage({type: 'final', text: 'late final'}); // discarded with the socket
-  await tick();
-  assert.equal(state.input.value, '');
-
-  upload.respond(200, {text: 'local words'});
-  await tick();
-  await tick();
-  assert.equal(state.input.value, 'local words'); // the decode result owns the input
-  assert.equal(state.beforeunloadCount, 0);
+    const expiry = state.timerByMs(budgetMs);
+    assert.ok(expiry, 'the budget for ' + seconds + ' s is ' + budgetMs + ' ms');
+    expiry.fn(); // the expiry enters the stop state; no upload may start from it
+    await tick();
+    await tick();
+    assert.equal(state.xhrs.length, 0);
+  }
 });
 
-test('a preview error mid-recording only stops the preview; the recording continues', async () => {
+test('a 201.6 s live recording finalizes through the relay inside its scaled budget', async () => {
+  const {state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(201.6 * RATE);
+
+  await state.stopLive();
+  const expiry = state.timerByMs(6032);
+  assert.ok(expiry, 'the budget grew with the recording');
+  assert.equal(state.xhrs.length, 0); // the run waits for the final, no upload
+  assert.equal(state.beforeunloadCount, 1); // the guard holds through the wait
+
+  socket.receiveMessage({type: 'final', text: '\u4f60\u597d\u4e16\u754c'}); // the measured 2130 ms
+  await tick();
+  await tick();
+  assert.equal(state.input.value, '\u4f60\u597d\u4e16\u754c'); // the relay's final owns the words
+  assert.equal(state.xhrs.length, 0); // zero upload requests
+  assert.ok(socket.closed);
+  assert.equal(state.beforeunloadCount, 0);
+  assert.equal(state.sendLockOpens, 0);
+});
+
+test('an error frame mid-recording stops visibly and one click transcribes locally', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
   socket.openSocket();
@@ -1013,20 +1047,154 @@ test('a preview error mid-recording only stops the preview; the recording contin
 
   socket.receiveMessage({type: 'error', message: 'backend exploded'});
   await tick();
-  assert.ok(socket.closed); // the preview is over
+  assert.ok(socket.closed); // the failed relay is done
   assert.equal(state.voiceUi().partial.textContent, ''); // the grey text cleared
+  const hint = state.voiceUi().hint.textContent;
+  assert.ok(hint.includes('Gemini 3.5 Transcribe Live'), hint);
+  assert.ok(hint.includes('backend exploded'), hint);
+  assert.equal(state.xhrs.length, 0); // the failure never uploads by itself
   assert.equal(state.beforeunloadCount, 1); // still recording
-  assert.equal(state.micCalls, 1);
   worklet.emitPcmCount(RATE); // capture keeps running
 
-  const upload = await state.stopWithFlush();
-  assert.equal(upload.url, '/api/voice/session-a'); // recording and upload unaffected
-  assert.equal(upload.sentBody.has('transcript'), false); // the fallback form carries audio only
+  await state.stopLive(); // at stop with a failed relay: the stop state at once
+  assert.equal(state.xhrs.length, 0); // still no upload
+  assert.ok(state.voiceUi().hint.textContent.includes('backend exploded'));
+  assert.equal(state.beforeunloadCount, 1); // the guard stays engaged
+
+  context.toggleVoice(); // one click
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 1); // exactly one POST
+  const upload = state.xhrs[0];
+  assert.equal(upload.url, '/api/voice/session-a');
+  assert.equal(upload.sentBody.get('backend'), 'gemini'); // the live backend id stays
 
   upload.respond(200, {text: 'after error'});
   await tick();
   await tick();
   assert.equal(state.input.value, 'after error');
+  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
+  assert.equal(state.beforeunloadCount, 0);
+});
+
+test('a lost socket mid-recording stops visibly and one click transcribes locally', async () => {
+  const {context, state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(RATE);
+
+  socket.dropSocket();
+  await tick();
+  assert.equal(state.xhrs.length, 0); // the lost relay never uploads by itself
+  const hint = state.voiceUi().hint.textContent;
+  assert.ok(hint.includes('Gemini 3.5 Transcribe Live'), hint);
+  assert.ok(hint.includes('connection lost'), hint);
+  assert.equal(state.beforeunloadCount, 1); // still recording
+
+  await state.stopLive(); // the stop state at once
+  assert.equal(state.xhrs.length, 0);
+  assert.equal(state.beforeunloadCount, 1);
+
+  context.toggleVoice(); // one click
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 1);
+  const upload = state.xhrs[0];
+  assert.equal(upload.sentBody.get('backend'), 'gemini');
+
+  upload.respond(200, {text: 'after close'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, 'after close');
+  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
+  assert.equal(state.beforeunloadCount, 0);
+});
+
+test('a spent budget stops visibly and one click transcribes locally', async () => {
+  const {context, state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(21.6 * RATE); // 2432 ms of budget for this length
+
+  await state.stopLive();
+  assert.equal(state.xhrs.length, 0); // the run waits for the final
+
+  state.timerByMs(2432).fn(); // the budget expires
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 0); // expiry uploads nothing
+  assert.ok(!socket.closed); // the relay stays open for a late final
+  const hint = state.voiceUi().hint.textContent;
+  assert.ok(hint.includes('Gemini 3.5 Transcribe Live'), hint);
+  assert.ok(hint.includes('no final after 2.4 s, still waiting'), hint);
+  assert.equal(state.beforeunloadCount, 1); // the guard stays engaged
+
+  context.toggleVoice(); // one click
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 1); // exactly one POST
+  const upload = state.xhrs[0];
+  assert.equal(upload.sentBody.get('backend'), 'gemini');
+
+  upload.respond(200, {text: 'local words'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, 'local words');
+  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
+  assert.equal(state.beforeunloadCount, 0);
+});
+
+test('a spent budget keeps waiting and a final before the click still wins', async () => {
+  const {state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(RATE); // 2020 ms of budget for this length
+
+  await state.stopLive();
+  state.timerByMs(2020).fn(); // the budget expires
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 0); // no upload
+  assert.ok(!socket.closed); // the relay stayed open
+
+  socket.receiveMessage({type: 'final', text: 'still mine'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, 'still mine'); // inserted through the final path
+  assert.equal(state.xhrs.length, 0); // zero POSTs
+  assert.ok(socket.closed); // the relay closed with the run
+  assert.equal(state.beforeunloadCount, 0); // the guard is released
+  assert.equal(state.sendLockOpens, 0); // the send lock never engaged
+});
+
+test('a spent budget then a click uploads once and discards the late final', async () => {
+  const {context, state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(RATE);
+
+  await state.stopLive();
+  state.timerByMs(2020).fn(); // the budget expires
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 0);
+
+  context.toggleVoice(); // the stop state's click
+  assert.ok(socket.closed); // the relay closes before any upload work starts
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 1); // exactly one POST
+  const upload = state.xhrs[0];
+  assert.equal(upload.sentBody.get('backend'), 'gemini');
+
+  socket.receiveMessage({type: 'final', text: 'too late'}); // the handlers are gone
+  await tick();
+  assert.equal(state.input.value, ''); // the late final is not inserted
+
+  upload.respond(200, {text: 'local words'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, 'local words'); // the decode result owns the input
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1045,7 +1213,7 @@ test('the upload form carries the devices object beside the backend', async () =
   assert.equal(state.input.value, 'words');
 });
 
-test('the local backend opens no relay, fires the probe, and uploads as the fallback', async () => {
+test('the local backend opens no relay, fires the probe, and uploads right after stop', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
 
@@ -1067,6 +1235,31 @@ test('the local backend opens no relay, fires the probe, and uploads as the fall
   await tick();
   await tick();
   assert.equal(state.input.value, 'recognized words');
+  assert.deepEqual(state.chatNotes, []); // a chosen local backend sets no note
+});
+
+test('an empty local decode after the stop-state click sets no note', async () => {
+  const {context, state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(RATE); // 2020 ms of budget for this length
+
+  await state.stopLive();
+  state.timerByMs(2020).fn(); // the budget expires
+  await tick();
+  await tick();
+
+  context.toggleVoice(); // the stop state's click
+  await tick();
+  await tick();
+  assert.equal(state.xhrs.length, 1); // exactly one POST
+
+  state.xhrs[0].respond(200, {text: ''});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, ''); // the empty decode inserted nothing
+  assert.deepEqual(state.toasts, [{msg: 'No speech detected', isError: false}]);
+  assert.deepEqual(state.chatNotes, []); // no insertion, no note
 });
 
 test('the caret is disabled while a run is active and back on release', async () => {

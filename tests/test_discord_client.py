@@ -186,13 +186,8 @@ async def test_reaction_emoji_is_url_encoded():
   assert seen["DELETE"] == seen["PUT"]
 
 
-def test_message_link_round_trip():
-  """message_link and parse_message_link invert each other, message id optional."""
-  assert discord_client.message_link(
-      "111111111111111111",
-      "222222222222222222") == "https://discord.com/channels/111111111111111111/222222222222222222"
-  assert discord_client.message_link("111111111111111111", "222222222222222222", "333333333333333333") == (
-      "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333")
+def test_parse_message_link_reads_channel_and_message_links():
+  """A channel link parses with the message id None; a message link names its message."""
   assert discord_client.parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222") == (
       "111111111111111111", "222222222222222222", None)
   assert discord_client.parse_message_link(

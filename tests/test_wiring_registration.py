@@ -25,6 +25,7 @@ from src.runtime.hooks import page_render, wiring
 
 DELETED_PACKAGE = "src.features.latex"
 DELETED_PREFIX = "/api/latex"
+DELETED_STATIC = "/static/features/latex"
 
 # The probe process deletes one package line, registers, then imports the server module,
 # which calls register_all() again (a no-op) and assembles the app from the registry.
@@ -47,8 +48,11 @@ def test_deleting_a_package_line_removes_its_routes_and_keeps_the_others() -> No
   with_package = [route.path for route in server.app.routes]
 
   assert any(path.startswith(DELETED_PREFIX) for path in with_package)
-  assert not any(path.startswith(DELETED_PREFIX) for path in without_package)
-  assert without_package == [path for path in with_package if not path.startswith(DELETED_PREFIX)]
+  assert DELETED_STATIC in with_package
+  assert not any(path.startswith(DELETED_PREFIX) or path == DELETED_STATIC for path in without_package)
+  assert without_package == [
+      path for path in with_package if not path.startswith(DELETED_PREFIX) and path != DELETED_STATIC
+  ]
 
 
 def test_a_second_registration_of_one_name_raises() -> None:

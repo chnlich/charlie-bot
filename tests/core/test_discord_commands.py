@@ -17,6 +17,7 @@ import pytest
 
 from src.features.discord import discord_client, discord_commands, discord_listener, metadata
 from src.infra import config, metadata_slots, models
+from src.infra import event_types as ET
 
 _GUILD = "800000000000000001"
 _PARENT = "800000000000000002"
@@ -269,6 +270,148 @@ async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: 
   assert _ack_events(session_blocks, session_id) == []
 
 
+def _summon_event(mention_id: str) -> dict:
+  """A summon injection as the log holds it: the block and the one-line content."""
+  return {
+      "type": ET.AGENT_MESSAGE,
+      "content": discord_listener.DISCORD.summon_line,
+      "discord": {
+          "guild_id": _GUILD,
+          "channel_id": _THREAD,
+          "thread_id": _THREAD,
+          "mention_id": mention_id,
+      },
+  }
+
+
+@pytest.mark.asyncio
+async def test_read_flags_the_pending_summon_and_starts_the_window_at_it(tmp_path: pathlib.Path) -> None:
+  """The summon step marked the mention read, so the window would start at the
+  later unread message and hide the question; the readback starts at the
+  pending summon's mention instead and flags it ``summon: true``."""
+  cfg, session_blocks, client = _rig(
+      tmp_path, channels={_THREAD: [_message(1, "the question"),
+                                    _message(2, "a later follow up")]})
+  session_id = await _make_session(session_blocks, watermark=_mid(1))  # the summon step consumed its own mention
+  await session_blocks.events.save_chat_event(session_id, _summon_event(_mid(1)))
+
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_blocks.store, session_blocks.events)
+
+  assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
+  assert [(m["summon"], m["unread"]) for m in result["messages"]] == [(True, False), (False, True)]
+  # The ack keeps its meaning: the unread message inside the window is the only
+  # one it advances through.
+  assert _ack_events(session_blocks, session_id)[0]["discord_ack"] == {
+      "message_ids": [_mid(2)],
+      "watermark_id": _mid(2),
+  }
+  assert result["watermark_id"] == _mid(2)
+  assert result["more_unread"] == 0
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_flag_a_summon_a_master_done_names(tmp_path: pathlib.Path) -> None:
+  """A summon whose round finished (a master_done names it) is answered history,
+  not a pending ask: no flag, and the window start stays with the unread."""
+  cfg, session_blocks, client = _rig(
+      tmp_path, channels={_THREAD: [_message(1, "the question"),
+                                    _message(2, "a later follow up")]})
+  session_id = await _make_session(session_blocks, watermark=_mid(1))
+  summon = _summon_event(_mid(1))
+  await session_blocks.events.save_chat_event(session_id, summon)
+  await session_blocks.events.save_chat_event(
+      session_id, {
+          "type": ET.MASTER_DONE,
+          "exit_code": 0,
+          "still_thinking": False,
+          "input_event_id": summon["id"],
+      })
+
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_blocks.store, session_blocks.events)
+
+  # Not pending: the window keeps its old start (the oldest unread), so the
+  # answered mention stays out of the readback entirely.
+  assert result["messages"] == [
+      {
+          "id": _mid(2),
+          "author_id": _USER,
+          "author": "plain-name",
+          "person": _PERSON,
+          "timestamp": "2026-08-26T00:00:02Z",
+          "content": "a later follow up",
+          "attachments": [],
+          "unread": True,
+          "summon": False,
+      }
+  ]
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_flag_a_summon_a_backfill_marker_names(tmp_path: pathlib.Path) -> None:
+  """A summon the boot backfill marked lost never gets a master_done, so the
+  marker alone must retire it: no flag, and the window start stays with the
+  unread instead of dragging back to the dead mention on every later read."""
+  cfg, session_blocks, client = _rig(
+      tmp_path, channels={_THREAD: [_message(1, "the question"),
+                                    _message(2, "a later follow up")]})
+  session_id = await _make_session(session_blocks, watermark=_mid(1))
+  summon = _summon_event(_mid(1))
+  await session_blocks.events.save_chat_event(session_id, summon)
+  await session_blocks.events.save_chat_event(
+      session_id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": "这条 Discord 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
+          discord_listener.DISCORD.backfill_key: {
+              ET.INPUT_EVENT_ID: summon["id"]
+          },
+      })
+
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_blocks.store, session_blocks.events)
+
+  # Not pending: the window starts at the oldest unread, so the lost mention
+  # stays out of the readback entirely and nothing carries the summon flag.
+  assert [(m["id"], m["summon"], m["unread"]) for m in result["messages"]] == [(_mid(2), False, True)]
+  assert result["more_unread"] == 0
+
+
+@pytest.mark.asyncio
+async def test_read_flags_a_starter_message_mention(tmp_path: pathlib.Path) -> None:
+  """A mention that started the thread names the starter: the prepended starter
+  view carries the summon flag."""
+  starter = _message(0, "the question", message_id=_THREAD)
+  cfg, session_blocks, client = _rig(
+      tmp_path, channels={
+          _PARENT: [starter],
+          _THREAD: [_message(1, "a follow up")],
+      })
+  session_id = await _make_session(session_blocks, watermark=_THREAD)  # the summon step consumed the starter mention
+  await session_blocks.events.save_chat_event(session_id, _summon_event(_THREAD))
+
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 5, cfg, session_blocks.store, session_blocks.events)
+
+  assert [m["id"] for m in result["messages"]] == [_THREAD, _mid(1)]
+  assert [(m["summon"], m["unread"]) for m in result["messages"]] == [(True, False), (False, True)]
+
+
+@pytest.mark.asyncio
+async def test_read_flags_a_nudge_neither(tmp_path: pathlib.Path) -> None:
+  """A nudge carries the summon block with ``nudge_of``: it never flags a message."""
+  cfg, session_blocks, client = _rig(tmp_path, channels={_THREAD: [_message(1, "hello")]})
+  session_id = await _make_session(session_blocks, watermark=_mid(1))
+  nudge = _summon_event(_mid(1))
+  nudge["discord"]["nudge_of"] = "s0"
+  await session_blocks.events.save_chat_event(session_id, nudge)
+
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 5, cfg, session_blocks.store, session_blocks.events)
+
+  assert [m["summon"] for m in result["messages"]] == [False]
+
+
 @pytest.mark.asyncio
 async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: pathlib.Path) -> None:
   """A thread started from a parent message reads its starter first, not counted in *limit*."""
@@ -285,7 +428,8 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: path
     result = await discord_commands.read_thread(session_id, None, 2, cfg, session_blocks.store, session_blocks.events)
 
   assert [m["id"] for m in result["messages"]] == [_THREAD, _mid(1), _mid(2)]
-  # The starter rides first, unread false; limit=2 still delivered both unread.
+  # The starter rides first, unread false, not a summon; limit=2 still
+  # delivered both unread.
   assert result["messages"][0] == {
       "id": _THREAD,
       "author_id": _USER,
@@ -295,6 +439,7 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: path
       "content": "please plan the release",
       "attachments": [],
       "unread": False,
+      "summon": False,
   }
   # A message view: global_name unset falls back to the username.
   assert result["messages"][1] == {
@@ -306,6 +451,7 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: path
       "content": "first follow up",
       "attachments": [],
       "unread": True,
+      "summon": False,
   }
 
 

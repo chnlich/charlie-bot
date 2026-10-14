@@ -126,9 +126,9 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
 // Wide-character 2ch boxes. The code font stack ('Fira Code', ui-monospace,
 // monospace) carries no CJK glyphs, so a wide char falls back to a system
 // font whose 1em advance is ~1.667 columns of the Latin mono font — while an
-// ASCII diagram authored on a terminal reserves exactly 2 columns per wide
+// ASCII diagram authored in a monospace editor reserves exactly 2 columns per wide
 // char, and every CJK label pushes the right edge left by another 1/3
-// column. CSS has no terminal-wcwidth equivalent, so the render side wraps
+// column. CSS has no wcwidth equivalent, so the render side wraps
 // each East_Asian_Width W/F character in a fixed 2ch inline box; `ch` follows
 // the actually-rendered monospace font, so 2ch is exactly two Latin columns
 // on every client, with or without Fira Code. The spans are layout-only and
@@ -142,7 +142,7 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
 // ---------------------------------------------------------------------------
 
 // Ordered [lo, hi] code-point ranges of East_Asian_Width W(ide) and
-// F(ullwidth) — the terminal wcwidth 2-cell set — from Unicode 16.0.0's
+// F(ullwidth) — the wcwidth 2-cell set — from Unicode 16.0.0's
 // EastAsianWidth.txt (291 ranges, file order). Membership goes through this
 // generated table and a binary search, not a \p{East_Asian_Width} escape:
 // ECMAScript property escapes cover General_Category, Script and binary
@@ -626,8 +626,7 @@ function recordCodeTokens(tokens) {
   // text node; this extension only decides what survives the parse. The
   // delimiter scan is math-scanner.js's mathSpan (loaded just before this
   // file), shared with the wrap pre-render driver; tests/chat_math_extension.test.js
-  // and tests/core/test_artifact_wrap.py run the same case list against both
-  // consumers.
+  // and the driver's tests run the same case list against both consumers.
   const mathExtension = {
     name: 'math',
     level: 'inline',
@@ -669,7 +668,7 @@ function recordCodeTokens(tokens) {
     // before the first such character. Stock marked stops a bare URL only at
     // whitespace, so a URL before Chinese prose swallows the tail into href and
     // link text, and the polluted href then fails every downstream consumer
-    // (artifact-card regex, missing-file probe, click). chat/artifacts.js's
+    // (link cards, missing-file probe, click). chat/file-links.js's
     // FILE_SERVER_LINK_SOURCE stops at the same boundary when it scans code and
     // text carriers for file-server links — two copies of one definition, kept
     // in sync by the comments in both files (the modules load independently, so

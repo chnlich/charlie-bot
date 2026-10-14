@@ -2,28 +2,22 @@
 
 import argparse
 import json
+import pathlib
 import subprocess
 import sys
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    CLI_COMMON_BASE_URL_PATCH_TARGET,
-    CLI_COMMON_SESSIONS_DIR_PATCH_TARGET,
-    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
-    make_json_response,
-    stub_credentials,
-)
 
-from src.infra.constants import SESSION_ID_ENV_VAR
+from src.infra import constants
 from src.runtime.cli import common
 
 
 def _set_cwd(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    sessions_dir: Path,
+    sessions_dir: pathlib.Path,
     session_id: str | None,
 ) -> None:
   if session_id is None:
@@ -45,7 +39,7 @@ def _set_cwd(
     ],
 )
 def test_resolve_session_id_sources_without_env(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     arg_session: str | None,
     cwd_session: str | None,
@@ -55,9 +49,9 @@ def test_resolve_session_id_sources_without_env(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
+  monkeypatch.delenv(constants.SESSION_ID_ENV_VAR, raising=False)
 
-  with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
+  with mock.patch(conftest.CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(arg_session) == expected
 
 
@@ -68,7 +62,7 @@ def test_resolve_session_id_sources_without_env(
     ],
 )
 def test_resolve_session_id_rejects_mismatches_without_env(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     arg_session: str | None,
@@ -78,10 +72,10 @@ def test_resolve_session_id_rejects_mismatches_without_env(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
+  monkeypatch.delenv(constants.SESSION_ID_ENV_VAR, raising=False)
 
   with (
-      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
+      mock.patch(conftest.CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
       pytest.raises(SystemExit) as exc_info,
   ):
     common.resolve_session_id(arg_session)
@@ -105,7 +99,7 @@ def test_resolve_session_id_rejects_mismatches_without_env(
     ],
 )
 def test_resolve_session_id_env_outranks_cwd(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     arg_session: str | None,
@@ -116,9 +110,9 @@ def test_resolve_session_id_env_outranks_cwd(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.setenv(SESSION_ID_ENV_VAR, "env-session")
+  monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "env-session")
 
-  with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
+  with mock.patch(conftest.CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(arg_session) == "env-session"
 
   err = capsys.readouterr().err
@@ -127,10 +121,10 @@ def test_resolve_session_id_env_outranks_cwd(
     return
   note = json.loads(err)["note"]
   assert "other-session" in note
-  assert f"{SESSION_ID_ENV_VAR}=env-session" in note
+  assert f"{constants.SESSION_ID_ENV_VAR}=env-session" in note
 
 
-def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: Path) -> None:
+def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: pathlib.Path) -> None:
   common.validate_repo_path(argparse.ArgumentParser(), str(tmp_path))
 
 
@@ -139,13 +133,14 @@ def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: Path) -> Non
     [("secret", True), ("", False)],
 )
 def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -> None:
-  cfg = MagicMock()
+  cfg = mock.MagicMock()
   cfg.server_base_url = "https://server"
-  stub_credentials({"charliebot": {"access_key": access_key}})
+  conftest.stub_credentials({"charliebot": {"access_key": access_key}})
 
   with (
-      patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=cfg.server_base_url),
-      patch(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, return_value=make_json_response({"ok": True})) as mock_post,
+      mock.patch(conftest.CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=cfg.server_base_url),
+      mock.patch(conftest.CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
+                 return_value=conftest.make_json_response({"ok": True})) as mock_post,
   ):
     assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
 
@@ -156,9 +151,9 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
     assert "Authorization" not in headers
 
 
-def test_port_cache_hit_serves_the_cached_port_in_a_fresh_process(tmp_path: Path) -> None:
+def test_port_cache_hit_serves_the_cached_port_in_a_fresh_process(tmp_path: pathlib.Path) -> None:
   """A fresh process reads the base-url port cache by its fingerprints and returns the cached port."""
-  repo_root = str(Path(__file__).resolve().parents[1])
+  repo_root = str(pathlib.Path(__file__).resolve().parents[1])
   home = tmp_path / "home"
   (home / "cache").mkdir(parents=True)
   code = "\n".join(

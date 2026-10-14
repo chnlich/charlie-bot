@@ -18,11 +18,15 @@ def register() -> None:
           preassigned_session_id=False,
           reads_context_window=False,
           family_prefix=None,
+          manual_compact=False,
+          compact_hint=None,
       ),
   )
   usage_source_registration.register_source(
       usage_source_registration.UsageSource(
-          name=USAGE_SOURCE, id_prefixes=("opencode-",), run_logs_only=False,
+          name=USAGE_SOURCE,
+          id_prefixes=("opencode-", "oc-"),
+          run_logs_only=False,
           module="src.backends.opencode.usage_logs"))
   usage_source_registration.attribute_backend_type("opencode", USAGE_SOURCE)
   backend_lifecycle_registration.register_reading_limits(

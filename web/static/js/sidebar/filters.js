@@ -7,6 +7,9 @@
 const sidebarFilters = [];
 const sidebarFiltersByName = {};
 
+// The pill strip lists the filters in registration order. A filter with
+// `before` takes its place in front of the named filter. A package registers
+// its filter when its script loads.
 function registerSidebarFilter(filter) {
   if (!filter || !filter.name || !filter.label || !filter.url) throw new Error('Invalid sidebar filter registration');
   if (sidebarFiltersByName[filter.name]) throw new Error('Duplicate sidebar filter: ' + filter.name);
@@ -16,12 +19,13 @@ function registerSidebarFilter(filter) {
     url: filter.url,
     restoreFromUrl: filter.restoreFromUrl !== false,
   };
-  sidebarFilters.push(normalized);
+  const at = filter.before ? sidebarFilters.indexOf(sidebarFiltersByName[filter.before]) : sidebarFilters.length;
+  if (at < 0) throw new Error('Unknown sidebar filter: ' + filter.before);
+  sidebarFilters.splice(at, 0, normalized);
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
 registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/', restoreFromUrl: false});
-registerSidebarFilter({name: 'threads', label: 'Threads', url: '/api/sessions/chat-threads'});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
@@ -33,164 +37,15 @@ function getRestorableSidebarFilters() {
   return sidebarFilters.filter(filter => filter.restoreFromUrl).map(filter => filter.name);
 }
 
-// Single source for both pill strips: the sidebar filter strip here and the
-// archived view's group strip (sidebar/archived.js).
-function filterPillClass(active) {
-  return active
-    ? 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300'
-    : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
-}
-
 function renderSidebarFilterPills() {
   const container = document.getElementById('sidebar-filter-pills');
   if (!container) return;
   const buttons = sidebarFilters.map(filter => {
     const active = filter.name === currentFilter;
-    const cls = filterPillClass(active);
+    const cls = Sidebar.filterPillClass(active);
     return `<button onclick="enterSidebarFilter('${filter.name}')" id="filter-${filter.name}" class="${cls}">${filter.label}</button>`;
   }).join('');
   container.innerHTML = buttons;
-}
-
-// Inline removal shared by archive / unarchive / delete: the list never
-// refetches — grouped views repaint in place from the last-rendered list
-// minus the session (preview backfill, counts and Show-all toggle resync),
-// the archived tab and the search overlay fall back to removing just the row
-// node, and when it was the session being viewed the view moves to the first
-// remaining rendered session.
-async function removeSessionRowInline(sessionId) {
-  delete sessionUnread[sessionId];
-  const repainted = Sidebar.removeSessionFromRenderedList(sessionId);
-  if (!repainted) {
-    const row = document.getElementById('session-' + sessionId);
-    if (row) row.remove();
-  }
-
-  if (SESSION_ID !== sessionId) {
-    updateSidebarHighlight(SESSION_ID);
-    return;
-  }
-  let nextId = null;
-  document.querySelectorAll('a[id^="session-"]').forEach(el => {
-    const sid = el.id.slice('session-'.length);
-    if (!nextId && sid && sid !== sessionId) nextId = sid;
-  });
-  if (nextId) {
-    await switchSession(nextId);
-  } else {
-    renderNoActiveSessionView();
-  }
-}
-
-async function archiveSession(id) {
-  try {
-    const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(await archiveRefusalDetail(res));
-    await removeSessionRowInline(id);
-  } catch (err) {
-    console.error('Archive failed:', err);
-    showToast(err.message, true);
-  }
-}
-
-// The server's refusal sentence for the row's user: a 409 archive refusal
-// carries its blockers (the nodes holding an unfinished run) beside the
-// message; any other refusal body keeps whatever detail it carries.
-async function archiveRefusalDetail(res) {
-  let detail = `Archive failed: ${res.status}`;
-  try {
-    const body = await res.json();
-    const d = body && body.detail;
-    if (typeof d === 'string') {
-      detail = d;
-    } else if (d && typeof d === 'object') {
-      detail = d.message || detail;
-      if (Array.isArray(d.blockers) && d.blockers.length) detail += '\n' + d.blockers.join('\n');
-    }
-  } catch (err) {
-    // A bodyless refusal keeps the status line.
-  }
-  return detail;
-}
-
-async function deleteSessionPermanently(sessionId) {
-  const res = await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Permanent delete failed: ${res.status}`);
-  if (currentFilter === 'archived') archivedForgetSession(sessionId);
-  await removeSessionRowInline(sessionId);
-}
-
-async function unarchiveSession(id) {
-  try {
-    const res = await fetch(`/api/sessions/${id}/unarchive`, { method: 'POST' });
-    if (!res.ok) throw new Error(await archiveRefusalDetail(res));
-    // A task node's restore answers with the restored ids: the target plus
-    // its archived ancestor chain, so the archived list drops them all. A
-    // legacy session's restore answers with the session metadata; its row is
-    // the only one that leaves.
-    let restored = [id];
-    const body = await res.json().catch(() => null);  // an unreadable body keeps the single-row drop
-    if (body && Array.isArray(body.restored)) restored = body.restored;
-    if (currentFilter === 'archived') {
-      restored.forEach(rid => archivedForgetSession(rid));
-      await removeSessionRowInline(id);
-      return;
-    }
-    switchSidebarFilter(currentFilter);
-  } catch (err) {
-    console.error('Unarchive failed:', err);
-    showToast(err.message, true);
-  }
-}
-
-let deleteConfirmKeyHandler = null;
-
-function closeDeleteConfirmModal() {
-  document.getElementById('delete-confirm-overlay')?.remove();
-  if (deleteConfirmKeyHandler) {
-    document.removeEventListener('keydown', deleteConfirmKeyHandler);
-    deleteConfirmKeyHandler = null;
-  }
-}
-
-function confirmDeletePermanently(sessionId) {
-  closeDeleteConfirmModal();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'delete-confirm-overlay';
-  overlay.className = Sidebar.MODAL_OVERLAY_CLASS;
-  overlay.innerHTML = `
-    <div class="${Sidebar.MODAL_DIALOG_CLASS} text-center"
-         onclick="event.stopPropagation()">
-      <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        ${Sidebar.TRASH_SVG_PATH}
-      </svg>
-      <p class="text-sm font-semibold text-slate-200 mb-1">Delete permanently?</p>
-      <p class="text-xs text-slate-400 mb-4">This will permanently delete this session and all its data. This cannot be undone.</p>
-      <div class="flex gap-2 justify-center">
-        <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
-        <button id="confirm-delete-btn" class="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors">Delete</button>
-      </div>
-    </div>`;
-
-  overlay.querySelector('#confirm-cancel-btn').addEventListener('click', closeDeleteConfirmModal);
-  overlay.querySelector('#confirm-delete-btn').addEventListener('click', async () => {
-    closeDeleteConfirmModal();
-    try {
-      await deleteSessionPermanently(sessionId);
-    } catch (err) {
-      console.error('Permanent delete failed:', err);
-    }
-  });
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeDeleteConfirmModal();
-  });
-  deleteConfirmKeyHandler = (e) => {
-    if (e.key === 'Escape') closeDeleteConfirmModal();
-  };
-  document.addEventListener('keydown', deleteConfirmKeyHandler);
-
-  document.body.appendChild(overlay);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,18 +65,21 @@ function setSidebarFilterPill(filter) {
   }
 }
 
-// The Workspace error badge rides this fetch: a failed cron pull yields no
-// badge ([]) but never hides the session list.
-async function fetchBrokenCronTasks() {
-  try {
-    const res = await fetch('/api/cron/tasks');
-    if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
-    const tasks = await res.json();
-    return tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
-  } catch (err) {
-    console.error('Cron tasks fetch failed:', err);
-    return [];
-  }
+// The badges at the top of the Workspace list: a package registers a loader
+// when its script loads. load() resolves to the badge HTML, or '' for no
+// badge, and resolves even when its own fetch fails, so the list still paints.
+const workspaceBadgeLoaders = [];
+
+function registerWorkspaceBadge(load) {
+  if (typeof load !== 'function') throw new Error('Invalid Workspace badge registration');
+  if (workspaceBadgeLoaders.includes(load)) throw new Error('Duplicate Workspace badge');
+  workspaceBadgeLoaders.push(load);
+}
+
+// Every loader runs on each Workspace fetch; the badges paint in registration
+// order.
+function loadWorkspaceBadges() {
+  return Promise.all(workspaceBadgeLoaders.map(load => load())).then(badges => badges.join(''));
 }
 
 function switchSidebarFilter(filter) {
@@ -236,16 +94,16 @@ function switchSidebarFilter(filter) {
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
   if (filter === 'all') {
-    // The error badge's broken tasks and the session list load in parallel, so
-    // badge and list paint together in the one render call.
+    // The Workspace badges and the session list load in parallel, so badges
+    // and list paint together in the one render call.
     Promise.all([
       fetch(registeredFilter.url).then(res => {
         if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
         return res.json();
       }),
-      fetchBrokenCronTasks(),
+      loadWorkspaceBadges(),
     ])
-      .then(([sessions, brokenTasks]) => renderSessionList(sessions, filter, {brokenTasks}))
+      .then(([sessions, workspaceBadges]) => renderSessionList(sessions, filter, {workspaceBadges}))
       .catch(err => console.error('Filter fetch failed:', err));
     return;
   }
@@ -289,9 +147,9 @@ function restoreSidebarFromUrl() {
       renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
     } else {
       renderSessionList(INITIAL_SESSIONS, 'all');
-      // The error badge rides its own cron pull so the first paint never waits
-      // for it; the repaint discards itself when the view has moved on.
-      fetchBrokenCronTasks().then(paintWorkspaceBadge);
+      // The Workspace badges load on their own so the first paint never waits
+      // for them; the repaint discards itself when the view has moved on.
+      loadWorkspaceBadges().then(paintWorkspaceBadges);
     }
   }
 }
@@ -347,11 +205,12 @@ async function toggleSessionStar(id, currentlyStarred) {
   }
 }
 
+// The session rows' star button (groups.js).
+registerSidebarControl('toggleSessionStar', toggleSessionStar);
 
 const GLOBALS = {
-  archiveSession,
-  unarchiveSession,
-  confirmDeletePermanently,
+  registerSidebarFilter,
+  registerWorkspaceBadge,
   setSidebarFilterPill,
   switchSidebarFilter,
   enterSidebarFilter,
@@ -359,11 +218,6 @@ const GLOBALS = {
   handleSidebarSearch,
   toggleSessionStar,
 };
-const SIDEBAR_ONLY = {
-  filterPillClass,
-  removeSessionRowInline,
-  deleteSessionPermanently,
-};
-Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
+Sidebar.wire(GLOBALS);
 
 })();

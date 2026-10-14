@@ -48,7 +48,7 @@ function dateClockMDHM(date) {
 }
 
 // ---------------------------------------------------------------------------
-// Right-edge panel resize (LaTeX and backlog panels): drag-left enlarges.
+// Right-edge panel resize (the side panels beside the chat column): drag-left enlarges.
 // Width follows the mouse in px and persists as a parent percentage on
 // release; the left-docked sidebar keeps its own px-bounded handler.
 // ---------------------------------------------------------------------------

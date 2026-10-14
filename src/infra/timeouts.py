@@ -101,7 +101,7 @@ SUBPROCESS_GIT_SHA_TIMEOUT = 2.0  # seconds
 HTTP_MODEL_DOWNLOAD_TIMEOUT = 60  # seconds
 
 # ---------------------------------------------------------------------------
-# CLI remote launch (ssh + setsid)
+# CLI detached-launch ssh start and kill (ssh + setsid), src/runtime/cli/launcher.py
 # ---------------------------------------------------------------------------
 
 # Whole ssh wrapper run: connect (ssh's own ConnectTimeout applies inside) plus

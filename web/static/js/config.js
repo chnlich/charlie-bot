@@ -9,7 +9,7 @@
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 
 // The one reader of the access key for request auth: the fetch wrapper below and
-// the voice upload's XHR (which no wrapper patches) both send this header.
+// a package's own XHR (which no wrapper patches) both send this header.
 function accessTokenAuthorization() {
   const key = localStorage.getItem(ACCESS_KEY_NAME);
   return key ? 'Bearer ' + key : null;
@@ -34,22 +34,22 @@ function showAuthOverlay() {
 
 // Shared Content-Type for fetches that send a JSON body through the wrapper
 // above. index.html loads this file before every consumer; diff.html and the
-// artifact iframe pages do not, so their copies stay local there.
+// package iframe pages do not, so their copies stay local there.
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
-// Shared fill styling for every horizontal meter bar on index.html (sidebar
-// context bar, ext-usage quota bars): one literal keeps the bars painting
-// alike. index.html loads this file before both consumers; the static
+// Shared fill styling for every horizontal meter bar on index.html (the
+// sidebar context bar and the package meter bars): one literal keeps the bars
+// painting alike. index.html loads this file before every consumer; the static
 // #usage-bar markup renders before any script, so its copy stays local there.
 const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300';
 
 // WebSocket endpoints take the access key as a 'token' query param: the
 // browser WebSocket API exposes no header channel for the fetch wrapper's
-// Bearer header. Loads before the websocket/voice/terminal connectors.
+// Bearer header. Loads before every script that opens a WebSocket.
 function withAccessToken(url) {
   const key = localStorage.getItem(ACCESS_KEY_NAME);
   if (!key) return url;
-  // A path may already carry a query of its own (the voice relay's ?backend=).
+  // A path may already carry a query of its own (a package relay's ?backend=).
   const separator = url.includes('?') ? '&' : '?';
   return url + separator + 'token=' + encodeURIComponent(key);
 }
@@ -72,9 +72,9 @@ function hideAuthOverlay() {
 // SameSite=Strict closes the CSRF surface cookie auth would otherwise open;
 // Secure is appropriate since the server is reached only over HTTPS (Tailscale).
 function writeAccessCookie(key) {
-  // Secure only on https: a loopback-HTTP deployment (the session-tree preview)
-  // cannot set Secure cookies, and without the cookie every top-level
-  // navigation would 401 back to the login page.
+  // Secure only on https: a loopback-HTTP deployment cannot set Secure cookies,
+  // and without the cookie every top-level navigation would 401 back to the
+  // login page.
   const secure = location.protocol === 'https:' ? '; Secure' : '';
   document.cookie = ACCESS_KEY_NAME + '=' + key + '; path=/; SameSite=Strict' + secure;
 }

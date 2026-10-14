@@ -2,8 +2,9 @@
 
 This module holds the Discord-specific pieces: the gateway ``MESSAGE_CREATE``
 handler (``handle_message_create`` reads one gateway payload, applies Discord's
-drop rules, and hands the rest to the shared core), the summon prompt and the
-follow wake label, and the ``DiscordThreadAdapter`` over the bot client
+drop rules, and hands the rest to the shared core), the one-line summon input,
+the Discord part of the thread reply contract, and the
+``DiscordThreadAdapter`` over the bot client
 (``src.features.discord.discord_client.DiscordClient``). Everything platform-neutral lives
 in ``src.features.chat_threads.thread_entry``: the summon acceptance (``accept_summon`` —
 session create/unarchive/reuse, the watermark step, the group, the summon
@@ -39,10 +40,11 @@ ack task), cleared when a reply answering it lands, or when the notice or the
 lost-summon report closes it.
 
 Unlike Slack, the master never fetches the thread itself: the bot does the
-reading server-side. Both the summon prompt and the follow wake tell it to
-``charliebot discord read`` the thread — the readback returns the messages the
-bot can see there (the same eligibility the round side reads) and marks them
-read — and to ack before replying. A mention in a plain text channel starts a
+reading server-side. The thread reply contract in the session's managed
+instructions tells it to ``charliebot discord read`` the thread — the readback
+returns the messages the bot can see there (the same eligibility the round
+side reads), marks them read, and flags the pending summon the round answers
+(``summon: true``) — and to ack before replying. A mention in a plain text channel starts a
 thread from the mention message (named from the stripped content); a mention
 inside an existing thread summons into that thread. Every Discord id is a
 snowflake, so ids are compared and sorted through ``snowflake_key`` — never as
@@ -51,8 +53,8 @@ strings, whose order flips whenever the digit counts differ.
 Thread follow: after the first summon, eligible thread messages (human,
 allowed, newer than the session's ``discord_watermark_id``) arriving over the
 same gateway connection — or found by the reconnect backfill on every
-(re)connection — arm one persisted per-session trigger whose wake label names
-the chain's floor id and the thread link. The reply path is gated on
+(re)connection — arm one persisted per-session trigger whose wake label is
+the one line ``discord-thread-follow floor=<id>`` (the chain's floor id). The reply path is gated on
 freshness: ``assert_thread_fresh`` refuses with 412 until every eligible
 message is acked (``ack_messages`` advances the watermark); silence stays a
 legal round outcome because trigger wakes enter the log as scheduled-trigger
@@ -76,13 +78,10 @@ from src.features.chat_threads.thread_entry import (
     ThreadAdapter,
     ThreadMessage,
     ThreadPlatform,
-    follow_wake_label,
-    summon_prompt_tail,
 )
 from src.features.discord.discord_client import (
     DiscordClient,
     message_content_intent_enabled,
-    message_link,
     missing_permissions,
     snowflake_key,
 )
@@ -137,9 +136,9 @@ _MAX_POST_CHARS = 2000
 
 _REPLY_COMMAND = "charliebot discord reply"
 
-# The command the summon prompt and the follow wake name for reading the
-# thread: the bot reads server-side (the gateway payload alone is not the
-# thread), and the read marks the returned messages read.
+# The command the thread reply contract names for reading the thread: the bot
+# reads server-side (the gateway payload alone is not the thread), and the
+# read marks the returned messages read.
 _READ_COMMAND = "charliebot discord read"
 
 # Trigger-label prefix identifying a session's armed thread-follow record.
@@ -170,7 +169,7 @@ DISCORD = ThreadPlatform(
     id_label="id",
     mention_key="mention_id",
     block_keys=("guild_id", "channel_id", "thread_id", "mention_id"),
-    thread_fallback="(guild {guild_id}, thread {thread_id})",
+    summon_line="Discord 线程召唤",
 )
 
 
@@ -188,33 +187,23 @@ _PLATFORM_LINE = (
     f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")
 
 
-def _build_summon_prompt(link: str, cfg: CharlieBotConfig) -> str:
-  """The persisted summon: the mention-message link plus the server-side read hint, ending at the fixed notices.
+def thread_contract_part() -> str:
+  """The Discord part of the thread reply contract: the platform line and the read sentences.
 
-  Only the link is stored because the bot reads the thread server-side when the
-  round runs — a snapshot persisted here would go stale as the thread keeps
-  changing after the mention, and the gateway payload that started the round
-  carries only one message of it.
-
-  The tail after the platform line (the platform's scope doc, the PII red
-  line, the reply-format contract) is the shared one from thread_entry, read
-  fresh from prompts/ on every call — no caching, so an edit takes effect on
-  the next summon.
+  The thread session's managed instructions carry this part once, joined with
+  the three rule docs by ``thread_entry.thread_reply_contract`` — so the
+  summon input stays the one line ``DISCORD.summon_line`` and a rule edit
+  takes effect on the next round. The platform line and the two read
+  sentences move here unchanged from the old summon prompt and follow wake;
+  the summon mark sentence is new — the readback flags the pending summon
+  this round answers.
   """
   return (
-      f"Discord 线程召唤：{link}\n\n"
-      f"用 `{_READ_COMMAND}` 读这条线程（服务端代读，返回 bot 在这条线程里能看到的消息，未读的随之记为已读）。\n\n"
-      f"{summon_prompt_tail(DISCORD, _PLATFORM_LINE, cfg)}")
-
-
-def _build_follow_wake_message(floor: str, link: str) -> str:
-  """The Discord follow-wake label: the shared frame with Discord's read rule.
-
-  The read is server-side and marks the returned messages read, so the label
-  carries no ack rule; the wake orders the read first — the round must read
-  even when it plans to stay silent.
-  """
-  return follow_wake_label(DISCORD, floor, link, f"用 `{_READ_COMMAND}` 读线程里的新消息（本次返回的未读消息随之记为已读，本轮沉默也要先读）；", "")
+      f"{_PLATFORM_LINE}\n"
+      f"用 `{_READ_COMMAND}` 读这条线程（服务端代读，返回 bot 在这条线程里能看到的消息，未读的随之记为已读）。"
+      "读回里 `summon: true` 的消息就是本轮要回答的召唤。\n"
+      f"跟帖唤醒（`{_FOLLOW_TRIGGER_PREFIX} floor=<id>`）：用 `{_READ_COMMAND}` 读线程里的新消息"
+      "（本次返回的未读消息随之记为已读，本轮沉默也要先读）。")
 
 
 # ---------------------------------------------------------------------------
@@ -303,12 +292,6 @@ class DiscordThreadAdapter(ThreadAdapter):
 
   def log_fields(self, address: dict) -> dict:
     return {"guild": address["guild_id"], "thread": address["thread_id"]}
-
-  async def thread_link(self, origin: DiscordOrigin) -> str:
-    return message_link(origin.guild_id, origin.thread_id)
-
-  def follow_wake_message(self, floor: str, link: str) -> str:
-    return _build_follow_wake_message(floor, link)
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +415,7 @@ async def handle_message_create(
           "thread_id": thread_id,
           "mention_id": message_id
       },
-      content=_build_summon_prompt(message_link(guild_id, channel_id, message_id), cfg),
+      content=DISCORD.summon_line,
       user=author_id,
   )
 

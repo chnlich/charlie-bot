@@ -1,21 +1,19 @@
 """Tests for the plan registry: state machine, rejections, derived state, schema migration."""
 
 import json
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import make_plan_setup as _setup
-from conftest import plan_page_html
-from conftest import write_plan_artifact as _write_artifact
 
-from src.features.artifacts.plans import PlanRegistryManager, read_plans_tolerant
-from src.infra.config import CharlieBotConfig
+from src.features.artifacts import plans
+from src.infra import config
 
 
-async def _present_first_plan(plan_mgr: PlanRegistryManager, cfg: CharlieBotConfig, meta_id: str) -> str:
+async def _present_first_plan(plan_mgr: plans.PlanRegistryManager, cfg: config.CharlieBotConfig, meta_id: str) -> str:
   """Write the default plan artifact and register it as plan 1 v1 (title P1); returns the
   artifact's plan-relative path for the tests that re-present or rebind that file."""
-  file_rel = _write_artifact(cfg, meta_id, "plan_01.html")
+  file_rel = conftest.write_plan_artifact(cfg, meta_id, "plan_01.html")
   await plan_mgr.present(meta_id, file=file_rel, title="P1")
   return file_rel
 
@@ -26,9 +24,9 @@ async def _present_first_plan(plan_mgr: PlanRegistryManager, cfg: CharlieBotConf
 
 
 @pytest.mark.asyncio
-async def test_present_returns_awaiting_approval(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
+async def test_present_returns_awaiting_approval(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  file_rel = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
 
   result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
   assert result == {"plan": 1, "v": 1, "state": "awaiting approval"}
@@ -37,9 +35,10 @@ async def test_present_returns_awaiting_approval(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first_absolute", [False, True])
 @pytest.mark.parametrize("amend", [False, True], ids=["present", "amend"])
-async def test_registry_rejects_cross_format_duplicate(tmp_path: Path, first_absolute: bool, amend: bool) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
+async def test_registry_rejects_cross_format_duplicate(
+    tmp_path: pathlib.Path, first_absolute: bool, amend: bool) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  file_rel = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
   file_abs = str((cfg.sessions_dir / meta.id / file_rel).resolve())
   first_file = file_abs if first_absolute else file_rel
   second_file = file_rel if first_absolute else file_abs
@@ -53,8 +52,8 @@ async def test_registry_rejects_cross_format_duplicate(tmp_path: Path, first_abs
 
 
 @pytest.mark.asyncio
-async def test_approve_returns_approved(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
+async def test_approve_returns_approved(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
 
   result = await plan_mgr.approve(meta.id)
@@ -68,32 +67,32 @@ async def test_approve_returns_approved(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("note", [None, "", "   "])
-async def test_amend_requires_non_empty_note(tmp_path: Path, note: str | None) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
+async def test_amend_requires_non_empty_note(tmp_path: pathlib.Path, note: str | None) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
-  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
+  f2 = conftest.write_plan_artifact(cfg, meta.id, "plan_02.html")
 
   with pytest.raises(ValueError, match="amend requires a non-empty --note"):
     await plan_mgr.amend(meta.id, file=f2, plan_id=1, note=note)
 
 
 @pytest.mark.asyncio
-async def test_close_superseded_and_abandoned(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
+async def test_close_superseded_and_abandoned(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
 
   result = await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
   assert result == {"plan": 1, "state": "superseded"}
 
-  file_2 = _write_artifact(cfg, meta.id, "plan_02.html")
+  file_2 = conftest.write_plan_artifact(cfg, meta.id, "plan_02.html")
   await plan_mgr.present(meta.id, file=file_2, title="P2")
   result = await plan_mgr.close(meta.id, plan_id=2, close_as="abandoned")
   assert result == {"plan": 2, "state": "abandoned"}
 
 
 @pytest.mark.asyncio
-async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
+async def test_closing_already_closed_rejected(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
 
@@ -107,9 +106,9 @@ async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plans_json_shape_matches_schema(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
+async def test_plans_json_shape_matches_schema(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  f1 = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f1, title="P1", base={"repo": "r", "branch": "b", "sha": "s"})
 
   raw = (cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8")
@@ -133,10 +132,10 @@ async def test_plans_json_shape_matches_schema(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_read_plans_tolerant_corrupt_json_returns_one_file_level_error(tmp_path: Path) -> None:
+def test_read_plans_tolerant_corrupt_json_returns_one_file_level_error(tmp_path: pathlib.Path) -> None:
   p = tmp_path / "plans.json"
   p.write_text("{not valid json", encoding="utf-8")
-  result = read_plans_tolerant(p, "sess")
+  result = plans.read_plans_tolerant(p, "sess")
   assert result["plans"] == []
   assert len(result["errors"]) == 1
   err = result["errors"][0]
@@ -152,12 +151,12 @@ def test_read_plans_tolerant_corrupt_json_returns_one_file_level_error(tmp_path:
 
 def _goal_doc(goal_text: str) -> str:
   """A page passing every plan assertion except goal-budget, carrying *goal_text* as the goal body."""
-  return plan_page_html(goal_body=goal_text)
+  return conftest.plan_page_html(goal_body=goal_text)
 
 
 @pytest.mark.asyncio
-async def test_present_rejects_goal_over_budget_with_measured_value(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("x" * 241))
+async def test_present_rejects_goal_over_budget_with_measured_value(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  file_rel = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("x" * 241))
   with pytest.raises(ValueError, match=r"241 weighted chars \(budget 240\)"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")

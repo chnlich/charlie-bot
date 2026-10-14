@@ -27,7 +27,7 @@ QUOTA_EXHAUSTED = "quota_exhausted"
 # Payload keys of a MASTER_DONE event, all persisted wire values re-read from
 # chat_events.jsonl. Every round end renders a separator; still_thinking marks
 # a round end that left another queued item running, and the live panel reads
-# it to keep the thinking indicator on (web/static/js/websocket.js).
+# it to keep the thinking indicator on (web/static/js/websocket-handlers.js).
 # thinking_seconds is the length of the round's continuous busy interval,
 # copied verbatim onto the rendered separator message whose name the chat JS
 # reads (src/runtime/message_aggregator.py, web/static/js/chat/rendering.js); a

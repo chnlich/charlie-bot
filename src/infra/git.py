@@ -1,20 +1,17 @@
 """Shared git helpers — subprocess operations with timeouts and error handling."""
 
 import asyncio
+import dataclasses
 import os
+import pathlib
 import re
 import shutil
 import subprocess
 from collections.abc import Iterator
-from dataclasses import dataclass
-from pathlib import Path
 
-from src.infra import timeouts
-from src.infra.locks import lock_for
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC, SUBPROCESS_GIT_WRITE_TIMEOUT
+from src.infra import locks, log_once, timeouts
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _WORKTREE_LOCAL_ARTIFACT_NAMES = frozenset({".pixi", ".pixi-cache", ".uv-cache", ".venv", ".local", "build"})
 # Concurrent `git worktree add -b` calls in one repository race on shared state -
@@ -27,7 +24,7 @@ _WORKTREE_LOCAL_ARTIFACT_NAMES = frozenset({".pixi", ".pixi-cache", ".uv-cache",
 # process runs the adds of one repository one at a time (_worktree_add_locks).
 # A lock-class error caused by a git process outside this one gets a short
 # retry; any other failure raises on its first attempt.
-_worktree_add_locks: dict[Path, asyncio.Lock] = {}
+_worktree_add_locks: dict[pathlib.Path, asyncio.Lock] = {}
 _WORKTREE_LOCK_RETRY_MARKERS = ("could not lock", "unable to create", "file exists")
 _WORKTREE_ADD_ATTEMPTS = 4  # the first invocation plus 3 retries
 _WORKTREE_RETRY_BACKOFF_S = 0.1  # doubled per retry: 100ms, 200ms, 400ms
@@ -38,13 +35,14 @@ def git_worktree_dir_name(branch_name: str) -> str:
   return branch_name.replace("/", "-")
 
 
-async def git_current_branch(repo_path: Path) -> str:
+async def git_current_branch(repo_path: pathlib.Path) -> str:
   """Get the current branch of the repo."""
   try:
     proc, stdout, stderr = await _git_proc_bytes(
-        repo_path, "rev-parse", "--abbrev-ref", "HEAD", timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+        repo_path, "rev-parse", "--abbrev-ref", "HEAD", timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError as e:
-    raise RuntimeError(f'git rev-parse timed out after {SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}') from e
+    raise RuntimeError(
+        f'git rev-parse timed out after {timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}') from e
   if proc.returncode != 0:
     err_msg = stderr.decode().strip()
     if 'unknown revision' in err_msg:
@@ -67,7 +65,7 @@ class BaseBranchResolutionError(RuntimeError):
   """
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class BaseResolution:
   """Result of resolving a --base-branch value into a worktree start point."""
 
@@ -77,7 +75,7 @@ class BaseResolution:
 
 
 async def _git_proc_bytes(
-    repo_path: Path | str,
+    repo_path: pathlib.Path | str,
     *args: str,
     timeout: int,
 ) -> tuple[asyncio.subprocess.Process, bytes, bytes]:
@@ -103,7 +101,7 @@ async def _git_proc_bytes(
 
 
 async def _git_stdout(
-    repo_path: Path,
+    repo_path: pathlib.Path,
     *args: str,
     timeout: int,
     timeout_label: str,
@@ -118,7 +116,7 @@ async def _git_stdout(
   return True, stdout.decode().strip(), ""
 
 
-async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
+async def _git_rev_parse(repo_path: pathlib.Path, ref: str) -> str | None:
   """Resolve a ref to a commit SHA; return None when it does not resolve."""
   ok, out, _ = await _git_stdout(
       repo_path,
@@ -126,7 +124,7 @@ async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
       "--verify",
       "--quiet",
       ref,
-      timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+      timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
       timeout_label="git rev-parse",
   )
   return out if ok and out else None
@@ -152,7 +150,7 @@ def _origin_tracking_ref(branch: str) -> str:
   return f"refs/remotes/origin/{branch}"
 
 
-def _default_branch_from_ls_remote(out: str, source: str, repo_path: Path) -> str:
+def _default_branch_from_ls_remote(out: str, source: str, repo_path: pathlib.Path) -> str:
   """Parse the symref line of `git ls-remote --symref` output into the default branch name."""
   for line in out.splitlines():
     if line.startswith(_SYMREF_PREFIX):
@@ -173,7 +171,7 @@ def _ls_remote_ref_sha(out: str, ref: str) -> str | None:
   return None
 
 
-async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str | None]:
+async def git_remote_default_branch_and_tip(repo_path: pathlib.Path) -> tuple[str, str | None]:
   """The remote's default branch and its tip SHA from ONE `git ls-remote --symref origin`.
 
   The unfiltered listing carries the HEAD symref and every branch ref, so a
@@ -200,7 +198,7 @@ async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str |
   return branch, _ls_remote_ref_sha(out, _heads_ref(branch))
 
 
-async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: str | None) -> BaseResolution:
+async def resolve_base_branch(repo_path: pathlib.Path, base_branch: str, *, remote_tip: str | None) -> BaseResolution:
   """Resolve a --base-branch value to a worktree start point, failing loudly on ambiguity.
 
   Resolution matrix (the only accepted forms; everything else raises
@@ -238,7 +236,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
         "cat-file",
         "-e",
         f"{raw}^{{commit}}",
-        timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+        timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
         timeout_label="git cat-file",
     )
     if not ok:
@@ -260,7 +258,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
         "remote",
         "get-url",
         "origin",
-        timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+        timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
         timeout_label="git remote get-url",
     )
     origin_configured = ok
@@ -314,12 +312,12 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
               "--is-ancestor",
               local_sha,
               remote_sha,
-              timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+              timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
           )
         except TimeoutError as e:
           raise BaseBranchResolutionError(
               f"git merge-base --is-ancestor {local_sha} {remote_sha} timed out after "
-              f"{SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}") from e
+              f"{timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}") from e
         if proc.returncode == 0:
           log.info(
               "base_branch_local_behind",
@@ -361,10 +359,10 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
 
 
 async def git_create_worktree(
-    repo_path: Path,
+    repo_path: pathlib.Path,
     base_branch: str,
     branch_name: str,
-    wt_path: Path,
+    wt_path: pathlib.Path,
     *,
     remote_tip: str | None = None) -> BaseResolution:
   """Create a git worktree and fail loudly if git reports an error.
@@ -379,7 +377,7 @@ async def git_create_worktree(
   """
   resolution = await resolve_base_branch(repo_path, base_branch, remote_tip=remote_tip)
   start_point = resolution.start_point
-  add_lock = lock_for(_worktree_add_locks, repo_path.resolve())
+  add_lock = locks.lock_for(_worktree_add_locks, repo_path.resolve())
   for attempt in range(1, _WORKTREE_ADD_ATTEMPTS + 1):
     async with add_lock:
       try:
@@ -391,10 +389,11 @@ async def git_create_worktree(
             branch_name,
             str(wt_path),
             start_point,
-            timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+            timeout=timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT,
         )
       except TimeoutError as e:
-        raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
+        raise RuntimeError(
+            f'git worktree add timed out after {timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
     if proc.returncode == 0:
       break
     out = stdout.decode().strip()
@@ -437,11 +436,11 @@ async def git_create_worktree(
 
 def _assert_safe_worktree_cleanup_target(
     repo_path: str,
-    wt_path: Path,
+    wt_path: pathlib.Path,
     *,
-    allowed_parent: Path,
+    allowed_parent: pathlib.Path,
     expected_residue_name: str,
-) -> Path:
+) -> pathlib.Path:
   """Validate the worktree path before removing anything inside it."""
   if wt_path.name != expected_residue_name:
     raise RuntimeError(
@@ -452,9 +451,9 @@ def _assert_safe_worktree_cleanup_target(
 
   resolved_wt = wt_path.resolve()
   resolved_allowed_parent = allowed_parent.resolve()
-  resolved_repo = Path(repo_path).resolve()
-  home = Path.home().resolve()
-  if resolved_wt in {Path("/"), home}:
+  resolved_repo = pathlib.Path(repo_path).resolve()
+  home = pathlib.Path.home().resolve()
+  if resolved_wt in {pathlib.Path("/"), home}:
     raise RuntimeError(f"refusing to clean unsafe worktree path: {wt_path}")
   if resolved_wt == resolved_repo:
     raise RuntimeError(f"refusing to clean repo root as worktree: {wt_path}")
@@ -463,7 +462,7 @@ def _assert_safe_worktree_cleanup_target(
   return resolved_wt
 
 
-def _contains_git_marker(path: Path) -> bool:
+def _contains_git_marker(path: pathlib.Path) -> bool:
   """Return True if path contains any .git marker without following symlinks."""
   for _dirpath, dirnames, filenames in os.walk(path, followlinks=False):
     if ".git" in filenames or ".git" in dirnames:
@@ -471,7 +470,7 @@ def _contains_git_marker(path: Path) -> bool:
   return False
 
 
-def _iter_local_worktree_artifacts(wt_path: Path) -> Iterator[Path]:
+def _iter_local_worktree_artifacts(wt_path: pathlib.Path) -> Iterator[pathlib.Path]:
   """Yield paths of known cache/env/build artifact dirs inside the worktree.
 
   Walks top-down without following symlinks and never descends into a nested git
@@ -479,16 +478,16 @@ def _iter_local_worktree_artifacts(wt_path: Path) -> Iterator[Path]:
   artifacts are surfaced. Artifact dirs are not descended into.
   """
   for dirpath, dirnames, filenames in os.walk(wt_path, topdown=True, followlinks=False):
-    if Path(dirpath) != wt_path and (".git" in filenames or ".git" in dirnames):
+    if pathlib.Path(dirpath) != wt_path and (".git" in filenames or ".git" in dirnames):
       dirnames[:] = []
       continue
     dirnames[:] = [name for name in dirnames if name != ".git"]
     for name in [name for name in dirnames if name in _WORKTREE_LOCAL_ARTIFACT_NAMES]:
-      yield Path(dirpath) / name
+      yield pathlib.Path(dirpath) / name
     dirnames[:] = [name for name in dirnames if name not in _WORKTREE_LOCAL_ARTIFACT_NAMES]
 
 
-async def _remove_local_worktree_artifacts(wt_path: Path, thread_id: str) -> None:
+async def _remove_local_worktree_artifacts(wt_path: pathlib.Path, thread_id: str) -> None:
   """Pre-clean known local cache/env/build artifacts inside the worktree.
 
   A symlinked artifact (e.g. `.venv -> <main checkout>/.venv`) is skipped rather
@@ -506,11 +505,11 @@ async def _remove_local_worktree_artifacts(wt_path: Path, thread_id: str) -> Non
 
 
 async def _remove_worktree_residue(
-    wt_path: Path,
+    wt_path: pathlib.Path,
     thread_id: str,
     *,
     repo_path: str,
-    allowed_parent: Path,
+    allowed_parent: pathlib.Path,
     expected_residue_name: str,
 ) -> None:
   """Delete a git-detached residual worktree directory after explicit safety checks."""
@@ -533,10 +532,10 @@ async def _remove_worktree_residue(
 
 async def git_worktree_remove(
     repo_path: str,
-    wt_path: Path,
+    wt_path: pathlib.Path,
     thread_id: str,
     *,
-    allowed_parent: Path,
+    allowed_parent: pathlib.Path,
     expected_residue_name: str,
 ) -> bool:
   """Remove a git worktree and any safe git-detached residual directory."""
@@ -555,7 +554,7 @@ async def git_worktree_remove(
 
   try:
     proc, _, stderr = await _git_proc_bytes(
-        repo_path, "worktree", "remove", "--force", str(wt_path), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+        repo_path, "worktree", "remove", "--force", str(wt_path), timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError:
     log.warning("worktree_remove_timeout", thread_id=thread_id, path=str(wt_path))
     return False
@@ -579,7 +578,7 @@ async def git_worktree_remove_reporting(
     worktree_path: str | None,
     branch_name: str | None,
     owner_id: str,
-    worktree_parent: Path,
+    worktree_parent: pathlib.Path,
     *,
     log_fields: dict,
     label: str,
@@ -599,7 +598,7 @@ async def git_worktree_remove_reporting(
   """
   if not repo_path or not worktree_path:
     return None
-  wt = Path(worktree_path)
+  wt = pathlib.Path(worktree_path)
   if not wt.exists():
     return None
   if not branch_name:
@@ -625,12 +624,12 @@ async def git_worktree_remove_reporting(
 async def git_worktree_prune(repo_path: str, thread_id: str) -> None:
   """Prune stale worktree refs."""
   try:
-    await _git_proc_bytes(repo_path, "worktree", "prune", timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    await _git_proc_bytes(repo_path, "worktree", "prune", timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError:
     log.warning("worktree_prune_timeout", thread_id=thread_id)
 
 
-async def _git_remote(repo_path: Path, *args: str, label: str) -> tuple[bool, str, str]:
+async def _git_remote(repo_path: pathlib.Path, *args: str, label: str) -> tuple[bool, str, str]:
   """Run a git command that talks to a remote (ls-remote, fetch, push), retrying failed attempts.
 
   Each attempt runs under SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT. A timeout or a
@@ -657,7 +656,7 @@ async def _git_remote(repo_path: Path, *args: str, label: str) -> tuple[bool, st
   return ok, out, err
 
 
-async def git_rev_parse(repo_path: Path, rev: str) -> str | None:
+async def git_rev_parse(repo_path: pathlib.Path, rev: str) -> str | None:
   """The full commit sha *rev* resolves to, or None when it does not exist."""
   try:
     proc = await asyncio.create_subprocess_exec(
@@ -670,7 +669,7 @@ async def git_rev_parse(repo_path: Path, rev: str) -> str | None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except (OSError, TimeoutError) as e:
     log.warning("git_rev_parse_failed", repo=str(repo_path), rev=rev, error=str(e))
     return None
@@ -682,7 +681,7 @@ async def git_rev_parse(repo_path: Path, rev: str) -> str | None:
 _COMMIT_REV_RE = re.compile(r"[0-9a-f]{7,40}")
 
 
-async def git_verify_commit_landed(repo_path: Path, branch: str, commit: str) -> tuple[bool, str]:
+async def git_verify_commit_landed(repo_path: pathlib.Path, branch: str, commit: str) -> tuple[bool, str]:
   """Whether *commit* exists in *repo_path* and is an ancestor of (or equal to) *branch*'s tip.
 
   The completion evidence check behind every ``landed:<branch>@<commit>`` claim:
@@ -711,7 +710,7 @@ async def git_verify_commit_landed(repo_path: Path, branch: str, commit: str) ->
           stdout=asyncio.subprocess.PIPE,
           stderr=asyncio.subprocess.PIPE,
       )
-      _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+      _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
     except (OSError, TimeoutError) as e:
       return False, f"git {label} check for {commit} failed: {e}"
     if proc.returncode != 0:
@@ -720,19 +719,19 @@ async def git_verify_commit_landed(repo_path: Path, branch: str, commit: str) ->
   return True, ""
 
 
-async def git_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
+async def git_fetch(repo_path: pathlib.Path, remote: str, branch: str) -> tuple[bool, str]:
   """Run git fetch <remote> <branch>. Returns (success, stderr)."""
   ok, _, err = await _git_remote(repo_path, "fetch", remote, branch, label="git fetch")
   return ok, err
 
 
-async def git_push_branch(repo_path: Path, branch: str) -> tuple[bool, str]:
+async def git_push_branch(repo_path: pathlib.Path, branch: str) -> tuple[bool, str]:
   """Run git push origin <branch>. Returns (success, stderr)."""
   ok, _, err = await _git_remote(repo_path, "push", "origin", branch, label="git push")
   return ok, err
 
 
-async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: str) -> tuple[bool, str]:
+async def git_push_refspec(repo_path: pathlib.Path, local_branch: str, remote_branch: str) -> tuple[bool, str]:
   """Run git push origin <local>:refs/heads/<remote>. Returns (success, stderr).
 
   Git rejects non-fast-forward pushes by default, so this is implicitly an FF-only push.
@@ -743,14 +742,14 @@ async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: st
 
 
 async def git_add_commit_push(
-    repo_path: Path,
+    repo_path: pathlib.Path,
     files: list[str],
     message: str,
 ) -> None:
   """Git add, commit, and push, logging a failure as a warning rather than propagating it.
 
   add and commit run in a thread-pool worker, each under
-  SUBPROCESS_GIT_WRITE_TIMEOUT; a failure there skips the push. The push goes
+  timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT; a failure there skips the push. The push goes
   through _git_remote's per-attempt limit and retries.
 
   Args:
@@ -761,13 +760,17 @@ async def git_add_commit_push(
 
   def _commit() -> None:
     subprocess.run(
-        ['git', 'add', *files], cwd=repo_path, check=True, capture_output=True, timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+        ['git', 'add', *files],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        timeout=timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT)
     subprocess.run(
         ['git', 'commit', '-m', message],
         cwd=repo_path,
         check=True,
         capture_output=True,
-        timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+        timeout=timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT)
 
   try:
     await asyncio.to_thread(_commit)

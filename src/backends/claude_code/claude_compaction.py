@@ -275,7 +275,7 @@ async def compact_with_sonnet(
   place.
 
   *cgroup_session_id* is the owning CharlieBot session, so the compaction
-  process lands in that session's memory-cap cgroup; None (no session home)
+  process lands in that session's cgroup; None (no session home)
   spawns exactly as before.
   """
   transcript = claude_accounts.transcript_path(config_dir, cc_session_id)
@@ -292,6 +292,7 @@ async def compact_with_sonnet(
       cgroup_session_id,
       memory_max_mb=cfg.server.session_memory_max_mb,
       swap_max_mb=cfg.server.session_swap_max_mb,
+      tasks_max=cfg.server.session_tasks_max,
   )
   try:
     proc = await asyncio.create_subprocess_exec(

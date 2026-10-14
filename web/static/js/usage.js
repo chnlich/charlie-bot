@@ -25,7 +25,7 @@ function paintStreamDraft(draft) {
   // A reader parked inside the 150px geometry band is still reading: under
   // the turn engine the follow decision is the engine's shouldFollow() — the
   // pin intent, or the follow the open deferred to the next turn.
-  const engine = Chat.TurnEngine && container ? Chat.TurnEngine.activeFor(container) : null;
+  const engine = Chat.activeTurnEngineFor(container);
   const wasAtBottom = engine ? engine.shouldFollow() : shouldAutoScroll(container);
   el.classList.remove('hidden');
   const content = (draft && draft.content) || '';
@@ -71,7 +71,7 @@ function showStreaming(draft) {
 
 function hideStreaming() {
   // A pending trailing paint must not land after a hide: callers hide from
-  // terminal or context-switch paths (committed bubble, error, session swap).
+  // end-of-turn or context-switch paths (committed bubble, error, session swap).
   if (streamRenderTimer !== null) {
     clearTimeout(streamRenderTimer);
     streamRenderTimer = null;

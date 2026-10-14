@@ -7,10 +7,11 @@
 // load time.
 const vm = require('node:vm');
 
-const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
+const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
@@ -56,11 +57,13 @@ function baseSessionContext(overrides = {}) {
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},
+      dispatchEvent: () => true,
     },
+    // session-view.js announces the end of a session switch as a page event.
+    CustomEvent,
     disconnectWS: () => {},
     connectWS: () => {},
     cancelReconnect: () => {},
-    resetVoiceState: () => {},
     renderFileChips: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},
@@ -80,6 +83,7 @@ function baseSessionContext(overrides = {}) {
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     escapeHtml: (v) => v,
     switchTab: () => {},
+    tabAfterSessionSwitch: () => 'chat',
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
     renderProseMarkdown: (txt) => txt,
@@ -89,10 +93,13 @@ function baseSessionContext(overrides = {}) {
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},
     showToast: () => {},
-    _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},
+    // index.html's server facts: the compact button's facts by backend type and
+    // the configured default backend id.
+    BACKEND_COMPACT: overrides.BACKEND_COMPACT || {},
+    DEFAULT_BACKEND_ID: overrides.DEFAULT_BACKEND_ID || 'claude-opus-4.6',
     // config.js's shared literals and the draft-save seam; index.html loads
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.
@@ -116,9 +123,12 @@ function createChatSidebarContext(context) {
   runStaticModules(context, sidebarModules());
 }
 
-// The wire path web/static/js/sidebar/session-view.js posts switch telemetry
-// to (reportSwitchEvent); an endpoint move on either side breaks the pin.
-const SWITCH_TELEMETRY_URL = '/api/diag/switch-events';
+// The cron script: a harness whose rows, menus or Workspace badge show the
+// cron parts runs it after createChatSidebarContext, as the page runs a
+// package's script after the core modules.
+function loadCronPackage(context) {
+  vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+}
 
 // One sidebar row as the harnesses mount it: querySelector answers only
 // '.session-name' (the selector the row rendering resolves); sidebar callers
@@ -321,10 +331,10 @@ module.exports = {
   baseSessionContext,
   buildSidebarIndicatorContext,
   createChatSidebarContext,
+  loadCronPackage,
   buildSidebarFilterElements,
   buildUsageElements,
   buildSwitchFlowHarness,
-  SWITCH_TELEMETRY_URL,
   makeSidebarRow,
   makeSessionMeta,
   bootstrapPayload,

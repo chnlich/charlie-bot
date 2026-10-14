@@ -155,7 +155,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 For complex tasks, the master plans before building; the plan registry keeps that lifecycle:
 
 - **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/features/artifacts/plan_cli.py` → `PlanRegistryManager` in `src/features/artifacts/plans.py`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
-- **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`web/static/js/plan-panel.js`).
+- **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`src/features/artifacts/static/plan-panel.js`).
 - **Approve**: The user's "take off" approves the settled terms; `charliebot plan approve` records it against the latest version. The takeoff gate (`src/runtime/takeoff_gate.py`) lets `/delegate` and `/improve` proceed only when the session's latest real user message carries the approval (or a "pre take off" stamp within 12 hours).
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 
@@ -254,15 +254,22 @@ A raw log that stops growing while the process is still alive is what the server
   (`[tool.pylint]` in `pyproject.toml`).
 
 ### 10.2 Worker Instructions
-Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt
-itself: `prompts/worker.md` sections assembled by `_build_worker_prompt` (`src/runtime/spawner_prompt.py`) for
-workers, `review_rules_text` (`src/runtime/review.py`) for reviewers, rendered into the managed instructions by
-`_worker_kind_rule_segments` (`src/runtime/task_prompts.py`) beside the volatile review context that
-`_build_review_context` (`src/runtime/task_execution.py`) assembles. No instruction file is written into a
-worker's worktree, so the checked-out repo's own AGENTS.md/CLAUDE.md stays in effect. Master sessions are the
-only path that writes one: `_build_instructions_content` (`src/runtime/master_cc_run.py`) assembles the
-git-shared base prompt, the per-host override, the memory block, and the project layer, and the backend writes
-it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backends).
+Each worker and reviewer launch writes its managed instructions to `harness_instructions.md` in its Run directory
+(`HARNESS_INSTRUCTIONS_NAME`, `src/runtime/runs.py`). The text is the run's `PromptSnapshot.instructions_text`
+(`src/runtime/task_prompts.py`): the worker role rules from `prompts/worker.md`, `review_rules_text`
+(`src/runtime/review.py`) for reviewers, and the memory block. The worktree is never written, so the checked-out
+repo's own guide files stay in effect for the agent. Each backend passes the instructions on every launch,
+including a resumed run and a pool relay:
+
+- Claude Code: `--append-system-prompt-file <run dir>/harness_instructions.md`.
+- charlie-code: `--instructions-file <run dir>/harness_instructions.md`.
+- Codex: `-c developer_instructions=<file text as a TOML string>` and `-c project_doc_fallback_filenames=["CLAUDE.md"]`.
+- OpenCode: the base class frames the text into the prompt.
+
+A run on a repository starts in its worktree root, so its CLI can read that repository's guide and skills from there;
+a run without a repository starts in its Run directory. A manager turn is the one path that writes an instructions
+file into a working directory: the backend writes it into the session cwd (CLAUDE.md for Claude Code, AGENTS.md
+for the other backends) and passes no flag.
 
 ---
 
@@ -305,5 +312,5 @@ decodes the opening clip as a recognition probe.
 
 **Configuration**
 - `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
-- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version (the id rule: the `BackendsConfig` comment in `src/infra/config.py`)
+- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: the `BackendsConfig` comment in `src/infra/config.py`; usage's startup check, `src/features/usage/backend_ids.py`, refuses an id outside them)
 - `backends.preference`: ordered list of backend IDs for cross-backend reviewer selection; server startup refuses a preference entry (`require_backends`) or a cron task or step backend (cron's startup check, `src/features/cron/backend_refs.py`) that names no option id

@@ -6,48 +6,39 @@ never enumerate the whole directory.
 """
 
 import os
-from pathlib import Path
+import pathlib
 
+import conftest
 import orjson
 import pytest
-from conftest import (
-    SessionBlocks,
-    build_session_blocks,
-    build_task_tree,
-    build_two_backend_cfg,
-    create_root_session,
-    make_sessions_listing_client,
-)
 
-from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
-from src.runtime import sidebar_state, thinking_state
+from src.infra import models
+from src.runtime import session_listing, session_sidebar, sidebar_state, thinking_state
 from src.runtime.api import sessions as sessions_api
-from src.runtime.session_listing import SessionListing, _listing_row_copy
-from src.runtime.session_sidebar import _iter_trigger_stats
 
 
-def _build_client(cfg, session_blocks: SessionBlocks):
-  return make_sessions_listing_client(cfg, session_blocks, build_task_tree(cfg, session_blocks))
+def _build_client(cfg, session_blocks: conftest.SessionBlocks):
+  return conftest.make_sessions_listing_client(cfg, session_blocks, conftest.build_task_tree(cfg, session_blocks))
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
   """Make the full-directory sweep an error so a regression fails loudly."""
 
-  async def explode(*args: object, **kwargs: object) -> list[SessionMetadata]:
+  async def explode(*args: object, **kwargs: object) -> list[models.SessionMetadata]:
     raise AssertionError("status handlers must not enumerate all sessions")
 
-  monkeypatch.setattr(SessionListing, "list_sessions", explode)
+  monkeypatch.setattr(session_listing.SessionListing, "list_sessions", explode)
 
 
 @pytest.mark.asyncio
 async def test_status_returns_exactly_the_requested_ids(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  wanted = await create_root_session(session_blocks, CreateSessionRequest(name="Sidebar"))
-  other = await create_root_session(session_blocks, CreateSessionRequest(name="Off screen"))
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  wanted = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Sidebar"))
+  other = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Off screen"))
   _forbid_list_sessions(monkeypatch)
 
   with _build_client(cfg, session_blocks) as client:
@@ -70,7 +61,7 @@ async def test_status_returns_exactly_the_requested_ids(
 
 
 @pytest.mark.asyncio
-async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Path,) -> None:
+async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: pathlib.Path,) -> None:
   """A clean poll serves the last fold's map; any state bump forces a re-derive.
 
   The memo is the /status poll's freshness boundary: a bump that failed to
@@ -79,9 +70,9 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
   rebuild the fold used to pay.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_two_backend_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  session = await create_root_session(session_blocks, CreateSessionRequest(name="Memo"))
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Memo"))
   flags = {
       "include_running_status": True,
       "include_pending_trigger_status": True,
@@ -112,7 +103,7 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_status_body_memo_serves_whole_between_state_bumps(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   """A clean poll serves the last rendered body bytes; any state bump re-renders.
 
@@ -122,9 +113,9 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
   the poll to the per-request render it used to pay.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_two_backend_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  session = await create_root_session(session_blocks, CreateSessionRequest(name="Body memo"))
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Body memo"))
   renders: list[object] = []
 
   def count_render(content: object) -> bytes:
@@ -162,7 +153,7 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
 
 
 @pytest.mark.asyncio
-async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,) -> None:
+async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: pathlib.Path,) -> None:
   """A permanent deletion bumps the generation the body memo keys on.
 
   The memo keys on the requested ids, so a poll still carrying a just-deleted
@@ -172,10 +163,10 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
   session's ghost row for a full memo lifetime.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_two_backend_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  kept = await create_root_session(session_blocks, CreateSessionRequest(name="Survivor"))
-  gone = await create_root_session(session_blocks, CreateSessionRequest(name="Deleted"))
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  kept = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Survivor"))
+  gone = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Deleted"))
   ids = f"{kept.id},{gone.id}"
 
   with _build_client(cfg, session_blocks) as client:
@@ -197,7 +188,7 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,) -> None:
+async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: pathlib.Path,) -> None:
   """Every listing row leaves the manager stamped and derived, as its own copy.
 
   The row build folds the thinking stamp and resolve_sidebar_state's derived
@@ -207,9 +198,9 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   later listing.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_two_backend_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  session = await create_root_session(session_blocks, CreateSessionRequest(name="Stamped"))
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Stamped"))
   thinking_state.mark_busy(session.id)
   flags = {
       "include_running_status": True,
@@ -231,18 +222,18 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   # below cannot catch a private-attr change on its own — pydantic keeps empty
   # private attrs out of both model_dump() and __pydantic_fields_set__ — so the
   # two config facts are asserted directly and the config change fails here.
-  assert SessionMetadata.model_config.get("extra") == "allow"
-  assert not SessionMetadata.__private_attributes__
+  assert models.SessionMetadata.model_config.get("extra") == "allow"
+  assert not models.SessionMetadata.__private_attributes__
   update = {
       "thinking_since": thinking_state.busy_since(session.id),
       "run_backend": None,
       "has_unread": True,
       "has_running_tasks": True,
-      "status": SessionStatus.ARCHIVED,
+      "status": models.SessionStatus.ARCHIVED,
   }
   for meta in await session_blocks.store.load_session_metas():
     meta.unregistered_key = "kept"  # an extra key rides the copy
-    fast = _listing_row_copy(meta, update)
+    fast = session_listing._listing_row_copy(meta, update)
     reference = meta.model_copy(update=update)
     assert fast.model_dump() == reference.model_dump()
     assert fast.model_extra == reference.model_extra == meta.model_extra
@@ -253,7 +244,7 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
 @pytest.mark.asyncio
 async def test_root_list_changed_round_rerenders_only_moved_rows(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   """A moved row re-dumps itself; every unmoved row reuses its rendered dict.
 
@@ -267,19 +258,19 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   sidebar_state.reset_for_tests()
   sessions_api._workspace_list_memos.whole_body = None
   sessions_api._workspace_list_memos.row_render.clear()
-  cfg = build_two_backend_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  await create_root_session(session_blocks, CreateSessionRequest(name="Steady"))
-  mover = await create_root_session(session_blocks, CreateSessionRequest(name="Churning"))
-  leaving = await create_root_session(session_blocks, CreateSessionRequest(name="Departing"))
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Steady"))
+  mover = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Churning"))
+  leaving = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Departing"))
   counts = {"dump": 0}
-  real_dump = SessionMetadata.model_dump
+  real_dump = models.SessionMetadata.model_dump
 
-  def counted_dump(self: SessionMetadata, *args: object, **kwargs: object) -> object:
+  def counted_dump(self: models.SessionMetadata, *args: object, **kwargs: object) -> object:
     counts["dump"] += 1
     return real_dump(self, *args, **kwargs)
 
-  monkeypatch.setattr(SessionMetadata, "model_dump", counted_dump)
+  monkeypatch.setattr(models.SessionMetadata, "model_dump", counted_dump)
 
   with _build_client(cfg, session_blocks) as client:
     full = client.get("/api/sessions/")
@@ -315,17 +306,18 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
 class TestProbeWalkDirStateMemo:
   """The probe walk memoizes trigger directory membership while its stat holds."""
 
-  def test_trigger_pairs_refresh_when_the_directory_moves_and_hold_while_it_stands(self, tmp_path: Path) -> None:
+  def test_trigger_pairs_refresh_when_the_directory_moves_and_hold_while_it_stands(
+      self, tmp_path: pathlib.Path) -> None:
     triggers_dir = tmp_path / "sessions" / "sid" / "triggers"
     triggers_dir.mkdir(parents=True)
     (triggers_dir / "a.json").write_text("{}", encoding="utf-8")
-    pairs = _iter_trigger_stats(os.fspath(triggers_dir), os.stat(triggers_dir))
+    pairs = session_sidebar._iter_trigger_stats(os.fspath(triggers_dir), os.stat(triggers_dir))
     assert [os.path.basename(path) for path, _st in pairs] == ["a.json"]
     # the same directory stat serves the memoized pairs unchanged
-    assert _iter_trigger_stats(os.fspath(triggers_dir), os.stat(triggers_dir)) == pairs
+    assert session_sidebar._iter_trigger_stats(os.fspath(triggers_dir), os.stat(triggers_dir)) == pairs
     # a rename-published trigger moves the directory: the next walk sees it
     landing = triggers_dir / "b.json.new"
     landing.write_text("{}", encoding="utf-8")
     os.replace(landing, triggers_dir / "b.json")
-    refreshed = _iter_trigger_stats(os.fspath(triggers_dir), os.stat(triggers_dir))
+    refreshed = session_sidebar._iter_trigger_stats(os.fspath(triggers_dir), os.stat(triggers_dir))
     assert [os.path.basename(path) for path, _st in refreshed] == ["a.json", "b.json"]

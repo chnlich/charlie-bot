@@ -22,7 +22,7 @@ import re
 import sqlite3
 from collections.abc import Iterator
 
-from src.backends.opencode import USAGE_SOURCE
+from src.backends import opencode
 from src.infra import home
 from src.runtime.hooks import usage_sources
 
@@ -96,7 +96,7 @@ def _record(message_id: str, session_id: str, data: str) -> usage_sources.UsageR
   return usage_sources.UsageRecord(
       record_id=f"opencode:{message_id}",
       kind=usage_sources.RecordKind.NATIVE,
-      source=USAGE_SOURCE,
+      source=opencode.USAGE_SOURCE,
       model=model,
       account=provider or "unknown",
       ts=ts,

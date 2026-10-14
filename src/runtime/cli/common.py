@@ -723,7 +723,6 @@ def find_local_task_child(
   # (child, "<request id>:work") binding the server launched — not "whatever
   # run directory sorts first" (a review Run of the same child is a different
   # operation).
-  from src.runtime import control_events  # deferred: charliebot improve --help
   run_id = control_events.stable_run_id(child_id, f"{resolved_request_id}:work")
   if not (get_config().sessions_dir / child_id / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME / run_id /
           runs.RUN_METADATA_NAME).is_file():

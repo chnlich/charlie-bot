@@ -25,6 +25,10 @@ server:
   # bounds swap use separately (0 = no swap).
   session_memory_max_mb: 12288
   session_swap_max_mb: 0
+  # Per-session task cap (processes plus threads), written to the session cgroup's
+  # pids.max: a runaway fork loop fails inside its own session instead of
+  # exhausting the host's PID space. 0 means no task cap.
+  session_tasks_max: 4096
   # Worker-class launch precheck, GiB: the filesystems holding the CharlieBot
   # data dir and the worktree root must hold at least this much free space, or
   # the run stays queued with a blocked report to its parent. 0 disables the

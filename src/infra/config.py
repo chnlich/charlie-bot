@@ -85,6 +85,12 @@ class ServerConfig(BaseModel):
   # entirely. session_swap_max_mb bounds swap use separately (0 = no swap).
   session_memory_max_mb: int = 12288
   session_swap_max_mb: int = 0
+  # Per-session task cap (processes plus threads), written to the session
+  # cgroup's pids.max. A runaway fork loop then fails with EAGAIN inside its
+  # own session, before it can exhaust the host's PID space and stop every
+  # fork on the host. 0 means no task cap (pids.max = max). With
+  # session_memory_max_mb at 0 there is no session cgroup, so no task cap either.
+  session_tasks_max: int = 4096
 
   # Worker-class launch precheck: the filesystems holding the CharlieBot data
   # dir (~/.charliebot) and the worktree root must hold at least this much

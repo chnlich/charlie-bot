@@ -69,12 +69,15 @@ async def wait_or_kill_group(
 
 
 # ---------------------------------------------------------------------------
-# Session memory-cap cgroups
+# Session cgroups: memory cap and task cap
 #
 # systemd delegates the user's app.slice subtree, so an unprivileged server can
 # create one cgroup per session under it, hold every agent process the session
 # spawns to hard memory.max / memory.swap.max limits, and let the kernel kill
-# only the cgroup's largest process on a breach. The parent creates the
+# only the cgroup's largest process on a breach. pids.max caps the session's
+# task count, so a runaway fork loop gets EAGAIN inside its own session and the
+# kernel logs "cgroup: fork rejected by pids controller in <cgroup path>"
+# instead of the host running out of PIDs. The parent creates the
 # directory and writes the limits; the child-side preexec move runs only under
 # asyncio.create_subprocess_exec with start_new_session=True — keep both the
 # flag and the preexec hook on every session spawn path.
@@ -104,19 +107,25 @@ def session_cgroup_path(session_id: str) -> pathlib.Path:
   return pathlib.Path(CGROUP_V2_APP_SLICE) / session_cgroup_name(session_id)
 
 
-def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int) -> pathlib.Path | None:
-  """Create or refresh the session's memory-cap cgroup; None when the host cannot.
+def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> pathlib.Path | None:
+  """Create or refresh the session's cgroup; None when the host cannot.
 
   Lazy per-session creation: the directory is made with the configured
-  ``memory.max`` / ``memory.swap.max``; an existing directory (the session's
-  later spawns) just has its limit files rewritten to the current config
-  values. Any OSError degrades to None with one logged warning — cgroup
-  control never blocks a spawn (the host guard).
+  ``memory.max`` / ``memory.swap.max`` / ``pids.max``; an existing directory
+  (the session's later spawns) just has its limit files rewritten to the
+  current config values. *tasks_max* 0 writes ``max`` (no task cap). Any
+  OSError degrades to None with one logged warning — cgroup control never
+  blocks a spawn (the host guard).
   """
   path = session_cgroup_path(session_id)
   try:
     path.mkdir()
-    log.info("session_cgroup_created", path=str(path), memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb)
+    log.info(
+        "session_cgroup_created",
+        path=str(path),
+        memory_max_mb=memory_max_mb,
+        swap_max_mb=swap_max_mb,
+        tasks_max=tasks_max)
   except FileExistsError:
     pass
   except OSError as e:
@@ -125,6 +134,7 @@ def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int)
   try:
     (path / "memory.max").write_text(str(memory_max_mb * 1024 * 1024))
     (path / "memory.swap.max").write_text(str(swap_max_mb * 1024 * 1024))
+    (path / "pids.max").write_text(str(tasks_max) if tasks_max > 0 else "max")
   except OSError as e:
     _session_cgroup_degraded.log(log.warning, "session_cgroup_unavailable", str(e), path=str(path), error=str(e))
     return None
@@ -215,7 +225,7 @@ def compose_preexec(*preexecs: Callable[[], None] | None) -> Callable[[], None] 
 
 @dataclasses.dataclass(frozen=True)
 class SessionCgroup:
-  """One spawn's handle on the session memory-cap cgroup.
+  """One spawn's handle on the session cgroup.
 
   Carries the cgroup directory, the configured cap (for the report text), and
   the ``memory.events`` counters captured before the spawn — the baseline the
@@ -259,16 +269,17 @@ def classify_cgroup_exit(
   return None
 
 
-def prepare_session_cgroup(session_id: str | None, *, memory_max_mb: int, swap_max_mb: int) -> SessionCgroup | None:
+def prepare_session_cgroup(
+    session_id: str | None, *, memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> SessionCgroup | None:
   """Ensure the session's cgroup and snapshot its pre-spawn ``memory.events`` counters.
 
   Returns None when cgroup control is off for this spawn: *session_id* is None
-  (a spawn with no session home), the configured cap is 0, or the host does not
-  support user-owned cgroups — the spawn then proceeds exactly as before.
+  (a spawn with no session home), the configured memory cap is 0, or the host
+  does not support user-owned cgroups — the spawn then proceeds exactly as before.
   """
   if not session_id or memory_max_mb <= 0:
     return None
-  path = ensure_session_cgroup(session_id, memory_max_mb, swap_max_mb)
+  path = ensure_session_cgroup(session_id, memory_max_mb, swap_max_mb, tasks_max)
   if path is None:
     return None
   return SessionCgroup(path=path, memory_max_mb=memory_max_mb, events_before=read_memory_events(path))
@@ -320,7 +331,7 @@ def sweep_stale_session_cgroups() -> int:
   return removed
 
 
-def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int) -> None:
+def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> None:
   """The one startup line stating whether session cgroup control is on (the host guard)."""
   if memory_max_mb <= 0:
     log.info("session_cgroup_disabled", reason="server.session_memory_max_mb is 0")
@@ -332,4 +343,4 @@ def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int) -> None:
   if not os.access(base, os.W_OK):
     log.info("session_cgroup_disabled", reason=f"{CGROUP_V2_APP_SLICE} not writable by this user")
     return
-  log.info("session_cgroup_enabled", memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb)
+  log.info("session_cgroup_enabled", memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb, tasks_max=tasks_max)

@@ -263,11 +263,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_seed.init_charliebot_home()
     log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
 
-    # Session memory-cap cgroups: the one boot line stating whether
-    # the feature is on for this host (off when the cap is 0 or the delegated
-    # app.slice is missing/unwritable). Then sweep cgroup directories a
-    # previous server life left behind (empty ones only).
-    log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb)
+    # Session cgroups (memory cap and task cap): the one boot line stating
+    # whether the feature is on for this host (off when the memory cap is 0 or
+    # the delegated app.slice is missing/unwritable). Then sweep cgroup
+    # directories a previous server life left behind (empty ones only).
+    log_session_cgroup_startup(
+        cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, cfg.server.session_tasks_max)
     sweep_stale_session_cgroups()
 
     app.state.recovery_task = asyncio.create_task(_run_task_recovery(cfg, task_manager()))

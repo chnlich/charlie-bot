@@ -15,7 +15,8 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.backends.claude_code import USAGE_SOURCE, login_dirs, usage_quota
+from src.backends import claude_code
+from src.backends.claude_code import login_dirs, usage_quota
 from src.infra import config, ndjson
 from src.infra import event_types as ET
 from src.runtime.hooks import usage_sources
@@ -71,7 +72,7 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
         usage_sources.UsageRecord(
             record_id=f"claude:{key}",
             kind=usage_sources.RecordKind.NATIVE,
-            source=USAGE_SOURCE,
+            source=claude_code.USAGE_SOURCE,
             model=model,
             account=account,
             ts=line.get("timestamp") or "",

@@ -22,11 +22,11 @@ from src.features.cron import loader
 from src.infra import config
 
 # Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
-# in src/features/cron/loader.py imports send_telegram at call time (lazy: only the alert send needs it),
-# so that import resolves the stand-in landed on the src.infra.notifications module attribute;
-# import-scope binders of the same function keep their own bound object and
-# are not intercepted through this route.
-NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.features.cron.loader.send_telegram"
+# in src/features/cron/loader.py calls notifications.send_telegram, so the attribute resolves on
+# the src.infra.notifications module at call time and the stand-in lands there; import-scope
+# binders of the same function keep their own bound object and are not intercepted through this
+# route.
+NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.features.cron.loader.notifications.send_telegram"
 
 
 @pytest.fixture

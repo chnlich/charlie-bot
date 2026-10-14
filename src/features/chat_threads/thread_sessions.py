@@ -8,8 +8,7 @@ the CLC context-window override) and the sidebar's chat-thread subtree rule
 :func:`is_thread_session`, so the test has one definition.
 """
 
-from src.infra import metadata_slots
-from src.infra.models import SessionMetadata
+from src.infra import metadata_slots, models
 
 # The context window a thread session passes to the charlie-code backend in
 # place of the backend option's own value. The option entry is shared with main
@@ -19,7 +18,7 @@ from src.infra.models import SessionMetadata
 THREAD_CONTEXT_WINDOW = 96_000
 
 
-def is_thread_session(meta: SessionMetadata) -> bool:
+def is_thread_session(meta: models.SessionMetadata) -> bool:
   """True when *meta* carries a Slack or Discord thread origin."""
   slack = metadata_slots.fields_of(meta, "slack")
   discord = metadata_slots.fields_of(meta, "discord")

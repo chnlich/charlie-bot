@@ -22,12 +22,8 @@ from typing import Any
 
 from src.infra import config, deferred, log_once, models, timeouts
 from src.infra import event_types as ET
-from src.runtime import message_aggregator, streaming
+from src.runtime import message_aggregator, session_events, session_lifecycle, session_listing, session_store, streaming
 from src.runtime.agent_process import deferred_build
-from src.runtime.session_events import SessionEvents
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_store import SessionStore
 
 log = log_once.LazyStructlogLogger()
 
@@ -143,8 +139,8 @@ def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
 
 
 async def _apply_name_to_session(
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_meta: models.SessionMetadata,
     name: str | None,
     group: str | None,
@@ -192,10 +188,10 @@ async def _apply_name_to_session(
 async def name_after_round(
     cfg: config.CharlieBotConfig,
     session_id: str,
-    store: SessionStore,
-    session_events: SessionEvents,
-    listing: SessionListing,
-    lifecycle: SessionLifecycle,
+    store: session_store.SessionStore,
+    event_store: session_events.SessionEvents,
+    listing: session_listing.SessionListing,
+    lifecycle: session_lifecycle.SessionLifecycle,
 ) -> None:
   """Name a session from its saved chat log after a master round finishes.
 
@@ -207,7 +203,7 @@ async def name_after_round(
   if meta is None or not is_default_session_name(meta.name):
     return
 
-  events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
+  events = await asyncio.to_thread(event_store.load_chat_events_sync, session_id)
   user_message = ""
   for ev in events:
     if ev.get("type") == ET.USER and isinstance(ev.get("content"), str):
@@ -229,8 +225,8 @@ async def maybe_auto_name(
     session_meta: models.SessionMetadata,
     user_message: str,
     assistant_response: str,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     existing_groups: list[str],
 ) -> None:
   """If the session still has a default name, generate a descriptive name and group."""

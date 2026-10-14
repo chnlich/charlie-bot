@@ -16,20 +16,17 @@ import threading
 import types
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib import parse
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, HTTPException, Query, Request, responses
 
 import src.features.trace.trace_merge
 from src.features.trace import direct_pass_child, trace_merge_child
-from src.infra.config import get_config
-from src.infra.log_once import LazyStructlogLogger
-from src.runtime import templating
-from src.runtime.file_urls import FILE_SERVER_MOUNTS
+from src.infra import config, log_once
+from src.runtime import file_urls, templating
 from src.runtime.hooks import wiring
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 router = APIRouter()
 
@@ -69,7 +66,7 @@ _merge_build_gate = threading.BoundedSemaphore(_MERGE_POOL_WORKERS)
 
 def _perfetto_merge_cache_dir() -> Path:
   """This profile's Perfetto merge cache. Resolved per call, never at import."""
-  return get_config().charliebot_home / "cache" / "perfetto_merge"
+  return config.get_config().charliebot_home / "cache" / "perfetto_merge"
 
 
 def _trace_merge() -> types.ModuleType:
@@ -77,7 +74,7 @@ def _trace_merge() -> types.ModuleType:
   return src.features.trace.trace_merge
 
 
-@router.get(PERFETTO_VIEWER_PATH, response_class=HTMLResponse)
+@router.get(PERFETTO_VIEWER_PATH, response_class=responses.HTMLResponse)
 async def perfetto_viewer(
     request: Request,
     trace: list[str] = Query(default=[]),
@@ -86,7 +83,7 @@ async def perfetto_viewer(
     pattern: str = "*.json",
     title: str | None = None,
     slim: bool | None = None,
-) -> HTMLResponse:
+) -> responses.HTMLResponse:
   """Render the Perfetto trace viewer page.
 
   Supports single trace, multiple traces, and directory auto-discovery.
@@ -94,7 +91,7 @@ async def perfetto_viewer(
   inputs = [_trace_input(value) for value in trace]
   if dir_path is not None:
     discovered = await asyncio.to_thread(_discover_trace_paths, dir_path, pattern)
-    inputs.extend((f"{FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
+    inputs.extend((f"{file_urls.FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
 
   if not inputs:
     raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
@@ -106,7 +103,7 @@ async def perfetto_viewer(
       query.extend((("dir", dir_path), ("pattern", pattern)))
     if slim is not None:
       query.append(("slim", str(slim)))
-    trace_url = f"{PERFETTO_MERGED_PATH}?{urlencode(query)}"
+    trace_url = f"{PERFETTO_MERGED_PATH}?{parse.urlencode(query)}"
   else:
     trace_url = inputs[0][0]
     if len(inputs) > 1:
@@ -140,11 +137,11 @@ def _discover_trace_paths(directory: str, pattern: str) -> list[Path]:
 
 
 def _trace_input(value: str) -> tuple[str, Path | None]:
-  for prefix in FILE_SERVER_MOUNTS:
+  for prefix in file_urls.FILE_SERVER_MOUNTS:
     if value.startswith(f"{prefix}/"):
       return value, Path(value.removeprefix(prefix))
   if value.startswith("/"):
-    return f"{FILE_SERVER_MOUNTS[0]}{value}", Path(value)
+    return f"{file_urls.FILE_SERVER_MOUNTS[0]}{value}", Path(value)
   return value, None
 
 
@@ -345,7 +342,7 @@ async def perfetto_merged(
     dir_path: str | None = Query(default=None, alias="dir"),
     pattern: str = "*.json",
     slim: bool = False,
-) -> FileResponse:
+) -> responses.FileResponse:
   """Merge local Chrome JSON traces and serve the cached gzip output."""
   if not trace and dir_path is None:
     raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
@@ -374,4 +371,4 @@ async def perfetto_merged(
   except Exception as error:
     log.exception("perfetto_merge_failed", paths=[str(path) for path in resolved_paths], slim=slim)
     raise HTTPException(status_code=500, detail=str(error)) from error
-  return FileResponse(cache_path, media_type="application/gzip")
+  return responses.FileResponse(cache_path, media_type="application/gzip")

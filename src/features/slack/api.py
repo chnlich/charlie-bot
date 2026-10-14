@@ -3,11 +3,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from src.features.slack.slack_listener import SlackReplyError, ack_messages, assert_thread_fresh, post_reply
-from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_store
-from src.runtime.session_events import SessionEvents
-from src.runtime.session_store import SessionStore
+from src.features.slack import slack_listener
+from src.infra import config
+from src.runtime import session_events, session_store
+from src.runtime.api import deps
 
 router = APIRouter()
 
@@ -31,9 +30,9 @@ class SlackAckRequest(BaseModel):
 @router.post("/slack/reply")
 async def slack_reply(
     req: SlackReplyRequest,
-    store: SessionStore = Depends(get_session_store),
-    session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Slack thread and return the readback.
 
@@ -47,18 +46,18 @@ async def slack_reply(
   ``stale_thread`` payload naming each unseen message, before any chunk posts.
   """
   try:
-    await assert_thread_fresh(req.session_id, cfg, store)
-    return await post_reply(req.session_id, req.text, cfg, store, session_events)
-  except SlackReplyError as exc:
+    await slack_listener.assert_thread_fresh(req.session_id, cfg, store)
+    return await slack_listener.post_reply(req.session_id, req.text, cfg, store, events)
+  except slack_listener.SlackReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.post("/slack/ack")
 async def slack_ack(
     req: SlackAckRequest,
-    store: SessionStore = Depends(get_session_store),
-    session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
 ) -> dict:
   """Mark the calling session's read thread messages as consumed and return the readback.
 
@@ -72,6 +71,6 @@ async def slack_ack(
   SlackReplyError's status: 404 unknown session, 409 no Slack thread.
   """
   try:
-    return await ack_messages(req.session_id, req.message_ids, cfg, store, session_events)
-  except SlackReplyError as exc:
+    return await slack_listener.ack_messages(req.session_id, req.message_ids, cfg, store, events)
+  except slack_listener.SlackReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc

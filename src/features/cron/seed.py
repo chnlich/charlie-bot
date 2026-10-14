@@ -2,10 +2,8 @@
 
 import copy
 
-from src.features.cron import loader
-from src.features.cron.config import ScheduledTaskConfig
-from src.features.cron.cron_sequence import effective_scheduled_task_backend
-from src.features.cron.loader import get_scheduled_tasks
+from src.features.cron import config as cron_config
+from src.features.cron import cron_sequence, loader
 from src.infra import config, yaml_utils
 
 
@@ -27,7 +25,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.infra.yaml_utils.save_yaml` (the same writer ``src/features/cron/api.py``
   uses). Validates every default entry before writing: each must construct a
-  :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
+  :class:`cron_config.ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
   entry with ``steps`` resolves each step's ``prompt_file`` exactly like the
   task-level pointer) and every ``prompt_file`` must resolve to an existing
   file. Fails loudly without writing if validation fails.
@@ -56,7 +54,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
       if isinstance(step, dict):
         loader._resolve_prompt_file(step, repo_root)  # raises ValueError
     loader._resolve_local_timezone(resolved)
-    ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
+    cron_config.ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
 
   cron_d_dir = cfg.config_d_dir / "cron.d"
   if not dry_run:
@@ -94,12 +92,12 @@ def setup_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   # backend. If backend resolution raises (e.g. empty backends.options on a fresh
   # host), print the reason instead of aborting setup.
   print("  effective scheduled tasks:")
-  tasks = get_scheduled_tasks()
+  tasks = loader.get_scheduled_tasks()
   if not tasks:
     print("    (none)")
   for t in tasks:
     try:
-      backend = effective_scheduled_task_backend(t, cfg)
+      backend = cron_sequence.effective_scheduled_task_backend(t, cfg)
     except Exception as e:
       backend = f"unresolved: {e}"
     print(f"    - {t.name} | cron={t.cron} | tz={t.timezone} | backend={backend}")

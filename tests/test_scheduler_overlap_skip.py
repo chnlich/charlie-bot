@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import datetime
 import pathlib
+import types
 from typing import Any
 from unittest import mock
 
@@ -74,10 +75,14 @@ class _PendingRound:
 
 
 def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
+  # The scheduler qualifies through the datetime module (`datetime.datetime.now`), so the
+  # stand-in binds the module attribute to a namespace carrying the fake class; patching the
+  # stdlib module's own `datetime` attribute would leak the fake into croniter/dateutil, whose
+  # deferred import (load_croniter) resolves inside this window.
   monkeypatch.setattr(
       scheduler_module,
       "datetime",
-      type("_FakeDate", (_FakeDate,), {"_clock": clock}),
+      types.SimpleNamespace(datetime=type("_FakeDate", (_FakeDate,), {"_clock": clock}), timedelta=datetime.timedelta),
   )
 
 

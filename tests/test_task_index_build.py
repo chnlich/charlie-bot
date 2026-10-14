@@ -11,22 +11,27 @@ readers the write touches all arrive inside the same burst.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, build_env, create_task
 
-from src.infra.models import PatchSessionTaskRequest, RunRecord
-from src.runtime.task_completion import CompletionEvidence
-from src.runtime.task_errors import TaskConflictError
+from src.infra import models
+from src.runtime import task_completion, task_errors
 
 
 @pytest_asyncio.fixture
-async def tree(tmp_path: Path):
-  _cfg, _session_blocks, tree = build_env(tmp_path)
+async def tree(tmp_path: pathlib.Path):
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="Root",
+      backend=None,
+      caller=conftest.OPERATOR)
   return tree
 
 
@@ -87,7 +92,13 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
   nodes (2 structural + 2 fold).
   """
   await tree.create_task(
-      request_id="child", task_parent_id=None, profile="worker", task=None, name="Child", backend=None, caller=OPERATOR)
+      request_id="child",
+      task_parent_id=None,
+      profile="worker",
+      task=None,
+      name="Child",
+      backend=None,
+      caller=conftest.OPERATOR)
   calls = {"n": 0}
   orig = type(tree)._facts_of
 
@@ -115,9 +126,9 @@ def _invalidate_during_builds(tree, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_automatic_completion_closes_when_a_write_lands_mid_build(tree, monkeypatch):
-  manager = await create_task(tree, parent=None, request_id="mgr")
-  worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker")
-  await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  manager = await conftest.create_task(tree, parent=None, request_id="mgr")
+  worker = await conftest.create_task(tree, parent=manager.id, request_id="w", profile="worker")
+  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   _invalidate_during_builds(tree, monkeypatch)
   await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
   assert tree._index is None  # the builds never installed
@@ -126,36 +137,36 @@ async def test_automatic_completion_closes_when_a_write_lands_mid_build(tree, mo
 
 @pytest.mark.asyncio
 async def test_cancellation_succeeds_when_a_write_lands_mid_build(tree, monkeypatch):
-  manager = await create_task(tree, parent=None, request_id="mgr")
-  worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker")
+  manager = await conftest.create_task(tree, parent=None, request_id="mgr")
+  worker = await conftest.create_task(tree, parent=manager.id, request_id="w", profile="worker")
   _invalidate_during_builds(tree, monkeypatch)
-  await tree.completion.cancel_task(worker.id, request_id="cancel", reason="not needed", caller=OPERATOR)
+  await tree.completion.cancel_task(worker.id, request_id="cancel", reason="not needed", caller=conftest.OPERATOR)
   assert tree.task_state(worker.id) == "cancelled"
 
 
 @pytest.mark.asyncio
 async def test_manager_close_citing_a_child_run_passes_evidence_when_a_write_lands_mid_build(tree, monkeypatch):
-  feature = await create_task(tree, parent=None, request_id="feature")
-  worker = await create_task(tree, parent=feature.id, request_id="w", profile="worker")
-  await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  feature = await conftest.create_task(tree, parent=None, request_id="feature")
+  worker = await conftest.create_task(tree, parent=feature.id, request_id="w", profile="worker")
+  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
   # The worker's report is unprocessed input on the manager until a turn consumes it.
-  await tree.runs.register_run(RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run(models.RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(feature.id, "run-turn")
   await tree.dispatch.finish_run(feature.id, "run-turn", outcome="success")
   _invalidate_during_builds(tree, monkeypatch)
-  evidence = CompletionEvidence(summary="delivered", result_refs=["run:run-w"], run_ids=["run-w"])
+  evidence = task_completion.CompletionEvidence(summary="delivered", result_refs=["run:run-w"], run_ids=["run-w"])
   status, _payload = await tree.completion.complete_task(
-      feature.id, request_id="close", evidence=evidence, caller=OPERATOR)
+      feature.id, request_id="close", evidence=evidence, caller=conftest.OPERATOR)
   assert status == 200
   assert tree.task_state(feature.id) == "completed"
 
 
 @pytest.mark.asyncio
 async def test_structural_patch_runs_its_guards_when_a_write_lands_mid_build(tree, monkeypatch):
-  manager = await create_task(tree, parent=None, request_id="mgr")
-  await create_task(tree, parent=manager.id, request_id="child", profile="worker")
+  manager = await conftest.create_task(tree, parent=None, request_id="mgr")
+  await conftest.create_task(tree, parent=manager.id, request_id="child", profile="worker")
   _invalidate_during_builds(tree, monkeypatch)
-  with pytest.raises(TaskConflictError, match="no child tasks"):
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(profile="worker"), caller=OPERATOR)
+  with pytest.raises(task_errors.TaskConflictError, match="no child tasks"):
+    await tree.patch_task(manager.id, models.PatchSessionTaskRequest(profile="worker"), caller=conftest.OPERATOR)

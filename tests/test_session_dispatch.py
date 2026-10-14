@@ -18,15 +18,13 @@ from conftest import (
 )
 
 from src.infra import event_types as ET
-from src.infra.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc, utc_now_iso
-from src.runtime.api.message_utils import events_to_view
-from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token
-from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError
-from src.runtime.task_sessions import TaskTreeManager
+from src.infra import models
+from src.runtime import run_token, task_errors, task_sessions
+from src.runtime.api import message_utils
 
 
 async def admit(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
     content: str,
     *,
@@ -42,7 +40,7 @@ class ScriptedExecutor:
   """The deterministic executor seam: binds one queued Run per dispatch and
   finishes it with the scripted outcome (or leaves it queued when finish=False)."""
 
-  def __init__(self, tree: TaskTreeManager, *, outcome: str = "success", finish: bool = True) -> None:
+  def __init__(self, tree: task_sessions.TaskTreeManager, *, outcome: str = "success", finish: bool = True) -> None:
     self.tree = tree
     self.outcome = outcome
     self.finish = finish
@@ -54,7 +52,7 @@ class ScriptedExecutor:
     batch_ids = [str(e["id"]) for e in pending]
     self.batches.append((session_id, batch_ids))
     run = await self.tree.runs.register_run(
-        RunRecord(id=f"consumer-{self.counter}", session_id=session_id, kind="work"))
+        models.RunRecord(id=f"consumer-{self.counter}", session_id=session_id, kind="work"))
     async with self.tree.control_lock:
       bound = await self.tree.dispatch.claim_input_batch_locked(session_id, run.id)
     assert bound == batch_ids
@@ -65,11 +63,11 @@ class ScriptedExecutor:
 
 def child_report_messages(session_blocks: SessionBlocks, session_id: str) -> list[dict]:
   events = session_blocks.events.load_chat_events_sync(session_id)
-  view, _draft = events_to_view(events)
+  view, _draft = message_utils.events_to_view(events)
   return [m for m in view if m.get("role") == ET.CHILD_REPORT]
 
 
-def input_events(tree: TaskTreeManager, session_id: str) -> list[dict]:
+def input_events(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return tree.dispatch.pending_inputs(session_id)
 
 
@@ -87,7 +85,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
 
   # Child A closes and reports; the parent's first consumer claims exactly that
   # report and finishes successfully, acknowledging only it.
-  run_a = await tree.runs.register_run(RunRecord(id="run-a", session_id=child_a.id, kind="work"))
+  run_a = await tree.runs.register_run(models.RunRecord(id="run-a", session_id=child_a.id, kind="work"))
   await tree.dispatch.finish_run(child_a.id, run_a.id, outcome="success")  # auto-close + report
   assert input_events(tree, parent.id) and {e["child_session_id"] for e in input_events(tree, parent.id)
                                            } == {child_a.id}
@@ -106,7 +104,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
   # With no executor installed the close-time report dispatch records the
   # report only (the execution adapter's own tests cover the live dispatch).
   tree.dispatch.executor = None
-  run_b = await tree.runs.register_run(RunRecord(id="run-b", session_id=child_b.id, kind="work"))
+  run_b = await tree.runs.register_run(models.RunRecord(id="run-b", session_id=child_b.id, kind="work"))
   await tree.dispatch.finish_run(child_b.id, run_b.id, outcome="success")
   pending_now = {e["child_session_id"] for e in input_events(tree, parent.id)}
   assert pending_now == {child_b.id}
@@ -142,7 +140,7 @@ async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: 
   close_event = {
       "id": "close-child",
       "type": ET.TASK_CLOSED,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
       "actor": "system",
       "source_session_id": child.id,
       "request_id": "auto:run-1",
@@ -187,7 +185,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   close_event = {
       "id": "close-child",
       "type": ET.TASK_CLOSED,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
       "actor": "system",
       "source_session_id": child.id,
       "request_id": "auto:run-1",
@@ -201,7 +199,6 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   fresh = build_task_tree(cfg, session_blocks)
 
   # While the report is undelivered, the moving-subtree reparent guard blocks.
-  from src.infra.models import PatchSessionTaskRequest
   other_root = await fresh.create_task(
       request_id="other-root",
       task_parent_id=None,
@@ -210,8 +207,8 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
       name=None,
       backend=None,
       caller=OPERATOR)
-  with pytest.raises(TaskConflictError, match="undelivered parent report"):
-    await fresh.patch_task(child.id, PatchSessionTaskRequest(task_parent_id=other_root.id), caller=OPERATOR)
+  with pytest.raises(task_errors.TaskConflictError, match="undelivered parent report"):
+    await fresh.patch_task(child.id, models.PatchSessionTaskRequest(task_parent_id=other_root.id), caller=OPERATOR)
 
   delivered = await fresh.dispatch.recover_pending_reports(child.id)
   assert len(delivered) == 1 and delivered[0]["child_session_id"] == child.id
@@ -231,7 +228,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   assert [str(e["id"]) for e in pending] == [delivered[0]["id"]]
 
   # With the report delivered, the same move passes its report guards.
-  await fresh.patch_task(child.id, PatchSessionTaskRequest(task_parent_id=other_root.id), caller=OPERATOR)
+  await fresh.patch_task(child.id, models.PatchSessionTaskRequest(task_parent_id=other_root.id), caller=OPERATOR)
   moved = await fresh.load_meta(child.id)
   assert moved is not None and moved.task_parent_id == other_root.id
 
@@ -252,11 +249,11 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   # at request entry (the sender holds no implementation authorization), so
   # only the server-owned cron trigger is enqueued — whose takeoff text still
   # mints nothing.
-  with pytest.raises(TaskForbiddenError):
+  with pytest.raises(task_errors.TaskForbiddenError):
     await admit(tree, worker.id, "take off now", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
   await admit(tree, worker.id, "take off (cron)", event_type=ET.SCHEDULED_TRIGGER, actor="system")
-  from src.runtime.takeoff_gate import DelegationBlockedError
-  with pytest.raises(DelegationBlockedError):
+  from src.runtime import takeoff_gate
+  with pytest.raises(takeoff_gate.DelegationBlockedError):
     await tree.check_task_authorization(worker.id)
 
   # A consumer takes the cron input; with the node's inputs handled the
@@ -272,8 +269,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
 
   # The closed node keeps a late machine input as history (and the machine
   # refusal never mints an authorization window).
-  from src.runtime.task_errors import TaskArchivedError
-  with pytest.raises(TaskArchivedError):
+  with pytest.raises(task_errors.TaskArchivedError):
     await admit(
         tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
   assert [str(e["id"]) for e in input_events(tree, worker.id)] == []
@@ -294,7 +290,7 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
   _, _, tree = build_env(tmp_path)
   node = await create_task(tree, parent=None, request_id="node")
   await admit(tree, node.id, "work to do", input_id="job-1")
-  queued = await tree.runs.register_run(RunRecord(id="run-queued", session_id=node.id))
+  queued = await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=node.id))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(node.id, queued.id)
   stop = await tree.runs.request_stop(node.id, "run-queued", "stop-1")
@@ -306,7 +302,7 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
   assert decision["launch"] is True  # the stopped queued run never consumes
   assert executor.batches and executor.batches[0][1] == ["job-1"]
 
-  with pytest.raises(TaskConflictError, match="stop request"):
+  with pytest.raises(task_errors.TaskConflictError, match="stop request"):
     async with tree.control_lock:
       await tree.dispatch.claim_input_batch_locked(node.id, "run-queued")
 
@@ -327,29 +323,28 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
 
   # Child reference.
-  with pytest.raises(TaskConflictError, match="child task"):
+  with pytest.raises(task_errors.TaskConflictError, match="child task"):
     await tree.delete_permanently(root.id, caller=OPERATOR)
   # Runs.
-  await tree.runs.register_run(RunRecord(id="run-blk", session_id=child.id))
-  with pytest.raises(TaskConflictError, match="run record"):
+  await tree.runs.register_run(models.RunRecord(id="run-blk", session_id=child.id))
+  with pytest.raises(task_errors.TaskConflictError, match="run record"):
     await tree.delete_permanently(child.id, caller=OPERATOR)
   # Preserved conversation beyond the creation fact.
   await admit(tree, child.id, "history", input_id="hist-1")
-  with pytest.raises(TaskConflictError, match="preserved conversation"):
+  with pytest.raises(task_errors.TaskConflictError, match="preserved conversation"):
     await tree.delete_permanently(child.id, caller=OPERATOR)
   # A child report held in another task's log.
   other_root = await create_task(tree, parent=None, request_id="other-root")
   await tree.dispatch.deliver_child_report(
       child.id, source_event={"id": "src-1"}, outcome="failed", summary="s", result_refs=[], recipient=other_root.id)
-  with pytest.raises(TaskConflictError, match="child report"):
+  with pytest.raises(task_errors.TaskConflictError, match="child report"):
     await tree.delete_permanently(child.id, caller=OPERATOR)
   # An origin reference from another task's saved metadata.
-  from src.infra.models import EventRef
   fork_meta = await session_blocks.store.get_session(other_root.id)
   assert fork_meta is not None
-  fork_meta.origin_ref = EventRef(session_id=child.id, event_id=None)
+  fork_meta.origin_ref = models.EventRef(session_id=child.id, event_id=None)
   await session_blocks.store.save_metadata(fork_meta)
-  with pytest.raises(TaskConflictError, match="origin_ref"):
+  with pytest.raises(task_errors.TaskConflictError, match="origin_ref"):
     await tree.delete_permanently(child.id, caller=OPERATOR)
 
   # A truly empty, unreferenced task is deletable under the same lock.
@@ -357,10 +352,11 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   assert await tree.delete_permanently(empty.id, caller=OPERATOR) is True
   assert await session_blocks.store.get_session(empty.id) is None
   # Agents cannot delete.
-  with pytest.raises(TaskForbiddenError):
+  with pytest.raises(task_errors.TaskForbiddenError):
     await tree.delete_permanently(
         other_root.id,
-        caller=CallerIdentity(kind="run", claims=RunTokenClaims(run_id="r", session_id=other_root.id, agent="a")))
+        caller=run_token.CallerIdentity(
+            kind="run", claims=run_token.RunTokenClaims(run_id="r", session_id=other_root.id, agent="a")))
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +366,13 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
 
 @pytest.mark.asyncio
 async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> None:
-  from fastapi import FastAPI
-  from fastapi.testclient import TestClient
+  from fastapi import FastAPI, testclient
 
   import src.runtime.api.chat as chat_api
   import src.runtime.api.internal as internal_api
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
+  from src.runtime.api import deps
 
   cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
@@ -390,9 +385,9 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   key = "op-secret"
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_run_store] = lambda: tree.runs
+  app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
 
   class _StreamingManager:
 
@@ -407,7 +402,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   fake_streaming = _StreamingManager()
   session_events_module.streaming_manager = fake_streaming  # type: ignore[assignment]
   try:
-    with TestClient(app) as client:
+    with testclient.TestClient(app) as client:
       # Operator browser input is a real USER event with its attachments.
       sent = client.post(
           f"/api/sessions/{worker.id}/message",
@@ -431,12 +426,12 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       # request-entry gate refuses it anyway — the worker is not its own
       # parent, so its self-addressed agent message is a 403 and nothing is
       # enqueued.
-      await tree.runs.register_run(RunRecord(id="run-agent", session_id=worker.id, kind="work"))
+      await tree.runs.register_run(models.RunRecord(id="run-agent", session_id=worker.id, kind="work"))
       # The run credential is accepted only once the launch callback persisted
       # the process identity on the Run.
       await tree.runs.record_launch(worker.id, "run-agent", pid=424242, pid_start="ps-1")
-      claims = RunTokenClaims(run_id="run-agent", session_id=worker.id, agent="worker-agent")
-      agent_client_headers = {"Authorization": f"Bearer {sign_run_token(claims, key)}"}
+      claims = run_token.RunTokenClaims(run_id="run-agent", session_id=worker.id, agent="worker-agent")
+      agent_client_headers = {"Authorization": f"Bearer {run_token.sign_run_token(claims, key)}"}
       relayed = client.post(
           f"/api/sessions/{worker.id}/message", json={"content": "agent view"}, headers=agent_client_headers)
       assert relayed.status_code == 403
@@ -469,23 +464,22 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_message_route_stores_input_mode_only_when_the_post_carries_it(tmp_path: Path) -> None:
-  from fastapi import FastAPI
-  from fastapi.testclient import TestClient
+  from fastapi import FastAPI, testclient
 
   import src.runtime.api.chat as chat_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
+  from src.runtime.api import deps
 
   cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
   app = FastAPI()
   app.include_router(chat_api.router, prefix="/api/chat")
   app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_run_store] = lambda: tree.runs
+  app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
 
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     dictated = client.post(f"/api/chat/{root.id}/message", json={"content": "said aloud", "input_mode": "voice"})
     typed = client.post(f"/api/chat/{root.id}/message", json={"content": "typed in"})
 
@@ -500,7 +494,7 @@ async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: Path) -> None
   _cfg, _blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
 
-  with pytest.raises(TaskInvalidError, match="input_mode"):
+  with pytest.raises(task_errors.TaskInvalidError, match="input_mode"):
     await admit(
         tree, root.id, "relayed", event_type=ET.AGENT_MESSAGE, actor="agent", from_session="peer", input_mode="voice")
 
@@ -509,12 +503,11 @@ async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
-  from fastapi import FastAPI
-  from fastapi.testclient import TestClient
+  from fastapi import FastAPI, testclient
 
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
+  from src.runtime.api import deps
 
   cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
@@ -525,10 +518,10 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   key = "op-secret"
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_run_store] = lambda: tree.runs
-  with TestClient(app) as client:
+  app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
+  with testclient.TestClient(app) as client:
     # Blockers are a concrete 409 list: the open child blocks the root.
     blocked = client.post(
         f"/api/sessions/{root.id}/complete",
@@ -542,7 +535,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
     assert any("open descendant" in b for b in blocked.json()["detail"]["blockers"])
 
     # The worker's successful run closes it; the route returns the Session detail.
-    await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+    await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
     await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
     ok = client.post(
         f"/api/sessions/{root.id}/complete",
@@ -553,7 +546,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
             "run_ids": ["run-w"]
         })
     assert ok.status_code == 409  # the worker's report is unprocessed input
-    await tree.runs.register_run(RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
+    await tree.runs.register_run(models.RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
     async with tree.control_lock:
       await tree.dispatch.claim_input_batch_locked(root.id, "run-root-turn")
     await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")
@@ -581,9 +574,10 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
     assert len(closes) == 1
 
     # Archive (DELETE) is the single end state; an agent token cannot mutate.
-    await tree.runs.register_run(RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
+    await tree.runs.register_run(models.RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
     await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
-    agent_token = sign_run_token(RunTokenClaims(run_id="run-root-agent", session_id=root.id, agent="a"), key)
+    agent_token = run_token.sign_run_token(
+        run_token.RunTokenClaims(run_id="run-root-agent", session_id=root.id, agent="a"), key)
     key2_headers = {"Authorization": f"Bearer {agent_token}"}
     forbidden = client.delete(f"/api/sessions/{root.id}", headers=key2_headers)
     assert forbidden.status_code == 403
@@ -610,17 +604,17 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   """The locked finish layer itself rejects it: a batchless run's finisher
   cannot name ids another registered non-terminal run claimed (a claim that
   lands between the dispatcher's pre-check and the locked finish still fails)."""
-  from src.runtime.runs import RunInputMismatchError
+  from src.runtime import runs
 
   _cfg, _session_blocks, tree = build_env(tmp_path)
   task = await create_task(tree, parent=None, request_id="root")
   await admit(tree, task.id, "work", input_id="in-1")
-  await tree.runs.register_run(RunRecord(id="run-b", session_id=task.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-b", session_id=task.id, kind="work"))
   async with tree.control_lock:
     claimed = await tree.dispatch.claim_input_batch_locked(task.id, "run-b")
   assert claimed == ["in-1"]
-  await tree.runs.register_run(RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
-  with pytest.raises(RunInputMismatchError, match="claimed batch"):
+  await tree.runs.register_run(models.RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
+  with pytest.raises(runs.RunInputMismatchError, match="claimed batch"):
     await tree.runs.record_finish(task.id, "run-a", "success", input_event_ids=["in-1"])
   # No terminal fact landed for run-a; the input stays claimed by its owner.
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(task.id), "run-a") is None
@@ -658,18 +652,18 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
   second = (await updated_at_of(session_blocks, child.id) + timedelta(hours=2)).isoformat()
 
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=first)
-  assert await updated_at_of(session_blocks, child.id) == ensure_utc(first)
-  assert await updated_at_of(session_blocks, mid.id) == ensure_utc(first)
-  assert await updated_at_of(session_blocks, root.id) == ensure_utc(first)
+  assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(first)
+  assert await updated_at_of(session_blocks, mid.id) == models.ensure_utc(first)
+  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(first)
 
   # A replayed input_id returns the original event and lifts nothing; a new
   # message moves the whole branch forward again.
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=second)
-  assert await updated_at_of(session_blocks, child.id) == ensure_utc(first)
+  assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(first)
   await admit(tree, child.id, "again", input_id="m2", timestamp=second)
-  assert await updated_at_of(session_blocks, child.id) == ensure_utc(second)
-  assert await updated_at_of(session_blocks, mid.id) == ensure_utc(second)
-  assert await updated_at_of(session_blocks, root.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(second)
+  assert await updated_at_of(session_blocks, mid.id) == models.ensure_utc(second)
+  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(second)
 
   # Agent relays, scheduled triggers, and child reports are server/agent
   # traffic: none of them lifts, however fresh.
@@ -678,9 +672,9 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
   await admit(
       tree, child.id, "cron woke this node", event_type=ET.SCHEDULED_TRIGGER, actor="system", timestamp=agent_at)
   await admit(tree, child.id, "child finished", event_type=ET.CHILD_REPORT, actor="system", timestamp=agent_at)
-  assert await updated_at_of(session_blocks, child.id) == ensure_utc(second)
-  assert await updated_at_of(session_blocks, mid.id) == ensure_utc(second)
-  assert await updated_at_of(session_blocks, root.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(second)
+  assert await updated_at_of(session_blocks, mid.id) == models.ensure_utc(second)
+  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(second)
 
   # An archived ancestor stops the climb: the archived row and everything
   # above it keep their updated_at even though the message is fresher.
@@ -692,7 +686,7 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
   root_at = await updated_at_of(session_blocks, aroot.id)
   later = (await updated_at_of(session_blocks, achild.id) + timedelta(hours=3)).isoformat()
   await admit(tree, achild.id, "to the archived branch", timestamp=later)
-  assert await updated_at_of(session_blocks, achild.id) == ensure_utc(later)
+  assert await updated_at_of(session_blocks, achild.id) == models.ensure_utc(later)
   assert await updated_at_of(session_blocks, amid.id) == archived_at
   assert await updated_at_of(session_blocks, aroot.id) == root_at
 
@@ -713,13 +707,13 @@ async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: P
   await session_blocks.anchors.update_thinking_state(s.id, base - timedelta(hours=1))
 
   await tree.update_slot_fields(
-      s.id, "cron", last_scheduled_run=base.isoformat(), last_run_status=LastRunStatus.SKIPPED)
-  listing = await session_blocks.listing.list_sessions(status=SessionStatus.ACTIVE)
+      s.id, "cron", last_scheduled_run=base.isoformat(), last_run_status=models.LastRunStatus.SKIPPED)
+  listing = await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [s.id, x.id]
-  assert next(r for r in listing if r.id == s.id).last_run_status == LastRunStatus.SKIPPED
+  assert next(r for r in listing if r.id == s.id).last_run_status == models.LastRunStatus.SKIPPED
 
   # The user messages the older node; the fired node keeps its place.
   messaged_at = (base - timedelta(minutes=30)).isoformat()
   await admit(tree, x.id, "my turn", timestamp=messaged_at)
-  listing = await session_blocks.listing.list_sessions(status=SessionStatus.ACTIVE)
+  listing = await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [x.id, s.id]

@@ -18,7 +18,8 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.backends.codex import USAGE_SOURCE, codex_usage, usage_quota
+from src.backends import codex
+from src.backends.codex import codex_usage, usage_quota
 from src.infra import ndjson
 from src.runtime.hooks import usage_sources
 
@@ -110,7 +111,7 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
     records[record_id] = usage_sources.UsageRecord(
         record_id=record_id,
         kind=usage_sources.RecordKind.NATIVE,
-        source=USAGE_SOURCE,
+        source=codex.USAGE_SOURCE,
         model=model or "unknown",
         account=account,
         ts=line.get("timestamp") or "",

@@ -15,3 +15,10 @@ question. Detailed positioning goes to the project owner.
 ## Linked docs
 
 Default to tenant-internal sharing when creating a doc linked to an issue.
+
+## Ghost-written messages
+
+A message drafted for a person to send under their own name (Slack reply,
+channel announcement, email) matches that person's chat style. Sample their
+recent messages in the thread or channel before writing. Keep their short
+sentences and usual wording over generic professional polish.

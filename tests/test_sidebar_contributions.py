@@ -7,10 +7,10 @@ without the Threads view.
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import types
-from pathlib import Path
 
 import conftest
 import pytest
@@ -37,7 +37,7 @@ def stub_module(monkeypatch: pytest.MonkeyPatch, name: str, **attrs: object) -> 
   monkeypatch.setitem(sys.modules, name, types.SimpleNamespace(**attrs))
 
 
-def test_the_base_class_adds_nothing(tmp_path: Path) -> None:
+def test_the_base_class_adds_nothing(tmp_path: pathlib.Path) -> None:
   contribution = hook.SidebarContribution()
 
   assert contribution.watched_files == ()
@@ -148,7 +148,7 @@ asyncio.run(main())
 """
 
 
-def probe_without(package: str, home: Path) -> dict:
+def probe_without(package: str, home: pathlib.Path) -> dict:
   probe = subprocess.run(
       [
           sys.executable, "-c",
@@ -167,7 +167,7 @@ def probe_without(package: str, home: Path) -> dict:
   return json.loads(probe.stdout.splitlines()[-1])
 
 
-def test_a_thread_session_roots_no_view_without_the_chat_threads_package(tmp_path: Path) -> None:
+def test_a_thread_session_roots_no_view_without_the_chat_threads_package(tmp_path: pathlib.Path) -> None:
   found = probe_without("src.features.chat_threads", tmp_path)
 
   assert found["views"] == {}

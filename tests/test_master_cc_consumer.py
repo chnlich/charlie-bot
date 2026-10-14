@@ -3,74 +3,49 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
+import datetime
 import json
+import pathlib
 from collections.abc import AsyncIterator
-from contextlib import nullcontext
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    ConsumerRound,
-    TerminateFlagBackend,
-    _run_seeded_consumer,
-    append_events,
-    assistant_event,
-    backend_option,
-    bind_session_blocks,
-    build_master_cc_cfg,
-    build_session_blocks,
-    create_root_session,
-    drain_session_consumer,
-    fresh_master_state,
-    make_sound_round,
-    make_work_item,
-    manager_backed_callbacks,
-    mock_session_callbacks,
-    mocked_callback_fields,
-    patch_resume_seams,
-    run_resume_round,
-    run_session_consumer,
-    run_task_manager_message,
-    user_event,
-)
 
 from src.features.latex import latex
+from src.infra import config, models
 from src.infra import event_types as ET
 from src.infra import tasks as infra_tasks
-from src.infra.config import CharlieBotConfig
-from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionCallbacks, SessionMetadata
 from src.runtime import autonamer, master_cc_queue, master_cc_run, master_cc_state, streaming, thinking_state
-from src.runtime.agent_process.base import make_result_event
+from src.runtime.agent_process import base
 
 
-def _make_meta(session_id: str) -> SessionMetadata:
-  return SessionMetadata(profile="manager", id=session_id, name="t", backend="fake", cc_session_id=None)
+def _make_meta(session_id: str) -> models.SessionMetadata:
+  return models.SessionMetadata(profile="manager", id=session_id, name="t", backend="fake", cc_session_id=None)
 
 
 async def run_consumer_over_real_disk(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: ConsumerRound,
+    fake_run_cc: conftest.ConsumerRound,
 ) -> None:
-  """run_session_consumer with the session blocks kept real: the dequeue refresh reads disk
+  """conftest.run_session_consumer with the session blocks kept real: the dequeue refresh reads disk
   through it, the teardown probe is silenced at the method, and no class-level patch can shadow
   the refresh's own local import."""
-  await _run_seeded_consumer(
+  await conftest._run_seeded_consumer(
       session_id,
       work_items,
       fake_run_cc,
-      nullcontext(),
+      contextlib.nullcontext(),
   )
 
 
 @pytest.mark.asyncio
 async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None:
-  """Two queued _WorkItems with distinct SessionMetadata objects must share cc_session_id.
+  """Two queued _WorkItems with distinct models.SessionMetadata objects must share cc_session_id.
 
   Reproduces the fork_session race where the bootstrap turn sets cc_session_id on
   meta_A but a concurrently-loaded meta_B still has cc_session_id=None.
@@ -79,13 +54,13 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
   meta_bootstrap = _make_meta(session_id)
   meta_user_message = _make_meta(session_id)  # distinct instance, freshly loaded from disk
-  cb = mock_session_callbacks()
-  item_bootstrap = make_work_item(MagicMock(), meta_bootstrap, None, user_content="hi", callbacks=cb)
+  cb = conftest.mock_session_callbacks()
+  item_bootstrap = conftest.make_work_item(mock.MagicMock(), meta_bootstrap, None, user_content="hi", callbacks=cb)
   # Different extra flags keep the two items in separate turns under the batch
   # contract (equal run settings would merge them into one round); the relay
   # under test is the consumer's cross-turn cc_session_id fill.
-  item_user = replace(
-      make_work_item(MagicMock(), meta_user_message, None, user_content="hi", callbacks=cb),
+  item_user = dataclasses.replace(
+      conftest.make_work_item(mock.MagicMock(), meta_user_message, None, user_content="hi", callbacks=cb),
       extra_claude_flags=["--relay-probe"],
   )
 
@@ -95,7 +70,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
     observed_cc_session_ids.append(item.session_meta.cc_session_id)
     return ("cc-id-from-bootstrap", 0, None, {})
 
-  await run_session_consumer(session_id, [item_bootstrap, item_user], fake_run_cc)
+  await conftest.run_session_consumer(session_id, [item_bootstrap, item_user], fake_run_cc)
 
   assert observed_cc_session_ids == [None, "cc-id-from-bootstrap"
                                     ], ("second _run_cc must observe cc_session_id relayed from bootstrap meta")
@@ -112,7 +87,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inject_at", ["run_cc", "master_done_persist", "idle_broadcast"])
 async def test_busy_invariant_holds_under_adversarial_enqueue(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     inject_at: str,
 ) -> None:
@@ -125,14 +100,14 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   ends busy_since must be None.
   """
   session_id = f"t1-{inject_at}"
-  cfg = build_master_cc_cfg(tmp_path)
-  bind_session_blocks(monkeypatch, build_session_blocks(cfg))
+  cfg = conftest.build_master_cc_cfg(tmp_path)
+  conftest.bind_session_blocks(monkeypatch, conftest.build_session_blocks(cfg))
   monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
 
-  entries: list[datetime | None] = []
+  entries: list[datetime.datetime | None] = []
   injected = False
   injected_task: asyncio.Task | None = None
-  real_persist = AsyncMock()
+  real_persist = mock.AsyncMock()
 
   async def _inject_once() -> None:
     nonlocal injected, injected_task
@@ -140,9 +115,9 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       return
     injected = True
     injected_task = asyncio.create_task(
-        run_task_manager_message(
+        conftest.run_task_manager_message(
             cfg,
-            SessionMetadata(id=session_id, name="t", profile="manager"),
+            models.SessionMetadata(id=session_id, name="t", profile="manager"),
             "extra",
             callbacks,
         ))
@@ -166,17 +141,18 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       await _inject_once()
       await asyncio.sleep(0)
 
-  callbacks = SessionCallbacks(
+  callbacks = models.SessionCallbacks(
       persist_and_broadcast=persist_hook,
-      **mocked_callback_fields(),
+      **conftest.mocked_callback_fields(),
   )
 
   monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast_hook)
 
-  async with fresh_master_state(session_id):
+  async with conftest.fresh_master_state(session_id):
     task1 = asyncio.create_task(
-        run_task_manager_message(cfg, SessionMetadata(id=session_id, name="t", profile="manager"), "first", callbacks))
+        conftest.run_task_manager_message(
+            cfg, models.SessionMetadata(id=session_id, name="t", profile="manager"), "first", callbacks))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
 
     # For injections fired during the consumer's teardown awaits, the work item
@@ -204,28 +180,28 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
 
 @pytest.mark.asyncio
-async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_consumer_persists_cc_session_id_to_disk(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Anchor lands on disk: after one round through the consumer, a second,
   cold-cache session blocks read the cc_session_id the backend returned —
   an assertion an in-memory-object check cannot make.
   """
-  cfg = build_master_cc_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  session = await create_root_session(session_blocks, CreateSessionRequest(name="anchor-on-disk"))
-  bind_session_blocks(monkeypatch, session_blocks)
+  cfg = conftest.build_master_cc_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="anchor-on-disk"))
+  conftest.bind_session_blocks(monkeypatch, session_blocks)
   backend_returned_id = "cc-backend-session-42"
 
-  monkeypatch.setattr(master_cc_run, "_run_cc", make_sound_round(backend_returned_id))
+  monkeypatch.setattr(master_cc_run, "_run_cc", conftest.make_sound_round(backend_returned_id))
   monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
-  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", mock.AsyncMock())
 
-  async with fresh_master_state(session.id):
-    result = await run_task_manager_message(cfg, session, "hi", session_blocks.callbacks())
+  async with conftest.fresh_master_state(session.id):
+    result = await conftest.run_task_manager_message(cfg, session, "hi", session_blocks.callbacks())
     assert result == backend_returned_id
-    await drain_session_consumer(session.id, timeout=5)
+    await conftest.drain_session_consumer(session.id, timeout=5)
 
   # Cold-cache reader: fresh session blocks parse metadata.json from disk.
-  cold_reader = build_session_blocks(cfg)
+  cold_reader = conftest.build_session_blocks(cfg)
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == backend_returned_id
@@ -235,7 +211,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
 # ---------------------------------------------------------------------------
 # Zero-output guard: a settled run with all-zero usage and no output fails loudly
 # ---------------------------------------------------------------------------
-class _EventsBackend(TerminateFlagBackend):
+class _EventsBackend(conftest.TerminateFlagBackend):
   """Backend double that yields a fixed event stream, then exits with the given code."""
 
   def __init__(self, events: list[dict], *, exit_code: int = 0, stderr_text: str = "") -> None:
@@ -252,7 +228,7 @@ class _EventsBackend(TerminateFlagBackend):
       yield event
 
 
-def _guard_events(cb: SessionCallbacks) -> tuple[list[dict], list[dict]]:
+def _guard_events(cb: models.SessionCallbacks) -> tuple[list[dict], list[dict]]:
   """Split persisted/broadcast events into zero-output ERRORs and MASTER_DONEs."""
   errors = [c.args[1] for c in cb.persist_and_broadcast.await_args_list if c.args[1].get("type") == ET.ERROR]
   dones = [c.args[1] for c in cb.persist_and_broadcast.await_args_list if c.args[1].get("type") == ET.MASTER_DONE]
@@ -260,35 +236,36 @@ def _guard_events(cb: SessionCallbacks) -> tuple[list[dict], list[dict]]:
 
 
 async def _run_stream_consumer(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     session_id: str,
     events: list[dict],
     *,
     exit_code: int = 0,
     stderr_text: str = "",
-) -> SessionCallbacks:
+) -> models.SessionCallbacks:
   """Run a simulated event stream through the production consumer path."""
-  cfg = build_master_cc_cfg(tmp_path)
-  bind_session_blocks(monkeypatch, build_session_blocks(cfg))
+  cfg = conftest.build_master_cc_cfg(tmp_path)
+  conftest.bind_session_blocks(monkeypatch, conftest.build_session_blocks(cfg))
   meta = _make_meta(session_id)
-  cb = mock_session_callbacks()
+  cb = conftest.mock_session_callbacks()
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backend)
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backend)
   monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
-  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", mock.AsyncMock())
 
-  async with fresh_master_state(session_id):
-    await run_task_manager_message(cfg, meta, "hi", cb)
-    await drain_session_consumer(session_id, timeout=5)
+  async with conftest.fresh_master_state(session_id):
+    await conftest.run_task_manager_message(cfg, meta, "hi", cb)
+    await conftest.drain_session_consumer(session_id, timeout=5)
   return cb
 
 
 @pytest.mark.asyncio
-async def test_zero_output_guard_fires_on_all_zero_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_zero_output_guard_fires_on_all_zero_result(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Positive: a result with all-zero usage and nothing else fails loudly."""
-  cb = await _run_stream_consumer(tmp_path, monkeypatch, "zero-pos", [make_result_event()])
+  cb = await _run_stream_consumer(tmp_path, monkeypatch, "zero-pos", [base.make_result_event()])
 
   errors, dones = _guard_events(cb)
   assert len(errors) == 1
@@ -301,21 +278,21 @@ async def test_zero_output_guard_fires_on_all_zero_result(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
-async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_zero_output_guard_covers_resume_path(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The guard fires on the resume (re-attach) outcome, not just fresh runs."""
   session_id = "zero-resume"
-  started_at = datetime.now(UTC) - timedelta(seconds=60)
-  record = MasterRunRecord(pid=1234, pid_start="100", started_at=started_at, raw_log="<fake>")
+  started_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=60)
+  record = models.MasterRunRecord(pid=1234, pid_start="100", started_at=started_at, raw_log="<fake>")
 
-  cfg = build_master_cc_cfg(tmp_path)
+  cfg = conftest.build_master_cc_cfg(tmp_path)
   meta = _make_meta(session_id)
-  cb = mock_session_callbacks()
+  cb = conftest.mock_session_callbacks()
 
   async def fake_resume_cc(item: master_cc_state._WorkItem) -> tuple:
     return "cc-resumed-id", 0, None, {"zero_output": True}
 
-  patch_resume_seams(monkeypatch, resume_cc=fake_resume_cc)
-  await run_resume_round(cfg, meta, record, cb, is_alive=lambda: True)
+  conftest.patch_resume_seams(monkeypatch, resume_cc=fake_resume_cc)
+  await conftest.run_resume_round(cfg, meta, record, cb, is_alive=lambda: True)
 
   errors, dones = _guard_events(cb)
   assert len(errors) == 1
@@ -330,30 +307,29 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
 
 @pytest.mark.asyncio
 async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A turn that ends without a backend session id (a refusal or a spawn /
   transport failure) must not wipe the durable resume anchor: only a truthy id
   ever persists. Clearing for a v2 fresh-native launch is the adapter's
   spawn-time write, not this path."""
-  from conftest import build_sessions_cfg
-
-  cfg = build_sessions_cfg(tmp_path)
-  mgr = build_session_blocks(cfg)
-  session = await create_root_session(mgr, CreateSessionRequest(name="anchor-preserved"))
-  bind_session_blocks(monkeypatch, mgr)
+  cfg = conftest.build_sessions_cfg(tmp_path)
+  mgr = conftest.build_session_blocks(cfg)
+  session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="anchor-preserved"))
+  conftest.bind_session_blocks(monkeypatch, mgr)
   await mgr.anchors.persist_cc_session_id(session.id, "kept-anchor")
 
-  snapshot = SessionMetadata(
+  snapshot = models.SessionMetadata(
       profile="manager", id=session.id, name="anchor-preserved", backend=cfg.backends.options[0].id)
   snapshot.cc_session_id = "kept-anchor"
-  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  item = conftest.make_work_item(
+      cfg, snapshot, cfg.backends.options[0], callbacks=conftest.manager_backed_callbacks(mgr))
 
   async def refused_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return (None, 1, "refused", {})
 
   await run_consumer_over_real_disk(session.id, [item], refused_round)
 
-  cold_reader = build_session_blocks(cfg)
+  cold_reader = conftest.build_session_blocks(cfg)
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"
@@ -373,7 +349,7 @@ class _StubLightBackend:
 
 @pytest.mark.asyncio
 async def test_consumer_names_a_default_session_after_master_done(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """One round through the real consumer names "Session 7" via the autonamer.
 
   The consumer resolves the round future and then starts name_after_round
@@ -381,22 +357,22 @@ async def test_consumer_names_a_default_session_after_master_done(
   reading the renamed metadata. Guards the call itself: with the after-round
   lines removed, no naming task starts and the session keeps its default name.
   """
-  cfg = CharlieBotConfig(
+  cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={
-          "options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")],
+          "options": [conftest.backend_option(id="fake", label="Fake", type="codex", model="fake-model")],
           "preference": ["fake"],
       })
-  blocks = build_session_blocks(cfg)
-  session = await create_root_session(blocks, CreateSessionRequest(name="Session 7"))
-  bind_session_blocks(monkeypatch, blocks)
-  append_events(
+  blocks = conftest.build_session_blocks(cfg)
+  session = await conftest.create_root_session(blocks, models.CreateSessionRequest(name="Session 7"))
+  conftest.bind_session_blocks(monkeypatch, blocks)
+  conftest.append_events(
       blocks.events.get_chat_events_path(session.id),
-      [user_event("Name this conversation."),
-       assistant_event("We planned the session naming fix.")],
+      [conftest.user_event("Name this conversation."),
+       conftest.assistant_event("We planned the session naming fix.")],
   )
   monkeypatch.setattr(autonamer, "build_backend", lambda option, cfg, **_: _StubLightBackend())
-  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", mock.AsyncMock())
 
   naming_tasks: list[asyncio.Task] = []
   real_create_logged_task = infra_tasks.create_logged_task
@@ -409,8 +385,9 @@ async def test_consumer_names_a_default_session_after_master_done(
 
   monkeypatch.setattr(master_cc_queue.tasks, "create_logged_task", spy_create_logged_task)
 
-  snapshot = SessionMetadata(profile="manager", id=session.id, name="Session 7", backend=cfg.backends.options[0].id)
-  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=blocks.callbacks())
+  snapshot = models.SessionMetadata(
+      profile="manager", id=session.id, name="Session 7", backend=cfg.backends.options[0].id)
+  item = conftest.make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=blocks.callbacks())
 
   async def sound_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return ("cc-named-round", 0, None, {})

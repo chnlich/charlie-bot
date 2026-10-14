@@ -282,7 +282,6 @@ from src.runtime.api.deps import (  # noqa: E402
     get_session_listing,
     get_session_search,
     get_session_sidebar,
-    get_session_successor,
 )
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
@@ -1274,7 +1273,6 @@ def override_session_blocks(app: FastAPI, session_blocks: Any) -> None:
   app.dependency_overrides[get_session_lifecycle] = lambda: session_blocks.lifecycle
   app.dependency_overrides[get_session_fork] = lambda: session_blocks.fork
   app.dependency_overrides[get_session_anchors] = lambda: session_blocks.anchors
-  app.dependency_overrides[get_session_successor] = lambda: session_blocks.successor
 
 
 def make_router_client(

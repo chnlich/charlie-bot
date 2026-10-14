@@ -13,29 +13,29 @@ the node holds no Run that nothing can finish, and a second pass only logs.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+import pathlib
+import types
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import create_task
-from structlog.testing import capture_logs
+from structlog import testing
 
 from src.infra import event_types as ET
-from src.infra.models import RunRecord, SequenceRef, TaskSpec
-from src.runtime.runs import RUN_EVENTS_NAME
-from tests.test_task_execution import _adapter_with_silent_broadcast, build_env
+from src.infra import models
+from src.runtime import runs
+from tests import test_task_execution
 
 # A kind no registered controller owns: the owning package was deleted, so its
 # registration is gone and the stored Runs it left behind outlive it.
-ORPHAN_REF = SequenceRef(kind="deleted_feature", owner_ref="deleted:loop-1", position=1)
+ORPHAN_REF = models.SequenceRef(kind="deleted_feature", owner_ref="deleted:loop-1", position=1)
 
 
 async def _manager_and_leaf(tree) -> tuple:
-  manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
-  leaf = await create_task(
-      tree, parent=manager.id, request_id="leaf", profile="worker", task=TaskSpec(goal="loop work"), name="leaf")
+  manager = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
+  leaf = await conftest.create_task(
+      tree, parent=manager.id, request_id="leaf", profile="worker", task=models.TaskSpec(goal="loop work"), name="leaf")
   return manager, leaf
 
 
@@ -53,12 +53,13 @@ def _assert_one_warning(entries: list[dict], *, session_id: str, run_id: str, ow
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_never_launches_a_queued_sequence_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dispatcher_never_launches_a_queued_sequence_run(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A queued Run with a sequence_ref is its controller's launch: the
   dispatcher skips it instead of starting one headlessly."""
-  _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
-  run = RunRecord(id="seq-run", session_id=leaf.id, kind="iteration", sequence_ref=ORPHAN_REF)
+  run = models.RunRecord(id="seq-run", session_id=leaf.id, kind="iteration", sequence_ref=ORPHAN_REF)
   await tree.runs.register_run(run)
 
   await tree.dispatch.dispatch_pending(leaf.id)
@@ -72,7 +73,7 @@ async def test_dispatcher_never_launches_a_queued_sequence_run(tmp_path: Path, m
 
 @pytest.mark.asyncio
 async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A durable finish asks the owning controller's after_run: the cron step
   re-drives its firing, the improve iteration runs its loop's close step —
   which leaves the node open while the loop is still running — and no owned
@@ -80,31 +81,31 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
   import os
 
   from src.features.cron import sequence_controller
-  from src.features.improve.improve_command import ImproveState, save_loop_state
-  from src.features.improve.improve_sequence import loop_owner_ref
+  from src.features.improve import improve_command, improve_sequence
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   adapter = tree.dispatch.executor
   meta = await tree.load_meta(leaf.id)
-  cron_step = RunRecord(
+  cron_step = models.RunRecord(
       id="step-0",
       session_id=leaf.id,
       kind="scheduled_step",
       backend="fake",
       model="fake-model",
-      sequence_ref=SequenceRef(kind="cron_steps", owner_ref="cron:nightly@2026-10-08T00:00Z", position=0))
-  iteration = RunRecord(
+      sequence_ref=models.SequenceRef(kind="cron_steps", owner_ref="cron:nightly@2026-10-08T00:00Z", position=0))
+  iteration = models.RunRecord(
       id="iter-1",
       session_id=leaf.id,
       kind="iteration",
       backend="fake",
       model="fake-model",
-      sequence_ref=SequenceRef(kind="improve", owner_ref=loop_owner_ref(leaf.id, 1, cfg), position=1))
+      sequence_ref=models.SequenceRef(
+          kind="improve", owner_ref=improve_sequence.loop_owner_ref(leaf.id, 1, cfg), position=1))
   await tree.runs.register_run(cron_step)
   await tree.runs.register_run(iteration)
-  redrive = AsyncMock()
+  redrive = mock.AsyncMock()
   monkeypatch.setattr(sequence_controller, "redrive_firing", redrive)
 
   await adapter._after_worker_run(meta, cron_step, "success")
@@ -112,9 +113,9 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
 
   # A running loop: after_run's close step returns on the running state and
   # the node stays open.
-  await save_loop_state(
+  await improve_command.save_loop_state(
       leaf.id,
-      ImproveState(
+      improve_command.ImproveState(
           loop_id=1,
           goal="improve the thing",
           status="running",
@@ -122,7 +123,7 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
           repo_path=str(tmp_path),
           created_at="2026-10-08T00:00:00+00:00",
           server_pid=os.getpid()), cfg)
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await adapter._after_worker_run(meta, iteration, "success")
   assert _without_controller(logs) == []
   assert tree.task_state(leaf.id) == "open"
@@ -130,23 +131,23 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
 
 @pytest.mark.asyncio
 async def test_recovery_asks_the_owning_controller_and_counts_one_follow_up(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Recovery replays a terminal cron step and an unlaunched one (one follow-up
   each), and leaves a launched non-terminal step to the ordinary follow."""
   from src.features.cron import sequence_controller
-  from src.runtime.task_execution import _replay_followups
+  from src.runtime import task_execution
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
 
-  def step(position: str, **fields) -> RunRecord:
-    return RunRecord(
+  def step(position: str, **fields) -> models.RunRecord:
+    return models.RunRecord(
         id=f"step-{position}",
         session_id=leaf.id,
         kind="scheduled_step",
         backend="fake",
         model="fake-model",
-        sequence_ref=SequenceRef(kind="cron_steps", owner_ref="cron:nightly@2026-10-08T00:00Z", position=0),
+        sequence_ref=models.SequenceRef(kind="cron_steps", owner_ref="cron:nightly@2026-10-08T00:00Z", position=0),
         **fields)
 
   finished = step("fin")
@@ -155,11 +156,11 @@ async def test_recovery_asks_the_owning_controller_and_counts_one_follow_up(
   for run in (finished, unlaunched, launched):
     await tree.runs.register_run(run)
   await tree.runs.record_finish(leaf.id, finished.id, "success", exit_code=0)
-  redrive = AsyncMock()
+  redrive = mock.AsyncMock()
   monkeypatch.setattr(sequence_controller, "redrive_firing", redrive)
   counters = {"followups": 0}
 
-  await _replay_followups(leaf.id, tree, None, counters, cfg)
+  await task_execution._replay_followups(leaf.id, tree, None, counters, cfg)
 
   assert counters["followups"] == 2
   assert redrive.await_count == 2
@@ -170,18 +171,18 @@ async def test_recovery_asks_the_owning_controller_and_counts_one_follow_up(
 
 @pytest.mark.asyncio
 async def test_a_finish_without_a_controller_warns_and_does_nothing_else(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A Run whose kind no controller owns: its finish logs the warning with the
   session, run and owner_ref, and nothing else happens."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   meta = await tree.load_meta(leaf.id)
-  run = RunRecord(
+  run = models.RunRecord(
       id="orphan", session_id=leaf.id, kind="iteration", backend="fake", model="fake-model", sequence_ref=ORPHAN_REF)
   await tree.runs.register_run(run)
 
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await tree.dispatch.executor._after_worker_run(meta, run, "success")
 
   _assert_one_warning(logs, session_id=leaf.id, run_id="orphan", owner_ref=ORPHAN_REF.owner_ref)
@@ -195,21 +196,21 @@ async def test_a_finish_without_a_controller_warns_and_does_nothing_else(
 
 @pytest.mark.asyncio
 async def test_recovery_without_a_controller_lands_interrupted_then_only_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Recovery of a registered-but-unlaunched Run without its controller records
   the interrupted finish through the run store's normal entry and logs the same
   warning; a second pass finds the terminal fact and only logs."""
-  from src.runtime.task_execution import _replay_followups
+  from src.runtime import task_execution
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
-  run = RunRecord(
+  run = models.RunRecord(
       id="orphan", session_id=leaf.id, kind="iteration", backend="fake", model="fake-model", sequence_ref=ORPHAN_REF)
   await tree.runs.register_run(run)
   counters = {"followups": 0}
 
-  with capture_logs() as logs:
-    await _replay_followups(leaf.id, tree, None, counters, cfg)
+  with testing.capture_logs() as logs:
+    await task_execution._replay_followups(leaf.id, tree, None, counters, cfg)
   assert counters["followups"] == 0
   _assert_one_warning(logs, session_id=leaf.id, run_id="orphan", owner_ref=ORPHAN_REF.owner_ref)
   stored = await tree.runs.get_run(leaf.id, "orphan")
@@ -220,8 +221,8 @@ async def test_recovery_without_a_controller_lands_interrupted_then_only_logs(
   ]
   assert len(finished_facts) == 1
 
-  with capture_logs() as logs:
-    await _replay_followups(leaf.id, tree, None, counters, cfg)
+  with testing.capture_logs() as logs:
+    await task_execution._replay_followups(leaf.id, tree, None, counters, cfg)
   assert counters["followups"] == 0  # a terminal Run only logs
   assert len(_without_controller(logs)) == 1
   finished_facts = [
@@ -232,15 +233,14 @@ async def test_recovery_without_a_controller_lands_interrupted_then_only_logs(
 
 @pytest.mark.asyncio
 async def test_recovery_follows_a_live_sequence_run_without_its_controller(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A launched, non-terminal Run without its controller is followed exactly as
   any other live Run; no interrupted finish and no warning."""
-  from src.runtime import runs
-  from src.runtime.task_execution import _reconcile_node
+  from src.runtime import task_execution
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
-  run = RunRecord(
+  run = models.RunRecord(
       id="orphan",
       session_id=leaf.id,
       kind="iteration",
@@ -252,13 +252,14 @@ async def test_recovery_follows_a_live_sequence_run_without_its_controller(
       sequence_ref=ORPHAN_REF)
   await tree.runs.register_run(run)
   follows: list[tuple[str, str]] = []
-  adapter = SimpleNamespace(
-      follow_run_in_background=lambda session_id, run_id: follows.append((session_id, run_id)), resume_run=AsyncMock())
+  adapter = types.SimpleNamespace(
+      follow_run_in_background=lambda session_id, run_id: follows.append((session_id, run_id)),
+      resume_run=mock.AsyncMock())
   counters = {"resumed": 0, "drained": 0, "followups": 0}
 
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     monkeypatch.setattr(runs, "is_run_alive", lambda *args: True)
-    await _reconcile_node(leaf.id, tree, adapter, counters, cfg)
+    await task_execution._reconcile_node(leaf.id, tree, adapter, counters, cfg)
 
   assert follows == [(leaf.id, "orphan")]
   assert counters["resumed"] == 1
@@ -271,14 +272,14 @@ async def test_recovery_follows_a_live_sequence_run_without_its_controller(
 
 @pytest.mark.asyncio
 async def test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """If the adapter reaches a controller-less sequence Run anyway, the launch
   raises TaskInvalidError naming the owner_ref and the durable failure lands."""
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  run = RunRecord(
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  run = models.RunRecord(
       id="orphan", session_id=leaf.id, kind="iteration", backend="fake", model="fake-model", sequence_ref=ORPHAN_REF)
   await tree.runs.register_run(run)
 
@@ -290,7 +291,7 @@ async def test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref(
   assert stored is not None and stored.pid is None  # no process ever started
   # The launch's durable evidence: the error rides the run's own events log,
   # where the failure-summary reader already looks.
-  events_log = tree.runs.run_dir(leaf.id, "orphan") / RUN_EVENTS_NAME
+  events_log = tree.runs.run_dir(leaf.id, "orphan") / runs.RUN_EVENTS_NAME
   error_events = [json.loads(line) for line in events_log.read_text(encoding="utf-8").splitlines() if line.strip()]
   assert [e.get("type") for e in error_events] == [ET.ERROR]
   assert ORPHAN_REF.owner_ref in str(error_events[0].get("message"))

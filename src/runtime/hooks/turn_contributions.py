@@ -23,8 +23,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
-  from src.infra.models import SessionMetadata
+  from src.infra import config, models
 
 DEFAULT_WORKFLOW_RULES_FILE = "manager_workflows.md"
 
@@ -41,36 +40,37 @@ class InstructionSegment(Protocol):
 class TurnContribution:
   """One feature package's part in a master turn; subclasses override the steps they take part in."""
 
-  def instruction_segments(self, meta: SessionMetadata, kind: str, cfg: CharlieBotConfig) -> list[InstructionSegment]:
+  def instruction_segments(self, meta: models.SessionMetadata, kind: str,
+                           cfg: config.CharlieBotConfig) -> list[InstructionSegment]:
     """Segments for the managed instructions of a run of *kind*.
 
     They follow the model overlay segments and precede the local rule segments, in registration order.
     """
     return []
 
-  def workflow_rules_file(self, meta: SessionMetadata) -> str | None:
+  def workflow_rules_file(self, meta: models.SessionMetadata) -> str | None:
     """The name of the workflow rules file for this session, or None to name none.
 
     At most one contribution answers non-None for one session.
     """
     return None
 
-  async def before_turn(self, meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
+  async def before_turn(self, meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> None:
     """Runs when a turn's input is queued, before the user event is appended."""
     return
 
-  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig) -> None:
+  async def after_turn(self, meta: models.SessionMetadata, done_event: dict, *, cfg: config.CharlieBotConfig) -> None:
     """Runs as its own logged task after ``done_event`` (a MASTER_DONE) is appended and broadcast."""
     return
 
-  def context_window(self, meta: SessionMetadata) -> int | None:
+  def context_window(self, meta: models.SessionMetadata) -> int | None:
     """The context window in tokens for this session, or None to keep the backend option's own.
 
     At most one contribution answers non-None for one session. A backend that reads no context window ignores it.
     """
     return None
 
-  def input_preamble(self, meta: SessionMetadata, input_event: dict) -> str | None:
+  def input_preamble(self, meta: models.SessionMetadata, input_event: dict) -> str | None:
     """The text that opens *input_event* (a user input) in the turn prompt, or None to open it with no text.
 
     At most one contribution answers non-None for one event.
@@ -126,7 +126,7 @@ def _the_one_answer(question: str, answers: list[tuple[TurnContribution, _Answer
   return given[0][1] if given else None
 
 
-def resolve_workflow_rules_file(meta: SessionMetadata) -> str:
+def resolve_workflow_rules_file(meta: models.SessionMetadata) -> str:
   """The workflow rules file for *meta*: the one a contribution names, else ``DEFAULT_WORKFLOW_RULES_FILE``.
 
   Two contributions that name a file raise ValueError.
@@ -137,7 +137,7 @@ def resolve_workflow_rules_file(meta: SessionMetadata) -> str:
   return DEFAULT_WORKFLOW_RULES_FILE if named is None else named
 
 
-def resolve_input_preamble(meta: SessionMetadata, input_event: dict) -> str | None:
+def resolve_input_preamble(meta: models.SessionMetadata, input_event: dict) -> str | None:
   """The preamble a contribution gives *input_event*, or None when none does.
 
   Two contributions that give one raise ValueError.
@@ -147,7 +147,7 @@ def resolve_input_preamble(meta: SessionMetadata, input_event: dict) -> str | No
       [(contribution, contribution.input_preamble(meta, input_event)) for contribution in turn_contributions()])
 
 
-def resolve_context_window(meta: SessionMetadata) -> int | None:
+def resolve_context_window(meta: models.SessionMetadata) -> int | None:
   """The context window a contribution sets for *meta*, or None when none does.
 
   Two contributions that set one raise ValueError.

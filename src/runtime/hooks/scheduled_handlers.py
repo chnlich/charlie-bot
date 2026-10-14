@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import importlib
 
-from src.infra.deferred import import_attr
+from src.infra import deferred
 
 _HANDLERS: dict[str, tuple[str, str]] = {}  # name -> (module, attr)
 _loop_action: tuple[str, str] | None = None
@@ -62,4 +62,4 @@ def loop_model() -> type:
   """The pydantic model of the `loop:` section, imported. Raises LookupError when no package registered a loop action."""
   if _loop_model is None:
     raise LookupError("no package registered a loop action")
-  return import_attr(_loop_model)
+  return deferred.import_attr(_loop_model)

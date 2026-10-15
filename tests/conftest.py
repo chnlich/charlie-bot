@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
+import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fastapi
 import pytest
 import yaml
 from _pytest.runner import runtestprotocol
@@ -1986,6 +1988,22 @@ class _PendingAudio:
   async def __anext__(self) -> bytes:
     await asyncio.Event().wait()
     raise AssertionError("unreachable: the pending audio never yields")
+
+
+def wav_body(samples: int = 160) -> bytes:
+  """A 16 kHz mono 16-bit WAV of *samples* silent frames: the recording the voice upload tests post."""
+  buffer = io.BytesIO()
+  with wave.open(buffer, "wb") as writer:
+    writer.setnchannels(1)
+    writer.setsampwidth(2)
+    writer.setframerate(16_000)
+    writer.writeframes(b"\x00\x00" * samples)
+  return buffer.getvalue()
+
+
+def voice_upload_file(body: bytes) -> fastapi.UploadFile:
+  """*body* wrapped as the multipart ``recording.wav`` upload the voice endpoint tests drive."""
+  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
 
 
 async def assert_transcribe_cancel_honors_close_timeout(

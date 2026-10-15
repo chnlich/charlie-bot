@@ -10,24 +10,17 @@ mutates metadata shares them. The process builds one store (``store()``); tests 
 import asyncio
 import contextlib
 import os
+import pathlib
 import time
-from pathlib import Path
 from typing import Any
 
 import aiofiles
 
-from src.infra import locks
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.json_utils import atomic_write_text
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.memo import stat_signature
-from src.infra.models import SessionMetadata, SessionStatus, utc_now, validate_session_metadata
-from src.runtime import sidebar_state
+from src.infra import config, json_utils, locks, log_once, memo, models
+from src.runtime import run_identity, sidebar_state, thinking_state
 from src.runtime.hooks import backend_types
-from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME
-from src.runtime.thinking_state import busy_since, run_backend
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
 # Sweep bound for the listings memo. In-process writes bump the revision and
@@ -61,7 +54,7 @@ TRANSIENT_METADATA_FIELDS = {
 }
 
 
-def stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
+def stamp_thinking_since(meta: models.SessionMetadata) -> models.SessionMetadata:
   """Overwrite thinking_since with the live value before *meta* reaches a caller.
 
   thinking_since is a derived runtime fact owned by
@@ -77,15 +70,15 @@ def stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   or restored into the cache by a post-save rebuild must not leak out
   through an unstamped API path.
   """
-  meta.thinking_since = busy_since(meta.id)
-  meta.run_backend = run_backend(meta.id)
+  meta.thinking_since = thinking_state.busy_since(meta.id)
+  meta.run_backend = thinking_state.run_backend(meta.id)
   return meta
 
 
 class SessionStore:
   """Session metadata persistence: metadata.json reads and writes, the cache, the per-session locks."""
 
-  def __init__(self, cfg: CharlieBotConfig) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig) -> None:
     self._cfg = cfg
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp, disk signature).
     # The signature is the (st_mtime_ns, st_size) of metadata.json taken BEFORE the read
@@ -95,7 +88,7 @@ class SessionStore:
     # instead of a re-read — every writer publishes through the atomic tmp rename, so a
     # content change always moves st_mtime_ns, and a same-signature stat proves the parsed
     # bytes current.
-    self.metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]] = {}
+    self.metadata_cache: dict[str, tuple[models.SessionMetadata, float, tuple[int, int] | None]] = {}
     # Per-session asyncio.Lock guarding metadata read-modify-write operations.
     # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
     # update_thinking_state), which both load meta, mutate disjoint fields, and
@@ -113,9 +106,10 @@ class SessionStore:
     # status -> (revision at walk time, monotonic at store time, root signature, metas).
     # The stored list holds the cache's own meta objects: every consumer copies or
     # stamps on the way out and mutates neither the list nor its rows.
-    self._listings_memo: dict[SessionStatus | None, tuple[int, float, tuple[int, int], list[SessionMetadata]]] = {}
+    self._listings_memo: dict[models.SessionStatus | None, tuple[int, float, tuple[int, int],
+                                                                 list[models.SessionMetadata]]] = {}
 
-  async def get_session(self, session_id: str) -> SessionMetadata | None:
+  async def get_session(self, session_id: str) -> models.SessionMetadata | None:
     """Load session metadata, using in-memory cache when available."""
     meta = self._fresh_cached_meta(session_id)
     cache_hit = meta is not None
@@ -124,18 +118,18 @@ class SessionStore:
       # The signature is taken before the read: a write landing between the two
       # keys the entry under the older signature, which the next expiry stat
       # mismatches — an entry can never be served for bytes it did not parse.
-      sig = stat_signature(self.metadata_path(session_id))
+      sig = memo.stat_signature(self.metadata_path(session_id))
       raw = await self._read_metadata_raw(session_id)
       if raw is None:
         return None
-      meta = validate_session_metadata(raw, str(self.metadata_path(session_id)))
+      meta = models.validate_session_metadata(raw, str(self.metadata_path(session_id)))
     # The manual populate covers disk loads only; re-stamping a hit's
     # timestamp would wrongly extend its TTL.
     if not cache_hit:
       self.metadata_cache[session_id] = (meta, time.monotonic(), sig)
     return stamp_thinking_since(meta.model_copy())
 
-  async def get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
+  async def get_session_bypassing_cache(self, session_id: str) -> models.SessionMetadata | None:
     """get_session forced past the TTL cache, so the read lands on disk.
 
     The single-field mutators (``save_field_fresh``, ``_persist_anchor_fresh``)
@@ -149,7 +143,7 @@ class SessionStore:
     self.invalidate_cache(session_id)
     return await self.get_session(session_id)
 
-  async def read_metadata_fresh(self, session_id: str) -> SessionMetadata | None:
+  async def read_metadata_fresh(self, session_id: str) -> models.SessionMetadata | None:
     """Read metadata.json directly from disk, bypassing ``metadata_cache``.
 
     The cache is TTL-based and can be stale relative to a concurrent elone, so
@@ -159,7 +153,7 @@ class SessionStore:
     raw = await self._read_metadata_raw(session_id)
     if raw is None:
       return None
-    return validate_session_metadata(raw, str(self.metadata_path(session_id)))
+    return models.validate_session_metadata(raw, str(self.metadata_path(session_id)))
 
   async def _read_metadata_raw(self, session_id: str) -> str | None:
     """Return the raw metadata.json text, or None when the file is missing or blank.
@@ -201,7 +195,7 @@ class SessionStore:
     self.metadata_cache.pop(session_id, None)
     self._listings_revision += 1
 
-  def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
+  def _fresh_cached_meta(self, session_id: str) -> models.SessionMetadata | None:
     """Return the cached metadata for *session_id* when the entry is authoritative.
 
     An archived entry is served regardless of age: archived metadata changes
@@ -224,7 +218,7 @@ class SessionStore:
     if cached is None:
       return None
     meta, ts, sig = cached
-    if meta.status == SessionStatus.ARCHIVED:
+    if meta.status == models.SessionStatus.ARCHIVED:
       return meta
     if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
       return meta
@@ -244,7 +238,7 @@ class SessionStore:
     self._listings_revision += 1
     return None
 
-  def fresh_cached_metas(self) -> dict[str, SessionMetadata]:
+  def fresh_cached_metas(self) -> dict[str, models.SessionMetadata]:
     """The authoritative cached metadata entries, keyed by session id.
 
     One :meth:`_fresh_cached_meta` check per entry — the shared check
@@ -255,14 +249,14 @@ class SessionStore:
     re-time or evict here, the same side effects a per-id check has; ids with
     no authoritative entry are absent and the caller reads their files.
     """
-    resolved: dict[str, SessionMetadata] = {}
+    resolved: dict[str, models.SessionMetadata] = {}
     for session_id in list(self.metadata_cache):
       meta = self._fresh_cached_meta(session_id)
       if meta is not None:
         resolved[session_id] = meta
     return resolved
 
-  async def load_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
+  async def load_session_metas(self, status: models.SessionStatus | None = None) -> list[models.SessionMetadata]:
     """Load session metadata, batching disk reads and parses for cache misses.
 
     Performs the listing preamble for the entry points routed through here
@@ -323,7 +317,7 @@ class SessionStore:
     revision = self._listings_revision
     root_sig, dir_names = await asyncio.to_thread(_session_dir_names)
 
-    cached_metas: dict[str, SessionMetadata] = {}
+    cached_metas: dict[str, models.SessionMetadata] = {}
     missing_ids: list[str] = []
     for session_id in dir_names:
       meta = self._fresh_cached_meta(session_id)
@@ -332,7 +326,7 @@ class SessionStore:
       else:
         cached_metas[session_id] = meta
 
-    parsed_by_id: dict[str, SessionMetadata] = {}
+    parsed_by_id: dict[str, models.SessionMetadata] = {}
     parsed_sigs: dict[str, tuple[int, int] | None] = {}
     empty_ids: set[str] = set()
     load_failures: dict[str, Exception] = {}
@@ -344,7 +338,7 @@ class SessionStore:
           # Signature before the read, per file: an entry keys only the bytes
           # it parsed (see get_session's same rule), so a write landing between
           # the two is re-read at the next expiry stat instead of served stale.
-          sig = stat_signature(path)
+          sig = memo.stat_signature(path)
           try:
             if not path.exists():
               continue
@@ -356,14 +350,14 @@ class SessionStore:
             empty_ids.add(session_id)
             continue
           try:
-            parsed_by_id[session_id] = validate_session_metadata(raw, str(self.metadata_path(session_id)))
+            parsed_by_id[session_id] = models.validate_session_metadata(raw, str(self.metadata_path(session_id)))
             parsed_sigs[session_id] = sig
           except Exception as exc:
             load_failures[session_id] = exc
 
       await asyncio.to_thread(_read_and_parse_missing)
 
-    result: list[SessionMetadata] = []
+    result: list[models.SessionMetadata] = []
     for session_id in dir_names:
       loaded_from_cache = session_id in cached_metas
       if loaded_from_cache:
@@ -391,19 +385,20 @@ class SessionStore:
     return locks.lock_for(self.metadata_locks, session_id)
 
   async def update_field(
-      self, session_id: str, field: str, value: Any, log_event: str, **log_fields: Any) -> SessionMetadata | None:
+      self, session_id: str, field: str, value: Any, log_event: str,
+      **log_fields: Any) -> models.SessionMetadata | None:
     """Get a session, set one field, save, and log. Returns None if session not found."""
     async with self.lock_for(session_id):
       meta = await self.get_session(session_id)
       if not meta:
         return None
       setattr(meta, field, value)
-      meta.updated_at = utc_now()
+      meta.updated_at = models.utc_now()
       await self.save_metadata(meta, lock_held=True)
     log.info(log_event, session_id=session_id, **log_fields)
     return meta
 
-  async def get_sessions_readonly(self, session_ids: list[str]) -> list[SessionMetadata]:
+  async def get_sessions_readonly(self, session_ids: list[str]) -> list[models.SessionMetadata]:
     """Resolve *session_ids* to metadata for consumers that only read it.
 
     Warm entries serve the cached objects themselves — the caller must not
@@ -411,7 +406,7 @@ class SessionStore:
     only a cache miss pays a ``get_session`` read, which returns its own copy.
     Ids that no longer resolve are dropped, and request order is preserved.
     """
-    resolved: dict[str, SessionMetadata | None] = {}
+    resolved: dict[str, models.SessionMetadata | None] = {}
     for session_id in dict.fromkeys(session_ids):
       resolved[session_id] = self._fresh_cached_meta(session_id)
     for session_id, meta in resolved.items():
@@ -419,7 +414,7 @@ class SessionStore:
         resolved[session_id] = await self.get_session(session_id)
     return [meta for meta in resolved.values() if meta is not None]
 
-  async def _reconcile_anchor_fields(self, meta: SessionMetadata) -> None:
+  async def _reconcile_anchor_fields(self, meta: models.SessionMetadata) -> None:
     """Correct *meta*'s anchor fields back to the on-disk values before a whole-object save.
 
     The guard behind the authorized-channel model: the resume anchors change
@@ -461,7 +456,7 @@ class SessionStore:
 
   async def save_metadata(
       self,
-      meta: SessionMetadata,
+      meta: models.SessionMetadata,
       *,
       lock_held: bool = False,
       anchor_write: bool = False,
@@ -498,7 +493,7 @@ class SessionStore:
       path.parent.mkdir(parents=True, exist_ok=True)
       serialized = meta.model_dump_json(indent=2, exclude=TRANSIENT_METADATA_FIELDS)
 
-      sig = await asyncio.to_thread(atomic_write_text, path, serialized)
+      sig = await asyncio.to_thread(json_utils.atomic_write_text, path, serialized)
       # The entry re-keys from the write's own proven signature: the swap
       # publishes the tmp inode the writer just statted, so a later
       # same-signature stat proves the file still carries the funnel's bytes
@@ -508,18 +503,18 @@ class SessionStore:
       # expiry's stat then evicts and re-reads — the same bound the
       # signature-less entry paid on every expiry.
       self.metadata_cache[meta.id] = (
-          validate_session_metadata(serialized, str(self.metadata_path(meta.id))), time.monotonic(), sig)
+          models.validate_session_metadata(serialized, str(self.metadata_path(meta.id))), time.monotonic(), sig)
       # The single funnel for every session-metadata write (35+ call sites, plus
       # the save funnel): status transitions (archive/unarchive)
       # land here, so the sidebar snapshot must re-probe this session.
       sidebar_state.mark_sidebar_dirty(meta.id)
       self._listings_revision += 1
 
-  def session_dir(self, session_id: str) -> Path:
+  def session_dir(self, session_id: str) -> pathlib.Path:
     return self._cfg.sessions_dir / session_id
 
-  def metadata_path(self, session_id: str) -> Path:
-    return self.session_dir(session_id) / METADATA_NAME
+  def metadata_path(self, session_id: str) -> pathlib.Path:
+    return self.session_dir(session_id) / run_identity.SESSION_METADATA_NAME
 
   def _metadata_path_str(self, session_id: str) -> str:
     """The string form of ``metadata_path`` — same layout, no pathlib construction.
@@ -531,7 +526,7 @@ class SessionStore:
     300-entry aged walk, Python 3.14). The layout stays owned by
     :meth:`metadata_path`; this form only skips the Path objects.
     """
-    return f"{self._cfg.sessions_dir}/{session_id}/{METADATA_NAME}"
+    return f"{self._cfg.sessions_dir}/{session_id}/{run_identity.SESSION_METADATA_NAME}"
 
 
 # The process owner of the metadata store; built on the first ``store()`` call.
@@ -542,5 +537,5 @@ def store() -> SessionStore:
   """The process-wide session metadata store."""
   global _store
   if _store is None:
-    _store = SessionStore(get_config())
+    _store = SessionStore(config.get_config())
   return _store

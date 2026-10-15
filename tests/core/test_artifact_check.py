@@ -21,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
@@ -294,27 +295,6 @@ def _clean_coldread_dir(session_id: str) -> None:
   shutil.rmtree(Path("/tmp/charliebot-coldread") / session_id[:8], ignore_errors=True)
 
 
-def _registering_post(cfg: SimpleNamespace, session_id: str, calls: list[dict]) -> Callable:
-  """post_internal_api stand-in: persists the trigger the way the server would, then answers."""
-
-  def post(endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
-    calls.append({"endpoint": endpoint, "payload": payload})
-    triggers_dir = cfg.sessions_dir / session_id / "triggers"
-    triggers_dir.mkdir(parents=True, exist_ok=True)
-    stored = {
-        "id": "trig-1",
-        "status": "pending",
-        "message": payload["message"],
-        "watch_targets": payload["watch_targets"],
-        "created_at": "2026-10-08T00:00:00+00:00",
-        "fire_at": "2026-10-08T00:11:00+00:00",
-    }
-    (triggers_dir / "trig-1.json").write_text(json.dumps(stored), encoding="utf-8")
-    return {"trigger_id": "trig-1", "fire_at": "2026-10-08T00:11:00+00:00"}
-
-  return post
-
-
 def test_background_requires_trigger(tmp_path: Path) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   assert _run_cli([str(artifact), "--genre", "sitrep", "--background"]) == 2
@@ -357,7 +337,7 @@ def test_background_starts_the_cold_read_and_registers_its_wake(
   spawned: list[subprocess.Popen] = []
   monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
   calls: list[dict] = []
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", _registering_post(cfg, session_id, calls))
+  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", conftest.registering_post(cfg, session_id, calls))
   try:
     assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
   finally:
@@ -396,7 +376,7 @@ def test_background_log_first_line_names_the_page_and_its_sha256(
   spawned: list[subprocess.Popen] = []
   monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
   calls: list[dict] = []
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", _registering_post(cfg, session_id, calls))
+  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", conftest.registering_post(cfg, session_id, calls))
   try:
     assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
     log_path = Path(calls[0]["payload"]["message"].removeprefix("cold read: "))
@@ -453,7 +433,7 @@ def test_background_child_argv_runs_the_same_tree_and_interpreter(
 
   monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
   calls: list[dict] = []
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", _registering_post(cfg, session_id, calls))
+  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", conftest.registering_post(cfg, session_id, calls))
   try:
     assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
   finally:

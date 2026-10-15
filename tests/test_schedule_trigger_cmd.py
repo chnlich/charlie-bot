@@ -40,26 +40,6 @@ def _patch_cli(monkeypatch: pytest.MonkeyPatch, cfg: types.SimpleNamespace, argv
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
 
-def _registering_post(cfg: types.SimpleNamespace, session_id: str, calls: list[dict]):
-
-  def post(endpoint: str, payload: dict, *, readback: Any = None, rejection_exit_codes: Any = None) -> dict:
-    calls.append({"endpoint": endpoint, "payload": payload})
-    triggers_dir = cfg.sessions_dir / session_id / "triggers"
-    triggers_dir.mkdir(parents=True, exist_ok=True)
-    stored = {
-        "id": "trig-1",
-        "status": "pending",
-        "message": payload["message"],
-        "watch_targets": payload["watch_targets"],
-        "created_at": "2026-10-08T00:00:00+00:00",
-        "fire_at": "2026-10-08T00:11:00+00:00",
-    }
-    (triggers_dir / "trig-1.json").write_text(json.dumps(stored), encoding="utf-8")
-    return {"trigger_id": "trig-1", "fire_at": "2026-10-08T00:11:00+00:00"}
-
-  return post
-
-
 def _reap(pid: int, timeout: float = 5) -> None:
   """Reap the wrapper (this process's child) so a dead one stops answering kill -0."""
   deadline = time.monotonic() + timeout
@@ -90,7 +70,7 @@ def test_cmd_exit_3_writes_the_launch_record_and_the_exit_file(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv("--cmd", "exit 3"))
   calls: list[dict] = []
-  monkeypatch.setattr(POST_PATCH_TARGET, _registering_post(cfg, "s1", calls))
+  monkeypatch.setattr(POST_PATCH_TARGET, conftest.registering_post(cfg, "s1", calls))
 
   schedule_trigger.main()
 
@@ -126,7 +106,7 @@ def test_registered_target_carries_exit_file_and_log(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv("--cmd", "exit 0"))
   calls: list[dict] = []
-  monkeypatch.setattr(POST_PATCH_TARGET, _registering_post(cfg, "s1", calls))
+  monkeypatch.setattr(POST_PATCH_TARGET, conftest.registering_post(cfg, "s1", calls))
 
   schedule_trigger.main()
 

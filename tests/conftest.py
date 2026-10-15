@@ -2322,6 +2322,27 @@ def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
 
 
+def registering_post(cfg: SimpleNamespace, session_id: str, calls: list[dict]) -> Callable:
+  """post_internal_api stand-in: persists the trigger the way the server would, then answers."""
+
+  def post(endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
+    calls.append({"endpoint": endpoint, "payload": payload})
+    triggers_dir = cfg.sessions_dir / session_id / "triggers"
+    triggers_dir.mkdir(parents=True, exist_ok=True)
+    stored = {
+        "id": "trig-1",
+        "status": "pending",
+        "message": payload["message"],
+        "watch_targets": payload["watch_targets"],
+        "created_at": "2026-10-08T00:00:00+00:00",
+        "fire_at": "2026-10-08T00:11:00+00:00",
+    }
+    (triggers_dir / "trig-1.json").write_text(json.dumps(stored), encoding="utf-8")
+    return {"trigger_id": "trig-1", "fire_at": "2026-10-08T00:11:00+00:00"}
+
+  return post
+
+
 def run_reply_stdin_case(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], verb: str,
     readback: dict[str, Any]) -> None:

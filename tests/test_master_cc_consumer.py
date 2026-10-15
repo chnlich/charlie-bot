@@ -15,7 +15,6 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.features.latex import latex
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.infra import tasks as infra_tasks
@@ -102,7 +101,6 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   session_id = f"t1-{inject_at}"
   cfg = conftest.build_master_cc_cfg(tmp_path)
   conftest.bind_session_blocks(monkeypatch, conftest.build_session_blocks(cfg))
-  monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   entries: list[datetime.datetime | None] = []
   injected = False
@@ -192,7 +190,6 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: pathlib.Path, m
   backend_returned_id = "cc-backend-session-42"
 
   monkeypatch.setattr(master_cc_run, "_run_cc", conftest.make_sound_round(backend_returned_id))
-  monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", mock.AsyncMock())
 
   async with conftest.fresh_master_state(session.id):
@@ -252,7 +249,6 @@ async def _run_stream_consumer(
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backend)
-  monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", mock.AsyncMock())
 
   async with conftest.fresh_master_state(session_id):

@@ -110,7 +110,7 @@ def test_startup_never_writes_cron(temp_home: pathlib.Path) -> None:
 # the pointed file owns the body and the loader reads it on every load. A file
 # that instead carries the body itself under `prompt` holds a second source, so
 # it is a per-file load error; a file that carries neither a prompt source nor a
-# handler/loop is likewise an error whose message names prompt_file.
+# handler is likewise an error whose message names prompt_file.
 
 
 def test_loader_loads_prompt_file_pointer(temp_home: pathlib.Path) -> None:
@@ -141,26 +141,6 @@ def test_loader_rejects_task_without_prompt_file(temp_home: pathlib.Path, task_y
   assert len(errors) == 1 and errors[0].name == "t"
   # the message the operator reads names prompt_file as the missing source
   assert "prompt_file" in errors[0].error
-
-
-def test_loader_fails_the_file_whose_loop_field_the_loop_model_rejects(temp_home: pathlib.Path) -> None:
-  _write_healthy(temp_home, "healthy", "* * * * *", "body")
-  conftest.write_cron_task(
-      temp_home, "looped",
-      conftest.dump_yaml(
-          {
-              "cron": "* * * * *",
-              "repo": str(temp_home),
-              "loop": {
-                  "backlog": "backlog/backlog.yaml",
-                  "role": "tester"
-              },
-          }))
-
-  assert [task.name for task in loader.get_scheduled_tasks()] == ["healthy"]
-  errors = loader.get_scheduled_task_errors()
-  assert [error.name for error in errors] == ["looped"]
-  assert "scope_files" in errors[0].error and "Field required" in errors[0].error
 
 
 # --- 6. shipped default is loadable and seeds per-job files ------------------

@@ -92,7 +92,7 @@ charlie-bot/
 
 **Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/runtime/agent_process/base.py`). Each backend package registers its type string, its option model and its factory with `src/runtime/hooks/backend_type_registration.py` (`src/app/registrations.py` lists the packages), and `src/runtime/hooks/backend_types.py` dispatches each `BackendOption.type` to its implementation; config loading parses each `backends.options[]` entry through the option models that `src/infra/config_registry.py` holds. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
-**Turn Contributions**: Feature packages add to a master turn through `src/runtime/hooks/turn_contributions.py`: a package registers a `TurnContribution` from its `register()`, and the turn path (instruction build, queue, run, session funnel, chat aggregator) asks every registered contribution at its own step and names no feature. The memory, LaTeX, chat-threads, Slack and Discord packages register one each.
+**Turn Contributions**: Feature packages add to a master turn through `src/runtime/hooks/turn_contributions.py`: a package registers a `TurnContribution` from its `register()`, and the turn path (instruction build, queue, run, session funnel, chat aggregator) asks every registered contribution at its own step and names no feature. The chat-threads, cron, Discord, memory, Slack and voice packages register one each.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
@@ -305,7 +305,7 @@ decodes the opening clip as a recognition probe.
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)
-- Panels: the sessions sidebar plus the tab strip — Terminal, Chat w/ TeX, Backlog, Plans, Chat
+- Panels: the sessions sidebar plus the tab strip — Terminal, Plans, Chat
 - The session WebSocket (`web/static/js/websocket.js`) drives the chat: rendering is fully driven by aggregated `message`/`stream` deltas, so a worker completion summary arrives as an assistant message
 - Polls: the sidebar status poll adapts (3 s with running tasks, 10 s idle); an open session view polls its usage every 3 s while the master is thinking, and an open worker transcript polls every 2 s (all ride the page-timers registry, so a hidden tab polls nothing)
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload

@@ -174,9 +174,9 @@ function loadExtUsageScript(options = {}) {
   // page-timers.js loads first, matching the script order in index.html — the
   // strip's refresh timers register through it.
   vm.runInContext(pageTimersSource, context, { filename: pageTimersPath });
-  // Bridge the lexical module binding (same pattern as the backlogPanel bridge
-  // in tailwind_class_coverage.test.js) so tests can read the one in-memory
-  // collapsed boolean rather than inferring it from DOM state.
+  // Bridge the lexical module binding (a top-level binding is not a property
+  // of the vm context object) so tests can read the one in-memory collapsed
+  // boolean rather than inferring it from DOM state.
   vm.runInContext(
     scriptSource + '\nglobalThis._peekExtUsageCollapsed = () => _extUsageCollapsed;',
     context,

@@ -15,7 +15,6 @@ from src.runtime.hooks import page_render
 # the feature lines.
 PACKAGES = (
     "src.features.artifacts",
-    "src.features.backlog",
     "src.features.backup",
     "src.features.chat_threads",
     "src.features.code_server",
@@ -27,7 +26,6 @@ PACKAGES = (
     "src.features.diff_view",
     "src.features.explain",
     "src.features.improve",
-    "src.features.latex",
     "src.features.memory",
     "src.features.ncu",
     "src.features.terminal",

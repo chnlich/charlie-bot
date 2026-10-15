@@ -19,7 +19,7 @@ Known-alive symbols:
   `src/backends/openai_compatible/factory.py`. The Python name has exactly zero whole-repo matches outside
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
 - Every FastAPI route handler in `src/runtime/api/*.py` and the feature `api.py` modules (functions under `@router.get/post/patch/put/
-  delete/websocket` decorators, e.g. `get_backlog`, `list_cron_tasks`,
+  delete/websocket` decorators, e.g. `list_cron_tasks`,
   `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` includes
   each router with `include_router(prefix=...)` (the package routers through the wiring registry,
   `src/app/registrations.py`) and `web/static/js/` fetches the composed paths
@@ -87,11 +87,6 @@ Known-alive symbols:
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
-- `validate_loop_section` — pydantic `@field_validator('loop')` method on `ScheduledTaskConfig`
-  in `src/features/cron/config.py`, invoked during model validation: it builds the `loop:` mapping into the
-  model that the loop action registered. The method name has exactly zero whole-repo matches outside its
-  definition, so vulture flags it as an unused method. Same framework-registered class as the
-  `check_sources_and_mode` entry above.
 - `seed_default_cron_tasks` (`src/features/cron/seed.py`) — production-scope vulture (`src/ server.py`)
   can flag it as an unused function. The only production caller is `setup_step` in the same file,
   which `scripts/setup.sh` runs through `src.app.setup`. The server-start path never calls the function,
@@ -134,7 +129,7 @@ Known-alive symbols:
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
   `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,
-  `src/features/backlog/config.py`, `src/features/code_server/config.py`,
+  `src/features/code_server/config.py`,
   `src/features/diag/api.py`, `src/features/discord/config.py`, `src/features/slack/config.py`,
   `src/features/voice/config.py`, `src/features/cron/config.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
   consumes it by attribute name at class-definition time. Every assignment pins
@@ -181,13 +176,6 @@ Known-alive symbols:
   ``file-chip file-chip--${file.status}``, and `tests/chat_attachments_render.test.js` asserts
   the failed and uploaded variants by name. A dead-selector scan that greps each full class
   name finds no template or JS literal, so it flags them as unused CSS.
-- `d2h-wrapper`, `d2h-file-header`, `d2h-del`, `d2h-ins` (`src/features/latex/static/latex.css`, scoped
-  under `.diff-modal-body`) — reached by library DOM construction: the diff2html bundle both
-  templates load from jsdelivr CDN emits every one of these class names when it renders the
-  diff, and the rules restyle that output. A dead-selector scan that greps each full class
-  name finds no template or JS literal, so it flags them as unused CSS. (Other `d2h-*`
-  selectors in the same block, e.g. `.d2h-code-linenumber`, are reached directly by
-  `diff_comments.js` `querySelector` calls.)
 - `turn-row-tag-trigger`, `turn-row-tag-turn`, `turn-row-tag-worker`, `turn-row-tag-you`
   (`web/static/css/styles.css`) — reached by string construction: `chat/rendering.js` emits
   ``turn-row-tag turn-row-tag-' + label.toLowerCase()``, with the labels
@@ -212,7 +200,7 @@ Known-alive symbols:
   by that name when FastAPI serializes a response. As a Python identifier the name has zero
   matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
   an unused method; a whole-repo grep is noisier — `render` is also ordinary web-JS DOM code
-  (`plan-panel.js` `function render()`, `backlogPanel.render()`, pdf.js `page.render(...)`)
+  (`plan-panel.js` `function render()`)
   that names unrelated methods. Same class as the `do_POST`/`log_message`
   stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
@@ -264,8 +252,8 @@ Known-alive symbols:
   `option_default_model` docstring's reference (`src/infra/backend_models.py`), so vulture
   flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
-- `_expand_tilde` (`PathsConfig` in `src/infra/config.py`, `BacklogConfig` in
-  `src/features/backlog/config.py`, and `PublishConfig` in `src/features/artifacts/config.py`) —
+- `_expand_tilde` (`PathsConfig` in `src/infra/config.py` and `PublishConfig` in
+  `src/features/artifacts/config.py`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
   section's path settings against the process HOME. The method name has exactly zero
@@ -441,11 +429,8 @@ Known-alive symbols:
   `register()` passes the function to `scheduled_handlers.register_handler(<name>, <module>,
   attr=<attr>)` (`src/features/backup/__init__.py`, `src/features/usage/__init__.py`), and a
   registered task with `handler: <name>` awaits `getattr(import_module(module), attr)()`
-  (`src/runtime/hooks/scheduled_handlers.py`). `scheduled_loop_action`
-  (`src/features/backlog/backlog_loop.py`) is the same class under
-  `scheduled_handlers.register_loop_action` (`src/features/backlog/__init__.py`): a task with a
-  `loop:` section awaits `getattr(import_module(module), attr)(name=, repo=, loop=)` on each
-  fire. Vulture flags each of the four as an unused function at 60% confidence.
+  (`src/runtime/hooks/scheduled_handlers.py`). Vulture flags each of the three as an unused
+  function at 60% confidence.
 - `set_task_manager` (`src/runtime/task_execution.py`) — kept deliberately as the test
   injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
   swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep

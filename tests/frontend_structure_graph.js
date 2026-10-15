@@ -29,7 +29,7 @@ const identifyShadowedGlobals = require(path.join(sucraseDist, 'identifyShadowed
 
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-// Registered packages in registration order: "src.features.latex" -> "features/latex".
+// Registered packages in registration order: "src.features.cron" -> "features/cron".
 const registrations = read('src/app/registrations.py');
 const packagesBlock = registrations.match(/PACKAGES\s*=\s*\(([\s\S]*?)\n\)/)[1];
 const packages = [...packagesBlock.matchAll(/"src\.(features|backends)\.([A-Za-z0-9_]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
@@ -83,8 +83,8 @@ function permissive() {
   });
 }
 
-const HOST_GLOBALS = ['marked', 'hljs', 'katex', 'renderMathInElement', 'Diff', 'Diff2Html', 'Diff2HtmlUI', 'Terminal',
-  'FitAddon', 'pdfjsLib',
+const HOST_GLOBALS = ['marked', 'hljs', 'katex', 'renderMathInElement', 'Diff2HtmlUI', 'Terminal',
+  'FitAddon',
   'document', 'navigator', 'localStorage', 'sessionStorage', 'location', 'history', 'performance',
   'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'MutationObserver', 'IntersectionObserver',
   'WebSocket', 'EventSource', 'AudioContext', 'MediaRecorder', 'Notification', 'matchMedia', 'getComputedStyle',

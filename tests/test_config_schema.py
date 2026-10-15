@@ -38,15 +38,6 @@ def _credentials_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -
   return home
 
 
-def test_ui_backlog_repos_is_an_unknown_key_since_the_backlog_section_owns_it(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  home = _credentials_home(tmp_path, monkeypatch)
-  (home / "config.yaml").write_text("ui:\n  backlog_repos: []\n", encoding="utf-8")
-  with pytest.raises(pydantic.ValidationError) as excinfo:
-    config.load_config()
-  assert [(err["type"], err["loc"]) for err in excinfo.value.errors()] == [("extra_forbidden", ("ui", "backlog_repos"))]
-
-
 def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)

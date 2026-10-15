@@ -1,21 +1,14 @@
-"""Scheduled-handler registry: packages register scheduled-task handlers by name and the loop action.
+"""Scheduled-handler registry: packages register scheduled-task handlers by name.
 
 Each registration holds a module path and an attribute name. The scheduler imports the
 module when a task fires, so a handler's stack loads only when it runs.
-
-The loop action also registers the pydantic model of a scheduled task's ``loop:`` section, so
-the package that owns the section validates it without importing the owning package.
 """
 
 from __future__ import annotations
 
 import importlib
 
-from src.infra import deferred
-
 _HANDLERS: dict[str, tuple[str, str]] = {}  # name -> (module, attr)
-_loop_action: tuple[str, str] | None = None
-_loop_model: str | None = None  # "module:Class" of the loop section's model
 
 
 def register_handler(name: str, module: str, *, attr: str) -> None:
@@ -28,38 +21,9 @@ def register_handler(name: str, module: str, *, attr: str) -> None:
   _HANDLERS[name] = (module, attr)
 
 
-def register_loop_action(module: str, *, attr: str, model: str) -> None:
-  """A registered task with a `loop:` section awaits getattr(import_module(module), attr)(name=, repo=, loop=) on each fire.
-
-  `model` is a "module:Class" string: the pydantic model of the task's `loop:` section. `loop` is an
-  instance of it. The coroutine returns (action, prompt). action is a short label for the log; prompt
-  None means this fire has nothing to do. A second registration raises ValueError.
-  """
-  global _loop_action, _loop_model
-  if _loop_action is not None:
-    raise ValueError(f"the loop action is already registered by {_loop_action[0]}")
-  _loop_action = (module, attr)
-  _loop_model = model
-
-
 def handler(name: str) -> object | None:
   """The registered handler coroutine function for name, imported; None when no package registered name."""
   if name not in _HANDLERS:
     return None
   module, attr = _HANDLERS[name]
   return getattr(importlib.import_module(module), attr)
-
-
-def loop_action() -> object:
-  """The registered loop action, imported. Raises LookupError when no package registered one."""
-  if _loop_action is None:
-    raise LookupError("no package registered a loop action")
-  module, attr = _loop_action
-  return getattr(importlib.import_module(module), attr)
-
-
-def loop_model() -> type:
-  """The pydantic model of the `loop:` section, imported. Raises LookupError when no package registered a loop action."""
-  if _loop_model is None:
-    raise LookupError("no package registered a loop action")
-  return deferred.import_attr(_loop_model)

@@ -23,9 +23,9 @@ from src.infra.config import CharlieBotConfig
 from src.runtime import templating, v1_sessions
 from src.runtime.hooks import page_render, wiring
 
-DELETED_PACKAGE = "src.features.latex"
-DELETED_PREFIX = "/api/latex"
-DELETED_STATIC = "/static/features/latex"
+DELETED_PACKAGE = "src.features.diag"
+DELETED_PREFIX = "/api/diag"
+DELETED_STATIC = "/static/features/diag"
 
 # The probe process deletes one package line, registers, then imports the server module,
 # which calls register_all() again (a no-op) and assembles the app from the registry.

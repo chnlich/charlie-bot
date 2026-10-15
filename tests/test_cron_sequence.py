@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -655,64 +654,6 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   await _drain_manager_turns(tree, manager.id)
   assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
-
-
-@pytest.mark.asyncio
-async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
-    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The loop's no-op decision consumes the occurrence: the checkpoint still
-  advances (or the same occurrence would refire every tick), with the same
-  last_run_status bookkeeping as before."""
-  cfg, session_blocks, tree = bound_env
-  manager = await make_manager(tree)
-  install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  task_cfg = _bound_task(
-      "noop-loop",
-      manager.id,
-      repo=str(cfg.charliebot_home),
-      loop={
-          "backlog": "backlog.yaml",
-          "role": "tester",
-          "scope_files": ["x"],
-          "max_pending": 3
-      })
-  scheduler = build_scheduler(cfg, session_blocks)
-  from src.features.backlog import backlog_loop
-
-  async def noop_action(*args, **kwargs):
-    return "noop", ""
-
-  monkeypatch.setattr(backlog_loop, "determine_action", noop_action)
-  result = await scheduler._execute_task(task_cfg, record_handle=True, firing=FIRING)
-  assert result["skipped"] == "noop"
-  meta = await tree.load_meta(manager.id)
-  assert meta.last_scheduled_run is not None
-  assert meta.last_scheduled_cron == task_cfg.cron
-  assert str(meta.last_run_status) == "success"
-
-
-@pytest.mark.asyncio
-async def test_the_scheduler_calls_the_loop_action_with_the_task_name_repo_and_loop_section(
-    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = bound_env
-  manager = await make_manager(tree)
-  install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  task_cfg = _bound_task(
-      "loop-args",
-      manager.id,
-      repo=str(cfg.charliebot_home),
-      loop={
-          "backlog": "backlog.yaml",
-          "role": "tester",
-          "scope_files": ["x"]
-      })
-  from src.features.backlog import backlog_loop
-
-  action = AsyncMock(return_value=("noop", None))
-  monkeypatch.setattr(backlog_loop, "scheduled_loop_action", action)
-  await build_scheduler(cfg, session_blocks)._execute_task(task_cfg, record_handle=True, firing=FIRING)
-
-  action.assert_awaited_once_with(name="loop-args", repo=str(cfg.charliebot_home), loop=task_cfg.loop)
 
 
 # ---------------------------------------------------------------------------

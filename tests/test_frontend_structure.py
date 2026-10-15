@@ -64,7 +64,6 @@ for it. The core page events today:
     charliebot:session-switched web/static/js/sidebar/session-view.js (the end of a session switch)
     charliebot:session-view-teardown
                                 web/static/js/sidebar/session-view.js (the active session view is torn down)
-    charliebot:sidebar-resized  web/static/js/sidebar/modals.js (the end of a sidebar drag)
 
 A landing that adds a registration entry or a page event extends these lists.
 

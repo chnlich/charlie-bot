@@ -5,7 +5,7 @@
 # schedule) belong in the host files, not here.
 #
 # The prompt source of every task is exactly one of `prompt_file`, `steps`,
-# `handler`, or `loop`. `steps` is an ordered worker list: each step declares
+# or `handler`. `steps` is an ordered worker list: each step declares
 # `name`, `prompt_file`, and an optional `backend` (a step without one uses the
 # task-level `backend`), starts after the previous step exits 0 with that
 # step's result, and the session master is woken once at the end with one

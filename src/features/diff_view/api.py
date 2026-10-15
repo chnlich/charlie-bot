@@ -75,9 +75,7 @@ def _attributes_signature(repo_path: pathlib.Path) -> tuple[int, int] | None:
 
 # Wire spelling of the 400 a non-repo path earns: both raisers
 # (_resolve_repo_under_workspace and list_branches, whose acceptance conditions
-# differ deliberately) format the same sentence, and the latex route's
-# 'Not a git repo' JSON error is a distinct, deliberate spelling this constant
-# does not home.
+# differ deliberately) format the same sentence.
 _NOT_A_GIT_REPO_DETAIL = "Not a git repo: {}"
 
 

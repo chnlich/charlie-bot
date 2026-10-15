@@ -1755,13 +1755,6 @@ ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolv
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 
-# Import-path patch target for the improve loop's commit step. src/features/backlog/backlog_loop.py binds
-# the git module at import scope (`from src.infra import git`) and its stale-item handler reads
-# the commit function off that binding at call time, so mock setattrs the stand-in on the
-# src.features.backlog.backlog_loop.git module attribute -- the shared src.infra.git module object, restored
-# by monkeypatch after the test.
-BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.features.backlog.backlog_loop.git.git_add_commit_push"
-
 # Patch target for the atomic-write swap hook. src/infra/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
 # atomic_write_stream's docstring pins that lookup as the test hook, so mock setattrs the

@@ -2,10 +2,9 @@
 // Coverage boundary: this test only asserts that Tailwind utility classes
 // produced by the render paths the fixture below actually exercises --
 // renderMessage() (user/assistant/tool-activity/system/delegate/worker/plan/
-// clone/trigger/separator), the backlog card renderer, and the plan
-// compact-card builder -- are present in the committed
-// web/static/css/tailwind.css. It says nothing about class usage in code
-// paths (or templates) the fixture does not touch.
+// clone/trigger/separator) and the plan compact-card builder -- are present
+// in the committed web/static/css/tailwind.css. It says nothing about class
+// usage in code paths (or templates) the fixture does not touch.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -21,21 +20,9 @@ const BUILD_ENV = Object.assign({}, process.env, {
   PATH: `${NODE_BIN_DIR}:${process.env.PATH || ''}`,
 });
 
-const { FakeElement } = require('./fake_dom');
-const { escapeHtml } = require('./escape_html_stub');
-const { readStatic, readPackageStatic } = require('./read_static');
+const { readStatic } = require('./read_static');
 const { loadArtifactsScript } = require('./artifacts_context_stub');
 const { makeChatRenderContext } = require('./chat_rendering_context_stub');
-
-function makeDocument(elements) {
-  return {
-    getElementById(id) { return elements.has(id) ? elements.get(id) : null; },
-    createElement(tag) { return new FakeElement(tag); },
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
-    addEventListener() {},
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Loaders for each render surface, mirroring the vm bootstrap pattern used by
@@ -54,25 +41,6 @@ function loadChatContext(elements) {
   vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
   // The explain package's separator button.
   context.Chat.registerSeparatorButton(() => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>');
-  return context;
-}
-
-function loadBacklogContext(elements, fetchImpl) {
-  const context = {
-    document: makeDocument(elements),
-    console: { error: () => {} },
-    fetch: fetchImpl,
-    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
-    registerTab: () => {},
-  };
-  vm.createContext(context);
-  // backlog-panel.js declares `const backlogPanel = (() => {...})();` at top
-  // level -- a `const` binding is not a property of the vm context object, so
-  // bridge it onto the context in the same script (same lexical scope).
-  vm.runInContext(
-      readPackageStatic('features', 'backlog', 'backlog-panel.js') + '\nglobalThis.backlogPanel = backlogPanel;',
-      context,
-      { filename: 'backlog-panel.js' });
   return context;
 }
 
@@ -197,19 +165,6 @@ const CHAT_MESSAGES = [
   { role: 'separator', id: 'sep1', thinking_seconds: 12, event_index: 3 },
 ];
 
-const BACKLOG_ITEMS = [
-  { id: 1, title: 'Pending idea', description: 'desc', priority: 'high', category: 'feature', status: 'pending', created: '2026-07-30T00:00:00Z', _source: 'alpha-lab-core' },
-  { id: 2, title: 'Needs revision', description: 'desc', priority: 'medium', category: 'infra', status: 'revision_requested', revision_feedback: 'please clarify', created: '2026-07-29T00:00:00Z', _source: 'alpha-lab-core' },
-  { id: 3, title: 'Approved idea', description: 'desc', priority: 'low', category: 'data', status: 'approved', created: '2026-07-28T00:00:00Z' },
-  { id: 4, title: 'Rejected idea', description: 'desc', priority: 'high', category: 'strategy', status: 'rejected', rejected_reason: 'not now', created: '2026-07-27T00:00:00Z' },
-  { id: 5, title: 'Failed idea', description: 'desc', priority: 'medium', category: 'backtest', status: 'failed', failed_reason: 'crashed', failed_count: 2, created: '2026-07-26T00:00:00Z' },
-  { id: 6, title: 'Done idea', description: 'desc', priority: 'low', category: 'feature', status: 'done', created: '2026-07-25T00:00:00Z' },
-];
-
-const BACKLOG_HISTORY = [
-  { idea_id: 6, backtest_result: { sharpe: { before: 1.1, after: 1.4 } } },
-];
-
 // ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
@@ -244,23 +199,7 @@ test('tailwind utility classes used by rendered messages/cards are all present i
     snippets.push(chatCtx.renderMessage(delivery, 'sess-1'));
   }
 
-  // 3. Backlog cards, across every status branch.
-  const backlogList = new FakeElement('DIV');
-  const backlogElements = new Map([
-    ['backlog-list', backlogList],
-    ['backlog-filter', { value: 'all' }],
-    ['backlog-module-filter', { value: 'all' }],
-  ]);
-  const fetchImpl = (url) => {
-    if (String(url).startsWith('/api/backlog/repos')) return Promise.resolve({ ok: true, json: async () => [] });
-    if (String(url).startsWith('/api/backlog/history')) return Promise.resolve({ ok: true, json: async () => BACKLOG_HISTORY });
-    return Promise.resolve({ ok: true, json: async () => BACKLOG_ITEMS });
-  };
-  const backlogCtx = loadBacklogContext(backlogElements, fetchImpl);
-  await backlogCtx.backlogPanel.refresh();
-  snippets.push(backlogList.innerHTML);
-
-  // 4. Plan compact card, in both a pending and an approved-with-takeoff state.
+  // 3. Plan compact card, in both a pending and an approved-with-takeoff state.
   const artifactsCtx = loadArtifactsScript({ sessionId: 'sess-1' });
   snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
   snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));

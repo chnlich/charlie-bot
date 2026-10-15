@@ -34,9 +34,6 @@ from conftest import (
 from src.features.discord.event_types import DISCORD_REPLY
 from src.features.discord.metadata import DiscordOrigin
 from src.features.discord.turn_contribution import DiscordTurnContribution
-from src.features.latex import latex
-from src.features.latex.event_types import TEX_EDIT_PROPOSED
-from src.features.latex.turn_contribution import LatexTurnContribution
 from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.features.slack.turn_contribution import SlackTurnContribution
@@ -369,7 +366,7 @@ def test_registration_imports_no_contribution_module() -> None:
 
 @pytest.mark.parametrize(
     "omitted, contribution_type", [
-        ("src.features.latex", "LatexTurnContribution"),
+        ("src.features.chat_threads", "ChatThreadsTurnContribution"),
         ("src.features.memory", "MemoryTurnContribution"),
     ])
 def test_server_turn_paths_work_when_a_package_is_not_registered(
@@ -418,7 +415,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
         assert {contribution_type!r} not in [type(item).__name__ for item in turn_contributions.turn_contributions()]
         segments, _ = build_segments(cfg, meta, "manager_turn", overlay=None, chain=(), node_ref=None)
         has_memory = any(source.scope == SCOPE_MEMORY for segment in segments for source in segment.sources)
-        assert has_memory is ({omitted!r} == "src.features.latex")
+        assert has_memory is ({omitted!r} == "src.features.chat_threads")
 
       asyncio.run(main())
       """),
@@ -502,87 +499,18 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
 
 
 # ---------------------------------------------------------------------------
-# LaTeX: a turn that edits the .tex file proposes the edit after its MASTER_DONE
+# A turn left running in another process: no MASTER_DONE, so no after_turn runs
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def tex_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-  path = tmp_path / "report.tex"
-  path.write_text("original", encoding="utf-8")
-  monkeypatch.setattr(latex, "get_tex_path", lambda: path)
-  monkeypatch.setattr(latex, "_tex_snapshot", None)
-  monkeypatch.setattr(latex, "_pending_proposal", None)
-  return path
+class _RecordingContribution(turn_contributions.TurnContribution):
+  """The test's own funnel observer: its after_turn records every call."""
 
+  def __init__(self) -> None:
+    self.after_turn_calls: list[dict] = []
 
-async def run_turn(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    turn: conftest.ConsumerRound,
-) -> tuple[SessionBlocks, str, list[asyncio.Task]]:
-  """Queue one turn through the real run_message and consumer, with _run_cc replaced by *turn*.
-
-  Returns the manager, the session id and the after_turn tasks the funnel spawned.
-  """
-  cfg = build_master_cc_cfg(tmp_path)
-  mgr = conftest.build_session_blocks(cfg)
-  session = await conftest.create_root_session(mgr, CreateSessionRequest(name="tex"))
-  conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
-  tasks: list[asyncio.Task] = []
-  monkeypatch.setattr(master_cc_run, "_run_cc", turn)
-  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.runtime.session_events.create_logged_task", make_task_spawner(tasks))
-  async with fresh_master_state(session.id):
-    await run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks())
-    await conftest.drain_session_consumer(session.id, timeout=5)
-    await asyncio.gather(*tasks)
-  return mgr, session.id, tasks
-
-
-def edits_tex(path: Path, content: str) -> conftest.ConsumerRound:
-
-  async def turn(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    path.write_text(content, encoding="utf-8")
-    return ("cc-1", 0, None, {})
-
-  return turn
-
-
-@pytest.mark.asyncio
-async def test_a_changed_tex_file_is_proposed_after_master_done_and_reverted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tex_file: Path) -> None:
-  mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "edited by the agent"))
-
-  types = [event["type"] for event in mgr.events.load_chat_events_sync(session_id)]
-  assert types == [ET.TASK_CREATED, ET.MASTER_DONE, TEX_EDIT_PROPOSED]
-  assert tex_file.read_text(encoding="utf-8") == "original"
-  assert latex.get_pending_proposal() == {"old": "original", "new": "edited by the agent"}
-
-
-@pytest.mark.asyncio
-async def test_an_unchanged_tex_file_appends_nothing_and_clears_the_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tex_file: Path) -> None:
-  mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "original"))
-
-  assert [event["type"] for event in mgr.events.load_chat_events_sync(session_id)] == [ET.TASK_CREATED, ET.MASTER_DONE]
-  assert latex._tex_snapshot is None
-  assert latex.get_pending_proposal() is None
-
-
-@pytest.mark.asyncio
-async def test_latex_after_turn_skips_the_check_without_a_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-  events = SimpleNamespace(persist_and_broadcast=AsyncMock())
-  monkeypatch.setattr(session_events, "_events", events)
-  contribution = LatexTurnContribution()
-  meta = SessionMetadata(profile="manager", id="no-snapshot", name="no-snapshot")
-  monkeypatch.setattr(latex, "has_snapshot", lambda: False)
-
-  with patch("src.features.latex.turn_contribution.asyncio.to_thread", new=AsyncMock()) as to_thread:
-    await contribution.after_turn(meta, {"type": ET.MASTER_DONE}, cfg=SimpleNamespace())
-
-  to_thread.assert_not_awaited()
-  events.persist_and_broadcast.assert_not_awaited()
+  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg) -> None:
+    self.after_turn_calls.append(done_event)
 
 
 class _LetGoBackend(ScriptedRelayBackend):
@@ -595,15 +523,15 @@ class _LetGoBackend(ScriptedRelayBackend):
   their thread hops have no loop-tick budget.
   """
 
-  def __init__(self, tex_path: Path) -> None:
+  def __init__(self, path: Path) -> None:
     super().__init__([], exit_code=0)
-    self._tex_path = tex_path
+    self._path = path
     self.turn_started = asyncio.Event()
     self.release_cancel = asyncio.Event()
 
   async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     await self._on_spawn(self.pid)
-    self._tex_path.write_text("edited by the agent", encoding="utf-8")
+    self._path.write_text("edited by the agent", encoding="utf-8")
     self.turn_started.set()
     await self.release_cancel.wait()
     raise asyncio.CancelledError
@@ -611,8 +539,8 @@ class _LetGoBackend(ScriptedRelayBackend):
 
 
 @pytest.mark.asyncio
-async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tex_file: Path) -> None:
+async def test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A turn left running in another process ends in CancelledError: the consumer appends no MASTER_DONE,
   so no after_turn runs, and the agent's edit stays on disk for the next boot's re-attach to settle."""
   cfg = build_master_cc_cfg(tmp_path)
@@ -620,13 +548,17 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   session = await conftest.create_root_session(mgr, CreateSessionRequest(name="let-go"))
   conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   tasks: list[asyncio.Task] = []
-  let_go_backend = _LetGoBackend(tex_file)
+  edited = tmp_path / "edited.txt"
+  let_go_backend = _LetGoBackend(edited)
   install_scripted_backends(monkeypatch, [let_go_backend], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.runtime.session_events.create_logged_task", make_task_spawner(tasks))
+  recorder = _RecordingContribution()
+  real = turn_contributions.turn_contributions()
+  monkeypatch.setattr(turn_contributions, "turn_contributions", lambda: (*real, recorder))
 
   async with fresh_master_state(session.id):
-    queued = asyncio.create_task(run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks()))
+    queued = asyncio.create_task(run_task_manager_message(cfg, session, "edit the file", mgr.callbacks()))
     try:
       await asyncio.wait_for(let_go_backend.turn_started.wait(), timeout=5)
       consumer = master_cc_state._session_consumers[session.id]
@@ -639,5 +571,5 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   assert consumer.cancelled()
   assert not tasks
   assert ET.MASTER_DONE not in [event["type"] for event in mgr.events.load_chat_events_sync(session.id)]
-  assert tex_file.read_text(encoding="utf-8") == "edited by the agent"
-  assert latex.get_pending_proposal() is None
+  assert edited.read_text(encoding="utf-8") == "edited by the agent"
+  assert recorder.after_turn_calls == []

@@ -1,5 +1,6 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
+from pathlib import Path
 from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,7 +34,7 @@ from src.runtime.api.sessions import _task_http_error
 from src.runtime.control_events import derived_delegate_request_id, stable_run_id
 from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
-from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
+from src.runtime.takeoff_gate import DelegationBlockedError, is_read_only_exempt
 from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_execution import TaskExecutionAdapter
 from src.runtime.task_sessions import TaskTreeManager, canonical_task_spec_text
@@ -91,7 +92,7 @@ async def _authorize_spawn_request(
   """
   require_found(await store.get_session(req.session_id))
 
-  if not (isinstance(req, DelegateRequest) and is_verify_exempt(req.task_type)):
+  if not (isinstance(req, DelegateRequest) and is_read_only_exempt(req.task_type)):
     try:
       await task_mgr.check_task_authorization(req.session_id)
     except DelegationBlockedError as e:
@@ -99,7 +100,8 @@ async def _authorize_spawn_request(
 
   cfg = get_config()
   try:
-    if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY and req.backend is None:
+    if (isinstance(req, DelegateRequest) and req.task_type in (TaskType.VERIFY, TaskType.COLD_READ) and
+        req.backend is None):
       resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(req.session_id, cfg, store, [])
     else:
       resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
@@ -140,11 +142,11 @@ async def _delegate_task_tree(
 
   try:
     # The nearest-user-ancestor gate judges here, where the delegation request
-    # enters; the child run's launch re-judges nothing. The read-only verify
-    # exemption rides the one shared judgment (is_verify_exempt) here, at the
-    # admission check above, and at the agent-creation check; the structural
-    # create checks still apply to a verify child.
-    if not is_verify_exempt(req.task_type):
+    # enters; the child run's launch re-judges nothing. The read-only
+    # exemption rides the one shared judgment (is_read_only_exempt) here, at
+    # the admission check above, and at the agent-creation check; the
+    # structural create checks still apply to a read-only child.
+    if not is_read_only_exempt(req.task_type):
       await task_mgr.check_task_authorization(req.session_id)
     request_id = delegate_request_id(req)
     task_spec = TaskSpec(
@@ -153,13 +155,17 @@ async def _delegate_task_tree(
         base_branch=req.base_branch,
         task_type=req.task_type,
         keep_worktree=req.keep_worktree,
+        cold_read=req.cold_read,
     )
+    # A cold-read child is named at creation (no automatic naming call); every
+    # other child takes the default node name.
+    name = f"Cold read: {Path(req.cold_read.page_path).name}" if req.task_type == TaskType.COLD_READ else None
     child = await task_mgr.create_task(
         request_id=request_id,
         task_parent_id=req.session_id,
         profile="worker",
         task=task_spec,
-        name=None,
+        name=name,
         # The dispatcher reserves every later work Run of this node from the
         # child record's backend, so the record carries the delegation's
         # resolved backend.
@@ -235,14 +241,19 @@ async def delegate_task(
   The existing task node supplies the authorization boundary and the new
   worker child is created directly beneath it.
   """
-  # Repo/branch contract first, before any session access or backend
-  # resolution: the rejection must not depend on the caller's configured
-  # backends, and a replayed request must fail identically.
-  if req.task_type == TaskType.VERIFY:
+  # Field contract first, before any session access or backend resolution:
+  # the rejection must not depend on the caller's configured backends, and a
+  # replayed request must fail identically. The cold_read field rides exactly
+  # the cold-read task type.
+  if req.task_type == TaskType.COLD_READ and req.cold_read is None:
+    raise HTTPException(status_code=400, detail="cold-read delegations require cold_read")
+  if req.task_type != TaskType.COLD_READ and req.cold_read is not None:
+    raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations reject cold_read")
+  if req.task_type in (TaskType.VERIFY, TaskType.COLD_READ):
     if req.repo_path is not None:
-      raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit repo_path")
+      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit repo_path")
     if req.base_branch is not None:
-      raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit base_branch")
+      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit base_branch")
   else:
     # implement/quick-edit/script-run carry a repo, or neither field: a
     # repo-less Run works from its Run directory, and a base without its repo

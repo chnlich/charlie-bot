@@ -22,10 +22,11 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fastapi
 import pytest
 import yaml
 from _pytest.runner import runtestprotocol
-from fastapi import APIRouter, FastAPI, UploadFile
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -2000,9 +2001,9 @@ def wav_body(samples: int = 160) -> bytes:
   return buffer.getvalue()
 
 
-def voice_upload_file(body: bytes) -> UploadFile:
+def voice_upload_file(body: bytes) -> fastapi.UploadFile:
   """*body* wrapped as the multipart ``recording.wav`` upload the voice endpoint tests drive."""
-  return UploadFile(file=io.BytesIO(body), filename="recording.wav")
+  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
 
 
 async def assert_transcribe_cancel_honors_close_timeout(

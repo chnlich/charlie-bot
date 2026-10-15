@@ -40,14 +40,7 @@ class DiscordTurnContribution(turn_contributions.TurnContribution):
       return []
     platform = discord_listener.DISCORD
     text = thread_entry.thread_reply_contract(platform, discord_listener.thread_contract_part(), cfg)
-    return [
-        task_prompts.RuleSegment(
-            text=text,
-            sources=tuple(
-                task_prompts.PromptSource(scope=task_prompts.SCOPE_BASE, source_ref=f"prompts/{ref}")
-                for ref in (platform.scope_doc, "thread_reply_redline.md", "thread_reply_format.md")),
-        )
-    ]
+    return [thread_entry.thread_reply_segment(platform, text)]
 
   def event_renderers(self) -> dict[str, Callable[[dict], dict]]:
     return {event_types.DISCORD_REPLY: _discord_reply_message}

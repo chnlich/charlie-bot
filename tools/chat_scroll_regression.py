@@ -750,14 +750,7 @@ async def bootstrap_messages_now(sid: str, store, events) -> list[dict]:
 
 
 async def run_scenarios(
-    cdp: CDP,
-    page: str,
-    sid: str,
-    sid_b: str,
-    sid_c: str,
-    store,
-    events,
-    evidence_dir: Path,
+    cdp: CDP, page: str, sid: str, sid_b: str, sid_c: str, store, events, evidence_dir: Path,
     results: list[dict]) -> None:
   """The ordered scenario flow; each scenario starts from a state it sets.
 
@@ -1233,7 +1226,8 @@ async def run_scenarios(
           for page_i, page in enumerate(wheel_pages)) + "]")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid_c) + ")")
   await wait_for(
-      cdp, cs, "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')) "
+      cdp,
+      cs, "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')) "
       "&& document.querySelector('#messages [data-message-id]')",
       label="wheel session rendered")
   await wait_reader_settled(cdp, cs)
@@ -1275,8 +1269,7 @@ async def run_scenarios(
   measured = [s for s in steps if s["step"] is not None]
   sc.check(len(measured) == len(steps), f"every notch kept its reference row ({len(measured)}/{len(steps)})")
   for s in measured:
-    sc.check(
-        abs(s["step"] - 100) <= 1.0, f"notch {s['notch']} moved the reference row 100±1px (got {s['step']:.2f})")
+    sc.check(abs(s["step"] - 100) <= 1.0, f"notch {s['notch']} moved the reference row 100±1px (got {s['step']:.2f})")
   sc.data.update({"loaded": loaded, "start": start, "steps": steps})
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "wheel_steps"))
 
@@ -1434,8 +1427,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         {"source": "try { localStorage.setItem('charliebot_access_key', " + json.dumps(key) + "); } catch (e) {}"},
         session_id=page_session)
     await cdp.send("Page.navigate", {"url": f"{base}/?session={sid}"}, session_id=page_session)
-    await run_scenarios(
-        cdp, page_session, sid, sid_b, sid_c, store, events, evidence_dir, results_payload["scenarios"])
+    await run_scenarios(cdp, page_session, sid, sid_b, sid_c, store, events, evidence_dir, results_payload["scenarios"])
     results_payload["console_errors"] = list(cdp.console_errors)
   except Exception as exc:
     results_payload["aborted_by"] = repr(exc)

@@ -397,10 +397,10 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
     async def broadcast(self, channel: str, payload: dict) -> None:
       self.sent.append((channel, payload))
 
-  import src.runtime.session_events as session_events_module
-  original_streaming = session_events_module.streaming_manager
+  from src.runtime import streaming
+  original_streaming = streaming.streaming_manager
   fake_streaming = _StreamingManager()
-  session_events_module.streaming_manager = fake_streaming  # type: ignore[assignment]
+  streaming.streaming_manager = fake_streaming  # type: ignore[assignment]
   try:
     with testclient.TestClient(app) as client:
       # Operator browser input is a real USER event with its attachments.
@@ -459,7 +459,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       roles = [d["message"]["role"] for d in message_deltas]
       assert roles.count("user") == 1 and roles.count("agent_message") == 0
   finally:
-    session_events_module.streaming_manager = original_streaming  # type: ignore[assignment]
+    streaming.streaming_manager = original_streaming  # type: ignore[assignment]
 
 
 @pytest.mark.asyncio

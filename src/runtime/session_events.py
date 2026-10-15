@@ -9,24 +9,13 @@ builds one block (``events()``); tests monkeypatch the ``_events`` global.
 """
 
 import asyncio
-from pathlib import Path
+import pathlib
 from typing import Any
 
+from src.infra import config, gc_control, locks, log_once, memo, models, tasks
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.gc_control import gc_off
-from src.infra.locks import lock_for
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.memo import BoundedMemo
-from src.infra.models import SessionMetadata
-from src.infra.tasks import create_logged_task
-from src.runtime import session_store
-from src.runtime.chat_events import ChatEventStore
-from src.runtime.hooks import turn_contributions
-from src.runtime.hooks.sidebar_contributions import sidebar_contributions
-from src.runtime.message_aggregator import MessageAggregator
-from src.runtime.message_projection import MessageProjection
-from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
+from src.runtime import chat_events, message_aggregator, message_projection, session_store, streaming
+from src.runtime.hooks import sidebar_contributions, turn_contributions
 
 # Raw event types whose render content is produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
@@ -34,7 +23,7 @@ from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_ma
 RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset(
     {ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT, ET.TASK_CLOSED, ET.TASK_REOPENED})
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # The window must cover the tabs' session rotation, so a re-entry never re-pays
 # the cold build: the switch diagnostic rotated among 21 distinct sessions in a
@@ -54,16 +43,16 @@ _AGGREGATOR_INIT_SLICE_EVENTS = 256
 class SessionEvents:
   """Session chat events: the events cache and its disk reads and writes, the live aggregators, broadcast."""
 
-  def __init__(self, cfg: CharlieBotConfig, store: session_store.SessionStore) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, store: session_store.SessionStore) -> None:
     self._cfg = cfg
     self._store = store
-    self.chat_events = ChatEventStore(store.session_dir, store.metadata_path, store.metadata_cache)
+    self.chat_events = chat_events.ChatEventStore(store.session_dir, store.metadata_path, store.metadata_cache)
     # Per-session MessageAggregator instance carrying live streaming state
     # (assistant_buf, tools_buf). Lazy-initialized from disk on first
     # persist_and_broadcast for a session after server start, then maintained
     # in memory across calls so consecutive assistant chunks accumulate into
     # a single bubble and tool-only events attach to the prior text bubble.
-    self._aggregators: dict[str, MessageAggregator] = {}
+    self._aggregators: dict[str, message_aggregator.MessageAggregator] = {}
     # Serializes the lazy disk catch-up behind _get_or_init_aggregator: the
     # init loads and feeds the whole live corpus, so two events arriving
     # back-to-back for the same session must not double-init.
@@ -79,9 +68,10 @@ class SessionEvents:
     # fast path) and asyncio.to_thread (the threaded build/advance), and the
     # to_thread side must not observe a half-updated map, so the memo
     # mechanics are BoundedMemo's locked ones, not a bare OrderedDict's.
-    self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
+    self._projection_cache: memo.BoundedMemo[str, message_projection.MessageProjection] = memo.BoundedMemo(
+        _PROJECTION_LRU_LIMIT)
 
-  def get_chat_events_path(self, session_id: str) -> Path:
+  def get_chat_events_path(self, session_id: str) -> pathlib.Path:
     """Return the absolute path to a session's chat_events.jsonl.
 
     See ``src/runtime/chat_events.py`` for the path layout.
@@ -95,7 +85,12 @@ class SessionEvents:
     ``session_id`` key; the helper is what keeps the senders agreeing on that
     payload shape.
     """
-    await streaming_manager.broadcast(SIDEBAR_CHANNEL, {"type": event_type, "session_id": session_id, **fields})
+    await streaming.streaming_manager.broadcast(
+        streaming.SIDEBAR_CHANNEL, {
+            "type": event_type,
+            "session_id": session_id,
+            **fields
+        })
 
   # ---------------------------------------------------------------------------
   # Chat event persistence (NDJSON — for WebSocket catch-up)
@@ -109,7 +104,8 @@ class SessionEvents:
     await self.chat_events.save_chat_event(session_id, event)
 
   async def _feed_and_broadcast(
-      self, session_id: str, event: dict, aggregator: MessageAggregator, archive_offset: int) -> None:
+      self, session_id: str, event: dict, aggregator: message_aggregator.MessageAggregator,
+      archive_offset: int) -> None:
     """Stamp the event index, feed the aggregator, and broadcast what comes out.
 
     The index is ``archive_offset + cached count - 1`` over the post-append
@@ -120,12 +116,12 @@ class SessionEvents:
     """
     event["event_index"] = archive_offset + self.chat_events.cached_event_count(session_id) - 1
 
-    channel = session_channel(session_id)
+    channel = streaming.session_channel(session_id)
     deltas = list(aggregator.feed(event))
     for delta in deltas:
-      await streaming_manager.broadcast(channel, delta)
+      await streaming.streaming_manager.broadcast(channel, delta)
     if event.get("type") not in RAW_EVENTS_REPLACED_BY_DELTAS:
-      await streaming_manager.broadcast(channel, event)
+      await streaming.streaming_manager.broadcast(channel, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event, then broadcast it through the session's aggregator.
@@ -150,7 +146,7 @@ class SessionEvents:
     # the round is one it acts on. A missing session has no round to react to.
     if event.get("type") == ET.MASTER_DONE and meta is not None:
       for contribution in turn_contributions.turn_contributions():
-        create_logged_task(
+        tasks.create_logged_task(
             contribution.after_turn(meta, event, cfg=self._cfg),
             name=f"after-turn-{type(contribution).__name__}-{session_id}")
 
@@ -201,10 +197,10 @@ class SessionEvents:
     Used for state-change notifications (e.g. ``plan_updated``) that must not
     pollute the chat history or replay on reconnect.
     """
-    channel = session_channel(session_id)
-    await streaming_manager.broadcast(channel, event)
+    channel = streaming.session_channel(session_id)
+    await streaming.streaming_manager.broadcast(channel, event)
 
-  async def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:
+  async def _get_or_init_aggregator(self, session_id: str) -> message_aggregator.MessageAggregator:
     """Return the live aggregator for *session_id*, lazy-initialized from disk.
 
     On first use after server start, the aggregator catches up to the current
@@ -228,7 +224,7 @@ class SessionEvents:
       return aggregator
     while True:
       epoch = self._aggregator_epoch.get(session_id, 0)
-      lock = lock_for(self._aggregator_init_locks, session_id)
+      lock = locks.lock_for(self._aggregator_init_locks, session_id)
       async with lock:
         # A concurrent first event for the same session may have finished the
         # init while this caller waited on the lock.
@@ -246,7 +242,7 @@ class SessionEvents:
     """Load the init corpus off the event loop: the events and the aggregator's index offset."""
     return self.load_chat_events_sync(session_id), self.chat_events.read_archive_offset_sync(session_id)
 
-  async def _init_live_aggregator(self, session_id: str, epoch: int) -> MessageAggregator | None:
+  async def _init_live_aggregator(self, session_id: str, epoch: int) -> message_aggregator.MessageAggregator | None:
     """Build and catch up the live aggregator; None when a drop won mid-init.
 
     Live-file events are fed in `_AGGREGATOR_INIT_SLICE_EVENTS` slices with a
@@ -262,16 +258,16 @@ class SessionEvents:
     # and the init runs on server threads, so the disable spans the whole init.
     # The parse's dicts stay referenced by the events cache and the feed's
     # discards refcount-clear, so no collect rides the re-enable.
-    with gc_off(collect=False):
+    with gc_control.gc_off(collect=False):
       return await self._catch_up_aggregator(session_id, epoch)
 
-  async def _catch_up_aggregator(self, session_id: str, epoch: int) -> MessageAggregator | None:
+  async def _catch_up_aggregator(self, session_id: str, epoch: int) -> message_aggregator.MessageAggregator | None:
     """Catch up one aggregator to the on-disk corpus; called under the init's gc boundary."""
     # Live file only holds events from index archive_offset onward; seed the
     # aggregator's offset so the deltas it emits carry the same GLOBAL
     # event_index that persist_and_broadcast stamps on the raw event.
     events, archive_offset = await asyncio.to_thread(self._load_aggregator_init_inputs, session_id)
-    aggregator = MessageAggregator(event_index_offset=archive_offset, emit_stream_deltas=False)
+    aggregator = message_aggregator.MessageAggregator(event_index_offset=archive_offset, emit_stream_deltas=False)
     start = 0
     while start < len(events):
       end = min(start + _AGGREGATOR_INIT_SLICE_EVENTS, len(events))
@@ -306,7 +302,7 @@ class SessionEvents:
     """
     return self.chat_events.load_chat_events_tail(session_id, limit)
 
-  def get_chat_event_count_sync(self, session_id: str, session_meta: SessionMetadata | None = None) -> int:
+  def get_chat_event_count_sync(self, session_id: str, session_meta: models.SessionMetadata | None = None) -> int:
     """Return the current global chat event count without parsing event payloads.
 
     See ``src/runtime/chat_events.py`` for the count's index-space contract.
@@ -320,7 +316,7 @@ class SessionEvents:
     """
     return self.chat_events.load_chat_events_range(session_id, start, end)
 
-  def get_message_projection(self, session_id: str) -> MessageProjection | None:
+  def get_message_projection(self, session_id: str) -> message_projection.MessageProjection | None:
     """Return the memoized message-list projection for *session_id*.
 
     Lazily builds from ``events_to_view(load_chat_events_sync(session_id))``
@@ -339,7 +335,7 @@ class SessionEvents:
     if cached is None or len(live) < cached.event_count:
       # A shrink means the live file was rewritten; the append-incremental
       # advance cannot roll state back, so only this path pays a full build.
-      cached = MessageProjection(list(live))
+      cached = message_projection.MessageProjection(list(live))
     else:
       # Swapping one reference into the cache is atomic, and published
       # projections are immutable: concurrent advances race on copies and a
@@ -348,7 +344,7 @@ class SessionEvents:
     self._projection_cache.store(session_id, cached)
     return cached
 
-  def projection_memo_hit(self, session_id: str) -> MessageProjection | None:
+  def projection_memo_hit(self, session_id: str) -> message_projection.MessageProjection | None:
     """Return the memoized projection when the getter's fast path provably applies, else None.
 
     Pure memory — a dict read, a cache peek, one len compare — so callers can
@@ -373,7 +369,7 @@ class SessionEvents:
     self._aggregator_init_locks.pop(session_id, None)
     self._aggregator_epoch[session_id] = self._aggregator_epoch.get(session_id, 0) + 1
     self._projection_cache.drop(session_id)
-    for contribution in sidebar_contributions():
+    for contribution in sidebar_contributions.sidebar_contributions():
       contribution.drop_runtime_state(session_id)
 
 
@@ -385,5 +381,5 @@ def events() -> SessionEvents:
   """The process-wide session events block."""
   global _events
   if _events is None:
-    _events = SessionEvents(get_config(), session_store.store())
+    _events = SessionEvents(config.get_config(), session_store.store())
   return _events

@@ -1590,7 +1590,7 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 # imports the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
 # events-side import updates this one string. src.runtime.autonamer and src.runtime.worker import
 # the same singleton, so their routes reach the same attribute.
-BROADCAST_PATCH_TARGET = "src.runtime.session_events.streaming_manager.broadcast"
+BROADCAST_PATCH_TARGET = "src.runtime.streaming.streaming_manager.broadcast"
 
 # Import-path patch target for consumer tests that stub fresh metadata reads.
 # master_cc_queue reads the process store through session_store.store() at call time.

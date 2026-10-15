@@ -441,7 +441,7 @@ async def test_persisted_master_done_fires_both_deliver_tasks(
                  new=mock.AsyncMock(return_value=True)) as slack_deliver,
       mock.patch("src.features.discord.discord_listener.deliver_done", new=mock.AsyncMock(return_value=True)) as
       discord_deliver,
-      mock.patch("src.runtime.session_events.create_logged_task", side_effect=conftest.make_task_spawner(tasks)),
+      mock.patch("src.infra.tasks.create_logged_task", side_effect=conftest.make_task_spawner(tasks)),
       mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
   ):
     await session_blocks.events.persist_and_broadcast(meta.id, done)

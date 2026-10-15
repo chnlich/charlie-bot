@@ -388,7 +388,8 @@ def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path)
   """The CLI's default ledger resolves per call from the config's charliebot home."""
   import src.features.usage.usage_ledger as ledger_module
 
-  monkeypatch.setattr(ledger_module, "get_config", lambda: SimpleNamespace(charliebot_home=tmp_path / "home"))
+  monkeypatch.setattr(
+      ledger_module, "config", SimpleNamespace(get_config=lambda: SimpleNamespace(charliebot_home=tmp_path / "home")))
   assert default_ledger_path() == tmp_path / "home" / "usage" / "ledger.sqlite3"
 
 

@@ -1,11 +1,10 @@
 """Cron task models: one cron.d file body is a ``ScheduledTaskConfig``, a failed file a ``ScheduledTaskError``."""
 
-from typing import Any, Literal
+from typing import Literal
 
 import pydantic
 
 from src.infra import config
-from src.runtime.hooks import scheduled_handlers
 
 # The API request model TaskCreate (src/features/cron/api.py) inherits this default through
 # ScheduledTaskFields; the web UI re-pins the value in literals (the cron-timezone input's
@@ -84,31 +83,16 @@ class ScheduledTaskConfig(ScheduledTaskFields):
 
   prompt: str | None = None
   handler: str | None = None
-  # An instance of scheduled_handlers.loop_model(), the model that the package owning the
-  # loop action registered; the validator below builds it from the file's `loop:` mapping.
-  loop: Any | None = None
   # Ordered worker chain: each step is one scheduled_step Run on the firing's
   # leaf, launched after the previous one's durable success, and the parent is
   # woken once at the end (src/features/cron/cron_sequence.py).
   steps: list[StepConfig] | None = None
 
-  @pydantic.field_validator('loop', mode='before')
-  @classmethod
-  def validate_loop_section(cls, value: Any) -> Any:
-    """Validate the `loop:` mapping against the registered loop model."""
-    if value is None:
-      return None
-    try:
-      model = scheduled_handlers.loop_model()
-    except LookupError as e:
-      raise ValueError("no package registered a loop section") from e
-    return model.model_validate(value)
-
   @pydantic.model_validator(mode='after')
   def check_sources_and_mode(self) -> ScheduledTaskConfig:
-    sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
+    sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler)])
     if sources != 1:
-      raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+      raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', or 'handler'")
     if self.mode is not None and not self.session_id:
       raise ValueError("'mode' requires 'session_id' (mode selects how a bound task fires)")
     if self.mode == 'master':
@@ -117,8 +101,8 @@ class ScheduledTaskConfig(ScheduledTaskFields):
       # with no message at all.
       if not self.prompt:
         raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
-      if self.steps is not None or self.handler or self.loop:
-        raise ValueError("mode 'master' forbids 'steps', 'handler', and 'loop'; the manager wake is a prompt")
+      if self.steps is not None or self.handler:
+        raise ValueError("mode 'master' forbids 'steps' and 'handler'; the manager wake is a prompt")
     if self.steps is not None and not self.steps:
       raise ValueError("steps must be a non-empty list")
     if self.steps:

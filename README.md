@@ -23,18 +23,16 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 - Memory store: labeled entries with topic/audience scoping, queried mid-session via `charliebot memory`
 - Skills system: repo-shared (`skills/`) plus host-specific skills
-- YAML backlog with status tracking and auto-commit
 
 ### Web UI
 
 - Streaming chat over WebSockets
 - Sessions sidebar with groups, filters, and search; star / archive / fork sessions
-- Worker (thread), plan, and backlog panels
+- Worker (thread) and plan panels
 - HTML artifact viewer with line-anchored comments
 - GitHub-style diff viewer with diff comments
 - Perfetto and NCU trace viewers
 - Built-in web terminal (tmux)
-- LaTeX panel
 - Voice input with local speech transcription (sherpa-onnx Qwen3-ASR)
 - Usage panels: external provider quotas and per-session context usage
 - File browser (`/absolute_filepath/`) and file uploads
@@ -110,7 +108,6 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `tests/` — pytest suite; `tests/test_package_structure.py` fails on an import that crosses the `src` packages against their directions
 - `configs/` — example config and repo-default cron tasks
 - `docs/` — supplementary documentation and assets
-- `backlog/` — YAML backlog
 
 ## License
 

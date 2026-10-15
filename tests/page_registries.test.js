@@ -156,32 +156,6 @@ function tabLayouts(tabs) {
   return tabs.map(({id, showsChat, fullScreenOnMobile, keepOnSessionSwitch}) => ({id, showsChat, fullScreenOnMobile, keepOnSessionSwitch}));
 }
 
-test('the latex package registers its tab and its proposed-edit event', () => {
-  const {tabs, handlers} = loadPackageScripts('latex', ['latex-panel.js']);
-
-  assert.deepEqual(tabLayouts(tabs), [{id: 'chat-tex', showsChat: true, fullScreenOnMobile: true, keepOnSessionSwitch: true}]);
-  assert.deepEqual([...handlers.keys()], ['tex_edit_proposed']);
-});
-
-test('the backlog package registers its tab and reloads its list on the first show after a session switch', () => {
-  const fetched = [];
-  const {tabs, listeners} = loadPackageScripts('backlog', ['backlog-panel.js'], {
-    fetch: (url) => {
-      fetched.push(url);
-      return new Promise(() => {});
-    },
-  });
-  const [backlogTab] = tabs;
-
-  backlogTab.onShow();
-  backlogTab.onShow();
-  listeners.get('charliebot:session-switched')();
-  backlogTab.onShow();
-
-  assert.deepEqual(tabLayouts(tabs), [{id: 'chat-backlog', showsChat: true, fullScreenOnMobile: true, keepOnSessionSwitch: true}]);
-  assert.deepEqual(fetched, ['/api/backlog/repos', '/api/backlog/repos']);
-});
-
 test('the terminal package registers its tab', () => {
   const {tabs} = loadPackageScripts(
       'terminal', ['terminal_b64.js', 'terminal_clipboard.js', 'terminal_mount.js', 'terminal_panel.js']);

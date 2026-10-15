@@ -123,10 +123,10 @@ VFKSPAWN_C = pathlib.Path("src/runtime/agent_process/_vfkspawn.c")
 # Stack frames and code positions inside an error message: the same error on
 # both sides must compare equal, so its location does not register.
 LINE_COL = re.compile(r":\d+:\d+")
-# Query stamps that differ between any two loads or commits: the TeX panel's
-# /api/latex/pdf?t=<millis>, and the ?v=<commit>-<date>-<hash> that every static
-# asset URL (so every stack frame) carries.
-CACHE_BUSTER = re.compile(r"([?&][tv])=[^\s&:)\"'\\]+")
+# Query stamps that differ between any two loads or commits: the
+# ?v=<commit>-<date>-<hash> that every static asset URL (so every stack frame)
+# carries.
+CACHE_BUSTER = re.compile(r"([?&]v)=[^\s&:)\"'\\]+")
 
 # Placeholder rules: each entry names one node whose own text changes between
 # two loads of the same tree, with the reason; outline_lines rewrites the
@@ -519,7 +519,7 @@ async def capture_width(
     clicked = await evaluate(
         cdp, session_id, f"(function () {{ const button = document.getElementById({json.dumps(button_id)});"
         " if (!button) return false; button.click(); return true; })()")
-    # Let the tab's own refresh (backlog, plans, terminal) fetch and paint.
+    # Let the tab's own refresh (plans, terminal) fetch and paint.
     await asyncio.sleep(1.5)
     if clicked:
       views[view] = await snap(cdp, session_id, side, mark, parent_of)

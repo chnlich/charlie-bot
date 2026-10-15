@@ -288,7 +288,6 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 |---------|------------|
 | Improve loop | `features/improve/improve_command.py` |
 | Spawner + review | `runtime/spawner.py` |
-| Backlog state machine | `features/backlog/backlog_loop.py` |
 | Scheduler | `features/cron/scheduler.py` |
 | Delayed triggers | `runtime/triggers.py` |
 | Sessions | `runtime/session_events.py` and the other `runtime/session_*.py` blocks |

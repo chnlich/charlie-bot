@@ -12,9 +12,9 @@ stable task-tree node:
   Runs with ``sequence_ref=(cron_steps, owner_ref=<firing>, position=<i>)``;
   the chain advances on a step's success and stops on its failure, exactly as
   the legacy steps controller did, and ONE report is delivered at the sequence
-  boundary. Single-prompt and loop firings ride the ordinary work-Run delivery
-  chain: a successful run auto-closes the leaf and reports to the manager
-  through the common completion owner.
+  boundary. Single-prompt firings ride the ordinary work-Run delivery chain:
+  a successful run auto-closes the leaf and reports to the manager through the
+  common completion owner.
 
 Boundaries this module pins:
 
@@ -26,9 +26,9 @@ Boundaries this module pins:
   and leaf creation) binding fails the fire VISIBLY and never silently creates
   a replacement session.
 - The bound node's backend resolution, per-step backends, allow_failure,
-  stop-on-failure, prompt_file reloading, loop actions, overlap behavior and
-  system handler mode are preserved; the handler mode keeps its inline system
-  execution and only borrows the bound node for its bookkeeping.
+  stop-on-failure, prompt_file reloading, overlap behavior and system handler
+  mode are preserved; the handler mode keeps its inline system execution and
+  only borrows the bound node for its bookkeeping.
 - Recovery consumes the same pure functions: the durable step Runs and their
   sequence positions decide the frontier, so a repeated pass never duplicates
   a step, a report, or a close.
@@ -232,17 +232,12 @@ async def ensure_firing_leaf(
     tree: task_sessions.TaskTreeManager,
     firing: str,
     goal: str,
-    task_type: models.TaskType | None = None,
 ) -> models.SessionMetadata:
   """Create (or re-admit) the ONE worker leaf this firing owns.
 
   Stable by (parent, firing): a replayed fire returns the original leaf. The
-  leaf carries no task_type unless the caller passes one (the loop backlog's
-  implement action delegates implementation, so its leaf is an implement task
-  whose delivery rides the review + repository landing policy with the repo's
-  default branch as the merge target) — the scheduled work's applicable
-  evidence policy is otherwise the run's own result truth reported to the
-  manager.
+  scheduled work's applicable evidence policy is the run's own result truth
+  reported to the manager.
 
   The parent is the bound manager task, which owns the firing's worker leaf.
   """
@@ -258,7 +253,6 @@ async def ensure_firing_leaf(
           goal=goal,
           repo_path=task_cfg.repo,
           base_branch=None,
-          task_type=task_type,
       ),
       name=f"{task_cfg.name} · {firing}",
       backend=None,

@@ -109,10 +109,6 @@ headless_chrome_bin: ""
 ui:
   home_services: []
 
-# Backlog: the repos the backlog panel lists.
-backlog:
-  repos: []
-
 # Slack: the summon entrypoint's user allow-list.
 slack:
   allowed_user_ids: []

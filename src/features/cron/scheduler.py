@@ -425,24 +425,7 @@ class Scheduler:
         self._handles[task_cfg.name] = handle
       return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
 
-    prompt, action = await self._resolve_bound_prompt(task_cfg, meta)
-    if prompt is None:
-      # The loop decided nothing to do: the occurrence is consumed by that
-      # decision (the no-op loop semantics, preserved — the checkpoint still
-      # advances, or the same occurrence would refire every tick).
-      await self._record_bound_fire(meta, task_cfg)
-      return {"session_id": meta.id, "firing": firing, "skipped": action}
-    # The loop's implement action is implementation delegation: its leaf
-    # carries the implement task type, so the review + landing delivery policy
-    # applies with the repo's default branch as the merge target. Every other
-    # action stays a type-less leaf whose success closes it.
-    leaf = await self._bound_leaf(
-        task_cfg,
-        meta,
-        tree,
-        firing,
-        goal=prompt,
-        task_type=models.TaskType.IMPLEMENT if action == "implement" else None)
+    leaf = await self._bound_leaf(task_cfg, meta, tree, firing, goal=task_cfg.prompt or "")
     await cron_sequence.register_leaf_run(
         tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
     await self._record_bound_fire(meta, task_cfg)
@@ -474,27 +457,6 @@ class Scheduler:
   ) -> tuple[str, str | None]:
     return cron_sequence.resolved_backend_model(task_cfg, tree, task_cfg.backend)
 
-  async def _resolve_bound_prompt(
-      self,
-      task_cfg: cron_config.ScheduledTaskConfig,
-      meta: models.SessionMetadata,
-  ) -> tuple[str | None, str | None]:
-    """The fire's prompt: the loop action's decision, or the task prompt verbatim.
-
-    Returns (prompt, action); prompt None means the registered loop action decided
-    nothing to do (noop/stale_reset) and the fire is recorded as such.
-    """
-    if task_cfg.loop:
-      action_type, prompt = await scheduled_handlers.loop_action()(
-          name=task_cfg.name, repo=task_cfg.repo, loop=task_cfg.loop)
-      if prompt is None:
-        await task_execution.task_manager().update_slot_fields(
-            meta.id, "cron", last_run_status=models.LastRunStatus.SUCCESS)
-        log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
-        return None, action_type
-      return prompt, action_type
-    return task_cfg.prompt or "", None
-
   async def _bound_leaf(
       self,
       task_cfg: cron_config.ScheduledTaskConfig,
@@ -503,9 +465,8 @@ class Scheduler:
       firing: str,
       *,
       goal: str,
-      task_type: models.TaskType | None = None,
   ):
-    return await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, firing, goal, task_type=task_type)
+    return await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, firing, goal)
 
   async def _launch_bound_round(
       self,

@@ -1,13 +1,13 @@
+import html
 import re
-from html import unescape
 
 import conftest
 
 from src.features.artifacts import artifact_check, plan_diff
 
 
-def _parse(html: str) -> artifact_check._Element:
-  root = artifact_check._parse_dom(html)
+def _parse(page: str) -> artifact_check._Element:
+  root = artifact_check._parse_dom(page)
   return next((node for node in artifact_check._descendants(root) if node.tag == "body"), root)
 
 
@@ -35,48 +35,48 @@ def _commentable(node: artifact_check._Element) -> bool:
   return node.tag in {"pre", "td", "th"} and bool(_text(node).strip())
 
 
-def _commentable_blocks(html: str) -> list[artifact_check._Element]:
-  return [node for node in artifact_check._descendants(_parse(html)) if _commentable(node)]
+def _commentable_blocks(page: str) -> list[artifact_check._Element]:
+  return [node for node in artifact_check._descendants(_parse(page)) if _commentable(node)]
 
 
 def _quote(node: artifact_check._Element) -> str:
   return re.sub(r"\s+", " ", _text(node)).strip()[:400]
 
 
-def _document_text(html: str) -> str:
-  return _text(_parse(html))
+def _document_text(page: str) -> str:
+  return _text(_parse(page))
 
 
-def _marks(html: str) -> list[tuple[str, re.Match[str]]]:
+def _marks(page: str) -> list[tuple[str, re.Match[str]]]:
   marks: list[tuple[str, re.Match[str]]] = []
-  ignored = [match.span() for match in re.finditer(r"<style\b[^>]*>.*?</style\s*>", html, re.IGNORECASE | re.DOTALL)]
+  ignored = [match.span() for match in re.finditer(r"<style\b[^>]*>.*?</style\s*>", page, re.IGNORECASE | re.DOTALL)]
 
   def in_ignored(match: re.Match[str]) -> bool:
     return any(start <= match.start() < end for start, end in ignored)
 
   marks.extend(
       ("ins", match)
-      for match in re.finditer(r"<ins\b[^>]*\bcbd-ins\b[^>]*>.*?</ins\s*>", html, re.IGNORECASE | re.DOTALL)
+      for match in re.finditer(r"<ins\b[^>]*\bcbd-ins\b[^>]*>.*?</ins\s*>", page, re.IGNORECASE | re.DOTALL)
       if not in_ignored(match))
   marks.extend(
       ("del", match) for match in re.finditer(
-          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-del\b)(?=[^>]*\bdata-del\s*=\s*\"[^\"]*\")[^>]*>.*?</\1\s*>", html,
+          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-del\b)(?=[^>]*\bdata-del\s*=\s*\"[^\"]*\")[^>]*>.*?</\1\s*>", page,
           re.IGNORECASE | re.DOTALL) if not in_ignored(match))
   marks.extend(
       ("new", match)
       for match in re.finditer(
-          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-new\b)[^>]*>.*?</\1\s*>", html, re.IGNORECASE | re.DOTALL)
+          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-new\b)[^>]*>.*?</\1\s*>", page, re.IGNORECASE | re.DOTALL)
       if not in_ignored(match))
   return sorted(marks, key=lambda item: item[1].start())
 
 
-def _remove_mark(html: str, mark: tuple[str, re.Match[str]]) -> str:
+def _remove_mark(page: str, mark: tuple[str, re.Match[str]]) -> str:
   match = mark[1]
-  return html[:match.start()] + html[match.end():]
+  return page[:match.start()] + page[match.end():]
 
 
-def _restore(html: str) -> str:
-  result = html
+def _restore(page: str) -> str:
+  result = page
   while True:
     marks = _marks(result)
     if not marks:
@@ -86,7 +86,7 @@ def _restore(html: str) -> str:
     if kind == "del":
       data = re.search(r'\bdata-del\s*=\s*"([^"]*)"', match.group(0), re.IGNORECASE)
       assert data is not None
-      replacement = unescape(data.group(1))
+      replacement = html.unescape(data.group(1))
     result = result[:match.start()] + replacement + result[match.end():]
 
 

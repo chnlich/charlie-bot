@@ -14,10 +14,10 @@ import asyncio
 import contextlib
 import io
 import os
+import pathlib
 import signal
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 import uvicorn
@@ -170,7 +170,7 @@ async def _unserved_app(scope: dict, receive: object, send: object) -> None:
 
 
 @pytest.mark.parametrize("direction", ["read", "write"])
-def test_pipe_close_never_kills_a_reused_fd(tmp_path: Path, direction: str) -> None:
+def test_pipe_close_never_kills_a_reused_fd(tmp_path: pathlib.Path, direction: str) -> None:
   """The service event loop closes a subprocess pipe fd exactly once.
 
   uvloop frees the fd in libuv and then calls the file object's close() a second

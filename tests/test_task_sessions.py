@@ -8,7 +8,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.features.slack.metadata import SlackOrigin
+from src.features.slack import metadata
 from src.infra import metadata_slots, models
 from src.runtime import run_token, task_errors, task_sessions
 
@@ -110,7 +110,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   assert await session_blocks.store.get_session("agent-picked-id") is None
   assert (await mgr.create_task(request_id="by-agent", caller=agent, **create)).id != "agent-picked-id"
 
-  origin = SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
+  origin = metadata.SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
   by_server = await mgr.create_task(
       request_id="by-server",
       session_id="server-picked-id",

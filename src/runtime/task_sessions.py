@@ -26,24 +26,21 @@ Guarantees the delivery stage pins down:
 """
 
 import asyncio
+import dataclasses
+import datetime
 import os
+import pathlib
 import re
 import shutil
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from src.infra import config, json_utils, metadata_slots, ndjson, tasks
 from src.infra import event_types as ET
-from src.infra import metadata_slots
-from src.infra.config import CharlieBotConfig
-from src.infra.event_types import is_real_user_message
-from src.infra.json_utils import atomic_write_text
 from src.infra.models import (
     AncestorRef,
     EventRef,
@@ -57,11 +54,13 @@ from src.infra.models import (
     utc_now,
     validate_session_metadata,
 )
-from src.infra.ndjson import append_ndjson
-from src.infra.tasks import create_logged_task
 from src.runtime import (
+    chat_events,
+    control_events,
     control_sink,
+    run_token,
     session_anchors,
+    session_dispatch,
     session_events,
     session_fork,
     session_lifecycle,
@@ -69,20 +68,12 @@ from src.runtime import (
     session_sidebar,
     session_store,
     session_successor,
+    takeoff_gate,
+    task_completion,
+    task_errors,
+    thinking_state,
 )
-from src.runtime.chat_events import chat_events_path
-from src.runtime.control_events import (
-    ACTOR_AGENT,
-    ACTOR_SYSTEM,
-    ACTOR_USER,
-    build_control_event,
-    build_task_created_event,
-    sha256_hex,
-    stable_close_event_id,
-    stable_task_id,
-)
-from src.runtime.hooks.sequence_controllers import binding_for, sequence_controllers
-from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
+from src.runtime.hooks import sequence_controllers
 from src.runtime.runs import (
     DATA_DIR_NAME,
     METADATA_NAME,
@@ -91,19 +82,6 @@ from src.runtime.runs import (
     read_host_boot_time,
     stop_requested_in_events,
 )
-from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
-from src.runtime.session_store import TRANSIENT_METADATA_FIELDS
-from src.runtime.takeoff_gate import check_takeoff_gate_for_task, is_verify_exempt
-from src.runtime.task_completion import TaskCompletionManager
-from src.runtime.task_errors import (
-    ANCESTOR_HOP_LIMIT,
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskInvalidError,
-    TaskNotFoundError,
-    require_operator,
-)
-from src.runtime.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
 
 if TYPE_CHECKING:
   from src.infra.models import RunRecord
@@ -129,7 +107,7 @@ def closed_ancestors_blocker(closed_ids: list[str]) -> str:
   return f"closed ancestor task(s): {', '.join(closed_ids)}"
 
 
-@dataclass
+@dataclasses.dataclass
 class _TaskFacts:
   """The derived facts one session's full event history folds to.
 
@@ -140,14 +118,14 @@ class _TaskFacts:
   events (archived segments included).
   """
   task_state: str = "open"
-  run_outcomes: dict[str, str] = field(default_factory=dict)
+  run_outcomes: dict[str, str] = dataclasses.field(default_factory=dict)
   # Each run's first run_finished fact's absolute log position (the durable
   # order; RunRecord carries no creation timestamp).
-  run_finish_positions: dict[str, int] = field(default_factory=dict)
+  run_finish_positions: dict[str, int] = dataclasses.field(default_factory=dict)
   # Input ids a successful run_finished acknowledged.
-  confirmed_input_ids: set[str] = field(default_factory=set)
+  confirmed_input_ids: set[str] = dataclasses.field(default_factory=set)
   # Input events inside the valid boundary (pre confirmation/claim filtering).
-  input_candidates: list[dict] = field(default_factory=list)
+  input_candidates: list[dict] = dataclasses.field(default_factory=list)
   # Old pending input ids the task_imported boundary explicitly admits.
   imported_pending_ids: frozenset[str] = frozenset()
   # Absolute history position of the latest input boundary fact (creation,
@@ -157,13 +135,13 @@ class _TaskFacts:
   # creation/import/reopen, False from a close (a closed node admits nothing;
   # arrivals during closure are history only).
   boundary_open: bool = True
-  close_events: list[dict] = field(default_factory=list)
-  close_requests: list[dict] = field(default_factory=list)
+  close_events: list[dict] = dataclasses.field(default_factory=list)
+  close_requests: list[dict] = dataclasses.field(default_factory=list)
   # (child_session_id, child_event_id) pairs this session's log has received.
-  delivered_reports: set[tuple[str, str]] = field(default_factory=set)
+  delivered_reports: set[tuple[str, str]] = dataclasses.field(default_factory=set)
   # Every event id in the folded history (identity dedup for reports/inputs).
-  event_ids: set[str] = field(default_factory=set)
-  events_by_id: dict[str, dict] = field(default_factory=dict)
+  event_ids: set[str] = dataclasses.field(default_factory=set)
+  events_by_id: dict[str, dict] = dataclasses.field(default_factory=dict)
   covered: int = 0
 
 
@@ -273,14 +251,14 @@ def _admits_input_type(event: dict) -> bool:
   echo is tool output no round can ever confirm, not a message.
   """
   etype = event.get("type")
-  if etype not in INPUT_EVENT_TYPES:
+  if etype not in session_dispatch.INPUT_EVENT_TYPES:
     return False
   if etype == ET.USER:
-    return is_real_user_message(event)
+    return ET.is_real_user_message(event)
   return True
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class TaskTreeActivity:
   """One task-tree node's derived activity: the sidebar's truth for the node.
 
@@ -310,7 +288,7 @@ def _run_outcomes(events: list[dict]) -> dict[str, str]:
 def derive_task_tree_activity(
     runs: list[RunRecord],
     events: list[dict],
-    host_boot_time: Callable[[], datetime],
+    host_boot_time: Callable[[], datetime.datetime],
     task_open: bool,
     outcomes: dict[str, str] | None = None,
 ) -> TaskTreeActivity:
@@ -337,7 +315,7 @@ def derive_task_tree_activity(
     outcomes = _run_outcomes(events)
   verdicts: list[str] = []
   has_running = False
-  boot: datetime | None = None
+  boot: datetime.datetime | None = None
   for run in runs:
     if outcomes.get(run.id) is not None:
       continue  # a terminal fact of any outcome is a settled Run, not activity
@@ -371,7 +349,7 @@ class TaskTreeManager:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       events: session_events.SessionEvents,
       sidebar: session_sidebar.SessionSidebar,
@@ -399,8 +377,8 @@ class TaskTreeManager:
     # The notification is the tree owner's because only the tree index knows
     # which nodes are workers.
     self.runs.set_liveness_notifier(self._note_run_liveness)
-    self.dispatch = TaskInputDispatcher(self)
-    self.completion = TaskCompletionManager(self)
+    self.dispatch = session_dispatch.TaskInputDispatcher(self)
+    self.completion = task_completion.TaskCompletionManager(self)
     # The pending-input blockers of one session ([] when none): the structural
     # guard seam the input dispatcher answers.
     self.pending_input_blockers: Callable[[str], list[str]] | None = self.dispatch.pending_input_blockers
@@ -444,12 +422,12 @@ class TaskTreeManager:
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property
-  def prompt_bodies_dir(self) -> Path:
+  def prompt_bodies_dir(self) -> pathlib.Path:
     """The immutable local-rule body store (prompt_bodies/<sha256>.md) in the selected home."""
     return self._prompt_bodies_dir
 
   @property
-  def cfg(self) -> CharlieBotConfig:
+  def cfg(self) -> config.CharlieBotConfig:
     """The config this tree was built over (display-label resolution reads it)."""
     return self._cfg
 
@@ -462,7 +440,7 @@ class TaskTreeManager:
 
   def _require_task(self, meta: SessionMetadata | None, session_id: str) -> SessionMetadata:
     if meta is None:
-      raise TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
     return meta
 
   async def load_task_meta(self, session_id: str) -> SessionMetadata:
@@ -501,7 +479,8 @@ class TaskTreeManager:
     # check (_fresh_cached_meta), so the thread build reads a file only for a
     # session no authoritative entry covers (cold cache, out-of-band create).
     cached_metas = self.session_store.fresh_cached_metas()
-    task = create_logged_task(asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
+    task = tasks.create_logged_task(
+        asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
     self._index_build_task = task
     self._index_build_generation = generation
     try:
@@ -589,13 +568,13 @@ class TaskTreeManager:
           f"|{facts.task_state}|{self._archived_of_pass(index, meta, memo, pass_facts)}")
     # The placeholder revision above is an input only to the shared-memo pass,
     # which never reads it; the real one lands before the index is published.
-    index.revision = sha256_hex("\n".join(sorted(structural)))
+    index.revision = control_events.sha256_hex("\n".join(sorted(structural)))
     return index
 
   def _index_meta(self, index: _TreeIndex, session_id: str) -> SessionMetadata:
     meta = index.metas.get(session_id)
     if meta is None:
-      raise TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
     return meta
 
   def _children_of(self, index: _TreeIndex, session_id: str | None) -> list[str]:
@@ -609,12 +588,12 @@ class TaskTreeManager:
     while stack:
       sid = stack.pop()
       if sid in seen:
-        raise TaskConflictError([f"task relation cycle through {sid}"])
+        raise task_errors.TaskConflictError([f"task relation cycle through {sid}"])
       seen.add(sid)
       out.append(sid)
       stack.extend(self._children_of(index, sid))
-      if len(out) > ANCESTOR_HOP_LIMIT:
-        raise TaskConflictError([f"subtree of {session_id} exceeds {ANCESTOR_HOP_LIMIT} nodes"])
+      if len(out) > task_errors.ANCESTOR_HOP_LIMIT:
+        raise task_errors.TaskConflictError([f"subtree of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} nodes"])
     return out
 
   def _ancestors(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
@@ -624,12 +603,13 @@ class TaskTreeManager:
     current = self._index_meta(index, session_id)
     while current.task_parent_id is not None:
       if current.task_parent_id in seen:
-        raise TaskConflictError([f"task relation cycle through {current.task_parent_id}"])
+        raise task_errors.TaskConflictError([f"task relation cycle through {current.task_parent_id}"])
       seen.add(current.task_parent_id)
       current = self._index_meta(index, current.task_parent_id)
       chain.append(current)
-      if len(chain) > ANCESTOR_HOP_LIMIT:
-        raise TaskConflictError([f"ancestor chain of {session_id} exceeds {ANCESTOR_HOP_LIMIT} hops"])
+      if len(chain) > task_errors.ANCESTOR_HOP_LIMIT:
+        raise task_errors.TaskConflictError(
+            [f"ancestor chain of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} hops"])
     return chain
 
   async def _note_run_liveness(self, session_id: str, run: RunRecord, launched: bool) -> None:
@@ -646,13 +626,13 @@ class TaskTreeManager:
     launch or finish that preceded them.
     """
     if not launched:
-      clear_run_busy(session_id, run.id)
+      thinking_state.clear_run_busy(session_id, run.id)
       return
-    note_run_backend(session_id, run.backend)
+    thinking_state.note_run_backend(session_id, run.backend)
     index = await self._get_index()
     meta = index.metas.get(session_id)
     if meta is not None and meta.profile == "worker":
-      mark_run_busy(session_id, run.id, since=run.started_at)
+      thinking_state.mark_run_busy(session_id, run.id, since=run.started_at)
 
   async def _require_open_ancestry(self, session_id: str) -> list[SessionMetadata]:
     index = await self._get_index()
@@ -818,7 +798,7 @@ class TaskTreeManager:
     archived_count = self._archived_event_count(session_id, live)
     probed = False
 
-    def host_boot_time() -> datetime:
+    def host_boot_time() -> datetime.datetime:
       nonlocal probed
       probed = True
       return self._host_boot_time()
@@ -842,7 +822,7 @@ class TaskTreeManager:
     activity = self.activity_of(session_id)
     return (activity.has_running_tasks, activity.work_state)
 
-  def _host_boot_time(self) -> datetime:
+  def _host_boot_time(self) -> datetime.datetime:
     return read_host_boot_time()
 
   def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
@@ -918,8 +898,8 @@ class TaskTreeManager:
       if known is not None:
         inherited = known
         break
-      if current in seen or len(chain) > ANCESTOR_HOP_LIMIT:
-        raise TaskConflictError([f"task relation cycle through {current}"])
+      if current in seen or len(chain) > task_errors.ANCESTOR_HOP_LIMIT:
+        raise task_errors.TaskConflictError([f"task relation cycle through {current}"])
       seen.add(current)
       meta = self._index_meta(index, current)
       chain.append((current, meta))
@@ -1018,7 +998,7 @@ class TaskTreeManager:
     # Re-read through the index so the detail and the tree agree on one projection.
     indexed = index.metas.get(session_id)
     if indexed is None:
-      raise TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
     ancestors = self._ancestors(index, session_id)
     payload = indexed.model_dump(mode="json")
     payload.update(
@@ -1047,7 +1027,7 @@ class TaskTreeManager:
     async with self.control_lock:
       meta = await self.load_meta(session_id)
       if meta is None:
-        raise TaskNotFoundError(f"session {session_id} not found")
+        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
       metadata_slots.copy_fields(old, meta, owner, names=fields)
       meta.updated_at = utc_now()
       await self._save_meta(meta)
@@ -1078,12 +1058,12 @@ class TaskTreeManager:
     with one rename, so a crash leaves either no node or a complete one.
     """
     if not request_id:
-      raise TaskInvalidError(TASK_CREATE_REQUEST_ID_REQUIRED)
+      raise task_errors.TaskInvalidError(TASK_CREATE_REQUEST_ID_REQUIRED)
     if profile not in ("manager", "worker"):
-      raise TaskInvalidError("profile must be 'manager' or 'worker'")
-    if session_id is not None and _create_actor_for(caller) == ACTOR_AGENT:
-      raise TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
-    task_id = session_id or stable_task_id(task_parent_id, request_id)
+      raise task_errors.TaskInvalidError("profile must be 'manager' or 'worker'")
+    if session_id is not None and _create_actor_for(caller) == control_events.ACTOR_AGENT:
+      raise task_errors.TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
+    task_id = session_id or control_events.stable_task_id(task_parent_id, request_id)
     async with self.control_lock:
       existing = await self.load_meta(task_id)
       if existing is not None:
@@ -1095,26 +1075,26 @@ class TaskTreeManager:
         # implementation delegation) into an ungated manager create, nor
         # borrow the read-only verify exemption for a node created as
         # implementation.
-        if isinstance(caller, CallerIdentity) and not caller.is_operator:
+        if isinstance(caller, run_token.CallerIdentity) and not caller.is_operator:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
           await self._authorize_agent_creation(caller, existing.profile, existing.task, task_parent_id, parent_meta)
         return existing
       parent_meta: SessionMetadata | None = None
       # Caller scope first: an agent's 403 must not depend on the target's shape.
-      if isinstance(caller, CallerIdentity) and not caller.is_operator:
+      if isinstance(caller, run_token.CallerIdentity) and not caller.is_operator:
         if task_parent_id is not None:
           parent_meta = await self.load_meta(task_parent_id)
         await self._authorize_agent_creation(caller, profile, task, task_parent_id, parent_meta)
       if task_parent_id is not None:
         parent_meta = await self.load_meta(task_parent_id)
         if parent_meta is None:
-          raise TaskNotFoundError(f"task {task_parent_id} not found")
+          raise task_errors.TaskNotFoundError(f"task {task_parent_id} not found")
         if parent_meta.profile == "worker":
-          raise TaskInvalidError(f"parent task {task_parent_id} is not a manager")
+          raise task_errors.TaskInvalidError(f"parent task {task_parent_id} is not a manager")
         index = await self._get_index()
         parent_state = self.task_state(task_parent_id)
         if parent_state != "open":
-          raise TaskConflictError([f"parent task {task_parent_id} is {parent_state}"])
+          raise task_errors.TaskConflictError([f"parent task {task_parent_id} is {parent_state}"])
         await self._require_open_ancestry_from_index(index, task_parent_id)
       await self._publish_new_task(
           task_id=task_id,
@@ -1205,12 +1185,12 @@ class TaskTreeManager:
     unrelated root, a foreign parent, a worker parent — is
     outside an agent's scope.
     """
-    assert isinstance(caller, CallerIdentity)
+    assert isinstance(caller, run_token.CallerIdentity)
     claims = caller.claims
     assert claims is not None
     if (task_parent_id != claims.session_id or parent_meta is None or parent_meta.profile != "manager"):
-      raise TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
-    if profile == "worker" and not is_verify_exempt(task):
+      raise task_errors.TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
+    if profile == "worker" and not takeoff_gate.is_verify_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
       # the nearest-real-user-ancestor gate (takeoff_gate) decides. The
       # read-only verify delegation needs no window, on the same task-type
@@ -1222,7 +1202,7 @@ class TaskTreeManager:
     chain = self._ancestors(index, session_id)
     closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
     if closed:
-      raise TaskConflictError([closed_ancestors_blocker(closed)])
+      raise task_errors.TaskConflictError([closed_ancestors_blocker(closed)])
     return chain
 
   async def _publish_new_task(
@@ -1260,18 +1240,18 @@ class TaskTreeManager:
       # The creation fact is written into the temp node itself, so metadata and
       # the event log publish together with the one rename; post-publication
       # facts go through the sink.
-      created_event = build_task_created_event(
+      created_event = control_events.build_task_created_event(
           actor=actor,
           task_id=task_id,
           request_id=request_id,
           task_parent_id=task_parent_id,
           task_spec_hash=canonical_task_spec_hash(task),
       )
-      await append_ndjson(chat_events_path(temp_dir), created_event)
+      await ndjson.append_ndjson(chat_events.chat_events_path(temp_dir), created_event)
       meta.created_by_event = EventRef(session_id=task_id, event_id=str(created_event["id"]))
       await asyncio.to_thread(
-          atomic_write_text, temp_dir / METADATA_NAME,
-          meta.model_dump_json(indent=2, exclude=TRANSIENT_METADATA_FIELDS))
+          json_utils.atomic_write_text, temp_dir / METADATA_NAME,
+          meta.model_dump_json(indent=2, exclude=session_store.TRANSIENT_METADATA_FIELDS))
       try:
         os.replace(temp_dir, final_dir)
       except OSError:
@@ -1291,7 +1271,7 @@ class TaskTreeManager:
       return None
     return validate_session_metadata(path.read_text(encoding="utf-8"), str(path))
 
-  async def check_task_authorization(self, session_id: str, now: datetime | None = None) -> str:
+  async def check_task_authorization(self, session_id: str, now: datetime.datetime | None = None) -> str:
     """The nearest-real-user-ancestor gate for a v2 task caller (takeoff_gate).
 
     Every ancestor must be open and the calling node a manager; the first node
@@ -1312,7 +1292,7 @@ class TaskTreeManager:
         return "open"
       return self.task_state(sid)
 
-    return check_takeoff_gate_for_task(
+    return takeoff_gate.check_takeoff_gate_for_task(
         session_id,
         load_events=self.events.load_events,
         task_meta_of=meta_of,
@@ -1329,11 +1309,11 @@ class TaskTreeManager:
     bumping the listing revision and invalidating the tree index.
     """
     if not values:
-      raise TaskInvalidError("update_slot_fields requires at least one field")
+      raise task_errors.TaskInvalidError("update_slot_fields requires at least one field")
     async with self.control_lock:
       meta = await self.load_meta(session_id)
       if meta is None:
-        raise TaskNotFoundError(f"session {session_id} not found")
+        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
       metadata_slots.set_fields(meta, owner, **values)
       await self.session_store.save_metadata(meta)
       self._invalidate_index()
@@ -1351,10 +1331,10 @@ class TaskTreeManager:
       meta = await self.load_task_meta(session_id)
       state = self.task_state(session_id)
       if state != "open":
-        raise TaskConflictError([f"task {session_id} is {state}; only open tasks accept retries"])
+        raise task_errors.TaskConflictError([f"task {session_id} is {state}; only open tasks accept retries"])
       original = await self.runs.get_run(session_id, original_run_id)
       if original is None:
-        raise TaskNotFoundError(f"run {original_run_id} not found in session {session_id}")
+        raise task_errors.TaskNotFoundError(f"run {original_run_id} not found in session {session_id}")
       retry_fields: dict = {}
       if original.kind == "manager_turn":
         # A manager-round retry reruns that round's own batch: the retry Run
@@ -1389,7 +1369,7 @@ class TaskTreeManager:
 
   async def patch_task(self, session_id: str, req: PatchSessionTaskRequest, *, caller: object) -> SessionMetadata:
     """Apply one v2 metadata mutation with its structural guards (operator-only)."""
-    require_operator(caller, "task metadata mutations require operator credentials")
+    task_errors.require_operator(caller, "task metadata mutations require operator credentials")
     async with self.control_lock:
       index = await self._get_index()
       meta = await self.load_task_meta(session_id)
@@ -1402,7 +1382,7 @@ class TaskTreeManager:
       if "task_parent_id" in fs and req.task_parent_id != meta.task_parent_id:
         blockers.extend(await self._reparent_blockers(session_id, req.task_parent_id))
       if blockers:
-        raise TaskConflictError(sorted(set(blockers)))
+        raise task_errors.TaskConflictError(sorted(set(blockers)))
       if "name" in fs and req.name is not None:
         meta.name = req.name
       if "profile" in fs and req.profile is not None:
@@ -1510,9 +1490,9 @@ class TaskTreeManager:
       return  # no rule was ever set on this scope: nothing to land
     await self.events.append(
         session_id,
-        build_control_event(
+        control_events.build_control_event(
             ET.PROMPT_CHANGED,
-            actor=ACTOR_USER,
+            actor=control_events.ACTOR_USER,
             source_session_id=session_id,
             scope=scope,
             previous_ref=last.get("new_ref") if last is not None else None,
@@ -1521,7 +1501,7 @@ class TaskTreeManager:
 
   def _store_prompt_body(self, body: str) -> str:
     """Write the rule body once under its SHA-256 fingerprint; returns the fingerprint ref."""
-    ref = sha256_hex(body)
+    ref = control_events.sha256_hex(body)
     path = self._prompt_bodies_dir / f"{ref}.md"
     if path.exists():
       existing = path.read_text(encoding="utf-8")
@@ -1529,7 +1509,7 @@ class TaskTreeManager:
         raise RuntimeError(f"prompt body store corrupted at {path}: fingerprint content mismatch")
       return ref
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, body)
+    json_utils.atomic_write_text(path, body)
     return ref
 
   # ------------------------------------------------------------------
@@ -1570,7 +1550,7 @@ class TaskTreeManager:
     if after is not None:
       after_revision, after_key = after
       if after_revision != index.revision:
-        raise TaskConflictError(["task tree changed during pagination; refresh and re-paginate"])
+        raise task_errors.TaskConflictError(["task tree changed during pagination; refresh and re-paginate"])
       rows_all = [r for r in rows_all if (index.metas[r.id].created_at, r.id) > after_key]
     page = rows_all[:limit]
     next_cursor = None
@@ -1637,13 +1617,13 @@ class TaskTreeManager:
     Operator scope only for v2 nodes; the empty/unreferenced rule is
     re-evaluated inside the lock immediately before the delete.
     """
-    require_operator(caller, "permanent delete requires operator credentials")
+    task_errors.require_operator(caller, "permanent delete requires operator credentials")
     async with self.control_lock:
       index = await self._get_index(force=True)
       self._index_meta(index, session_id)
       blockers = self._deletion_blockers_locked(index, session_id)
       if blockers:
-        raise TaskConflictError(sorted(set(blockers)))
+        raise task_errors.TaskConflictError(sorted(set(blockers)))
       result = await self._lifecycle.delete_session_permanently(session_id)
     if result:
       self._invalidate_index()
@@ -1667,11 +1647,11 @@ class TaskTreeManager:
     """One node's archive-format close fact: outcome ``archived``, ``report_to``
     null — an archive reports to nobody and wakes nobody. ``archived_with``
     names the node the user archived when this fact closes a descendant."""
-    return build_control_event(
+    return control_events.build_control_event(
         ET.TASK_CLOSED,
-        actor=ACTOR_USER,
+        actor=control_events.ACTOR_USER,
         source_session_id=session_id,
-        event_id=stable_close_event_id(session_id, request_id),
+        event_id=control_events.stable_close_event_id(session_id, request_id),
         request_id=request_id,
         outcome="archived",
         summary=summary,
@@ -1716,7 +1696,7 @@ class TaskTreeManager:
       try:
         blockers = self._elone_blockers(source)
         if blockers:
-          raise TaskConflictError(blockers)
+          raise task_errors.TaskConflictError(blockers)
         completed.append("validated the source")
         await self._redeliver_subtree_close_reports(source.id)
         completed.append("redelivered the subtree's undelivered close reports")
@@ -1797,7 +1777,7 @@ class TaskTreeManager:
     lands on the child.
     """
     moved = False
-    for controller in sequence_controllers():
+    for controller in sequence_controllers.sequence_controllers():
       if await controller.move_bindings(source.id, new_meta.id):
         moved = True
     if not moved:
@@ -1821,7 +1801,7 @@ class TaskTreeManager:
     the ids this call archived, in parent-before-child order; an already-archived target returns [].
     """
 
-    require_operator(caller, "archiving a task requires operator credentials")
+    task_errors.require_operator(caller, "archiving a task requires operator credentials")
     tree = self
     async with tree.control_lock:
       index = await tree._get_index(force=True)
@@ -1840,7 +1820,7 @@ class TaskTreeManager:
           if blocker is not None:
             blocked.append(f"{sid}: {blocker}")
       if blocked:
-        raise TaskConflictError(sorted(blocked))
+        raise task_errors.TaskConflictError(sorted(blocked))
       request_id = f"archive-{uuid.uuid4()}"
       archived: list[str] = []
       # Parent before child: the fold reads each node's own facts, so the
@@ -1859,7 +1839,7 @@ class TaskTreeManager:
       tree._invalidate_index()
       # The archived nodes' sequence bindings run their archive duties.
       for sid in archived:
-        binding = binding_for(sid)
+        binding = sequence_controllers.binding_for(sid)
         if binding is not None:
           await binding.on_archive()
       return archived
@@ -1877,11 +1857,11 @@ def _create_actor_for(caller: object) -> str:
   passes the "system" sentinel (provenance the server owns — never a payload
   bit a run-token caller can forge); anything else is an agent.
   """
-  if isinstance(caller, CallerIdentity) and caller.is_operator:
-    return ACTOR_USER
+  if isinstance(caller, run_token.CallerIdentity) and caller.is_operator:
+    return control_events.ACTOR_USER
   if caller == "system":
-    return ACTOR_SYSTEM
-  return ACTOR_AGENT
+    return control_events.ACTOR_SYSTEM
+  return control_events.ACTOR_AGENT
 
 
 def canonical_task_spec_text(task: TaskSpec | None) -> str | None:
@@ -1894,10 +1874,10 @@ def canonical_task_spec_text(task: TaskSpec | None) -> str | None:
 def canonical_task_spec_hash(task: TaskSpec | None) -> str | None:
   """The SHA-256 fingerprint of the canonical task-spec body (None without a spec)."""
   text = canonical_task_spec_text(task)
-  return sha256_hex(text) if text is not None else None
+  return control_events.sha256_hex(text) if text is not None else None
 
 
-@dataclass
+@dataclasses.dataclass
 class _TreeIndex:
   """The rebuildable parent/child index over one sessions directory."""
   metas: dict[str, SessionMetadata]
@@ -1928,17 +1908,17 @@ def jsonable_row(row: SessionRow) -> dict:
   return row.model_dump()
 
 
-def _encode_tree_cursor(revision: str, key: tuple[datetime, str]) -> str:
+def _encode_tree_cursor(revision: str, key: tuple[datetime.datetime, str]) -> str:
   """Revision-bound keyset cursor: base64url JSON of (revision, created_at, id)."""
   payload = {"r": revision, "a": key[0].isoformat(), "i": key[1]}
-  return b64url_encode(orjson.dumps(payload))
+  return run_token.b64url_encode(orjson.dumps(payload))
 
 
-def _decode_tree_cursor(cursor: str) -> tuple[str, tuple[datetime, str]]:
+def _decode_tree_cursor(cursor: str) -> tuple[str, tuple[datetime.datetime, str]]:
   """Decode one tree cursor; a malformed value fails loud (API: 400)."""
   try:
-    payload = orjson.loads(b64url_decode(cursor))
-    key = (ensure_utc(datetime.fromisoformat(payload["a"])), payload["i"])
+    payload = orjson.loads(run_token.b64url_decode(cursor))
+    key = (ensure_utc(datetime.datetime.fromisoformat(payload["a"])), payload["i"])
     return payload["r"], key
   except (ValueError, KeyError, TypeError) as e:
-    raise TaskInvalidError(f"malformed tree page cursor: {cursor!r}") from e
+    raise task_errors.TaskInvalidError(f"malformed tree page cursor: {cursor!r}") from e

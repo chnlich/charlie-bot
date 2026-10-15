@@ -5,7 +5,6 @@ import json
 import pathlib
 
 import conftest
-import pydantic
 import pytest
 import yaml
 

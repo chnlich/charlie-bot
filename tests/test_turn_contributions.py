@@ -22,7 +22,6 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     ScriptedRelayBackend,
-    SessionBlocks,
     build_master_cc_cfg,
     fresh_master_state,
     install_scripted_backends,
@@ -39,7 +38,7 @@ from src.features.slack.metadata import SlackOrigin
 from src.features.slack.turn_contribution import SlackTurnContribution
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, SessionMetadata
-from src.runtime import master_cc_run, master_cc_state, message_aggregator, session_events, streaming
+from src.runtime import master_cc_run, master_cc_state, message_aggregator, streaming
 from src.runtime.agent_process.base import make_result_event
 from src.runtime.hooks import turn_contributions
 from src.runtime.task_prompts import build_segments

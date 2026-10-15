@@ -18,14 +18,14 @@ from unittest.mock import MagicMock, patch
 import conftest
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  OPERATOR,
-  ROOT,
-  make_plan_setup,
-  plan_page_html,
-  write_plan_artifact,
-  write_stub_chrome,
+    BUILD_BACKEND_PATCH_TARGET,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    OPERATOR,
+    ROOT,
+    make_plan_setup,
+    plan_page_html,
+    write_plan_artifact,
+    write_stub_chrome,
 )
 from fastapi import HTTPException
 

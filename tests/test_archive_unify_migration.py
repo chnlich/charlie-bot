@@ -6,26 +6,26 @@ shape, backed by the real routers over the real managers."""
 
 from __future__ import annotations
 
+import datetime
 import json
+import pathlib
 import sys
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import OPERATOR, build_env, create_task, stub_credentials
 
 import scripts.archive_unify_migration as migration
 from src.infra import event_types as ET
-from src.infra.models import RunRecord
+from src.infra import models
 
 KEY = "op-secret"
 
 
 @pytest.fixture()
-def script_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def script_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """A real (cfg, session_blocks, tree) home with the script's IO seams pointed at it."""
-  cfg, session_blocks, tree = build_env(tmp_path)
-  stub_credentials({"charliebot": {"access_key": KEY}})
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  conftest.stub_credentials({"charliebot": {"access_key": KEY}})
   monkeypatch.setattr(migration, "_sessions_dir", lambda: cfg.sessions_dir)
   monkeypatch.setattr(migration, "_access_key", lambda: KEY)
   return cfg, session_blocks, tree
@@ -37,14 +37,14 @@ class RouterDouble:
   /api/internal/version answers the preflight's reachability check."""
 
   def __init__(self, cfg, session_blocks, tree) -> None:
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+    import fastapi
+    from fastapi import testclient
 
     from src.infra import config
+    from src.runtime.api import deps
     from src.runtime.api import sessions as sessions_api
-    from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
 
-    app = FastAPI()
+    app = fastapi.FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
 
     @app.get("/api/internal/version")
@@ -53,10 +53,10 @@ class RouterDouble:
 
     app.dependency_overrides[config.get_config] = lambda: cfg
     app.dependency_overrides[config.configured_access_key] = lambda: KEY
-    app.dependency_overrides[get_session_store] = lambda: session_blocks.store
-    app.dependency_overrides[get_task_manager] = lambda: tree
-    app.dependency_overrides[get_run_store] = lambda: tree.runs
-    self.client = TestClient(app)
+    app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+    app.dependency_overrides[deps.get_task_manager] = lambda: tree
+    app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
+    self.client = testclient.TestClient(app)
 
   def __call__(self, base: str, key: str, method: str, path: str, payload: dict | None = None):
     headers = {"Authorization": f"Bearer {key}"}
@@ -79,12 +79,12 @@ def hide_like_the_old_server(cfg, session_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
-    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   cfg, session_blocks, tree = script_env
-  root = await create_task(tree, parent=None, request_id="root")
-  mid = await create_task(tree, parent=root.id, request_id="mid")
-  closed = await create_task(tree, parent=root.id, request_id="closed")
-  await tree.archive_subtree(closed.id, caller=OPERATOR)  # not open: never listed
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  mid = await conftest.create_task(tree, parent=root.id, request_id="mid")
+  closed = await conftest.create_task(tree, parent=root.id, request_id="closed")
+  await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)  # not open: never listed
   hide_like_the_old_server(cfg, mid.id)
 
   out = tmp_path / "snapshot.json"
@@ -99,16 +99,18 @@ async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
 
 @pytest.mark.asyncio
 async def test_snapshot_folds_segments_before_the_live_file(
-    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """A close fact the rotation moved into a weekly segment and a reopen fact
   in the live file fold chronologically: the reopen (the last lifecycle fact)
   wins, so the hidden node reads open and the snapshot lists it."""
   cfg, session_blocks, tree = script_env
-  node = await create_task(tree, parent=None, request_id="seg")
-  await tree.archive_subtree(node.id, caller=OPERATOR)  # the close fact, live file
+  node = await conftest.create_task(tree, parent=None, request_id="seg")
+  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)  # the close fact, live file
   # The real segment writer: the rotation moves the closed-period events into
   # data/archives/chat_events.<iso-year>-W<week>.jsonl.
-  await session_blocks.lifecycle.recycle_history_before(node.id, datetime.now(UTC) + timedelta(seconds=1))
+  await session_blocks.lifecycle.recycle_history_before(
+      node.id,
+      datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=1))
   segments = sorted((cfg.sessions_dir / node.id / "data" / "archives").glob("chat_events.*.jsonl"))
   assert segments, "the rotation wrote no segment"
   segment_types = [
@@ -129,10 +131,10 @@ async def test_snapshot_folds_segments_before_the_live_file(
 
 @pytest.mark.asyncio
 async def test_apply_archives_verifies_and_reports_mismatches(
-    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   cfg, session_blocks, tree = script_env
-  root = await create_task(tree, parent=None, request_id="root")
-  mid = await create_task(tree, parent=root.id, request_id="mid")
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  mid = await conftest.create_task(tree, parent=root.id, request_id="mid")
   source = tmp_path / "snapshot.json"
   source.write_text(
       json.dumps(
@@ -173,18 +175,18 @@ async def test_apply_archives_verifies_and_reports_mismatches(
 @pytest.mark.asyncio
 async def test_rollback_unarchives_every_archived_task_node(script_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = script_env
-  root = await create_task(tree, parent=None, request_id="root")
-  mid = await create_task(tree, parent=root.id, request_id="mid")
-  keep = await create_task(tree, parent=None, request_id="keep")
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  mid = await conftest.create_task(tree, parent=root.id, request_id="mid")
+  keep = await conftest.create_task(tree, parent=None, request_id="keep")
   # A lone archived root with no archived descendant in the tree rows below
   # it: the walk's own root page must name it (its only child completed before
   # the archive, so nothing under it is an "archived" row).
-  lone = await create_task(tree, parent=None, request_id="lone")
-  done = await create_task(tree, parent=lone.id, request_id="done", profile="worker")
-  await tree.runs.register_run(RunRecord(id="run-done", session_id=done.id, kind="work"))
+  lone = await conftest.create_task(tree, parent=None, request_id="lone")
+  done = await conftest.create_task(tree, parent=lone.id, request_id="done", profile="worker")
+  await tree.runs.register_run(models.RunRecord(id="run-done", session_id=done.id, kind="work"))
   await tree.dispatch.finish_run(done.id, "run-done", outcome="success")
-  await tree.archive_subtree(lone.id, caller=OPERATOR)
-  await tree.archive_subtree(root.id, caller=OPERATOR)
+  await tree.archive_subtree(lone.id, caller=conftest.OPERATOR)
+  await tree.archive_subtree(root.id, caller=conftest.OPERATOR)
   assert tree.task_state(mid.id) == "archived"
   assert tree.task_state(done.id) == "completed"
 
@@ -229,7 +231,7 @@ def test_importing_the_script_module_never_imports_the_retired_field_model() -> 
               "import scripts.archive_unify_migration; "
               "assert 'src.infra.models' not in sys.modules, 'the script imported the model module'")
       ],
-      cwd=Path(__file__).resolve().parents[1],
+      cwd=pathlib.Path(__file__).resolve().parents[1],
       capture_output=True,
       text=True,
       timeout=60)

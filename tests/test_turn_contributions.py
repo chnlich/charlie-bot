@@ -407,7 +407,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
           tasks.append(task)
           return task
 
-        session_events.create_logged_task = schedule
+        session_events.tasks.create_logged_task = schedule
         meta = await conftest.create_root_session(manager, CreateSessionRequest(name="scratch"))
         await manager.events.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE}})
         await asyncio.gather(*tasks)
@@ -483,7 +483,7 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
   with (
       patch("src.features.slack.slack_listener.deliver_done", new=AsyncMock(return_value=True)) as slack,
       patch("src.features.discord.discord_listener.deliver_done", new=AsyncMock(return_value=True)) as discord,
-      patch("src.runtime.session_events.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch("src.infra.tasks.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await mgr.events.persist_and_broadcast(meta.id, done)
@@ -551,7 +551,7 @@ async def test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn(
   let_go_backend = _LetGoBackend(edited)
   install_scripted_backends(monkeypatch, [let_go_backend], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.runtime.session_events.create_logged_task", make_task_spawner(tasks))
+  monkeypatch.setattr("src.infra.tasks.create_logged_task", make_task_spawner(tasks))
   recorder = _RecordingContribution()
   real = turn_contributions.turn_contributions()
   monkeypatch.setattr(turn_contributions, "turn_contributions", lambda: (*real, recorder))

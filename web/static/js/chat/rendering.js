@@ -619,8 +619,9 @@ function renderDelegateMetadata(msg, sessionId) {
   var rows = [];
   if (invocation) {
     var taskType = displayMetadataValue(invocation.task_type || msg.task_type, '(unknown)');
-    var repoEmpty = taskType === 'verify' ? '(none)' : '(unknown)';
-    var baseEmpty = taskType === 'verify' ? '(none)' : '(unknown)';
+    var repoLess = taskType === 'verify' || taskType === 'cold-read';
+    var repoEmpty = repoLess ? '(none)' : '(unknown)';
+    var baseEmpty = repoLess ? '(none)' : '(unknown)';
     rows = [
       ['task type', taskType],
       ['thread id', displayMetadataValue(msg.thread_id, '(unknown)')],

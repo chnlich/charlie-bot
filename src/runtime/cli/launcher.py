@@ -8,8 +8,7 @@ exit file holds the command's exit code, so a wake that sees the PID gone can
 read the exit code out of the exit file. The wrapper leads its own process
 group on both paths (``start_new_session`` locally, ``setsid`` remotely), which
 makes its PID the group id the rejection path kills. ``schedule-trigger --cmd``
-and ``artifact check --background`` start through here; the fire-time exit
-reads live in ``src/runtime/triggers.py``.
+starts through here; the fire-time exit reads live in ``src/runtime/triggers.py``.
 """
 
 from __future__ import annotations

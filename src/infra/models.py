@@ -105,6 +105,7 @@ class TaskType(StrEnum):
   QUICK_EDIT = "quick-edit"
   SCRIPT_RUN = "script-run"
   VERIFY = "verify"
+  COLD_READ = "cold-read"
 
 
 class LastRunStatus(StrEnum):
@@ -141,6 +142,16 @@ WorkState = Literal["idle", "running", "waiting"]
 RunOutcomeValue = Literal["success", "failed", "interrupted"]
 
 
+class ColdReadSpec(BaseModel):
+  # The cold-read task's persisted payload: the page to read, its genre, and
+  # the trigger message (question 6 of the seven, filled verbatim).
+  model_config = ConfigDict(extra="forbid")
+
+  page_path: str
+  genre: str
+  trigger: str
+
+
 class TaskSpec(BaseModel):
   # The task record a v2 session carries: goal, acceptance, and execution bounds.
   model_config = ConfigDict(extra="forbid")
@@ -152,6 +163,16 @@ class TaskSpec(BaseModel):
   base_branch: str | None = None
   task_type: TaskType | None = None
   keep_worktree: bool = False
+  cold_read: ColdReadSpec | None = None
+
+  @model_validator(mode="after")
+  def _cold_read_matches_task_type(self) -> Self:
+    if self.task_type == TaskType.COLD_READ:
+      if self.cold_read is None:
+        raise ValueError("a cold-read task requires cold_read")
+    elif self.cold_read is not None:
+      raise ValueError(f"a {self.task_type} task rejects cold_read")
+    return self
 
 
 class EventRef(BaseModel):
@@ -265,7 +286,7 @@ class LocalPid(BaseModel):
   """A process on the trigger-server host, watched via pidfd.
 
   ``exit_file``/``log`` come from a launcher-started wrapper (schedule-trigger
-  --cmd, artifact check --background): the fire-time label of a finished target
+  --cmd): the fire-time label of a finished target
   reads its exit code out of ``exit_file`` and names ``log``. Both None keeps
   the bare-pid label, which is also what trigger files written before these
   fields existed load as.
@@ -682,6 +703,7 @@ class DelegateRequest(BaseModel):
   keep_worktree: bool = False
   delegate_invocation: DelegateInvocationMetadata | None = None
   request_id: str | None = None
+  cold_read: ColdReadSpec | None = None
 
 
 class ScheduleTriggerRequest(BaseModel):

@@ -89,6 +89,28 @@ test('task_delegated verify metadata renders explicit none for repo and base', (
   assert.match(html, /base[\s\S]*\(none\)/);
 });
 
+test('task_delegated cold-read metadata renders explicit none for repo and base', () => {
+  const context = loadChatRendering();
+
+  const html = context.renderMessage({
+    role: 'task_delegated',
+    thread_id: 'cold-read-thread',
+    delegate_invocation: {
+      task_type: 'cold-read',
+      repo_path: null,
+      base_branch: null,
+      task_spec_file: null,
+      reviewer_context_file: null,
+      keep_worktree: false,
+      backend: null,
+    },
+  }, 'session-a');
+
+  assert.match(html, /cold-read/);
+  assert.match(html, /repo[\s\S]*\(none\)/);
+  assert.match(html, /base[\s\S]*\(none\)/);
+});
+
 test('a new-style delegation links its child session and shows the live state line', () => {
   const context = loadChatRendering();
 

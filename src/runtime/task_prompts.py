@@ -49,6 +49,15 @@ session id stays stable.
 ``char_count`` is the measured length of the joined instruction text actually
 handed to the backend: ``"\\n\\n".join(block.text for block in blocks)`` — the
 same join the adapters deliver, never an estimate or a token count.
+
+A cold-read run (task type ``cold-read``) is the one exception to the block
+contract above: its managed instructions are the cold-reader instructions of
+``prompts/cold_read.md`` alone — one block, with none of the ordered blocks
+(no common rules, no host supplement, no model overlay), no turn contributions
+(the ``WORKER_KINDS`` memory-audience mapping never runs for it: a cold-read
+run selects no memory), and no subtree or node rules. Its ``prompt_hash``
+covers exactly that one block's text and provenance; the page text and the
+seven questions ride the launch text, which the hash excludes by construction.
 """
 
 from __future__ import annotations
@@ -61,17 +70,18 @@ from src.infra import constants
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import RunRecord, SessionMetadata, TaskSpec, TaskType
+from src.runtime import cold_read
 from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import turn_contributions
 from src.runtime.review import review_git_venue, review_log_pointer, review_numbered_steps, review_rules_text
 from src.runtime.spawner_prompt import (
-    WORKFLOW_PROMPT_SECTION,
-    load_marker_sections,
-    load_worker_prompt_sections,
-    substitute_tokens,
-    verify_contract_tokens,
-    workflow_rule_section_ids,
-    worktree_binding_tokens,
+  WORKFLOW_PROMPT_SECTION,
+  load_marker_sections,
+  load_worker_prompt_sections,
+  substitute_tokens,
+  verify_contract_tokens,
+  workflow_rule_section_ids,
+  worktree_binding_tokens,
 )
 
 log = LazyStructlogLogger()
@@ -89,7 +99,9 @@ DELIVERY_FULL = "full"
 # workflow, no PM body, no project/PM rules — those retired with the old role).
 MANAGER_KINDS = frozenset({"manager_turn"})
 # Run kinds mapped to the worker audience for memory selection: workers,
-# reviewers, verify, iteration and scheduled-step execution.
+# reviewers, verify, iteration and scheduled-step execution. A cold-read run
+# maps to no audience: its assembly returns before the turn contributions, so
+# no memory selection ever runs for it.
 WORKER_KINDS = frozenset({"work", "review", "iteration", "scheduled_step"})
 
 # Bounded rebuild loop for the launch-time coherence recheck: three passes
@@ -445,6 +457,12 @@ def build_segments(
   if kind in MANAGER_KINDS:
     segments = _manager_rule_segments(cfg, meta)
   elif kind in WORKER_KINDS:
+    if prompt_task_type(meta.task) == TaskType.COLD_READ:
+      # The cold-read exception the module docstring states: the cold-reader
+      # instructions alone, and none of the overlay, contribution, or local
+      # rule segments below.
+      system_prompt, _questions = cold_read.load_texts(cfg.charlie_bot_repo)
+      return [RuleSegment(text=system_prompt, sources=(PromptSource(SCOPE_BASE, "prompts/cold_read.md"),))], None
     segments = _worker_kind_rule_segments(cfg, meta, kind, prompt_task_type(meta.task))
   else:
     raise TaskPromptError(f"unknown run kind {kind!r}: no managed instruction contract")

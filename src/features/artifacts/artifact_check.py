@@ -13,9 +13,10 @@ half of the genre's GRAMMAR; rules needing judgment stay with the reader and the
 line — never stopping at the first failure. Structure parsing uses the standard library's
 ``html.parser``; only ``page-height`` shells out to headless chrome, so every other
 assertion runs on a host without a renderer. ``run_probe`` sends the page text plus the
-cold-read seven questions to CharlieBot's preferred light backends (config backends.preference
-order) and returns the attempts, the answering backend, and its verbatim answer; every
-genre's delivery gate routes through it after the assertions pass.
+cold-read seven questions (``prompts/cold_read.md``, their only home) to CharlieBot's
+preferred light backends (config backends.preference order) and returns the attempts, the
+answering backend, and its verbatim answer; every genre's delivery gate routes through it
+after the assertions pass.
 
 The goal-length and page-height measurements (the goal budget, the page-height target, and
 the headless-chrome probe page) live here as the goal-budget / page-height assertions; the
@@ -29,6 +30,7 @@ off the page carries a content name at first use.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import html
 import pathlib
 import re
@@ -40,6 +42,7 @@ from typing import TYPE_CHECKING
 from src.features.artifacts import artifact_shared, plan_diff
 from src.features.artifacts.constants import ARTIFACT_GENRES
 from src.infra import constants, text_length
+from src.runtime import cold_read
 from src.runtime.hooks import backend_types
 
 if TYPE_CHECKING:
@@ -737,46 +740,32 @@ def run_assertions(genre: str, artifact: pathlib.Path, cfg: config.CharlieBotCon
 # Cold-read probe
 # ---------------------------------------------------------------------------
 
-_PROBE_SYSTEM_PROMPT = "You are a careful cold reader. Answer every question from the page alone."
-
-# The single canonical copy of the cold-read seven-question prompt. skills/file-server/SKILL.md's
-# Cold-Read Gate section points at this module instead of restating the text.
-_PROBE_QUESTIONS = """You are reading one HTML page cold: the page source is the piped input, and you have no
-context beyond the file itself. Answer seven questions, each in one or two sentences and in
-the page's own language: (1) Whose problem does this page describe, and what is the
-problem? (2) What is the page's conclusion, and what epistemic state does the page itself
-claim for it (confirmed, hypothesis, refuted, or a stated mix)? (3) What does the page ask
-of the reader, if anything? (4) In which numbered section did you first become clear on
-what the problem is? (5) Name up to five points you had to re-read to follow the page.
-(6) The chat message that triggered this page was: "<trigger message verbatim>".
-Does the page answer that message, every part of it?
-(7) Read as an engineer who knows the domain (general engineering and ML vocabulary) and
-not this project, and who wrote the trigger message in (6), so its terms are the reader's
-own. List each project term, coined term, opaque identifier, or person whose gloss is
-missing from the sentence of its first use or sits only in a separate list or table; a term
-the page quotes as an object of discussion is a mention and stands as quoted.
-Write none when there is none."""
-
 
 @dataclasses.dataclass
 class ProbeResult:
   """Cold-read probe outcome: one (backend id, ``ExceptionType: message``) per tried backend, then the
-  answering backend's id and its verbatim answer — both None when every backend failed."""
+  answering backend's id and its verbatim answer — both None when every backend failed — and the
+  sha256 of the page bytes the probe read."""
 
   attempts: list[tuple[str, str]]
   backend_id: str | None
   answer: str | None
+  page_sha256: str
 
 
 def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str) -> ProbeResult:
   """Send the page's full text plus the seven-question prompt to the preferred light backends.
 
-  Backends are tried in config backends.preference order (iter_light_backends); each failure is
-  recorded and the next backend is tried. Returns the answering backend's id and answer, or
-  a ProbeResult of attempts only when every backend failed.
+  The system prompt and the questions read from ``prompts/cold_read.md`` (their only home)
+  through :mod:`src.runtime.cold_read`. Backends are tried in config backends.preference
+  order (iter_light_backends); each failure is recorded and the next backend is tried.
+  Returns the answering backend's id and answer, or a ProbeResult of attempts only when
+  every backend failed.
   """
-  questions = _PROBE_QUESTIONS.replace("<trigger message verbatim>", trigger)
-  prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
+  system_prompt, questions = cold_read.load_texts(cfg.charlie_bot_repo)
+  page_bytes = artifact.read_bytes()
+  page_sha256 = hashlib.sha256(page_bytes).hexdigest()
+  prompt = cold_read.probe_input(page_bytes.decode("utf-8"), questions, trigger)
   # The autonamer import drags fastapi and the sessions stack (~250 ms of import) and asyncio another ~35 ms.
   import asyncio
 
@@ -790,9 +779,8 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
       # No cgroup_session_id: the artifact probe runs from the CLI with no
       # CharlieBot session home, so it cannot enter any session's cgroup.
       # timeout=None: a time limit would drop a slow answer and retry on the next backend.
-      answer = asyncio.run(
-          backend_types.build_backend(option, cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=None))
-      return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)
+      answer = asyncio.run(backend_types.build_backend(option, cfg).one_shot_text(prompt, system_prompt, timeout=None))
+      return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer, page_sha256=page_sha256)
     except Exception as e:
       attempts.append((option.id, f"{type(e).__name__}: {e}"))
-  return ProbeResult(attempts=attempts, backend_id=None, answer=None)
+  return ProbeResult(attempts=attempts, backend_id=None, answer=None, page_sha256=page_sha256)

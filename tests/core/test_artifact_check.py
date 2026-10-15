@@ -1,22 +1,16 @@
-"""Tests for src/features/artifacts/artifact_check.py and the ``charliebot artifact check`` CLI.
+"""Tests for src/features/artifacts/artifact_check.py, the ``charliebot artifact check`` CLI,
+and the cold-read task type end to end (delegate entry, run, report).
 
 The goal-length and page-height measurements moved here from src/features/artifacts/plans.py with their
 budgets unchanged; the DOM assertions are the new mechanical half of each genre's GRAMMAR.
 Renderer work and the probe's model call are doubled out — no headless chrome, no backend
-subprocess, no HTTP.
+subprocess, no HTTP; the cold-read runs execute on scripted backends.
 """
 
-import contextlib
 import hashlib
 import json
-import os
 import re
-import shlex
-import shutil
-import signal
-import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -24,21 +18,26 @@ from unittest.mock import MagicMock, patch
 import conftest
 import pytest
 from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    ROOT,
-    make_plan_setup,
-    plan_page_html,
-    write_plan_artifact,
-    write_stub_chrome,
+  BUILD_BACKEND_PATCH_TARGET,
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  OPERATOR,
+  ROOT,
+  make_plan_setup,
+  plan_page_html,
+  write_plan_artifact,
+  write_stub_chrome,
 )
+from fastapi import HTTPException
 
 from src.features.artifacts import artifact_check, artifact_shared
-from src.features.artifacts import cli as artifact_cli
 from src.features.artifacts.artifact_check import run_assertions
 from src.features.artifacts.cli import main as artifact_main
+from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.runtime.cli import launcher
+from src.infra.models import ColdReadSpec, DelegateRequest, TaskSpec, TaskType
+from src.runtime import cold_read, spawner_backends, task_errors
+from src.runtime.api import internal
+from tests import test_task_execution
 
 
 def _genre_doc(genre: str, body: str) -> str:
@@ -166,6 +165,7 @@ def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespa
       backends=SimpleNamespace(preference=["alpha", "beta"]),
       get_backend_option=options.get,
       sessions_dir=tmp_path,
+      charlie_bot_repo=ROOT,
   )
   return cfg, options
 
@@ -201,8 +201,10 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   lines = capsys.readouterr().out.splitlines()
-  assert lines[-5:] == [
-      "--- cold read ---",
+  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+  assert lines[-6:] == [
+      f"cold read of {artifact}",
+      f"page sha256 {digest}",
       "attempt alpha failed: RuntimeError: boom",
       "backend beta",
       "(1) The reader's problem.",
@@ -251,256 +253,439 @@ def test_cli_unknown_genre_is_usage_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI: charliebot artifact check --background
-#
-# The detached child is doubled out on every path: launch_local stand-ins either start a
-# real sleep 30 in a new session (payload pid, kill checks) or capture their arguments; the
-# child output itself runs in process below, against the stub backends. post_internal_api is
-# doubled too, so no test calls a server or registers a real trigger.
+# CLI: the cold read follows the session (manager delegates, worker foreground)
 # ---------------------------------------------------------------------------
 
-LAUNCH_LOCAL_PATCH_TARGET = "src.runtime.cli.launcher.launch_local"
 
-
-def _enter_via_unified_cli(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Stand in for src.app.main.main(): the unified entry records its module for subprocess re-entry."""
-  monkeypatch.setattr("src.runtime.cli.common._CLI_ENTRY_MODULE", "src.app.main")
-
-
-def _sleep_launch(tracked: list[subprocess.Popen]) -> Callable:
-  """launch_local stand-in starting a real sleep 30 in a new session."""
-
-  def launch(cmd: str, *, cwd: str, log_path: Path, exit_file: Path) -> launcher.Launch:
-    proc = subprocess.Popen(
-        ["sleep", "30"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True)
-    tracked.append(proc)
-    return launcher.Launch(pid=proc.pid, host=None, log=str(log_path), exit_file=str(exit_file))
-
-  return launch
-
-
-def _reap_spawned(tracked: list[subprocess.Popen]) -> None:
-  for proc in tracked:
-    if proc.poll() is None:
-      os.killpg(proc.pid, signal.SIGKILL)
-      proc.wait()
-
-
-def _clean_coldread_dir(session_id: str) -> None:
-  """Remove the real log directory the background path writes under /tmp for *session_id*."""
-  shutil.rmtree(Path("/tmp/charliebot-coldread") / session_id[:8], ignore_errors=True)
-
-
-def test_background_requires_trigger(tmp_path: Path) -> None:
+def test_background_flag_is_a_usage_error(tmp_path: Path) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
-  assert _run_cli([str(artifact), "--genre", "sitrep", "--background"]) == 2
+  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "t", "--background"]) == 2
 
 
-def test_background_refuses_assertions_only() -> None:
-  argv = ["page.html", "--genre", "sitrep", "--trigger", "t", "--background", "--assertions-only"]
-  assert _run_cli(argv) == 2
+def _write_session_metadata(cfg: SimpleNamespace, session_id: str, profile: str) -> None:
+  """Persist a session metadata.json holding just the profile the CLI's routing reads."""
+  meta_dir = cfg.sessions_dir / session_id
+  meta_dir.mkdir(parents=True)
+  (meta_dir / "metadata.json").write_text(json.dumps({"id": session_id, "name": "S", "profile": profile}))
 
 
-def test_background_with_a_failing_assertion_starts_no_process(
+def test_cli_in_a_manager_session_delegates_the_cold_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  broken = _sitrep_ok_doc().replace('<span class="n">5</span>', '<span class="n">7</span>')
-  artifact = _write(tmp_path, broken)
+  """The manager-session command POSTs the cold-read delegation and prints the started line."""
+  artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
+  session_id = "sess-manager-1"
+  _write_session_metadata(cfg, session_id, "manager")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-coldread-fail")
-  launch = MagicMock()
-  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
+  calls: list[dict] = []
+
+  def post(endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
+    calls.append({"endpoint": endpoint, "payload": payload})
+    return {
+        "session_id": "child-1",
+        "parent_session_id": session_id,
+        "run_id": "run-1",
+        "thread_id": "run-1",
+        "description": payload["description"],
+    }
+
+  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
+  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
+  (call,) = calls
+  assert call["endpoint"] == "/api/internal/delegate"
+  payload = call["payload"]
+  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+  assert payload["session_id"] == session_id
+  assert payload["task_type"] == "cold-read"
+  assert payload["cold_read"] == {"page_path": str(artifact), "genre": "sitrep", "trigger": "where are we?"}
+  assert "repo_path" not in payload and "base_branch" not in payload and "backend" not in payload
+  assert payload["request_id"].startswith(f"cold-read:{session_id}:{digest[:12]}:")
+  assert "cold read started: session child-1 run run-1" in capsys.readouterr().out
+
+
+def test_cli_in_a_manager_session_exits_1_when_the_server_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, _sitrep_ok_doc())
+  cfg, _options = _probe_cfg(tmp_path)
+  _write_session_metadata(cfg, "sess-manager-2", "manager")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-manager-2")
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+
+  def refusing_post(
+      endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
+    print(json.dumps({"error": "delegation blocked", "code": "server_error", "effect": "none"}), file=sys.stderr)
+    raise SystemExit(1)
+
+  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", refusing_post)
+  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 1
+  assert "delegation blocked" in capsys.readouterr().err
+
+
+def test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, _sitrep_ok_doc())
+  cfg, _options = _probe_cfg(tmp_path)
+  _write_session_metadata(cfg, "sess-worker-1", "worker")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-worker-1")
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  backends = {"alpha": _FakeBackend(answer="(1) answered.")}
+  _patch_backends(monkeypatch, backends)
   post = MagicMock()
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
 
-  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 1
-  assert "FAIL sections-numbered" in capsys.readouterr().out
-  launch.assert_not_called()
+  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
+  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+  assert capsys.readouterr().out.splitlines()[-4:] == [
+      f"cold read of {artifact}",
+      f"page sha256 {digest}",
+      "backend alpha",
+      "(1) answered.",
+  ]
   post.assert_not_called()
 
 
-def test_background_starts_the_cold_read_and_registers_its_wake(
+def test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """Passing assertions: the command returns at once (the sleep outlives it), one trigger
-  watches the detached pid with a one-hour max wait and a label holding the log path, and
-  the log's first line names the page and its sha256."""
+  """No identity: CHARLIEBOT_SESSION_ID absent and the cwd not a session directory."""
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  session_id = "sess-coldread-run"
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
-  _enter_via_unified_cli(monkeypatch)
-  spawned: list[subprocess.Popen] = []
-  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
-  calls: list[dict] = []
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", conftest.registering_post(cfg, session_id, calls))
-  try:
-    assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
-  finally:
-    _reap_spawned(spawned)
-    _clean_coldread_dir(session_id)
-  (proc,) = spawned
-  (call,) = calls
-  out = capsys.readouterr().out
-  payload = call["payload"]
-  log_path = Path(payload["message"].removeprefix("cold read: "))
-  assert call["endpoint"] == "/api/internal/schedule-trigger"
-  assert payload["session_id"] == session_id
-  assert payload["delay_seconds"] == 3600
-  assert payload["watch_targets"] == [
-      {
-          "kind": "local_pid",
-          "pid": proc.pid,
-          "exit_file": str(log_path.with_suffix(".exit")),
-          "log": str(log_path),
-      }
-  ]
-  assert len(payload["message"]) <= 200
-  assert f"cold read started: pid {proc.pid} log {log_path} trigger trig-1" in out
-  assert log_path.parent == Path("/tmp/charliebot-coldread") / session_id[:8]
-  assert log_path.name.startswith(f"{artifact.name}.")
-
-
-def test_background_log_first_line_names_the_page_and_its_sha256(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  artifact = _write(tmp_path, _sitrep_ok_doc())
-  cfg, _options = _probe_cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  session_id = "sess-coldread-log"
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
-  _enter_via_unified_cli(monkeypatch)
-  spawned: list[subprocess.Popen] = []
-  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
-  calls: list[dict] = []
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", conftest.registering_post(cfg, session_id, calls))
-  try:
-    assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
-    log_path = Path(calls[0]["payload"]["message"].removeprefix("cold read: "))
-    header = log_path.read_text(encoding="utf-8").splitlines()[0]
-  finally:
-    _reap_spawned(spawned)
-    _clean_coldread_dir(session_id)
-  assert header == f"page {artifact} sha256 {hashlib.sha256(artifact.read_bytes()).hexdigest()}"
-
-
-def test_background_kills_the_process_group_when_the_wake_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  artifact = _write(tmp_path, _sitrep_ok_doc())
-  cfg, _options = _probe_cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  session_id = "sess-coldread-full"
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
-  _enter_via_unified_cli(monkeypatch)
-  spawned: list[subprocess.Popen] = []
-  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, _sleep_launch(spawned))
-  reason = f"session {session_id} has 5 pending triggers (limit 5); trigger rejected"
-
-  def rejecting_post(
-      endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
-    print(json.dumps({"error": reason, "code": "server_error", "effect": "none"}), file=sys.stderr)
-    raise SystemExit(1)
-
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", rejecting_post)
-  try:
-    assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 1
-  finally:
-    _reap_spawned(spawned)
-    _clean_coldread_dir(session_id)
-  (proc,) = spawned
-  assert proc.poll() is not None
-  with pytest.raises(ProcessLookupError):
-    os.killpg(proc.pid, 0)
-  assert f"wake registration rejected: {reason}" in capsys.readouterr().out
-
-
-def test_background_child_argv_runs_the_same_tree_and_interpreter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  artifact = _write(tmp_path, _sitrep_ok_doc())
-  cfg, _options = _probe_cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  session_id = "sess-coldread-argv"
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
-  _enter_via_unified_cli(monkeypatch)
-  captured_launch: dict = {}
-
-  def launch(cmd: str, *, cwd: str, log_path: Path, exit_file: Path) -> launcher.Launch:
-    captured_launch.update(cmd=cmd, cwd=cwd, log_path=log_path, exit_file=exit_file)
-    return launcher.Launch(pid=43210, host=None, log=str(log_path), exit_file=str(exit_file))
-
-  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
-  calls: list[dict] = []
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", conftest.registering_post(cfg, session_id, calls))
-  try:
-    assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?", "--background"]) == 0
-  finally:
-    _clean_coldread_dir(session_id)
-  assert shlex.split(captured_launch["cmd"]) == [
-      sys.executable, "-m", "src.app.main", "artifact", "check",
-      str(artifact), "--genre", "sitrep", "--trigger", "where are we?"
-  ]
-  assert captured_launch["cwd"] == str(Path(artifact_cli.__file__).resolve().parents[3])
-  # The exit file lands beside the log so the wake can read the cold read's exit code.
-  assert captured_launch["exit_file"] == captured_launch["log_path"].with_suffix(".exit")
-
-
-def test_background_label_over_the_trigger_limit_exits_before_the_spawn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  artifact = _write(tmp_path, _sitrep_ok_doc(), name=f"{'p' * 170}.html")
-  cfg, _options = _probe_cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-coldread-long")
-  launch = MagicMock()
-  monkeypatch.setattr(LAUNCH_LOCAL_PATCH_TARGET, launch)
-
-  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "t", "--background"]) == 1
-  assert "at most 200 characters" in capsys.readouterr().err
-  launch.assert_not_called()
-  _clean_coldread_dir("sess-coldread-long")
-
-
-def test_cold_read_log_holds_the_header_then_the_probe_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The detached child's log, reproduced in process: the parent's first line, then exactly
-  the foreground command's output (assertion lines, then the cold-read block)."""
-  artifact = _write(tmp_path, _sitrep_ok_doc())
-  cfg, _options = _probe_cfg(tmp_path)
-  backends = {
-      "alpha": _FakeBackend(error="boom"),
-      "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(6) fine."),
-  }
+  backends = {"alpha": _FakeBackend(answer="(1) answered.")}
   _patch_backends(monkeypatch, backends)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  log_path = tmp_path / "cold.log"
-  artifact_cli._start_cold_read_log(log_path, artifact)
-  with log_path.open("a", encoding="utf-8") as log, contextlib.redirect_stdout(log):
-    assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
-  lines = log_path.read_text(encoding="utf-8").splitlines()
-  assert lines[0] == f"page {artifact} sha256 {hashlib.sha256(artifact.read_bytes()).hexdigest()}"
-  assert lines[-5:] == [
-      "--- cold read ---",
-      "attempt alpha failed: RuntimeError: boom",
-      "backend beta",
-      "(1) The reader's problem.",
-      "(2)-(6) fine.",
+  post = MagicMock()
+  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
+
+  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
+  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+  assert capsys.readouterr().out.splitlines()[-4:] == [
+      f"cold read of {artifact}",
+      f"page sha256 {digest}",
+      "backend alpha",
+      "(1) answered.",
   ]
+  post.assert_not_called()
 
 
-def test_cold_read_log_ends_with_probe_could_not_run_when_every_backend_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_foreground_prints_every_model_failed_and_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(error="kaput")}
   _patch_backends(monkeypatch, backends)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  log_path = tmp_path / "cold.log"
-  artifact_cli._start_cold_read_log(log_path, artifact)
-  with log_path.open("a", encoding="utf-8") as log, contextlib.redirect_stdout(log):
-    assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 1
-  lines = log_path.read_text(encoding="utf-8").splitlines()
-  assert lines[-1] == "probe could not run: every backend failed (2 tried)"
+
+  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 1
+  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+  assert capsys.readouterr().out.splitlines()[-5:] == [
+      f"cold read of {artifact}",
+      f"page sha256 {digest}",
+      "attempt alpha failed: RuntimeError: boom",
+      "attempt beta failed: RuntimeError: kaput",
+      "every model failed (2 tried)",
+  ]
+
+
+# ---------------------------------------------------------------------------
+# The cold-read task type at the real delegate entry
+# ---------------------------------------------------------------------------
+
+
+async def _cold_read_tree_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, execute: bool):
+  """(cfg, session_blocks, tree, manager): a real task tree and delegate entry.
+
+  The manager is pinned to the "opus" backend (options[0]); backends.preference
+  is ["alpha", "beta"]. With execute=False the launch seam is stubbed so no run
+  starts; with execute=True runs really execute on the scripted backends.
+  """
+  options = [conftest.backend_option(id="opus", label="opus", type="codex", model="opus-model")]
+  options += [conftest.backend_option(id=b, label=b, type="codex", model=f"{b}-model") for b in ("alpha", "beta")]
+  cfg, session_blocks, tree = test_task_execution.build_spawning_env(
+      tmp_path, monkeypatch, options=options, preference=["alpha", "beta"])
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  if not execute:
+    monkeypatch.setattr(adapter, "_schedule_launch", lambda *args, **kwargs: None)
+  tree.dispatch.executor = adapter
+  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
+  return cfg, session_blocks, tree, manager
+
+
+def _cold_read_request(manager_id: str, page: Path, **overrides) -> DelegateRequest:
+  payload: dict = {
+      "session_id": manager_id,
+      "description": f"cold read of {page}",
+      "task_type": TaskType.COLD_READ,
+      "cold_read": ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?"),
+  }
+  payload.update(overrides)
+  return DelegateRequest(**payload)
+
+
+@pytest.mark.asyncio
+async def test_cold_read_delegation_from_a_manager_succeeds_without_takeoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """No take off in the manager's chat log: the read-only exemption covers cold-read, and the
+  child lands under the requesting session named after the page file."""
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
+
+  result = await internal.delegate_task(
+      _cold_read_request(manager.id, page),
+      session_events=session_blocks.events,
+      store=session_blocks.store,
+      task_mgr=tree,
+      caller=OPERATOR)
+
+  child = await tree.load_meta(result["session_id"])
+  assert child is not None
+  assert child.task_parent_id == manager.id and child.profile == "worker"
+  assert child.name == f"Cold read: {page.name}"
+  assert child.task is not None and child.task.task_type == TaskType.COLD_READ
+  assert child.task.cold_read == ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?")
+  assert child.task.repo_path is None and child.task.base_branch is None
+  first = await tree.runs.get_run(child.id, result["run_id"])
+  assert first is not None and first.backend == "alpha"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["repo_path", "base_branch"])
+async def test_cold_read_delegation_with_a_repo_field_gets_400(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
+  overrides = {field: ("/tmp/repo" if field == "repo_path" else "main")}
+
+  with pytest.raises(HTTPException) as exc_info:
+    await internal.delegate_task(
+        _cold_read_request(manager.id, page, **overrides),
+        session_events=session_blocks.events,
+        store=session_blocks.store,
+        task_mgr=tree,
+        caller=OPERATOR)
+
+  assert exc_info.value.status_code == 400
+  assert exc_info.value.detail == f"cold-read delegations are repo-less; omit {field}"
+
+
+@pytest.mark.asyncio
+async def test_cold_read_delegation_requires_cold_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
+
+  with pytest.raises(HTTPException) as exc_info:
+    await internal.delegate_task(
+        _cold_read_request(manager.id, page, cold_read=None),
+        session_events=session_blocks.events,
+        store=session_blocks.store,
+        task_mgr=tree,
+        caller=OPERATOR)
+
+  assert exc_info.value.status_code == 400
+  assert exc_info.value.detail == "cold-read delegations require cold_read"
+
+
+@pytest.mark.asyncio
+async def test_other_task_types_reject_cold_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
+
+  with pytest.raises(HTTPException) as exc_info:
+    await internal.delegate_task(
+        _cold_read_request(manager.id, page, task_type=TaskType.VERIFY),
+        session_events=session_blocks.events,
+        store=session_blocks.store,
+        task_mgr=tree,
+        caller=OPERATOR)
+
+  assert exc_info.value.status_code == 400
+  assert exc_info.value.detail == "verify delegations reject cold_read"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", ["verify", "cold-read"])
+async def test_agent_message_to_a_read_only_child_passes_without_takeoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
+  """An agent message to a cold-read child passes the same exemption a verify child passes."""
+  _cfg, _session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
+  cold = ColdReadSpec(page_path="/tmp/p.html", genre="plan", trigger="t") if task_type == "cold-read" else None
+  child = await conftest.create_task(
+      tree,
+      parent=manager.id,
+      profile="worker",
+      request_id=f"child-{task_type}",
+      task=TaskSpec(goal="check it", task_type=task_type, cold_read=cold))
+
+  event = await tree.dispatch.admit_input(
+      child.id, event_type=ET.AGENT_MESSAGE, content="a note from the parent", actor="agent", from_session=manager.id)
+  assert event["content"] == "a note from the parent"
+
+  # The control: an implement child refuses the same message without takeoff.
+  implement = await conftest.create_task(
+      tree,
+      parent=manager.id,
+      profile="worker",
+      request_id=f"child-implement-{task_type}",
+      task=TaskSpec(goal="build it", task_type="implement"))
+  with pytest.raises(task_errors.TaskForbiddenError):
+    await tree.dispatch.admit_input(
+        implement.id, event_type=ET.AGENT_MESSAGE, content="x", actor="agent", from_session=manager.id)
+
+
+# ---------------------------------------------------------------------------
+# The cold-read run and its report
+# ---------------------------------------------------------------------------
+
+
+def _error_event(message: str) -> dict:
+  """A backend error event for a scripted failure (the events-log error the attempt line reads)."""
+  return {"type": "error", "message": message, "content": message}
+
+
+async def _wait_child_report(tree, parent_id: str) -> dict:
+  """Poll the parent's fact history until the cold-read child's report lands; return it."""
+  await test_task_execution.poll_until(
+      lambda: test_task_execution.child_reports(tree, parent_id), timeout=15.0, what="the cold-read child report")
+  return test_task_execution.child_reports(tree, parent_id)[-1]
+
+
+async def _delegate_cold_read(tree, session_blocks, manager, page: Path) -> str:
+  """Delegate one cold read through the real entry; return the child session id."""
+  result = await internal.delegate_task(
+      _cold_read_request(manager.id, page),
+      session_events=session_blocks.events,
+      store=session_blocks.store,
+      task_mgr=tree,
+      caller=OPERATOR)
+  return result["session_id"]
+
+
+@pytest.mark.asyncio
+async def test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
+  backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("(1) fine.")])
+  test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, [backend])
+
+  child_id = await _delegate_cold_read(tree, session_blocks, manager, page)
+  (run,) = [r for r in tree.runs.list_run_records_sync(child_id) if r.kind == "work"]
+  await test_task_execution.wait_for_terminal_run(tree, child_id, run.id)
+  await _wait_child_report(tree, manager.id)
+
+  system_prompt, questions = cold_read.load_texts(ROOT)
+  stored = json.loads((tree.runs.run_dir(child_id, run.id) / "prompt_snapshot.json").read_text(encoding="utf-8"))
+  assert [b["text"] for b in stored["blocks"]] == [system_prompt]
+  launch_text = (tree.runs.run_dir(child_id, run.id) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert launch_text == cold_read.probe_input(page.read_text(encoding="utf-8"), questions, "where are we?")
+  assert backend.prompt == launch_text
+
+
+@pytest.mark.asyncio
+async def test_cold_read_success_report_carries_attempts_backend_and_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
+  scripted = [
+      test_task_execution.SpawningScriptedBackend([_error_event("alpha exploded")], exit_code=1),
+      test_task_execution.SpawningScriptedBackend(
+          [test_task_execution.result_event("(1) The reader's problem.\n(2) confirmed.")]),
+  ]
+  builds = test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, scripted)
+
+  child_id = await _delegate_cold_read(tree, session_blocks, manager, page)
+  report = await _wait_child_report(tree, manager.id)
+
+  digest = hashlib.sha256(page.read_bytes()).hexdigest()
+  assert report["outcome"] == "completed"
+  assert report["summary"] == "\n".join(
+      [
+          f"cold read of {page}",
+          f"page sha256 {digest}",
+          "attempt alpha failed: alpha exploded",
+          "backend beta",
+          "(1) The reader's problem.",
+          "(2) confirmed.",
+      ])
+  assert tree.task_state(child_id) == "completed"
+  # The retry took the next preference backend past the tried one.
+  assert [b["option"].id for b in builds] == ["alpha", "beta"]
+
+
+@pytest.mark.asyncio
+async def test_cold_read_empty_answer_counts_as_a_failed_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
+  scripted = [
+      test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("")]),
+      test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("(1) answered.")]),
+  ]
+  test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, scripted)
+
+  await _delegate_cold_read(tree, session_blocks, manager, page)
+  report = await _wait_child_report(tree, manager.id)
+
+  assert report["outcome"] == "completed"
+  assert "attempt alpha failed: empty final answer" in report["summary"].splitlines()
+  assert "backend beta" in report["summary"].splitlines()
+
+
+@pytest.mark.asyncio
+async def test_cold_read_retry_selects_the_next_backend_with_the_tried_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
+  tried_lists: list[list[str]] = []
+  real_select = spawner_backends.select_verify_backend
+
+  async def spy(session_id: str, cfg, store, tried: list[str]):
+    tried_lists.append(list(tried))
+    return await real_select(session_id, cfg, store, tried)
+
+  monkeypatch.setattr(spawner_backends, "select_verify_backend", spy)
+  scripted = [
+      test_task_execution.SpawningScriptedBackend([_error_event("alpha exploded")], exit_code=1),
+      test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("(1) answered.")]),
+  ]
+  test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, scripted)
+
+  await _delegate_cold_read(tree, session_blocks, manager, page)
+  await _wait_child_report(tree, manager.id)
+
+  # The delegation resolves the first backend with an empty tried list; the
+  # failed run's retry passes every backend tried so far.
+  assert tried_lists == [[], ["alpha"]]
+
+
+@pytest.mark.asyncio
+async def test_cold_read_every_backend_failed_reports_and_the_child_stays_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  page = _write(tmp_path, _sitrep_ok_doc())
+  _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
+  scripted = [
+      test_task_execution.SpawningScriptedBackend([_error_event("alpha exploded")], exit_code=1),
+      test_task_execution.SpawningScriptedBackend([_error_event("beta exploded")], exit_code=1),
+      test_task_execution.SpawningScriptedBackend([_error_event("opus exploded")], exit_code=1),
+  ]
+  test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, scripted)
+
+  child_id = await _delegate_cold_read(tree, session_blocks, manager, page)
+  report = await _wait_child_report(tree, manager.id)
+
+  digest = hashlib.sha256(page.read_bytes()).hexdigest()
+  assert report["outcome"] == "failed"
+  assert report["summary"] == "\n".join(
+      [
+          f"cold read of {page}",
+          f"page sha256 {digest}",
+          "attempt alpha failed: alpha exploded",
+          "attempt beta failed: beta exploded",
+          "attempt opus failed: opus exploded",
+          "every model failed (3 tried)",
+      ])
+  assert tree.task_state(child_id) == "open"
 
 
 # ---------------------------------------------------------------------------

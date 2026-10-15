@@ -32,7 +32,8 @@
     "repo_path": "/r",
     "base_branch": "main",
     "task_type": null,
-    "keep_worktree": false
+    "keep_worktree": false,
+    "cold_read": null
   },
   "created_by_event": {
     "session_id": "11111111-1111-1111-1111-111111111111",

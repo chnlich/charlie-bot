@@ -5,8 +5,8 @@ carries either an explicit "take off" in the latest real user message or a
 "pre take off" issued within the last 12 hours. This module owns the full
 gate — phrase matching, timestamp parsing, and the blocking exception —
 extracted from src.runtime.spawner, which consumes none of it. The module also
-owns the one verify-exemption judgment (``is_verify_exempt``) that every
-takeoff-exemption site reads.
+owns the one read-only-exemption judgment (``is_read_only_exempt``) that
+every takeoff-exemption site reads.
 
 The verdict reads two answers out of the chat history: the takeoff phrase in
 the file-last real user message, and the file-last parseable pre-takeoff
@@ -48,20 +48,25 @@ class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
 
 
-def is_verify_exempt(task: models.TaskSpec | models.TaskType | None) -> bool:
-  """Whether *task* carries the read-only verify exemption: no takeoff window.
+# The task types the read-only exemption covers: verify and cold-read are both
+# read-only and repo-less, which is what the contract excuses from the window.
+READ_ONLY_EXEMPT_TYPES = frozenset({models.TaskType.VERIFY, models.TaskType.COLD_READ})
+
+
+def is_read_only_exempt(task: models.TaskSpec | models.TaskType | None) -> bool:
+  """Whether *task* carries the read-only exemption: no takeoff window.
 
   The one owner of the judgment: the delegation route's admission and
   tree-delegation checks, the agent-creation check on the task tree, and the
-  Run's actual launch all read this function, so no site keeps its own
-  task-type comparison for the exemption. A verify delegation is read-only and
-  repo-less, which is what the contract excuses from the window. Accepts a
-  task type or a whole task spec (a node's ``task``); no spec or no type is
-  not exempt.
+  agent-message gate all read this function, so no site keeps its own
+  task-type comparison for the exemption. A verify or cold-read delegation is
+  read-only and repo-less, which is what the contract excuses from the
+  window. Accepts a task type or a whole task spec (a node's ``task``); no
+  spec or no type is not exempt.
   """
   if isinstance(task, models.TaskSpec):
-    return task.task_type == models.TaskType.VERIFY
-  return task == models.TaskType.VERIFY
+    return task.task_type in READ_ONLY_EXEMPT_TYPES
+  return task in READ_ONLY_EXEMPT_TYPES
 
 
 def _normalize_takeoff_content(content: str) -> str:

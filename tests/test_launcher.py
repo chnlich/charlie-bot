@@ -40,21 +40,6 @@ def _pid_alive(pid: int) -> bool:
   return True
 
 
-def _reap(pid: int, timeout: float = 5) -> None:
-  """Waitpid the launcher's wrapper: it is this process's child, so a dead one stays a zombie
-  (and kill -0-alive) until reaped."""
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    try:
-      reaped, _status = os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-      return
-    if reaped == pid:
-      return
-    time.sleep(0.05)
-  raise TimeoutError(f"pid {pid} not reaped after {timeout}s")
-
-
 # ---------------------------------------------------------------------------
 # launch_local: the wrapper runs the command, writes the exit file, then exits
 # ---------------------------------------------------------------------------
@@ -71,7 +56,7 @@ def test_launch_local_exit_code_lands_in_the_exit_file(tmp_path: pathlib.Path) -
     conftest._wait_for(lambda: pathlib.Path(launch.exit_file).exists(), 5, "the exit file never appeared")
     assert pathlib.Path(launch.exit_file).read_text().strip() == "3"
     # The wrapper exits only after the exit file is written.
-    _reap(launch.pid)
+    conftest.reap_child(launch.pid)
     assert not _pid_alive(launch.pid)
   finally:
     launcher.kill_launch(launch)
@@ -118,7 +103,7 @@ def test_kill_launch_local_kills_the_process_group(tmp_path: pathlib.Path) -> No
   )
   assert _pid_alive(launch.pid)
   launcher.kill_launch(launch)
-  _reap(launch.pid)
+  conftest.reap_child(launch.pid)
   assert not _pid_alive(launch.pid)
   # The group kill reaches the sleep too: no exit file is ever written.
   assert not pathlib.Path(launch.exit_file).exists()

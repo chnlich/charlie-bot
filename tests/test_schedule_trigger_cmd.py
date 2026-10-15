@@ -40,20 +40,6 @@ def _patch_cli(monkeypatch: pytest.MonkeyPatch, cfg: types.SimpleNamespace, argv
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
 
-def _reap(pid: int, timeout: float = 5) -> None:
-  """Reap the wrapper (this process's child) so a dead one stops answering kill -0."""
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    try:
-      reaped, _status = os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-      return
-    if reaped == pid:
-      return
-    time.sleep(0.05)
-  raise TimeoutError(f"pid {pid} not reaped after {timeout}s")
-
-
 def _metadata(cfg: types.SimpleNamespace, session_id: str) -> dict:
   metas = list((cfg.sessions_dir / session_id / "launches").glob("*/metadata.json"))
   assert len(metas) == 1
@@ -95,7 +81,7 @@ def test_cmd_exit_3_writes_the_launch_record_and_the_exit_file(
   try:
     conftest._wait_for(lambda: pathlib.Path(meta["exit_file"]).exists(), 5, "the exit file never appeared")
     assert pathlib.Path(meta["exit_file"]).read_text().strip() == "3"
-    _reap(meta["pid"])
+    conftest.reap_child(meta["pid"])
   finally:
     with contextlib.suppress(ProcessLookupError):
       os.killpg(meta["pid"], 9)
@@ -122,7 +108,7 @@ def test_registered_target_carries_exit_file_and_log(
   finally:
     with contextlib.suppress(ProcessLookupError):
       os.killpg(meta["pid"], 9)
-    _reap(meta["pid"])
+    conftest.reap_child(meta["pid"])
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +170,7 @@ def test_rejected_registration_kills_the_process_group(
   assert exc_info.value.code == 2
   assert reason in capsys.readouterr().err
   (pid,) = pids
-  _reap(pid)
+  conftest.reap_child(pid)
   with pytest.raises(ProcessLookupError):
     os.kill(pid, 0)
   # No launch record: the registration never landed (the killed process's log stays behind).
@@ -209,7 +195,7 @@ def test_failed_readback_kills_the_process_group(
   assert exc_info.value.code == 2
   assert "readback" in capsys.readouterr().err
   (pid,) = pids
-  _reap(pid)
+  conftest.reap_child(pid)
   with pytest.raises(ProcessLookupError):
     os.kill(pid, 0)
 

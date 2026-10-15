@@ -1,36 +1,35 @@
 """CLI script for the ``charliebot artifact`` subcommand.
 
   charliebot artifact check <file> --genre plan|understanding|sitrep|debug|explain
-      [--trigger "<message>"] [--assertions-only] [--background]
+      [--trigger "<message>"] [--assertions-only]
   charliebot artifact wrap <fragment> --genre <genre> --output <page.html> [--math/--no-math]
 
 ``check`` runs the genre's mechanical DOM assertions, prints one line per assertion
 (``ok <name>[ <measurement>]`` or ``FAIL <name>: <location>``), and — for every genre,
-once every assertion passed — runs the cold-read probe unless ``--assertions-only`` was
-given; ``--trigger`` is required for every genre unless ``--assertions-only``. With
-``--background`` the probe leaves the foreground: after the assertions pass, the command
-writes the cold-read log's first line (page path and sha256), starts the same check without
-``--background`` as a new-session child appending to that log, registers a session wake on
-the child through /api/internal/schedule-trigger, prints ``cold read started: pid <PID>
-log <path> trigger <id>``, and exits 0; a rejected or failed registration kills the
-child's process group and prints ``wake registration rejected: <server reason>`` before
-exit 1. ``--background`` needs ``--trigger`` and refuses ``--assertions-only`` (both usage
-errors); it is the one verb that resolves a session and calls the server. ``wrap``
-assembles a genre page from a content fragment (the fragment fills <body>; head and style
-come from the genre template), pre-rendering math to KaTeX markup for explain by default.
-Exit codes: 0 = success, 1 = any assertion failed, the probe could not run, the wake
-registration failed, or the assembled page failed the byte self-check, 2 = usage error.
+once every assertion passed — runs the cold read unless ``--assertions-only`` was given;
+``--trigger`` is required for every genre unless ``--assertions-only``. The cold read's
+shape follows the session the command runs in, read from the session metadata's profile:
+in a manager session the command POSTs a cold-read delegation to /api/internal/delegate,
+prints ``cold read started: session <child id> run <run id>``, and exits 0 — the cold read
+runs as a cold-read worker child of the session, and its completion report wakes the
+session; in a worker session, or with no session identity (CHARLIEBOT_SESSION_ID absent
+and the cwd not a session directory), the command runs the probe in the foreground and
+prints the report body — the page path, the page bytes' sha256, one line per failed
+attempt, the answering backend and the seven answers verbatim — the same body the child
+session's report carries. A failed assertion or a refused delegation prints the reason
+and exits 1. ``wrap`` assembles a genre page from a content fragment (the fragment fills
+<body>; head and style come from the genre template), pre-rendering math to KaTeX markup
+for explain by default. Exit codes: 0 = success, 1 = any assertion failed, the probe
+could not run, or the assembled page failed the byte self-check, 2 = usage error.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
-import io
 import json
+import os
 import pathlib
-import shlex
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -39,14 +38,11 @@ from typing import TYPE_CHECKING
 from src.features.artifacts import artifact_check, artifact_wrap, constants
 from src.infra import constants as infra_constants
 from src.infra import help_formatter, home
+from src.runtime import cold_read
 from src.runtime.cli import common as cli_common
-from src.runtime.cli import launcher, schedule_trigger
 
 if TYPE_CHECKING:
   from src.infra import config
-
-# The bound wakes the session and does not stop the cold read.
-COLD_READ_WAKE_MAX_WAIT_SECONDS = 3600
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -55,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
   sub = parser.add_subparsers(dest="verb", required=True)
   check = sub.add_parser(
       "check",
-      help="Run a genre's assertions (and cold-read probe) on a local file",
+      help="Run a genre's assertions (and cold read) on a local file",
       formatter_class=help_formatter.CliHelpFormatter)
   check.add_argument("file", help="Artifact path as an ordinary filesystem path (absolute or cwd-relative)")
   check.add_argument(
@@ -65,14 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
       default=None,
       help="Chat message that triggered the page (question 6 verbatim); required for every genre "
       "unless --assertions-only is given")
-  check.add_argument(
-      "--assertions-only", action="store_true", help="Run the assertions alone, skipping the cold-read probe")
-  check.add_argument(
-      "--background",
-      action="store_true",
-      help="Run the cold read detached once the assertions pass: append it to a log under "
-      "/tmp/charliebot-coldread, register a session wake on the detached process, print "
-      "'cold read started: pid <PID> log <path> trigger <id>' and exit")
+  check.add_argument("--assertions-only", action="store_true", help="Run the assertions alone, skipping the cold read")
   wrap = sub.add_parser(
       "wrap", help="Assemble a genre page from a content fragment", formatter_class=help_formatter.CliHelpFormatter)
   wrap.add_argument("fragment", help="Content fragment path: the page's <body> content")
@@ -87,85 +76,62 @@ def _build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def _start_cold_read_log(log_path: pathlib.Path, artifact: pathlib.Path) -> None:
-  """Create the cold-read log (parents included) with its first line: page path and the page
-  bytes' sha256, so the wake can tell whether the page changed after the cold read started."""
-  log_path.parent.mkdir(parents=True, exist_ok=True)
-  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-  log_path.write_text(f"page {artifact} sha256 {digest}\n", encoding="utf-8")
+def _session_identity(cfg: config.CharlieBotConfig) -> str | None:
+  """This invocation's session id, or None with no session identity.
+
+  No identity means ``CHARLIEBOT_SESSION_ID`` is absent and the cwd is not a
+  session directory — the contract ``cli_common.resolve_session_id`` summarizes.
+  """
+  env_session = os.environ.get(infra_constants.SESSION_ID_ENV_VAR) or None
+  if env_session is not None:
+    return env_session
+  cwd = pathlib.Path.cwd().resolve()
+  sessions_dir = cfg.sessions_dir.resolve()
+  return cwd.name if cwd.parent == sessions_dir else None
 
 
-def _rejection_reason(captured_stderr: str) -> str:
-  """The server reason out of the JSON error line post_internal_api printed before exiting."""
-  return str(json.loads(captured_stderr.strip().splitlines()[-1])["error"])
-
-
-def _start_background_cold_read(args: argparse.Namespace, artifact: pathlib.Path, cfg: config.CharlieBotConfig) -> int:
-  """Detach the cold read and register its wake; the module docstring holds the contract."""
-  session_id = cli_common.resolve_session_id(None)
-  timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-  log_path = pathlib.Path("/tmp/charliebot-coldread") / session_id[:8] / f"{artifact.name}.{timestamp}.log"
-  label = f"cold read: {log_path}"
+def _session_profile(cfg: config.CharlieBotConfig, session_id: str) -> str:
+  """The requesting session's profile (``manager`` or ``worker``) from its session metadata."""
+  meta_path = cfg.sessions_dir / session_id / "metadata.json"
   try:
-    schedule_trigger._validate_message(label)
-  except argparse.ArgumentTypeError as e:
-    cli_common.exit_error(str(e))
-  _start_cold_read_log(log_path, artifact)
-  argv = [
-      sys.executable, "-m",
-      cli_common.cli_entry_module(), "artifact", "check",
-      str(artifact), "--genre", args.genre, "--trigger", args.trigger
-  ]
-  # The same interpreter and the same code tree as this command: the tree root is the directory
-  # holding the src package of this very file. The shared launcher wraps the child so its exit
-  # code lands beside the log for the wake.
-  launch = launcher.launch_local(
-      shlex.join(argv),
-      cwd=str(pathlib.Path(__file__).resolve().parents[3]),
-      log_path=log_path,
-      exit_file=log_path.with_suffix(".exit"))
-  watch_targets = [
-      {
-          "kind": infra_constants.WatchKind.LOCAL_PID.value,
-          "pid": launch.pid,
-          "exit_file": launch.exit_file,
-          "log": launch.log,
-      }
-  ]
+    profile = json.loads(meta_path.read_text(encoding="utf-8"))["profile"]
+  except (OSError, ValueError, KeyError) as e:
+    cli_common.exit_error(f"cannot read the requesting session's profile from {meta_path}: {e}")
+  return profile
+
+
+def _delegate_cold_read(
+    args: argparse.Namespace, artifact: pathlib.Path, cfg: config.CharlieBotConfig, session_id: str) -> int:
+  """Delegate the cold read to a cold-read child of this manager session and print the started line.
+
+  The request id binds the session, a sha256 prefix of the page, and the UTC
+  time, so a replayed call returns the original child and a changed page a new one.
+  """
+  digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+  timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+  request_id = f"cold-read:{session_id}:{digest[:12]}:{timestamp}"
+  description = f"cold read of {artifact}"
   payload = {
       "session_id": session_id,
-      "delay_seconds": COLD_READ_WAKE_MAX_WAIT_SECONDS,
-      "message": label,
-      "watch_targets": watch_targets,
+      "description": description,
+      "task_type": "cold-read",
+      "cold_read": {
+          "page_path": str(artifact),
+          "genre": args.genre,
+          "trigger": args.trigger
+      },
+      "request_id": request_id,
   }
-  stderr_capture = io.StringIO()
-  try:
-    with contextlib.redirect_stderr(stderr_capture):
-      result = cli_common.post_internal_api(
-          "/api/internal/schedule-trigger",
-          payload,
-          readback=lambda: schedule_trigger._readback_trigger(session_id, label, watch_targets))
-  except SystemExit:
-    # post_internal_api exits on a server rejection or a failed call, after printing the
-    # reason as JSON on stderr; the cold read must not outlive its wake.
-    launcher.kill_launch(launch)
-    print(f"wake registration rejected: {_rejection_reason(stderr_capture.getvalue())}")
-    return 1
-  if schedule_trigger._readback_trigger(session_id, label, watch_targets) is None:
-    launcher.kill_launch(launch)
-    print("wake registration rejected: no pending trigger watching the cold-read pid on readback")
-    return 1
-  print(f"cold read started: pid {launch.pid} log {log_path} trigger {result['trigger_id']}")
+  result = cli_common.post_internal_api(
+      "/api/internal/delegate",
+      payload,
+      readback=lambda: cli_common.find_local_task_child(
+          session_id, description=description, task_type="cold-read", request_id=request_id))
+  print(f"cold read started: session {result['session_id']} run {result['run_id']}")
   return 0
 
 
 def _run_check(args: argparse.Namespace) -> int:
-  if args.background and args.assertions_only:
-    cli_common.exit_usage_error(
-        "--background cannot combine with --assertions-only: "
-        "the background child runs the full check, probe included")
-  if args.background and args.trigger is None:
-    cli_common.exit_usage_error("--background requires --trigger: the cold read answers the trigger")
   if args.trigger is None and not args.assertions_only:
     cli_common.exit_usage_error(f"--genre {args.genre} requires --trigger unless --assertions-only is given")
   artifact = pathlib.Path(args.file).resolve()
@@ -183,21 +149,16 @@ def _run_check(args: argparse.Namespace) -> int:
     return 1
   if args.assertions_only:
     return 0
-  if args.background:
-    return _start_background_cold_read(args, artifact, cfg)
-  print("--- cold read ---")
+  session_id = _session_identity(cfg)
+  if session_id is not None and _session_profile(cfg, session_id) == "manager":
+    return _delegate_cold_read(args, artifact, cfg, session_id)
+  # A worker session, or no session identity: the cold read runs in the foreground.
   try:
     result = artifact_check.run_probe(cfg, artifact, args.trigger)
   except ValueError as e:
     cli_common.exit_error(str(e))
-  for backend_id, error in result.attempts:
-    print(f"attempt {backend_id} failed: {error}")
-  if result.backend_id is None:
-    print(f"probe could not run: every backend failed ({len(result.attempts)} tried)")
-    return 1
-  print(f"backend {result.backend_id}")
-  print(result.answer)
-  return 0
+  print(cold_read.format_report(str(artifact), result.page_sha256, result.attempts, result.backend_id, result.answer))
+  return 0 if result.backend_id is not None else 1
 
 
 def _run_wrap(args: argparse.Namespace) -> int:

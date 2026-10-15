@@ -113,6 +113,7 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   window; a now past a served fire re-derives with the next occurrence.
   """
   import datetime
+  import types
 
   from src.features.cron import sequence_controller
 
@@ -151,7 +152,10 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
     def now(cls, tz=None):
       return crossed.astimezone(tz)
 
-  monkeypatch.setattr("src.features.cron.sequence_controller.datetime", _ShiftedDateTime)
+  # sequence_controller qualifies through the datetime module, so the stand-in binds the
+  # module attribute to a namespace carrying the fake class.
+  monkeypatch.setattr(
+      "src.features.cron.sequence_controller.datetime", types.SimpleNamespace(datetime=_ShiftedDateTime))
   advanced = controller.listing_fields(ids, crossed)
   assert datetime.datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
 

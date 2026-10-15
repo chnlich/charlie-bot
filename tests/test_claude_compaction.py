@@ -9,8 +9,7 @@ from typing import Any
 
 import pytest
 
-from src.backends.claude_code import claude_compaction
-from src.backends.claude_code.claude_config import ClaudeCompactionConfig
+from src.backends.claude_code import claude_compaction, claude_config
 from src.infra import config
 from src.infra import event_types as ET
 
@@ -23,7 +22,7 @@ SLUG = "-home-u--charliebot-sessions-s1"
 
 def _cfg(tmp_path: pathlib.Path, **floors: int) -> config.CharlieBotConfig:
   return config.CharlieBotConfig(
-      charliebot_home=tmp_path / "home", accounts={"claude_compaction": ClaudeCompactionConfig(**floors)})
+      charliebot_home=tmp_path / "home", accounts={"claude_compaction": claude_config.ClaudeCompactionConfig(**floors)})
 
 
 def _usage(*, inp: int, out: int, cache_read: int = 0, cache_creation: int = 0) -> dict:

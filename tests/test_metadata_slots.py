@@ -10,34 +10,34 @@ import threading
 import time
 
 import conftest
+import pydantic
 import pytest
-from pydantic import BaseModel, ValidationError
 
 from src.app import registrations
 from src.infra import metadata_slot_registration, metadata_slots, models
-from src.runtime.session_store import TRANSIENT_METADATA_FIELDS
+from src.runtime import session_store
 
 DATA = pathlib.Path(__file__).parent / "data"
 
 
-class ProbeSessionFields(BaseModel):
+class ProbeSessionFields(pydantic.BaseModel):
   probe_note: str | None = None
   probe_count: int = 0
 
 
-class ProbeThreadFields(BaseModel):
+class ProbeThreadFields(pydantic.BaseModel):
   probe_tag: str | None = None
 
 
-class FieldOfTheMetadataModel(BaseModel):
+class FieldOfTheMetadataModel(pydantic.BaseModel):
   group: str | None = None
 
 
-class FieldOfAnotherOwner(BaseModel):
+class FieldOfAnotherOwner(pydantic.BaseModel):
   probe_note: str | None = None
 
 
-class LateSessionFields(BaseModel):
+class LateSessionFields(pydantic.BaseModel):
   late_note: str | None = None
 
 
@@ -142,7 +142,7 @@ def test_fields_of_and_set_fields_validate_types() -> None:
   metadata_slots.set_fields(meta, "probe", probe_note="hello", probe_count=3)
   assert metadata_slots.fields_of(meta, "probe") == ProbeSessionFields(probe_note="hello", probe_count=3)
 
-  with pytest.raises(ValidationError):
+  with pytest.raises(pydantic.ValidationError):
     metadata_slots.set_fields(meta, "probe", probe_count="many")
   with pytest.raises(ValueError, match="no fields"):
     metadata_slots.set_fields(meta, "probe", not_a_field=1)
@@ -150,7 +150,7 @@ def test_fields_of_and_set_fields_validate_types() -> None:
 
   # A stored value of the wrong type still loads; reading it through the owner's view is what fails.
   loaded = models.SessionMetadata.model_validate_json('{"name": "s", "profile": "manager", "probe_count": "many"}')
-  with pytest.raises(ValidationError):
+  with pytest.raises(pydantic.ValidationError):
     metadata_slots.fields_of(loaded, "probe")
 
   thread = models.ThreadMetadata(session_id="s", description="d")
@@ -190,7 +190,7 @@ def test_task_node_metadata_saves_byte_identically() -> None:
   written = (DATA / "session_metadata_v2_manager.json").read_text()
 
   saved = models.SessionMetadata.model_validate_json(written).model_dump_json(
-      indent=2, exclude=TRANSIENT_METADATA_FIELDS)
+      indent=2, exclude=session_store.TRANSIENT_METADATA_FIELDS)
 
   assert saved == written
 

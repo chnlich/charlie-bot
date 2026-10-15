@@ -75,13 +75,13 @@ from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import turn_contributions
 from src.runtime.review import review_git_venue, review_log_pointer, review_numbered_steps, review_rules_text
 from src.runtime.spawner_prompt import (
-  WORKFLOW_PROMPT_SECTION,
-  load_marker_sections,
-  load_worker_prompt_sections,
-  substitute_tokens,
-  verify_contract_tokens,
-  workflow_rule_section_ids,
-  worktree_binding_tokens,
+    WORKFLOW_PROMPT_SECTION,
+    load_marker_sections,
+    load_worker_prompt_sections,
+    substitute_tokens,
+    verify_contract_tokens,
+    workflow_rule_section_ids,
+    worktree_binding_tokens,
 )
 
 log = LazyStructlogLogger()

@@ -12,7 +12,7 @@ const {
   assertEngineInvariants,
   distanceFromBottom,
   loadChatContext,
-  buildDepthControl,
+  openAllTurns,
   fakeEngineNode,
   makeEngineTimers,
   installEngineTimers,
@@ -45,7 +45,7 @@ function anchorY(root, id) {
 }
 
 // The same Y without the presence assert: null is the folded-out-of-DOM state
-// a depth switch or manual collapse puts the reading message in.
+// a manual collapse puts the reading message in.
 function messageYOrHidden(root, id) {
   const el = root.querySelector(`[data-message-id="${id}"]`);
   return el ? el.getBoundingClientRect().top - root.getBoundingClientRect().top : null;
@@ -63,12 +63,12 @@ function assertSameAnchor(actual, expected, label) {
 // A mid-history reader: genuine scroll events (the wheel path), settled
 // pre-render, and the anchor message sitting just below the viewport top.
 // The scroll target is the message's real box (a wheel gesture moves real
-// pixels; the height model's estimates are not where content lives). Compact
-// depth keeps every turn's body rendered, matching a reader who opened their
-// history; the outline-mode anchor case has its own test.
+// pixels; the height model's estimates are not where content lives). The rig
+// opens every turn the reader's way, matching a reader who opened their
+// history; the fold-row anchor case has its own test.
 function readingRig(prefix, turns, anchorTurn = Math.floor(turns / 2)) {
   const state = mountEngine(ePage(prefix, turns), {clientHeight: 300, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
   const anchorId = `${prefix}t${anchorTurn}_h0`;
   // Stage one: a coarse genuine scroll toward the anchor's model offset —
@@ -95,7 +95,7 @@ test('a clamp echo after a shrink does not read as an upward wheel', () => {
   // the clamped position as a scroll event. That event moves up while the
   // container shrinks — it is the clamp, not the user's wheel.
   const state = mountEngine(ePage('shrink_', 4), {clientHeight: 300, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
   assert.equal(state.engine.pinnedIntent, true, 'mounted pinned');
   const pinnedTop = state.root.scrollTop;
@@ -137,7 +137,7 @@ test('a page merging into the leading turn keeps the reading position once rende
   // placeholder period and must come back at the same viewport offset.
   const tail = [eMsg('assistant', 'tail-a', 'the read answer'), eMsg('user', 'tail-u', 'next ask')];
   const state = mountEngine([...ePage('mg_', 6), ...tail], {clientHeight: 300, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
   scrollTo(state.timers, state.root, 0);
   settle(state.timers);
@@ -155,7 +155,7 @@ test('a page merging into the leading turn keeps the reading position once rende
 
 test('a genuine wheel-up inside the 150px band stops both append and stream follow', () => {
   const state = mountEngine(ePage('band_', 8), {clientHeight: 300, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
   state.root.scrollTop = state.root.scrollHeight;
   state.root.fire('scroll');
@@ -194,7 +194,7 @@ test('a genuine wheel-up inside the 150px band stops both append and stream foll
 
 test('restoreBottomPin routes the jump through the engine when one is mounted', () => {
   const state = mountEngine(ePage('route_', 4), {clientHeight: 300, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
   scrollTo(state.timers, state.root, 50);
   assert.equal(state.engine.pinnedIntent, false, 'reader unpinned by the scroll');
@@ -220,7 +220,6 @@ function transcriptRig(prefix, turns) {
   context.document.getElementById = (id) => {
     if (id === 'messages') return root;
     if (id === 'streaming-msg') return stream;
-    if (id === 'page-depth-control') return buildDepthControl();
     for (const child of root.children) {
       if (child.id === id) return child;
     }
@@ -277,7 +276,7 @@ async function resetTranscript(context, prefix, turns, revision) {
 
 test('a transcript reset repaint keeps the reading position and a live engine', async () => {
   const {context, root, engine} = transcriptRig('tx_', 8);
-  context.setPageDepth('compact');
+  openAllTurns(engine);
   settle(timersOf(context));
   const anchorId = 'tx_t3_h0';
   const coarse = engineDebug(context, root);
@@ -297,7 +296,19 @@ test('a transcript reset repaint keeps the reading position and a live engine', 
   const remounted = context.Chat.activeTurnEngineFor(root);
   assert.ok(remounted && remounted.alive, 'a fresh engine owns the view after the reset');
   assert.notEqual(remounted, engine, 'the stale engine was replaced, not reused');
-  assert.equal(anchorY(root, anchorId), before, 'the reader kept their message on screen');
+  // The remount's fresh registry folds the turns the reader had opened back
+  // to one row per turn: the reading message hides and its fold row carries
+  // the place at the reading offset.
+  assertSameAnchor(remounted.readingAnchor, {kind: 'message', id: anchorId, offset: before},
+      'the reset kept the reading identity');
+  assert.equal(messageYOrHidden(root, anchorId), null, 'the reset folded the reading message away');
+  const wrapKey = 'tx_t3_h0|tx_t3_c0|tx_t3_p0';
+  const rowY = () => {
+    const wrap = root.querySelector(`[data-turn-key="${wrapKey}"]`);
+    assert.ok(wrap, 'the read turn\'s fold row is in the DOM');
+    return wrap.getBoundingClientRect().top - root.getBoundingClientRect().top;
+  };
+  assert.ok(Math.abs(rowY() - before) <= 0.5, 'the fold row took the reading offset');
   assertEngineInvariants(context, root, root.children[root.children.length - 1], 'after reset');
 
   // The remounted engine still ingests: the append joins the live tail (out
@@ -309,7 +320,7 @@ test('a transcript reset repaint keeps the reading position and a live engine', 
   const debugAfter = engineDebug(context, root);
   assert.equal(debugAfter.entries, entriesBefore + 1, 'the engine still ingests');
   assert.ok(debugAfter.keys.includes(null), 'the appended message joined a live segment');
-  assert.equal(anchorY(root, anchorId), before, 'the live append moved nothing on screen');
+  assert.ok(Math.abs(rowY() - before) <= 0.5, 'the live append moved nothing on screen');
 });
 
 test('a transcript reset while pinned stays at the bottom', async () => {
@@ -377,12 +388,12 @@ test('reading folded history in outline mode anchors the turn row', () => {
       'outline pagination did not park the reader at the bottom');
 });
 
-// The reading place across depth switches is the reading content's identity,
-// not whatever node the previous switch left at the top edge: the message
-// holds its viewport offset whenever it is rendered, its fold row takes the
-// offset while the turn hides it, and the message returns to the offset when
-// the turn reopens — with no user scroll in between.
-function depthWalkRig(prefix) {
+// The reading place across a collapse and reopen is the reading content's
+// identity, not whatever node the previous collapse left at the top edge:
+// the message holds its viewport offset whenever it is rendered, its fold row
+// takes the offset while the turn hides it, and the message returns to the
+// offset when the turn reopens — with no user scroll in between.
+function foldRowRig(prefix) {
   const rig = readingRig(prefix, 10, 5);
   const wrapKey = `${prefix}t5_h0|${prefix}t5_c0|${prefix}t5_p0`;
   const rowY = () => {
@@ -393,37 +404,38 @@ function depthWalkRig(prefix) {
   return {...rig, wrapKey, rowY};
 }
 
-test('a depth change keeps the reading message and hands it to its fold row', () => {
-  const rig = depthWalkRig('dp_');
+test('collapsing and reopening the read turn keeps the reading identity through repeats', () => {
+  const rig = foldRowRig('dp_');
   const anchor = {...rig.engine.readingAnchor};
   assert.equal(anchor.kind, 'message');
   assert.equal(anchor.id, rig.anchorId);
   assert.equal(anchor.offset, rig.anchorY);
-  for (const depth of ['outline', 'expanded', 'compact']) {
-    rig.context.setPageDepth(depth);
+  for (const open of [false, true, false]) {
+    rig.engine.setOverride(rig.wrapKey, open);
     settle(rig.timers);
     assertSameAnchor(rig.engine.readingAnchor, anchor,
-        `depth ${depth} kept the reading identity`);
-    if (depth === 'outline') {
+        `${open ? 'reopen' : 'collapse'} kept the reading identity`);
+    if (!open) {
       assert.equal(messageYOrHidden(rig.root, rig.anchorId), null,
-          'outline folded the reading message away');
+          'the collapse folded the reading message away');
       assert.ok(Math.abs(rig.rowY() - rig.anchorY) <= 0.5,
           'the fold row took the reading message\'s viewport offset');
     } else {
       const held = messageYOrHidden(rig.root, rig.anchorId);
       assert.ok(held != null && Math.abs(held - rig.anchorY) <= 0.5,
-          `depth ${depth} put the reading message back at its offset`);
+          'the reopen put the reading message back at its offset');
     }
   }
 });
 
 test('a fold that cannot reach the reading offset records the clamp and still restores', () => {
-  // The reported walk: expanded 31px, outline row, compact 670px. When the
-  // fold shrinks the document below the reader's offset, no scrollTop can
-  // deliver it; the engine records the limit against the target instead of
-  // letting the next depth switch re-anchor on whatever row the clamp left.
+  // The reader collapses their open history from the read turn down, and the
+  // fold shrinks the document below one viewport: no scrollTop can deliver
+  // the reading offset. The engine records the limit against the target
+  // instead of letting the next reopen re-anchor on whatever row the clamp
+  // left.
   const state = mountEngine(ePage('cl_', 6), {clientHeight: 1200, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
   scrollTo(state.timers, state.root, state.root.scrollTop - 600);
   settle(state.timers);
@@ -431,7 +443,11 @@ test('a fold that cannot reach the reading offset records the clamp and still re
   assert.equal(anchor.kind, 'message');
   const msgY = () => messageYOrHidden(state.root, anchor.id);
 
-  state.context.setPageDepth('outline');
+  const turnKeys = state.engine.segments.filter((seg) => seg.kind === 'turn').map((seg) => seg.key);
+  const anchorTurn = state.engine.segments.find((seg) => seg.kind === 'turn'
+      && seg.entries.some((entry) => entry.msg && entry.msg.id === anchor.id)).key;
+  const folded = turnKeys.slice(turnKeys.indexOf(anchorTurn));
+  folded.forEach((key) => state.engine.setOverride(key, false));
   settle(state.timers);
   assertSameAnchor(state.engine.readingAnchor, anchor, 'the fold kept the identity');
   assert.equal(msgY(), null, 'the fold hid the reading message');
@@ -444,7 +460,7 @@ test('a fold that cannot reach the reading offset records the clamp and still re
   assert.equal(clamp.limitedScrollTop, state.root.scrollTop,
       'the recorded limit is the position the browser kept');
 
-  state.context.setPageDepth('expanded');
+  folded.forEach((key) => state.engine.setOverride(key, true));
   settle(state.timers);
   assertSameAnchor(state.engine.readingAnchor, anchor, 'the reopen kept the identity');
   const held = msgY();
@@ -452,18 +468,25 @@ test('a fold that cannot reach the reading offset records the clamp and still re
       'the reading message returned to its offset once the space came back');
 });
 
-test('a user scroll between depth switches re-decides the reading place', () => {
+test('a user scroll between a collapse and a reopen re-decides the reading place', () => {
   const state = mountEngine(ePage('us_', 12), {clientHeight: 300, clampScrollTop: true});
-  state.context.setPageDepth('compact');
+  openAllTurns(state.engine);
   settle(state.timers);
-  state.context.setPageDepth('outline');
+  // The reader collapses their history back to one row per turn, newest open.
+  const newest = state.engine.newestFinishedTurnKey();
+  state.engine.segments.forEach((seg) => {
+    if (seg.kind === 'turn' && seg.key !== newest) state.engine.setOverride(seg.key, false);
+  });
   settle(state.timers);
   assert.equal(distanceFromBottom(state.root), 0,
-      'a pinned reader stays at the bottom through a depth change');
-  // The reader wheels on: the scroll capture reads the fold row they park on.
-  // The park target is the row's laid-out box (a wheel moves real pixels; the
-  // height model's folded-row estimates are not where the rows live).
+      'a pinned reader stays at the bottom through the collapse');
+  // The reader wheels on: the scroll capture reads the fold row they park
+  // on. The wheel journey materializes the rows on the way, and the park
+  // target is the row's laid-out box (a wheel moves real pixels; the height
+  // model's folded-row estimates are not where the rows live).
   const parkedKey = 'us_t4_h0|us_t4_c0|us_t4_p0';
+  scrollTo(state.timers, state.root, 300);
+  settle(state.timers);
   const row = state.root.querySelector(`[data-turn-key="${parkedKey}"]`);
   assert.ok(row, 'a fold row is rendered to park on');
   scrollTo(state.timers, state.root,
@@ -480,21 +503,21 @@ test('a user scroll between depth switches re-decides the reading place', () => 
     return wrap.getBoundingClientRect().top - state.root.getBoundingClientRect().top;
   };
 
-  state.context.setPageDepth('compact');
+  state.engine.setOverride(parkedKey, true);
   settle(state.timers);
   assertSameAnchor(state.engine.readingAnchor, parked,
-      'the depth change kept the row the reader chose');
+      'the reopen kept the row the reader chose');
   assert.ok(Math.abs(wrapY('true') - parked.offset) <= 0.5,
-      'compact reopened the parked turn at the parked offset');
-  state.context.setPageDepth('outline');
+      'the reopen opened the parked turn at the parked offset');
+  state.engine.setOverride(parkedKey, false);
   settle(state.timers);
-  assertSameAnchor(state.engine.readingAnchor, parked, 'the identity survives the walk back');
+  assertSameAnchor(state.engine.readingAnchor, parked, 'the identity survives the fold back');
   assert.ok(Math.abs(wrapY('false') - parked.offset) <= 0.5,
-      'outline folded the parked turn back to the parked offset');
+      'the collapse folded the parked turn back to the parked offset');
 });
 
 test('folding the read turn parks its row at the reading offset and reopening restores the message', () => {
-  const rig = depthWalkRig('sf_');
+  const rig = foldRowRig('sf_');
   const anchor = {...rig.engine.readingAnchor};
   assert.equal(anchor.id, rig.anchorId);
   rig.engine.setOverride(rig.wrapKey, false);

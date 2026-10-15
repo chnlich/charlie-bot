@@ -333,20 +333,7 @@ function loadChatContext(document) {
 }
 
 const PROSE_ROLES = ['assistant', 'worker_summary', 'plan'];
-const DEPTHS = ['outline', 'compact', 'expanded'];
 const BUBBLE_TIME_TEXT = 'Apr 2, 2026, 3:04:05 AM PDT';
-
-// The #page-depth-control rig renderSessionView's depth reproject resolves:
-// one button per DEPTHS entry, carrying its depth in dataset.pageDepth.
-function buildDepthControl() {
-  const control = new FakeElement('DIV', {id: 'page-depth-control'});
-  for (const depth of DEPTHS) {
-    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
-    btn.dataset.pageDepth = depth;
-    control.appendChild(btn);
-  }
-  return control;
-}
 
 // --- input spec -> DOM -----------------------------------------------------
 function msg(role, id, extra = {}) {
@@ -426,7 +413,6 @@ function buildElement(item) {
 
 function mountCase(items) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
-  const control = buildDepthControl();
   const nodes = new Map();
   for (const item of items) {
     const el = buildElement(item);
@@ -436,11 +422,10 @@ function mountCase(items) {
   const {context} = loadChatContext({
     getElementById(id) {
       if (id === 'messages') return root;
-      if (id === 'page-depth-control') return control;
       return null;
     },
   });
-  return {context, root, control, nodes};
+  return {context, root, nodes};
 }
 
 function wrappers(root) {
@@ -549,7 +534,6 @@ function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}
   if (clampScrollTop) installScrollTopClamp(root);
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
-  const control = buildDepthControl();
   const timers = makeEngineTimers();
   const {context} = loadChatContext({
     createTreeWalker() {
@@ -558,7 +542,6 @@ function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}
     getElementById(id) {
       if (id === 'messages') return root;
       if (id === 'streaming-msg') return stream;
-      if (id === 'page-depth-control') return control;
       return null;
     },
   });
@@ -567,7 +550,15 @@ function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-eng');
   assert.ok(engine, 'engine mounts on a document with createTreeWalker');
-  return {context, root, stream, control, timers, engine};
+  return {context, root, stream, timers, engine};
+}
+
+// The reader path to a fully opened history: every turn opened one click at a
+// time, the way a reader opens turns from their rows.
+function openAllTurns(engine) {
+  engine.segments.forEach((seg) => {
+    if (seg.kind === 'turn') engine.setOverride(seg.key, true);
+  });
 }
 
 // --- deterministic scheduling ------------------------------------------------
@@ -693,9 +684,7 @@ module.exports = {
   FakeElement,
   loadChatContext,
   PROSE_ROLES,
-  DEPTHS,
   BUBBLE_TIME_TEXT,
-  buildDepthControl,
   msg,
   separator,
   plain,
@@ -712,6 +701,7 @@ module.exports = {
   installEngineTimers,
   installScrollTopClamp,
   mountEngine,
+  openAllTurns,
   flushRaf,
   settle,
   scrollTo,

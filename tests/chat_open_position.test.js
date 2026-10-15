@@ -4,7 +4,6 @@ const test = require('node:test');
 const {
   FakeElement,
   fakeEngineNode,
-  buildDepthControl,
   makeEngineTimers,
   installEngineTimers,
   installScrollTopClamp,
@@ -60,7 +59,6 @@ function openRig({messages, session = {}, thinkingSince = null, pendingDraft = n
   context.document.getElementById = (id) => {
     if (id === 'messages') return root;
     if (id === 'streaming-msg') return stream;
-    if (id === 'page-depth-control') return buildDepthControl();
     for (const child of root.children) {
       if (child.id === id) return child;
     }

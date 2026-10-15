@@ -9,9 +9,7 @@ const {
   FakeElement,
   loadChatContext,
   PROSE_ROLES,
-  DEPTHS,
   BUBBLE_TIME_TEXT,
-  buildDepthControl,
   msg,
   separator,
   plain,
@@ -313,13 +311,11 @@ function assertWrapperCompleteness(root, turns, nodes, label) {
 // I2 — open/folded state equals open(turn), and the row's six fields equal the
 // independently computed values. Row values do not depend on the state, so
 // they are checked on every wrapper, not only the folded ones.
-function assertStateAndRows(root, turns, depth, label) {
+function assertStateAndRows(root, turns, label) {
   const found = wrappers(root);
   found.forEach((wrap, i) => {
     const override = wrap.dataset.turnOverride;
-    const open = override
-      ? override === 'open'
-      : (depth === 'outline' ? i === found.length - 1 : true);
+    const open = override ? override === 'open' : i === found.length - 1;
     assert.equal(wrap.dataset.turnOpen, String(open), `${label}: wrapper ${i} open state`);
 
     const row = wrap.querySelector('.turn-row');
@@ -552,43 +548,38 @@ function generateCases() {
   return cases;
 }
 
-// --- I0/I2/I4/I6 over every generated case, at every depth ------------------
-for (const depth of DEPTHS) {
-  test(`turn outline: wrapper completeness, state, row values and flat boundaries at depth ${depth}`, () => {
-    for (const testCase of generateCases()) {
-      const label = `${testCase.name} @ ${depth}`;
-      const {context, root, nodes} = mountCase(testCase.items);
-      const turns = expectedTurns(testCase.items);
+// --- I0/I2/I4/I6 over every generated case ----------------------------------
+test('turn outline: wrapper completeness, state, row values and flat boundaries', () => {
+  for (const testCase of generateCases()) {
+    const {context, root, nodes} = mountCase(testCase.items);
+    const turns = expectedTurns(testCase.items);
 
-      context.setPageDepth(depth);
+    context.applyTurnOutline(root);
 
-      assertWrapperCompleteness(root, turns, nodes, label);
-      assertStateAndRows(root, turns, depth, label);
-      assertStimulusVisible(root, turns, nodes, label);
-      assertFlatBoundaries(root, turns, nodes, label);
-    }
-  });
-}
+    assertWrapperCompleteness(root, turns, nodes, testCase.name);
+    assertStateAndRows(root, turns, testCase.name);
+    assertStimulusVisible(root, turns, nodes, testCase.name);
+    assertFlatBoundaries(root, turns, nodes, testCase.name);
+  }
+});
 
 // --- I1 + I3 ---------------------------------------------------------------
-test('turn outline: message conservation and idempotence across repeated derives at every depth', () => {
+test('turn outline: message conservation and idempotence across repeated derives', () => {
   for (const testCase of generateCases()) {
     const {context, root} = mountCase(testCase.items);
     const flatIds = stableMessageIds(root);
     assert.ok(flatIds.length > 0, `${testCase.name}: fixture has no stable messages`);
 
-    for (const depth of DEPTHS) {
-      context.setPageDepth(depth);
-      assert.deepEqual(stableMessageIds(root), flatIds, `${testCase.name} @ ${depth}: conservation`);
+    context.applyTurnOutline(root);
+    assert.deepEqual(stableMessageIds(root), flatIds, `${testCase.name}: conservation`);
 
-      const before = snapshot(root);
-      context.applyTurnOutline(root);
-      assert.deepEqual(snapshot(root), before, `${testCase.name} @ ${depth}: idempotence`);
-      context.applyTurnOutline(root);
-      assert.deepEqual(snapshot(root), before, `${testCase.name} @ ${depth}: idempotence (third derive)`);
-      assert.deepEqual(stableMessageIds(root), flatIds,
-          `${testCase.name} @ ${depth}: conservation after repeats`);
-    }
+    const before = snapshot(root);
+    context.applyTurnOutline(root);
+    assert.deepEqual(snapshot(root), before, `${testCase.name}: idempotence`);
+    context.applyTurnOutline(root);
+    assert.deepEqual(snapshot(root), before, `${testCase.name}: idempotence (third derive)`);
+    assert.deepEqual(stableMessageIds(root), flatIds,
+        `${testCase.name}: conservation after repeats`);
   }
 });
 
@@ -620,11 +611,11 @@ test('I0 fails for a no-op derive and for a derive that only wraps the N steps b
 test('I2: a landing separator wraps the finished turn and folds the one before it', () => {
   const items = [...finishedTurn('k1', {}), ...finishedTurn('k2', {steps: 2}), ...liveTail('k3')];
   const {context, root, nodes} = mountCase(items);
-  context.setPageDepth('outline');
+  context.applyTurnOutline(root);
 
   let turns = expectedTurns(items);
   assert.equal(wrappers(root).length, 2);
-  assertStateAndRows(root, turns, 'outline', 'before landing');
+  assertStateAndRows(root, turns, 'before landing');
   assert.equal(wrappers(root)[0].dataset.turnOpen, 'false');
   assert.equal(wrappers(root)[1].dataset.turnOpen, 'true');
 
@@ -639,7 +630,7 @@ test('I2: a landing separator wraps the finished turn and folds the one before i
   turns = expectedTurns(items);
   assert.equal(wrappers(root).length, 3);
   assertWrapperCompleteness(root, turns, nodes, 'after landing');
-  assertStateAndRows(root, turns, 'outline', 'after landing');
+  assertStateAndRows(root, turns, 'after landing');
   assert.deepEqual(wrappers(root).map((wrap) => wrap.dataset.turnOpen), ['false', 'false', 'true']);
 });
 
@@ -651,7 +642,7 @@ test('I5: manual open/fold and an expanded N steps bar survive later derives', (
     ...finishedTurn('r3', {steps: 2}),
   ];
   const {context, root, nodes} = mountCase(items);
-  context.setPageDepth('outline');
+  context.applyTurnOutline(root);
 
   const [first, second, third] = wrappers(root);
 
@@ -711,13 +702,13 @@ test('I6: a complete separator-terminated span at the container top wraps, with 
     separator('sep1', {secs: 12}),
   ];
   const bareCase = mountCase(bareItems);
-  bareCase.context.setPageDepth('outline');
+  bareCase.context.applyTurnOutline(bareCase.root);
 
   const bareTurns = expectedTurns(bareItems);
   assert.equal(bareTurns.length, 1);
   assert.equal(bareTurns[0].head, bareItems[0]);
   assertWrapperCompleteness(bareCase.root, bareTurns, bareCase.nodes, 'stimulus-free top turn');
-  assertStateAndRows(bareCase.root, bareTurns, 'outline', 'stimulus-free top turn');
+  assertStateAndRows(bareCase.root, bareTurns, 'stimulus-free top turn');
 
   // With a stimulus: the same span wraps with the stimulus as head.
   const items = [
@@ -728,12 +719,12 @@ test('I6: a complete separator-terminated span at the container top wraps, with 
     separator('sep1', {secs: 12}),
   ];
   const {context, root, nodes} = mountCase(items);
-  context.setPageDepth('outline');
+  context.applyTurnOutline(root);
 
   const turns = expectedTurns(items);
   assert.equal(turns.length, 1);
   assertWrapperCompleteness(root, turns, nodes, 'stimulated top turn');
-  assertStateAndRows(root, turns, 'outline', 'stimulated top turn');
+  assertStateAndRows(root, turns, 'stimulated top turn');
   assert.equal(root.querySelectorAll('.turn-fold-bar').length, 1);
   assert.deepEqual(
       root.querySelector('.turn-fold-content').children.map((child) => child.dataset.messageId),
@@ -751,14 +742,14 @@ test('a stimulus-free complete turn at the container top folds with its first as
     separator('wake-sep', {secs: 31}),
   ];
   const {context, root, nodes} = mountCase(items);
-  context.setPageDepth('outline');
+  context.applyTurnOutline(root);
 
   const turns = expectedTurns(items);
   assert.equal(turns.length, 1);
   assert.equal(turns[0].head, items[0], 'head must be the first assistant message');
   assert.equal(turns[0].head.role, 'assistant');
   assertWrapperCompleteness(root, turns, nodes, 'wake turn');
-  assertStateAndRows(root, turns, 'outline', 'wake turn');
+  assertStateAndRows(root, turns, 'wake turn');
   assertStimulusVisible(root, turns, nodes, 'wake turn');
 });
 
@@ -773,7 +764,7 @@ test('load-more under turn-aligned paging leaves no message outside a turn wrapp
     separator('p1-sep', {secs: 55}),
   ];
   const {context, root, nodes} = mountCase(pageItems);
-  context.setPageDepth('outline');
+  context.applyTurnOutline(root);
   assert.equal(wrappers(root).length, 1, 'first paint wraps the complete turn');
 
   const olderItems = [
@@ -792,7 +783,7 @@ test('load-more under turn-aligned paging leaves no message outside a turn wrapp
 
   const turns = expectedTurns([...olderItems, ...pageItems]);
   assertWrapperCompleteness(root, turns, nodes, 'after load-more');
-  assertStateAndRows(root, turns, 'outline', 'after load-more');
+  assertStateAndRows(root, turns, 'after load-more');
   for (const el of nodes.values()) {
     assert.ok(el.closest('.turn-wrap'), `${el.dataset.messageId} is outside every turn wrapper`);
   }
@@ -843,38 +834,6 @@ test('turn fold bar toggles its single intermediate span', () => {
 
   assert.equal(content.classList.contains('hidden'), false);
   assert.equal(bar.getAttribute('aria-expanded'), 'true');
-});
-
-test('the page depth control drives wrapper state, the N steps bars and its own pressed state', () => {
-  const items = [...finishedTurn('g1', {steps: 2}), ...finishedTurn('g2', {steps: 2})];
-  const {context, root, control} = mountCase(items);
-
-  const pressed = () => control.children
-      .filter((btn) => btn.getAttribute('aria-pressed') === 'true')
-      .map((btn) => btn.dataset.pageDepth);
-  const bands = () => root.querySelectorAll('.turn-fold-content');
-  const openStates = () => wrappers(root).map((wrap) => wrap.dataset.turnOpen);
-
-  context.setPageDepth('outline');
-  assert.deepEqual(pressed(), ['outline']);
-  assert.deepEqual(openStates(), ['false', 'true']);
-  assert.equal(bands().length, 2);
-  assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
-
-  context.setPageDepth('compact');
-  assert.deepEqual(pressed(), ['compact']);
-  assert.deepEqual(openStates(), ['true', 'true']);
-  assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
-
-  context.setPageDepth('expanded');
-  assert.deepEqual(pressed(), ['expanded']);
-  assert.deepEqual(openStates(), ['true', 'true']);
-  assert.equal(bands().every((band) => !band.classList.contains('hidden')), true);
-
-  context.setPageDepth('outline');
-  assert.deepEqual(pressed(), ['outline']);
-  assert.deepEqual(openStates(), ['false', 'true']);
-  assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -1385,7 +1344,6 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
   root.__baseHeight = baseHeight;
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
-  const control = buildDepthControl();
   const timers = makeEngineTimers();
   const fetchCalls = [];
   const {context} = baseSessionContext();
@@ -1394,7 +1352,6 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
   context.document.getElementById = (id) => {
     if (id === 'messages') return root;
     if (id === 'streaming-msg') return stream;
-    if (id === 'page-depth-control') return control;
     for (const child of root.children) {
       if (child.id === id) return child;
     }

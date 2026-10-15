@@ -17,11 +17,6 @@ const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" vi
 // buildTurnFoldBar's turn-fold chevron.
 const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
 
-// Page depth: 'outline' (one row per finished turn, last turn open),
-// 'compact' (every turn open, `N steps` bars closed), 'expanded' (all open).
-let pageDepth = 'outline';
-Chat.pageDepth = pageDepth;
-
 function renderToolActivity(tools) {
   if (!Array.isArray(tools) || !tools.length) return '';
   var rows = tools.map(function(tool, i) {
@@ -233,12 +228,6 @@ function setTurnFoldExpanded(btn, expanded) {
   setTurnFoldBarExpanded(btn, expanded);
 }
 
-function setAllTurnFolds(root, expanded) {
-  Array.from(root.querySelectorAll('.turn-fold-bar')).forEach(bar => {
-    setTurnFoldExpanded(bar, expanded);
-  });
-}
-
 function toggleTurnFold(btn) {
   const wrap = btn.closest && btn.closest('.turn-wrap');
   const engine = turnEngineForWrap(wrap);
@@ -398,11 +387,12 @@ function setTurnOpen(wrap, open) {
   wrap.dataset.turnOpen = String(open);
 }
 
-// open(turn) = override ?? (pageDepth === 'outline' ? isLastWrapper : true)
+// open(turn) = override ?? isLastWrapper: the reader's choice wins; with no
+// choice, only the newest finished turn is open.
 function turnIsOpen(wrap, isLast) {
   const override = wrap.dataset.turnOverride;
   if (override) return override === 'open';
-  return pageDepth === 'outline' ? isLast : true;
+  return isLast;
 }
 
 // Engine-hosted wraps route open/fold through the engine's registry; legacy
@@ -425,10 +415,7 @@ function setTurnOverride(wrap, open) {
 // The derive: wrap every newly finished turn, then set every wrapper's state to
 // open(turn). Runs at session load, at pagination, and when a separator lands.
 function applyTurnOutline(root) {
-  if (!root) {
-    updatePageDepthControl();
-    return;
-  }
+  if (!root) return;
 
   // Hold the reader's place: folding a turn above the viewport changes the
   // height above it, so keep the distance to the bottom (or stay pinned).
@@ -439,34 +426,8 @@ function applyTurnOutline(root) {
 
   const wrappers = turnWrappers(root);
   wrappers.forEach((wrap, i) => setTurnOpen(wrap, turnIsOpen(wrap, i === wrappers.length - 1)));
-  if (pageDepth === 'expanded') setAllTurnFolds(root, true);
 
   root.scrollTop = wasAtBottom ? root.scrollHeight : root.scrollHeight - bottomOffset;
-  updatePageDepthControl();
-}
-
-function updatePageDepthControl() {
-  const control = document.getElementById('page-depth-control');
-  if (!control) return;
-  Array.from(control.children).forEach(btn => {
-    btn.setAttribute('aria-pressed', String(btn.dataset.pageDepth === pageDepth));
-  });
-}
-
-function setPageDepth(depth) {
-  pageDepth = depth;
-  Chat.pageDepth = depth;
-  const root = document.getElementById('messages');
-  const engine = Chat.activeTurnEngineFor(root);
-  if (engine) {
-    engine.setDepth(depth);
-    updatePageDepthControl();
-    return;
-  }
-  // A depth click is the one place that closes a reader-expanded `N steps`
-  // bar; Expand all reopens every bar from the derive.
-  if (root && depth !== 'expanded') setAllTurnFolds(root, false);
-  applyTurnOutline(root);
 }
 
 function renderMessagesIntoContainer(container, messages, sessionId) {
@@ -913,7 +874,6 @@ const GLOBALS = {
   appendMessageObject,
   appendMessage,
   applyTurnOutline,
-  setPageDepth,
 };
 // Turn primitives the window engine builds wraps from and drives through Chat;
 // the fold bar's click handler closes over the module scope. Legacy callers go

@@ -146,17 +146,6 @@
         </div>
         <!-- Backend badge -->
         <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend">{{ active_backend_label or active_backend }}</span>
-        <div id="page-depth-control" class="turn-depth-control" role="group" aria-label="Turn depth">
-          <button type="button" class="turn-depth-btn" data-page-depth="outline"
-                  onclick="setPageDepth('outline')" aria-pressed="true"
-                  title="One row per finished turn, last turn open">Outline</button>
-          <button type="button" class="turn-depth-btn" data-page-depth="compact"
-                  onclick="setPageDepth('compact')" aria-pressed="false"
-                  title="Open every turn, keep the step folds closed">Compact</button>
-          <button type="button" class="turn-depth-btn" data-page-depth="expanded"
-                  onclick="setPageDepth('expanded')" aria-pressed="false"
-                  title="Open every turn and every step fold">Expand all</button>
-        </div>
         <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
         <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
           <div class="flex items-center gap-1.5" title="Context window usage">

@@ -90,18 +90,6 @@
    not chain to the page. */
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
 .turn-collapse:hover { color: #cbd5e1; }
-/* Page depth control (Outline / Compact / Expand all) */
-.turn-depth-control {
-  display: flex; margin-left: 0.5rem; border: 1px solid #475569;
-  border-radius: 0.375rem; overflow: hidden;
-}
-.turn-depth-btn {
-  font-size: 0.75rem; padding: 0.25rem 0.5rem; color: #cbd5e1;
-  white-space: nowrap; transition: background 0.15s, color 0.15s;
-}
-.turn-depth-btn + .turn-depth-btn { border-left: 1px solid #475569; }
-.turn-depth-btn:hover { background: #334155; }
-.turn-depth-btn[aria-pressed="true"] { background: rgba(37, 99, 235, 0.25); color: #93c5fd; }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
 /* Sidebar resize handle */

@@ -2,12 +2,13 @@
 
 Worker.run puts the guard directory first on the PATH of every worker and
 reviewer child, so these tests invoke the wrapper as a subprocess in fresh
-temp repos with real git reachable behind it: stash write forms (and aliases
-expanding to them, shell aliases included) return 2 with the plan's notice
-byte for byte while refs/stash, its reflog and the dirty worktree stay
-untouched; read forms and every other command come out byte-identical to real
-git. The worker/reviewer child PATH contract is checked through the launch
-harness for a work Run and a review Run.
+temp repos with real git reachable behind it: direct stash write forms return
+2 with the notice byte for byte while refs/stash, its reflog and the dirty
+worktree stay untouched; stash read forms, alias forms and every other
+command come out byte-identical to real git (plan 1 v4: alias resolution is
+no longer emulated, so an alias expanding to stash runs in real git). The
+worker/reviewer child PATH contract is checked through the launch harness for
+a work Run and a review Run.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from src.runtime import worker
 
 WRAPPER = worker.GIT_STASH_GUARD_DIR / "git"
 
-# Plan 3 v3, section 4.1: the refusal notice, byte for byte.
+# The refusal notice, byte for byte; plan 1 v4 carries it over unchanged.
 NOTICE = (
     b"CharlieBot worker runs refuse git stash writes: every worktree of this\n"
     b"repository shares one stash stack, so a pop can take another task's entry.\n"
@@ -36,8 +37,8 @@ NOTICE = (
     b'  git worktree add --detach "$(mktemp -d)" HEAD\n'
     b"  (remove it afterwards with: git worktree remove <dir>)\n")
 
-# Every stash write form the guard must refuse, global options and aliases
-# included (plan 3 v3, section 4.2's test list).
+# Every direct stash write form the guard must refuse, global options
+# included (plan 1 v4); alias forms pass to real git, so none appear here.
 REFUSAL_ARGVS = [
     ["stash"],
     ["stash", "push"],
@@ -48,9 +49,6 @@ REFUSAL_ARGVS = [
     ["stash", "clear"],
     ["-C", ".", "stash"],
     ["-c", "k=v", "stash"],
-    ["-c", "alias.s=stash", "s"],
-    ["-c", "alias.t=!git stash", "t"],
-    ["-c", "alias.a=b", "-c", "alias.b=stash", "a"],
 ]
 
 # Commands the guard must hand to real git unchanged; stdout, stderr and exit
@@ -154,57 +152,6 @@ def test_stash_write_forms_are_refused(guard_repo, tmp_path, argv) -> None:
   assert proc.stderr == NOTICE
   assert _stash_state(repo, env) == before
   assert "dirty" in (repo / "tracked.txt").read_text()
-
-
-def test_repo_level_alias_chain_is_refused(guard_repo) -> None:
-  repo, env = guard_repo
-  conftest.run_git(repo, "config", "alias.r1", "r2", env=env)
-  conftest.run_git(repo, "config", "alias.r2", "stash", env=env)
-  before = _stash_state(repo, env)
-
-  proc = _guard_run(repo, ["r1"], env)
-
-  assert proc.returncode == 2
-  assert proc.stderr == NOTICE
-  assert _stash_state(repo, env) == before
-  assert "dirty" in (repo / "tracked.txt").read_text()
-
-
-def test_shell_alias_inner_stash_is_refused(guard_repo) -> None:
-  """The `!` alias body runs with the guard directory still first on PATH.
-
-    Real git would prepend its exec-path (which ships a real git) to the child
-    PATH and let the inner `git stash` bypass the guard; the wrapper runs the
-    body itself instead.
-    """
-  repo, env = guard_repo
-  before = _stash_state(repo, env)
-
-  proc = _guard_run(repo, ["-c", "alias.t=!git stash push -m inner", "t"], env)
-
-  assert proc.returncode == 2
-  assert proc.stderr == NOTICE
-  assert _stash_state(repo, env) == before
-  assert "dirty" in (repo / "tracked.txt").read_text()
-
-
-def test_shell_alias_unexecutable_slash_body_matches_real_git(guard_repo, tmp_path) -> None:
-  """A `!` body carrying a slash is exec'd directly: git's first line is
-    "fatal: cannot exec" with the errno text, not the PATH lookup's
-    "error: cannot run" form."""
-  repo, env = guard_repo
-  real = _real_git(env)
-  no_exec = tmp_path / "no-exec-bin"
-  no_exec.write_text("#!/bin/sh\necho hi\n")
-  no_exec.chmod(0o644)
-  argv = ["-c", f"alias.x=!{no_exec}", "x"]
-
-  guarded = _guard_run(repo, argv, env)
-  plain = subprocess.run([real, *argv], cwd=repo, env=env, capture_output=True, check=False)
-
-  assert (guarded.returncode, guarded.stdout, guarded.stderr) == (plain.returncode, plain.stdout, plain.stderr)
-  assert guarded.stderr.startswith(b"fatal: cannot exec '")
-  assert b"Permission denied" in guarded.stderr
 
 
 @pytest.mark.parametrize("argv", PARITY_ARGVS, ids=lambda argv: " ".join(argv))

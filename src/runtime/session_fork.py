@@ -14,24 +14,19 @@ import asyncio
 import json
 import mmap
 import os
+import pathlib
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Protocol
 
 from src.infra import event_types as ET
 
 if TYPE_CHECKING:
   import numpy as np
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.json_utils import atomic_write_stream
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import EventRef, SessionMetadata, SessionStatus, utc_now, utc_now_iso
-from src.runtime import session_events, session_store, sidebar_state, task_errors
-from src.runtime.chat_events import ARCHIVE_FILE_GLOB, chat_event_archives_dir
-from src.runtime.control_events import ACTOR_USER, build_task_created_event
-from src.runtime.hooks.sidebar_contributions import sidebar_contributions
+from src.infra import config, json_utils, log_once, models
+from src.runtime import chat_events, control_events, session_events, session_store, sidebar_state, task_errors
+from src.runtime.hooks import sidebar_contributions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # The fork/elone API routes (src/runtime/api/sessions.py) open their auto-injected
 # bootstrap prompts with an opener plus the note, and a feature that summarizes
@@ -191,7 +186,7 @@ def _stream_reference_lines(out: BinaryIO, data: bytes | mmap.mmap, take: int) -
   return raw, appended
 
 
-def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int, int]:
+def _stream_reference_file(out: BinaryIO, source: pathlib.Path, take: int) -> tuple[int, int]:
   """Stream one parent source's first ``take`` raw line frames into ``out``.
 
   The source rides an mmap: the frame scan and the window write read the
@@ -228,12 +223,12 @@ class TaskTreeOwner(Protocol):
 
   async def run_elone_replacement(
       self,
-      source: SessionMetadata,
+      source: models.SessionMetadata,
       event_index: int,
       backend: str | None,
-      publish: Callable[[], Awaitable[SessionMetadata]],
+      publish: Callable[[], Awaitable[models.SessionMetadata]],
       archive: Callable[[str], Awaitable[None]],
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Replace one manager source with its elone child and return the child.
 
     The owner validates, redelivers and moves under its own write lock, calls
@@ -249,7 +244,7 @@ class SessionFork:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       events: session_events.SessionEvents,
   ) -> None:
@@ -271,7 +266,7 @@ class SessionFork:
       parent_id: str,
       event_index: int | None = None,
       backend: str | None = None,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Create a new session whose chat log opens with the parent's raw event lines.
 
     A manager source's clone is a sibling at the source's position: it carries the
@@ -292,7 +287,7 @@ class SessionFork:
       parent_id: str,
       event_index: int,
       backend: str | None = None,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Create an Elon-e session: the child's log opens with the parent's raw
     event lines, the parent is archived.
 
@@ -338,9 +333,9 @@ class SessionFork:
     async with self._store.lock_for(source_id):
       fresh_source = await self._store.get_session(source_id)
       if fresh_source:
-        fresh_source.status = SessionStatus.ARCHIVED
+        fresh_source.status = models.SessionStatus.ARCHIVED
         fresh_source.successor_session_id = new_id
-        fresh_source.updated_at = utc_now()
+        fresh_source.updated_at = models.utc_now()
         await self._store.save_metadata(fresh_source, lock_held=True)
     self._events.drop_session_runtime_state(source_id)
 
@@ -349,7 +344,7 @@ class SessionFork:
       parent_id: str,
       event_index: int,
       backend: str | None,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """The worker-source elone: a manager-root child, archived source, successor pointer."""
     meta = await self._spawn_with_history(parent_id, event_index, backend, "E")
     await self._archive_source(parent_id, meta.id)
@@ -362,7 +357,7 @@ class SessionFork:
       event_index: int | None,
       backend: str | None,
       name_prefix: str,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Create a child manager root whose chat log opens with the parent's raw event lines.
 
     The child's ``data/chat_events.jsonl`` first holds the parent's raw event
@@ -393,7 +388,7 @@ class SessionFork:
     # references. The task spec is copied deep so the two nodes' specs never
     # alias one object.
     holds_position = parent.profile == "manager"
-    meta = SessionMetadata(
+    meta = models.SessionMetadata(
         name=f"{name_prefix}{parent.name}",
         schema_version=2,
         profile="manager",
@@ -405,14 +400,14 @@ class SessionFork:
         subtree_prompt_ref=parent.subtree_prompt_ref if holds_position else None,
         node_prompt_ref=parent.node_prompt_ref if holds_position else None,
     )
-    created_event = build_task_created_event(
-        actor=ACTOR_USER,
+    created_event = control_events.build_task_created_event(
+        actor=control_events.ACTOR_USER,
         task_id=meta.id,
         request_id=f"history-copy-{meta.id}",
         task_parent_id=meta.task_parent_id,
         task_spec_hash=None,
     )
-    meta.created_by_event = EventRef(session_id=meta.id, event_id=str(created_event["id"]))
+    meta.created_by_event = models.EventRef(session_id=meta.id, event_id=str(created_event["id"]))
     session_dir = self._store.session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
@@ -421,7 +416,7 @@ class SessionFork:
         "type": ET.CLONE_START,
         "parent_session_id": parent_id,
         "parent_session_name": parent.name,
-        "timestamp": utc_now_iso(),
+        "timestamp": models.utc_now_iso(),
     }
     # The child log is born whole — prefix, marker, creation fact — through one
     # atomic stream. An append after the copy would fdatasync the entire corpus
@@ -441,12 +436,12 @@ class SessionFork:
     return session_store.stamp_thinking_since(meta)
 
   @staticmethod
-  def _copy_on_fork_sync(parent_dir: Path, child_dir: Path) -> None:
+  def _copy_on_fork_sync(parent_dir: pathlib.Path, child_dir: pathlib.Path) -> None:
     """Let every sidebar contribution copy its files from the parent's session directory into the child's."""
-    for contribution in sidebar_contributions():
+    for contribution in sidebar_contributions.sidebar_contributions():
       contribution.copy_on_fork(parent_dir, child_dir)
 
-  def _write_history_file_sync(self, path: Path, parent_id: str, end: int, tail_lines: str) -> None:
+  def _write_history_file_sync(self, path: pathlib.Path, parent_id: str, end: int, tail_lines: str) -> None:
     """Write the parent's raw event lines for ``[0, end)`` plus *tail_lines*
     (the clone-start marker and the child's creation fact) into ``path``.
 
@@ -472,11 +467,11 @@ class SessionFork:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def _write(out: BinaryIO) -> None:
-      archives_dir = chat_event_archives_dir(parent_dir)
+      archives_dir = chat_events.chat_event_archives_dir(parent_dir)
       raw_left = archive_take
       archived = 0
       if raw_left and archives_dir.is_dir():
-        for source in sorted(archives_dir.glob(ARCHIVE_FILE_GLOB)):
+        for source in sorted(archives_dir.glob(chat_events.ARCHIVE_FILE_GLOB)):
           if raw_left <= 0:
             break
           # A full-corpus budget spans nearly the whole file (only an archive
@@ -497,14 +492,14 @@ class SessionFork:
 
       out.write(tail_lines.encode("utf-8"))
 
-    atomic_write_stream(path, _write)
+    json_utils.atomic_write_stream(path, _write)
 
   @staticmethod
-  def _create_session_dirs(session_dir: Path) -> None:
+  def _create_session_dirs(session_dir: pathlib.Path) -> None:
     (session_dir / "data").mkdir(parents=True, exist_ok=True)
 
   @staticmethod
-  def _log_spawn(event: str, meta: SessionMetadata, parent_id: str, event_index: int | None) -> None:
+  def _log_spawn(event: str, meta: models.SessionMetadata, parent_id: str, event_index: int | None) -> None:
     # fork_session and elone_session emit the identical payload shape,
     # distinguished only by event name, so one log-query shape covers both
     # spawn flows; the single helper is what keeps them agreeing.
@@ -519,5 +514,5 @@ def fork() -> SessionFork:
   """The process-wide session fork block."""
   global _fork
   if _fork is None:
-    _fork = SessionFork(get_config(), session_store.store(), session_events.events())
+    _fork = SessionFork(config.get_config(), session_store.store(), session_events.events())
   return _fork

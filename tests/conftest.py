@@ -1586,10 +1586,9 @@ PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
 # Import-path patch target shared by every test that silences or spies on streaming broadcasts.
-# Mock resolves the route through the src.runtime.session_events namespace (src/runtime/session_events.py
-# imports the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
-# events-side import updates this one string. src.runtime.autonamer and src.runtime.worker import
-# the same singleton, so their routes reach the same attribute.
+# mock.patch resolves it to the streaming_manager singleton of src/runtime/streaming.py and
+# setattr's broadcast on that shared object, so every module holding the singleton, whatever
+# import form binds it, calls the patched attribute.
 BROADCAST_PATCH_TARGET = "src.runtime.streaming.streaming_manager.broadcast"
 
 # Import-path patch target for consumer tests that stub fresh metadata reads.

@@ -52,6 +52,7 @@ from src.runtime import (
     master_cc_queue,
     master_cc_state,
     task_execution,
+    task_prompts,
 )
 from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
@@ -237,6 +238,20 @@ def thread_reply_contract(platform: ThreadPlatform, platform_part: str, cfg: Cha
       "thread_reply_format.md",
       likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
   return f"{platform_part}\n\n{scope_doc}\n{red_line}\n{reply_format}"
+
+
+def thread_reply_segment(platform: ThreadPlatform, text: str) -> task_prompts.RuleSegment:
+  """The thread reply contract *text* as one rule segment of a session's managed instructions.
+
+  The sources name the three docs ``thread_reply_contract`` joins into *text*,
+  so the prompt-source audit reaches every prompt file the contract draws from.
+  """
+  return task_prompts.RuleSegment(
+      text=text,
+      sources=tuple(
+          task_prompts.PromptSource(scope=task_prompts.SCOPE_BASE, source_ref=f"prompts/{ref}")
+          for ref in (platform.scope_doc, "thread_reply_redline.md", "thread_reply_format.md")),
+  )
 
 
 def follow_wake_label(platform: ThreadPlatform, floor: str) -> str:

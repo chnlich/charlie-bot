@@ -10,60 +10,61 @@ launch a process.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import pathlib
 
+import conftest
+import fastapi
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, build_session_blocks, build_task_tree, make_home_config
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
-from src.infra import config
-from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.infra import config, models
+from src.runtime.api import deps
 from src.runtime.api import sessions as sessions_api
-from src.runtime.api.deps import (
-    get_config_on_loop,
-    get_run_store,
-    get_session_store,
-    get_task_manager,
-)
 
 pytestmark = pytest.mark.asyncio
 
 
 class _TaskEnv:
 
-  def __init__(self, tmp_path: Path) -> None:
-    self.cfg = make_home_config(tmp_path)
-    self.session_blocks = build_session_blocks(self.cfg)
-    self.tree = build_task_tree(self.cfg, self.session_blocks)
-    app = FastAPI()
+  def __init__(self, tmp_path: pathlib.Path) -> None:
+    self.cfg = conftest.make_home_config(tmp_path)
+    self.session_blocks = conftest.build_session_blocks(self.cfg)
+    self.tree = conftest.build_task_tree(self.cfg, self.session_blocks)
+    app = fastapi.FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
     app.dependency_overrides[config.get_config] = lambda: self.cfg
-    app.dependency_overrides[get_config_on_loop] = lambda: self.cfg
-    app.dependency_overrides[get_session_store] = lambda: self.session_blocks.store
-    app.dependency_overrides[get_task_manager] = lambda: self.tree
-    app.dependency_overrides[get_run_store] = lambda: self.tree.runs
-    self.client = TestClient(app)
+    app.dependency_overrides[deps.get_config_on_loop] = lambda: self.cfg
+    app.dependency_overrides[deps.get_session_store] = lambda: self.session_blocks.store
+    app.dependency_overrides[deps.get_task_manager] = lambda: self.tree
+    app.dependency_overrides[deps.get_run_store] = lambda: self.tree.runs
+    self.client = testclient.TestClient(app)
 
 
 @pytest_asyncio.fixture
-async def env(tmp_path: Path):
+async def env(tmp_path: pathlib.Path):
   return _TaskEnv(tmp_path)
 
 
 async def _tree(env: _TaskEnv) -> dict[str, str]:
   root = await env.tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="Root",
+      backend=None,
+      caller=conftest.OPERATOR)
   worker = await env.tree.create_task(
       request_id="w",
       task_parent_id=root.id,
       profile="worker",
-      task=TaskSpec(goal="worker goal", repo_path="/tmp/repo"),
+      task=models.TaskSpec(goal="worker goal", repo_path="/tmp/repo"),
       name="W",
       backend=None,
-      caller=OPERATOR)
-  await env.tree.patch_task(root.id, PatchSessionTaskRequest(subtree_prompt="the root subtree rule"), caller=OPERATOR)
+      caller=conftest.OPERATOR)
+  await env.tree.patch_task(
+      root.id, models.PatchSessionTaskRequest(subtree_prompt="the root subtree rule"), caller=conftest.OPERATOR)
   return {"root": root.id, "worker": worker.id}
 
 
@@ -71,16 +72,15 @@ async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "ctx-run"
   await env.tree.runs.register_run(
-      RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
+      models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   # The launch seam commits the snapshot; simulate the commit the adapter does.
-  from src.runtime.task_execution import capture_prompt_chain
-  from src.runtime.task_prompts import assemble_snapshot, build_segments
+  from src.runtime import task_execution, task_prompts
   meta = await env.tree.load_meta(ids["worker"])
   assert meta is not None
   index = await env.tree._get_index()
-  chain, node_ref = capture_prompt_chain(env.tree, index, meta)
-  segments, _err = build_segments(env.cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
-  snapshot = assemble_snapshot(segments)
+  chain, node_ref = task_execution.capture_prompt_chain(env.tree, index, meta)
+  segments, _err = task_prompts.build_segments(env.cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  snapshot = task_prompts.assemble_snapshot(segments)
   path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -121,7 +121,7 @@ async def test_context_reads_are_read_only(env: _TaskEnv) -> None:
 async def test_corrupt_new_snapshot_is_an_error(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "corrupt-snapshot"
-  await env.tree.runs.register_run(RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
+  await env.tree.runs.register_run(models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
   snapshot_path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   snapshot_path.parent.mkdir(parents=True, exist_ok=True)
   snapshot_path.write_text("not json at all", encoding="utf-8")

@@ -8,15 +8,12 @@ from the sidebar block. The process builds one block (``search()``); tests monke
 
 import asyncio
 import io
-from pathlib import Path
+import pathlib
 
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.infra.memo import BoundedMemo
-from src.infra.models import SessionMetadata, SessionStatus
+from src.infra import config, log_once, memo, models
 from src.runtime import session_events, session_sidebar, session_store
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 # LRU cap on the content-search miss memo: chat-file path -> {proven-absent
@@ -81,7 +78,7 @@ _ASCII_LOWER = bytes.maketrans(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ", b"abcdefghijklmnop
 # first event), and each scan reports the same failure again — one line per
 # search request per stuck file — while only the first sighting of a reported
 # (session, error) pair carries information.
-_SEARCH_READ_FAILURES_SEEN = WarnOnceRegistry()
+_SEARCH_READ_FAILURES_SEEN = log_once.WarnOnceRegistry()
 
 
 def _log_search_read_failed_once(session_id: str, error: OSError) -> None:
@@ -147,7 +144,7 @@ def _hit_root_covers(
 
 
 def _search_content_sigs_hold(
-    paths: list[Path],
+    paths: list[pathlib.Path],
     stored: tuple[tuple[int, int, int] | None, ...],
 ) -> bool:
   """True when every candidate chat file still carries the derived-from signature.
@@ -170,7 +167,7 @@ def _search_content_sigs_hold(
   return True
 
 
-def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
+def _scan_content_for_hit(path: pathlib.Path, session_id: str, query_lower: str, start: int) -> bool | None:
   """Window scan of a chat-events file for *query_lower* (thread-pool work).
 
   *start* is a byte offset the scan begins at; the caller uses it to re-scan
@@ -223,7 +220,7 @@ class SessionSearch:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       events: session_events.SessionEvents,
       sidebar: session_sidebar.SessionSidebar,
@@ -232,20 +229,23 @@ class SessionSearch:
     self._store = store
     self._events = events
     self._sidebar = sidebar
-    self._search_miss_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
-                                                                    int]]] = BoundedMemo(_SEARCH_MISS_MEMO_LIMIT)
-    self._search_hit_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
-                                                                   int]]] = BoundedMemo(_SEARCH_HIT_MEMO_LIMIT)
-    self._search_match_memo: BoundedMemo[str, tuple[list[SessionMetadata], list[Path],
-                                                    tuple[tuple[int, int, int] | None, ...],
-                                                    list[SessionMetadata]]] = BoundedMemo(_SEARCH_MATCH_MEMO_LIMIT)
+    self._search_miss_memo: memo.BoundedMemo[str,
+                                             memo.BoundedMemo[str,
+                                                              tuple[int, int,
+                                                                    int]]] = memo.BoundedMemo(_SEARCH_MISS_MEMO_LIMIT)
+    self._search_hit_memo: memo.BoundedMemo[str,
+                                            memo.BoundedMemo[str,
+                                                             tuple[int, int,
+                                                                   int]]] = memo.BoundedMemo(_SEARCH_HIT_MEMO_LIMIT)
+    self._search_match_memo: memo.BoundedMemo[str, tuple[list[models.SessionMetadata], list[pathlib.Path], tuple[
+        tuple[int, int, int] | None, ...], list[models.SessionMetadata]]] = memo.BoundedMemo(_SEARCH_MATCH_MEMO_LIMIT)
 
   async def search_sessions(
       self,
       query: str,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
-  ) -> list[SessionMetadata]:
+  ) -> list[models.SessionMetadata]:
     """Search sessions by name (every status) and chat event content (active only), case-insensitive.
 
     Returns at most ``_SEARCH_RESULT_LIMIT`` rows, newest first: the cap keeps
@@ -268,7 +268,7 @@ class SessionSearch:
       query: str,
       include_running_status: bool,
       include_pending_trigger_status: bool,
-  ) -> tuple[list[SessionMetadata], dict[str, dict]]:
+  ) -> tuple[list[models.SessionMetadata], dict[str, dict]]:
     """Search sessions by name (every status) and chat event content (active only), case-insensitive.
 
     Returns ``(rows, derived)`` for consumers that only read: rows are the
@@ -301,12 +301,12 @@ class SessionSearch:
     # One pass lowers every name once: the name-match test and the content-scan
     # candidate split read the same lowered string, and a name hit is by
     # definition no content-scan candidate.
-    matches: list[SessionMetadata] = []
-    content_candidates: list[tuple[SessionMetadata, Path]] = []
+    matches: list[models.SessionMetadata] = []
+    content_candidates: list[tuple[models.SessionMetadata, pathlib.Path]] = []
     for meta in all_meta:
       if query_lower in meta.name.lower():
         matches.append(meta)
-      elif meta.status == SessionStatus.ACTIVE:
+      elif meta.status == models.SessionStatus.ACTIVE:
         content_candidates.append((meta, self._events.get_chat_events_path(meta.id)))
     matches.sort(key=lambda meta: meta.updated_at, reverse=True)
 
@@ -319,8 +319,8 @@ class SessionSearch:
     # its signature (None when the stat failed) — the stored rows' freshness
     # ground must cover the paths that failed too, or a reappearing file could
     # not re-key the derivation.
-    proven_hits: list[SessionMetadata] = []
-    read_jobs: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]] = []
+    proven_hits: list[models.SessionMetadata] = []
+    read_jobs: list[tuple[models.SessionMetadata, pathlib.Path, tuple[int, int, int], int]] = []
     content_sigs: list[tuple[int, int, int] | None] = []
     for meta, path in content_candidates:
       key = str(path)
@@ -345,7 +345,8 @@ class SessionSearch:
     scan_failures = 0
 
     async def _check_content_batch(
-        batch: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]]) -> list[SessionMetadata | None]:
+        batch: list[tuple[models.SessionMetadata, pathlib.Path, tuple[int, int, int], int]]
+    ) -> list[models.SessionMetadata | None]:
       """Read a batch of chat files whose classification demanded bytes, one
       thread-pool task for the batch.
 
@@ -359,7 +360,7 @@ class SessionSearch:
       nonlocal scan_failures
       verdicts = await asyncio.to_thread(
           lambda: [_scan_content_for_hit(path, meta.id, query_lower, start) for meta, path, _, start in batch])
-      out: list[SessionMetadata | None] = []
+      out: list[models.SessionMetadata | None] = []
       for (meta, path, sig, _), verdict in zip(batch, verdicts, strict=True):
         if verdict is None:
           scan_failures += 1
@@ -402,7 +403,7 @@ class SessionSearch:
     """
     roots = self._search_miss_memo.get(memo_key)
     if roots is None:
-      roots = BoundedMemo(_SEARCH_MISS_ROOTS_PER_FILE)
+      roots = memo.BoundedMemo(_SEARCH_MISS_ROOTS_PER_FILE)
     roots.store(needle, sig)
     self._search_miss_memo.store(memo_key, roots)
 
@@ -416,7 +417,7 @@ class SessionSearch:
     """
     roots = self._search_hit_memo.get(memo_key)
     if roots is None:
-      roots = BoundedMemo(_SEARCH_HIT_ROOTS_PER_FILE)
+      roots = memo.BoundedMemo(_SEARCH_HIT_ROOTS_PER_FILE)
     roots.store(needle, sig)
     self._search_hit_memo.store(memo_key, roots)
 
@@ -429,5 +430,6 @@ def search() -> SessionSearch:
   """The process-wide session search block."""
   global _search
   if _search is None:
-    _search = SessionSearch(get_config(), session_store.store(), session_events.events(), session_sidebar.sidebar())
+    _search = SessionSearch(
+        config.get_config(), session_store.store(), session_events.events(), session_sidebar.sidebar())
   return _search

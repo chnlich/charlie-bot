@@ -117,11 +117,6 @@ def type_for_family_prefix(backend_id: str) -> str | None:
   return None
 
 
-def registered_types() -> tuple[str, ...]:
-  """Every registered type, in registration order."""
-  return tuple(backend_type_registration.registrations())
-
-
 def same_continuation_domain(current_id: str, target_id: str, cfg: config.CharlieBotConfig) -> bool:
   """True when the two configured backend ids share one continuation domain.
 

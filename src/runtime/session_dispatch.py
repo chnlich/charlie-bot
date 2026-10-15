@@ -30,33 +30,13 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import RunRecord, SessionMetadata, SessionStatus, ensure_utc
-from src.runtime.control_events import (
-    ACTOR_AGENT,
-    ACTOR_SYSTEM,
-    ACTOR_USER,
-    build_control_event,
-    stable_child_report_id,
-)
-from src.runtime.run_token import CallerIdentity
-from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
-from src.runtime.task_errors import (
-    TaskArchivedError,
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskInvalidError,
-    TaskNotFoundError,
-)
+from src.infra import log_once, models
+from src.runtime import control_events, run_token, takeoff_gate, task_errors
 
 if TYPE_CHECKING:
-  from src.runtime.control_sink import ControlEventSink
-  from src.runtime.runs import RunStore
-  from src.runtime.session_anchors import SessionAnchors
-  from src.runtime.session_events import SessionEvents
-  from src.runtime.session_store import SessionStore
+  from src.runtime import control_sink, runs, session_anchors, session_events, session_store
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 class DispatchFacts(Protocol):
@@ -88,17 +68,17 @@ class DispatchTree(Protocol):
   """
 
   control_lock: asyncio.Lock
-  events: ControlEventSink
-  runs: RunStore
+  events: control_sink.ControlEventSink
+  runs: runs.RunStore
   completion: DispatchCompletion
-  session_store: SessionStore
-  session_events: SessionEvents
-  session_anchors: SessionAnchors
+  session_store: session_store.SessionStore
+  session_events: session_events.SessionEvents
+  session_anchors: session_anchors.SessionAnchors
 
-  async def load_meta(self, session_id: str) -> SessionMetadata | None:
+  async def load_meta(self, session_id: str) -> models.SessionMetadata | None:
     ...
 
-  async def load_task_meta(self, session_id: str) -> SessionMetadata:
+  async def load_task_meta(self, session_id: str) -> models.SessionMetadata:
     ...
 
   def task_state(self, session_id: str) -> str:
@@ -113,13 +93,13 @@ class DispatchTree(Protocol):
   async def _get_index(self) -> Any:
     ...
 
-  def _index_meta(self, index: Any, session_id: str) -> SessionMetadata:
+  def _index_meta(self, index: Any, session_id: str) -> models.SessionMetadata:
     ...
 
-  def _ancestors(self, index: Any, session_id: str) -> list[SessionMetadata]:
+  def _ancestors(self, index: Any, session_id: str) -> list[models.SessionMetadata]:
     ...
 
-  def archived_of(self, index: Any, meta: SessionMetadata) -> bool:
+  def archived_of(self, index: Any, meta: models.SessionMetadata) -> bool:
     ...
 
   def invalidate_tree_index(self) -> None:
@@ -212,16 +192,16 @@ class TaskInputDispatcher:
         user event carries one.
         """
     if event_type not in INPUT_EVENT_TYPES:
-      raise TaskInvalidError(f"{event_type} is not a task input type")
+      raise task_errors.TaskInvalidError(f"{event_type} is not a task input type")
     if input_mode is not None and event_type != ET.USER:
-      raise TaskInvalidError(f"input_mode applies to a user message, not to {event_type}")
-    if event_type == ET.USER and actor != ACTOR_USER:
-      raise TaskForbiddenError("only verified operator input is a real user message")
-    if event_type == ET.SCHEDULED_TRIGGER and actor != ACTOR_SYSTEM:
+      raise task_errors.TaskInvalidError(f"input_mode applies to a user message, not to {event_type}")
+    if event_type == ET.USER and actor != control_events.ACTOR_USER:
+      raise task_errors.TaskForbiddenError("only verified operator input is a real user message")
+    if event_type == ET.SCHEDULED_TRIGGER and actor != control_events.ACTOR_SYSTEM:
       # A scheduled input's provenance is the server's own fire — the
       # scheduler derives the identity and stamps actor=system. No
       # caller (run-token agent included) can mint one.
-      raise TaskForbiddenError("only the server's own scheduler mints scheduled triggers")
+      raise task_errors.TaskForbiddenError("only the server's own scheduler mints scheduled triggers")
     tree = self._tree
     epoch = await tree.session_events.prime_aggregator(session_id)
     restore_announcements: list[tuple[str, dict, int]] = []
@@ -231,7 +211,7 @@ class TaskInputDispatcher:
         # The archived node answers machine input with the one archived
         # sentence, whatever the sender's own standing — the user's message is
         # the only input that gets past this gate (it restores just below).
-        raise TaskArchivedError(session_id)
+        raise task_errors.TaskArchivedError(session_id)
       await self._authorize_agent_message(meta, event_type, from_session)
       events = tree.fact_history(session_id)
       if input_id is not None:
@@ -240,7 +220,7 @@ class TaskInputDispatcher:
           # A replayed input keeps its original identity, timestamps,
           # content, and attachments; no second durable copy exists.
           return existing
-      event = build_control_event(
+      event = control_events.build_control_event(
           event_type,
           actor=actor,
           source_session_id=session_id,
@@ -279,10 +259,10 @@ class TaskInputDispatcher:
         # mutate, so a concurrent edit survives and the listing
         # revision advances; the lift only ever moves forward.
         index = await tree._get_index()
-        when = ensure_utc(event["timestamp"])
+        when = models.ensure_utc(event["timestamp"])
         chain = [tree._index_meta(index, session_id)]
         for ancestor in tree._ancestors(index, session_id):
-          if ancestor.status == SessionStatus.ARCHIVED or tree.archived_of(index, ancestor):
+          if ancestor.status == models.SessionStatus.ARCHIVED or tree.archived_of(index, ancestor):
             break
           chain.append(ancestor)
         for node in chain:
@@ -312,16 +292,16 @@ class TaskInputDispatcher:
         """
     if event_type != ET.AGENT_MESSAGE or meta.profile != "worker":
       return
-    if is_verify_exempt(meta.task):
+    if takeoff_gate.is_verify_exempt(meta.task):
       return
     if from_session != meta.task_parent_id:
-      raise TaskForbiddenError(
+      raise task_errors.TaskForbiddenError(
           f"agent messages to worker task {meta.id} must come from its parent task "
           f"{meta.task_parent_id}; this message names sender {from_session}")
     try:
       await self._tree.check_task_authorization(from_session or "")
-    except DelegationBlockedError as e:
-      raise TaskForbiddenError(str(e)) from e
+    except takeoff_gate.DelegationBlockedError as e:
+      raise task_errors.TaskForbiddenError(str(e)) from e
 
   # ------------------------------------------------------------------
   # Pending inputs (pure, recoverable)
@@ -379,14 +359,15 @@ class TaskInputDispatcher:
     tree = self._tree
     facts = tree.facts_of(session_id)
     if facts.boundary_index is None and not facts.imported_pending_ids:
-      raise TaskInvalidError(f"task {session_id} has no creation or import boundary; it is not a task-tree node")
-    runs = tree.runs.list_run_records_sync(session_id)
+      raise task_errors.TaskInvalidError(
+          f"task {session_id} has no creation or import boundary; it is not a task-tree node")
+    run_records = tree.runs.list_run_records_sync(session_id)
     events = tree.fact_history(session_id)
     # Everything the facts fold treats as acknowledged: a successful run's
     # batch, and the operator's durable input acknowledgements.
     confirmed: set[str] = set(facts.confirmed_input_ids)
     claimed: set[str] = set()
-    for run in runs:
+    for run in run_records:
       launched = run.pid is not None or tree.runs.run_has_terminal_fact(run, events)
       if not launched and tree.runs.stop_requested(events, run.id):
         continue  # a never-launched, stop-requested run releases its batch
@@ -423,21 +404,21 @@ class TaskInputDispatcher:
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
-      raise TaskNotFoundError(f"run {run_id} not found in session {session_id}")
+      raise task_errors.TaskNotFoundError(f"run {run_id} not found in session {session_id}")
     events = tree.runs.load_events_sync(session_id)
     if tree.runs.run_has_terminal_fact(run, events):
-      raise TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+      raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
     if run.pid is not None:
-      raise TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
+      raise task_errors.TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
     if tree.runs.stop_requested(events, run_id):
-      raise TaskConflictError([f"run {run_id} has a durable stop request; it never launches"])
+      raise task_errors.TaskConflictError([f"run {run_id} has a durable stop request; it never launches"])
     pending_ids = [str(e.get("id")) for e in self.pending_inputs(session_id)]
     if input_ids is None:
       batch = pending_ids
     else:
       unknown = [i for i in input_ids if i not in pending_ids]
       if unknown:
-        raise TaskConflictError([inputs_not_pending_conflict(session_id, unknown)])
+        raise task_errors.TaskConflictError([inputs_not_pending_conflict(session_id, unknown)])
       batch = list(input_ids)
     run.input_event_ids = [*run.input_event_ids, *batch]
     await tree.runs.write_record(session_id, run)
@@ -472,7 +453,7 @@ class TaskInputDispatcher:
       decision["reason"] = "task is closed; input retained as history"
       return decision
     events = tree.runs.load_events_sync(session_id)
-    queued: list[RunRecord] = []
+    queued: list[models.RunRecord] = []
     for run in tree.runs.list_run_records_sync(session_id):
       if tree.runs.run_has_terminal_fact(run, events):
         continue
@@ -567,7 +548,7 @@ class TaskInputDispatcher:
         re-evaluations re-acquire the control lock themselves — this method
         never holds it across them.
         """
-    from datetime import datetime
+    import datetime
 
     tree = self._tree
     if input_event_ids:
@@ -580,7 +561,7 @@ class TaskInputDispatcher:
         pending_ids = {str(e.get("id")) for e in self.pending_inputs(session_id)}
         foreign = [i for i in input_event_ids if i not in pending_ids]
         if foreign:
-          raise TaskConflictError([inputs_not_pending_conflict(session_id, foreign)])
+          raise task_errors.TaskConflictError([inputs_not_pending_conflict(session_id, foreign)])
     async with tree.control_lock:
       run = await tree.runs.record_finish_locked(
           session_id,
@@ -588,7 +569,7 @@ class TaskInputDispatcher:
           outcome,
           input_event_ids=input_event_ids,
           exit_code=exit_code,
-          ended_at=ended_at if isinstance(ended_at, datetime) or ended_at is None else None)
+          ended_at=ended_at if isinstance(ended_at, datetime.datetime) or ended_at is None else None)
     # The terminal fact is durable: a worker node's busy interval (its
     # header timer) closes with the Run that opened it. Best-effort: a
     # notification failure is logged by the run owner's seam and never
@@ -604,7 +585,7 @@ class TaskInputDispatcher:
     if durable == "success":
       try:
         await tree.completion.after_run_finished(session_id, run_id)
-      except TaskConflictError as e:
+      except task_errors.TaskConflictError as e:
         log.info(
             "post_finish_completion_blocked",
             session_id=session_id,
@@ -641,7 +622,7 @@ class TaskInputDispatcher:
       summary: str,
       result_refs: list[str] | None = None,
       recipient: str | None,
-      actor: str = ACTOR_AGENT,
+      actor: str = control_events.ACTOR_AGENT,
   ) -> tuple[dict, bool]:
     """Persist one child_report fact to the fixed recipient's log, then wake the parent.
 
@@ -701,7 +682,7 @@ class TaskInputDispatcher:
       summary: str,
       result_refs: list[str] | None = None,
       recipient: str | None,
-      actor: str = ACTOR_AGENT,
+      actor: str = control_events.ACTOR_AGENT,
   ) -> tuple[dict, bool]:
     """deliver_child_report for a caller already holding the control lock.
 
@@ -714,11 +695,11 @@ class TaskInputDispatcher:
     tree = self._tree
     parent_meta = await tree.load_meta(recipient)
     if parent_meta is None:
-      raise TaskNotFoundError(f"report recipient task {recipient} not found")
+      raise task_errors.TaskNotFoundError(f"report recipient task {recipient} not found")
     report_id, existing = self._child_report_delivery(child_session_id, str(source_event.get("id")), recipient)
     if existing is not None:
       return existing, False
-    report = build_control_event(
+    report = control_events.build_control_event(
         ET.CHILD_REPORT,
         actor=actor,
         source_session_id=child_session_id,
@@ -743,7 +724,7 @@ class TaskInputDispatcher:
         and the reparent guard read this, so the three cannot disagree about
         which reports are still owed.
         """
-    report_id = stable_child_report_id(child_session_id, source_event_id, recipient)
+    report_id = control_events.stable_child_report_id(child_session_id, source_event_id, recipient)
     delivered = next((e for e in self._tree.fact_history(recipient) if e.get("id") == report_id), None)
     return report_id, delivered
 
@@ -789,7 +770,7 @@ class TaskInputDispatcher:
           summary=str(close.get("summary") or ""),
           result_refs=list(close.get("result_refs") or []),
           recipient=recipient,
-          actor=ACTOR_SYSTEM,
+          actor=control_events.ACTOR_SYSTEM,
       )
       if created:
         delivered.append(report)
@@ -813,7 +794,7 @@ class TaskInputDispatcher:
           summary=str(close.get("summary") or ""),
           result_refs=list(close.get("result_refs") or []),
           recipient=recipient,
-          actor=ACTOR_SYSTEM,
+          actor=control_events.ACTOR_SYSTEM,
       )
       if created:
         delivered.append(report)
@@ -837,20 +818,20 @@ def input_event_type_for_caller(caller: object) -> str:
   never manufacture a real USER event or another caller's provenance.
   """
 
-  if isinstance(caller, CallerIdentity):
+  if isinstance(caller, run_token.CallerIdentity):
     if caller.is_operator:
       return ET.USER
     claims = caller.claims
     assert claims is not None
     return ET.AGENT_MESSAGE
   assert ET.USER in ROUTE_INPUT_TYPES and ET.AGENT_MESSAGE in ROUTE_INPUT_TYPES
-  raise TaskForbiddenError("message input requires verified caller credentials")
+  raise task_errors.TaskForbiddenError("message input requires verified caller credentials")
 
 
 def agent_provenance(caller: object) -> tuple[str | None, str | None]:
   """The (from_session, from_session_name) provenance for agent-relayed input."""
 
-  if isinstance(caller, CallerIdentity) and not caller.is_operator:
+  if isinstance(caller, run_token.CallerIdentity) and not caller.is_operator:
     claims = caller.claims
     assert claims is not None
     return claims.session_id, None

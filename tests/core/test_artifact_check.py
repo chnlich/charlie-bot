@@ -18,17 +18,16 @@ from unittest.mock import MagicMock, patch
 import conftest
 import pytest
 from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    OPERATOR,
-    ROOT,
-    make_plan_setup,
-    plan_page_html,
-    write_plan_artifact,
-    write_stub_chrome,
+  BUILD_BACKEND_PATCH_TARGET,
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  OPERATOR,
+  ROOT,
+  make_plan_setup,
+  plan_page_html,
+  write_plan_artifact,
+  write_stub_chrome,
 )
 from fastapi import HTTPException
-from tests import test_task_execution
 
 from src.features.artifacts import artifact_check, artifact_shared
 from src.features.artifacts.artifact_check import run_assertions
@@ -38,6 +37,7 @@ from src.infra.config import CharlieBotConfig
 from src.infra.models import ColdReadSpec, DelegateRequest, TaskSpec, TaskType
 from src.runtime import cold_read, spawner_backends, task_errors
 from src.runtime.api import internal
+from tests import test_task_execution
 
 
 def _genre_doc(genre: str, body: str) -> str:
@@ -571,7 +571,6 @@ async def test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_in
   test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, [backend])
 
   child_id = await _delegate_cold_read(tree, session_blocks, manager, page)
-  child = await tree.load_meta(child_id)
   (run,) = [r for r in tree.runs.list_run_records_sync(child_id) if r.kind == "work"]
   await test_task_execution.wait_for_terminal_run(tree, child_id, run.id)
   await _wait_child_report(tree, manager.id)
@@ -625,7 +624,7 @@ async def test_cold_read_empty_answer_counts_as_a_failed_run(tmp_path: Path, mon
   ]
   test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, scripted)
 
-  child_id = await _delegate_cold_read(tree, session_blocks, manager, page)
+  await _delegate_cold_read(tree, session_blocks, manager, page)
   report = await _wait_child_report(tree, manager.id)
 
   assert report["outcome"] == "completed"

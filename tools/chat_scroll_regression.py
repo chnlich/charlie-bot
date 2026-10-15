@@ -184,6 +184,68 @@ CLEAR_CLAMP_JS = """(() => {
   return true;
 })()"""
 
+# The reference row for one wheel notch: the message or turn row nearest the
+# viewport center, remembered as a selector the notch's before/after reads
+# share.
+PICK_CENTER_ROW_JS = """(() => {
+  const c = document.getElementById('messages');
+  const cr = c.getBoundingClientRect();
+  const mid = cr.top + c.clientHeight / 2;
+  let best = null;
+  for (const el of c.querySelectorAll('[data-message-id], [data-turn-key]')) {
+    const r = el.getBoundingClientRect();
+    if (r.height < 4 || r.bottom < cr.top || r.top > cr.bottom) continue;
+    const d = Math.abs((r.top + Math.min(r.height, 40) / 2) - mid);
+    if (!best || d < best.d) best = {el, d};
+  }
+  if (!best) return null;
+  const el = best.el;
+  const sel = el.hasAttribute('data-message-id')
+    ? '[data-message-id="' + el.getAttribute('data-message-id') + '"]'
+    : '[data-turn-key="' + el.getAttribute('data-turn-key') + '"]';
+  window.__wheelRef = sel;
+  return sel;
+})()"""
+
+# The reference row's viewport-relative Y plus the scroll position: one
+# notch's before/after pair.
+WHEEL_REF_STATE_JS = """(() => {
+  const c = document.getElementById('messages');
+  const el = window.__wheelRef ? c.querySelector(window.__wheelRef) : null;
+  return {y: el ? el.getBoundingClientRect().top - c.getBoundingClientRect().top : null,
+          top: c.scrollTop};
+})()"""
+
+# Two animation frames: the settle the jump-to-bottom scenario allows.
+TWO_FRAMES_JS = "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+
+# Per-notch settle: pump animation frames for ``ms`` milliseconds. Pending
+# rAF work keeps headless frame production alive, so a mouseWheel event's
+# scroll is processed within a frame; without it the event pends and
+# coalesces with the next notch into one doubled scroll.
+NOTCH_PUMP_JS = """((ms) => new Promise((resolve) => {
+  const t0 = performance.now();
+  const step = () => {
+    if (performance.now() - t0 < ms) requestAnimationFrame(step);
+    else resolve(true);
+  };
+  requestAnimationFrame(step);
+}))"""
+
+# The last turn's key — the row a jump to the bottom must show.
+LAST_TURN_KEY_JS = """(() => {
+  const e = Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'));
+  if (!e) return null;
+  const turns = e.segments.filter(s => s.kind === 'turn');
+  return turns.length ? turns[turns.length - 1].key : null;
+})()"""
+
+# The bottom spacer's style height: 0 when the window reaches the last segment.
+BOTTOM_SPACER_JS = """(() => {
+  const e = Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'));
+  return e && e.bottomSpacer ? parseFloat(e.bottomSpacer.style.height) : null;
+})()"""
+
 # Engine-level instrumentation: every reproject's reason/pin/position and every
 # scrollTop write, so each scenario's evidence carries the trace that explains
 # its outcome.
@@ -312,9 +374,9 @@ def stub_turn(page: list[dict], prefix: str, i: int, closed: bool) -> None:
     page.append(sep)
 
 
-def page_payload(messages: list[dict], has_more: bool) -> dict:
+def page_payload(messages: list[dict], has_more: bool, next_before: int = -1000) -> dict:
   """One pagination page in the wire shape loadOlderMessages consumes."""
-  return {"messages": messages, "has_more": has_more, "next_before": -1000}
+  return {"messages": messages, "has_more": has_more, "next_before": next_before}
 
 
 def build_stub_pages() -> tuple[list[dict], list[dict]]:
@@ -371,6 +433,20 @@ async def wheel(cdp: CDP, session_id: str, dy: int) -> None:
   await asyncio.sleep(0.35)
 
 
+async def wheel_notch(cdp: CDP, session_id: str, box: dict, delta_y: int = -100) -> None:
+  """One real mouse-wheel notch: a CDP mouseWheel event with a 100px delta,
+  the distance one notch travels on the reader's machine."""
+  await cdp.send(
+      "Input.dispatchMouseEvent", {
+          "type": "mouseWheel",
+          "x": box["x"],
+          "y": box["y"],
+          "deltaX": 0,
+          "deltaY": delta_y,
+      },
+      session_id=session_id)
+
+
 async def wheel_until_trigger(cdp: CDP, session_id: str, max_gestures: int = 6) -> None:
   """Wheel up in real gestures until the pagination trigger fires.
 
@@ -407,7 +483,9 @@ async def wait_reader_settled(cdp: CDP, session_id: str, timeout_s: float = 30.0
   last = None
   while time.monotonic() < deadline:
     last = await ev(cdp, session_id, probe)
-    if last and last["age"] >= 400 and last["queue"] == 0:
+    # A null age is a never-scrolled engine (the age is infinite, which JSON
+    # cannot carry): trivially at rest.
+    if last and (last["age"] is None or last["age"] >= 400) and last["queue"] == 0:
       return
     await asyncio.sleep(0.25)
   fail(f"the reader never settled within {timeout_s}s (last probe {last})")
@@ -610,8 +688,32 @@ async def seed_sessions() -> tuple[str, str, list[dict], object, object]:
             }
         })
     await events.save_chat_event(sid_b, {"type": "master_done"})
+  # The wheel-step scenarios' session: same completed-round shape as the main
+  # one; the scenarios grow it past four viewports with stub pages.
+  wheel_session = await tree.create_task(
+      request_id="seed-wheel",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="Wheel-step regression",
+      backend="fake-scripted",
+      caller=operator)
+  sid_c = wheel_session.id
+  for i in range(40):
+    await events.save_chat_event(sid_c, {"type": "user", "content": f"wheel history question {i:02d}"})
+    await events.save_chat_event(
+        sid_c, {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": f"wheel history answer {i:02d}"
+                }]
+            }
+        })
+    await events.save_chat_event(sid_c, {"type": "master_done"})
   bootstrap = await build_session_bootstrap_data(sid, store, events)
-  return sid, sid_b, bootstrap.messages, store, events
+  return sid, sid_b, sid_c, bootstrap.messages, store, events
 
 
 async def broadcast_user(events, sid: str, text: str) -> None:
@@ -648,12 +750,21 @@ async def bootstrap_messages_now(sid: str, store, events) -> list[dict]:
 
 
 async def run_scenarios(
-    cdp: CDP, page: str, sid: str, sid_b: str, store, events, evidence_dir: Path, results: list[dict]) -> None:
+    cdp: CDP,
+    page: str,
+    sid: str,
+    sid_b: str,
+    sid_c: str,
+    store,
+    events,
+    evidence_dir: Path,
+    results: list[dict]) -> None:
   """The ordered scenario flow; each scenario starts from a state it sets.
 
-  ``page`` is the CDP page session the browser calls ride; ``sid``/``sid_b``
-  are the chat sessions the app serves. Scenario rows append to *results* as
-  they finish, so an aborted run keeps the rows it already produced.
+  ``page`` is the CDP page session the browser calls ride; ``sid``/``sid_b``/
+  ``sid_c`` are the chat sessions the app serves. Scenario rows append to
+  *results* as they finish, so an aborted run keeps the rows it already
+  produced.
   """
   page1, page2 = build_stub_pages()
   cs = page  # every browser call below targets the one page session
@@ -1102,6 +1213,95 @@ async def run_scenarios(
       })
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "single_turn_fold"))
 
+  # -- S12: from the bottom, each wheel notch moves the content one notch ---
+  # The defect this locks out: the height model counted no row gap, so every
+  # row crossing the window's top edge shifted the content 12px — a 100px
+  # notch moved the screen anywhere from 52 to 176px.
+  sc = Scenario("wheel_steps_from_bottom_equal_notch")
+  wheel_pages: list[list[dict]] = []
+  for prefix in ("wh1", "wh2", "wh3"):
+    wheel_page: list[dict] = []
+    for i in range(25):
+      stub_turn(wheel_page, prefix, i, closed=True)
+    wheel_pages.append(wheel_page)
+  await ev(cdp, cs, "window.__sessionId = " + json.dumps(sid_c))
+  # Distinct next_before cursors: an unchanged cursor with has_more trips the
+  # client's no-progress guard and stops pagination early.
+  await ev(
+      cdp, cs, "window.__stubPages = [" + ", ".join(
+          json.dumps(page_payload(page, has_more=page_i < len(wheel_pages) - 1, next_before=-1000 - page_i))
+          for page_i, page in enumerate(wheel_pages)) + "]")
+  await ev(cdp, cs, "switchSession(" + json.dumps(sid_c) + ")")
+  await wait_for(
+      cdp, cs, "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')) "
+      "&& document.querySelector('#messages [data-message-id]')",
+      label="wheel session rendered")
+  await wait_reader_settled(cdp, cs)
+  # Paginate the stub pages in (a short head may already have auto-filled
+  # some); the notches below then run over more than four viewports of folded
+  # rows.
+  while await ev(cdp, cs, "window.__stubPages.length > 0"):
+    await ev(cdp, cs, "window.__fetchLog = []")
+    await scroll_write(cdp, cs, 450)
+    await wheel_until_trigger(cdp, cs)
+    await wait_reader_settled(cdp, cs)
+  loaded = await snap(cdp, cs)
+  sc.check(loaded["sentinel"] is None, "every history page loaded (sentinel gone)")
+  sc.check(
+      loaded["height"] > 4 * loaded["viewport"],
+      f"more than four viewports of folded rows ({loaded['height']} vs {loaded['viewport']})")
+  # Start at the bottom through the jump-to-bottom button.
+  await ev(cdp, cs, "document.getElementById('scroll-to-bottom').click()")
+  await wait_reader_settled(cdp, cs)
+  start = await snap(cdp, cs)
+  sc.check(start["bottom"] <= ANCHOR_TOLERANCE_PX, f"the jump button parked at the bottom ({start['bottom']})")
+  sc.check(start["pinned"] is True, "pin intent armed at the bottom")
+  box = await ev(
+      cdp, cs, "(() => {const r = document.getElementById('messages').getBoundingClientRect();"
+      " return {x: r.x + r.width / 2, y: r.y + r.height / 2};})()")
+  steps = []
+  for i in range(15):
+    ref = await ev(cdp, cs, PICK_CENTER_ROW_JS)
+    before = await ev(cdp, cs, WHEEL_REF_STATE_JS)
+    pump = asyncio.create_task(ev(cdp, cs, NOTCH_PUMP_JS + "(700)"))
+    await asyncio.sleep(0.05)  # the pump is producing frames before the event lands
+    await wheel_notch(cdp, cs, box)
+    await pump
+    after = await ev(cdp, cs, WHEEL_REF_STATE_JS)
+    step = None
+    if before and after and before["y"] is not None and after["y"] is not None:
+      step = after["y"] - before["y"]
+    steps.append({"notch": i, "ref": ref, "before": before, "after": after, "step": step})
+  measured = [s for s in steps if s["step"] is not None]
+  sc.check(len(measured) == len(steps), f"every notch kept its reference row ({len(measured)}/{len(steps)})")
+  for s in measured:
+    sc.check(
+        abs(s["step"] - 100) <= 1.0, f"notch {s['notch']} moved the reference row 100±1px (got {s['step']:.2f})")
+  sc.data.update({"loaded": loaded, "start": start, "steps": steps})
+  await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "wheel_steps"))
+
+  # -- S13: jump to bottom from deep history shows the last turn at once -----
+  # The companion defect: the jump used to write only the scroll position, so
+  # the window stayed up in history and the viewport held blank spacer.
+  sc = Scenario("jump_to_bottom_from_history_shows_last_turn")
+  await scroll_write(cdp, cs, 0)
+  await wait_reader_settled(cdp, cs)
+  top = await snap(cdp, cs)
+  sc.check(top["top"] <= 80, f"reader parked at the top of the loaded history ({top['top']})")
+  sc.check(
+      top["height"] > 4 * top["viewport"],
+      f"more than four viewports of loaded history ({top['height']} vs {top['viewport']})")
+  await ev(cdp, cs, "document.getElementById('scroll-to-bottom').click()")
+  await ev(cdp, cs, TWO_FRAMES_JS)
+  last_key = await ev(cdp, cs, LAST_TURN_KEY_JS)
+  row = await ev(cdp, cs, ROW_OF_JS + f'("{last_key}")') if last_key else None
+  spacer = await ev(cdp, cs, BOTTOM_SPACER_JS)
+  after = await snap(cdp, cs)
+  sc.check(row is not None and row["inView"], f"the last turn's row intersects the viewport ({row})")
+  sc.check(spacer == 0, f"the bottom spacer is 0px tall (got {spacer})")
+  sc.data.update({"top": top, "last_key": last_key, "row": row, "bottom_spacer": spacer, "after": after})
+  await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "jump_to_bottom"))
+
 
 # --- harness shell ----------------------------------------------------------
 
@@ -1165,7 +1365,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   chrome = resolve_chrome(args.chrome or get_config().headless_chrome_bin or None, fail)
   log(f"chat scroll regression · commit {commit} · chrome {chrome}")
 
-  sid, sid_b, _bootstrap_messages, store, events = await seed_sessions()
+  sid, sid_b, sid_c, _bootstrap_messages, store, events = await seed_sessions()
 
   # Isolated server: the real app, lifespan disabled, this checkout's files.
   import uvicorn
@@ -1234,7 +1434,8 @@ async def run_harness(args: argparse.Namespace) -> None:
         {"source": "try { localStorage.setItem('charliebot_access_key', " + json.dumps(key) + "); } catch (e) {}"},
         session_id=page_session)
     await cdp.send("Page.navigate", {"url": f"{base}/?session={sid}"}, session_id=page_session)
-    await run_scenarios(cdp, page_session, sid, sid_b, store, events, evidence_dir, results_payload["scenarios"])
+    await run_scenarios(
+        cdp, page_session, sid, sid_b, sid_c, store, events, evidence_dir, results_payload["scenarios"])
     results_payload["console_errors"] = list(cdp.console_errors)
   except Exception as exc:
     results_payload["aborted_by"] = repr(exc)

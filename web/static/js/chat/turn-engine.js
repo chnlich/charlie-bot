@@ -233,12 +233,10 @@
     effectiveOpen(seg) {
       const state = this.registry.get(seg.key);
       if (state && state.override) return state.override === 'open';
-      if (Chat.pageDepth === 'outline') return this.newestFinishedTurnKey() === seg.key;
-      return true;
+      return this.newestFinishedTurnKey() === seg.key;
     }
 
     effectiveNStepsExpanded(seg) {
-      if (Chat.pageDepth === 'expanded') return true;
       const state = this.registry.get(seg.key);
       return Boolean(state && state.nStepsExpanded);
     }
@@ -482,9 +480,9 @@
       this.stats.measuredTurnCount++;
       if (el.classList.contains('turn-placeholder')) return height;
       // The measurement belongs to the materialization the node was built
-      // for, not to the current policy: a depth change swaps open wraps for
-      // folded rows, and recording the outgoing open wrap's 400px into the
-      // folded table would poison every folded-row height with it.
+      // for, not to the current open state: a manual collapse swaps an open
+      // wrap for a folded row, and recording the outgoing open wrap's 400px
+      // into the folded table would poison every folded-row height with it.
       const parts = (seg.cachedSig || '').split(':');
       if (seg.kind === 'flat') {
         this.measuredFlat.set(seg, height);
@@ -673,18 +671,18 @@
       // The reading position is re-read only when the reader themselves moved
       // (a scroll frame). Every other frame mutates the DOM around the
       // reader — prerender materialization shifts content by the estimate
-      // error, a reset re-derives the whole store, a depth change swaps open
-      // wraps for fold rows — and a capture here would bake the mid-mutation
-      // viewport into the anchor, abandoning the message the reader was
-      // actually holding. A depth change that re-captured would be worse: it
-      // would re-anchor whatever row the previous switch's clamp left at the
-      // top edge, so walking expanded → outline → compact drifts the place
-      // one turn per switch and the reader's message ends screens away.
+      // error, a reset re-derives the whole store, a manual collapse swaps an
+      // open wrap for a fold row — and a capture here would bake the
+      // mid-mutation viewport into the anchor, abandoning the message the
+      // reader was actually holding. A collapse that re-captured would be
+      // worse: it would re-anchor whatever row the previous collapse's clamp
+      // left at the top edge, so repeated collapse-and-reopen drifts the
+      // place one turn per fold and the reader's message ends screens away.
       // Those frames restore the existing anchor instead (the branch below);
       // the recovery path after a hidden container reads the same preserved
       // anchor. While the anchor's turn hides its message, its fold row
       // carries the place (restoreReadingAnchor), so the identity survives
-      // every depth.
+      // the collapse.
       const freshAnchor = reason === 'scroll' ? this.captureReadingAnchor() : null;
       if (freshAnchor) this.readingAnchor = freshAnchor;
       // Hysteresis: while the viewport stays comfortably inside the current
@@ -721,7 +719,7 @@
       // construction.
       const range = wasPinned ? this.pinnedRange() : this.computeTargetRange();
       // The restore target's segment stays projected even when the update
-      // shrank the content above the reader (a depth collapse): without it
+      // shrank the content above the reader (a manual collapse): without it
       // the anchor node cannot come back and the position is lost until the
       // reader scrolls blind through collapsed rows.
       const restoreTarget = snapToBottom
@@ -1113,9 +1111,9 @@
     }
 
     // Viewport-relative top of the fold row standing in for a hidden message:
-    // a depth switch or a manual collapse replaced the message's turn body
-    // with the row, so the row is the position that carries the reader's
-    // place until the turn reopens and the message returns to it. Null when
+    // a manual collapse replaced the message's turn body with the row, so
+    // the row is the position that carries the reader's place until the turn
+    // reopens and the message returns to it. Null when
     // no row stands in (placeholder period, segment out of the window) — the
     // restore keeps waiting instead.
     foldRowTopForAnchor(target) {
@@ -1346,16 +1344,6 @@
       else openPanels.delete(kind.panelClass);
     }
 
-    setDepth(depth) {
-      if (depth !== 'expanded') {
-        this.registry.forEach((state) => { state.nStepsExpanded = false; });
-      }
-      this.measuredOpen.clear();
-      this.segments.forEach((seg) => { seg.cachedSig = null; });
-      this.offsetsDirty = true;
-      this.reproject('depth');
-      this.scheduleIdle();
-    }
   }
 
   // ---------------------------------------------------------------------------

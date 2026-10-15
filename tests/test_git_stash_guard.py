@@ -14,26 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pathlib
 import shutil
 import subprocess
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    WORKER_BUILD_BACKEND_PATCH_TARGET,
-    create_task,
-    init_repo_with_origin,
-    install_scripted_backends,
-    run_git,
-    stub_credentials,
-)
 
 from src.infra import event_types as ET
-from src.infra.models import RunRecord
-from src.runtime.worker import GIT_STASH_GUARD_DIR
+from src.infra import models
+from src.runtime import worker
 
-WRAPPER = GIT_STASH_GUARD_DIR / "git"
+WRAPPER = worker.GIT_STASH_GUARD_DIR / "git"
 
 # Plan 3 v3, section 4.1: the refusal notice, byte for byte.
 NOTICE = (
@@ -80,7 +72,7 @@ def _is_guard_shim_dir(entry: str) -> bool:
   ``git_stash_guard`` directory inside a ``src/runtime`` tree. The launching
   checkout and the imported tree can differ (a worktree-run session inherits
   the launcher's PATH), so any checkout's shim directory matches."""
-  resolved = Path(entry).resolve()
+  resolved = pathlib.Path(entry).resolve()
   return (
       resolved.name == "git_stash_guard" and resolved.parent.name == "runtime" and resolved.parent.parent.name == "src")
 
@@ -92,7 +84,7 @@ def _path_without_guard_shim(raw_path: str) -> str:
   return os.pathsep.join(entry for entry in raw_path.split(os.pathsep) if not _is_guard_shim_dir(entry))
 
 
-def _git_env(tmp_path: Path) -> dict[str, str]:
+def _git_env(tmp_path: pathlib.Path) -> dict[str, str]:
   """Isolated git config so host gitconfig cannot leak into the run, and a PATH
   without the guard shim so the fixture's git calls are real git."""
   env = dict(os.environ)
@@ -108,15 +100,15 @@ def _real_git(env: dict[str, str]) -> str:
   return real
 
 
-def _guard_run(repo: Path, argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
+def _guard_run(repo: pathlib.Path, argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
   """Run the wrapper with its directory first on PATH, like Worker.run does."""
   child_env = dict(env)
-  child_env["PATH"] = f"{GIT_STASH_GUARD_DIR}{os.pathsep}{env['PATH']}"
+  child_env["PATH"] = f"{worker.GIT_STASH_GUARD_DIR}{os.pathsep}{env['PATH']}"
   return subprocess.run([str(WRAPPER), *argv], cwd=repo, env=child_env, capture_output=True, check=False)
 
 
 @pytest.fixture
-def guard_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+def guard_repo(tmp_path: pathlib.Path) -> tuple[pathlib.Path, dict[str, str]]:
   """A fresh repo with one seeded stash entry and a dirty tracked file.
 
     The stash entry is seeded with real git so ``stash list``/``stash show``
@@ -144,10 +136,10 @@ def guard_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
   return repo, env
 
 
-def _stash_state(repo: Path, env: dict[str, str]) -> tuple[str, str]:
+def _stash_state(repo: pathlib.Path, env: dict[str, str]) -> tuple[str, str]:
   """refs/stash's sha and its reflog, the state a refusal must not move."""
-  ref = run_git(repo, "rev-parse", "refs/stash", env=env)
-  reflog = run_git(repo, "reflog", "show", "refs/stash", env=env)
+  ref = conftest.run_git(repo, "rev-parse", "refs/stash", env=env)
+  reflog = conftest.run_git(repo, "reflog", "show", "refs/stash", env=env)
   return ref, reflog
 
 
@@ -166,8 +158,8 @@ def test_stash_write_forms_are_refused(guard_repo, tmp_path, argv) -> None:
 
 def test_repo_level_alias_chain_is_refused(guard_repo) -> None:
   repo, env = guard_repo
-  run_git(repo, "config", "alias.r1", "r2", env=env)
-  run_git(repo, "config", "alias.r2", "stash", env=env)
+  conftest.run_git(repo, "config", "alias.r1", "r2", env=env)
+  conftest.run_git(repo, "config", "alias.r2", "stash", env=env)
   before = _stash_state(repo, env)
 
   proc = _guard_run(repo, ["r1"], env)
@@ -230,7 +222,7 @@ def test_guard_survives_its_directory_twice_on_path(guard_repo) -> None:
   """A repeated guard directory is dropped whole; the run still terminates."""
   repo, env = guard_repo
   child_env = dict(env)
-  guard = str(GIT_STASH_GUARD_DIR)
+  guard = str(worker.GIT_STASH_GUARD_DIR)
   child_env["PATH"] = os.pathsep.join([guard, guard, env["PATH"]])
 
   proc = subprocess.run(
@@ -243,7 +235,7 @@ def test_guard_survives_its_directory_twice_on_path(guard_repo) -> None:
 def test_guard_fails_loudly_without_real_git(guard_repo) -> None:
   repo, env = guard_repo
   child_env = dict(env)
-  child_env["PATH"] = str(GIT_STASH_GUARD_DIR)
+  child_env["PATH"] = str(worker.GIT_STASH_GUARD_DIR)
 
   proc = subprocess.run([str(WRAPPER), "status"], cwd=repo, env=child_env, capture_output=True, check=False)
 
@@ -253,28 +245,20 @@ def test_guard_fails_loudly_without_real_git(guard_repo) -> None:
 
 def test_guard_directory_holds_only_the_wrapper() -> None:
   """The whole directory rides first on PATH, so it must hold nothing else."""
-  assert sorted(p.name for p in GIT_STASH_GUARD_DIR.iterdir()) == ["git"]
+  assert sorted(p.name for p in worker.GIT_STASH_GUARD_DIR.iterdir()) == ["git"]
   assert os.access(WRAPPER, os.X_OK)
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_worker_and_review_runs_put_the_guard_first_on_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Both launch paths hand the backend spawn a PATH led by the guard."""
-  from tests.test_task_execution import (
-      SpawningScriptedBackend,
-      _adapter_with_silent_broadcast,
-      build_env,
-      make_pm_build,
-      result_event,
-      wait_for_review_terminal,
-      wait_for_worktree,
-  )
+  from tests import test_task_execution
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  repo, _origin = init_repo_with_origin(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="root")
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  repo, _origin = conftest.init_repo_with_origin(tmp_path)
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nadd a marker file\n",
       "repo_path": str(repo),
@@ -282,42 +266,45 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       "task_type": "implement",
       "keep_worktree": False,
   }
-  worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker", task=_spec(tree, task_spec))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", []))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  worker_node = await conftest.create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_spec(tree, task_spec))
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("manager turn", []))
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and implement the marker file.", actor="user")
 
   committed: asyncio.Event = asyncio.Event()
-  work_backend = SpawningScriptedBackend([result_event("implemented")], gate=committed.wait)
-  review_backend = SpawningScriptedBackend([result_event("review ok")])
-  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  work_backend = test_task_execution.SpawningScriptedBackend(
+      [test_task_execution.result_event("implemented")], gate=committed.wait)
+  review_backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")])
+  conftest.install_scripted_backends(
+      monkeypatch, [work_backend, review_backend], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(
+  record = models.RunRecord(
       id="run-work",
-      session_id=worker.id,
+      session_id=worker_node.id,
       kind="work",
       backend="fake",
       model="fake-model",
       repo_path=str(repo),
       base_branch="origin/main")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-  tree.dispatch.executor.launch(worker.id, "run-work")
+  tree.dispatch.executor.launch(worker_node.id, "run-work")
 
-  wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
+  wt = await test_task_execution.wait_for_worktree(tree, worker_node.id, "run-work", timeout=10.0)
   (wt / "marker.txt").write_text("implemented\n")
-  run_git(wt, "add", "-A")
-  run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+  conftest.run_git(wt, "add", "-A")
+  conftest.run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
   committed.set()
 
-  await wait_for_review_terminal(tree, worker.id, timeout=15.0, what="the review chain")
+  await test_task_execution.wait_for_review_terminal(tree, worker_node.id, timeout=15.0, what="the review chain")
 
   first_path_entry = work_backend.env["PATH"].split(os.pathsep)[0]
-  assert first_path_entry == str(GIT_STASH_GUARD_DIR)
-  assert review_backend.env["PATH"].split(os.pathsep)[0] == str(GIT_STASH_GUARD_DIR)
+  assert first_path_entry == str(worker.GIT_STASH_GUARD_DIR)
+  assert review_backend.env["PATH"].split(os.pathsep)[0] == str(worker.GIT_STASH_GUARD_DIR)
 
 
 def _spec(tree, spec: dict):
-  from tests.test_task_execution import _task_spec
-  return _task_spec(tree, spec)
+  from tests import test_task_execution
+  return test_task_execution._task_spec(tree, spec)

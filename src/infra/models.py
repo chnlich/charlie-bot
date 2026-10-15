@@ -286,7 +286,7 @@ class LocalPid(BaseModel):
   """A process on the trigger-server host, watched via pidfd.
 
   ``exit_file``/``log`` come from a launcher-started wrapper (schedule-trigger
-  --cmd, artifact check --background): the fire-time label of a finished target
+  --cmd): the fire-time label of a finished target
   reads its exit code out of ``exit_file`` and names ``log``. Both None keeps
   the bare-pid label, which is also what trigger files written before these
   fields existed load as.

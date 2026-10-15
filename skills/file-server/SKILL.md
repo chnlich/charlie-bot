@@ -124,22 +124,24 @@ The trigger is the chat message that asked for the page.
 For a plan, the trigger is the goal sentence of the confirmed understanding, verbatim.
 When no understanding exists, the trigger for a plan is the originating request.
 
-The cold read runs in the background after the page leaves the author.
+The cold read runs in a cold-read child session after the page leaves the author.
 Start the cold read with this command:
 
-    charliebot artifact check <page-file> --genre <genre> --trigger "<trigger>" --background
+    charliebot artifact check <page-file> --genre <genre> --trigger "<trigger>"
 
 - After `charliebot plan present` or `charliebot plan amend`, start the cold read.
 - When verify runs on the plan version, start the cold read in the same turn as the verify delegation.
 - For a page of any other genre: after you share the page, start the cold read.
 
-The command starts the cold read and registers a session wake.
+In a manager session, the command delegates the cold read to a cold-read child of your session.
 After the command prints its result, end the turn.
-When the command prints "wake registration rejected", run the same command without --background.
-Wait for that command to end, and use its output as the log.
+The child's report wakes your session.
+The report states the page path and the sha256 of the page bytes that the cold read read.
+Then the report lists each failed model attempt, the answering model, and the seven answers verbatim.
+In a worker session, the command runs the cold read in the foreground and prints the same lines.
 
-When the wake arrives, read the log that the wake message names.
-When the log ends with "probe could not run", state in the reply that the cold read failed.
+When the cold read fails, state in the reply that the cold read failed.
+In a manager session, cancel the failed child next: `charliebot session cancel <child id> --reason "cold read failed"`.
 When the page changed after the cold read started, check each answer against the current page.
 Each item below is a signal to revise the page:
 
@@ -158,9 +160,7 @@ When a verify round runs, fold the cold-read revisions and the verify findings i
 In the reply, state the count of terms that answer 7 listed and the count that you glossed.
 A revision from cold-read findings closes the gate. That revision gets no cold read.
 
-The cold-read prompt and the backend settings live in `src/features/artifacts/artifact_check.py`.
-The log shows the failure of each backend that the cold read tried.
-After the failures, the log shows the answering backend and the seven answers verbatim.
+The cold-reader instructions and the seven questions live in `prompts/cold_read.md`.
 
 ### Source Check
 

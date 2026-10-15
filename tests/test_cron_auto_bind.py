@@ -602,7 +602,11 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   backend = SpawningScriptedBackend([result_event("reviewed: merged")])
   install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
-  monkeypatch.setattr("src.features.cron.sequence_controller.datetime", _RecycleTestDateTime)
+  # sequence_controller qualifies through the datetime module, so the stand-in binds the
+  # module attribute to a namespace carrying the fake class beside the real UTC and timedelta.
+  monkeypatch.setattr(
+      "src.features.cron.sequence_controller.datetime",
+      types.SimpleNamespace(datetime=_RecycleTestDateTime, UTC=UTC, timedelta=timedelta))
 
   # An anchor and worker-thread directory predate the pinned weekly boundary.
   await session_blocks.anchors.persist_cc_session_id(node_id, "cc-old")

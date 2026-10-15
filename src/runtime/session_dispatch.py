@@ -285,14 +285,14 @@ class TaskInputDispatcher:
         created, re-applied where a new instruction enters the tree: the sender
         must be the worker's own parent, and the parent must hold the
         nearest-real-user-ancestor authorization (takeoff_gate) for
-        implementation work. The read-only verify exemption rides the same
-        one shared judgment (takeoff_gate.is_verify_exempt). A refusal raises
+        implementation work. The read-only exemption rides the same
+        one shared judgment (takeoff_gate.is_read_only_exempt). A refusal raises
         TaskForbiddenError before anything is enqueued; every entry that
         delivers an agent message to a worker node passes through here.
         """
     if event_type != ET.AGENT_MESSAGE or meta.profile != "worker":
       return
-    if takeoff_gate.is_verify_exempt(meta.task):
+    if takeoff_gate.is_read_only_exempt(meta.task):
       return
     if from_session != meta.task_parent_id:
       raise task_errors.TaskForbiddenError(

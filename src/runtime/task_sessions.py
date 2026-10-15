@@ -1177,9 +1177,9 @@ class TaskTreeManager:
     A logical manager child directly under the caller's own manager task is
     coordination work and needs no user authorization; a worker child is
     implementation delegation and still rides the nearest-real-user-ancestor
-    gate (takeoff_gate) — except the read-only verify delegation, which the
-    one shared judgment (takeoff_gate.is_verify_exempt) excuses here exactly
-    as it does on the route and at the launch. On a replayed create *task* is
+    gate (takeoff_gate) — except a read-only delegation (verify, cold-read),
+    which the one shared judgment (takeoff_gate.is_read_only_exempt) excuses
+    here exactly as it does on the route and at the launch. On a replayed create *task* is
     the ORIGINAL node's spec, so re-labeling a replay cannot borrow the
     exemption for a node created as implementation. Any other shape — an
     unrelated root, a foreign parent, a worker parent — is
@@ -1190,11 +1190,11 @@ class TaskTreeManager:
     assert claims is not None
     if (task_parent_id != claims.session_id or parent_meta is None or parent_meta.profile != "manager"):
       raise task_errors.TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
-    if profile == "worker" and not takeoff_gate.is_verify_exempt(task):
+    if profile == "worker" and not takeoff_gate.is_read_only_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
-      # the nearest-real-user-ancestor gate (takeoff_gate) decides. The
-      # read-only verify delegation needs no window, on the same task-type
-      # judgment the route and the launch apply.
+      # the nearest-real-user-ancestor gate (takeoff_gate) decides. A
+      # read-only delegation (verify, cold-read) needs no window, on the same
+      # task-type judgment the route and the launch apply.
       await self.check_task_authorization(claims.session_id)
 
   async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:

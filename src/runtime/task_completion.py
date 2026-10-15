@@ -1054,8 +1054,11 @@ class TaskCompletionManager:
         delivery waits for its review — plus the target-branch landing when
         the task carries a repository — which the execution adapter drives
         through :meth:`evaluate_automatic_completion` with the full verified
-        bundle. A blocked automatic close keeps its blockers visible and the
-        adapters re-evaluate.
+        bundle. A cold-read task's delivery is its report body, which the
+        execution adapter writes before driving the same method, so the
+        generic path below skips it rather than stamp the default body. A
+        blocked automatic close keeps its blockers visible and the adapters
+        re-evaluate.
         """
     tree = self._tree
     meta = await tree.load_task_meta(session_id)
@@ -1068,6 +1071,11 @@ class TaskCompletionManager:
       return
     if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT:
       log.info("worker_delivery_awaits_review", session_id=session_id, run_id=run_id)
+      return
+    if meta.task is not None and meta.task.task_type == TaskType.COLD_READ:
+      # The execution layer writes the report body and completes through
+      # evaluate_automatic_completion itself; the default body must not land first.
+      log.info("cold_read_delivery_awaits_report", session_id=session_id, run_id=run_id)
       return
     pause = self.pause_reason(session_id)
     if pause is not None:

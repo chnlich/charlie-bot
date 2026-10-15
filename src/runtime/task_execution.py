@@ -37,6 +37,7 @@ import asyncio
 import dataclasses
 import errno
 import functools
+import hashlib
 import json
 import shutil
 import time
@@ -56,6 +57,7 @@ from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType
 from src.infra.ndjson import append_ndjson
 from src.infra.tasks import create_logged_task
 from src.runtime import (
+    cold_read,
     master_cc_queue,
     review,
     runs,
@@ -67,6 +69,7 @@ from src.runtime import (
     session_sidebar,
     session_store,
     session_successor,
+    spawner_backends,
     task_prompts,
     thinking_state,
 )
@@ -1482,6 +1485,10 @@ class TaskExecutionAdapter:
         """
     if run.sequence_ref is not None or run.retry_of_run_id is not None:
       return None
+    if meta.task is not None and meta.task.task_type == TaskType.COLD_READ:
+      # Every cold-read run opens a new conversation: the reader answers from
+      # the page alone, with no memory of a previous attempt.
+      return None
     previous = self._previous_run(meta.id, run.id)
     if previous is None:
       return None
@@ -1644,8 +1651,11 @@ class TaskExecutionAdapter:
         Verify runs stay read-only: their contract is entirely managed
         instructions, so their context is the pinned spec and batch alone (no
         worktree, no review artifacts). Repo-less work runs keep the run dir as
-        the working directory.
+        the working directory. A cold-read run's context is the page text and
+        the seven questions alone (no session info, no task-body wrapper).
         """
+    if task_type == TaskType.COLD_READ:
+      return await self._build_cold_read_context(meta, run)
     description = await self._work_description(meta, run)
     task = meta.task
     if task_type == TaskType.VERIFY:
@@ -1677,6 +1687,23 @@ class TaskExecutionAdapter:
     if task is not None and task.keep_worktree:
       parts.append(task_prompts.render_worktree_persistence(self._cfg))
     return "\n\n".join(part for part in parts if part)
+
+  async def _build_cold_read_context(self, meta: SessionMetadata, run: RunRecord) -> str:
+    """The cold-read run's whole input: the page text, one blank line, the seven questions.
+
+        The reader answers from the page alone, so the context carries no
+        session info and no task-body wrapper. The launch reads the page and
+        records the bytes' sha256 on the run's evidence file: the completion
+        report states what the cold read read, even when the page moved since.
+        """
+    cold = meta.task.cold_read if meta.task is not None else None
+    assert cold is not None, f"cold-read run {run.id} of task {meta.id} carries no cold_read spec"
+    page_bytes = await asyncio.to_thread(Path(cold.page_path).read_bytes)
+    evidence = {"page_path": cold.page_path, "page_sha256": hashlib.sha256(page_bytes).hexdigest()}
+    evidence_path = self._tree.runs.run_dir(meta.id, run.id) / cold_read.EVIDENCE_FILENAME
+    await asyncio.to_thread(atomic_write_text, evidence_path, json.dumps(evidence))
+    _system_prompt, questions = cold_read.load_texts(self._cfg.charlie_bot_repo)
+    return cold_read.probe_input(page_bytes.decode("utf-8"), questions, cold.trigger)
 
   async def _build_step_context(
       self,
@@ -2058,6 +2085,10 @@ class TaskExecutionAdapter:
       if run.kind == "review":
         await self._after_review_run(meta, run, durable_outcome)
         return
+      if (meta.task is not None and meta.task.task_type == TaskType.COLD_READ and
+          durable_outcome in ("success", "failed")):
+        await self._after_cold_read_run(meta, run, durable_outcome)
+        return
       if durable_outcome == "success":
         task_type = meta.task.task_type if meta.task is not None else TaskType.IMPLEMENT
         if task_type == TaskType.IMPLEMENT:
@@ -2280,6 +2311,110 @@ class TaskExecutionAdapter:
         fail_event="task_worktree_cleanup_failed",
         remove_failed_event="task_worktree_remove_failed",
     )
+
+  async def _after_cold_read_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
+    """The cold-read delivery chain: report the answer, retry the next backend, or report every model failed.
+
+        A cold-read run succeeds only when its final answer text is not empty.
+        A failed run — or a successful run whose answer is empty — records its
+        backend and error on the run's evidence file, and the next backend
+        from ``select_verify_backend`` (the requesting session's order, tried
+        backends skipped) takes a new work run in the same child session. When
+        no backend remains, the parent gets the failure report and the child
+        stays open, as a failed verify does.
+        """
+    session_id = meta.id
+    answer: str | None = None
+    if durable_outcome == "success":
+      events_log = self._tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME
+      answer = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
+      if answer is not None:
+        await self._complete_cold_read(meta, run, answer)
+        return
+    error = "empty final answer" if durable_outcome == "success" else await self._cold_read_attempt_error(
+        session_id, run)
+    await self._record_cold_read_attempt(meta, run, error)
+    work_runs = [r for r in self._tree.runs.list_run_records_sync(session_id) if r.kind == "work"]
+    tried = [r.backend for r in work_runs if r.backend]
+    selection = await spawner_backends.select_verify_backend(
+        meta.task_parent_id or "", self._cfg, self._tree.session_store, tried)
+    if selection is not None:
+      resolved_backend, resolved_model, _tried = selection
+      async with self._tree.control_lock:
+        run_id = stable_run_id(session_id, f"cold-read:work:{len(work_runs)}")
+        record = RunRecord(
+            id=run_id,
+            session_id=session_id,
+            kind="work",
+            backend=resolved_backend,
+            model=resolved_model,
+        )
+        await self._tree.runs.register_run_locked(record, task_spec_text=canonical_task_spec_text(meta.task))
+      self.launch(session_id, run_id)
+      return
+    body = await self._cold_read_report(meta, run, backend_id=None, answer=None)
+    await self._report_failure_to_parent(session_id, run, "failed", summary=body)
+
+  async def _complete_cold_read(self, meta: SessionMetadata, run: RunRecord, answer: str) -> None:
+    """Write the success report body and close the child through the automatic completion."""
+    body = await self._cold_read_report(meta, run, backend_id=run.backend, answer=answer)
+    try:
+      await self._tree.completion.evaluate_automatic_completion(meta.id, run_id=run.id, summary=body)
+    except TaskConflictError as e:
+      log.warning(
+          "cold_read_delivery_close_blocked", session_id=meta.id, run_id=run.id, blockers=getattr(e, "blockers", None))
+
+  async def _cold_read_attempt_error(self, session_id: str, run: RunRecord) -> str:
+    """The failed cold-read run's error for the report's attempt line: the run's error
+    event, its closing text when no error event exists, or the bare fallback."""
+    events_log = self._tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME
+    if events_log.is_file():
+      error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
+      if error_text:
+        return error_text
+      text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
+      if text:
+        return text
+    return f"run {run.id} failed without a reportable output"
+
+  async def _record_cold_read_attempt(self, meta: SessionMetadata, run: RunRecord, error: str) -> None:
+    """Record one failed cold-read attempt on the run's evidence file (the report reads it back)."""
+    cold = meta.task.cold_read
+    assert cold is not None
+    evidence_path = self._tree.runs.run_dir(meta.id, run.id) / cold_read.EVIDENCE_FILENAME
+    evidence: dict = {"page_path": cold.page_path, "page_sha256": None}
+    if evidence_path.is_file():
+      evidence = json.loads(await asyncio.to_thread(evidence_path.read_text, encoding="utf-8"))
+    evidence["error"] = error
+    await asyncio.to_thread(atomic_write_text, evidence_path, json.dumps(evidence))
+
+  async def _cold_read_report(
+      self, meta: SessionMetadata, run: RunRecord, *, backend_id: str | None, answer: str | None) -> str:
+    """The report body for one settled cold-read: the page and its sha256, every failed
+    attempt in run order, then the answering backend and its answer — or the all-failed
+    trailer. The sha256 comes from the settling run's evidence file: what that run read."""
+    cold = meta.task.cold_read
+    assert cold is not None
+    session_id = meta.id
+    attempts: list[tuple[str, str]] = []
+    page_sha256: str | None = None
+    for record in self._tree.runs.list_run_records_sync(session_id):
+      if record.kind != "work":
+        continue
+      evidence_path = self._tree.runs.run_dir(session_id, record.id) / cold_read.EVIDENCE_FILENAME
+      if not evidence_path.is_file():
+        continue
+      evidence = json.loads(await asyncio.to_thread(evidence_path.read_text, encoding="utf-8"))
+      if record.id == run.id:
+        page_sha256 = evidence.get("page_sha256")
+      if "error" in evidence and record.backend:
+        attempts.append((record.backend, evidence["error"]))
+    if page_sha256 is None:
+      # The settling run never read the page (its launch failed on the read):
+      # state the page as it stands at report time.
+      page_bytes = await asyncio.to_thread(Path(cold.page_path).read_bytes)
+      page_sha256 = hashlib.sha256(page_bytes).hexdigest()
+    return cold_read.format_report(cold.page_path, page_sha256, attempts, backend_id, answer)
 
   async def _report_failure_to_parent(
       self, session_id: str, run: RunRecord, outcome: str, *, summary: str | None = None) -> None:

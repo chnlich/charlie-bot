@@ -13,39 +13,12 @@ from pydantic import BaseModel, TypeAdapter, field_validator
 from starlette.responses import Response
 
 from src.infra import event_types as ET
+from src.infra import models
 from src.infra.compression import gzip_level1
 from src.infra.config import CharlieBotConfig, get_config
 from src.infra.event_types import BACKEND_SWITCHED
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
-from src.infra.models import (
-    AcknowledgeTaskInputsRequest,
-    AncestorRef,
-    CancelRunRequest,
-    CancelTaskRequest,
-    CompleteTaskRequest,
-    CreateSessionRequest,
-    DeleteGroupRequest,
-    EloneSessionRequest,
-    ForkSessionRequest,
-    PatchSessionTaskRequest,
-    RateRoundRequest,
-    RenameGroupRequest,
-    RetryRunRequest,
-    RunCancelResponse,
-    RunKind,
-    RunPage,
-    RunRow,
-    SessionMetadata,
-    SessionRow,
-    SessionStatus,
-    SetGroupRequest,
-    SwitchBackendRequest,
-    TaskState,
-    TriggerStatus,
-    UtcDatetime,
-    WorkState,
-)
 from src.infra.responses import (
     GZIP_RESPONSE_HEADERS,
     FastJsonResponse,
@@ -125,17 +98,17 @@ router = APIRouter()
 # The search route's read-only overlay serializes derived datetimes through the
 # model's own JSON scheme: a hand-rolled isoformat() emits +00:00 where the
 # model's UtcDatetime fields emit Z.
-_UTC_DATETIME_JSON = TypeAdapter(UtcDatetime | None)
+_UTC_DATETIME_JSON = TypeAdapter(models.UtcDatetime | None)
 
 # Read from the Literal so the preview's 400 cannot drift from the type home.
-_RUN_KINDS = frozenset(get_args(RunKind))
+_RUN_KINDS = frozenset(get_args(models.RunKind))
 
 
 def _default_backend_id(cfg: CharlieBotConfig) -> str:
   return cfg.backends.options[0].id if cfg.backends.options else "claude"
 
 
-def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
+def _active_backend_payload(meta: models.SessionMetadata, cfg: CharlieBotConfig) -> dict:
   # A worker node displays its newest Run's backend (the delegation's target
   # model), never the inherited creation value the persisted field carries.
   binding = binding_for(meta.id)
@@ -329,7 +302,7 @@ class _SessionsListMemos:
     self.gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
     # One steady-state whole-body slot beside the gzip memo: the search
     # route's _search_whole_body mechanism. The slot is only ever replaced whole.
-    self.whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
+    self.whole_body: tuple[tuple[models.SessionMetadata, ...], tuple, bytes] | None = None
     # The changed round's per-row render: row id -> (overlay state, schedule
     # state, row, final payload dict). The slot holds the row, and a live
     # reference pins its id(), so an id hit is that row and only that row; the
@@ -339,13 +312,13 @@ class _SessionsListMemos:
     # are handed to the JSON renderer uncopied and never mutated after the
     # controller listing join, which keeps a shared slot read-only. Pruned to
     # the current projection after each changed round.
-    self.row_render: dict[int, tuple[tuple, tuple, SessionMetadata, dict]] = {}
+    self.row_render: dict[int, tuple[tuple, tuple, models.SessionMetadata, dict]] = {}
 
 
 _workspace_list_memos = _SessionsListMemos()
 
 
-async def _active_listing_corpus(listing: SessionListing) -> tuple[list[SessionMetadata], dict[str, dict]]:
+async def _active_listing_corpus(listing: SessionListing) -> tuple[list[models.SessionMetadata], dict[str, dict]]:
   """The active non-scheduled corpus with its status derivations, read-only.
 
   One home for the fetch both sidebar root lists ride: the Workspace list and
@@ -354,7 +327,7 @@ async def _active_listing_corpus(listing: SessionListing) -> tuple[list[SessionM
   lists.
   """
   return await listing.list_sessions_readonly(
-      status=SessionStatus.ACTIVE,
+      status=models.SessionStatus.ACTIVE,
       scheduled=False,
       include_running_status=True,
       include_pending_trigger_status=True,
@@ -364,7 +337,7 @@ async def _active_listing_corpus(listing: SessionListing) -> tuple[list[SessionM
 
 async def _sessions_list_response(
     request: Request,
-    rows: list[SessionMetadata],
+    rows: list[models.SessionMetadata],
     derived: dict[str, dict],
     memos: _SessionsListMemos,
 ) -> Response:
@@ -382,7 +355,7 @@ async def _sessions_list_response(
   rows. Each task row carries its own overlay state.
   """
   listing_fields = sequence_listing_fields((row.id for row in rows), datetime.now(UTC))
-  rendered: list[tuple[SessionMetadata, tuple, tuple]] = []
+  rendered: list[tuple[models.SessionMetadata, tuple, tuple]] = []
   for row in rows:
     listing_state = tuple(listing_fields[row.id].items())
     entry = derived[row.id]
@@ -461,13 +434,13 @@ async def list_sessions(
   return await _sessions_list_response(request, rows, derived, _workspace_list_memos)
 
 
-@router.post("/", response_model=SessionMetadata)
+@router.post("/", response_model=models.SessionMetadata)
 async def create_session(
-    req: CreateSessionRequest,
+    req: models.CreateSessionRequest,
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
     # v2 task create: the task-tree owner binds (parent, request_id) to one node.
     if req.request_id is None:
@@ -592,14 +565,16 @@ async def list_groups(listing: SessionListing = Depends(get_session_listing)) ->
 
 
 @router.post("/groups/rename")
-async def rename_group(req: RenameGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
+async def rename_group(
+    req: models.RenameGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
   """Rename a group across all sessions."""
   count = await lifecycle.rename_group(req.old_name, req.new_name)
   return {"updated": count}
 
 
 @router.post("/groups/delete")
-async def delete_group(req: DeleteGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
+async def delete_group(
+    req: models.DeleteGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
   """Remove a group from all sessions (sets group to null)."""
   count = await lifecycle.delete_group(req.group)
   return {"updated": count}
@@ -659,7 +634,7 @@ async def all_sessions_status(
         # the sessions' metadata, so the resolution the memo hit skipped
         # happens here, on the one poll in ten that carries the tick.
         sessions = await store.get_sessions_readonly(requested)
-        active = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
+        active = [m for m in sessions if m.status != models.SessionStatus.ARCHIVED]
         if active:
           sidebar.schedule_sidebar_sweep(active)
       return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
@@ -720,8 +695,8 @@ _SEARCH_NULL_PIECES: dict[str, bytes] = {
     for key, prefix in _SEARCH_DERIVED_PREFIXES.items()
     if key in ("thinking_since", sidebar_state.NEXT_TRIGGER_AT)
 }
-_search_row_fragments: BoundedMemo[int, tuple[SessionMetadata, tuple[bytes | str,
-                                                                     ...]]] = BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
+_search_row_fragments: BoundedMemo[int, tuple[models.SessionMetadata,
+                                              tuple[bytes | str, ...]]] = BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
 # The finished row's wire bytes: metadata object -> (that object, the row's five
 # derived values, the spliced body). The body is a pure function of the metadata
 # object and those five values, both in the value — the metadata cache replaces
@@ -730,7 +705,7 @@ _search_row_fragments: BoundedMemo[int, tuple[SessionMetadata, tuple[bytes | str
 # stored object pins the row so an id reuse can never serve another object's
 # bytes.
 _SEARCH_ROW_BODY_CAP = 512
-_search_row_bodies: BoundedMemo[int, tuple[SessionMetadata, tuple, bytes]] = BoundedMemo(_SEARCH_ROW_BODY_CAP)
+_search_row_bodies: BoundedMemo[int, tuple[models.SessionMetadata, tuple, bytes]] = BoundedMemo(_SEARCH_ROW_BODY_CAP)
 # The whole response body of the last render: (the rows' metadata objects, each
 # row's derived values, the body). The body is a pure function of the row
 # sequence and those values, both in the check — so the steady-state repeat
@@ -739,7 +714,7 @@ _search_row_bodies: BoundedMemo[int, tuple[SessionMetadata, tuple, bytes]] = Bou
 # state moved. The stored rows pin their objects, so ids in play can never name
 # another object; the render runs synchronously on the event loop between
 # awaits, so the single slot needs no lock.
-_search_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
+_search_whole_body: tuple[tuple[models.SessionMetadata, ...], tuple, bytes] | None = None
 # The body's gzip form rides the same pure-function ground as the plain bytes
 # above, so the served shape (the browser's search fetch always sends
 # Accept-Encoding: gzip) reads the stored compressed bytes instead of paying
@@ -749,7 +724,7 @@ _SEARCH_GZIP_MEMO_LIMIT = 2
 _search_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SEARCH_GZIP_MEMO_LIMIT)
 
 
-def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...]:
+def _search_row_static_segments(meta: models.SessionMetadata) -> tuple[bytes | str, ...]:
   """Return the row's dump segments: static JSON runs and derived key names.
 
   The route's overlay assigns its derived fields onto keys the model
@@ -807,10 +782,10 @@ def _json_scalar_bytes(value: object) -> bytes:
   raise ValueError(f"unsupported overlay value type: {type(value).__name__}")
 
 
-class SessionDetailResponse(SessionMetadata):
+class SessionDetailResponse(models.SessionMetadata):
   """GET /api/sessions/{id} response: the session metadata plus the derived task fields."""
-  task_state: TaskState = "open"
-  work_state: WorkState = "idle"
+  task_state: models.TaskState = "open"
+  work_state: models.WorkState = "idle"
 
   @field_validator("work_state", mode="before")
   @classmethod
@@ -821,7 +796,7 @@ class SessionDetailResponse(SessionMetadata):
     return "idle" if value is None else value
 
   archived: bool = False
-  ancestors: list[AncestorRef] = []
+  ancestors: list[models.AncestorRef] = []
   # The scope/source/current-rule facts the later Task/Context UI reads; body
   # content stays in the immutable prompt_bodies store.
   prompt_rules: dict = {}
@@ -829,7 +804,7 @@ class SessionDetailResponse(SessionMetadata):
 
 class TreePageResponse(BaseModel):
   """GET /api/sessions/tree response."""
-  items: list[SessionRow]
+  items: list[models.SessionRow]
   next_cursor: str | None = None
   tree_revision: str
 
@@ -890,13 +865,13 @@ async def get_session_tree(
     raise _task_http_error(e) from e
 
 
-@router.get('/search', response_model=list[SessionMetadata])
+@router.get('/search', response_model=list[models.SessionMetadata])
 async def search_sessions(
     request: Request,
     q: str = '',
     listing: SessionListing = Depends(get_session_listing),
     search: SessionSearch = Depends(get_session_search),
-) -> list[SessionMetadata] | Response:
+) -> list[models.SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
     # A whitespace query never reaches the capped scan: the route serves the
@@ -904,7 +879,7 @@ async def search_sessions(
     # whole-body-memo render — the copy path's per-row model_copy plus the
     # response-model walk measured multi-ms on the projected fan-out.
     rows, derived = await listing.list_sessions_readonly(
-        status=SessionStatus.ACTIVE,
+        status=models.SessionStatus.ACTIVE,
         include_running_status=True,
         include_pending_trigger_status=True,
     )
@@ -924,7 +899,7 @@ async def search_sessions(
 
 async def _serve_search_rows(
     request: Request,
-    rows: list[SessionMetadata],
+    rows: list[models.SessionMetadata],
     derived: dict[str, dict],
 ) -> Response:
   """Render the search route's rows through the whole-body memo and serve.
@@ -945,7 +920,7 @@ async def _serve_search_rows(
   # _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole prebuilt
   # null piece (both fields are None on the common idle row), so the pydantic
   # dump_python call under it never runs.
-  rendered: list[tuple[SessionMetadata, tuple]] = []
+  rendered: list[tuple[models.SessionMetadata, tuple]] = []
   for meta in rows:
     entry = derived[meta.id]
     rendered.append(
@@ -971,7 +946,7 @@ async def _serve_search_rows(
   return await gzip_body_response(request, body, {}, _search_gzip_memo)
 
 
-def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
+def _search_row_body(meta: models.SessionMetadata, row_key: tuple) -> bytes:
   """Render one search row's wire bytes, memoized on the row's identity and state."""
   cached = _search_row_bodies.get(id(meta))
   if cached is not None and cached[0] is meta and cached[1] == row_key:
@@ -1023,7 +998,7 @@ async def _switch_payload_response(request: Request, payload: dict | list) -> Re
 @router.get('/{session_id}/pending-triggers')
 async def get_pending_triggers(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
 ) -> list[dict]:
   """Return the session's pending delayed triggers, fire_at ascending.
@@ -1036,7 +1011,7 @@ async def get_pending_triggers(
   """
   triggers = await trigger_mgr.list_triggers(session_id)
   pending = sorted(
-      (tr for tr in triggers if tr.status is TriggerStatus.PENDING),
+      (tr for tr in triggers if tr.status is models.TriggerStatus.PENDING),
       key=lambda tr: tr.fire_at,
   )
   return [tr.model_dump(mode="json") for tr in pending]
@@ -1046,7 +1021,7 @@ async def get_pending_triggers(
 async def get_session_bootstrap(
     session_id: str,
     request: Request,
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     store: SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
@@ -1061,7 +1036,7 @@ async def get_session_bootstrap(
 @router.post('/{session_id}/read')
 async def mark_session_read(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
 ) -> dict:
   """Clear the session's unread flag; the client posts this after a render lands.
@@ -1078,7 +1053,7 @@ async def mark_session_read(
 @router.get('/{session_id}/usage')
 async def get_session_usage(
     session_id: str,
-    meta: SessionMetadata = Depends(require_session),
+    meta: models.SessionMetadata = Depends(require_session),
     anchors: SessionAnchors = Depends(get_session_anchors),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
@@ -1105,7 +1080,7 @@ async def get_session_events_page(
     request: Request,
     before: int,
     limit: int = 40,
-    meta: SessionMetadata = Depends(require_session),
+    meta: models.SessionMetadata = Depends(require_session),
     session_events: SessionEvents = Depends(get_session_events),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
@@ -1166,7 +1141,7 @@ async def get_session_transcript(
     session_id: str,
     after: int = Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
     revision: str = Query(default='', description="The revision the client last rendered"),
-    meta: SessionMetadata = Depends(require_session),
+    meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
   """The live-transcript poll for a worker task.
@@ -1212,7 +1187,7 @@ def _successor_tree_note(new_session_id: str) -> str:
 async def _start_successor_run(
     task_mgr: TaskTreeManager,
     caller: CallerIdentity,
-    meta: SessionMetadata,
+    meta: models.SessionMetadata,
     prompt_head: str,
     directive: str,
 ) -> None:
@@ -1237,16 +1212,16 @@ async def _start_successor_run(
   await task_mgr.dispatch.dispatch_pending(meta.id)
 
 
-@router.post('/{session_id}/fork', response_model=SessionMetadata)
+@router.post('/{session_id}/fork', response_model=models.SessionMetadata)
 async def fork_session(
     session_id: str,
-    body: ForkSessionRequest | None = None,
-    parent: SessionMetadata = Depends(require_session),
+    body: models.ForkSessionRequest | None = None,
+    parent: models.SessionMetadata = Depends(require_session),
     fork: SessionFork = Depends(get_session_fork),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
   backend = _resolve_requested_backend(
       body.backend if body else None,
@@ -1278,16 +1253,16 @@ async def fork_session(
   return meta
 
 
-@router.post('/{session_id}/elone', response_model=SessionMetadata)
+@router.post('/{session_id}/elone', response_model=models.SessionMetadata)
 async def elone_session(
     session_id: str,
-    body: EloneSessionRequest,
-    parent: SessionMetadata = Depends(require_session),
+    body: models.EloneSessionRequest,
+    parent: models.SessionMetadata = Depends(require_session),
     fork: SessionFork = Depends(get_session_fork),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
   try:
@@ -1313,17 +1288,17 @@ async def elone_session(
   return meta
 
 
-@router.post("/{session_id}/backend", response_model=SessionMetadata)
+@router.post("/{session_id}/backend", response_model=models.SessionMetadata)
 async def switch_session_backend(
     session_id: str,
-    body: SwitchBackendRequest,
-    parent: SessionMetadata = Depends(require_session),
+    body: models.SwitchBackendRequest,
+    parent: models.SessionMetadata = Depends(require_session),
     anchors: SessionAnchors = Depends(get_session_anchors),
     lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
     store: SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   """Switch a session's backend in place, across model families.
 
   ``meta.backend`` is an effective current backend: the raw field when set,
@@ -1381,7 +1356,7 @@ async def switch_session_backend(
 
 @router.get("/{session_id}", response_model=SessionDetailResponse)
 async def get_session(
-    meta: SessionMetadata = Depends(require_session),
+    meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> SessionDetailResponse:
   """Session detail; task-tree nodes carry the derived task fields from one projection owner."""
@@ -1434,7 +1409,7 @@ async def delete_session_permanently(
 @router.post("/{session_id}/unarchive")
 async def unarchive_session(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> Response:
@@ -1455,26 +1430,26 @@ async def unarchive_session(
   return JSONResponse({"restored": restored["restored"]})
 
 
-@router.post("/{session_id}/star", response_model=SessionMetadata)
+@router.post("/{session_id}/star", response_model=models.SessionMetadata)
 async def star_session(
-    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> SessionMetadata:
+    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> models.SessionMetadata:
   return require_found(await lifecycle.star_session(session_id))
 
 
-@router.post("/{session_id}/unstar", response_model=SessionMetadata)
+@router.post("/{session_id}/unstar", response_model=models.SessionMetadata)
 async def unstar_session(
-    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> SessionMetadata:
+    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> models.SessionMetadata:
   return require_found(await lifecycle.unstar_session(session_id))
 
 
-@router.post("/{session_id}/rounds/{round_id}/rate", response_model=SessionMetadata)
+@router.post("/{session_id}/rounds/{round_id}/rate", response_model=models.SessionMetadata)
 async def rate_round(
     session_id: str,
     round_id: str,
-    req: RateRoundRequest,
-    meta: SessionMetadata = Depends(require_session),
+    req: models.RateRoundRequest,
+    meta: models.SessionMetadata = Depends(require_session),
     store: SessionStore = Depends(get_session_store),
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   if req.rating is None:
     meta.round_ratings.pop(round_id, None)
   else:
@@ -1488,7 +1463,7 @@ async def rate_round(
 @router.patch("/{session_id}", response_model=SessionDetailResponse)
 async def patch_session(
     session_id: str,
-    req: PatchSessionTaskRequest,
+    req: models.PatchSessionTaskRequest,
     lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
@@ -1512,12 +1487,12 @@ async def patch_session(
   return SessionDetailResponse.model_validate(await task_mgr.session_detail(meta.id))
 
 
-@router.post("/{session_id}/group", response_model=SessionMetadata)
+@router.post("/{session_id}/group", response_model=models.SessionMetadata)
 async def set_session_group(
     session_id: str,
-    req: SetGroupRequest,
+    req: models.SetGroupRequest,
     lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   return require_found(await lifecycle.set_group(session_id, req.group))
 
 
@@ -1550,15 +1525,15 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{session_id}/runs", response_model=RunPage)
+@router.get("/{session_id}/runs", response_model=models.RunPage)
 async def list_session_runs(
     session_id: str,
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = Query(default=None),
     order: str = Query(default="asc"),
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-) -> RunPage:
+) -> models.RunPage:
   """One keyset page of the session's run records over the canonical launch order.
 
   ``order`` defaults to ``asc`` — chronological, queued reservations first —
@@ -1584,20 +1559,20 @@ async def list_session_runs(
   events = task_mgr.runs.load_events_sync(session_id)
   host_boot = await asyncio.to_thread(read_host_boot_time)
   rows = [
-      RunRow(
+      models.RunRow(
           **run.model_dump(),
           state=task_mgr.runs.run_display_state(run, events, host_boot),
           stop_requested=task_mgr.runs.stop_requested(events, run.id),
       ) for run in slice_.items
   ]
-  return RunPage(items=rows, next_cursor=slice_.next_cursor)
+  return models.RunPage(items=rows, next_cursor=slice_.next_cursor)
 
 
 @router.get("/{session_id}/effective-prompt")
 async def get_effective_prompt(
     session_id: str,
     kind: str | None = Query(default=None),
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
@@ -1644,7 +1619,7 @@ async def get_effective_prompt(
   return payload
 
 
-async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> SessionMetadata:
+async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> models.SessionMetadata:
   """The task metadata a context read needs, with the task-tree 404 mapping."""
   meta = await task_mgr.load_meta(session_id)
   if meta is None:
@@ -1671,7 +1646,7 @@ def _legacy_prompt_payload(path: Path) -> dict:
 async def get_run_context(
     session_id: str,
     run_id: str,
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """One historical Run's stored startup snapshot plus its pinned evidence references.
@@ -1738,8 +1713,8 @@ async def get_run_context(
 @router.post("/{session_id}/retry")
 async def retry_session_run(
     session_id: str,
-    req: RetryRunRequest,
-    _meta: SessionMetadata = Depends(require_session),
+    req: models.RetryRunRequest,
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
@@ -1764,7 +1739,7 @@ async def retry_session_run(
 @router.get("/{session_id}/task-inputs/pending", response_model=PendingTaskInputsResponse)
 async def list_pending_task_inputs(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """The task's currently pending inputs, with each one's source and text.
@@ -1794,8 +1769,8 @@ async def list_pending_task_inputs(
 @router.post("/{session_id}/task-inputs/acknowledge")
 async def acknowledge_task_inputs(
     session_id: str,
-    req: AcknowledgeTaskInputsRequest,
-    _meta: SessionMetadata = Depends(require_session),
+    req: models.AcknowledgeTaskInputsRequest,
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
@@ -1817,8 +1792,8 @@ async def acknowledge_task_inputs(
 @router.post("/{session_id}/complete")
 async def complete_session_task(
     session_id: str,
-    req: CompleteTaskRequest,
-    _meta: SessionMetadata = Depends(require_session),
+    req: models.CompleteTaskRequest,
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> Response:
@@ -1851,8 +1826,8 @@ async def _completed_session_detail(task_mgr: TaskTreeManager, session_id: str) 
 @router.post("/{session_id}/cancel", response_model=SessionDetailResponse)
 async def cancel_session_task(
     session_id: str,
-    req: CancelTaskRequest,
-    _meta: SessionMetadata = Depends(require_session),
+    req: models.CancelTaskRequest,
+    _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
@@ -1883,18 +1858,18 @@ def _require_own_run_scope(caller: CallerIdentity, session_id: str, run_id: str)
     raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
 
 
-@router.post("/{session_id}/runs/{run_id}/cancel", response_model=RunCancelResponse)
+@router.post("/{session_id}/runs/{run_id}/cancel", response_model=models.RunCancelResponse)
 async def cancel_session_run(
     session_id: str,
     run_id: str,
-    req: CancelRunRequest,
+    req: models.CancelRunRequest,
     run_store=Depends(get_run_store),
     caller: CallerIdentity = Depends(require_caller),
-) -> RunCancelResponse:
+) -> models.RunCancelResponse:
   """Request one stop: durable fact first, then identity-checked signal and exit observation."""
   _require_own_run_scope(caller, session_id, run_id)
   try:
     result = await run_store.request_stop(session_id, run_id, req.request_id)
   except (RunNotFoundError, RunIdentityConflictError) as e:
     raise _task_http_error(e) from e
-  return RunCancelResponse(run_id=result.run_id, stop_requested=result.stop_requested, outcome=result.outcome)
+  return models.RunCancelResponse(run_id=result.run_id, stop_requested=result.stop_requested, outcome=result.outcome)

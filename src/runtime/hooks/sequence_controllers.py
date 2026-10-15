@@ -14,17 +14,16 @@ unlaunched one, so the node holds no Run that nothing can finish.
 
 from __future__ import annotations
 
+import datetime
 import importlib
-from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
   import asyncio
+  import pathlib
   from collections.abc import Iterable
-  from pathlib import Path
 
-  from src.infra.config import CharlieBotConfig
-  from src.infra.models import RunRecord, SequenceRef, SessionMetadata
+  from src.infra import config, models
 
 
 class SequenceBinding(Protocol):
@@ -37,7 +36,7 @@ class SequenceBinding(Protocol):
     """The 400 detail when a backend switch is refused."""
     ...
 
-  async def on_wake(self, meta: SessionMetadata, input_events: list[dict]) -> str | None:
+  async def on_wake(self, meta: models.SessionMetadata, input_events: list[dict]) -> str | None:
     """Run the node's wake duties and return an optional turn-input prefix."""
     ...
 
@@ -49,13 +48,13 @@ class SequenceBinding(Protocol):
 class SequenceRuns(Protocol):
   """The run store members the sequence controllers call."""
 
-  def run_dir(self, session_id: str, run_id: str) -> Path:
+  def run_dir(self, session_id: str, run_id: str) -> pathlib.Path:
     ...
 
-  async def get_run(self, session_id: str, run_id: str) -> RunRecord | None:
+  async def get_run(self, session_id: str, run_id: str) -> models.RunRecord | None:
     ...
 
-  def list_run_records_sync(self, session_id: str) -> list[RunRecord]:
+  def list_run_records_sync(self, session_id: str) -> list[models.RunRecord]:
     ...
 
   def load_events_sync(self, session_id: str) -> list[dict]:
@@ -67,10 +66,10 @@ class SequenceRuns(Protocol):
   async def terminal_outcome_of(self, session_id: str, run_id: str) -> str | None:
     ...
 
-  def run_has_terminal_fact(self, run: RunRecord, events: list[dict]) -> bool:
+  def run_has_terminal_fact(self, run: models.RunRecord, events: list[dict]) -> bool:
     ...
 
-  async def register_run_locked(self, record: RunRecord, *, task_spec_text: str | None) -> RunRecord:
+  async def register_run_locked(self, record: models.RunRecord, *, task_spec_text: str | None) -> models.RunRecord:
     ...
 
   async def request_stop(self, session_id: str, run_id: str, request_id: str) -> object:
@@ -159,9 +158,9 @@ class SequenceTree(Protocol):
   completion: SequenceCompletion
   session_events: SequenceSessionEvents
   session_successor: SequenceSuccessor
-  _cfg: CharlieBotConfig  # read by the scheduled task's backend resolution
+  _cfg: config.CharlieBotConfig  # read by the scheduled task's backend resolution
 
-  async def load_meta(self, session_id: str) -> SessionMetadata | None:
+  async def load_meta(self, session_id: str) -> models.SessionMetadata | None:
     ...
 
   def task_state(self, session_id: str) -> str:
@@ -171,14 +170,15 @@ class SequenceTree(Protocol):
 class SequenceController(Protocol):
   """A package's runtime interface for one kind of durable sequence."""
 
-  sequence_kind: str  # the SequenceRef.kind whose Runs this controller owns
+  sequence_kind: str  # the models.SequenceRef.kind whose Runs this controller owns
 
-  async def redrive(self, session_id: str, tree: SequenceTree, cfg: CharlieBotConfig) -> None:
+  async def redrive(self, session_id: str, tree: SequenceTree, cfg: config.CharlieBotConfig) -> None:
     """Redrive the sequence that owns a durable Run reference."""
     ...
 
   async def launch_context(
-      self, meta: SessionMetadata, run: RunRecord, launch_text: str, cfg: CharlieBotConfig) -> str | None:
+      self, meta: models.SessionMetadata, run: models.RunRecord, launch_text: str,
+      cfg: config.CharlieBotConfig) -> str | None:
     """One sequence Run's task/input context, composed by its owning controller.
 
     *launch_text* is the prompt the controller passed the adapter at launch
@@ -188,12 +188,14 @@ class SequenceController(Protocol):
     """
     ...
 
-  async def after_run(self, session_id: str, run: RunRecord, tree: SequenceTree, cfg: CharlieBotConfig) -> None:
+  async def after_run(
+      self, session_id: str, run: models.RunRecord, tree: SequenceTree, cfg: config.CharlieBotConfig) -> None:
     """One sequence Run's durable finish: the owning controller's progression duty."""
     ...
 
   async def recover_run(
-      self, session_id: str, run: RunRecord, outcome: str | None, tree: SequenceTree, cfg: CharlieBotConfig) -> bool:
+      self, session_id: str, run: models.RunRecord, outcome: str | None, tree: SequenceTree,
+      cfg: config.CharlieBotConfig) -> bool:
     """Recovery duty for one sequence Run; True adds one follow-up to the counters.
 
     *outcome* is the Run's terminal outcome, or None while it has none. A
@@ -203,7 +205,7 @@ class SequenceController(Protocol):
     """
     ...
 
-  async def reconcile_interrupted(self, cfg: CharlieBotConfig, tree: SequenceTree) -> None:
+  async def reconcile_interrupted(self, cfg: config.CharlieBotConfig, tree: SequenceTree) -> None:
     """Reconcile interrupted sequences before ordinary Run recovery, when needed."""
     return
 
@@ -218,11 +220,11 @@ class SequenceController(Protocol):
     """The sequence binding for *session_id*, if one exists."""
     ...
 
-  def owns_session(self, meta: SessionMetadata) -> bool:
+  def owns_session(self, meta: models.SessionMetadata) -> bool:
     """Whether *meta* carries this controller's legacy ownership marker."""
     ...
 
-  def listing_fields(self, session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
+  def listing_fields(self, session_ids: Iterable[str], now_utc: datetime.datetime) -> dict[str, dict]:
     """Return this controller's per-row fields for one listing batch."""
     ...
 
@@ -256,7 +258,7 @@ def sequence_controllers() -> tuple[SequenceController, ...]:
   return tuple(_load_controller(name) for name in _registered)
 
 
-def controller_for_sequence(ref: SequenceRef) -> SequenceController | None:
+def controller_for_sequence(ref: models.SequenceRef) -> SequenceController | None:
   """The controller that owns *ref*'s sequence kind, if registered."""
   matches = [controller for controller in sequence_controllers() if controller.sequence_kind == ref.kind]
   if len(matches) > 1:
@@ -277,7 +279,7 @@ def binding_for(session_id: str) -> SequenceBinding | None:
   return binding
 
 
-def sequence_listing_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
+def sequence_listing_fields(session_ids: Iterable[str], now_utc: datetime.datetime) -> dict[str, dict]:
   """Merge each controller's listing fields into a row map keyed by session id."""
   ids = tuple(sorted(set(session_ids)))
   fields_by_session = {session_id: {} for session_id in ids}

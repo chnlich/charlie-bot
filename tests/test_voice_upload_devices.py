@@ -7,12 +7,10 @@ is a 400 — only an absent field (a page loaded before the devices existed)
 logs all five as None. Every string here is synthetic.
 """
 
-import io
 import json
 import pathlib
-import wave
 
-import fastapi
+import conftest
 import pytest
 from structlog import testing
 
@@ -37,20 +35,6 @@ DEVICES = {
 }
 
 
-def _wav_body(samples: int = 160) -> bytes:
-  buffer = io.BytesIO()
-  with wave.open(buffer, "wb") as writer:
-    writer.setnchannels(1)
-    writer.setsampwidth(2)
-    writer.setframerate(16_000)
-    writer.writeframes(b"\x00\x00" * samples)
-  return buffer.getvalue()
-
-
-def _upload_file(body: bytes) -> fastapi.UploadFile:
-  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
-
-
 @pytest.fixture
 def endpoint(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """The upload endpoint against a temporary sessions dir and a faked decode."""
@@ -72,7 +56,7 @@ async def _fake_decode(session_id: str, bundle: object, pcm_bytes: bytes) -> str
 async def _post(cfg: config.CharlieBotConfig, devices: str | None) -> tuple[object, list[dict]]:
   with testing.capture_logs() as logs:
     response = await voice.upload_voice_recording(
-        SESSION_ID, audio=_upload_file(_wav_body()), backend=BACKEND, devices=devices)
+        SESSION_ID, audio=conftest.voice_upload_file(conftest.wav_body()), backend=BACKEND, devices=devices)
   return response, logs
 
 

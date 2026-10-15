@@ -9,7 +9,6 @@ import pathlib
 import shlex
 import shutil
 import subprocess
-import time
 from unittest import mock
 
 import conftest

@@ -19,6 +19,33 @@ const TEXT_NODE = 3;
 // Height model behind FakeElement.getBoundingClientRect — see the getter.
 const FAKE_LEAF_HEIGHT = 24;
 
+// Row-gap emulation, opt-in per suite (enableRowGapEmulation): the chat
+// container's `space-y-3` rule gives every non-first, non-hidden child a
+// 12px margin-top, and the turn spacers are the one exception
+// (styles.css: #messages > .turn-spacer { margin-top: 0 }). Off by default;
+// with it off every margin reads 0 and the layout is exactly the old
+// margin-free one.
+const ROW_GAP_PX = 12;
+let rowGapEmulation = false;
+
+function enableRowGapEmulation() {
+  rowGapEmulation = true;
+}
+
+// The emulated margin-top of one element: 12px on each non-first, non-hidden
+// child of #messages while the emulation is on, 0 everywhere else.
+function fakeRowMarginTop(el) {
+  if (!rowGapEmulation) return 0;
+  const parent = el.parentElement;
+  if (!parent || parent.id !== 'messages') return 0;
+  if (el.classList.contains('turn-spacer') || el.classList.contains('hidden')) return 0;
+  for (const sib of parent.children) {
+    if (sib === el) return 0;
+    if (!sib.classList.contains('hidden')) return ROW_GAP_PX;
+  }
+  return 0;
+}
+
 // Selector support the turn engine's reading-anchor lookups need: '.class',
 // '[data-attr]' and '[data-attr="value"]'. Anything else stays unsupported.
 function fakeElementMatches(el, selector) {
@@ -35,8 +62,10 @@ function fakeElementMatches(el, selector) {
 }
 
 // Absolute top within the layout tree: the sum of every preceding sibling's
-// height, walked up to the root. Margin-free by construction — the engine's
-// anchor corrections read rect deltas, which cancel margins on both ends.
+// height, walked up to the root. With row-gap emulation on, each #messages
+// child's own margin-top adds to the walk — a sibling's margin-top collapses
+// with the previous row's zero margin-bottom, so the gap above a row is its
+// own margin.
 function fakeElementTop(el) {
   let top = 0;
   let node = el;
@@ -45,8 +74,11 @@ function fakeElementTop(el) {
     const siblings = parent._nodes;
     const index = siblings.indexOf(node);
     for (let i = 0; i < index; i++) {
-      if (siblings[i].nodeType === ELEMENT_NODE) top += fakeElementHeight(siblings[i]);
+      if (siblings[i].nodeType === ELEMENT_NODE) {
+        top += fakeElementHeight(siblings[i]) + fakeRowMarginTop(siblings[i]);
+      }
     }
+    top += fakeRowMarginTop(node);
     node = parent;
   }
   return top;
@@ -71,7 +103,7 @@ function fakeElementHeight(el) {
   if (styled) return parseFloat(el.style.height);
   if (el.classList.contains('hidden')) return 0;
   let total = el.__baseHeight || 0;
-  for (const child of el.children) total += fakeElementHeight(child);
+  for (const child of el.children) total += fakeElementHeight(child) + fakeRowMarginTop(child);
   if (total === 0 && el.children.length === 0) return FAKE_LEAF_HEIGHT;
   return total;
 }
@@ -680,6 +712,8 @@ function messageIdsUnder(el) {
 module.exports = {
   ELEMENT_NODE,
   TEXT_NODE,
+  ROW_GAP_PX,
+  enableRowGapEmulation,
   FakeText,
   FakeElement,
   loadChatContext,

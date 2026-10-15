@@ -8,24 +8,18 @@ global.
 """
 
 import asyncio
+import datetime
 import os
+import pathlib
 import stat
 from collections.abc import Callable
-from datetime import datetime
-from pathlib import Path
 from typing import Any, NamedTuple
 
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.json_utils import load_json_meta
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.memo import BoundedMemo, StatSignatureMemo, stat_signature
-from src.infra.models import SessionMetadata, SessionStatus, parse_utc_datetime
-from src.infra.tasks import create_logged_task
-from src.runtime import session_store, sidebar_state, trigger_files
-from src.runtime.hooks.sidebar_contributions import sidebar_contributions
-from src.runtime.thinking_state import busy_since
+from src.infra import config, json_utils, log_once, memo, models, tasks
+from src.runtime import session_store, sidebar_state, thinking_state, trigger_files
+from src.runtime.hooks import sidebar_contributions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def _sidebar_entry(
@@ -35,7 +29,7 @@ def _sidebar_entry(
     *,
     running: bool,
     trigger_count: int,
-    next_trigger_at: datetime | None,
+    next_trigger_at: datetime.datetime | None,
     plan_approval: bool,
     task_activity: tuple[bool, str] | None = None,
 ) -> dict:
@@ -64,7 +58,7 @@ def _sidebar_entry(
 
 
 def apply_sidebar_state(
-    sessions: list[SessionMetadata],
+    sessions: list[models.SessionMetadata],
     derived: dict[str, dict],
     include_running_status: bool,
     include_pending_trigger_status: bool,
@@ -106,7 +100,7 @@ def apply_sidebar_state(
 # contract is StatSignatureMemo's). Stored dicts are shared across calls —
 # consumers must treat them as read-only.
 _TRIGGER_META_MEMO_LIMIT = 1024
-_trigger_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TRIGGER_META_MEMO_LIMIT)
+_trigger_meta_memo: memo.StatSignatureMemo[str, dict] = memo.StatSignatureMemo(_TRIGGER_META_MEMO_LIMIT)
 
 # The trigger scan's directory verdict: dir path -> (dir (mtime_ns, size),
 # pending count, earliest fire). Signed on the directory's (mtime_ns, size) on
@@ -114,8 +108,8 @@ _trigger_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TRIGGER_ME
 # states once; the steady-state scan serves it for one directory stat without
 # the scandir+stat walk or the per-file memo loop.
 _TRIGGER_STATE_VERDICT_LIMIT = 1024
-_trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
-                                                datetime | None]] = BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
+_trigger_state_verdicts: memo.BoundedMemo[str, tuple[tuple[int, int], int, datetime.datetime |
+                                                     None]] = memo.BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
 
 # The probe's trigger-dir walk memo: (trigger dir path, its st_mode) -> the
 # walk's (path, stat) pairs, signed on the directory's (mtime_ns, size). Every
@@ -130,8 +124,8 @@ _trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
 # corpus in one pass, and an LRU under that corpus thrashes (each session
 # re-scandirs per sweep).
 _TRIGGER_WALK_MEMO_LIMIT = 4096
-_trigger_walk_pairs: StatSignatureMemo[tuple[str, int],
-                                       list[tuple[str, os.stat_result]]] = StatSignatureMemo(_TRIGGER_WALK_MEMO_LIMIT)
+_trigger_walk_pairs: memo.StatSignatureMemo[tuple[str, int], list[tuple[str, os.stat_result]]] = memo.StatSignatureMemo(
+    _TRIGGER_WALK_MEMO_LIMIT)
 
 
 def _iter_trigger_stats(triggers_dir: str, dir_st: os.stat_result) -> list[tuple[str, os.stat_result]]:
@@ -149,22 +143,22 @@ def _iter_trigger_stats(triggers_dir: str, dir_st: os.stat_result) -> list[tuple
   return pairs
 
 
-def _parse_optional_utc(raw: Any, log_event: str, **log_ctx: Any) -> datetime | None:
+def _parse_optional_utc(raw: Any, log_event: str, **log_ctx: Any) -> datetime.datetime | None:
   """Parse a stored timestamp tolerantly for trigger and plan state scans."""
   if not raw:
     return None
   try:
-    return parse_utc_datetime(raw)
+    return models.parse_utc_datetime(raw)
   except ValueError as e:
     log.debug(log_event, **log_ctx, error=str(e))
     return None
 
 
 def pending_trigger_state_sync(
-    triggers_dir: Path,
+    triggers_dir: pathlib.Path,
     walked: list[tuple[str, os.stat_result]] | None,
     dir_sig: tuple[int, int] | None,
-) -> tuple[int, datetime | None]:
+) -> tuple[int, datetime.datetime | None]:
   """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*.
 
   Steady state pays one directory stat: an unchanged (mtime_ns, size) of the
@@ -203,15 +197,15 @@ def pending_trigger_state_sync(
     walked = _iter_trigger_stats(triggers_str, dst)
 
   pending_count = 0
-  next_trigger_at: datetime | None = None
+  next_trigger_at: datetime.datetime | None = None
   for trigger_path, st in walked:
     if not stat.S_ISREG(st.st_mode):
       continue
     # The memo keys on the walked string path directly.
     trigger = _trigger_meta_memo.fresh(trigger_path, st)
     if trigger is None:
-      trigger = load_json_meta(
-          Path(trigger_path),
+      trigger = json_utils.load_json_meta(
+          pathlib.Path(trigger_path),
           "trigger_meta_read_failed",
           catch=(OSError, ValueError),
       )
@@ -258,8 +252,8 @@ class SidebarProbeSpec(NamedTuple):
   nothing.
   """
   session_id: str
-  triggers_dir: Path
-  session_dir: Path
+  triggers_dir: pathlib.Path
+  session_dir: pathlib.Path
   recheck_liveness: bool = False
 
 
@@ -272,9 +266,9 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   derivation's inputs unchanged, so a fresh-signature poll never hides a
   changed state — and never pays the derivation's reads either.
   """
-  metadata_sig = stat_signature(session_dir_str + "/metadata.json")
-  events_sig = stat_signature(session_dir_str + "/data/chat_events.jsonl")
-  archives_sig = stat_signature(session_dir_str + "/data/archives")
+  metadata_sig = memo.stat_signature(session_dir_str + "/metadata.json")
+  events_sig = memo.stat_signature(session_dir_str + "/data/chat_events.jsonl")
+  archives_sig = memo.stat_signature(session_dir_str + "/data/archives")
   runs_sig: list[tuple[str, int, int]] = []
   runs_dir_str = session_dir_str + "/data/runs"
   try:
@@ -282,7 +276,7 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   except OSError:
     run_names = []
   for name in run_names:
-    run_meta = stat_signature(runs_dir_str + "/" + name + "/metadata.json")
+    run_meta = memo.stat_signature(runs_dir_str + "/" + name + "/metadata.json")
     if run_meta is not None:
       runs_sig.append((name, run_meta[0], run_meta[1]))
   return (metadata_sig, events_sig, archives_sig, tuple(runs_sig))
@@ -306,7 +300,7 @@ def probe_sidebar_state_sync(
   same scandir+stat phase.
   """
   results: dict[str, dict] = {}
-  contributions = sidebar_contributions()
+  contributions = sidebar_contributions.sidebar_contributions()
   for spec in specs:
     inputs = walked.get(spec.session_id) if walked is not None else None
     pending_count, next_trigger_at = pending_trigger_state_sync(
@@ -359,7 +353,7 @@ def _sidebar_probe_walk(spec: SidebarProbeSpec, watched_files: tuple[str, ...]) 
     trigger_pairs = _iter_trigger_stats(triggers_str, dir_st)
     trigger_sig = [(os.path.basename(path), st.st_mtime_ns, st.st_size) for path, st in trigger_pairs]
   session_dir_str = os.fspath(spec.session_dir)
-  watched_sig = tuple(stat_signature(session_dir_str + "/" + rel) for rel in watched_files)
+  watched_sig = tuple(memo.stat_signature(session_dir_str + "/" + rel) for rel in watched_files)
   # The task-tree derivation reads its fact history and Run records; the
   # signature covers those files too, so an unchanged signature can never hide
   # a changed state (and a fresh-signature poll skips their reads).
@@ -404,7 +398,8 @@ def selective_probe_sidebar_state(
   walked_inputs: dict[str, _WalkedProbeInputs] = {}
   to_probe: list[SidebarProbeSpec] = []
   watched_files = tuple(
-      dict.fromkeys(rel for contribution in sidebar_contributions() for rel in contribution.watched_files))
+      dict.fromkeys(
+          rel for contribution in sidebar_contributions.sidebar_contributions() for rel in contribution.watched_files))
   for spec in specs:
     if not isinstance(spec, SidebarProbeSpec):
       spec = SidebarProbeSpec(*spec)
@@ -424,7 +419,7 @@ def selective_probe_sidebar_state(
 class SessionSidebar:
   """Sidebar run flags over the session metadata store."""
 
-  def __init__(self, cfg: CharlieBotConfig, store: session_store.SessionStore) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, store: session_store.SessionStore) -> None:
     self._cfg = cfg
     self._store = store
     # The task-tree owner registers its activity derivation here at wiring
@@ -435,7 +430,7 @@ class SessionSidebar:
     # None only before that wiring exists (no tree consumer in this process).
     self.task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
 
-  def _probe_spec(self, meta: SessionMetadata, *, recheck_liveness: bool = False) -> SidebarProbeSpec:
+  def _probe_spec(self, meta: models.SessionMetadata, *, recheck_liveness: bool = False) -> SidebarProbeSpec:
     """The probe-input spec :func:`selective_probe_sidebar_state` consumes.
 
     ``recheck_liveness`` marks a task-tree node whose stored verdict is
@@ -450,7 +445,7 @@ class SessionSidebar:
 
   async def resolve_sidebar_state(
       self,
-      sessions: list[SessionMetadata],
+      sessions: list[models.SessionMetadata],
       include_running_status: bool,
       include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
@@ -512,13 +507,13 @@ class SessionSidebar:
         if force_full:
           # The every-10th sweep serves the polls that follow it: its stores
           # bump the generation and the next poll re-derives with its results.
-          self.schedule_sidebar_sweep([m for m in sessions if m.status != SessionStatus.ARCHIVED])
+          self.schedule_sidebar_sweep([m for m in sessions if m.status != models.SessionStatus.ARCHIVED])
         return cached
 
     # Archived sessions cannot have running tasks or pending triggers, so skip
     # the per-session filesystem work for them.
-    active_sessions = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
-    archived_sessions = [m for m in sessions if m.status == SessionStatus.ARCHIVED]
+    active_sessions = [m for m in sessions if m.status != models.SessionStatus.ARCHIVED]
+    archived_sessions = [m for m in sessions if m.status == models.SessionStatus.ARCHIVED]
 
     derived: dict[str, dict] = {}
     for meta in archived_sessions:
@@ -578,7 +573,7 @@ class SessionSidebar:
           include_running_status,
           include_pending_trigger_status,
           include_pending_plan_approval,
-          running=bool(busy_since(meta.id)),
+          running=bool(thinking_state.busy_since(meta.id)),
           trigger_count=probed[sidebar_state.PENDING_TRIGGER_COUNT],
           next_trigger_at=probed[sidebar_state.NEXT_TRIGGER_AT],
           plan_approval=bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL]),
@@ -590,7 +585,7 @@ class SessionSidebar:
     sidebar_state.store_derived_map((ids, flags, generation), derived)
     return derived
 
-  def schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:
+  def schedule_sidebar_sweep(self, sessions: list[models.SessionMetadata]) -> None:
     """Run the every-10th-poll self-heal sweep detached from the caller's request.
 
     Single-flight: a sweep still running covers the window, so a poll landing
@@ -603,7 +598,7 @@ class SessionSidebar:
     if _sidebar_sweep_task is not None and not _sidebar_sweep_task.done():
       return
 
-    def _spec(meta: SessionMetadata) -> SidebarProbeSpec:
+    def _spec(meta: models.SessionMetadata) -> SidebarProbeSpec:
       # A task-tree node whose stored verdict is running holds a launched Run
       # without a terminal fact: its liveness must be re-judged here even when
       # no covered file moved, because a process death writes nothing.
@@ -635,11 +630,11 @@ class SessionSidebar:
         return
       _store_probe_results(probed, probe_sigs)
 
-    _sidebar_sweep_task = create_logged_task(_run(), name="sidebar-self-heal-sweep")
+    _sidebar_sweep_task = tasks.create_logged_task(_run(), name="sidebar-self-heal-sweep")
 
   async def populate_sidebar_state(
       self,
-      sessions: list[SessionMetadata],
+      sessions: list[models.SessionMetadata],
       include_running_status: bool,
       include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
@@ -669,5 +664,5 @@ def sidebar() -> SessionSidebar:
   """The process-wide session sidebar block."""
   global _sidebar
   if _sidebar is None:
-    _sidebar = SessionSidebar(get_config(), session_store.store())
+    _sidebar = SessionSidebar(config.get_config(), session_store.store())
   return _sidebar

@@ -11,11 +11,12 @@ honestly without resuming the loop or leaving a permanently blocking lock.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import os
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from conftest import (
@@ -31,13 +32,11 @@ from conftest import (
 )
 
 from src.backends.claude_code import claude_accounts, claude_relay
-from src.features.improve import improve_command, improve_sequence
-from src.features.improve.improve_command import ImproveState, load_loop_state, save_loop_state
+from src.features.improve import improve_command, improve_sequence, sequence_controller
 from src.infra import event_types as ET
-from src.infra.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
-from src.infra.tasks import create_logged_task
-from src.runtime.runs import RUN_EVENTS_NAME
-from src.runtime.task_sessions import TaskTreeManager
+from src.infra import models, tasks
+from src.runtime import control_events, runs, task_execution, task_recovery, task_sessions
+from src.runtime.hooks import sequence_controllers
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
     OP_HEADERS,
@@ -104,7 +103,7 @@ async def _start_loop_in_process(
       repo_path=str(repo),
       base_branch="main",
       backend=state.backend)
-  task = create_logged_task(
+  task = tasks.create_logged_task(
       improve_sequence.run_improve_sequence(
           manager.id,
           cfg,
@@ -133,9 +132,9 @@ async def _ended_loop_shape(
   loop_id = 1
   child = await improve_sequence.create_improve_child(
       tree, manager.id, loop_id, "improve the thing", repo_path=None, base_branch=None, backend=None)
-  await save_loop_state(
+  await improve_command.save_loop_state(
       manager.id,
-      ImproveState(
+      improve_command.ImproveState(
           loop_id=loop_id,
           goal="improve the thing",
           status=status,
@@ -148,13 +147,13 @@ async def _ended_loop_shape(
       ), cfg)
   loop_dir = cfg.sessions_dir / manager.id / "loops" / str(loop_id)
   for position, (outcome, report_text) in enumerate(iterations, start=1):
-    run = RunRecord(
+    run = models.RunRecord(
         id=f"iter-run-{position}",
         session_id=child.id,
         kind="iteration",
         backend="fake",
         model="fake-model",
-        sequence_ref=SequenceRef(
+        sequence_ref=models.SequenceRef(
             kind="improve", owner_ref=improve_sequence.loop_owner_ref(manager.id, loop_id, cfg), position=position))
     await tree.runs.register_run(run)
     if outcome is not None:
@@ -164,7 +163,7 @@ async def _ended_loop_shape(
   return child.id
 
 
-async def _admit_takeoff(tree: TaskTreeManager, manager: SessionMetadata) -> None:
+async def _admit_takeoff(tree: task_sessions.TaskTreeManager, manager: models.SessionMetadata) -> None:
   """The operator's first user message; its dispatch runs the manager's takeoff turn."""
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
@@ -216,7 +215,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
   """Two iterations: ONE child, two ordered iteration Runs, one final report."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   await _admit_takeoff(tree, manager)
@@ -241,7 +240,8 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
       "loops" in r.sequence_ref.owner_ref for r in records)
   # ONE child only: the loop never created a second task under the manager.
   metas = [
-      SessionMetadata.model_validate_json(p.read_text()) for p in sorted((cfg.sessions_dir).glob("*/metadata.json"))
+      models.SessionMetadata.model_validate_json(p.read_text())
+      for p in sorted((cfg.sessions_dir).glob("*/metadata.json"))
   ]
   assert [m.id for m in metas if m.task_parent_id == manager.id] == [child_id]
   # Both iteration prompts carry the worker memory block + iteration report
@@ -258,7 +258,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
   assert len(_iteration_reports(tree, manager.id)) == 2
   # The loop state is honestly 'blocked' — iterations exhausted without a
   # proven landing (no merge-back) is NOT successful delivery.
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "blocked"
   # The loop's end closed the child through the completion owner: lifecycle
   # cancelled with the loop's own outcome on the close fact, and the listing
@@ -279,7 +279,7 @@ async def test_live_goal_change_affects_next_iteration(
   """The controller re-reads goal.md every iteration: a mid-loop edit steers the next one."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
 
   async def edit_goal_after_first_stream() -> None:
     # After the first build's scripted stream, edit the live goal so the
@@ -326,10 +326,9 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """No take-off anywhere in the chain: 403 with the gate's reason, never a
   500, and nothing reserved."""
-  from src.features.improve.improve_command import _active_loop_path, _loops_dir, find_running_loop
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   payload = {
@@ -343,9 +342,9 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
   assert resp.status_code == 403, resp.text
   assert "take off" in str(resp.json()["detail"]).lower() or "authorization" in str(resp.json()["detail"]).lower()
-  assert not _active_loop_path(manager.id, cfg).exists()
-  assert await find_running_loop(manager.id, cfg) is None
-  loops_dir = _loops_dir(manager.id, cfg)
+  assert not improve_command._active_loop_path(manager.id, cfg).exists()
+  assert await improve_command.find_running_loop(manager.id, cfg) is None
+  loops_dir = improve_command._loops_dir(manager.id, cfg)
   assert not loops_dir.is_dir() or list(loops_dir.glob("*")) == []
 
 
@@ -425,7 +424,7 @@ async def _pooled_pm_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
       request_id="root",
       task_parent_id=None,
       profile="manager",
-      task=TaskSpec(goal="pm"),
+      task=models.TaskSpec(goal="pm"),
       name="PM",
       backend=None,
       caller=OPERATOR)
@@ -453,7 +452,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
 
   report = await _wait_for_final_report(tree, manager.id)
   assert report["outcome"] in ("completed", "blocked", "cancelled", "failed")
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None
 
   expected = claude_accounts.select(cfg, FABLE_MODEL)
@@ -497,14 +496,14 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   assert run.pid is None
   assert builds == []  # no process ever started
 
-  events_path = tree.runs.run_dir(child_id, run.id) / RUN_EVENTS_NAME
+  events_path = tree.runs.run_dir(child_id, run.id) / runs.RUN_EVENTS_NAME
   error_lines = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
   errors = [e for e in error_lines if e.get("type") == ET.ERROR]
   assert len(errors) == 1
   assert claude_relay.POOL_EXHAUSTED_PHRASE in errors[0]["message"]
   assert "earliest reset" in errors[0]["message"] and "UTC" in errors[0]["message"]
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "failed"
   # The quota failure closed the child cancelled with the loop's failed
   # outcome; the one final report carries the blocked-on-iteration sentence
@@ -611,7 +610,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words", "iter three words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 
@@ -664,7 +663,7 @@ async def test_iteration_report_header_carries_the_judgment(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   loop_dir = cfg.sessions_dir / manager.id / "loops" / "1"
 
   async def write_iter_two_report() -> None:
@@ -727,7 +726,7 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   failed = result_event("the build broke")
   failed["is_error"] = True  # an error result lands the failed durable outcome
   backends = [
@@ -773,7 +772,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 
@@ -815,21 +814,11 @@ async def test_restart_recovery_marks_improve_loop_through_registered_controller
   """The registered improve controller marks a prior-process loop interrupted once."""
   import os
 
-  from src.features.improve.improve_command import (
-      ImproveState,
-      _active_loop_path,
-      load_loop_state,
-      save_loop_state,
-  )
-  from src.features.improve.sequence_controller import ImproveSequenceController
-  from src.runtime.hooks.sequence_controllers import sequence_controllers
-  from src.runtime.task_recovery import reconcile_task_tree
-
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
-  state = ImproveState(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
+  state = improve_command.ImproveState(
       loop_id=1,
       goal="improve the thing",
       status="running",
@@ -839,11 +828,13 @@ async def test_restart_recovery_marks_improve_loop_through_registered_controller
       created_at="2026-10-07T00:00:00+00:00",
       server_pid=os.getpid() + 1,
   )
-  await save_loop_state(manager.id, state, cfg)
-  active_lock = _active_loop_path(manager.id, cfg)
+  await improve_command.save_loop_state(manager.id, state, cfg)
+  active_lock = improve_command._active_loop_path(manager.id, cfg)
   active_lock.write_text("1\n")
 
-  improve_controller = next(c for c in sequence_controllers() if isinstance(c, ImproveSequenceController))
+  improve_controller = next(
+      c for c in sequence_controllers.sequence_controllers()
+      if isinstance(c, sequence_controller.ImproveSequenceController))
   reconcile = improve_controller.reconcile_interrupted
   controller_calls: list[tuple[object, object]] = []
 
@@ -852,9 +843,9 @@ async def test_restart_recovery_marks_improve_loop_through_registered_controller
     await reconcile(cfg_arg, tree_arg)
 
   monkeypatch.setattr(improve_controller, "reconcile_interrupted", record_controller_call)
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
-  recovered = await load_loop_state(manager.id, state.loop_id, cfg)
+  recovered = await improve_command.load_loop_state(manager.id, state.loop_id, cfg)
   assert recovered is not None and recovered.status == "interrupted"
   assert not active_lock.exists()
   notices = [e for e in tree.events.load_events(manager.id) if e.get("type") == improve_sequence.IMPROVE_FAILED]
@@ -868,26 +859,12 @@ async def test_improve_controller_preserves_base_lookups_and_skips_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The kind lookup selects the improve controller; it binds, owns, and lists
     nothing, and recovery leaves an iteration Run alone (no replay, no follow-up)."""
-  from datetime import UTC, datetime
-  from unittest.mock import AsyncMock
-
-  from src.features.improve.improve_command import ImproveState, save_loop_state
-  from src.features.improve.improve_sequence import loop_owner_ref
-  from src.features.improve.sequence_controller import ImproveSequenceController
-  from src.infra.models import RunRecord, SequenceRef
-  from src.runtime.hooks.sequence_controllers import (
-      binding_for,
-      controller_for_sequence,
-      sequence_controllers,
-      sequence_listing_fields,
-  )
-  from src.runtime.task_execution import _replay_followups
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
-  state = ImproveState(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
+  state = improve_command.ImproveState(
       loop_id=1,
       goal="improve the thing",
       status="running",
@@ -897,40 +874,40 @@ async def test_improve_controller_preserves_base_lookups_and_skips_recovery(
       created_at="2026-10-07T00:00:00+00:00",
       server_pid=0,
   )
-  await save_loop_state(manager.id, state, cfg)
+  await improve_command.save_loop_state(manager.id, state, cfg)
 
-  controllers = sequence_controllers()
-  improve_controller = next(c for c in controllers if isinstance(c, ImproveSequenceController))
+  controllers = sequence_controllers.sequence_controllers()
+  improve_controller = next(c for c in controllers if isinstance(c, sequence_controller.ImproveSequenceController))
   base_controllers = tuple(c for c in controllers if c is not improve_controller)
-  owner_ref = loop_owner_ref(manager.id, state.loop_id, cfg)
+  owner_ref = improve_sequence.loop_owner_ref(manager.id, state.loop_id, cfg)
   assert improve_controller.sequence_kind == "improve"
-  ref = SequenceRef(kind="improve", owner_ref=owner_ref, position=1)
-  assert controller_for_sequence(ref) is improve_controller
+  ref = models.SequenceRef(kind="improve", owner_ref=owner_ref, position=1)
+  assert sequence_controllers.controller_for_sequence(ref) is improve_controller
 
   base_binding = next((binding for c in base_controllers if (binding := c.binding(manager.id)) is not None), None)
-  assert binding_for(manager.id) is base_binding
+  assert sequence_controllers.binding_for(manager.id) is base_binding
   base_ownership = any(c.owns_session(manager) for c in base_controllers)
   assert improve_controller.owns_session(manager) is False
   assert any(c.owns_session(manager) for c in controllers) is base_ownership
 
-  now_utc = datetime.now(UTC)
+  now_utc = datetime.datetime.now(datetime.UTC)
   base_listing = {manager.id: {}}
   for controller in base_controllers:
     for session_id, fields in controller.listing_fields((manager.id,), now_utc).items():
       base_listing.setdefault(session_id, {}).update(fields)
   assert improve_controller.listing_fields((manager.id,), now_utc) == {}
-  assert sequence_listing_fields((manager.id,), now_utc) == base_listing
+  assert sequence_controllers.sequence_listing_fields((manager.id,), now_utc) == base_listing
 
   redrive_mocks = []
   for controller in controllers:
-    mock = AsyncMock()
-    monkeypatch.setattr(controller, "redrive", mock)
-    redrive_mocks.append(mock)
-  await tree.runs.register_run(RunRecord(id="it-run", session_id=manager.id, kind="iteration", sequence_ref=ref))
+    redrive_mock = mock.AsyncMock()
+    monkeypatch.setattr(controller, "redrive", redrive_mock)
+    redrive_mocks.append(redrive_mock)
+  await tree.runs.register_run(models.RunRecord(id="it-run", session_id=manager.id, kind="iteration", sequence_ref=ref))
   counters = {"followups": 0}
-  await _replay_followups(manager.id, tree, None, counters, cfg)
+  await task_execution._replay_followups(manager.id, tree, None, counters, cfg)
   assert counters["followups"] == 0
-  assert all(mock.await_count == 0 for mock in redrive_mocks)
+  assert all(redrive_mock.await_count == 0 for redrive_mock in redrive_mocks)
 
 
 # ---------------------------------------------------------------------------
@@ -946,7 +923,7 @@ async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_comp
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   failed = result_event("the build broke")
   failed["is_error"] = True
   backends = [
@@ -973,7 +950,7 @@ async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_comp
       },
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "completed"
   assert tree.task_state(child_id) == "cancelled"
   close = _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="completed")
@@ -991,7 +968,7 @@ async def test_ff_push_rejection_reports_the_landing_error_and_the_pushed_branch
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   async def rejected_refspec(*args, **kwargs):
@@ -1014,7 +991,7 @@ async def test_ff_push_rejection_reports_the_landing_error_and_the_pushed_branch
       payload_overrides={"merge_back": True},
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "blocked"
   assert state.end_error == (
       "The fast-forward landing onto main failed (rejected: non-fast-forward); "
@@ -1035,7 +1012,7 @@ async def test_both_landing_pushes_failing_names_the_branch_push_error(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   async def failing_push(*args, **kwargs):
@@ -1055,7 +1032,7 @@ async def test_both_landing_pushes_failing_names_the_branch_push_error(
       payload_overrides={"merge_back": True},
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "blocked"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
@@ -1073,7 +1050,7 @@ async def test_best_effort_branch_push_failure_is_reported_without_merge_back(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   async def failing_push(*args, **kwargs):
@@ -1091,7 +1068,7 @@ async def test_best_effort_branch_push_failure_is_reported_without_merge_back(
       monkeypatch,
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "blocked"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
@@ -1108,7 +1085,7 @@ async def test_controller_exception_closes_the_child_failed(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   async def boom(*args, **kwargs):
@@ -1126,7 +1103,7 @@ async def test_controller_exception_closes_the_child_failed(
       monkeypatch,
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "failed"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
@@ -1145,7 +1122,7 @@ async def test_worktree_failure_closes_the_child_failed(
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["never launched"])
 
   async def boom(*args, **kwargs):
@@ -1163,7 +1140,7 @@ async def test_worktree_failure_closes_the_child_failed(
       monkeypatch,
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "failed"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
@@ -1183,12 +1160,11 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
   active lock); the controller's own end path then closes it cancelled with
   the loop's cancelled outcome, and the final report holds the iteration's
   summary."""
-  from src.features.improve.sequence_controller import ImproveSequenceController
 
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   gate = asyncio.Event()
   first = SpawningScriptedBackend([result_event("iter one words")], gate=gate.wait)
   second = SpawningScriptedBackend([result_event("never reached")])
@@ -1207,13 +1183,13 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
 
   monkeypatch.setattr(improve_sequence, "_judge_iteration", held_judge)
   after_run_calls: list[str] = []
-  real_after_run = ImproveSequenceController.after_run
+  real_after_run = sequence_controller.ImproveSequenceController.after_run
 
   async def recording_after_run(self, session_id, run, tree_, cfg_):
     after_run_calls.append(run.id)
     await real_after_run(self, session_id, run, tree_, cfg_)
 
-  monkeypatch.setattr(ImproveSequenceController, "after_run", recording_after_run)
+  monkeypatch.setattr(sequence_controller.ImproveSequenceController, "after_run", recording_after_run)
 
   body, child_id, controller = await _start_loop_in_process(cfg, tree, manager, repo, iterations=2)
   await _async_wait_for(lambda: bool(tree.runs.list_run_records_sync(child_id)), 10.0, "iteration never registered")
@@ -1228,7 +1204,7 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
   release_judge.set()
   await asyncio.wait_for(controller, timeout=10)
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "stopped"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="cancelled")
@@ -1251,7 +1227,7 @@ async def test_withheld_iteration_launch_closes_the_child_blocked(
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: every worker launch is withheld
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["never launched"])
 
   await _admit_takeoff(tree, manager)
@@ -1264,7 +1240,7 @@ async def test_withheld_iteration_launch_closes_the_child_blocked(
       monkeypatch,
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
-  state = await load_loop_state(manager.id, body["loop_id"], cfg)
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "blocked"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
@@ -1290,7 +1266,7 @@ async def test_controller_exception_while_an_iteration_runs_closes_after_its_fin
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   hold = asyncio.Event()
   backend = SpawningScriptedBackend([result_event("iter words")], post_events=hold.wait)
 
@@ -1351,12 +1327,11 @@ async def test_startup_recovery_closes_an_interrupted_loop_whose_process_died(
   """Restart interruption with a dead iteration process: the reconcile marks
   the loop interrupted, the Run's drain lands its terminal fact, and its
   after_run closes the child cancelled with the loop's failed outcome."""
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
   # The launched iteration died with the old server: a recorded pid that no
@@ -1365,7 +1340,7 @@ async def test_startup_recovery_closes_an_interrupted_loop_whose_process_died(
   assert run is not None
   run.pid = 999999
   run.pid_start = "1-424000"
-  run.started_at = datetime(2026, 10, 8, tzinfo=UTC)
+  run.started_at = datetime.datetime(2026, 10, 8, tzinfo=datetime.UTC)
   await tree.runs.write_record(child_id, run)
   write_raw_result(tree.runs.run_dir(child_id, run.id), "crashed mid-iteration")
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -1373,9 +1348,9 @@ async def test_startup_recovery_closes_an_interrupted_loop_whose_process_died(
   install_worker_launch_and_resume_backends(monkeypatch, [])
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
-  state = await load_loop_state(manager.id, 1, cfg)
+  state = await improve_command.load_loop_state(manager.id, 1, cfg)
   assert state is not None and state.status == "interrupted"
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
@@ -1395,14 +1370,14 @@ async def test_startup_recovery_leaves_a_live_iterations_child_open_until_its_fi
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
   run = await tree.runs.get_run(child_id, "iter-run-1")
   assert run is not None
   run.pid = 424777
   run.pid_start = "1-424000"
-  run.started_at = datetime(2026, 10, 8, tzinfo=UTC)
+  run.started_at = datetime.datetime(2026, 10, 8, tzinfo=datetime.UTC)
   await tree.runs.write_record(child_id, run)
   monkeypatch.setattr(runs_mod, "is_run_alive", lambda *args, **kwargs: True)
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -1417,7 +1392,7 @@ async def test_startup_recovery_leaves_a_live_iterations_child_open_until_its_fi
   counters = {"resumed": 0, "drained": 0, "followups": 0}
   await task_execution_module._reconcile_node(child_id, tree, adapter, counters, cfg)
 
-  state = await load_loop_state(manager.id, 1, cfg)
+  state = await improve_command.load_loop_state(manager.id, 1, cfg)
   assert state is not None and state.status == "interrupted"
   assert counters["resumed"] == 1 and follows == [(child_id, run.id)]
   assert tree.task_state(child_id) == "open"
@@ -1443,13 +1418,11 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A launched iteration carrying a durable stop request at startup:
   recovery lands its interrupted finish and recover_run closes the child."""
-  from src.runtime.control_events import ACTOR_SYSTEM, build_control_event
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
   proc = subprocess.Popen(["/bin/sleep", "30"])
@@ -1459,14 +1432,14 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
     assert run is not None
     run.pid = pid
     run.pid_start = pid_start
-    run.started_at = datetime.now(UTC)
+    run.started_at = datetime.datetime.now(datetime.UTC)
     await tree.runs.write_record(child_id, run)
     # The durable stop request, staged as the old process left it (no follow).
     await tree.events.append(
         child_id,
-        build_control_event(
+        control_events.build_control_event(
             ET.RUN_STOP_REQUESTED,
-            actor=ACTOR_SYSTEM,
+            actor=control_events.ACTOR_SYSTEM,
             source_session_id=child_id,
             request_id="boot-stop",
             run_id=run.id))
@@ -1475,7 +1448,7 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
     install_worker_launch_and_resume_backends(monkeypatch, [])
     _count_manager_wakes(monkeypatch, tree, manager.id)
 
-    await reconcile_task_tree(cfg, tree)
+    await task_recovery.reconcile_task_tree(cfg, tree)
 
     assert proc.poll() is not None  # the stop's signal landed
     assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), run.id) == "interrupted"
@@ -1494,11 +1467,10 @@ async def test_startup_closes_a_loop_that_crashed_between_final_state_and_close(
   """Crash window after the final state write and before the close: the
   startup pass closes the child per the table and the parent receives one
   final report carrying the judged iterations' summaries."""
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg,
       tree,
@@ -1507,7 +1479,7 @@ async def test_startup_closes_a_loop_that_crashed_between_final_state_and_close(
       iterations=[("success", "## Iter 1\n\niter one report\n"), ("success", "## Iter 2\n\niter two report\n")])
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
@@ -1524,11 +1496,10 @@ async def test_startup_closes_a_failed_loop_and_reports_its_end_error(
   """Crash window after the final failed state (already carrying its end
   error) and before the close: the startup pass closes the child and the
   parent's one final report carries the error text the controller wrote."""
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg,
       tree,
@@ -1538,7 +1509,7 @@ async def test_startup_closes_a_failed_loop_and_reports_its_end_error(
       iterations=[("success", "## Iter 1\n\niter one report\n"), ("success", "## Iter 2\n\niter two report\n")])
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
@@ -1553,11 +1524,10 @@ async def test_legacy_state_without_end_error_loads_and_reports_clean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A state.json written before end_error existed loads with end_error None,
   and its final report holds nothing between the sentence and the summaries."""
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg,
       tree,
@@ -1569,11 +1539,11 @@ async def test_legacy_state_without_end_error_loads_and_reports_clean(
   raw = json.loads(state_path.read_text())
   raw.pop("end_error", None)
   state_path.write_text(json.dumps(raw))
-  state = await load_loop_state(manager.id, 1, cfg)
+  state = await improve_command.load_loop_state(manager.id, 1, cfg)
   assert state is not None and state.end_error is None
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="failed")
@@ -1588,18 +1558,17 @@ async def test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_u
   """Crash window with an iteration registered and never launched: the close
   step stop-requests the queued Run, the child closes cancelled with the
   loop's blocked outcome, and the queued Run never launches afterwards."""
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="blocked", iterations=[("success", "## Iter 1\n\niter one report\n"), (None, None)])
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="blocked")
@@ -1618,16 +1587,15 @@ async def test_startup_closes_a_loop_that_crashed_between_run_finished_and_after
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Crash window after run_finished and before after_run: the startup pass
   closes the child per the table and the parent receives one final report."""
-  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="stopped", iterations=[("success", "## Iter 1\n\niter one report\n")])
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await reconcile_task_tree(cfg, tree)
+  await task_recovery.reconcile_task_tree(cfg, tree)
 
   assert tree.task_state(child_id) == "cancelled"
   _assert_single_close(tree, child_id, lifecycle="cancelled", sequence_outcome="cancelled")
@@ -1643,7 +1611,7 @@ async def test_raced_close_step_calls_land_one_close_and_one_report(
   racing a controller end path): one close fact and one final report."""
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="blocked", iterations=[("success", "## Iter 1\n\niter one report\n")])
   _count_manager_wakes(monkeypatch, tree, manager.id)
@@ -1665,7 +1633,7 @@ async def test_a_reopened_child_stays_open_across_restarts(tmp_path: Path, monke
   open and its queued Run gains no new stop request."""
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="blocked", iterations=[("success", "## Iter 1\n\niter one report\n"), (None, None)])
   _count_manager_wakes(monkeypatch, tree, manager.id)

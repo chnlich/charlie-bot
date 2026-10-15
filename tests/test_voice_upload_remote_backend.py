@@ -9,13 +9,11 @@ reason and never a local fallback, and every other backend value - absent,
 unknown, a live backend, the local id - keeps the local decode.
 """
 
-import io
 import json
 import pathlib
-import wave
 from collections.abc import AsyncIterator, Sequence
 
-import fastapi
+import conftest
 import pytest
 from structlog import testing
 
@@ -28,20 +26,6 @@ SESSION_ID = "session-a"
 BACKEND_ID = "fake-remote"
 REMOTE_TEXT = "synthetic remote words"
 LOCAL_TEXT = "synthetic decoded words"
-
-
-def _wav_body(samples: int = 160) -> bytes:
-  buffer = io.BytesIO()
-  with wave.open(buffer, "wb") as writer:
-    writer.setnchannels(1)
-    writer.setsampwidth(2)
-    writer.setframerate(16_000)
-    writer.writeframes(b"\x00\x00" * samples)
-  return buffer.getvalue()
-
-
-def _upload_file(body: bytes) -> fastapi.UploadFile:
-  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
 
 
 async def _pcm_frames(audio: AsyncIterator[bytes]) -> bytes:
@@ -129,7 +113,7 @@ def remote(cfg: config.CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> _Fa
 async def _post(backend: str | None) -> tuple[object, list[dict]]:
   with testing.capture_logs() as logs:
     response = await voice.upload_voice_recording(
-        SESSION_ID, audio=_upload_file(_wav_body()), backend=backend, devices=None)
+        SESSION_ID, audio=conftest.voice_upload_file(conftest.wav_body()), backend=backend, devices=None)
   return response, logs
 
 

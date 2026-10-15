@@ -31,8 +31,7 @@ import orjson
 from fastapi import responses
 from starlette import requests
 
-from src.infra import compression
-from src.infra.memo import BoundedMemo, StatSignatureMemo
+from src.infra import compression, memo
 
 
 def fast_json_bytes(content: Any) -> bytes:
@@ -81,25 +80,25 @@ def request_wants_gzip(request: requests.Request) -> bool:
   return "gzip" in request.headers.get("accept-encoding", "")
 
 
-def gzip_file_fresh(memo: StatSignatureMemo[pathlib.Path, bytes], path: pathlib.Path) -> bytes:
+def gzip_file_fresh(gzip_memo: memo.StatSignatureMemo[pathlib.Path, bytes], path: pathlib.Path) -> bytes:
   """The file's level-1 gzip form, memoized on the stat pair the read served.
 
   stat precedes the read in the same call (the StatSignatureMemo contract), so a
   repeat hit serves only bytes its signature proves current.
   """
   st = path.stat()
-  hit = memo.fresh(path, st)
+  hit = gzip_memo.fresh(path, st)
   if hit is not None:
     return hit
   compressed = compression.gzip_level1(path.read_bytes())
-  memo.record(path, st, compressed)
+  gzip_memo.record(path, st, compressed)
   return compressed
 
 
 async def gzip_body_response(
-    request: requests.Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes,
-                                                                                       bytes]) -> responses.Response:
-  """Serve *body* plain or from *memo*'s gzip form (keyed on the bytes themselves).
+    request: requests.Request, body: bytes, headers: dict[str, str],
+    gzip_memo: memo.BoundedMemo[bytes, bytes]) -> responses.Response:
+  """Serve *body* plain or from *gzip_memo*'s gzip form (keyed on the bytes themselves).
 
   One off-loop level-1 deflate per distinct body, stored so a repeat serves
   the stored bytes; the gzip headers make the middleware skip (see
@@ -107,8 +106,8 @@ async def gzip_body_response(
   """
   if not request_wants_gzip(request):
     return PreencodedJSONResponse(body, headers=headers)
-  gz = memo.get(body)
+  gz = gzip_memo.get(body)
   if gz is None:
     gz = await asyncio.to_thread(compression.gzip_level1, body)
-    memo.store(body, gz)
+    gzip_memo.store(body, gz)
   return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})

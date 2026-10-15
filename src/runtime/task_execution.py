@@ -2623,7 +2623,7 @@ async def _replay_followups(
     return
   events = tree.runs.load_events_sync(session_id)
   run_records = tree.runs.list_run_records_sync(session_id)
-  for run in run_records:
+  for run_index, run in enumerate(run_records):
     outcome = tree.runs.terminal_outcome(events, run.id)
     # A terminal run whose metadata write failed (ended_at empty) gets its
     # end metadata re-derived from the raw log: the run_finished fact is on
@@ -2667,6 +2667,23 @@ async def _replay_followups(
       continue
     if run.kind == "work":
       counters["followups"] += 1
+      if meta.task is not None and meta.task.task_type == TaskType.COLD_READ:
+        # The execution layer owns a cold-read Run's delivery (the report
+        # body, the next-backend retry, the all-failed report), and the
+        # generic completion skips the task type, so the replay re-drives
+        # the chain here. A success re-drives the finish path's own
+        # close-request recheck first, exactly as the live finish ran it. A
+        # failed Run re-drives only when no retry Run follows it: a
+        # registered retry's own finish drives the rest, and step 4's
+        # dispatch launches a queued one. An interrupted Run keeps the live
+        # chain's silence (no report, no retry).
+        later_work = [r for r in run_records[run_index + 1:] if r.kind == "work"]
+        if outcome == "success":
+          await tree.completion.after_run_finished(session_id, run.id)
+          await adapter._after_cold_read_run(meta, run, outcome)
+        elif outcome == "failed" and not later_work:
+          await adapter._after_cold_read_run(meta, run, outcome)
+        continue
       if outcome == "success":
         # The completion owner's post-success follow-up replays exactly
         # as the dispatcher's finish path ran it: the own close-request

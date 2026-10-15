@@ -11,6 +11,7 @@ instance's data and owned processes stay untouched.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from datetime import timedelta
 from functools import partial
@@ -34,7 +35,8 @@ import src.runtime.task_execution as task_execution_module
 from src.infra import event_types as ET
 from src.infra import models
 from src.infra.models import CreateSessionRequest, RunRecord, TaskSpec, TaskType
-from src.runtime import control_events, task_recovery
+from src.infra.ndjson import append_ndjson
+from src.runtime import control_events, runs, task_recovery
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
@@ -415,6 +417,157 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
   # The retried review consumed the one scripted backend; nothing else launches.
   await task_recovery.reconcile_task_tree(cfg, tree)
   assert len([r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]) == 2
+
+
+async def _cold_read_child(tmp_path: Path, tree, manager, *, page: Path):
+  """One cold-read worker child under the manager, its page already on disk."""
+  page.write_text("<html><body><p>sitrep body</p></body></html>", encoding="utf-8")
+  return await tree.create_task(
+      request_id="cold-read",
+      task_parent_id=manager.id,
+      profile="worker",
+      task=TaskSpec(
+          goal=f"cold read of {page}",
+          task_type=TaskType.COLD_READ,
+          cold_read=models.ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?")),
+      name=f"Cold read: {page.name}",
+      backend="fake",
+      caller=OPERATOR)
+
+
+@pytest.mark.asyncio
+async def test_recovery_replays_a_lost_cold_read_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cold-read Run whose terminal fact landed but whose delivery a crash cut:
+    the replay reports the parent with the report body and closes the child; a
+    repeated pass lands nothing twice."""
+  cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  page = tmp_path / "page.html"
+  worker = await _cold_read_child(tmp_path, tree, manager, page=page)
+  run_id = "run-cold"
+  await tree.runs.register_run(
+      RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await append_ndjson(tree.runs.run_dir(worker.id, run_id) / runs.RUN_EVENTS_NAME, result_event("(1) answered."))
+  await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  reports = child_reports(tree, manager.id)
+  assert len(reports) == 1
+  assert reports[-1]["outcome"] == "completed"
+  assert reports[-1]["summary"] == "\n".join(
+      [
+          f"cold read of {page}",
+          f"page sha256 {hashlib.sha256(page.read_bytes()).hexdigest()}",
+          "backend fake",
+          "(1) answered.",
+      ])
+  assert tree.task_state(worker.id) == "completed"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  # A repeated pass lands nothing twice.
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert len(child_reports(tree, manager.id)) == 1
+  assert len(tree.runs.list_run_records_sync(worker.id)) == 1
+  assert tree.task_state(worker.id) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_recovery_replays_a_lost_cold_read_failure_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A failed cold-read Run whose chain a crash cut with one backend left: the
+    replay records the attempt, starts the retry on the next preference
+    backend, and the retry's answer delivers the report."""
+  cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  cfg.backends.options.append(conftest.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"))
+  cfg.backends.preference = ["fake2"]
+  page = tmp_path / "page.html"
+  worker = await _cold_read_child(tmp_path, tree, manager, page=page)
+  failed_run = "run-cold-1"
+  await tree.runs.register_run(
+      RunRecord(id=failed_run, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, failed_run, outcome="failed", exit_code=1)
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("(1) answered.")])])
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  await poll_until(lambda: bool(child_reports(tree, manager.id)), timeout=15.0, what="the cold-read child report")
+  reports = child_reports(tree, manager.id)
+  assert reports[-1]["outcome"] == "completed"
+  assert reports[-1]["summary"] == "\n".join(
+      [
+          f"cold read of {page}",
+          f"page sha256 {hashlib.sha256(page.read_bytes()).hexdigest()}",
+          "attempt fake failed: run run-cold-1 failed without a reportable output",
+          "backend fake2",
+          "(1) answered.",
+      ])
+  assert tree.task_state(worker.id) == "completed"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  # A repeated pass lands nothing twice.
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert len(child_reports(tree, manager.id)) == 1
+  assert len(tree.runs.list_run_records_sync(worker.id)) == 2
+  assert tree.task_state(worker.id) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_recovery_replays_a_lost_cold_read_all_failed_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A failed cold-read Run whose chain a crash cut with no backend left: the
+    replay reports the parent with the attempt line and the all-failed trailer,
+    and the child stays open; a repeated pass lands nothing twice."""
+  cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  page = tmp_path / "page.html"
+  worker = await _cold_read_child(tmp_path, tree, manager, page=page)
+  failed_run = "run-cold-1"
+  await tree.runs.register_run(
+      RunRecord(id=failed_run, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, failed_run, outcome="failed", exit_code=1)
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  reports = child_reports(tree, manager.id)
+  assert len(reports) == 1
+  assert reports[-1]["outcome"] == "failed"
+  assert reports[-1]["summary"] == "\n".join(
+      [
+          f"cold read of {page}",
+          f"page sha256 {hashlib.sha256(page.read_bytes()).hexdigest()}",
+          "attempt fake failed: run run-cold-1 failed without a reportable output",
+          "every model failed (1 tried)",
+      ])
+  assert tree.task_state(worker.id) == "open"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  # A repeated pass lands nothing twice.
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert len(child_reports(tree, manager.id)) == 1
+  assert len(tree.runs.list_run_records_sync(worker.id)) == 1
+  assert tree.task_state(worker.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A failed cold-read Run whose retry a crash left registered but unlaunched:
+    the replay launches the queued retry (step 4) and never re-drives the failed
+    attempt's chain — one retry Run, one report."""
+  cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  cfg.backends.options.append(conftest.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"))
+  cfg.backends.preference = ["fake2"]
+  page = tmp_path / "page.html"
+  worker = await _cold_read_child(tmp_path, tree, manager, page=page)
+  failed_run = "run-cold-1"
+  await tree.runs.register_run(
+      RunRecord(id=failed_run, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, failed_run, outcome="failed", exit_code=1)
+  retry_run = "run-cold-2"
+  await tree.runs.register_run(
+      RunRecord(id=retry_run, session_id=worker.id, kind="work", backend="fake2", model="fake2-model"))
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("(1) answered.")])])
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  await poll_until(lambda: bool(child_reports(tree, manager.id)), timeout=15.0, what="the cold-read child report")
+  reports = child_reports(tree, manager.id)
+  assert reports[-1]["outcome"] == "completed"
+  assert "backend fake2" in reports[-1]["summary"].splitlines()
+  assert tree.task_state(worker.id) == "completed"
+  work_runs = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work"]
+  assert [r.id for r in work_runs] == [failed_run, retry_run]
 
 
 @pytest.mark.asyncio

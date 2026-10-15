@@ -39,16 +39,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
+import datetime
+import pathlib
 import sqlite3
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Self
 
-from src.infra import log_once
-from src.infra.config import get_config
-from src.infra.timeouts import USAGE_LEDGER_LOCK_WAIT_SECONDS
+from src.infra import config, log_once, timeouts
 from src.runtime.hooks import usage_sources
 
 log = log_once.LazyStructlogLogger()
@@ -354,7 +352,7 @@ GROUP BY source, model, account, kind, day
 """
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class LedgerAccount:
   """Usage for one subscription account of a model."""
 
@@ -364,7 +362,7 @@ class LedgerAccount:
   total: int
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class LedgerRow:
   """One aggregated per-model row for the /token-usage page.
 
@@ -390,7 +388,7 @@ class LedgerRow:
   accounts: list[LedgerAccount]
 
 
-@dataclass
+@dataclasses.dataclass
 class _Sum:
   """Mutable token accumulator for one bucket; ``total`` is the five token fields.
 
@@ -418,7 +416,7 @@ class _Sum:
     return self.in_fresh + self.cache_write + self.cache_read + self.in_unsplit + self.output
 
 
-@dataclass
+@dataclasses.dataclass
 class _ModelSum:
   """Per-(source, model) accumulator: every counted row plus the fallback split.
 
@@ -427,13 +425,13 @@ class _ModelSum:
   the table.
   """
 
-  sums: _Sum = field(default_factory=_Sum)
+  sums: _Sum = dataclasses.field(default_factory=_Sum)
   fallback_calls: int = 0
   fallback_output: int = 0
   first: str = ""
   last: str = ""
   native_first: str = ""
-  accounts: dict[str, _Sum] = field(default_factory=dict)
+  accounts: dict[str, _Sum] = dataclasses.field(default_factory=dict)
 
 
 def _fold_grouped_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row | dict) -> None:
@@ -492,9 +490,9 @@ def _native_starts_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> dict[str
   return starts
 
 
-def default_ledger_path() -> Path:
+def default_ledger_path() -> pathlib.Path:
   """The CLI's default ledger: under the charliebot home, beside the sessions it indexes."""
-  return get_config().charliebot_home / "usage" / "ledger.sqlite3"
+  return config.get_config().charliebot_home / "usage" / "ledger.sqlite3"
 
 
 class UsageLedger:
@@ -506,10 +504,10 @@ class UsageLedger:
   re-priced on open (``_refresh_agg_triggers``).
   """
 
-  def __init__(self, path: Path) -> None:
-    self._path = Path(path)
+  def __init__(self, path: pathlib.Path) -> None:
+    self._path = pathlib.Path(path)
     self._path.parent.mkdir(parents=True, exist_ok=True)
-    self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
+    self._conn = sqlite3.connect(self._path, timeout=timeouts.USAGE_LEDGER_LOCK_WAIT_SECONDS)
     self._conn.row_factory = sqlite3.Row
     self._conn.executescript(_SCHEMA)
     self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
@@ -609,7 +607,7 @@ class UsageLedger:
     keep them), each FALLBACK record's sessions are linked, and the file's signature is
     remembered for the collector's skip decision. The file commits on its own outside ``batch()``.
     """
-    captured_at = datetime.now(UTC).isoformat()
+    captured_at = datetime.datetime.now(datetime.UTC).isoformat()
     self._conn.execute("SAVEPOINT record_file")
     try:
       for rec in records:
@@ -647,14 +645,14 @@ class UsageLedger:
     """
     self._conn.execute(
         "INSERT INTO ledger_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (f"last_capture_at:{host}", datetime.now(UTC).isoformat()))
+        (f"last_capture_at:{host}", datetime.datetime.now(datetime.UTC).isoformat()))
     if self._batch_savepoint is None:
       self._conn.commit()
 
-  def last_capture_at(self, host: str) -> datetime | None:
+  def last_capture_at(self, host: str) -> datetime.datetime | None:
     """When *host*'s capture last finished (timezone-aware UTC), or None when it never has."""
     row = self._conn.execute("SELECT value FROM ledger_meta WHERE key = ?", (f"last_capture_at:{host}",)).fetchone()
-    return None if row is None else datetime.fromisoformat(row["value"])
+    return None if row is None else datetime.datetime.fromisoformat(row["value"])
 
   def model_rows(self) -> list[LedgerRow]:
     """The /token-usage page rows, aggregated from counted records only."""
@@ -733,13 +731,13 @@ class UsageLedger:
 
 async def run_scheduled_usage_ledger() -> str:
   """Built-in cron handler: capture this host's token usage into the usage ledger."""
-  from src.features.usage.token_tally import capture_local  # deferred: import cycle src.features.usage.token_tally
+  from src.features.usage import token_tally  # deferred: import cycle src.features.usage.token_tally
 
   loop = asyncio.get_running_loop()
 
   def capture() -> dict[str, int]:
     with UsageLedger(default_ledger_path()) as ledger:
-      return capture_local(ledger)
+      return token_tally.capture_local(ledger)
 
   written = await loop.run_in_executor(None, capture)
   summary = "; ".join(f"{source} {count}" for source, count in written.items())

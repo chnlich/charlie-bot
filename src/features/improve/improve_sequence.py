@@ -44,29 +44,20 @@ Boundaries this module pins:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
-from dataclasses import dataclass
-from pathlib import Path
+import pathlib
 from typing import TYPE_CHECKING
 
 from src.features.improve import improve_command
+from src.infra import config, git, log_once, models
 from src.infra import event_types as ET
-from src.infra import git
-from src.infra.config import CharlieBotConfig
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
-from src.runtime import task_prompts
-from src.runtime.control_events import stable_run_id, stable_task_id
-from src.runtime.runs import RUN_EVENTS_NAME
-from src.runtime.spawner_prompt import load_marker_sections, substitute_tokens
-from src.runtime.task_completion import RUN_REF_PREFIX, CompletionEvidence, LandingEvidence, SequenceCloseOutcome
-from src.runtime.task_errors import TaskConflictError, TaskInvalidError
-from src.runtime.task_execution import TaskExecutionAdapter
+from src.runtime import control_events, runs, spawner_prompt, task_completion, task_errors, task_execution, task_prompts
 
 if TYPE_CHECKING:
-  from src.runtime.task_sessions import TaskTreeManager
+  from src.runtime import task_sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 IMPROVE_ITERATION_COMPLETED = "improve_iteration_completed"
 IMPROVE_COMPLETED = "improve_completed"
@@ -75,7 +66,7 @@ IMPROVE_FAILED = "improve_failed"
 IMPROVE_STOPPED = "improve_stopped"
 
 
-def loop_owner_ref(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> str:
+def loop_owner_ref(session_id: str, loop_id: int, cfg: config.CharlieBotConfig) -> str:
   """The sequence owner_ref of one improve loop: the loop directory, exactly
   as the plan's sequence_ref contract names it ("owner_ref 指向该循环目录")."""
   return str(improve_command._loops_dir(session_id, cfg) / str(loop_id))
@@ -99,7 +90,7 @@ def improve_close_request_id(loop_id: int) -> str:
 
 
 async def create_improve_child(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
     loop_id: int,
     goal: str,
@@ -107,7 +98,7 @@ async def create_improve_child(
     repo_path: str | None,
     base_branch: str | None,
     backend: str | None,
-) -> SessionMetadata:
+) -> models.SessionMetadata:
   """Create (or re-admit) the loop's one worker child under the manager.
 
   Stable by request id: a replayed admission returns the original child. The
@@ -121,7 +112,7 @@ async def create_improve_child(
       request_id=improve_child_request_id(loop_id),
       task_parent_id=session_id,
       profile="worker",
-      task=TaskSpec(
+      task=models.TaskSpec(
           goal=goal,
           repo_path=repo_path,
           base_branch=base_branch,
@@ -145,18 +136,19 @@ def iteration_report_tokens(loop_dir: str, iteration_number: int) -> dict[str, s
   }
 
 
-def render_iteration_reports(cfg: CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
+def render_iteration_reports(cfg: config.CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
   """The iteration report contract, rendered from the maintained worker-prompt section."""
-  sections = load_marker_sections(
+  sections = spawner_prompt.load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",), extraction="worker-prompt")
-  return substitute_tokens(sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
+  return spawner_prompt.substitute_tokens(
+      sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
 
 
 def iteration_context(
-    cfg: CharlieBotConfig,
-    meta: SessionMetadata,
-    run: RunRecord,
-    seq: SequenceRef,
+    cfg: config.CharlieBotConfig,
+    meta: models.SessionMetadata,
+    run: models.RunRecord,
+    seq: models.SequenceRef,
     description: str,
 ) -> str:
   """One improve iteration's context: shared-worktree bindings + the loop position.
@@ -169,14 +161,14 @@ def iteration_context(
   directory and position.
   """
   if not (run.repo_path and run.base_branch and run.branch_name and run.worktree_path):
-    raise TaskInvalidError(
+    raise task_errors.TaskInvalidError(
         f"iteration run {run.id} is missing its pinned shared-worktree provenance "
         "(repo/base/branch/worktree); refusing to create a divergent worktree")
   parts = [task_prompts.render_session_info(cfg, meta.name)]
   parts.append(
       task_prompts.render_worktree_bindings(
           cfg,
-          task_type=TaskType.IMPLEMENT,
+          task_type=models.TaskType.IMPLEMENT,
           intro_line=task_prompts.binding_intro(cfg, run),
           branch_name=run.branch_name,
           base_branch_origin=f"`{run.base_branch}`",
@@ -198,12 +190,12 @@ def _compose_iteration_description(goal: str, plan: str | None, previous_summari
 
 
 async def register_iteration_run(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     child_id: str,
     session_id: str,
     loop_id: int,
     iteration: int,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     *,
     resolved_backend: str,
     resolved_model: str | None,
@@ -211,7 +203,7 @@ async def register_iteration_run(
     base_branch: str,
     work_branch: str,
     worktree_path: str,
-) -> RunRecord:
+) -> models.RunRecord:
   """Register one iteration Run with its full shared-worktree provenance.
 
   The loop's single worktree, branch and base are pinned on the Run before
@@ -219,11 +211,11 @@ async def register_iteration_run(
   iteration commits to the same branch the controller merges back. Stable by
   (child, request id): a replayed registration returns the original Run.
   """
-  run_id = stable_run_id(child_id, iteration_run_request_id(loop_id, iteration))
+  run_id = control_events.stable_run_id(child_id, iteration_run_request_id(loop_id, iteration))
   existing = await tree.runs.get_run(child_id, run_id)
   if existing is not None:
     return existing
-  record = RunRecord(
+  record = models.RunRecord(
       id=run_id,
       session_id=child_id,
       kind="iteration",
@@ -233,7 +225,7 @@ async def register_iteration_run(
       base_branch=base_branch,
       branch_name=work_branch,
       worktree_path=worktree_path,
-      sequence_ref=SequenceRef(
+      sequence_ref=models.SequenceRef(
           kind="improve",
           owner_ref=loop_owner_ref(session_id, loop_id, cfg),
           position=iteration,
@@ -247,7 +239,7 @@ async def register_iteration_run(
 
 
 async def _iteration_blocker(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     child_id: str,
     run_id: str,
     iteration: int,
@@ -258,7 +250,7 @@ async def _iteration_blocker(
   Reuses the legacy mechanical judgments over the Run's translated events —
   the same quota-shaped-event definition, no new matcher.
   """
-  events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
+  events_path = tree.runs.run_dir(child_id, run_id) / runs.RUN_EVENTS_NAME
   if not events_path.is_file():
     return None, f"Iteration {iteration} {outcome} (no events log)."
   blocker_reason, summary = improve_command._failed_iteration_judgments(
@@ -268,8 +260,8 @@ async def _iteration_blocker(
 
 async def run_improve_sequence(
     session_id: str,
-    cfg: CharlieBotConfig,
-    tree: TaskTreeManager,
+    cfg: config.CharlieBotConfig,
+    tree: task_sessions.TaskTreeManager,
     *,
     loop_id: int,
     iterations: int,
@@ -289,14 +281,14 @@ async def run_improve_sequence(
   """
   state = await improve_command.require_loop_state(session_id, loop_id, cfg)
   loop_dir = cfg.sessions_dir / session_id / "loops" / str(loop_id)
-  resolved_repo = Path(state.repo_path)
+  resolved_repo = pathlib.Path(state.repo_path)
   work_branch = state.work_branch
   base_branch = state.base_branch
   merge_back = state.merge_back
   resolved_backend = state.backend or ""
   resolved_model = state.model
   adapter = tree.dispatch.executor
-  if not isinstance(adapter, TaskExecutionAdapter):
+  if not isinstance(adapter, task_execution.TaskExecutionAdapter):
     raise RuntimeError("task execution adapter is not installed; cannot run an improve sequence")
 
   previous_summaries: list[str] = []
@@ -306,8 +298,8 @@ async def run_improve_sequence(
   try:
     # The single shared worktree every iteration commits to. Created here
     # (the controller owns it) and pinned on each iteration Run.
-    wt_path = Path(cfg.paths.worktree_dir) / work_branch.replace('/', '-')
-    Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
+    wt_path = pathlib.Path(cfg.paths.worktree_dir) / work_branch.replace('/', '-')
+    pathlib.Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
     try:
       resolution = await git.git_create_worktree(
           resolved_repo, base_branch or await git.git_current_branch(resolved_repo), work_branch, wt_path)
@@ -465,9 +457,9 @@ async def run_improve_sequence(
 
 
 async def _settle_withheld_iteration(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     loop_id: int,
     goal: str,
     iteration: int,
@@ -506,7 +498,7 @@ async def _settle_withheld_iteration(
   await close_ended_loop_child(tree, cfg, session_id, loop_id)
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class IterationJudgment:
   """One iteration's mechanical judgment and the evidence its report carries.
 
@@ -520,16 +512,16 @@ class IterationJudgment:
   invalid_reason: str | None
   tip: str
   commits_added: int
-  report_path: Path
+  report_path: pathlib.Path
 
 
 async def _judge_iteration(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     child_id: str,
     run_id: str,
     iteration: int,
-    wt_path: Path,
-    loop_dir: Path,
+    wt_path: pathlib.Path,
+    loop_dir: pathlib.Path,
     tip_before: str,
 ) -> IterationJudgment:
   """The mechanical iteration judgment: report validity over the git delta.
@@ -550,7 +542,7 @@ async def _judge_iteration(
     # below never flips it). Fall back to the worker's own closing words,
     # as the legacy controller did, and leave the same marked fallback file.
     fallback = f"Iteration {iteration} finished without a report file."
-    events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
+    events_path = tree.runs.run_dir(child_id, run_id) / runs.RUN_EVENTS_NAME
     if events_path.is_file():
       text = improve_command._extract_iteration_summary(
           improve_command._newest_first_events(events_path), iteration, "finished")
@@ -580,7 +572,7 @@ async def _judge_iteration(
 
 
 async def _broadcast_iteration_progress(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
     child_id: str,
     run_id: str,
@@ -588,7 +580,7 @@ async def _broadcast_iteration_progress(
     iterations: int,
     status: str,
     summary: str,
-    loop_dir: Path,
+    loop_dir: pathlib.Path,
 ) -> None:
   """The per-iteration progress event: chat visibility only, never an input.
 
@@ -611,11 +603,11 @@ async def _broadcast_iteration_progress(
 
 
 async def _deliver_iteration_report(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
     child_id: str,
     loop_id: int,
-    run: RunRecord,
+    run: models.RunRecord,
     iteration: int,
     iterations: int,
     outcome: str,
@@ -656,7 +648,7 @@ async def _deliver_iteration_report(
       source_event={"id": f"improve-iteration:{finished['id']}"},
       outcome=outcome,
       summary=f"{header}\n\n{judgment.summary}",
-      result_refs=[f"loop:{loop_id}", f"{RUN_REF_PREFIX}{run.id}"],
+      result_refs=[f"loop:{loop_id}", f"{task_completion.RUN_REF_PREFIX}{run.id}"],
       recipient=meta.task_parent_id,
   )
   log.info(
@@ -674,7 +666,7 @@ async def _deliver_iteration_report(
 
 # The loop outcome one durable loop status maps to (state.json's status
 # values; "running" never reaches this map — the step returns on it first).
-_SEQUENCE_OUTCOMES: dict[str, SequenceCloseOutcome] = {
+_SEQUENCE_OUTCOMES: dict[str, task_completion.SequenceCloseOutcome] = {
     "completed": "completed",
     "blocked": "blocked",
     "failed": "failed",
@@ -684,8 +676,8 @@ _SEQUENCE_OUTCOMES: dict[str, SequenceCloseOutcome] = {
 
 
 async def close_ended_loop_child(
-    tree: TaskTreeManager,
-    cfg: CharlieBotConfig,
+    tree: task_sessions.TaskTreeManager,
+    cfg: config.CharlieBotConfig,
     session_id: str,
     loop_id: int,
 ) -> None:
@@ -713,8 +705,8 @@ async def close_ended_loop_child(
 
 
 async def _close_ended_loop_child(
-    tree: TaskTreeManager,
-    cfg: CharlieBotConfig,
+    tree: task_sessions.TaskTreeManager,
+    cfg: config.CharlieBotConfig,
     session_id: str,
     loop_id: int,
 ) -> None:
@@ -728,7 +720,7 @@ async def _close_ended_loop_child(
       # This process's controller still owns the loop: its own end path runs
       # this step when the loop actually ends.
       return
-  child_id = stable_task_id(session_id, improve_child_request_id(loop_id))
+  child_id = control_events.stable_task_id(session_id, improve_child_request_id(loop_id))
   if await tree.load_meta(child_id) is None:
     return  # a legacy loop owns no worker child
   if tree.task_state(child_id) != "open":
@@ -738,23 +730,23 @@ async def _close_ended_loop_child(
   if any(e.get("type") == ET.TASK_CLOSED and e.get("request_id") == request_id for e in history):
     return  # closed by this step already; a manually reopened child stays as left
   events = tree.runs.load_events_sync(child_id)
-  runs = tree.runs.list_run_records_sync(child_id)
-  for run in runs:
+  run_records = tree.runs.list_run_records_sync(child_id)
+  for run in run_records:
     if tree.runs.run_has_terminal_fact(run, events) or run.pid is not None:
       continue
     # A queued iteration never launches on its own (the dispatcher skips
     # sequence Runs), so the durable stop request settles what would
     # otherwise block the close as pending execution.
     await tree.runs.request_stop(child_id, run.id, request_id)
-  for run in runs:
+  for run in run_records:
     if run.pid is not None and not tree.runs.run_has_terminal_fact(run, events):
       # A launched iteration still owes its terminal fact; its finish runs
       # after_run (or recovery's recover_run), which re-runs this step.
       return
-  outcome, evidence = await _loop_close_verdict(tree, cfg, session_id, state, child_id, runs, events)
+  outcome, evidence = await _loop_close_verdict(tree, cfg, session_id, state, child_id, run_records, events)
   try:
     await tree.completion.close_sequence_child(child_id, request_id=request_id, outcome=outcome, evidence=evidence)
-  except TaskConflictError:
+  except task_errors.TaskConflictError:
     # A raced close either landed under this request id (the loser returns
     # quietly) or met a genuinely changed node; the next call point retries
     # the latter through the wrapper's error log.
@@ -765,18 +757,18 @@ async def _close_ended_loop_child(
 
 
 async def _loop_close_verdict(
-    tree: TaskTreeManager,
-    cfg: CharlieBotConfig,
+    tree: task_sessions.TaskTreeManager,
+    cfg: config.CharlieBotConfig,
     session_id: str,
     state: improve_command.ImproveState,
     child_id: str,
-    runs: list[RunRecord],
+    run_records: list[models.RunRecord],
     events: list[dict],
-) -> tuple[SequenceCloseOutcome, CompletionEvidence]:
+) -> tuple[task_completion.SequenceCloseOutcome, task_completion.CompletionEvidence]:
   """The loop outcome and the close evidence, derived from durable records only."""
   loop_id = state.loop_id
-  terminal: list[tuple[RunRecord, str]] = []
-  for run in runs:
+  terminal: list[tuple[models.RunRecord, str]] = []
+  for run in run_records:
     outcome = tree.runs.terminal_outcome(events, run.id)
     if outcome is not None:
       terminal.append((run, outcome))
@@ -830,14 +822,15 @@ async def _loop_close_verdict(
   # The end error rides after the outcome sentence, before the iteration
   # summaries, verbatim (never truncated).
   end_error_part = f" {state.end_error}" if state.end_error else ""
-  landing: LandingEvidence | None = None
+  landing: task_completion.LandingEvidence | None = None
   if state.status == "completed" and state.base_branch:
     # The merge-back's own evidence: the work branch's tip, which the FF push
     # published onto the base's origin ref.
-    commit = await git.git_rev_parse(Path(state.repo_path), state.work_branch)
+    commit = await git.git_rev_parse(pathlib.Path(state.repo_path), state.work_branch)
     if commit:
-      landing = LandingEvidence(branch=f"origin/{state.base_branch}", commit=commit, repo_path=state.repo_path)
-  evidence = CompletionEvidence(
+      landing = task_completion.LandingEvidence(
+          branch=f"origin/{state.base_branch}", commit=commit, repo_path=state.repo_path)
+  evidence = task_completion.CompletionEvidence(
       summary=f"[Improve loop {loop_id}] {sentence}{end_error_part}{detail}",
       result_refs=[f"loop:{loop_id}"],
       run_ids=successful_ids,
@@ -851,8 +844,8 @@ async def _loop_close_verdict(
 
 
 async def reconcile_interrupted_sequences(
-    cfg: CharlieBotConfig,
-    tree: TaskTreeManager,
+    cfg: config.CharlieBotConfig,
+    tree: task_sessions.TaskTreeManager,
     boot_pid: int | None = None,
 ) -> int:
   """Mark every improve loop whose controller died with the old process, then close what ended.

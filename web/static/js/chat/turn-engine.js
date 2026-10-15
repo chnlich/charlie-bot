@@ -13,7 +13,10 @@
   // separator panels live in a registry keyed by turn key (head|conclusion|
   // separator message ids). Spacer heights come from measurements once a turn
   // has materialized, from estimates otherwise, with scroll position corrected
-  // whenever a measurement refines an estimate above the viewport.
+  // whenever a measurement refines an estimate above the viewport. Every
+  // height is a layout extent — the row's border-box height plus the row's
+  // own margin-top (the container's space-y-3 row gap) — so spacer sums
+  // equal the space the rows they stand for occupied.
   //
   // Scroll-path frames (rAF after a scroll event, inside the trailing
   // scroll-activity window) do only window bookkeeping, batched
@@ -34,6 +37,12 @@
   const SCROLL_QUIET_MS = 200;
   const FRAME_BUDGET_MS = 16.7;
   const FOLDED_ROW_DEFAULT_EST = 30;
+  // Pre-measurement row gap: the margin-top the container's `space-y-3` rule
+  // gives every non-first, non-hidden row (.space-y-3 > :not([hidden]) ~
+  // :not([hidden]) { margin-top: 0.75rem } in tailwind.css — 12px at the
+  // default root font size). measureSegment replaces it with the measured
+  // margin-top of the first measured row.
+  const ROW_GAP_EST = 12;
   const OPEN_BASE_EST = 64;
   const LINE_HEIGHT_EST = 21;
   const CHARS_PER_LINE_EST = 75;
@@ -137,6 +146,9 @@
       this.measuredOpen = new Map();
       this.measuredFlat = new WeakMap();
       this.foldedRowMeasures = [];
+      // The measured row gap (one row's margin-top), from the first
+      // measurement on; null until then, so rowGap() serves ROW_GAP_EST.
+      this.measuredRowGap = null;
       this.domBySeg = new Map();
       this.window = null;
       this.offsets = [];
@@ -305,8 +317,19 @@
     }
 
     // ---- height model -------------------------------------------------------
+    // The unit is the row's layout extent: the row's border-box height plus
+    // the row's own margin-top. Spacer heights are plain sums in this unit,
+    // so a spacer takes exactly the space its out-of-window rows took.
+
+    // The one row-gap source: the measured margin-top once a row is
+    // measured, ROW_GAP_EST before that.
+    rowGap() {
+      return this.measuredRowGap != null ? this.measuredRowGap : ROW_GAP_EST;
+    }
+
     foldedRowEstimate() {
-      if (!this.foldedRowMeasures.length) return FOLDED_ROW_DEFAULT_EST;
+      // The measured average already carries the gap; the default adds it.
+      if (!this.foldedRowMeasures.length) return FOLDED_ROW_DEFAULT_EST + this.rowGap();
       const sum = this.foldedRowMeasures.reduce((acc, value) => acc + value, 0);
       return sum / this.foldedRowMeasures.length;
     }
@@ -321,7 +344,8 @@
       seg.entries.forEach((entry) => { chars += contentChars(entry); });
       return OPEN_BASE_EST
         + Math.max(1, Math.ceil(chars / CHARS_PER_LINE_EST)) * LINE_HEIGHT_EST
-        + seg.rowSpec.foldCount * 36;
+        + seg.rowSpec.foldCount * 36
+        + this.rowGap();
     }
 
     flatEstimate(seg) {
@@ -330,7 +354,7 @@
         height += OPEN_BASE_EST
           + Math.max(1, Math.ceil(contentChars(entry) / CHARS_PER_LINE_EST)) * LINE_HEIGHT_EST;
       });
-      return height;
+      return height + this.rowGap();
     }
 
     heightOf(seg) {
@@ -431,7 +455,9 @@
     buildPlaceholder(seg) {
       const el = document.createElement('div');
       el.className = 'turn-placeholder';
-      el.style.height = Math.round(this.heightOf(seg)) + 'px';
+      // The style height is the border box: the model height minus the row
+      // gap the placeholder's own margin-top adds back.
+      el.style.height = Math.round(this.heightOf(seg) - this.rowGap()) + 'px';
       if (seg.kind === 'turn') el.dataset.turnKey = seg.key;
       el.textContent = '…';
       return el;
@@ -476,7 +502,20 @@
     }
 
     measureSegment(seg, el) {
-      const height = el.getBoundingClientRect().height;
+      // The measured height is the layout extent: the border box plus the
+      // row's own margin-top. The margin reads as the gap between the row's
+      // box and its predecessor's bottom edge — every row and spacer has
+      // margin-bottom 0, so the gap is the row's margin-top; a first child
+      // carries no space-y-3 margin.
+      const rect = el.getBoundingClientRect();
+      const prev = el.previousElementSibling;
+      let marginTop = 0;
+      if (prev) {
+        const prevRect = prev.getBoundingClientRect();
+        marginTop = rect.top - (prevRect.top + prevRect.height);
+      }
+      this.measuredRowGap = marginTop;
+      const height = rect.height + marginTop;
       this.stats.measuredTurnCount++;
       if (el.classList.contains('turn-placeholder')) return height;
       // The measurement belongs to the materialization the node was built
@@ -625,10 +664,10 @@
     }
 
     isPinned() {
-      // The browser's real scroll range (spacers + window + sibling margins +
-      // the streaming fixture) differs from the engine's height model by the
-      // container's space-y-3 margins; pinning to the model would leave the
-      // bottom margin worth of content unreachable.
+      // The height model counts every row's layout extent, so the browser's
+      // real scroll range exceeds it only by the tail no segment owns — the
+      // container's padding and the streaming fixture. Pinning to the model
+      // would still leave that tail unreachable, so the pin reads geometry.
       const el = this.container;
       return el.scrollHeight - el.scrollTop - el.clientHeight < 150;
     }
@@ -712,11 +751,10 @@
         : reason === 'scroll' ? this.isPinned()
         : this.pinnedIntent;
       const snapToBottom = wasPinned && reason !== 'scroll';
-      // At the pinned bottom the browser's scrollTop and the height model
-      // disagree by the container's sibling margins, which makes a
-      // scrollTop-derived range flap ±1 segment in a limit cycle. The pinned
-      // range is therefore derived from the model's own offsets — stable by
-      // construction.
+      // At the pinned bottom the browser's scrollTop still sits outside the
+      // height model by the tail no segment owns (container padding,
+      // streaming fixture), so the pinned range is derived from the model's
+      // own offsets — stable by construction.
       const range = wasPinned ? this.pinnedRange() : this.computeTargetRange();
       // The restore target's segment stays projected even when the update
       // shrank the content above the reader (a manual collapse): without it
@@ -1018,6 +1056,7 @@
       this.measuredOpen.clear();
       this.measuredFlat = new WeakMap();
       this.foldedRowMeasures = [];
+      this.measuredRowGap = null;
       this.domBySeg.clear();
       this.offsets = [];
       this.offsetsDirty = false;
@@ -1170,7 +1209,10 @@
       this.pinnedIntent = true;
       this.followNextTurn = false;
       this.pendingAnchor = null;
-      this.writeScrollTop(this.container.scrollHeight);
+      // Project as a pinned frame: the pinned range brings the trailing
+      // segments into the DOM and the pin branch snaps the scroll position
+      // to the bottom through writeScrollTop, whose echo stays an echo.
+      this.reproject('jump');
     }
 
     // ---- ingest: pagination ---------------------------------------------------

@@ -72,7 +72,8 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -
   inits = 0
   original = session_events_module.SessionEvents._init_live_aggregator
 
-  async def counting_init(self, session_id: str, epoch: int) -> session_events_module.MessageAggregator | None:
+  async def counting_init(
+      self, session_id: str, epoch: int) -> session_events_module.message_aggregator.MessageAggregator | None:
     nonlocal inits
     inits += 1
     return await original(self, session_id, epoch)
@@ -96,7 +97,7 @@ async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeyp
   mgr = conftest.build_session_blocks(cfg)
   sid = await _seed_session(mgr)
 
-  real_aggregator = session_events_module.MessageAggregator
+  real_aggregator = session_events_module.message_aggregator.MessageAggregator
   feeds = 0
 
   class DropMidFeed(real_aggregator):
@@ -110,7 +111,7 @@ async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeyp
         mgr.events.drop_session_runtime_state(sid)
       return super().feed(event)
 
-  monkeypatch.setattr(session_events_module, "MessageAggregator", DropMidFeed)
+  monkeypatch.setattr(session_events_module.message_aggregator, "MessageAggregator", DropMidFeed)
   aggregator = await mgr.events._get_or_init_aggregator(sid)
 
   assert feeds >= 3  # the dropped run's feeds plus the rerun's

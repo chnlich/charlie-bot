@@ -6,19 +6,16 @@ store's stored-status memo. The process builds one block (``listing()``); tests 
 global.
 """
 
+import datetime
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import Any
 
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.models import SessionMetadata, SessionStatus
-from src.runtime import session_sidebar, session_store
-from src.runtime.hooks.sequence_controllers import sequence_controllers
-from src.runtime.scheduled_sessions import sequence_subtree_roots, view_subtree_roots
-from src.runtime.thinking_state import busy_since, run_backend
+from src.infra import config, models
+from src.runtime import scheduled_sessions, session_sidebar, session_store, thinking_state
+from src.runtime.hooks import sequence_controllers
 
 
-def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionMetadata:
+def _listing_row_copy(meta: models.SessionMetadata, update: dict[str, Any]) -> models.SessionMetadata:
   """Return *meta* as a caller-safe listing row carrying *update*, as ``model_copy`` would.
 
   SessionMetadata keeps its unregistered and package-registered keys as
@@ -29,7 +26,7 @@ def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionM
   ``model_copy(update=...)``; a config change that adds private state must
   extend the copy with that state in the same change.
   """
-  row = SessionMetadata.__new__(SessionMetadata)
+  row = models.SessionMetadata.__new__(models.SessionMetadata)
   object.__setattr__(row, "__dict__", {**meta.__dict__, **update})
   object.__setattr__(row, "__pydantic_extra__", dict(meta.model_extra or {}))
   object.__setattr__(row, "__pydantic_fields_set__", meta.__pydantic_fields_set__ | update.keys())
@@ -42,7 +39,7 @@ class SessionListing:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       sidebar: session_sidebar.SessionSidebar,
   ) -> None:
@@ -60,18 +57,18 @@ class SessionListing:
     # until a write bumps the revision, a create/delete moves the root
     # signature, or the sweep re-walks, so the map re-derives exactly when its
     # inputs can have moved and never wider.
-    self._sequence_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
-    self._view_subtree_memo: tuple[list[SessionMetadata], dict[str, dict[str, str]]] | None = None
+    self._sequence_subtree_memo: tuple[list[models.SessionMetadata], dict[str, str]] | None = None
+    self._view_subtree_memo: tuple[list[models.SessionMetadata], dict[str, dict[str, str]]] | None = None
 
   async def list_sessions(
       self,
-      status: SessionStatus | None = None,
+      status: models.SessionStatus | None = None,
       starred: bool | None = None,
       scheduled: bool | None = None,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
       include_pending_plan_approval: bool = False,
-  ) -> list[SessionMetadata]:
+  ) -> list[models.SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled.
 
     The starred/scheduled filters run against the shared cached metas (read-only),
@@ -92,21 +89,21 @@ class SessionListing:
     return [
         _listing_row_copy(
             meta, {
-                "thinking_since": busy_since(meta.id),
-                "run_backend": run_backend(meta.id),
+                "thinking_since": thinking_state.busy_since(meta.id),
+                "run_backend": thinking_state.run_backend(meta.id),
                 **derived[meta.id],
             }) for meta in rows
     ]
 
   async def list_sessions_readonly(
       self,
-      status: SessionStatus | None = None,
+      status: models.SessionStatus | None = None,
       starred: bool | None = None,
       scheduled: bool | None = None,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
       include_pending_plan_approval: bool = False,
-  ) -> tuple[list[SessionMetadata], dict[str, dict]]:
+  ) -> tuple[list[models.SessionMetadata], dict[str, dict]]:
     """List sessions newest-first without copying: ``(rows, derived)`` for
     consumers that only read.
 
@@ -117,7 +114,7 @@ class SessionListing:
     among them (the caller reads :func:`busy_since` itself).
     """
     metas = await self._with_derived_archive(await self._store.load_session_metas(status), status)
-    controllers = () if scheduled is None else sequence_controllers()
+    controllers = () if scheduled is None else sequence_controllers.sequence_controllers()
     rows = [
         meta for meta in metas if (starred is None or meta.starred == starred) and
         (scheduled is None or any(controller.owns_session(meta) for controller in controllers) == scheduled)
@@ -145,7 +142,7 @@ class SessionListing:
     cached = self._sequence_subtree_memo
     if cached is not None and cached[0] is metas:
       return cached[1]
-    roots = sequence_subtree_roots(metas)
+    roots = scheduled_sessions.sequence_subtree_roots(metas)
     self._sequence_subtree_memo = (metas, roots)
     return roots
 
@@ -162,7 +159,7 @@ class SessionListing:
     cached = self._view_subtree_memo
     if cached is not None and cached[0] is metas:
       return cached[1]
-    roots = view_subtree_roots(metas)
+    roots = scheduled_sessions.view_subtree_roots(metas)
     self._view_subtree_memo = (metas, roots)
     return roots
 
@@ -193,7 +190,7 @@ class SessionListing:
     """
     limit = max(1, min(500, limit))
     metas = await self._with_derived_archive(
-        await self._store.load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
+        await self._store.load_session_metas(status=models.SessionStatus.ARCHIVED), models.SessionStatus.ARCHIVED)
     # Sequence-subtree rows stay out of the Archived list; the owned sessions
     # themselves keep their rows. The exclusion runs before the group
     # aggregates and the keyset slice, so both describe the rows the page can
@@ -220,7 +217,7 @@ class SessionListing:
     if (before is None) != (before_id is None):
       raise ValueError("before and before_id form one cursor: pass both or neither")
     if before is not None:
-      cursor_time = datetime.fromisoformat(before)
+      cursor_time = datetime.datetime.fromisoformat(before)
       if cursor_time.tzinfo is None:
         raise ValueError("before must be a timezone-aware ISO timestamp")
       cursor = (cursor_time, before_id)
@@ -242,7 +239,7 @@ class SessionListing:
         "groups": groups,
     }
 
-  async def archived_context_rows(self, rows: list[SessionMetadata]) -> list[SessionMetadata]:
+  async def archived_context_rows(self, rows: list[models.SessionMetadata]) -> list[models.SessionMetadata]:
     """Every unarchived ancestor of *rows* that *rows* do not already carry.
 
     The archived listing's context rows (plan 4.2): a page's rows nest into the
@@ -261,7 +258,7 @@ class SessionListing:
     present = {row.id for row in rows}
     overlay = self.archive_overlay
     derived = await overlay() if overlay is not None else set()
-    out: list[SessionMetadata] = []
+    out: list[models.SessionMetadata] = []
     seen: set[str] = set()
     for row in rows:
       parent_id = row.task_parent_id
@@ -270,13 +267,13 @@ class SessionListing:
         ancestor = await self._store.get_session(parent_id)
         if ancestor is None:
           break
-        if ancestor.status != SessionStatus.ARCHIVED and ancestor.id not in derived:
+        if ancestor.status != models.SessionStatus.ARCHIVED and ancestor.id not in derived:
           out.append(ancestor)
         parent_id = ancestor.task_parent_id
     return out
 
-  async def _with_derived_archive(self, metas: list[SessionMetadata],
-                                  status: SessionStatus | None) -> list[SessionMetadata]:
+  async def _with_derived_archive(self, metas: list[models.SessionMetadata],
+                                  status: models.SessionStatus | None) -> list[models.SessionMetadata]:
     """Apply the task tree's fact-derived archive to one stored-status listing.
 
     The listing memo keys stored status; the derived set moves with facts, so
@@ -291,16 +288,17 @@ class SessionListing:
     if not derived:
       return metas
 
-    def as_archived(meta: SessionMetadata) -> SessionMetadata:
-      return meta.model_copy(update={"status": SessionStatus.ARCHIVED})
+    def as_archived(meta: models.SessionMetadata) -> models.SessionMetadata:
+      return meta.model_copy(update={"status": models.SessionStatus.ARCHIVED})
 
-    if status == SessionStatus.ACTIVE:
+    if status == models.SessionStatus.ACTIVE:
       return [meta for meta in metas if meta.id not in derived]
-    if status == SessionStatus.ARCHIVED:
-      active = await self._store.load_session_metas(SessionStatus.ACTIVE)
+    if status == models.SessionStatus.ARCHIVED:
+      active = await self._store.load_session_metas(models.SessionStatus.ACTIVE)
       return metas + [as_archived(meta) for meta in active if meta.id in derived]
     return [
-        as_archived(meta) if meta.id in derived and meta.status != SessionStatus.ARCHIVED else meta for meta in metas
+        as_archived(meta) if meta.id in derived and meta.status != models.SessionStatus.ARCHIVED else meta
+        for meta in metas
     ]
 
 
@@ -312,5 +310,5 @@ def listing() -> SessionListing:
   """The process-wide session listing block."""
   global _listing
   if _listing is None:
-    _listing = SessionListing(get_config(), session_store.store(), session_sidebar.sidebar())
+    _listing = SessionListing(config.get_config(), session_store.store(), session_sidebar.sidebar())
   return _listing

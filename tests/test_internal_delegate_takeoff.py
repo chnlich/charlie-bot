@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 from src.features.improve import api as improve_api
 from src.infra import event_types as ET
+from src.infra import tasks
 from src.infra.config import CharlieBotConfig
 from src.infra.models import DelegateRequest, SessionMetadata, TaskSpec, TaskType
 from src.runtime import spawner_backends
@@ -445,7 +446,7 @@ async def test_improve_child_records_the_requested_backend(tmp_path: Path, monke
     coro.close()
     spawned.append(name)
 
-  monkeypatch.setattr(improve_api, "create_logged_task", fake_logged_task)
+  monkeypatch.setattr(tasks, "create_logged_task", fake_logged_task)
 
   result = await improve_api.start_improve_loop(
       improve_api.ImproveRequest(

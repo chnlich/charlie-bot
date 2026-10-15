@@ -13,7 +13,7 @@ from src.runtime.cli import common
 
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.runtime.api.internal.get_config"
 _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.runtime.spawner_backends.resolve_requested_subagent_backend_model"
-_IMPROVE_API_RESERVE_LOOP_STATE_PATCH_TARGET = "src.features.improve.api.reserve_loop_state"
+_RESERVE_LOOP_STATE_PATCH_TARGET = "src.features.improve.improve_command.reserve_loop_state"
 
 
 def _improve_argv(session_id: str | None, repo: str, goal_file: pathlib.Path, *extra: str) -> list[str]:
@@ -143,8 +143,6 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   """POST /api/internal/improve returns 409 when another loop is already running."""
   import fastapi
 
-  from src.features.improve import improve_command
-
   req = improve_api.ImproveRequest(
       session_id="s1",
       repo_path="/tmp/repo",
@@ -162,7 +160,7 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
        mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
        mock.patch(
-           _IMPROVE_API_RESERVE_LOOP_STATE_PATCH_TARGET,
+           _RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=improve_command.ImproveLoopAlreadyRunningError(7)), \
        pytest.raises(fastapi.HTTPException) as exc_info:
     await improve_api.start_improve_loop(req, store=store, task_mgr=task_mgr)
@@ -264,8 +262,6 @@ async def test_improve_stop_endpoint_404_for_missing_session(tmp_path: pathlib.P
 async def test_session_takes_a_new_loop_after_stop(tmp_path: pathlib.Path) -> None:
   """After a stop, the session's active lock releases (the sequence's own exit
   step, src/features/improve/improve_sequence.py) and a new loop reserves cleanly."""
-  from src.features.improve import improve_command
-
   cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)

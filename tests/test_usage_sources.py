@@ -15,7 +15,7 @@ import types
 import pytest
 
 from src.features.usage import token_tally
-from src.runtime.hooks import backend_types, usage_source_registration, usage_sources
+from src.runtime.hooks import backend_type_registration, usage_source_registration, usage_sources
 
 
 @pytest.fixture
@@ -196,6 +196,6 @@ def test_every_backend_type_attributes_to_the_cli_that_logs_it() -> None:
       "opencode": "opencode",
       "charlie-code": "CLC",
   }
-  for backend_type in backend_types.registered_types():
+  for backend_type in backend_type_registration.registrations():
     source = usage_source_registration.source_for(backend_type)
     assert (source.name if source else None) == expected.get(backend_type), backend_type

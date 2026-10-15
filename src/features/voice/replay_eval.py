@@ -22,29 +22,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
+import datetime
 import difflib
 import json
+import pathlib
 import re
 import sys
 import time
 import wave
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from pathlib import Path
 
 import numpy as np
 
-from src.features.voice import transcriber
-from src.features.voice.transcription import base, registry
-from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend
-from src.features.voice.transcription.local import LocalTranscriptionBackend
-from src.features.voice.turn_contribution import VOICE_INPUT_MODE
-from src.infra.config import CharlieBotConfig, load_config
-from src.infra.models import utc_now_iso
+from src.features.voice import transcriber, turn_contribution
+from src.features.voice.transcription import base, local, registry
+from src.infra import config, models
 
 # The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 SAMPLE_RATE = base.SAMPLE_RATE
 # A voice recording pairs with the first voice-flagged user message sent within
@@ -69,11 +65,11 @@ def _variant_engine_ids() -> set[str]:
   return ids | {HOTWORDS_ENGINE} | {f"{engine_id}{VOCAB_SUFFIX}" for engine_id in ids}
 
 
-@dataclass
+@dataclasses.dataclass
 class Clip:
-  path: Path
+  path: pathlib.Path
   session_id: str
-  recorded_at: datetime
+  recorded_at: datetime.datetime
   samples: np.ndarray
 
   @property
@@ -81,7 +77,7 @@ class Clip:
     return self.samples.size / SAMPLE_RATE
 
 
-def load_clips(cfg: CharlieBotConfig, only: str = "", limit: int = 0) -> list[Clip]:
+def load_clips(cfg: config.CharlieBotConfig, only: str = "", limit: int = 0) -> list[Clip]:
   """Every 16 kHz mono PCM16 recording under sessions/*/voice/, oldest first.
 
   Any file that is not that format — or whose name does not carry the upload
@@ -106,7 +102,7 @@ def load_clips(cfg: CharlieBotConfig, only: str = "", limit: int = 0) -> list[Cl
     except (wave.Error, EOFError) as exc:
       _note(f"skip {wav.name}: malformed WAV: {exc}")
       continue
-    recorded_at = datetime.strptime(match.group(1), "%Y-%m-%dT%H%M%S.%f").replace(tzinfo=UTC)
+    recorded_at = datetime.datetime.strptime(match.group(1), "%Y-%m-%dT%H%M%S.%f").replace(tzinfo=datetime.UTC)
     clips.append(
         Clip(
             path=wav,
@@ -118,7 +114,7 @@ def load_clips(cfg: CharlieBotConfig, only: str = "", limit: int = 0) -> list[Cl
   return clips
 
 
-def find_ground_truth(session_dir: Path, recorded_at: datetime) -> str | None:
+def find_ground_truth(session_dir: pathlib.Path, recorded_at: datetime.datetime) -> str | None:
   """The first voice-flagged string user event within 900 s after the recording.
 
   Reads the session's ``data/chat_events.jsonl``; None means the clip is scored
@@ -134,13 +130,13 @@ def find_ground_truth(session_dir: Path, recorded_at: datetime) -> str | None:
       except json.JSONDecodeError as exc:
         raise ValueError(f"malformed JSON at {events_path}:{line_number}: {exc}") from exc
       # A stored event carries ``input_mode``, or ``is_voice`` when it was written under the earlier flag.
-      dictated = event.get("input_mode") == VOICE_INPUT_MODE or event.get("is_voice") is True
+      dictated = event.get("input_mode") == turn_contribution.VOICE_INPUT_MODE or event.get("is_voice") is True
       if event.get("type") != "user" or not dictated:
         continue
       content = event.get("content")
       if not isinstance(content, str):
         continue
-      timestamp = datetime.fromisoformat(event["timestamp"])
+      timestamp = datetime.datetime.fromisoformat(event["timestamp"])
       if timestamp < recorded_at:
         continue
       if (timestamp - recorded_at).total_seconds() <= GROUND_TRUTH_WINDOW_S:
@@ -167,7 +163,7 @@ def score_terms(output: str, sent: str, terms: list[str]) -> dict[str, dict[str,
   return scores
 
 
-def ensure_out_dir(out: Path, repo_root: Path) -> Path:
+def ensure_out_dir(out: pathlib.Path, repo_root: pathlib.Path) -> pathlib.Path:
   """Resolve ``out`` and refuse any location inside the repository working tree.
 
   Results carry the user's speech and messages; the repository is public, so the
@@ -183,7 +179,7 @@ def ensure_out_dir(out: Path, repo_root: Path) -> Path:
   return resolved
 
 
-async def _transcribe_clip(backend: TranscriptionBackend, clip: Clip, vocabulary: list[str],
+async def _transcribe_clip(backend: base.TranscriptionBackend, clip: Clip, vocabulary: list[str],
                            languages: list[str]) -> tuple[str, float | None, float | None]:
   """Drive one clip through ``transcribe`` and time it against the chunk hand-offs.
 
@@ -199,7 +195,7 @@ async def _transcribe_clip(backend: TranscriptionBackend, clip: Clip, vocabulary
     yield pcm
 
   async def paced_chunks() -> AsyncIterator[bytes]:
-    frame_bytes = VOICE_CHUNK_SAMPLES * 2
+    frame_bytes = base.VOICE_CHUNK_SAMPLES * 2
     started = time.monotonic()
     for offset in range(0, len(pcm), frame_bytes):
       target = started + (offset // 2) / SAMPLE_RATE
@@ -228,7 +224,7 @@ async def _transcribe_clip(backend: TranscriptionBackend, clip: Clip, vocabulary
 
 
 async def run_engine(
-    engine: str, backend: TranscriptionBackend, clips: list[Clip], vocabulary: list[str],
+    engine: str, backend: base.TranscriptionBackend, clips: list[Clip], vocabulary: list[str],
     languages: list[str]) -> list[dict]:
   """Replay every clip through one backend; a clip-level failure is recorded, the run continues."""
   records: list[dict] = []
@@ -254,7 +250,7 @@ def _warmup_pcm() -> bytes:
   return samples.astype("<i2").tobytes()
 
 
-def _prepare_local_backends(backends: dict[str, TranscriptionBackend], cfg: CharlieBotConfig) -> None:
+def _prepare_local_backends(backends: dict[str, base.TranscriptionBackend], cfg: config.CharlieBotConfig) -> None:
   """Provision the speech models and warm every local backend's bundle before the timed runs.
 
   The server does both on its provisioning thread at boot; the replay process
@@ -263,13 +259,13 @@ def _prepare_local_backends(backends: dict[str, TranscriptionBackend], cfg: Char
   without a local backend provisions nothing: the speech models are the local
   backend's alone.
   """
-  local_backends = [backend for backend in backends.values() if isinstance(backend, LocalTranscriptionBackend)]
+  local_backends = [backend for backend in backends.values() if isinstance(backend, local.LocalTranscriptionBackend)]
   if not local_backends:
     return
   transcriber.ensure_models_cached(cfg)
   sine = _warmup_pcm()
 
-  async def warm(backend: TranscriptionBackend) -> None:
+  async def warm(backend: base.TranscriptionBackend) -> None:
 
     async def one_chunk() -> AsyncIterator[bytes]:
       yield sine
@@ -304,7 +300,7 @@ def _snippet(text: str, term: str) -> str:
 
 
 def write_outputs(
-    out_dir: Path, engines: list[str], clips: list[Clip], ground_truth: dict[str, str | None], terms: list[str],
+    out_dir: pathlib.Path, engines: list[str], clips: list[Clip], ground_truth: dict[str, str | None], terms: list[str],
     records: dict[str, list[dict]]) -> None:
   """Write results.json (one record per clip and engine) and summary.md."""
   clip_records = []
@@ -320,7 +316,7 @@ def write_outputs(
       entry.update(record)
       clip_records.append(entry)
   payload = {
-      "generated_at": utc_now_iso(),
+      "generated_at": models.utc_now_iso(),
       "engines": engines,
       "terms": terms,
       "clips": clip_records,
@@ -345,12 +341,12 @@ def write_outputs(
     better = worse = None
     if local_records is not None and engine != "local":
       pairs = [
-          (record, local)
-          for record, local in zip(engine_records, local_records, strict=True)
-          if record.get("ok") and local.get("ok") and "sim" in record and "sim" in local
+          (record, local_record)
+          for record, local_record in zip(engine_records, local_records, strict=True)
+          if record.get("ok") and local_record.get("ok") and "sim" in record and "sim" in local_record
       ]
-      better = sum(1 for record, local in pairs if record["sim"] > local["sim"])
-      worse = sum(1 for record, local in pairs if record["sim"] < local["sim"])
+      better = sum(1 for record, local_record in pairs if record["sim"] > local_record["sim"])
+      worse = sum(1 for record, local_record in pairs if record["sim"] < local_record["sim"])
     rows.append(
         {
             "engine": engine,
@@ -369,7 +365,7 @@ def write_outputs(
   lines = [
       "# Voice replay evaluation",
       "",
-      f"Generated {utc_now_iso()}; engines: {', '.join(engines)}; " + f"terms: {', '.join(terms)}",
+      f"Generated {models.utc_now_iso()}; engines: {', '.join(engines)}; " + f"terms: {', '.join(terms)}",
       "",
       "| " + " | ".join(SUMMARY_COLUMNS) + " |",
       "|" + "---|" * len(SUMMARY_COLUMNS),
@@ -432,10 +428,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
-  cfg = load_config()
+  cfg = config.load_config()
   out_dir = ensure_out_dir(
-      Path(args.out) if args.out else cfg.charliebot_home / "voice_eval" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
-      _REPO_ROOT)
+      pathlib.Path(args.out) if args.out else cfg.charliebot_home / "voice_eval" /
+      datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ"), _REPO_ROOT)
   clips = load_clips(cfg, args.only, args.limit)
 
   ground_truth = {clip.path.name: find_ground_truth(clip.path.parent.parent, clip.recorded_at) for clip in clips}
@@ -453,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     # same registry interface.
     hotwords = ",".join(args.hotwords_list)
     registry.register_transcription_backend(
-        HOTWORDS_ENGINE, lambda backend_cfg, **_: LocalTranscriptionBackend(backend_cfg, hotwords=hotwords))
+        HOTWORDS_ENGINE, lambda backend_cfg, **_: local.LocalTranscriptionBackend(backend_cfg, hotwords=hotwords))
 
   out_dir.mkdir(parents=True, exist_ok=True)
   backends = {

@@ -8,12 +8,12 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
-from unittest.mock import patch
+from unittest import mock
 
 import conftest
 import pytest
 
-from src.features.slack.slack_listener import handle_app_mention, summon_session_id
+from src.features.slack import slack_listener
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
 
@@ -64,12 +64,12 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
   tasks: list[asyncio.Task] = []
 
   # The wake runs for real: the summon's round must start on the new root.
-  with patch(conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)):
-    session_id = await handle_app_mention(
+  with mock.patch(conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)):
+    session_id = await slack_listener.handle_app_mention(
         event, cfg, *conftest.thread_blocks(session_blocks), conftest.FakeSlackClient())
     await asyncio.gather(*tasks)
 
-  assert session_id == summon_session_id("T_TEST", "C_TEST", "1700000000.000100")
+  assert session_id == slack_listener.summon_session_id("T_TEST", "C_TEST", "1700000000.000100")
   assert launches == [(session_id, 1)]
   _assert_manager_root(cfg, session_id)
   meta = await session_blocks.store.get_session(session_id)
@@ -87,7 +87,7 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
   parent = await conftest.make_parent(mgr)  # two seed events: e0, e1
   parent_events = _read_events(mgr.events.get_chat_events_path(parent))
 
-  with patch("os.fdatasync") as fdatasync:
+  with mock.patch("os.fdatasync") as fdatasync:
     if spawn == "fork":
       child = await mgr.fork.fork_session(parent, event_index=len(parent_events) - 1)
     else:

@@ -440,11 +440,19 @@ async def test_improve_child_records_the_requested_backend(tmp_path: Path, monke
   manager = await _backend_test_manager(tree)
   spawned: list[str] = []
 
+  real_logged_task = tasks.create_logged_task
+
   def fake_logged_task(coro, *, name: str):
-    # The loop controller is not this test's subject; the request is accepted
-    # once the child exists, so the scheduled coroutine never starts here.
-    coro.close()
-    spawned.append(name)
+    # Only the loop's task is this test's subject: the request is accepted
+    # once the child exists, so its coroutine never starts here. The patch
+    # intercepts every consumer of the shared tasks module, and a caller
+    # like the task tree's index build awaits the returned task, so other
+    # names pass through to the real factory.
+    if name.startswith("improve-sequence-"):
+      coro.close()
+      spawned.append(name)
+      return
+    return real_logged_task(coro, name=name)
 
   monkeypatch.setattr(tasks, "create_logged_task", fake_logged_task)
 

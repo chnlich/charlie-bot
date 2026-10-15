@@ -2519,8 +2519,15 @@ def block_home_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
   violations: list[str] = []
   for module, singleton in _BLOCK_SINGLETONS:
     monkeypatch.setattr(module, singleton, None)
-    monkeypatch.setattr(
-        module, "get_config", _guarded_get_config(module.get_config, module.__name__, tmp_path, violations))
+    # A module that imports config by module (Google style 2.2) holds no get_config attribute; the guard goes on a
+    # shim of its config module instead, because patching src.infra.config itself would guard every consumer.
+    if hasattr(module, "get_config"):
+      monkeypatch.setattr(
+          module, "get_config", _guarded_get_config(module.get_config, module.__name__, tmp_path, violations))
+    else:
+      shim = SimpleNamespace(
+          get_config=_guarded_get_config(module.config.get_config, module.__name__, tmp_path, violations))
+      monkeypatch.setattr(module, "config", shim)
   yield violations
   if violations:
     pytest.fail("\n".join(violations), pytrace=False)

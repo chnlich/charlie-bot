@@ -6,12 +6,10 @@ disk, because a TTL-cached read may predate a concurrent elone. The process buil
 monkeypatch the ``_successor`` global.
 """
 
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionMetadata
+from src.infra import config, log_once, models
 from src.runtime import session_events, session_store
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Bounds both the successor-chain walk (a cycle must never spin) and the
 # delivery retry loop that re-resolves racing elones, keeping the two in agreement.
@@ -23,7 +21,7 @@ class SessionSuccessor:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       events: session_events.SessionEvents,
   ) -> None:
@@ -31,7 +29,7 @@ class SessionSuccessor:
     self._store = store
     self._events = events
 
-  async def resolve_successor_chain(self, session_id: str) -> SessionMetadata | None:
+  async def resolve_successor_chain(self, session_id: str) -> models.SessionMetadata | None:
     """Walk ``successor_session_id`` from *session_id* to the chain end.
 
     Uses ``read_metadata_fresh`` at every hop (never the TTL cache, which may
@@ -119,5 +117,5 @@ def successor() -> SessionSuccessor:
   """The process-wide session successor block."""
   global _successor
   if _successor is None:
-    _successor = SessionSuccessor(get_config(), session_store.store(), session_events.events())
+    _successor = SessionSuccessor(config.get_config(), session_store.store(), session_events.events())
   return _successor

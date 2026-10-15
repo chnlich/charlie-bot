@@ -39,10 +39,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from src.features.cron import config, loader
-from src.infra import backend_models, log_once, models, tasks
+from src.features.cron import config as cron_config
+from src.features.cron import loader
+from src.infra import backend_models, config, log_once, models, tasks
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, require_backend_option
 from src.runtime import control_events, review, runs, task_completion, task_errors, task_execution
 
 if TYPE_CHECKING:
@@ -71,7 +71,7 @@ def firing_ref_prefix(owner_ref: str) -> tuple[str, str] | None:
   return name, firing
 
 
-def load_bound_task(task_name: str, cfg: object) -> config.ScheduledTaskConfig | None:
+def load_bound_task(task_name: str, cfg: object) -> cron_config.ScheduledTaskConfig | None:
   """The current config of one named scheduled task, or None when unconfigured.
 
   Reads the task's own cron.d file under this instance's home so recovery can
@@ -91,7 +91,7 @@ def load_bound_task(task_name: str, cfg: object) -> config.ScheduledTaskConfig |
   return task
 
 
-def bound_task_names(session_id: str, tasks: list[config.ScheduledTaskConfig] | None = None) -> list[str]:
+def bound_task_names(session_id: str, tasks: list[cron_config.ScheduledTaskConfig] | None = None) -> list[str]:
   """Every loaded scheduled task whose ``session_id`` binding names *session_id*.
 
   The plural form of the one binding judgment (see :func:`bound_task_name`):
@@ -106,7 +106,7 @@ def bound_task_names(session_id: str, tasks: list[config.ScheduledTaskConfig] | 
   ]
 
 
-def bound_task_name(session_id: str, tasks: list[config.ScheduledTaskConfig] | None = None) -> str | None:
+def bound_task_name(session_id: str, tasks: list[cron_config.ScheduledTaskConfig] | None = None) -> str | None:
   """The loaded scheduled task whose ``session_id`` binding names *session_id*.
 
   The one "is this node bound by a task" judgment, derived from the loaded task
@@ -130,25 +130,25 @@ def chain_step_prompt(prompt: str, previous_name: str, previous_result: str) -> 
   return f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
 
 
-def firing_ref(task_cfg: config.ScheduledTaskConfig, firing: str) -> str:
+def firing_ref(task_cfg: cron_config.ScheduledTaskConfig, firing: str) -> str:
   """The durable owner_ref of one firing: task name + the due occurrence."""
   return f"cron:{task_cfg.name}:{firing}"
 
 
-def leaf_request_id(task_cfg: config.ScheduledTaskConfig, firing: str) -> str:
+def leaf_request_id(task_cfg: cron_config.ScheduledTaskConfig, firing: str) -> str:
   return f"{firing_ref(task_cfg, firing)}:leaf"
 
 
-def step_run_request_id(task_cfg: config.ScheduledTaskConfig, firing: str, position: int) -> str:
+def step_run_request_id(task_cfg: cron_config.ScheduledTaskConfig, firing: str, position: int) -> str:
   return f"{firing_ref(task_cfg, firing)}:step:{position}"
 
 
-def work_run_request_id(task_cfg: config.ScheduledTaskConfig, firing: str) -> str:
+def work_run_request_id(task_cfg: cron_config.ScheduledTaskConfig, firing: str) -> str:
   return f"{firing_ref(task_cfg, firing)}:work"
 
 
 async def resolve_binding(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     tree: task_sessions.TaskTreeManager,
 ) -> models.SessionMetadata:
   """Load the bound task-tree node; every invalid binding fails loudly.
@@ -167,7 +167,7 @@ async def resolve_binding(
 
 
 async def check_fireable_binding(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     tree: task_sessions.TaskTreeManager,
 ) -> models.SessionMetadata:
   """The binding a NEW cron execution may start against.
@@ -195,7 +195,7 @@ async def check_fireable_binding(
 
 
 async def fire_bound_master(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     meta: models.SessionMetadata,
     tree: task_sessions.TaskTreeManager,
     firing: str,
@@ -227,7 +227,7 @@ async def fire_bound_master(
 
 
 async def ensure_firing_leaf(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     meta: models.SessionMetadata,
     tree: task_sessions.TaskTreeManager,
     firing: str,
@@ -269,7 +269,7 @@ async def ensure_firing_leaf(
 async def register_leaf_run(
     tree: task_sessions.TaskTreeManager,
     leaf_id: str,
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     firing: str,
     *,
     kind: str,
@@ -319,7 +319,7 @@ async def run_result_text(tree: task_sessions.TaskTreeManager, leaf_id: str, run
 
 
 async def run_firing_steps(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     meta: models.SessionMetadata,
     tree: task_sessions.TaskTreeManager,
     firing: str,
@@ -400,7 +400,7 @@ async def deliver_boundary_report(
     tree: task_sessions.TaskTreeManager,
     leaf_id: str,
     recipient: str,
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     firing: str,
     outcome: str,
     summary: str,
@@ -472,23 +472,23 @@ async def redrive_firing(leaf_id: str, tree: task_sessions.TaskTreeManager, cfg)
 # ---------------------------------------------------------------------------
 
 
-def effective_scheduled_task_backend(task_cfg: config.ScheduledTaskConfig, cfg: CharlieBotConfig) -> str:
+def effective_scheduled_task_backend(task_cfg: cron_config.ScheduledTaskConfig, cfg: config.CharlieBotConfig) -> str:
   """Return the backend id a scheduled task should use."""
   if task_cfg.backend:
-    require_backend_option(cfg, task_cfg.backend, subject="scheduled task ")
+    config.require_backend_option(cfg, task_cfg.backend, subject="scheduled task ")
     return task_cfg.backend
   if not cfg.backends.options:
     raise ValueError("scheduled task backend resolution requires a configured backends.options entry")
   return cfg.backends.options[0].id
 
 
-def effective_backend(task_cfg: config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str:
+def effective_backend(task_cfg: cron_config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str:
   """The task's effective backend id, resolved strictly against the config."""
   return effective_scheduled_task_backend(task_cfg, tree._cfg)
 
 
 def resolved_backend_option(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     tree: task_sessions.TaskTreeManager,
     backend_id: str | None,
 ):
@@ -501,7 +501,7 @@ def resolved_backend_option(
 
 
 def resolved_backend_model(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     tree: task_sessions.TaskTreeManager,
     backend_id: str | None,
 ) -> tuple[str, str | None]:
@@ -512,7 +512,8 @@ def resolved_backend_model(
   return option.id, backend_models.option_default_model(option, subject="scheduled task backend ")
 
 
-def distinct_backend_conflict(task_cfg: config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str | None:
+def distinct_backend_conflict(
+    task_cfg: cron_config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str | None:
   """The first ``distinct_backend_from`` pair whose resolved (type, model) matches, as a
   report sentence; None when every declared pair stays distinct.
 
@@ -590,7 +591,7 @@ async def step_advanced(tree: task_sessions.TaskTreeManager, leaf_id: str, run_i
 
 
 async def reconcile_bound_firings(
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     meta: models.SessionMetadata,
     tree: task_sessions.TaskTreeManager,
     firing: str,
@@ -695,7 +696,7 @@ async def reconcile_bound_firings(
 
 async def run_firing_steps_boundary_report(
     tree: task_sessions.TaskTreeManager,
-    task_cfg: config.ScheduledTaskConfig,
+    task_cfg: cron_config.ScheduledTaskConfig,
     meta: models.SessionMetadata,
     firing: str,
     leaf_id: str,

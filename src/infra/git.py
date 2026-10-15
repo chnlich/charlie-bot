@@ -6,7 +6,6 @@ import os
 import pathlib
 import re
 import shutil
-import subprocess
 from collections.abc import Iterator
 
 from src.infra import locks, log_once, timeouts
@@ -739,50 +738,3 @@ async def git_push_refspec(repo_path: pathlib.Path, local_branch: str, remote_br
   ok, _, err = await _git_remote(
       repo_path, "push", "origin", f"{local_branch}:{_heads_ref(remote_branch)}", label="git push refspec")
   return ok, err
-
-
-async def git_add_commit_push(
-    repo_path: pathlib.Path,
-    files: list[str],
-    message: str,
-) -> None:
-  """Git add, commit, and push, logging a failure as a warning rather than propagating it.
-
-  add and commit run in a thread-pool worker, each under
-  timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT; a failure there skips the push. The push goes
-  through _git_remote's per-attempt limit and retries.
-
-  Args:
-    repo_path: Working directory for git commands.
-    files: Paths (relative to repo_path) to stage.
-    message: Commit message.
-  """
-
-  def _commit() -> None:
-    subprocess.run(
-        ['git', 'add', *files],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-        timeout=timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT)
-    subprocess.run(
-        ['git', 'commit', '-m', message],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-        timeout=timeouts.SUBPROCESS_GIT_WRITE_TIMEOUT)
-
-  try:
-    await asyncio.to_thread(_commit)
-  except subprocess.CalledProcessError as e:
-    log.warning('git_commit_push_failed', cmd=e.cmd, stderr=e.stderr.decode(errors='replace'))
-    return
-  except subprocess.TimeoutExpired as e:
-    log.warning('git_commit_push_timeout', cmd=e.cmd, timeout=e.timeout)
-    return
-  except Exception as e:
-    log.warning('git_commit_push_error', error=str(e))
-    return
-  ok, _, err = await _git_remote(repo_path, 'push', label='git push')
-  if not ok:
-    log.warning('git_commit_push_failed', cmd=['git', 'push'], stderr=err)

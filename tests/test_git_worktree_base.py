@@ -29,7 +29,6 @@ Plus the remote operations' per-attempt limit:
 import asyncio
 import os
 import pathlib
-import subprocess
 import types
 
 import conftest
@@ -470,47 +469,32 @@ async def test_remote_op_failing_every_attempt_returns_single_attempt_error(
 @pytest.mark.asyncio
 async def test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limit(
     repo_setup: dict[str, pathlib.Path], monkeypatch: pytest.MonkeyPatch) -> None:
-  """worktree add, add and commit keep the 60 s local limit; ls-remote, fetch
-  and push each run under the 120 s per-attempt limit."""
-  origin = repo_setup["origin"]
+  """worktree add keeps the 60 s local limit; ls-remote and fetch each run
+  under the 120 s per-attempt limit."""
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
   _commit(seed, "advance.txt", "advance\n", "advance origin")
   conftest.run_git(seed, "push", "origin", "feature")  # local feature is now behind: the resolution fetches
-  (seed / "note.txt").write_text("note\n", encoding="utf-8")
 
   seen: list[tuple[tuple[str, ...], float]] = []
   real_proc_bytes = git._git_proc_bytes
-  real_run = subprocess.run
 
   async def _recording_proc_bytes(repo_path, *args, timeout):
     seen.append((args, timeout))
     return await real_proc_bytes(repo_path, *args, timeout=timeout)
 
-  def _recording_run(cmd, **kwargs):
-    seen.append((tuple(cmd[1:]), kwargs["timeout"]))
-    return real_run(cmd, **kwargs)
-
   monkeypatch.setattr(git, "_git_proc_bytes", _recording_proc_bytes)
-  monkeypatch.setattr(subprocess, "run", _recording_run)
 
   await git.git_create_worktree(
       main_checkout, "feature", "charliebot/task-limits", repo_setup["tmp_path"] / "wt-limits")
-  await git.git_add_commit_push(seed, ["note.txt"], "add note")
 
-  monkeypatch.undo()
-  assert conftest.run_git(origin, "rev-parse",
-                          "feature") == conftest.run_git(seed, "rev-parse", "HEAD")  # the push landed
-  verbs = ("worktree", "add", "commit", "ls-remote", "fetch", "push")
+  verbs = ("worktree", "ls-remote", "fetch")
   assert {
       verb: {timeout for args, timeout in seen if verb in args} for verb in verbs
   } == {
       "worktree": {60.0},
-      "add": {60.0},
-      "commit": {60.0},
       "ls-remote": {120.0},
       "fetch": {120.0},
-      "push": {120.0},
   }
 
 

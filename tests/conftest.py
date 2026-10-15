@@ -3111,6 +3111,21 @@ async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: s
   raise TimeoutError(what)
 
 
+def reap_child(pid: int, timeout: float = 5) -> None:
+  """Reap this process's child with waitpid(WNOHANG): a dead child stays a zombie, and kill -0 keeps
+  answering, until reaped."""
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    try:
+      reaped, _status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+      return
+    if reaped == pid:
+      return
+    time.sleep(0.05)
+  raise TimeoutError(f"pid {pid} not reaped after {timeout}s")
+
+
 async def _settle_parent(
     tree: TaskTreeManager, manager: models.SessionMetadata, *, timeout: float, poll: float) -> None:
   # Shared by the task-tree execution and recovery files, whose report-delivery

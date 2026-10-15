@@ -91,7 +91,7 @@ def test_registering_the_packages_imports_no_backend_module() -> None:
   result = subprocess.run(
       [sys.executable, "-c", script], cwd=conftest.ROOT, capture_output=True, text=True, check=True, timeout=60)
 
-  assert result.stdout.strip() == f"{len(backend_types.registered_types())} [] []"
+  assert result.stdout.strip() == f"{len(backend_type_registration.registrations())} [] []"
 
 
 def test_the_packages_register_the_credential_variables_an_isolated_trial_must_not_inherit() -> None:

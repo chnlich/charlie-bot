@@ -85,6 +85,10 @@
   box-sizing: border-box; overflow: hidden;
 }
 .turn-spacer { pointer-events: none; }
+/* The height model's spacer heights are the exact layout extent of the rows
+   the spacers stand for; a space-y-3 margin on the spacer itself would add
+   height no row owns. */
+#messages > .turn-spacer { margin-top: 0; }
 /* The turn engine is the scroll-anchoring authority; Chrome's own scroll
    anchoring fights its spacer corrections, and its scroll corrections must
    not chain to the page. */

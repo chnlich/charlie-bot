@@ -1,7 +1,7 @@
 """Internal API endpoints behind ``charliebot discord reply``, ``read`` and ``check``."""
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+import fastapi
+import pydantic
 
 from src.features.chat_threads import thread_entry
 from src.features.discord import discord_commands, discord_listener
@@ -9,37 +9,37 @@ from src.infra import config
 from src.runtime import session_events, session_store
 from src.runtime.api import deps
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
-class DiscordReplyRequest(BaseModel):
+class DiscordReplyRequest(pydantic.BaseModel):
   """Request body for the internal discord/reply endpoint: the calling session posts *text* to its own thread."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   text: str
 
 
-class DiscordReadRequest(BaseModel):
+class DiscordReadRequest(pydantic.BaseModel):
   """Request body for the internal discord/read endpoint: the session reads its own thread, or the channel *url* names."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   url: str | None = None
-  limit: int = Field(50, ge=1, le=100)
+  limit: int = pydantic.Field(50, ge=1, le=100)
 
 
-class DiscordCheckRequest(BaseModel):
+class DiscordCheckRequest(pydantic.BaseModel):
   """Request body for the internal discord/check endpoint: reports the bot token's setup, carrying no fields."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
 
 @router.post("/discord/reply")
 async def discord_reply(
     req: DiscordReplyRequest,
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    events: session_events.SessionEvents = Depends(deps.get_session_events),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Discord thread and return the readback.
 
@@ -56,15 +56,15 @@ async def discord_reply(
     await discord_listener.assert_thread_fresh(req.session_id, cfg, store)
     return await discord_listener.post_reply(req.session_id, req.text, cfg, store, events)
   except thread_entry.ThreadReplyError as exc:
-    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.post("/discord/read")
 async def discord_read(
     req: DiscordReadRequest,
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    events: session_events.SessionEvents = Depends(deps.get_session_events),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """Read the calling session's Discord thread (or the channel *url* names) and return its messages.
 
@@ -82,13 +82,13 @@ async def discord_read(
   try:
     return await discord_commands.read_thread(req.session_id, req.url, req.limit, cfg, store, events)
   except thread_entry.ThreadReplyError as exc:
-    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.post("/discord/check")
 async def discord_check(
     req: DiscordCheckRequest,
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """Report the Discord bot token's setup: bot user, message-content intent, per-guild permissions.
 
@@ -101,4 +101,4 @@ async def discord_check(
   try:
     return await discord_commands.check_setup(cfg)
   except thread_entry.ThreadReplyError as exc:
-    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc

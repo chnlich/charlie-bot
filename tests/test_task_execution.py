@@ -544,8 +544,8 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path / "delegate-work")
 
-  # The nearest-user authorization gate re-judges at delegation: the manager
-  # needs a real user message with the takeoff phrase.
+  # The runtime gate re-judges at delegation: the manager's chain needs a real
+  # user message, takeoff phrase or not.
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
   from src.runtime.api import internal as internal_api

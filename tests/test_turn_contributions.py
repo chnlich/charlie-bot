@@ -9,42 +9,30 @@ asks every registered contribution at its step: the instruction build (rule file
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+import types
+from unittest import mock
 
 import conftest
 import pytest
-from conftest import (
-    BROADCAST_PATCH_TARGET,
-    BUILD_BACKEND_PATCH_TARGET,
-    ScriptedRelayBackend,
-    build_master_cc_cfg,
-    fresh_master_state,
-    install_scripted_backends,
-    make_task_spawner,
-    make_work_item,
-    run_task_manager_message,
-)
 
-from src.features.discord.event_types import DISCORD_REPLY
-from src.features.discord.metadata import DiscordOrigin
-from src.features.discord.turn_contribution import DiscordTurnContribution
-from src.features.slack.event_types import SLACK_REPLY
-from src.features.slack.metadata import SlackOrigin
-from src.features.slack.turn_contribution import SlackTurnContribution
+from src.features.discord import event_types as discord_event_types
+from src.features.discord import metadata as discord_metadata
+from src.features.discord import turn_contribution as discord_turn_contribution
+from src.features.slack import event_types as slack_event_types
+from src.features.slack import metadata as slack_metadata
+from src.features.slack import turn_contribution as slack_turn_contribution
 from src.infra import event_types as ET
-from src.infra.models import CreateSessionRequest, SessionMetadata
-from src.runtime import master_cc_run, master_cc_state, message_aggregator, streaming
-from src.runtime.agent_process.base import make_result_event
+from src.infra import models
+from src.runtime import master_cc_run, master_cc_state, message_aggregator, streaming, task_prompts
+from src.runtime.agent_process import base
 from src.runtime.hooks import turn_contributions
-from src.runtime.task_prompts import build_segments
 
-SLACK_ORIGIN = SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")
-DISCORD_ORIGIN = DiscordOrigin(guild_id="G1", parent_channel_id="C1", thread_id="1234567890")
+SLACK_ORIGIN = slack_metadata.SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")
+DISCORD_ORIGIN = discord_metadata.DiscordOrigin(guild_id="G1", parent_channel_id="C1", thread_id="1234567890")
 SESSION_KINDS = {
     "slack": ("thread_session.md", {
         "slack_origin": SLACK_ORIGIN
@@ -56,9 +44,9 @@ SESSION_KINDS = {
 }
 
 
-def real_repo_cfg(home: Path) -> SimpleNamespace:
+def real_repo_cfg(home: pathlib.Path) -> types.SimpleNamespace:
   """Instruction inputs over this checkout's real prompts tree; the host override and memory store are absent."""
-  return SimpleNamespace(
+  return types.SimpleNamespace(
       charlie_bot_repo=conftest.ROOT,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",
       charliebot_home=home,
@@ -75,11 +63,11 @@ def prompts_text(filename: str, session_id: str) -> str:
 
 
 @pytest.mark.parametrize("kind", SESSION_KINDS)
-def test_manager_root_task_path_reads_the_rule_file_of_its_kind(kind: str, tmp_path: Path) -> None:
+def test_manager_root_task_path_reads_the_rule_file_of_its_kind(kind: str, tmp_path: pathlib.Path) -> None:
   rule_file, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="root-1", name="root", profile="manager", **origin)
+  meta = models.SessionMetadata(id="root-1", name="root", profile="manager", **origin)
 
-  segments, _ = build_segments(
+  segments, _ = task_prompts.build_segments(
       real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
 
   refs = [source.source_ref for segment in segments for source in segment.sources]
@@ -103,14 +91,14 @@ def _prompt_text(name: str) -> str:
 
 @pytest.mark.parametrize("kind, summon_line", [("slack", "Slack 线程召唤"), ("discord", "Discord 线程召唤")])
 def test_thread_session_manager_instructions_carry_the_reply_contract_once(
-    kind: str, summon_line: str, tmp_path: Path) -> None:
+    kind: str, summon_line: str, tmp_path: pathlib.Path) -> None:
   """The contract (platform part plus the three rule docs) rides the managed
   instructions once, with each doc's full text present exactly once; the
   summon input itself stays out of the instructions."""
   _, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="root-1", name="root", profile="manager", **origin)
+  meta = models.SessionMetadata(id="root-1", name="root", profile="manager", **origin)
 
-  segments, _ = build_segments(
+  segments, _ = task_prompts.build_segments(
       real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
   joined = "\n\n".join(segment.text for segment in segments)
 
@@ -131,12 +119,12 @@ def test_thread_session_manager_instructions_carry_the_reply_contract_once(
   assert summon_line not in contract[0].text
 
 
-def test_slack_contract_part_carries_the_thread_address(tmp_path: Path) -> None:
+def test_slack_contract_part_carries_the_thread_address(tmp_path: pathlib.Path) -> None:
   """Slack's contract part names this session's thread ids — the summon link's replacement."""
   _, origin = SESSION_KINDS["slack"]
-  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+  meta = models.SessionMetadata(id="s", name="s", profile="manager", **origin)
 
-  segments, _ = build_segments(
+  segments, _ = task_prompts.build_segments(
       real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
   joined = "\n\n".join(segment.text for segment in segments)
 
@@ -146,13 +134,13 @@ def test_slack_contract_part_carries_the_thread_address(tmp_path: Path) -> None:
   assert "`charliebot slack ack --message-id <ts> [...]`" in joined
 
 
-def test_discord_contract_part_carries_the_summon_mark(tmp_path: Path) -> None:
+def test_discord_contract_part_carries_the_summon_mark(tmp_path: pathlib.Path) -> None:
   """Discord's contract part states the server-side read and the ``summon: true`` mark,
   and carries no Slack-only citation boundary."""
   _, origin = SESSION_KINDS["discord"]
-  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+  meta = models.SessionMetadata(id="s", name="s", profile="manager", **origin)
 
-  segments, _ = build_segments(
+  segments, _ = task_prompts.build_segments(
       real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
   joined = "\n\n".join(segment.text for segment in segments)
 
@@ -161,11 +149,11 @@ def test_discord_contract_part_carries_the_summon_mark(tmp_path: Path) -> None:
   assert "已成文的私有内容不引用" not in joined
 
 
-def test_main_session_instructions_carry_no_reply_contract(tmp_path: Path) -> None:
+def test_main_session_instructions_carry_no_reply_contract(tmp_path: pathlib.Path) -> None:
   """A session without a thread origin gets none of the contract."""
-  meta = SessionMetadata(id="root-1", name="root", profile="manager")
+  meta = models.SessionMetadata(id="root-1", name="root", profile="manager")
 
-  segments, _ = build_segments(
+  segments, _ = task_prompts.build_segments(
       real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
   joined = "\n\n".join(segment.text for segment in segments)
   refs = [source.source_ref for segment in segments for source in segment.sources]
@@ -176,13 +164,16 @@ def test_main_session_instructions_carry_no_reply_contract(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    "contribution, kind", [(SlackTurnContribution(), "slack"), (DiscordTurnContribution(), "discord")])
+    "contribution, kind", [
+        (slack_turn_contribution.SlackTurnContribution(), "slack"),
+        (discord_turn_contribution.DiscordTurnContribution(), "discord")
+    ])
 def test_contract_segment_goes_to_manager_rounds_only(contribution, kind: str) -> None:
   """A worker-kind run of the same thread session gets no contract."""
   _, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+  meta = models.SessionMetadata(id="s", name="s", profile="manager", **origin)
 
-  assert contribution.instruction_segments(meta, "work", real_repo_cfg(Path("/tmp"))) == []
+  assert contribution.instruction_segments(meta, "work", real_repo_cfg(pathlib.Path("/tmp"))) == []
 
 
 # ---------------------------------------------------------------------------
@@ -193,24 +184,25 @@ def test_contract_segment_goes_to_manager_rounds_only(contribution, kind: str) -
 @pytest.mark.parametrize("kind, window", [("slack", 96_000), ("discord", 96_000), ("plain", None)])
 def test_context_window_is_set_for_a_thread_session_only(kind: str, window: int | None) -> None:
   _, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
+  meta = models.SessionMetadata(id="s", name="s", profile="manager", **origin)
 
   assert turn_contributions.resolve_context_window(meta) == window
 
 
 @pytest.mark.asyncio
 async def test_a_backend_that_reads_no_context_window_keeps_its_option(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The run applies the thread window only to a backend type whose traits read one: the codex type
   does not, so a thread session's option reaches the backend unchanged. The reading backend's two
   cases (thread window, main session's own) run through the charlie-code tests of the backend routing suite."""
-  cfg = build_master_cc_cfg(tmp_path)
-  builds = install_scripted_backends(
-      monkeypatch, [ScriptedRelayBackend([make_result_event()], exit_code=0)], BUILD_BACKEND_PATCH_TARGET)
-  thread_meta = SessionMetadata(
+  cfg = conftest.build_master_cc_cfg(tmp_path)
+  builds = conftest.install_scripted_backends(
+      monkeypatch, [conftest.ScriptedRelayBackend([base.make_result_event()], exit_code=0)],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
+  thread_meta = models.SessionMetadata(
       id="thread", name="thread", backend="fake", profile="manager", slack_origin=SLACK_ORIGIN)
 
-  await master_cc_run._run_cc(make_work_item(cfg, thread_meta, cfg.backends.options[0]))
+  await master_cc_run._run_cc(conftest.make_work_item(cfg, thread_meta, cfg.backends.options[0]))
 
   assert builds[0]["option"] == cfg.backends.options[0]
 
@@ -226,10 +218,10 @@ class _Names(turn_contributions.TurnContribution):
   def __init__(self, rules_file: str | None, window: int | None, renderers: dict) -> None:
     self._rules_file, self._window, self._renderers = rules_file, window, renderers
 
-  def workflow_rules_file(self, meta: SessionMetadata) -> str | None:
+  def workflow_rules_file(self, meta: models.SessionMetadata) -> str | None:
     return self._rules_file
 
-  def context_window(self, meta: SessionMetadata) -> int | None:
+  def context_window(self, meta: models.SessionMetadata) -> int | None:
     return self._window
 
   def event_renderers(self) -> dict:
@@ -251,7 +243,7 @@ class _Opens(turn_contributions.TurnContribution):
   def __init__(self, preamble: str) -> None:
     self._preamble = preamble
 
-  def input_preamble(self, meta: SessionMetadata, input_event: dict) -> str | None:
+  def input_preamble(self, meta: models.SessionMetadata, input_event: dict) -> str | None:
     return self._preamble
 
 
@@ -287,7 +279,7 @@ def test_contributions_come_back_in_registration_order(empty_registry: None) -> 
 
 
 def test_one_named_rule_file_wins_and_none_means_the_manager_workflows(empty_registry: None) -> None:
-  meta = SessionMetadata(profile="manager", id="s", name="s")
+  meta = models.SessionMetadata(profile="manager", id="s", name="s")
   assert turn_contributions.resolve_workflow_rules_file(meta) == "manager_workflows.md"
 
   register(silent="SILENT", first="FIRST")
@@ -297,7 +289,7 @@ def test_one_named_rule_file_wins_and_none_means_the_manager_workflows(empty_reg
 
 
 def test_two_named_rule_files_or_two_context_windows_raise(empty_registry: None) -> None:
-  meta = SessionMetadata(profile="manager", id="s", name="s")
+  meta = models.SessionMetadata(profile="manager", id="s", name="s")
   register(first="FIRST", second="SECOND")
 
   with pytest.raises(ValueError, match="workflow rules file"):
@@ -307,7 +299,7 @@ def test_two_named_rule_files_or_two_context_windows_raise(empty_registry: None)
 
 
 def test_one_input_preamble_wins_and_two_raise(empty_registry: None) -> None:
-  meta = SessionMetadata(profile="manager", id="s", name="s")
+  meta = models.SessionMetadata(profile="manager", id="s", name="s")
   event = {"type": ET.USER, "content": "hello"}
   assert turn_contributions.resolve_input_preamble(meta, event) is None
 
@@ -319,13 +311,13 @@ def test_one_input_preamble_wins_and_two_raise(empty_registry: None) -> None:
     turn_contributions.resolve_input_preamble(meta, event)
 
 
-def test_two_named_rule_files_fail_the_task_path_build(empty_registry: None, tmp_path: Path) -> None:
+def test_two_named_rule_files_fail_the_task_path_build(empty_registry: None, tmp_path: pathlib.Path) -> None:
   register(first="FIRST", second="SECOND")
 
   with pytest.raises(ValueError, match="workflow rules file"):
-    build_segments(
+    task_prompts.build_segments(
         real_repo_cfg(tmp_path / "home"),
-        SessionMetadata(profile="manager", id="s", name="s"),
+        models.SessionMetadata(profile="manager", id="s", name="s"),
         "manager_turn",
         overlay=None,
         chain=(),
@@ -369,7 +361,7 @@ def test_registration_imports_no_contribution_module() -> None:
         ("src.features.memory", "MemoryTurnContribution"),
     ])
 def test_server_turn_paths_work_when_a_package_is_not_registered(
-    tmp_path: Path, omitted: str, contribution_type: str) -> None:
+    tmp_path: pathlib.Path, omitted: str, contribution_type: str) -> None:
   probe = tmp_path / "probe.py"
   profile = tmp_path / "profile"
   probe.write_text(
@@ -433,8 +425,8 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
 
 @pytest.mark.parametrize(
     "event_type, content, rendered", [
-        (SLACK_REPLY, "hello slack", "Posted to Slack: hello slack"),
-        (DISCORD_REPLY, "hello discord", "Posted to Discord: hello discord"),
+        (slack_event_types.SLACK_REPLY, "hello slack", "Posted to Slack: hello slack"),
+        (discord_event_types.DISCORD_REPLY, "hello discord", "Posted to Discord: hello discord"),
     ])
 def test_reply_events_render_as_system_rows(event_type: str, content: str, rendered: str) -> None:
   event = {"type": event_type, "content": content, "id": "e1", "timestamp": "2026-01-01T00:00:00Z"}
@@ -463,16 +455,16 @@ def test_reply_events_render_as_system_rows(event_type: str, content: str, rende
 
 class _Raises(turn_contributions.TurnContribution):
 
-  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg) -> None:
+  async def after_turn(self, meta: models.SessionMetadata, done_event: dict, *, cfg) -> None:
     raise RuntimeError("after_turn failed")
 
 
 @pytest.mark.asyncio
 async def test_one_master_done_calls_each_platforms_deliver_done_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = build_master_cc_cfg(tmp_path)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.build_master_cc_cfg(tmp_path)
   mgr = conftest.build_session_blocks(cfg)
-  meta = await conftest.create_root_session(mgr, CreateSessionRequest(name="both"))
+  meta = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="both"))
   conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   # A failing contribution in front of the real ones must not stop them or the append.
@@ -481,10 +473,11 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
   tasks: list[asyncio.Task] = []
 
   with (
-      patch("src.features.slack.slack_listener.deliver_done", new=AsyncMock(return_value=True)) as slack,
-      patch("src.features.discord.discord_listener.deliver_done", new=AsyncMock(return_value=True)) as discord,
-      patch("src.infra.tasks.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
+      mock.patch("src.features.slack.slack_listener.deliver_done", new=mock.AsyncMock(return_value=True)) as slack,
+      mock.patch("src.features.discord.discord_listener.deliver_done", new=mock.AsyncMock(return_value=True)) as
+      discord,
+      mock.patch("src.infra.tasks.create_logged_task", side_effect=conftest.make_task_spawner(tasks)),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
   ):
     await mgr.events.persist_and_broadcast(meta.id, done)
     await mgr.events.persist_and_broadcast(meta.id, {"type": ET.SCHEDULED_TRIGGER, "content": "wake"})
@@ -508,11 +501,11 @@ class _RecordingContribution(turn_contributions.TurnContribution):
   def __init__(self) -> None:
     self.after_turn_calls: list[dict] = []
 
-  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg) -> None:
+  async def after_turn(self, meta: models.SessionMetadata, done_event: dict, *, cfg) -> None:
     self.after_turn_calls.append(done_event)
 
 
-class _LetGoBackend(ScriptedRelayBackend):
+class _LetGoBackend(conftest.ScriptedRelayBackend):
   """A backend whose turn is cancelled after the agent edited the file, as at a graceful restart.
 
   The gate holds the CancelledError until the test holds the consumer's task handle. A started
@@ -522,7 +515,7 @@ class _LetGoBackend(ScriptedRelayBackend):
   their thread hops have no loop-tick budget.
   """
 
-  def __init__(self, path: Path) -> None:
+  def __init__(self, path: pathlib.Path) -> None:
     super().__init__([], exit_code=0)
     self._path = path
     self.turn_started = asyncio.Event()
@@ -539,25 +532,25 @@ class _LetGoBackend(ScriptedRelayBackend):
 
 @pytest.mark.asyncio
 async def test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A turn left running in another process ends in CancelledError: the consumer appends no MASTER_DONE,
   so no after_turn runs, and the agent's edit stays on disk for the next boot's re-attach to settle."""
-  cfg = build_master_cc_cfg(tmp_path)
+  cfg = conftest.build_master_cc_cfg(tmp_path)
   mgr = conftest.build_session_blocks(cfg)
-  session = await conftest.create_root_session(mgr, CreateSessionRequest(name="let-go"))
+  session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="let-go"))
   conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   tasks: list[asyncio.Task] = []
   edited = tmp_path / "edited.txt"
   let_go_backend = _LetGoBackend(edited)
-  install_scripted_backends(monkeypatch, [let_go_backend], BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.infra.tasks.create_logged_task", make_task_spawner(tasks))
+  conftest.install_scripted_backends(monkeypatch, [let_go_backend], conftest.BUILD_BACKEND_PATCH_TARGET)
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", mock.AsyncMock())
+  monkeypatch.setattr("src.infra.tasks.create_logged_task", conftest.make_task_spawner(tasks))
   recorder = _RecordingContribution()
   real = turn_contributions.turn_contributions()
   monkeypatch.setattr(turn_contributions, "turn_contributions", lambda: (*real, recorder))
 
-  async with fresh_master_state(session.id):
-    queued = asyncio.create_task(run_task_manager_message(cfg, session, "edit the file", mgr.callbacks()))
+  async with conftest.fresh_master_state(session.id):
+    queued = asyncio.create_task(conftest.run_task_manager_message(cfg, session, "edit the file", mgr.callbacks()))
     try:
       await asyncio.wait_for(let_go_backend.turn_started.wait(), timeout=5)
       consumer = master_cc_state._session_consumers[session.id]

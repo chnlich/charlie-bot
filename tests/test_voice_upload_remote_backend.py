@@ -11,6 +11,7 @@ unknown, a live backend, the local id - keeps the local decode.
 
 import json
 import pathlib
+import types
 from collections.abc import AsyncIterator, Sequence
 
 import conftest
@@ -99,7 +100,7 @@ def cfg(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> config.Charl
           "vocabulary": ["CharlieBot"],
           "languages": ["zh"]
       })
-  monkeypatch.setattr(voice, "get_config", lambda: cfg)
+  monkeypatch.setattr(voice, "config", types.SimpleNamespace(get_config=lambda: cfg))
   return cfg
 
 

@@ -95,7 +95,7 @@ async def _start_improve_sequence(
   # "running" loop state or the active lock in this live process.
   try:
     resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
-        req.session_id, cfg, store, requested_backend=req.backend)
+        req.session_id, cfg, store, requested_backend=req.backend, role=spawner_backends.IMPROVE_ROLE)
   except ValueError as e:
     raise deps.bad_request(e) from e
 

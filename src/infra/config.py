@@ -121,7 +121,7 @@ class PathsConfig(BaseModel):
 
 
 class BackendsConfig(BaseModel):
-  """``backends:`` section: model-switch options and the selector preference order."""
+  """``backends:`` section: model-switch options, the selector preference order and the worker default."""
 
   model_config = ConfigDict(extra='forbid')
 
@@ -130,14 +130,15 @@ class BackendsConfig(BaseModel):
   # prefix one of the id prefixes the type's usage source registers (each type's
   # src/backends/<package>/__init__.py). The id names the model family
   # and carries no version: the version lives only in the entry's `model` and
-  # `label`. Session, thread and Run metadata, package config files and `preference` store
-  # the id, so a version bump edits exactly those two fields of one entry and
-  # every stored reference stays valid. The usage tally classifies a retired id
+  # `label`. Session, thread and Run metadata, package config files, `preference` and
+  # `worker_default` store the id, so a version bump edits exactly those two fields of one
+  # entry and every stored reference stays valid. The usage tally classifies a retired id
   # (off config, still in old records) by its prefix. An option bound to an
   # account pool may end its id with `-<pool name>`. require_backends refuses a
-  # startup whose preference names an id missing from `options`; a package's startup
-  # check does the same for the ids in that package's config files, and usage's
-  # check_backend_ids refuses an id outside its type's registered prefixes.
+  # startup whose preference or worker_default names an id missing from `options`;
+  # a package's startup check does the same for the ids in that package's config
+  # files, and usage's check_backend_ids refuses an id outside its type's
+  # registered prefixes.
 
   # Ordered preference list of BackendOption ids, consumed by two selectors:
   #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
@@ -146,6 +147,12 @@ class BackendsConfig(BaseModel):
   #     autonamer.iter_light_backends.
   # Empty list (default) skips the one-shot.
   preference: list[str] = []
+
+  # BackendOption id the implementation workers (implement, quick-edit,
+  # script-run, improve loop) run on when their request names no backend — see
+  # spawner_backends.resolve_requested_subagent_backend_model. None (default):
+  # they inherit the delegating session's backend.
+  worker_default: str | None = None
 
   # Backend options available for model switching. Each entry parses as the option model that
   # its ``type`` names in the config registry (src/infra/config_registry.py). Additional
@@ -485,13 +492,14 @@ def load_config() -> CharlieBotConfig:
 
 
 def require_backends(cfg: CharlieBotConfig) -> None:
-  """Raise ValueError when ``backends.options`` or ``backends.preference`` is broken.
+  """Raise ValueError when ``backends.options``, ``preference`` or ``worker_default`` is broken.
 
   The server calls this once at start, because every session and every package-started
   run resolves a backend id against ``backends.options``; a broken catalog is a
   deployment error worth stopping on. Refused: an empty list, an option id
-  listed twice, and a ``backends.preference`` entry naming no option id. One
-  error lists every violation, each line naming the file, the entry and the id.
+  listed twice, and a ``backends.preference`` entry or ``backends.worker_default``
+  naming no option id. One error lists every violation, each line naming the
+  file, the entry and the id.
   Each package's startup check covers that package's own references into the
   catalog. ``load_config`` stays permissive for CLIs that never resolve a backend.
   """
@@ -508,6 +516,9 @@ def require_backends(cfg: CharlieBotConfig) -> None:
   for index, backend_id in enumerate(cfg.backends.preference):
     if backend_id not in ids:
       problems.append(f"{cfg.config_file}: backends.preference[{index}] names unknown backend '{backend_id}'")
+  worker_default = cfg.backends.worker_default
+  if worker_default is not None and worker_default not in ids:
+    problems.append(f"{cfg.config_file}: backends.worker_default names unknown backend '{worker_default}'")
   if problems:
     raise ValueError(
         "backend references must name a backends.options id (id rule: BackendsConfig in "

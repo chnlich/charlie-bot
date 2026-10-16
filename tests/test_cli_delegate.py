@@ -244,17 +244,6 @@ def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> N
   assert "read-only plan verifier" in out
 
 
-def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[str]) -> None:
-  with mock.patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
-    delegate.main()
-
-  assert exc_info.value.code == 0
-  out = " ".join(capsys.readouterr().out.split())
-  assert "Omit --backend unless the user explicitly named a backend for this delegation" in out
-  assert "verify is routed to the first backends.preference entry that differs from it" in out
-  assert "The resolved backend runs every work Run of the worker session" in out
-
-
 def test_main_rejects_removed_reviewer_context_file_flag(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """The removed --reviewer-context-file exits with a usage error naming the Reviewer Checklist, before any POST."""

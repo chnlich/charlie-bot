@@ -7,7 +7,7 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import spawner
+from src.runtime import spawner, spawner_backends
 
 
 def _build_cfg(options: list[models.BackendOption]) -> config.CharlieBotConfig:
@@ -33,7 +33,7 @@ async def test_session_default_returns_configured_backend() -> None:
   store = _mock_store(session)
 
   backend, model = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
-      session.id, cfg, store, requested_backend=None)
+      session.id, cfg, store, requested_backend=None, role=models.TaskType.IMPLEMENT)
 
   assert backend == "claude-opus-4.7"
   assert model == "claude-opus-4-7"
@@ -88,4 +88,52 @@ async def test_unresolvable_backend_resolution_raises(
 
   with pytest.raises(ValueError, match=match):
     await spawner.spawner_backends.resolve_requested_subagent_backend_model(
-        session.id, cfg, store, requested_backend=requested_backend)
+        session.id, cfg, store, requested_backend=requested_backend, role=models.TaskType.IMPLEMENT)
+
+
+_SESSION_DEFAULT = (conftest.OPUS_BACKEND_ID, conftest.OPUS_BACKEND_OPTION.model)
+_WORKER_DEFAULT = ("codex-o3", "o3")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("role", "worker_default", "requested_backend", "expected"),
+    [
+        *(
+            pytest.param(role, "codex-o3", None, _WORKER_DEFAULT, id=f"{role}-runs-on-worker-default") for role in (
+                models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN,
+                spawner_backends.IMPROVE_ROLE)),
+        pytest.param(
+            models.TaskType.IMPLEMENT,
+            "codex-o3",
+            conftest.OPUS_BACKEND_ID,
+            _SESSION_DEFAULT,
+            id="named-backend-wins",
+        ),
+        pytest.param(models.TaskType.VERIFY, "codex-o3", None, _SESSION_DEFAULT, id="verify-keeps-session-backend"),
+        *(
+            pytest.param(role, None, None, _SESSION_DEFAULT, id=f"{role}-inherits-without-the-key")
+            for role in (models.TaskType.IMPLEMENT, spawner_backends.IMPROVE_ROLE)),
+    ],
+)
+async def test_worker_default_resolution(
+    role: spawner_backends.SubagentRole,
+    worker_default: str | None,
+    requested_backend: str | None,
+    expected: tuple[str, str],
+) -> None:
+  """Implementation workers that name no backend run on backends.worker_default; a named backend
+  wins, other roles keep the session backend, and without the key every worker inherits it."""
+  cfg = config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
+      backends={
+          "options": [conftest.OPUS_BACKEND_OPTION, conftest.CODEX_BACKEND_OPTION],
+          "worker_default": worker_default
+      },
+  )
+  session = models.SessionMetadata(profile="manager", name="s", backend=conftest.OPUS_BACKEND_ID)
+
+  resolved = await spawner_backends.resolve_requested_subagent_backend_model(
+      session.id, cfg, _mock_store(session), requested_backend=requested_backend, role=role)
+
+  assert resolved == expected

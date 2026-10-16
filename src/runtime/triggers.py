@@ -2,42 +2,23 @@
 
 import asyncio
 import contextlib
+import datetime
 import json
 import os
+import pathlib
 import random
 import shlex
 import shutil
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import aiofiles
 
+from src.infra import config, json_utils, log_once, memo, models, ssh, tasks, timeouts
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.json_utils import write_model_json_atomically
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.memo import BoundedMemo, StatSignatureMemo
-from src.infra.models import (
-    LocalPid,
-    PendingTrigger,
-    RemotePid,
-    SlurmJob,
-    TriggerStatus,
-    WatchKind,
-    WatchTarget,
-)
-from src.infra.ssh import ssh_cmd
-from src.infra.tasks import create_logged_task
-from src.infra.timeouts import SSH_OVERALL_TIMEOUT
-from src.runtime import trigger_files
-from src.runtime.sidebar_state import mark_sidebar_dirty
-from src.runtime.task_errors import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
-from src.runtime.task_execution import task_manager
-from src.runtime.task_sessions import TaskTreeManager
+from src.runtime import sidebar_state, task_errors, task_execution, task_sessions, trigger_files
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _SYS_pidfd_open = {"x86_64": 434, "aarch64": 434}
 
@@ -256,8 +237,8 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
     - "ERROR": ssh failed / timed out / unexpected output (transient)
   """
   run = await _run_probe_cmd(
-      ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
-      timeout=SSH_OVERALL_TIMEOUT,
+      ssh.ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
+      timeout=timeouts.SSH_OVERALL_TIMEOUT,
       kill_wait_log_event="ssh_probe_wait_after_kill_failed",
       host=host,
       pid=pid,
@@ -280,7 +261,7 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
 
 async def _probe_remaining_remote_pids(
     remaining: dict[str, set[int]],
-    targets_by_key: dict[tuple[str, int], RemotePid],
+    targets_by_key: dict[tuple[str, int], models.RemotePid],
     trigger_id: str,
 ) -> list[str]:
   """Probe every (host, pid) in ``remaining`` concurrently via ssh.
@@ -323,16 +304,16 @@ def _log_suffix(log: str | None) -> str:
   return f", log {log}" if log is not None else ""
 
 
-def _still_alive_label(target: LocalPid | RemotePid) -> str:
+def _still_alive_label(target: models.LocalPid | models.RemotePid) -> str:
   """The timeout-fire label of a target still running: today's bare label plus its log path."""
-  base = str(target.pid) if isinstance(target, LocalPid) else f"{target.host}:{target.pid}"
+  base = str(target.pid) if isinstance(target, models.LocalPid) else f"{target.host}:{target.pid}"
   return f"{base}{_log_suffix(target.log)}"
 
 
 def _read_local_exit_code(exit_file: str) -> str | None:
   """The wrapper-written exit code out of the local exit file; None when absent or empty."""
   try:
-    content = Path(exit_file).read_text(encoding="utf-8").strip()
+    content = pathlib.Path(exit_file).read_text(encoding="utf-8").strip()
   except OSError:
     return None
   return content or None
@@ -345,8 +326,8 @@ async def _ssh_read_exit_code(host: str, exit_file: str) -> str | None:
   wake must never carry one the exit file did not provide.
   """
   run = await _run_probe_cmd(
-      ssh_cmd(host, f"cat {shlex.quote(exit_file)} 2>/dev/null"),
-      timeout=SSH_OVERALL_TIMEOUT,
+      ssh.ssh_cmd(host, f"cat {shlex.quote(exit_file)} 2>/dev/null"),
+      timeout=timeouts.SSH_OVERALL_TIMEOUT,
       kill_wait_log_event="ssh_exit_read_wait_after_kill_failed",
       host=host,
       exit_file=exit_file,
@@ -365,7 +346,7 @@ def _exit_state_label(pid_label: str, code: str | None, log: str | None) -> str:
   return f"{pid_label}: {state}{_log_suffix(log)}"
 
 
-async def _local_finished_label(target: LocalPid, *, gone_at_start: bool) -> str:
+async def _local_finished_label(target: models.LocalPid, *, gone_at_start: bool) -> str:
   """The fire-time label of an exited local target.
 
   A launcher-started target (``exit_file`` set) states the code read out of
@@ -377,7 +358,7 @@ async def _local_finished_label(target: LocalPid, *, gone_at_start: bool) -> str
   return _exit_state_label(str(target.pid), code, target.log)
 
 
-async def _remote_finished_label(target: RemotePid) -> str:
+async def _remote_finished_label(target: models.RemotePid) -> str:
   """The fire-time label of an exited remote target: ``host:pid`` plus the exit verdict."""
   base = f"{target.host}:{target.pid}"
   if target.exit_file is None:
@@ -412,8 +393,8 @@ async def _probe_sacct(
     cmd = sacct_args
     timeout = None
   else:
-    cmd = ssh_cmd(host, " ".join(sacct_args))
-    timeout = SSH_OVERALL_TIMEOUT
+    cmd = ssh.ssh_cmd(host, " ".join(sacct_args))
+    timeout = timeouts.SSH_OVERALL_TIMEOUT
 
   run = await _run_probe_cmd(
       cmd,
@@ -459,19 +440,19 @@ def _slurm_label(host: str | None, job_id: int) -> str:
 class TriggerManager:
   """Manages delayed one-shot triggers that admit scheduled task inputs."""
 
-  def __init__(self, cfg: CharlieBotConfig, task_tree: TaskTreeManager) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, task_tree: task_sessions.TaskTreeManager) -> None:
     self._cfg = cfg
     self._task_tree = task_tree
     self._tasks: dict[str, asyncio.Task] = {}
     # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
-    self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
-                                                      PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    self._list_memo: memo.BoundedMemo[str, dict[str, tuple[int, int, models.PendingTrigger]]] = memo.BoundedMemo(
+        _TRIGGER_LIST_MEMO_SESSION_LIMIT)
     # list_triggers' directory verdict: session id -> sorted list, signed on the
-    # directory's (mtime_ns, size) (StatSignatureMemo). The rename-publish ground
+    # directory's (mtime_ns, size) (memo.StatSignatureMemo). The rename-publish ground
     # that makes the directory signature a sound verdict is stated in
     # list_triggers' docstring.
-    self._list_verdicts: StatSignatureMemo[str,
-                                           list[PendingTrigger]] = StatSignatureMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    self._list_verdicts: memo.StatSignatureMemo[str, list[models.PendingTrigger]] = memo.StatSignatureMemo(
+        _TRIGGER_LIST_MEMO_SESSION_LIMIT)
     # Per-session create lock: the pending-count check and the record write run
     # under one lock, so two concurrent registrations cannot both cross the
     # limit. The lock never spans a network probe -- probes run before it.
@@ -482,11 +463,11 @@ class TriggerManager:
       session_id: str,
       delay_seconds: int,
       message: str,
-      watch_targets: list[WatchTarget] | None = None,
+      watch_targets: list[models.WatchTarget] | None = None,
       probe_out: dict[str, str] | None = None,
-      created_at: datetime | None = None,
+      created_at: datetime.datetime | None = None,
       enforce_pending_limit: bool = True,
-  ) -> PendingTrigger:
+  ) -> models.PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task.
 
     Raises ``ArchivedSessionError`` when the target must not be woken — a task
@@ -518,27 +499,27 @@ class TriggerManager:
     if dormancy is not None:
       raise ArchivedSessionError(f"session {session_id} is archived ({dormancy}); trigger rejected")
 
-    if WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
+    if models.WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
       raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
-    if any(t.kind == WatchKind.SLURM_JOB and t.host is None for t in targets) and not _SACCT_AVAILABLE:
+    if any(t.kind == models.WatchKind.SLURM_JOB and t.host is None for t in targets) and not _SACCT_AVAILABLE:
       raise RuntimeError("sacct unavailable: cannot watch a SLURM job on a host without slurm")
 
-    if WatchKind.REMOTE_PID in kinds:
-      await self._verify_remote_targets([t for t in targets if t.kind == WatchKind.REMOTE_PID])
+    if models.WatchKind.REMOTE_PID in kinds:
+      await self._verify_remote_targets([t for t in targets if t.kind == models.WatchKind.REMOTE_PID])
 
-    remote_slurm = [t for t in targets if t.kind == WatchKind.SLURM_JOB and t.host is not None]
+    remote_slurm = [t for t in targets if t.kind == models.WatchKind.SLURM_JOB and t.host is not None]
     if remote_slurm:
       observed = await self._verify_remote_slurm_targets(remote_slurm)
       if probe_out is not None:
         probe_out.update(observed)
 
-    fire_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+    fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=delay_seconds)
     # Count-and-write under one per-session lock: the probes above stayed
     # outside it (never hold a lock across network I/O), so two concurrent
     # registrations serialize here and exactly one can cross the limit.
     async with self._create_locks.setdefault(session_id, asyncio.Lock()):
       if enforce_pending_limit:
-        pending_count = sum(1 for t in await self.list_triggers(session_id) if t.status is TriggerStatus.PENDING)
+        pending_count = sum(1 for t in await self.list_triggers(session_id) if t.status is models.TriggerStatus.PENDING)
         if pending_count + 1 > MAX_PENDING_TRIGGERS:
           raise PendingTriggerLimitError(
               f"session {session_id} has {pending_count} pending triggers (limit {MAX_PENDING_TRIGGERS}); "
@@ -546,7 +527,7 @@ class TriggerManager:
       stamp: dict[str, Any] = {}
       if created_at is not None:
         stamp["created_at"] = created_at
-      trigger = PendingTrigger(
+      trigger = models.PendingTrigger(
           session_id=session_id,
           fire_at=fire_at,
           message=message,
@@ -564,7 +545,7 @@ class TriggerManager:
     )
     return trigger
 
-  async def _verify_remote_targets(self, targets: list[RemotePid]) -> None:
+  async def _verify_remote_targets(self, targets: list[models.RemotePid]) -> None:
     """Probe each remote target once before persisting; reject if any not ALIVE."""
     results = await asyncio.gather(*[_ssh_probe_pid(t.host, t.pid) for t in targets])
     bad: list[str] = []
@@ -574,7 +555,7 @@ class TriggerManager:
     if bad:
       raise RemoteVerifyError("verify-on-create failed for remote watch target(s): " + "; ".join(bad))
 
-  async def _verify_remote_slurm_targets(self, targets: list[SlurmJob]) -> dict[str, str]:
+  async def _verify_remote_slurm_targets(self, targets: list[models.SlurmJob]) -> dict[str, str]:
     """Probe each remote SLURM host once before persisting; reject if a probe failed.
 
     Returns ``label -> observed state``, using ``not-yet-registered`` when the probe
@@ -604,19 +585,19 @@ class TriggerManager:
     return observed
 
   @staticmethod
-  def _stat_trigger_files(triggers_dir: Path) -> dict[str, tuple[int, int]]:
+  def _stat_trigger_files(triggers_dir: pathlib.Path) -> dict[str, tuple[int, int]]:
     """One scandir snapshot of the session's trigger files: name -> (mtime_ns, size)."""
     return {
         os.path.basename(path): (st.st_mtime_ns, st.st_size)
         for path, st in trigger_files.iter_trigger_file_stats(triggers_dir)
     }
 
-  async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
+  async def list_triggers(self, session_id: str) -> list[models.PendingTrigger]:
     """Read all triggers for a session from disk, memoized per file.
 
     Steady state (the pending-triggers tray endpoint, GET
     /api/sessions/{id}/pending-triggers) pays one directory stat per call: every
-    trigger-file write goes through ``write_model_json_atomically``, whose rename into the triggers directory moves the
+    trigger-file write goes through ``json_utils.write_model_json_atomically``, whose rename into the triggers directory moves the
     directory's own mtime_ns whether it creates, replaces, or removes an entry, so an
     unchanged (mtime_ns, size) of the directory proves the stored sorted list current and
     serves it without the per-file stat walk or its executor round-trip. Within one proved
@@ -639,17 +620,17 @@ class TriggerManager:
       return list(verdict)
     stats = await asyncio.to_thread(self._stat_trigger_files, triggers_dir)
 
-    memo = self._list_memo.get(session_id)
-    if memo is None:
-      memo = {}
-      self._list_memo.store(session_id, memo)
+    entries = self._list_memo.get(session_id)
+    if entries is None:
+      entries = {}
+      self._list_memo.store(session_id, entries)
 
-    triggers: list[PendingTrigger] = []
+    triggers: list[models.PendingTrigger] = []
     stale = []
-    for name in memo.keys() - stats.keys():
-      del memo[name]
+    for name in entries.keys() - stats.keys():
+      del entries[name]
     for name, sig in stats.items():
-      entry = memo.get(name)
+      entry = entries.get(name)
       if entry is not None and entry[0] == sig[0] and entry[1] == sig[1]:
         triggers.append(entry[2])
       else:
@@ -657,12 +638,12 @@ class TriggerManager:
 
     if stale:
 
-      def _read_stale() -> list[tuple[str, PendingTrigger]]:
+      def _read_stale() -> list[tuple[str, models.PendingTrigger]]:
         parsed = []
         for name in stale:
           path = triggers_dir / name
           try:
-            trigger = PendingTrigger.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            trigger = models.PendingTrigger.model_validate(json.loads(path.read_text(encoding="utf-8")))
           except Exception as e:
             log.warning("trigger_load_failed", path=str(path), error=str(e))
             continue
@@ -671,7 +652,7 @@ class TriggerManager:
 
       loaded = await asyncio.to_thread(_read_stale)
       for name, trigger in loaded:
-        memo[name] = (*stats[name], trigger)
+        entries[name] = (*stats[name], trigger)
         triggers.append(trigger)
 
     triggers.sort(key=lambda t: t.created_at, reverse=True)
@@ -681,9 +662,9 @@ class TriggerManager:
   async def cancel_trigger(self, session_id: str, trigger_id: str) -> None:
     """Mark a trigger as cancelled and cancel its asyncio task."""
     trigger = await self._load_trigger(session_id, trigger_id)
-    if trigger.status != TriggerStatus.PENDING:
+    if trigger.status != models.TriggerStatus.PENDING:
       return
-    trigger.status = TriggerStatus.CANCELLED
+    trigger.status = models.TriggerStatus.CANCELLED
     await self._save_trigger(trigger)
     task = self._tasks.pop(trigger_id, None)
     if task and not task.done():
@@ -704,17 +685,17 @@ class TriggerManager:
       for f in files:
         try:
           raw = await asyncio.to_thread(f.read_text, "utf-8")
-          trigger = PendingTrigger.model_validate(json.loads(raw))
+          trigger = models.PendingTrigger.model_validate(json.loads(raw))
         except Exception as e:
           log.warning("trigger_recovery_load_failed", path=str(f), error=str(e))
           continue
-        if trigger.status == TriggerStatus.PENDING:
+        if trigger.status == models.TriggerStatus.PENDING:
           self._start_task(trigger)
           log.info("trigger_recovered", trigger_id=trigger.id, session=trigger.session_id)
 
-  def _start_task(self, trigger: PendingTrigger) -> None:
+  def _start_task(self, trigger: models.PendingTrigger) -> None:
     """Start the asyncio sleep task for a trigger."""
-    task = create_logged_task(self._wait_and_fire(trigger), name=f"trigger-{trigger.id[:8]}")
+    task = tasks.create_logged_task(self._wait_and_fire(trigger), name=f"trigger-{trigger.id[:8]}")
     self._tasks[trigger.id] = task
 
   async def _dormancy_reason(self, session_id: str) -> str | None:
@@ -735,7 +716,7 @@ class TriggerManager:
       return "target task is archived"
     return None
 
-  async def _watch_dormancy(self, trigger: PendingTrigger) -> str:
+  async def _watch_dormancy(self, trigger: models.PendingTrigger) -> str:
     """Watchdog racer: poll the dormancy predicate every ``_DORMANCY_CHECK_SECONDS``.
 
     Returns — and so wins the race against the delivery wait — once the target
@@ -749,7 +730,7 @@ class TriggerManager:
       if reason is not None:
         return reason
 
-  async def _reload_pending(self, trigger: PendingTrigger) -> PendingTrigger | None:
+  async def _reload_pending(self, trigger: models.PendingTrigger) -> models.PendingTrigger | None:
     """Re-read a trigger after a wait. None when the file vanished mid-wait (logged) or
     another path already moved it off PENDING — either way the caller must not re-stamp."""
     try:
@@ -757,15 +738,15 @@ class TriggerManager:
     except FileNotFoundError:
       log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
       return None
-    if fresh.status != TriggerStatus.PENDING:
+    if fresh.status != models.TriggerStatus.PENDING:
       return None
     return fresh
 
-  async def _cancel_undeliverable(self, fresh: PendingTrigger, reason: str) -> None:
+  async def _cancel_undeliverable(self, fresh: models.PendingTrigger, reason: str) -> None:
     """Every _wait_and_fire exit where the event cannot be delivered ends the same
     way: stamp CANCELLED with the path's reason, persist, drop the in-memory
     task handle, log the path."""
-    fresh.status = TriggerStatus.CANCELLED
+    fresh.status = models.TriggerStatus.CANCELLED
     fresh.fire_reason = reason
     await self._save_trigger(fresh)
     self._tasks.pop(fresh.id, None)
@@ -776,7 +757,7 @@ class TriggerManager:
         reason=reason,
     )
 
-  async def _wait_and_fire(self, trigger: PendingTrigger) -> None:
+  async def _wait_and_fire(self, trigger: models.PendingTrigger) -> None:
     """Wait until every watch group finishes (or fire_at), then admit its task input.
 
     Targets are grouped by kind and each group's sub-waiter runs concurrently
@@ -787,7 +768,7 @@ class TriggerManager:
     The wait races a dormancy watchdog, so an archived task cancels the trigger
     instead of firing.
     """
-    groups: dict[WatchKind, list[WatchTarget]] = {}
+    groups: dict[models.WatchKind, list[models.WatchTarget]] = {}
     for t in trigger.watch_targets:
       groups.setdefault(t.kind, []).append(t)
 
@@ -795,13 +776,13 @@ class TriggerManager:
       if groups:
         sub_waiters = []
         for kind, group in groups.items():
-          if kind == WatchKind.LOCAL_PID:
+          if kind == models.WatchKind.LOCAL_PID:
             sub_waiters.append(self._wait_with_pidfd(trigger, group))
-          elif kind == WatchKind.REMOTE_PID:
+          elif kind == models.WatchKind.REMOTE_PID:
             sub_waiters.append(self._wait_with_remote_probe(trigger, group))
-          elif kind == WatchKind.SLURM_JOB:
+          elif kind == models.WatchKind.SLURM_JOB:
             sub_waiters.append(self._wait_with_sacct(trigger, group))
-          elif kind == WatchKind.UNKNOWN:
+          elif kind == models.WatchKind.UNKNOWN:
             raise RuntimeError("WatchKind.UNKNOWN is a fail-loud sentinel and must never be watched")
           else:
             raise RuntimeError(f"unhandled WatchKind in dispatch: {kind!r}")
@@ -810,7 +791,7 @@ class TriggerManager:
         still_alive = [label for _, group_alive in results for label in group_alive]
         reason = "timeout" if still_alive else "completed"
       else:
-        now = datetime.now(UTC)
+        now = datetime.datetime.now(datetime.UTC)
         remaining = (trigger.fire_at - now).total_seconds()
         if remaining > 0:
           await asyncio.sleep(remaining)
@@ -881,21 +862,21 @@ class TriggerManager:
     await self._fire_task_tree(fresh, trigger_message)
     await self._stamp_fired(fresh, reason)
 
-  async def _stamp_fired(self, fresh: PendingTrigger, reason: str) -> None:
+  async def _stamp_fired(self, fresh: models.PendingTrigger, reason: str) -> None:
     """Stamp a delivered trigger FIRED, persist it, and retire its waiter.
 
     Both delivery routes end here: the stamp, the persist, the waiter's
     retirement, and the fired log move together, so a route that stamps
     FIRED without the other four leaves a live waiter on a terminal record.
     """
-    fresh.status = TriggerStatus.FIRED
-    fresh.fired_at = datetime.now(UTC)
+    fresh.status = models.TriggerStatus.FIRED
+    fresh.fired_at = datetime.datetime.now(datetime.UTC)
     fresh.fire_reason = reason
     await self._save_trigger(fresh)
     self._tasks.pop(fresh.id, None)
     log.info("trigger_fired", trigger_id=fresh.id, session=fresh.session_id, reason=reason)
 
-  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str) -> None:
+  async def _fire_task_tree(self, trigger: models.PendingTrigger, trigger_message: str) -> None:
     """Admit and dispatch one durable scheduled input to its stable node."""
     task_mgr = self._task_tree
     session_id = trigger.session_id
@@ -909,22 +890,22 @@ class TriggerManager:
           input_id=trigger.id,
       )
       await task_mgr.dispatch.dispatch_pending(session_id)
-    except TaskArchivedError as e:
+    except task_errors.TaskArchivedError as e:
       # The archive landed in the sliver between the dormancy backstop and the
       # admission: the refusal is the delivery outcome, and the waiter must
       # retire instead of lingering on a pending record.
       log.info("trigger_cancelled_archived_target", trigger_id=trigger.id, session=session_id, error=str(e))
       await self._cancel_undeliverable(trigger, reason="target task is archived")
       return
-    except (TaskNotFoundError, TaskForbiddenError, TaskInvalidError) as e:
+    except (task_errors.TaskNotFoundError, task_errors.TaskForbiddenError, task_errors.TaskInvalidError) as e:
       log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id, session=session_id, error=str(e))
       raise
     log.info("trigger_delivered_to_task_tree", trigger_id=trigger.id, session=session_id)
 
   async def _wait_with_pidfd(
       self,
-      trigger: PendingTrigger,
-      targets: list[LocalPid],
+      trigger: models.PendingTrigger,
+      targets: list[models.LocalPid],
   ) -> tuple[list[str], list[str]]:
     """Event-driven wait on local pidfds. Returns (finished, still_alive) labels.
 
@@ -971,7 +952,7 @@ class TriggerManager:
     for fd in list(pidfds):
       loop.add_reader(fd, on_ready, fd)
 
-    now = datetime.now(UTC)
+    now = datetime.datetime.now(datetime.UTC)
     remaining = (trigger.fire_at - now).total_seconds()
     try:
       await asyncio.wait_for(done.wait(), timeout=max(0.0, remaining))
@@ -991,8 +972,8 @@ class TriggerManager:
 
   async def _wait_with_remote_probe(
       self,
-      trigger: PendingTrigger,
-      targets: list[RemotePid],
+      trigger: models.PendingTrigger,
+      targets: list[models.RemotePid],
   ) -> tuple[list[str], list[str]]:
     """Polling wait via ssh probes with backoff. Returns (finished, still_alive).
 
@@ -1001,7 +982,7 @@ class TriggerManager:
     was ALIVE at create time.
     """
     remaining: dict[str, set[int]] = {}
-    targets_by_key: dict[tuple[str, int], RemotePid] = {}
+    targets_by_key: dict[tuple[str, int], models.RemotePid] = {}
     for t in targets:
       remaining.setdefault(t.host, set()).add(t.pid)
       targets_by_key[(t.host, t.pid)] = t
@@ -1010,7 +991,7 @@ class TriggerManager:
     step = 0
 
     while True:
-      now = datetime.now(UTC)
+      now = datetime.datetime.now(datetime.UTC)
       time_to_fire = (trigger.fire_at - now).total_seconds()
       if time_to_fire <= 0:
         break
@@ -1019,7 +1000,7 @@ class TriggerManager:
       sleep_for = base + random.uniform(0, _REMOTE_PROBE_NOISE_MAX)
       await asyncio.sleep(min(sleep_for, time_to_fire))
 
-      now = datetime.now(UTC)
+      now = datetime.datetime.now(datetime.UTC)
       if (trigger.fire_at - now).total_seconds() <= 0:
         break
 
@@ -1034,8 +1015,8 @@ class TriggerManager:
 
   async def _wait_with_sacct(
       self,
-      trigger: PendingTrigger,
-      targets: list[SlurmJob],
+      trigger: models.PendingTrigger,
+      targets: list[models.SlurmJob],
   ) -> tuple[list[str], list[str]]:
     """Polling wait via ``sacct`` for SLURM jobs, local and remote.
 
@@ -1053,7 +1034,7 @@ class TriggerManager:
 
   async def _wait_sacct_group(
       self,
-      trigger: PendingTrigger,
+      trigger: models.PendingTrigger,
       host: str | None,
       job_ids: set[int],
   ) -> tuple[list[str], list[str]]:
@@ -1071,21 +1052,21 @@ class TriggerManager:
 
     if host is None and not _SACCT_AVAILABLE:
       log.warning("slurm_watch_no_sacct_skip", trigger_id=trigger.id, job_ids=sorted(remaining))
-      time_to_fire = (trigger.fire_at - datetime.now(UTC)).total_seconds()
+      time_to_fire = (trigger.fire_at - datetime.datetime.now(datetime.UTC)).total_seconds()
       if time_to_fire > 0:
         await asyncio.sleep(time_to_fire)
       return [], [_slurm_label(host, j) for j in sorted(remaining)]
 
     finished: list[str] = []
     step = 0
-    last_success = datetime.now(UTC)
+    last_success = datetime.datetime.now(datetime.UTC)
     while True:
       states, error = await _probe_sacct(sorted(remaining), trigger.id, host=host)
       if error is None:
-        last_success = datetime.now(UTC)
+        last_success = datetime.datetime.now(datetime.UTC)
       else:
         log.debug("sacct_probe_transient_error", trigger_id=trigger.id, host=host, error=error)
-        dark_for = (datetime.now(UTC) - last_success).total_seconds()
+        dark_for = (datetime.datetime.now(datetime.UTC) - last_success).total_seconds()
         if host is not None and dark_for >= _REMOTE_SACCT_UNREACHABLE_GRACE:
           log.warning(
               "slurm_watch_host_unreachable",
@@ -1115,7 +1096,7 @@ class TriggerManager:
 
       if not remaining:
         break
-      time_to_fire = (trigger.fire_at - datetime.now(UTC)).total_seconds()
+      time_to_fire = (trigger.fire_at - datetime.datetime.now(datetime.UTC)).total_seconds()
       if time_to_fire <= 0:
         break
       if host is None:
@@ -1129,17 +1110,17 @@ class TriggerManager:
     still_alive = [_slurm_label(host, j) for j in sorted(remaining)]
     return finished, still_alive
 
-  def _triggers_dir(self, session_id: str) -> Path:
+  def _triggers_dir(self, session_id: str) -> pathlib.Path:
     return self._cfg.sessions_dir / session_id / "triggers"
 
-  def _trigger_path(self, session_id: str, trigger_id: str) -> Path:
+  def _trigger_path(self, session_id: str, trigger_id: str) -> pathlib.Path:
     return self._triggers_dir(session_id) / f"{trigger_id}.json"
 
-  async def _save_trigger(self, trigger: PendingTrigger) -> None:
+  async def _save_trigger(self, trigger: models.PendingTrigger) -> None:
     # list_triggers and the sidebar probe read this file from executor threads
     # with no coordination, so the write must stay atomic (a JSON parse
     # failure drops the trigger from one poll).
-    await write_model_json_atomically(self._trigger_path(trigger.session_id, trigger.id), trigger)
+    await json_utils.write_model_json_atomically(self._trigger_path(trigger.session_id, trigger.id), trigger)
     # Schedule, cancel, and undeliverable all move a session's pending count through
     # this method, so the sidebar snapshot is told here. recover_pending only
     # reads trigger files, so the pending count cannot change there and no dirty
@@ -1147,13 +1128,13 @@ class TriggerManager:
     # mark stays path-less: a trigger save is user-action rare, and the status
     # re-probe it schedules refreshes the pending-trigger snapshot the sidebar
     # bell and the pending-triggers tray read.
-    mark_sidebar_dirty(trigger.session_id)
+    sidebar_state.mark_sidebar_dirty(trigger.session_id)
 
-  async def _load_trigger(self, session_id: str, trigger_id: str) -> PendingTrigger:
+  async def _load_trigger(self, session_id: str, trigger_id: str) -> models.PendingTrigger:
     path = self._trigger_path(session_id, trigger_id)
     async with aiofiles.open(path) as f:
       raw = await f.read()
-    return PendingTrigger.model_validate(json.loads(raw))
+    return models.PendingTrigger.model_validate(json.loads(raw))
 
 
 def _format_suffix(
@@ -1185,7 +1166,7 @@ _trigger_manager: TriggerManager | None = None
 def trigger_manager() -> TriggerManager:
   global _trigger_manager
   if _trigger_manager is None:
-    _trigger_manager = TriggerManager(get_config(), task_manager())
+    _trigger_manager = TriggerManager(config.get_config(), task_execution.task_manager())
   return _trigger_manager
 
 

@@ -54,6 +54,7 @@ from src.features.voice.turn_contribution import VOICE_NOTE
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import PatchSessionTaskRequest, RunRecord, SessionMetadata, TaskSpec
+from src.runtime import runs as runs_mod
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
@@ -2892,6 +2893,41 @@ async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
   decision = await tree.dispatch.dispatch_pending(worker.id)
   run, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
   assert outcome == "success"
+
+
+@pytest.mark.asyncio
+async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A launch withheld because its task is closed records the withheld fact
+    and the blocked report as today, plus one durable stop request settling
+    the never-launched run: the archive check reads it resolved and the
+    parent's archive passes."""
+  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  # The worker's delivered run closed it completed; the queued run never launches.
+  await tree.runs.register_run(RunRecord(id="run-done", session_id=worker.id, kind="work"))
+  await tree.dispatch.finish_run(worker.id, "run-done", outcome="success", exit_code=0)
+  assert tree.task_state(worker.id) == "completed"
+  await tree.runs.register_run(
+      RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+
+  verdict = await adapter.execute_run(worker.id, "run-queued", launch_prompt=None)
+
+  assert verdict == f"withheld: task {worker.id} is completed"
+  events = tree.runs.load_events_sync(worker.id)
+  withheld = [e for e in events if e["type"] == ET.RUN_LAUNCH_WITHHELD and e.get("run_id") == "run-queued"]
+  assert len(withheld) == 1
+  stops = [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED and e.get("run_id") == "run-queued"]
+  assert len(stops) == 1 and stops[0]["request_id"] == "closed-task:run-queued"
+  run = await tree.runs.get_run(worker.id, "run-queued")
+  assert run is not None and run.pid is None
+  # The withheld rule stands: a run that never launched has no terminal fact.
+  assert tree.runs.terminal_outcome(events, "run-queued") is None
+  assert tree.runs.run_blocker(run, events, runs_mod.read_host_boot_time()) is None
+  assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["completed", "blocked"]
+  # The completed worker's stopped run blocks nothing: the archive passes and
+  # archives the open parent (a completed node is left unchanged).
+  assert await tree.archive_subtree(manager.id, caller=OPERATOR) == [manager.id]
 
 
 @pytest.mark.asyncio

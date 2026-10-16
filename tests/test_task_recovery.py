@@ -25,6 +25,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
     create_root_session,
+    create_task,
     fresh_master_state,
     init_repo_with_origin,
     install_scripted_backends,
@@ -364,6 +365,33 @@ async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
   assert run is not None and run.pid is None
   assert tree.runs.terminal_outcome(events, queued_id) is None
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_settles_a_queued_run_on_a_completed_node_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A completed node holding a queued run with no stop request: one startup
+    pass records exactly one stop request (request id closed-task:<run id>),
+    and a repeated pass records nothing more."""
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="g"))
+  await tree.runs.register_run(RunRecord(id="run-done", session_id=worker.id, kind="work"))
+  await tree.dispatch.finish_run(worker.id, "run-done", outcome="success", exit_code=0)
+  assert tree.task_state(worker.id) == "completed"
+  await tree.runs.register_run(
+      RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+
+  def stops() -> list[dict]:
+    events = tree.runs.load_events_sync(worker.id)
+    return [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED and e.get("run_id") == "run-queued"]
+
+  assert len(stops()) == 1 and stops()[0]["request_id"] == "closed-task:run-queued"
+  facts = len(tree.fact_history(worker.id))
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert len(stops()) == 1
+  assert len(tree.fact_history(worker.id)) == facts
 
 
 def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:

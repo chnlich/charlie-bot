@@ -62,29 +62,15 @@ seven questions ride the launch text, which the hash excludes by construction.
 
 from __future__ import annotations
 
+import dataclasses
 import json
-from dataclasses import dataclass
-from pathlib import Path
+import pathlib
 
-from src.infra import constants
-from src.infra.config import CharlieBotConfig
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import RunRecord, SessionMetadata, TaskSpec, TaskType
-from src.runtime import cold_read
-from src.runtime.control_events import sha256_hex
+from src.infra import config, constants, log_once, models
+from src.runtime import cold_read, control_events, review, spawner_prompt
 from src.runtime.hooks import turn_contributions
-from src.runtime.review import review_git_venue, review_log_pointer, review_numbered_steps, review_rules_text
-from src.runtime.spawner_prompt import (
-    WORKFLOW_PROMPT_SECTION,
-    load_marker_sections,
-    load_worker_prompt_sections,
-    substitute_tokens,
-    verify_contract_tokens,
-    workflow_rule_section_ids,
-    worktree_binding_tokens,
-)
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 SNAPSHOT_FILENAME = "prompt_snapshot.json"
 LAUNCH_TEXT_FILENAME = "launch_prompt.md"
@@ -119,7 +105,7 @@ class TaskPromptError(RuntimeError):
   """
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class PromptSource:
   """One managed block's origin: scope, readable ref, owning node (local rules only)."""
   scope: str  # base | memory | subtree | node
@@ -127,7 +113,7 @@ class PromptSource:
   source_session_id: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class PromptBlock:
   """One ordered managed instruction block with its full provenance."""
   sources: tuple[PromptSource, ...]
@@ -136,7 +122,7 @@ class PromptBlock:
   text: str
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class PromptSnapshot:
   """The durable startup snapshot: ordered blocks, prompt hash, measured length."""
   blocks: tuple[PromptBlock, ...]
@@ -166,7 +152,7 @@ class PromptSnapshot:
         },
         sort_keys=True,
         ensure_ascii=False)
-    return sha256_hex(payload)
+    return control_events.sha256_hex(payload)
 
   def to_json_dict(self) -> dict:
     """The persisted/wire form: blocks, prompt_hash, char_count — the plan 4.1 object."""
@@ -209,14 +195,14 @@ class PromptSnapshot:
           f"stored prompt snapshot char_count mismatch: recorded {stored_count!r}, "
           f"content measures {snapshot.char_count}")
     for block in snapshot.blocks:
-      if block.body_ref != sha256_hex(block.text):
+      if block.body_ref != control_events.sha256_hex(block.text):
         raise TaskPromptError(
             f"stored prompt snapshot body_ref mismatch: block hashes to "
-            f"{sha256_hex(block.text)}, recorded {block.body_ref}")
+            f"{control_events.sha256_hex(block.text)}, recorded {block.body_ref}")
     return snapshot
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class RuleSegment:
   """One ordered instruction unit before dedup: text, provenance, delivery label."""
   text: str
@@ -229,7 +215,7 @@ class RuleSegment:
 # ---------------------------------------------------------------------------
 
 
-def _read_source_file(path: Path, *, what: str) -> str:
+def _read_source_file(path: pathlib.Path, *, what: str) -> str:
   """Read one managed source file; missing/unreadable is a named TaskPromptError."""
   try:
     return path.read_text(encoding="utf-8")
@@ -237,14 +223,14 @@ def _read_source_file(path: Path, *, what: str) -> str:
     raise TaskPromptError(f"{what} is unavailable: {path} ({e})") from e
 
 
-def _sections_text(cfg: CharlieBotConfig, filename: str, section_ids: tuple[str, ...]) -> str:
+def _sections_text(cfg: config.CharlieBotConfig, filename: str, section_ids: tuple[str, ...]) -> str:
   """The joined marker-sections of one repo template (the section ids fail loud)."""
   path = cfg.charlie_bot_repo / "prompts" / filename
-  sections = load_marker_sections(path, section_ids, extraction=f"{filename}-sections")
+  sections = spawner_prompt.load_marker_sections(path, section_ids, extraction=f"{filename}-sections")
   return "\n".join(sections[sid] for sid in section_ids)
 
 
-def _host_supplement(cfg: CharlieBotConfig, meta: SessionMetadata) -> str | None:
+def _host_supplement(cfg: config.CharlieBotConfig, meta: models.SessionMetadata) -> str | None:
   """The host cfg.claude_md_file content (its YOUR_SESSION_UUID names this task node)."""
   path = cfg.claude_md_file
   if not path.exists():
@@ -252,7 +238,7 @@ def _host_supplement(cfg: CharlieBotConfig, meta: SessionMetadata) -> str | None
   return _read_source_file(path, what="host supplement").replace("YOUR_SESSION_UUID", meta.id)
 
 
-def _overlay_segment(cfg: CharlieBotConfig, overlay: str | None) -> tuple[str | None, OSError | None]:
+def _overlay_segment(cfg: config.CharlieBotConfig, overlay: str | None) -> tuple[str | None, OSError | None]:
   """The declared model overlay's text; a declared-but-unreadable file degrades like v1.
 
   The task prompt contract (undeclared/unreadable overlay → the unified
@@ -269,7 +255,7 @@ def _overlay_segment(cfg: CharlieBotConfig, overlay: str | None) -> tuple[str | 
     return None, e
 
 
-def read_local_rule_body(prompt_bodies_dir: Path, ref: str, *, owner: str, scope: str) -> str:
+def read_local_rule_body(prompt_bodies_dir: pathlib.Path, ref: str, *, owner: str, scope: str) -> str:
   """Read one immutable local rule body and verify its fingerprint.
 
   ``ref`` names ``prompt_bodies/<sha256>.md``; the content must hash back to
@@ -278,7 +264,7 @@ def read_local_rule_body(prompt_bodies_dir: Path, ref: str, *, owner: str, scope
   """
   path = prompt_bodies_dir / f"{ref}.md"
   body = _read_source_file(path, what=f"{scope} rule of task {owner}")
-  actual = sha256_hex(body)
+  actual = control_events.sha256_hex(body)
   if actual != ref:
     raise TaskPromptError(f"{scope} rule of task {owner} is corrupt: prompt_bodies/{ref}.md hashes to {actual}")
   return body
@@ -289,7 +275,7 @@ def read_local_rule_body(prompt_bodies_dir: Path, ref: str, *, owner: str, scope
 # ---------------------------------------------------------------------------
 
 
-def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list[RuleSegment]:
+def _manager_rule_segments(cfg: config.CharlieBotConfig, meta: models.SessionMetadata) -> list[RuleSegment]:
   """The manager contract at any depth: common rules + shared manager rules + template.
 
   Every manager depth selects the same rule set: the shared base, the full
@@ -323,18 +309,19 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   return segments
 
 
-def prompt_task_type(task: TaskSpec | None) -> TaskType:
+def prompt_task_type(task: models.TaskSpec | None) -> models.TaskType:
   """The task type whose workflow contract a worker's prompt renders.
 
   A type-less task (a scheduled firing's leaf) renders the implement contract,
   as the legacy scheduled worker did. Delivery reads the raw type instead: a
   type-less success closes without review.
   """
-  return task.task_type if (task is not None and task.task_type) else TaskType.IMPLEMENT
+  return task.task_type if (task is not None and task.task_type) else models.TaskType.IMPLEMENT
 
 
-def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kind: str,
-                               task_type: TaskType) -> list[RuleSegment]:
+def _worker_kind_rule_segments(
+    cfg: config.CharlieBotConfig, meta: models.SessionMetadata, kind: str,
+    task_type: models.TaskType) -> list[RuleSegment]:
   """Worker-kind rules: role, the task-type workflow contract, and the source-files rule.
 
   The workflow's volatile bindings (branch/worktree/repo, the intro line) are
@@ -347,10 +334,11 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
   if kind == "review":
     segments.append(
         RuleSegment(
-            text=review_rules_text(), sources=(PromptSource(SCOPE_BASE, "src/runtime/review.py:review_rules_text"),)))
-  elif task_type == TaskType.VERIFY:
+            text=review.review_rules_text(),
+            sources=(PromptSource(SCOPE_BASE, "src/runtime/review.py:review_rules_text"),)))
+  elif task_type == models.TaskType.VERIFY:
     contract = _sections_text(cfg, "verify.md", ("preamble", "scope"))
-    contract = substitute_tokens(contract, verify_contract_tokens(cfg))
+    contract = spawner_prompt.substitute_tokens(contract, spawner_prompt.verify_contract_tokens(cfg))
     segments.append(RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/verify.md"),)))
   else:
     worker = _sections_text(cfg, "worker.md", ("role",))
@@ -359,14 +347,15 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
     # renders per-run, never as a persistent rule), and a repo-less task
     # selects the repo-less workflow and source-files rules.
     repo_less = not (meta.task is not None and meta.task.repo_path)
-    workflow = _sections_text(cfg, "worker.md", workflow_rule_section_ids(task_type, repo_less=repo_less))
+    workflow = _sections_text(
+        cfg, "worker.md", spawner_prompt.workflow_rule_section_ids(task_type, repo_less=repo_less))
     segments.append(
         RuleSegment(text="\n".join((worker, workflow)), sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
   return segments
 
 
 def _overlay_rule_segments(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     overlay: str | None,
 ) -> tuple[list[RuleSegment], OSError | None]:
   segments, overlay_error = _overlay_segment(cfg, overlay)
@@ -377,7 +366,7 @@ def _overlay_rule_segments(
 
 
 def _local_rule_segments(
-    prompt_bodies_dir: Path,
+    prompt_bodies_dir: pathlib.Path,
     chain: tuple[tuple[str, str | None], ...],
     node_ref: str | None,
     node_id: str,
@@ -435,7 +424,7 @@ def assemble_snapshot(segments: list[RuleSegment]) -> PromptSnapshot:
       continue
     block = PromptBlock(
         sources=tuple(dict.fromkeys(segment.sources)),
-        body_ref=sha256_hex(segment.text),
+        body_ref=control_events.sha256_hex(segment.text),
         delivery=segment.delivery,
         text=segment.text,
     )
@@ -445,8 +434,8 @@ def assemble_snapshot(segments: list[RuleSegment]) -> PromptSnapshot:
 
 
 def build_segments(
-    cfg: CharlieBotConfig,
-    meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    meta: models.SessionMetadata,
     kind: str,
     *,
     overlay: str | None,
@@ -457,7 +446,7 @@ def build_segments(
   if kind in MANAGER_KINDS:
     segments = _manager_rule_segments(cfg, meta)
   elif kind in WORKER_KINDS:
-    if prompt_task_type(meta.task) == TaskType.COLD_READ:
+    if prompt_task_type(meta.task) == models.TaskType.COLD_READ:
       # The cold-read exception the module docstring states: the cold-reader
       # instructions alone, and none of the overlay, contribution, or local
       # rule segments below.
@@ -485,23 +474,23 @@ def build_segments(
 # ---------------------------------------------------------------------------
 
 
-def render_session_info(cfg: CharlieBotConfig, session_name: str) -> str:
-  sections = load_marker_sections(
+def render_session_info(cfg: config.CharlieBotConfig, session_name: str) -> str:
+  sections = spawner_prompt.load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", ("session_info",), extraction="worker-prompt")
   return sections["session_info"].replace("{{session_name}}", session_name)
 
 
-def binding_intro(cfg: CharlieBotConfig, run: RunRecord) -> str:
+def binding_intro(cfg: config.CharlieBotConfig, run: models.RunRecord) -> str:
   """The workflow bindings' intro line: a retry continuing the worktree says so."""
   if run.retry_of_run_id is not None and run.worktree_path is not None:
-    return load_worker_prompt_sections(cfg)["intro_continuation"].strip()
-  return load_worker_prompt_sections(cfg)["intro_new"].strip()
+    return spawner_prompt.load_worker_prompt_sections(cfg)["intro_continuation"].strip()
+  return spawner_prompt.load_worker_prompt_sections(cfg)["intro_new"].strip()
 
 
 def render_worktree_bindings(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     *,
-    task_type: TaskType,
+    task_type: models.TaskType,
     intro_line: str,
     branch_name: str,
     base_branch_origin: str,
@@ -510,12 +499,12 @@ def render_worktree_bindings(
 ) -> str:
   """The workflow's binding header (intro + branch/worktree/repo), actual values."""
   # Element 0 of the section map's single home is the bindings section.
-  section = WORKFLOW_PROMPT_SECTION[task_type][0]
-  sections = load_marker_sections(
+  section = spawner_prompt.WORKFLOW_PROMPT_SECTION[task_type][0]
+  sections = spawner_prompt.load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", (section,), extraction="worker-prompt")
-  return substitute_tokens(
+  return spawner_prompt.substitute_tokens(
       sections[section],
-      worktree_binding_tokens(
+      spawner_prompt.worktree_binding_tokens(
           intro_line=intro_line,
           branch_name=branch_name,
           base_branch_origin=base_branch_origin,
@@ -523,13 +512,14 @@ def render_worktree_bindings(
           repo_path=repo_path))
 
 
-def render_task_body(cfg: CharlieBotConfig, description: str) -> str:
-  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("task",), extraction="worker-prompt")
-  return substitute_tokens(sections["task"], {"{{description}}": description})
+def render_task_body(cfg: config.CharlieBotConfig, description: str) -> str:
+  sections = spawner_prompt.load_marker_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", ("task",), extraction="worker-prompt")
+  return spawner_prompt.substitute_tokens(sections["task"], {"{{description}}": description})
 
 
-def render_worktree_persistence(cfg: CharlieBotConfig) -> str:
-  sections = load_marker_sections(
+def render_worktree_persistence(cfg: config.CharlieBotConfig) -> str:
+  sections = spawner_prompt.load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", ("worktree_persistence",), extraction="worker-prompt")
   return sections["worktree_persistence"]
 
@@ -539,8 +529,8 @@ def review_task_context(
     branch_name: str,
     wt_path: str,
     base_branch: str,
-    chat_log_path: Path,
-    worker_log_path: Path,
+    chat_log_path: pathlib.Path,
+    worker_log_path: pathlib.Path,
     context_section: str,
 ) -> str:
   """The review run's volatile half: context, log paths, and this run's git steps.
@@ -550,15 +540,15 @@ def review_task_context(
   return (
       f"## Context\n"
       f"{context_section}\n\n"
-      f"{review_log_pointer(chat_log_path, worker_log_path)}\n\n"
-      f"{review_git_venue(branch_name, wt_path)}\n\n"
-      f"{review_numbered_steps(branch_name, wt_path, base_branch)}")
+      f"{review.review_log_pointer(chat_log_path, worker_log_path)}\n\n"
+      f"{review.review_git_venue(branch_name, wt_path)}\n\n"
+      f"{review.review_numbered_steps(branch_name, wt_path, base_branch)}")
 
 
 def repo_less_review_task_context(
     *,
-    chat_log_path: Path,
-    worker_log_path: Path,
+    chat_log_path: pathlib.Path,
+    worker_log_path: pathlib.Path,
     spec_text: str,
     later_messages: str,
     work_report: str | None,
@@ -582,4 +572,4 @@ def repo_less_review_task_context(
       f"nothing to merge or push. Review the CURRENT state of the paths the work report lists.\n\n"
       f"### Task spec (acceptance tests included)\n{spec_text}{later}\n\n"
       f"### Work report (every created, modified and deleted path, and each acceptance test's result)\n{report}\n\n"
-      f"{review_log_pointer(chat_log_path, worker_log_path)}")
+      f"{review.review_log_pointer(chat_log_path, worker_log_path)}")

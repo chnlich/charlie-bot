@@ -34,8 +34,7 @@ def __getattr__(name: str):
 SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
 # Run-bearer env wire name: run_token reads the presented bearer from it and the
-# task executor writes the signed token into every spawned worker env. One
-# spelling everywhere, so the isolation boundary (src/infra/identity_env.py) names the constant.
+# task executor writes the signed token into every spawned worker env. One spelling everywhere.
 RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
 
 # Request-header wire name of the calling session on internal-API calls: the

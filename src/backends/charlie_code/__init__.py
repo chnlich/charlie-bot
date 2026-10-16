@@ -1,10 +1,8 @@
 """The charlie-code backend package."""
 
-from src.infra import identity_env
 from src.runtime.hooks import backend_type_registration, usage_source_registration
 
-# The child's API-key injection name: the backend writes the configured key into the child env under
-# it, and register() adds it to the identity variables an isolated trial must not inherit.
+# The child's API-key injection name: the backend writes the configured key into the child env under it.
 CHARLIE_CODE_API_KEY_ENV = "CHARLIE_CODE_API_KEY"
 
 # The ledger's source value and the usage page's card title for Charlie Code's usage, which only
@@ -13,7 +11,7 @@ USAGE_SOURCE = "CLC"
 
 
 def register() -> None:
-  """Register the charlie-code backend type, the CLC usage source and its API-key variable with the runtime.
+  """Register the charlie-code backend type and the CLC usage source with the runtime.
 
   CLC's usage lives only in CharlieBot's own run logs, so its source has no log reader.
   """
@@ -35,4 +33,3 @@ def register() -> None:
       usage_source_registration.UsageSource(
           name=USAGE_SOURCE, id_prefixes=("charlie-code-", "clc-"), run_logs_only=True, module=None))
   usage_source_registration.attribute_backend_type("charlie-code", USAGE_SOURCE)
-  identity_env.register_identity_env_var(CHARLIE_CODE_API_KEY_ENV)

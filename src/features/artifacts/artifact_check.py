@@ -39,9 +39,9 @@ from collections.abc import Callable, Iterator
 from html import parser
 from typing import TYPE_CHECKING
 
-from src.features.artifacts import artifact_shared, plan_diff
-from src.features.artifacts.constants import ARTIFACT_GENRES
-from src.infra import constants, text_length
+from src.features.artifacts import artifact_shared, constants, plan_diff
+from src.infra import constants as infra_constants
+from src.infra import text_length
 from src.runtime import cold_read
 from src.runtime.hooks import backend_types
 
@@ -294,7 +294,7 @@ def _check_style_verbatim(ctx: _Context) -> list[AssertionOutcome]:
   if len(page_styles) != 1:
     return [_fail(name, f"page carries {len(page_styles)} <style> blocks, expected exactly one")]
   template_rel = f"prompts/{artifact_shared.GENRE_TEMPLATES[ctx.genre]}"
-  template_styles = _find(_parse_dom((constants.REPO_ROOT / template_rel).read_text(encoding="utf-8")), "style")
+  template_styles = _find(_parse_dom((infra_constants.REPO_ROOT / template_rel).read_text(encoding="utf-8")), "style")
   if len(template_styles) != 1:
     raise RuntimeError(f"genre template {template_rel} carries {len(template_styles)} <style> blocks, expected one")
   if " ".join(_text(page_styles[0]).split()) == " ".join(_text(template_styles[0]).split()):
@@ -712,7 +712,7 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
 # The CLI parses GENRES from src.features.artifacts.constants (the artifact chain must not load this
 # module to build its parser), so the registry and the parsed vocabulary must state the
 # same genres; a registration that skips the constants tuple fails here, at import.
-GENRES: tuple[str, ...] = ARTIFACT_GENRES
+GENRES: tuple[str, ...] = constants.ARTIFACT_GENRES
 if GENRES != tuple(_ASSERTION_SETS):
   raise ValueError(
       f"src.features.artifacts.constants.ARTIFACT_GENRES {GENRES} drifted from _ASSERTION_SETS "

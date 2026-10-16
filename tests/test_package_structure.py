@@ -41,10 +41,10 @@ table, and a break is fixed in the code.
 
 import ast
 import io
+import pathlib
 import re
 import textwrap
 import tokenize
-from pathlib import Path
 from typing import NamedTuple
 
 import conftest
@@ -53,7 +53,7 @@ import pytest
 BACKEND_VARIANTS = frozenset({"kimi", "openai_compatible"})
 CHAT_CHANNELS = frozenset({"slack", "discord"})
 CONTAINER_MARKERS = frozenset({"src/__init__.py", "src/backends/__init__.py", "src/features/__init__.py"})
-EXCEPTIONS_PATH = Path(__file__).with_name("structure_exceptions.txt")
+EXCEPTIONS_PATH = pathlib.Path(__file__).with_name("structure_exceptions.txt")
 DEFERRAL_COMMENT = re.compile(r"#\s*deferred:\s*\S")
 DEFERRAL_SCOPES = ("src/runtime/", "src/infra/", "src/features/", "src/backends/")
 DEFERRAL_ADVICE = (
@@ -160,7 +160,7 @@ def allowed_groups(group: str) -> set[str] | None:
   raise ValueError(f"unknown group {group}")
 
 
-def module_index(root: Path) -> dict[str, str]:
+def module_index(root: pathlib.Path) -> dict[str, str]:
   """Dotted module name -> repo-relative path, for every ``.py`` file under src and for server.py."""
   index = {"server": "server.py"}
   for path in sorted((root / "src").rglob("*.py")):
@@ -227,13 +227,13 @@ def docstring_nodes(tree: ast.Module) -> set[int]:
   return ids
 
 
-def scan(root: Path) -> Structure:
+def scan(root: pathlib.Path) -> Structure:
   index = module_index(root)
   structure = Structure([], [], [])
   for rel in index.values():
     if group_of(rel) is None:
       structure.ungrouped.append(rel)
-    package = ".".join(Path(rel).with_suffix("").parts[:-1])
+    package = ".".join(pathlib.Path(rel).with_suffix("").parts[:-1])
     found = set()
     tree = ast.parse((root / rel).read_text(encoding="utf-8"), filename=rel)
     docstrings = docstring_nodes(tree)
@@ -276,10 +276,10 @@ def runtime_name(rel: str) -> str | None:
   """The name of a runtime module relative to ``src.runtime``; None for another file and for a package ``__init__``."""
   if not rel.startswith("src/runtime/") or rel.endswith("/__init__.py"):
     return None
-  return ".".join(Path(rel).with_suffix("").parts[2:])
+  return ".".join(pathlib.Path(rel).with_suffix("").parts[2:])
 
 
-def runtime_files(root: Path) -> list[str]:
+def runtime_files(root: pathlib.Path) -> list[str]:
   """The repo-relative paths of the runtime modules under ``root``."""
   return [rel for rel in module_index(root).values() if runtime_name(rel) is not None]
 
@@ -416,7 +416,7 @@ def has_deferral(comments: dict[int, tuple[str, bool]], line: int) -> bool:
   return False
 
 
-def deferral_breaks(root: Path) -> list[str]:
+def deferral_breaks(root: pathlib.Path) -> list[str]:
   """One failure line per function-level import of a src module, under src/runtime, src/infra, src/features or
   src/backends, that has no ``# deferred: <command>`` comment. The target resolves as in :func:`scan`."""
   index = module_index(root)
@@ -425,7 +425,7 @@ def deferral_breaks(root: Path) -> list[str]:
     if not rel.startswith(DEFERRAL_SCOPES):
       continue
     source = (root / rel).read_text(encoding="utf-8")
-    package = ".".join(Path(rel).with_suffix("").parts[:-1])
+    package = ".".join(pathlib.Path(rel).with_suffix("").parts[:-1])
     comments = None
     for node in function_level_imports(ast.parse(source, filename=rel)):
       targets = {
@@ -536,7 +536,7 @@ DEFERRAL_MODULES = {
 }
 
 
-def write_tree(root: Path, modules: dict[str, str]) -> None:
+def write_tree(root: pathlib.Path, modules: dict[str, str]) -> None:
   for rel, source in modules.items():
     (root / rel).parent.mkdir(parents=True, exist_ok=True)
     (root / rel).write_text(source, encoding="utf-8")
@@ -613,7 +613,7 @@ def test_every_function_level_import_names_its_command() -> None:
   assert not failures, "\n".join(failures)
 
 
-def test_the_scan_counts_every_form_of_import(tmp_path: Path) -> None:
+def test_the_scan_counts_every_form_of_import(tmp_path: pathlib.Path) -> None:
   """An import form the scan skips would let a reverse import in unseen."""
   modules = dict.fromkeys(EMPTY_MODULES, "")
   modules["src/runtime/core.py"] = FORMS_SOURCE
@@ -629,7 +629,7 @@ def test_the_scan_counts_every_form_of_import(tmp_path: Path) -> None:
   assert {(r.importer, r.target) for r in violations(found)} == {("src/runtime/core.py", "src/features/alpha/impl.py")}
 
 
-def test_the_layer_checks_find_each_break(tmp_path: Path) -> None:
+def test_the_layer_checks_find_each_break(tmp_path: pathlib.Path) -> None:
   """A form of import the checks skip would let an upward import in unseen, and a package marker they count would
   fail a clean tree."""
   write_tree(tmp_path, {**LAYERED_MODULES, "src/runtime/bottom.py": BOTTOM_SOURCE})
@@ -658,7 +658,7 @@ def test_the_layer_checks_find_each_break(tmp_path: Path) -> None:
     layer_of("top", (Layer(2, "first", ("top",)), Layer(1, "second", ("top",))))
 
 
-def test_the_deferral_check_finds_each_unmarked_import(tmp_path: Path) -> None:
+def test_the_deferral_check_finds_each_unmarked_import(tmp_path: pathlib.Path) -> None:
   """A deferral without its command, or with an empty one, would stay in the code unread."""
   write_tree(tmp_path, DEFERRAL_MODULES)
 

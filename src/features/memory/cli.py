@@ -34,38 +34,36 @@ fails visibly instead of falling back to operator behavior.
 """
 
 import argparse
+import datetime
+import pathlib
 import re
 import sys
-from datetime import UTC, datetime
-from pathlib import Path
 
-from src.features.memory import memory, memory_proposal
-from src.features.memory.store_root import store_root
-from src.infra.credentials import configured_access_key
-from src.infra.help_formatter import CliHelpFormatter
-from src.infra.home import charliebot_home_dir
-from src.infra.json_utils import load_json_meta
-from src.runtime.run_identity import SESSION_METADATA_NAME, run_scoped_refusal
-from src.runtime.run_token import RunTokenError, load_run_token, verify_run_token
+from src.features.memory import memory, memory_proposal, store_root
+from src.infra import credentials, help_formatter, home, json_utils
+from src.runtime import run_identity, run_token
 
 
-def _memory_dir() -> Path:
+def _memory_dir() -> pathlib.Path:
   """The store root of the env-resolved home (``store_root``)."""
-  return store_root(charliebot_home_dir())
+  return store_root.store_root(home.charliebot_home_dir())
 
 
-def _sessions_root() -> Path:
+def _sessions_root() -> pathlib.Path:
   """The sessions root: ``<home>/sessions`` (the CharlieBotConfig.sessions_dir derivation)."""
-  return charliebot_home_dir() / "sessions"
+  return home.charliebot_home_dir() / "sessions"
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-      description="Labeled-entry memory store: query, add captures, and lint", formatter_class=CliHelpFormatter)
+      description="Labeled-entry memory store: query, add captures, and lint",
+      formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="command", required=True)
 
   p_query = sub.add_parser(
-      "query", help="Print matched entries' full text (or index lines with --index)", formatter_class=CliHelpFormatter)
+      "query",
+      help="Print matched entries' full text (or index lines with --index)",
+      formatter_class=help_formatter.CliHelpFormatter)
   p_query.add_argument(
       "--topic", action="append", required=True, help="Topic to match (repeatable); must exist in the vocabulary")
   p_query.add_argument(
@@ -80,25 +78,28 @@ def main() -> None:
   )
 
   p_add = sub.add_parser(
-      "add", help="Stage a free-form capture (never touches entries/)", formatter_class=CliHelpFormatter)
+      "add", help="Stage a free-form capture (never touches entries/)", formatter_class=help_formatter.CliHelpFormatter)
   p_add.add_argument("--file", default=None, help="Read body from file (default: stdin)")
 
   p_lint = sub.add_parser(
-      "lint", help="Validate the store; exit nonzero on violations", formatter_class=CliHelpFormatter)
+      "lint", help="Validate the store; exit nonzero on violations", formatter_class=help_formatter.CliHelpFormatter)
   p_lint.add_argument("--dir", default=None, help="Store root to validate (default: the live store)")
 
   p_proposal = sub.add_parser(
       "proposal",
       help="Drive the store's PR flow: open, status, commit one path, land one version",
-      formatter_class=CliHelpFormatter)
+      formatter_class=help_formatter.CliHelpFormatter)
   proposal_sub = p_proposal.add_subparsers(dest="proposal_command", required=True)
   proposal_sub.add_parser(
       "open",
       help="Ensure the proposal branch and worktree exist, aligned with the base branch",
-      formatter_class=CliHelpFormatter)
-  proposal_sub.add_parser("status", help="Print the PR state (read-only)", formatter_class=CliHelpFormatter)
+      formatter_class=help_formatter.CliHelpFormatter)
+  proposal_sub.add_parser(
+      "status", help="Print the PR state (read-only)", formatter_class=help_formatter.CliHelpFormatter)
   p_pcommit = proposal_sub.add_parser(
-      "commit", help="Commit exactly one store-relative path on the proposal branch", formatter_class=CliHelpFormatter)
+      "commit",
+      help="Commit exactly one store-relative path on the proposal branch",
+      formatter_class=help_formatter.CliHelpFormatter)
   p_pcommit.add_argument("path", help="Store-relative path: an entry file or topics")
   p_pcommit.add_argument("--message-file", required=True, help="File holding the commit message")
   p_pcommit.add_argument(
@@ -107,7 +108,9 @@ def main() -> None:
       help="Commit even when lines the PR already added are rewritten or gone; the commit "
       "message lists each replaced line under 'Replaced PR lines:'")
   p_pland = proposal_sub.add_parser(
-      "land", help="Fast-forward the live checkout to one approved proposal commit", formatter_class=CliHelpFormatter)
+      "land",
+      help="Fast-forward the live checkout to one approved proposal commit",
+      formatter_class=help_formatter.CliHelpFormatter)
   p_pland.add_argument("sha", help="The approved proposal commit SHA")
 
   args = parser.parse_args()
@@ -122,7 +125,7 @@ def main() -> None:
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
-  token = load_run_token()
+  token = run_token.load_run_token()
   if token is not None:
     audience = _resolve_run_scoped_audience(token)
     if args.audience is not None and args.audience != audience:
@@ -175,13 +178,13 @@ def _resolve_run_scoped_audience(token: str) -> str:
   which is the same visible unknown-run refusal.
   """
   root = _sessions_root()
-  key = configured_access_key()
+  key = credentials.configured_access_key()
   if not key:
     print("error: run token presented but no signing key is configured", file=sys.stderr)
     sys.exit(1)
   try:
-    claims = verify_run_token(token, key)
-  except RunTokenError as e:
+    claims = run_token.verify_run_token(token, key)
+  except run_token.RunTokenError as e:
     print(f"error: invalid run token: {e}", file=sys.stderr)
     sys.exit(1)
   # A read-only local resolution through the same owners the server uses (the
@@ -189,11 +192,12 @@ def _resolve_run_scoped_audience(token: str) -> str:
   # needed; nothing here writes. The read stays off the pydantic model stack:
   # this runs per fresh CLI process, and the stack prices ~120 ms of the wall
   # (src.infra.models' 58 model classes) for three record fields and one fact type.
-  refusal = run_scoped_refusal(root, claims.session_id, claims.run_id)
+  refusal = run_identity.run_scoped_refusal(root, claims.session_id, claims.run_id)
   if refusal is not None:
     print(f"error: {refusal}", file=sys.stderr)
     sys.exit(1)
-  meta = load_json_meta(root / claims.session_id / SESSION_METADATA_NAME, "memory_session_meta_read")
+  meta = json_utils.load_json_meta(
+      root / claims.session_id / run_identity.SESSION_METADATA_NAME, "memory_session_meta_read")
   profile = meta.get("profile") if meta else None
   if profile not in ("manager", "worker"):
     print(
@@ -205,7 +209,7 @@ def _resolve_run_scoped_audience(token: str) -> str:
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
-  body = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+  body = pathlib.Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
   lines = body.split("\n")
   if not lines or not lines[0].startswith("# "):
     print("error: body must start with '# <title>'", file=sys.stderr)
@@ -220,17 +224,17 @@ def _cmd_add(args: argparse.Namespace) -> None:
   memory_dir = _memory_dir()
   memory.ensure_store(memory_dir)
   sess8 = _session_slug8(_sessions_root())
-  ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+  ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
   filename = f"{ts}-{sess8}-{slug}.md"
   target = memory_dir / "staging" / filename
   target.write_text(body, encoding="utf-8")
   print(str(target))
 
 
-def _store_root(args: argparse.Namespace) -> Path:
+def _store_root(args: argparse.Namespace) -> pathlib.Path:
   """The store root this invocation reads: --dir when given, else the live store."""
   if getattr(args, "dir", None):
-    return Path(args.dir).expanduser()
+    return pathlib.Path(args.dir).expanduser()
   return _memory_dir()
 
 
@@ -256,7 +260,7 @@ def _cmd_proposal(args: argparse.Namespace) -> None:
       fields = memory_proposal.status(live)
     elif args.proposal_command == "commit":
       sha, warnings = memory_proposal.commit(
-          live, args.path, Path(args.message_file).expanduser(), replace_pr_lines=args.replace_pr_lines)
+          live, args.path, pathlib.Path(args.message_file).expanduser(), replace_pr_lines=args.replace_pr_lines)
       for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
       fields = {"committed": sha}
@@ -276,9 +280,9 @@ def _slugify(text: str) -> str:
   return s.strip("-")
 
 
-def _session_slug8(sessions_dir: Path) -> str:
+def _session_slug8(sessions_dir: pathlib.Path) -> str:
   """First 8 chars of the CharlieBot session id derived from cwd, else 'nosess'."""
-  cwd = Path.cwd().resolve()
+  cwd = pathlib.Path.cwd().resolve()
   if cwd.parent == sessions_dir.resolve():
     return cwd.name[:8]
   return "nosess"

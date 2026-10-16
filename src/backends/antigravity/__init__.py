@@ -17,7 +17,6 @@ def register() -> None:
           resume="native_id",
           restart_reattach=False,
           preassigned_session_id=False,
-          reads_context_window=False,
           family_prefix=None,
           manual_compact=False,
           compact_hint=None,

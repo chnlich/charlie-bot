@@ -23,8 +23,7 @@ class BackendTraits(NamedTuple):
   "native_id" passes the backend's own session id to its constructor.
   ``restart_reattach`` is True when a restarted server can follow the process of an interrupted
   run. ``preassigned_session_id`` is True when the runtime chooses the session id of a task run
-  before the process starts. ``reads_context_window`` is True when the backend takes a context
-  window from its option. ``family_prefix`` is the id prefix that names the type's family of
+  before the process starts. ``family_prefix`` is the id prefix that names the type's family of
   backend ids; None when the type has no family. ``manual_compact`` is True when the backend runs
   a ``/compact`` chat message as a manual compaction. ``compact_hint`` is the compact button's
   title on a backend without manual compaction; None takes the page's generic title.
@@ -32,7 +31,6 @@ class BackendTraits(NamedTuple):
   resume: str
   restart_reattach: bool
   preassigned_session_id: bool
-  reads_context_window: bool
   family_prefix: str | None
   manual_compact: bool
   compact_hint: str | None

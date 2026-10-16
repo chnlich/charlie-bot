@@ -11,7 +11,7 @@ from src.infra import config, constants, log_once, models, ndjson, process
 from src.infra import event_types as ET
 from src.runtime import launch_loop, master_cc_state, runs, spawner_backends, streaming
 from src.runtime.agent_process import base
-from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
+from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
 
 log = log_once.LazyStructlogLogger()
 
@@ -434,16 +434,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     return await _refuse_turn(item, msg, None)
   if models.backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
-  # A contribution may set the session's context window in place of the option's
-  # own (a thread session runs the fixed thread window): the option entry is
-  # shared with main sessions and workers, so its window must keep serving
-  # them, and a thread session is born without a backend of its own to pin a
-  # narrower entry on. Only a backend type that reads a context window takes it;
-  # other backend types are untouched.
-  if backend_types.traits_for(option.type).reads_context_window:
-    context_window = turn_contributions.resolve_context_window(session_meta)
-    if context_window is not None:
-      option = option.model_copy(update={"context_window": context_window})
 
   assert item.task_run is not None
   assert item.task_instructions is not None

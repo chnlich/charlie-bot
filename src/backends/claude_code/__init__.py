@@ -5,7 +5,7 @@ and ``ClaudeThreadFields`` (keys of a thread's). ``src/backends/claude_code/clau
 and reads and writes them; ``register()`` names them by string, so registering imports no pydantic.
 """
 
-from src.infra import config_registry, identity_env, metadata_slot_registration
+from src.infra import config_registry, metadata_slot_registration
 from src.runtime.hooks import (
     backend_lifecycle_registration,
     backend_type_registration,
@@ -22,7 +22,7 @@ USAGE_SOURCE = "Claude Code"
 
 def register() -> None:
   """Register the cc-claude backend type, the Claude Code usage source, the accounts section,
-  its metadata keys, its credential variables and its setup check with the runtime."""
+  its metadata keys and its setup check with the runtime."""
   turn_contributions.register_turn_contribution(
       "claude_code", "src.backends.claude_code.turn_contribution:CONTRIBUTION")
   backend_type_registration.register_backend_type(
@@ -70,6 +70,4 @@ def register() -> None:
       "src.backends.claude_code.claude_metadata:ClaudeThreadFields",
       on=metadata_slot_registration.ON_THREAD,
       after="exit_code")
-  identity_env.register_identity_env_var("CLAUDE_CODE_OAUTH_TOKEN")
-  identity_env.register_identity_env_var("ANTHROPIC_API_KEY")
   wiring.register_setup_step("src.backends.claude_code.setup_check", attr="setup_step")

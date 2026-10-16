@@ -2,7 +2,8 @@
 
 The runtime turn path names no feature. Each feature package registers one TurnContribution, and the path
 asks every registered contribution at its step: the instruction build (rule file, segments), the queue
-(before a turn), the session funnel (after a MASTER_DONE) and the chat aggregator (event renderers). The tests drive each call site through the real registrations that conftest makes.
+(before a turn), the session funnel (after a MASTER_DONE) and the chat aggregator (event renderers). The
+tests drive each call site through the real registrations that conftest makes.
 """
 
 from __future__ import annotations

@@ -10,6 +10,7 @@ files behind, and the kept audio never exceeds the transcriber's sample cap.
 import asyncio
 import json
 import pathlib
+import types
 import wave
 from collections.abc import AsyncIterator
 
@@ -156,7 +157,7 @@ def _start_relay(
     backend: FakeLiveBackend,
 ) -> asyncio.Task:
   """Run the relay handler as a task against the fake socket, backend, and sessions dir."""
-  monkeypatch.setattr(voice, "get_config", lambda: _build_cfg(tmp_path))
+  monkeypatch.setattr(voice, "config", types.SimpleNamespace(get_config=lambda: _build_cfg(tmp_path)))
   # The registry is the relay's only backend seam; setitem puts the fake behind
   # the id and monkeypatch removes it again after the test.
   monkeypatch.setitem(transcription_registry._FACTORIES, BACKEND_ID, lambda _cfg: backend)

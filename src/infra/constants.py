@@ -5,7 +5,7 @@ this module on every ``charliebot`` invocation, so nothing here may import
 pydantic, config, or any other server stack.
 """
 
-from enum import StrEnum
+import enum
 
 # Checkout root (where pyproject.toml lives): this file sits at src/infra/, so
 # parents[2] is the root; moving this file breaks the depth. Buildinfo's git
@@ -19,9 +19,9 @@ from enum import StrEnum
 
 def __getattr__(name: str):
   if name == "REPO_ROOT":
-    from pathlib import Path
+    import pathlib
 
-    root = Path(__file__).resolve().parents[2]
+    root = pathlib.Path(__file__).resolve().parents[2]
     globals()["REPO_ROOT"] = root
     return root
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -67,7 +67,7 @@ AUTH_STATUS_PATH = "/api/auth/status"
 UVICORN_LOOP = "asyncio"
 
 
-class WatchKind(StrEnum):
+class WatchKind(enum.StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default
   LOCAL_PID = "local_pid"
   REMOTE_PID = "remote_pid"

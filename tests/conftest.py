@@ -1699,11 +1699,10 @@ def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) ->
 CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.runtime.cli.common._request_post"
 CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.runtime.cli.common._request_get"
 
-# Import-path patch target for the memory CLI's home read. src/features/memory/cli.py binds the
-# name at import scope (`from src.infra.home import charliebot_home_dir`), so mock and
-# monkeypatch.setattr land the stand-in on the src.features.memory.cli module attribute and the
-# CLI's entry points read it at call time.
-CLI_MEMORY_HOME_PATCH_TARGET = "src.features.memory.cli.charliebot_home_dir"
+# Import-path patch target for the memory CLI's home read. monkeypatch.setattr resolves it to
+# src/infra/home.py's charliebot_home_dir and swaps that attribute, so the CLI's
+# home.charliebot_home_dir() reads pick the stand-in up at call time.
+CLI_MEMORY_HOME_PATCH_TARGET = "src.infra.home.charliebot_home_dir"
 
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/runtime/master_cc_run.py reads `backend_types.build_backend` as a module

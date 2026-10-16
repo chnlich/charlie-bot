@@ -27,48 +27,37 @@ entrypoint imports this module, never the reverse.
 
 import abc
 import asyncio
+import dataclasses
+import datetime
+import pathlib
 import re
+import zoneinfo
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
-from zoneinfo import ZoneInfo
+from urllib import parse
 
+from src.infra import config, log_once, metadata_slots, models, tasks
 from src.infra import event_types as ET
-from src.infra import metadata_slots
-from src.infra.config import HOUSE_TIMEZONE, CharlieBotConfig
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import (
-    PendingTrigger,
-    SessionMetadata,
-    SessionStatus,
-    TriggerStatus,
-    utc_now,
-)
-from src.infra.tasks import create_logged_task
 from src.runtime import (
+    file_urls,
     master_cc_queue,
     master_cc_state,
+    master_trigger,
+    session_lifecycle,
+    session_listing,
+    session_store,
+    session_successor,
     task_execution,
     task_prompts,
+    triggers,
 )
-from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
-from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
-from src.runtime.file_urls import FILE_SERVER_MOUNTS
-from src.runtime.master_trigger import trigger_master
+from src.runtime.api import deps, message_utils
 from src.runtime.session_events import SessionEvents
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_store import SessionStore
-from src.runtime.session_successor import SessionSuccessor
-from src.runtime.triggers import ArchivedSessionError, TriggerManager
 
-logger = LazyStructlogLogger()
+logger = log_once.LazyStructlogLogger()
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class ThreadPlatform:
   """The per-platform facts the shared helpers and the entrypoint agree on.
 
@@ -129,7 +118,7 @@ class ThreadPlatform:
     return f"{self.name}_ack"
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class ThreadMessage:
   """One eligible thread message as the round side reads it.
 
@@ -169,7 +158,7 @@ class ThreadAdapter(abc.ABC):
     """Clear the summon ack the summon block *block* carries."""
 
   @abc.abstractmethod
-  async def read_eligible(self, origin: Any, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+  async def read_eligible(self, origin: Any, cfg: config.CharlieBotConfig) -> list[ThreadMessage]:
     """The thread *origin* names' eligible messages, in platform order."""
 
   @abc.abstractmethod
@@ -194,7 +183,7 @@ class ThreadReplyError(Exception):
     self.detail = detail
 
 
-def load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
+def load_prompt_doc(repo_root: pathlib.Path, name: str, *, likely_cause: str) -> str:
   """Read one prompts doc fresh from disk, raising a ValueError naming the path when missing.
 
   No caching, so an edit takes effect on the next summon. A missing or
@@ -209,7 +198,7 @@ def load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
     raise ValueError(f"{name} prompt not found at {path} — {likely_cause}") from e
 
 
-def thread_reply_contract(platform: ThreadPlatform, platform_part: str, cfg: CharlieBotConfig) -> str:
+def thread_reply_contract(platform: ThreadPlatform, platform_part: str, cfg: config.CharlieBotConfig) -> str:
   """The thread reply contract: *platform_part* joined with the three rule docs.
 
   A thread session's managed instructions carry this contract once, so the
@@ -367,7 +356,7 @@ def lost_summons(platform: ThreadPlatform, events: list[dict], *, owned: set[str
   answered: set[str] = set()
   for ev in events:
     if ev.get("type") == ET.MASTER_DONE:
-      answered.update(master_done_input_event_ids(ev))
+      answered.update(message_utils.master_done_input_event_ids(ev))
   marked = {ev[platform.backfill_key].get(ET.INPUT_EVENT_ID) for ev in events if platform.backfill_key in ev}
   return [
       ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and platform.name in ev and ev["id"] not in answered and
@@ -453,14 +442,15 @@ def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:
   """
   if block.get(adapter.platform.mention_key) is None:
     return
-  create_logged_task(adapter.remove_ack(block), name=f"{adapter.platform.name}-ack-clear-{session_id}")
+  tasks.create_logged_task(adapter.remove_ack(block), name=f"{adapter.platform.name}-ack-clear-{session_id}")
 
 
 # How much of an unread message's text the 412 refusal and the gate list carry.
 _TEXT_PREVIEW_CHARS = 200
 
 
-async def require_thread_session(platform: ThreadPlatform, session_id: str, store: SessionStore) -> SessionMetadata:
+async def require_thread_session(
+    platform: ThreadPlatform, session_id: str, store: session_store.SessionStore) -> models.SessionMetadata:
   """The session named by *session_id* when it exists and carries a platform thread.
 
   The reply-path preamble shared by ``assert_thread_fresh``, ``ack_messages``,
@@ -469,13 +459,13 @@ async def require_thread_session(platform: ThreadPlatform, session_id: str, stor
   """
   meta = await store.get_session(session_id)
   if meta is None:
-    raise ThreadReplyError(404, SESSION_NOT_FOUND_DETAIL)
+    raise ThreadReplyError(404, deps.SESSION_NOT_FOUND_DETAIL)
   if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
     raise ThreadReplyError(409, f"Session has no {platform.display_name} thread")
   return meta
 
 
-async def unread_messages(adapter: ThreadAdapter, origin: Any, cfg: CharlieBotConfig,
+async def unread_messages(adapter: ThreadAdapter, origin: Any, cfg: config.CharlieBotConfig,
                           watermark: str | None) -> list[ThreadMessage]:
   """The thread *origin* names' eligible messages above *watermark*; None passes all.
 
@@ -491,7 +481,7 @@ async def unread_messages(adapter: ThreadAdapter, origin: Any, cfg: CharlieBotCo
 
 
 async def assert_thread_fresh(
-    adapter: ThreadAdapter, session_id: str, cfg: CharlieBotConfig, store: SessionStore) -> None:
+    adapter: ThreadAdapter, session_id: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   The reply-path gate, run by the reply endpoint before ``post_reply``:
@@ -531,7 +521,7 @@ _REPLY_BUDGET_CHARS = 500
 
 
 async def post_reply(
-    adapter: ThreadAdapter, session_id: str, text: str, cfg: CharlieBotConfig, store: SessionStore,
+    adapter: ThreadAdapter, session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
     session_events: SessionEvents) -> dict:
   """Post *text* to the session's thread and return the readback the CLI prints.
 
@@ -603,8 +593,8 @@ async def post_reply(
 
 
 async def ack_messages(
-    adapter: ThreadAdapter, session_id: str, message_ids: list[str], cfg: CharlieBotConfig, store: SessionStore,
-    session_events: SessionEvents) -> dict:
+    adapter: ThreadAdapter, session_id: str, message_ids: list[str], cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore, session_events: SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
   The follow round's proof-of-read. Refusals raise ``ThreadReplyError``: 404
@@ -639,7 +629,7 @@ async def ack_messages(
   if floor is None or ceiling_key > floor:
     watermark = ceiling
     metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: watermark})
-    meta.updated_at = utc_now()
+    meta.updated_at = models.utc_now()
     await store.save_metadata(meta)
   await session_events.persist_and_broadcast(
       session_id, {
@@ -678,8 +668,8 @@ _NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the 
 
 async def audit_round(
     adapter: ThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
-    cfg: CharlieBotConfig, store: SessionStore, lifecycle: SessionLifecycle, session_events: SessionEvents,
-    successor: SessionSuccessor) -> bool:
+    cfg: config.CharlieBotConfig, store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle,
+    session_events: SessionEvents, successor: session_successor.SessionSuccessor) -> bool:
   """Act on one finished round whose input carried a summon block; True when it acted.
 
   Reads the log for the round's summon: a reply answering it ends the audit. A
@@ -707,12 +697,13 @@ async def audit_round(
     if nudged(platform, events, summon_id):
       return False
     content = _NUDGE_TEMPLATE.format(platform=platform.display_name)
-    nudge = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
+    nudge = message_utils.build_agent_message_event(
+        content, from_session=session_id, from_session_name=platform.display_name)
     nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
     nudge[platform.name]["nudge_of"] = summon_id
     await session_events.persist_and_broadcast(session_id, nudge)
-    create_logged_task(
-        trigger_master(
+    tasks.create_logged_task(
+        master_trigger.trigger_master(
             session_id,
             content,
             store,
@@ -752,8 +743,9 @@ async def audit_round(
 
 
 async def deliver_done(
-    adapter: ThreadAdapter, session_id: str, done: dict, cfg: CharlieBotConfig, store: SessionStore,
-    lifecycle: SessionLifecycle, session_events: SessionEvents, successor: SessionSuccessor) -> bool:
+    adapter: ThreadAdapter, session_id: str, done: dict, cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    successor: session_successor.SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
@@ -766,7 +758,7 @@ async def deliver_done(
   meta = await store.get_session(session_id)
   if meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
     return False
-  input_event_ids = master_done_input_event_ids(done)
+  input_event_ids = message_utils.master_done_input_event_ids(done)
   if not input_event_ids:
     return False
   events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
@@ -786,8 +778,9 @@ _LOST_SUMMON_CONTENT = "这条 {platform} 召唤在服务重启时还排在队�
 
 
 async def backfill_lost_summons(
-    adapter: ThreadAdapter, cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore,
-    lifecycle: SessionLifecycle, session_events: SessionEvents, successor: SessionSuccessor) -> int:
+    adapter: ThreadAdapter, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
+    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    successor: session_successor.SessionSuccessor) -> int:
   """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
 
   First the summons lost while queued: the startup replay covers ``ET.USER``
@@ -835,9 +828,9 @@ async def backfill_lost_summons(
     if lost:
       events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
 
-    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
+    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and message_utils.master_done_input_event_ids(ev)]
     for done in dones:
-      bound = newest_thread_input(platform, events, master_done_input_event_ids(done))
+      bound = newest_thread_input(platform, events, message_utils.master_done_input_event_ids(done))
       if bound is None:
         continue
       done_input_id, target = bound
@@ -860,16 +853,17 @@ _FOLLOW_QUIET_SECONDS = 45
 _FOLLOW_CHAIN_CAP_SECONDS = 300
 
 
-async def armed_follow_triggers(platform: ThreadPlatform, trigger_mgr: TriggerManager,
-                                session_id: str) -> list[PendingTrigger]:
+async def armed_follow_triggers(platform: ThreadPlatform, trigger_mgr: triggers.TriggerManager,
+                                session_id: str) -> list[models.PendingTrigger]:
   """The session's pending thread-follow trigger records (at most one by construction)."""
   return [
       t for t in await trigger_mgr.list_triggers(session_id)
-      if t.status == TriggerStatus.PENDING and t.message.startswith(platform.follow_trigger_prefix)
+      if t.status == models.TriggerStatus.PENDING and t.message.startswith(platform.follow_trigger_prefix)
   ]
 
 
-async def cancel_armed_follow_triggers(platform: ThreadPlatform, trigger_mgr: TriggerManager, session_id: str) -> int:
+async def cancel_armed_follow_triggers(
+    platform: ThreadPlatform, trigger_mgr: triggers.TriggerManager, session_id: str) -> int:
   """Cancel every armed thread-follow trigger of the session; return how many."""
   armed = await armed_follow_triggers(platform, trigger_mgr, session_id)
   for trigger in armed:
@@ -879,12 +873,12 @@ async def cancel_armed_follow_triggers(platform: ThreadPlatform, trigger_mgr: Tr
 
 async def arm_follow_trigger(
     platform: ThreadPlatform,
-    trigger_mgr: TriggerManager,
+    trigger_mgr: triggers.TriggerManager,
     session_id: str,
     *,
     floor: str,
     log_fields: dict,
-) -> PendingTrigger | None:
+) -> models.PendingTrigger | None:
   """Cancel-then-create the session's one persisted follow trigger; return the fresh record.
 
   The replaced record's ``created_at`` and floor id are read BEFORE the cancel:
@@ -896,7 +890,7 @@ async def arm_follow_trigger(
   Returns None without arming when the session was archived mid-flight: the
   thread-follow stops with its session.
   """
-  chain_start: datetime | None = None
+  chain_start: datetime.datetime | None = None
   for old in await armed_follow_triggers(platform, trigger_mgr, session_id):
     if chain_start is None:  # exactly one armed record exists by construction
       chain_start = old.created_at
@@ -904,9 +898,11 @@ async def arm_follow_trigger(
       if parsed_floor is not None:
         floor = parsed_floor
     await trigger_mgr.cancel_trigger(session_id, old.id)
-  now = utc_now()
+  now = models.utc_now()
   start = chain_start or now
-  fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS), start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
+  fire_at = min(
+      now + datetime.timedelta(seconds=_FOLLOW_QUIET_SECONDS),
+      start + datetime.timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
   delay = max(0, int((fire_at - now).total_seconds()))
   try:
     # The re-arm is never rejected by the pending-trigger limit: it replaces its
@@ -919,7 +915,7 @@ async def arm_follow_trigger(
         created_at=start,
         enforce_pending_limit=False,
     )
-  except ArchivedSessionError as e:
+  except triggers.ArchivedSessionError as e:
     # The archive raced the re-arm between the caller's status check (and any
     # revival it performed) and the create: log and leave without a new
     # trigger record.
@@ -936,7 +932,7 @@ async def arm_follow_trigger(
 
 
 async def consume_mention(
-    platform: ThreadPlatform, store: SessionStore, trigger_mgr: TriggerManager, session_id: str,
+    platform: ThreadPlatform, store: session_store.SessionStore, trigger_mgr: triggers.TriggerManager, session_id: str,
     mention_id: str) -> None:
   """The mention round consumes its own id: advance the watermark to it and cancel armed follows."""
   meta = await store.get_session(session_id)
@@ -947,7 +943,7 @@ async def consume_mention(
   watermark = getattr(fields, platform.watermark_field)
   if watermark is None or platform.id_key(watermark) < platform.id_key(mention_id):
     metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: mention_id})
-    meta.updated_at = utc_now()
+    meta.updated_at = models.utc_now()
     await store.save_metadata(meta)
   cancelled = await cancel_armed_follow_triggers(platform, trigger_mgr, session_id)
   if cancelled:
@@ -955,7 +951,8 @@ async def consume_mention(
 
 
 async def ensure_group(
-    platform: ThreadPlatform, store: SessionStore, lifecycle: SessionLifecycle, session_id: str, label: str) -> None:
+    platform: ThreadPlatform, store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle,
+    session_id: str, label: str) -> None:
   """Group a summon session under its label, unless it already has a group.
 
   The label is resolved once by the summon path (the single resolution point)
@@ -974,22 +971,22 @@ async def ensure_group(
     logger.warning(f"{platform.name}_group_assignment_failed", session=session_id, label=label, error=str(e))
 
 
-_LOCAL_TZ = ZoneInfo(HOUSE_TIMEZONE)
+_LOCAL_TZ = zoneinfo.ZoneInfo(config.HOUSE_TIMEZONE)
 
 
 def _local_time() -> str:
   """Local wall-clock stamp for a session display name."""
-  return datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+  return datetime.datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 async def accept_summon(
     adapter: ThreadAdapter,
-    cfg: CharlieBotConfig,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
-    successor: SessionSuccessor,
-    trigger_mgr: TriggerManager,
+    successor: session_successor.SessionSuccessor,
+    trigger_mgr: triggers.TriggerManager,
     *,
     session_id: str,
     label: str,
@@ -1030,7 +1027,7 @@ async def accept_summon(
         caller="system",
     )
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
-  elif session_meta.status == SessionStatus.ARCHIVED:
+  elif session_meta.status == models.SessionStatus.ARCHIVED:
     await lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_mention_session_unarchived", **fields, session=session_id)
     # The unarchive write alone notifies nobody: an open sidebar refetches its
@@ -1044,14 +1041,15 @@ async def accept_summon(
 
   await ensure_group(platform, store, lifecycle, session_id, label)
 
-  evt = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
+  evt = message_utils.build_agent_message_event(
+      content, from_session=session_id, from_session_name=platform.display_name)
   evt[platform.name] = block
   await session_events.persist_and_broadcast(session_id, evt)
   round_event_id = evt.get("id")
   logger.info(f"{platform.name}_mention_round_started", **fields, session=session_id, user_event_id=round_event_id)
 
-  create_logged_task(
-      trigger_master(
+  tasks.create_logged_task(
+      master_trigger.trigger_master(
           session_id,
           content,
           store,
@@ -1064,21 +1062,21 @@ async def accept_summon(
           from_session_name=platform.display_name,
       ),
       name=f"{platform.name}-round-{session_id}")
-  create_logged_task(adapter.add_ack(block), name=f"{platform.name}-ack-{session_id}")
+  tasks.create_logged_task(adapter.add_ack(block), name=f"{platform.name}-ack-{session_id}")
   return session_id
 
 
 async def revive_and_arm_follow(
     platform: ThreadPlatform,
-    lifecycle: SessionLifecycle,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
-    trigger_mgr: TriggerManager,
-    meta: SessionMetadata,
+    trigger_mgr: triggers.TriggerManager,
+    meta: models.SessionMetadata,
     *,
     session_id: str,
     floor: str,
     log_fields: dict,
-) -> PendingTrigger | None:
+) -> models.PendingTrigger | None:
   """Revive an archived thread session, then arm its follow trigger; the fresh record.
 
   The one home of the revival sequence the two follow paths share (the live
@@ -1091,7 +1089,7 @@ async def revive_and_arm_follow(
   reappears on Threads without a manual refresh. An ACTIVE session arms
   directly.
   """
-  if meta.status == SessionStatus.ARCHIVED:
+  if meta.status == models.SessionStatus.ARCHIVED:
     await lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_follow_session_unarchived", session=session_id, **log_fields)
     await session_events.broadcast_task_tree_changed(session_id, "session_unarchived")
@@ -1100,10 +1098,10 @@ async def revive_and_arm_follow(
 
 async def follow_message(
     adapter: ThreadAdapter,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
-    trigger_mgr: TriggerManager,
+    trigger_mgr: triggers.TriggerManager,
     session_id: str,
     message_id: str,
     *,
@@ -1146,8 +1144,9 @@ async def follow_message(
 
 
 async def backfill_followed_threads(
-    adapter: ThreadAdapter, cfg: CharlieBotConfig, listing: SessionListing, lifecycle: SessionLifecycle,
-    session_events: SessionEvents, trigger_mgr: TriggerManager) -> int:
+    adapter: ThreadAdapter, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
+    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    trigger_mgr: triggers.TriggerManager) -> int:
   """Arm the follow trigger of every followed session holding unread messages; return the count.
 
   Runs once per successful (re)connection: one eligible read per followed
@@ -1166,8 +1165,8 @@ async def backfill_followed_threads(
   # Both status filters ride the readonly listings: the shared cached metas
   # are handed out uncopied (the backfill only reads them) and the corpus
   # outside the followed threads is never copied+stamped.
-  active, _ = await listing.list_sessions_readonly(status=SessionStatus.ACTIVE)
-  archived, _ = await listing.list_sessions_readonly(status=SessionStatus.ARCHIVED)
+  active, _ = await listing.list_sessions_readonly(status=models.SessionStatus.ACTIVE)
+  archived, _ = await listing.list_sessions_readonly(status=models.SessionStatus.ARCHIVED)
   for meta in [*active, *archived]:
     fields = metadata_slots.fields_of(meta, platform.name)
     origin = getattr(fields, platform.origin_field)
@@ -1215,14 +1214,14 @@ def _file_server_named_path(url_path: str) -> str | None:
   """The filesystem path a file-server URL path names, percent-decoded; None when it names none.
 
   The file server serves ``<mount>/<absolute path without its leading slash>``
-  (``FILE_SERVER_MOUNTS``), whatever the scheme, host, or port in front, so the
+  (``file_urls.FILE_SERVER_MOUNTS``), whatever the scheme, host, or port in front, so the
   tail after the mount segment is the path ``charliebot publish`` takes.
   """
-  for mount in FILE_SERVER_MOUNTS:
+  for mount in file_urls.FILE_SERVER_MOUNTS:
     marker = mount + "/"
     at = url_path.find(marker)
     if at != -1:
-      return "/" + unquote(url_path[at + len(marker):])
+      return "/" + parse.unquote(url_path[at + len(marker):])
   return None
 
 
@@ -1244,7 +1243,7 @@ def assert_no_file_server_links(text: str) -> None:
         f"Publish the page with `charliebot publish {named}` and write the URL the command prints into the reply")
 
 
-def application_route_links(text: str, cfg: CharlieBotConfig) -> list[str]:
+def application_route_links(text: str, cfg: config.CharlieBotConfig) -> list[str]:
   """The application-route URLs on this server's port that the reply names for the operator.
 
   ``/diff``, ``/perfetto`` and the server's other pages are not static files:

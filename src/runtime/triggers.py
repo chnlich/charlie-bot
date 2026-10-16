@@ -14,7 +14,7 @@ from typing import Any
 
 import aiofiles
 
-from src.infra import config, json_utils, log_once, memo, models, ssh, tasks, timeouts
+from src.infra import config, constants, json_utils, log_once, memo, models, ssh, tasks, timeouts
 from src.infra import event_types as ET
 from src.runtime import sidebar_state, task_errors, task_execution, task_sessions, trigger_files
 
@@ -499,15 +499,15 @@ class TriggerManager:
     if dormancy is not None:
       raise ArchivedSessionError(f"session {session_id} is archived ({dormancy}); trigger rejected")
 
-    if models.WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
+    if constants.WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
       raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
-    if any(t.kind == models.WatchKind.SLURM_JOB and t.host is None for t in targets) and not _SACCT_AVAILABLE:
+    if any(t.kind == constants.WatchKind.SLURM_JOB and t.host is None for t in targets) and not _SACCT_AVAILABLE:
       raise RuntimeError("sacct unavailable: cannot watch a SLURM job on a host without slurm")
 
-    if models.WatchKind.REMOTE_PID in kinds:
-      await self._verify_remote_targets([t for t in targets if t.kind == models.WatchKind.REMOTE_PID])
+    if constants.WatchKind.REMOTE_PID in kinds:
+      await self._verify_remote_targets([t for t in targets if t.kind == constants.WatchKind.REMOTE_PID])
 
-    remote_slurm = [t for t in targets if t.kind == models.WatchKind.SLURM_JOB and t.host is not None]
+    remote_slurm = [t for t in targets if t.kind == constants.WatchKind.SLURM_JOB and t.host is not None]
     if remote_slurm:
       observed = await self._verify_remote_slurm_targets(remote_slurm)
       if probe_out is not None:
@@ -768,7 +768,7 @@ class TriggerManager:
     The wait races a dormancy watchdog, so an archived task cancels the trigger
     instead of firing.
     """
-    groups: dict[models.WatchKind, list[models.WatchTarget]] = {}
+    groups: dict[constants.WatchKind, list[models.WatchTarget]] = {}
     for t in trigger.watch_targets:
       groups.setdefault(t.kind, []).append(t)
 
@@ -776,13 +776,13 @@ class TriggerManager:
       if groups:
         sub_waiters = []
         for kind, group in groups.items():
-          if kind == models.WatchKind.LOCAL_PID:
+          if kind == constants.WatchKind.LOCAL_PID:
             sub_waiters.append(self._wait_with_pidfd(trigger, group))
-          elif kind == models.WatchKind.REMOTE_PID:
+          elif kind == constants.WatchKind.REMOTE_PID:
             sub_waiters.append(self._wait_with_remote_probe(trigger, group))
-          elif kind == models.WatchKind.SLURM_JOB:
+          elif kind == constants.WatchKind.SLURM_JOB:
             sub_waiters.append(self._wait_with_sacct(trigger, group))
-          elif kind == models.WatchKind.UNKNOWN:
+          elif kind == constants.WatchKind.UNKNOWN:
             raise RuntimeError("WatchKind.UNKNOWN is a fail-loud sentinel and must never be watched")
           else:
             raise RuntimeError(f"unhandled WatchKind in dispatch: {kind!r}")

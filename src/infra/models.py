@@ -1,37 +1,24 @@
 """All Pydantic models for CharlieBot."""
 
+import dataclasses
+import datetime
+import enum
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
-from pydantic import (
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    SerializationInfo,
-    SerializerFunctionWrapHandler,
-    ValidationError,
-    model_serializer,
-    model_validator,
-)
-
-from src.infra import metadata_slot_registration, metadata_slots
-from src.infra.config import CharlieBotConfig
-from src.infra.deferred import deferred_import_loader
+import pydantic
 
 # The cross-layer constants single-home in src.infra.constants (stdlib-only, the
 # CLI import floor's contract).
+from src.infra import config, constants, deferred, metadata_slot_registration, metadata_slots
+
 if TYPE_CHECKING:
   from src.infra.backend_models import (  # noqa: F401  (re-export)
       BackendOption,
       backend_type_allows_missing_model,
       option_default_model,
   )
-from src.infra.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 
 # The backend-field models live in backend_models so the config chain (every
 # CLI invocation's get_config) constructs no session/API models; the re-export
@@ -46,27 +33,27 @@ _BACKEND_REEXPORTS = frozenset({
 
 def __getattr__(name: str) -> Any:
   if name in _BACKEND_REEXPORTS:
-    return deferred_import_loader(name, "src.infra.backend_models")(globals())
+    return deferred.deferred_import_loader(name, "src.infra.backend_models")(globals())
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def ensure_utc(v: datetime | str) -> datetime:
+def ensure_utc(v: datetime.datetime | str) -> datetime.datetime:
   """Coerce naive datetimes to UTC; pass aware datetimes through unchanged."""
   if isinstance(v, str):
-    v = datetime.fromisoformat(v)
-  if isinstance(v, datetime) and v.tzinfo is None:
-    return v.replace(tzinfo=UTC)
+    v = datetime.datetime.fromisoformat(v)
+  if isinstance(v, datetime.datetime) and v.tzinfo is None:
+    return v.replace(tzinfo=datetime.UTC)
   return v
 
 
-def parse_utc_datetime(v: str) -> datetime:
+def parse_utc_datetime(v: str) -> datetime.datetime:
   """Parse an ISO 8601 string and normalize naive datetimes to UTC."""
   return ensure_utc(v)
 
 
-def utc_now() -> datetime:
+def utc_now() -> datetime.datetime:
   """Return the current UTC datetime as a tz-aware value."""
-  return datetime.now(UTC)
+  return datetime.datetime.now(datetime.UTC)
 
 
 def utc_now_iso() -> str:
@@ -74,14 +61,14 @@ def utc_now_iso() -> str:
   return utc_now().isoformat()
 
 
-UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
+UtcDatetime = Annotated[datetime.datetime, pydantic.BeforeValidator(ensure_utc)]
 
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
 
 
-class ThreadStatus(StrEnum):
+class ThreadStatus(enum.StrEnum):
   IDLE = "idle"
   RUNNING = "running"
   COMPLETED = "completed"
@@ -89,18 +76,18 @@ class ThreadStatus(StrEnum):
   CANCELLED = "cancelled"
 
 
-class SessionStatus(StrEnum):
+class SessionStatus(enum.StrEnum):
   ACTIVE = "active"
   ARCHIVED = "archived"
 
 
-class TriggerStatus(StrEnum):
+class TriggerStatus(enum.StrEnum):
   PENDING = "pending"
   FIRED = "fired"
   CANCELLED = "cancelled"
 
 
-class TaskType(StrEnum):
+class TaskType(enum.StrEnum):
   IMPLEMENT = "implement"
   QUICK_EDIT = "quick-edit"
   SCRIPT_RUN = "script-run"
@@ -108,7 +95,7 @@ class TaskType(StrEnum):
   COLD_READ = "cold-read"
 
 
-class LastRunStatus(StrEnum):
+class LastRunStatus(enum.StrEnum):
   """Outcome of a scheduled task's most recent run."""
   RUNNING = "running"
   SUCCESS = "success"
@@ -142,30 +129,30 @@ WorkState = Literal["idle", "running", "waiting"]
 RunOutcomeValue = Literal["success", "failed", "interrupted"]
 
 
-class ColdReadSpec(BaseModel):
+class ColdReadSpec(pydantic.BaseModel):
   # The cold-read task's persisted payload: the page to read, its genre, and
   # the trigger message (question 6 of the seven, filled verbatim).
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   page_path: str
   genre: str
   trigger: str
 
 
-class TaskSpec(BaseModel):
+class TaskSpec(pydantic.BaseModel):
   # The task record a v2 session carries: goal, acceptance, and execution bounds.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   goal: str = ""
-  acceptance: list[str] = Field(default_factory=list)
-  context_refs: list[str] = Field(default_factory=list)
+  acceptance: list[str] = pydantic.Field(default_factory=list)
+  context_refs: list[str] = pydantic.Field(default_factory=list)
   repo_path: str | None = None
   base_branch: str | None = None
   task_type: TaskType | None = None
   keep_worktree: bool = False
   cold_read: ColdReadSpec | None = None
 
-  @model_validator(mode="after")
+  @pydantic.model_validator(mode="after")
   def _cold_read_matches_task_type(self) -> Self:
     if self.task_type == TaskType.COLD_READ:
       if self.cold_read is None:
@@ -175,9 +162,9 @@ class TaskSpec(BaseModel):
     return self
 
 
-class EventRef(BaseModel):
+class EventRef(pydantic.BaseModel):
   # Pointer to the source chat event behind a metadata fact (provenance, not identity).
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   # origin_ref allows a null event id (the copy source predates event ids);
@@ -185,28 +172,28 @@ class EventRef(BaseModel):
   event_id: str | None = None
 
 
-class SequenceRef(BaseModel):
+class SequenceRef(pydantic.BaseModel):
   # Execution-sequence association: a Run that a sequence controller launched.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   kind: str  # the owning controller's declared sequence kind
   owner_ref: str
   position: int
 
 
-class RunRecord(BaseModel):
+class RunRecord(pydantic.BaseModel):
   # One actual execution and its evidence (schema_version=2 Run schema).
   #
   # Owned by src.runtime.runs; lives at sessions/<id>/data/runs/<run_id>/metadata.json.
   # Identity and evidence fields pin the execution; activity is always re-read
   # from process identity plus terminal facts, never from a persisted status.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   id: str
   session_id: str
   kind: RunKind = "work"
   # The exact input batch this run was dispatched against.
-  input_event_ids: list[str] = Field(default_factory=list)
+  input_event_ids: list[str] = pydantic.Field(default_factory=list)
   # The task-spec body pinned at launch: ref points at the immutable pinned
   # text, hash is its SHA-256 (execution evidence binding).
   task_spec_hash: str | None = None
@@ -242,16 +229,16 @@ class RunRecord(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ThreadMetadata(BaseModel):
+class ThreadMetadata(pydantic.BaseModel):
   # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the
   # declared fields and are written back unchanged.
-  model_config = ConfigDict(extra="allow")
+  model_config = pydantic.ConfigDict(extra="allow")
 
-  id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+  id: str = pydantic.Field(default_factory=lambda: str(uuid.uuid4()))
   session_id: str
   description: str
   status: ThreadStatus = ThreadStatus.IDLE
-  created_at: UtcDatetime = Field(default_factory=utc_now)
+  created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)
   started_at: UtcDatetime | None = None
   completed_at: UtcDatetime | None = None
   pid: int | None = None
@@ -269,11 +256,12 @@ class ThreadMetadata(BaseModel):
   backend: str | None = None
   model: str | None = None
   keep_worktree: bool = False
-  tried_backends: list[str] = Field(default_factory=list)
+  tried_backends: list[str] = pydantic.Field(default_factory=list)
   task_type: TaskType | None = None
 
-  @model_serializer(mode="wrap")
-  def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+  @pydantic.model_serializer(mode="wrap")
+  def _serialize_with_slots(self, handler: pydantic.SerializerFunctionWrapHandler,
+                            info: pydantic.SerializationInfo) -> dict[str, Any]:
     return metadata_slots.arrange(metadata_slot_registration.ON_THREAD, type(self).model_fields, handler(self), info)
 
 
@@ -282,7 +270,7 @@ class ThreadMetadata(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class LocalPid(BaseModel):
+class LocalPid(pydantic.BaseModel):
   """A process on the trigger-server host, watched via pidfd.
 
   ``exit_file``/``log`` come from a launcher-started wrapper (schedule-trigger
@@ -291,32 +279,32 @@ class LocalPid(BaseModel):
   the bare-pid label, which is also what trigger files written before these
   fields existed load as.
   """
-  kind: Literal[WatchKind.LOCAL_PID] = WatchKind.LOCAL_PID
+  kind: Literal[constants.WatchKind.LOCAL_PID] = constants.WatchKind.LOCAL_PID
   pid: int
   exit_file: str | None = None
   log: str | None = None
 
 
-class RemotePid(BaseModel):
+class RemotePid(pydantic.BaseModel):
   """A process on another host, watched via periodic ssh `kill -0` probes.
 
   ``exit_file``/``log`` play the same role as on LocalPid; the exit file is
   read over ssh at fire time.
   """
-  kind: Literal[WatchKind.REMOTE_PID] = WatchKind.REMOTE_PID
+  kind: Literal[constants.WatchKind.REMOTE_PID] = constants.WatchKind.REMOTE_PID
   host: str
   pid: int
   exit_file: str | None = None
   log: str | None = None
 
 
-class SlurmJob(BaseModel):
+class SlurmJob(pydantic.BaseModel):
   """A SLURM job, watched via `sacct` for its authoritative terminal state.
 
   `host` routes the probe: None runs `sacct` on the trigger-server host, a value
   runs it over `ssh <host>` against that cluster's login node.
   """
-  kind: Literal[WatchKind.SLURM_JOB] = WatchKind.SLURM_JOB
+  kind: Literal[constants.WatchKind.SLURM_JOB] = constants.WatchKind.SLURM_JOB
   host: str | None = None
   job_id: int
 
@@ -324,18 +312,18 @@ class SlurmJob(BaseModel):
 # Discriminated union on `kind`: each variant carries only its own fields, so
 # illegal combinations (a local pid with a host, a slurm job with a pid) are
 # unconstructable.
-WatchTarget = Annotated[LocalPid | RemotePid | SlurmJob, Field(discriminator="kind")]
+WatchTarget = Annotated[LocalPid | RemotePid | SlurmJob, pydantic.Field(discriminator="kind")]
 
 
-class PendingTrigger(BaseModel):
-  id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+class PendingTrigger(pydantic.BaseModel):
+  id: str = pydantic.Field(default_factory=lambda: str(uuid.uuid4()))
   session_id: str
   fire_at: UtcDatetime
   message: str
-  created_at: UtcDatetime = Field(default_factory=utc_now)
+  created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)
   status: TriggerStatus = TriggerStatus.PENDING
   fired_at: UtcDatetime | None = None
-  watch_targets: list[WatchTarget] = Field(default_factory=list)
+  watch_targets: list[WatchTarget] = pydantic.Field(default_factory=list)
   # 'completed' or 'timeout' when fired; the cancel reason ('archived',
   # 'target task is archived', ...) when a delivery path cancelled it.
   fire_reason: str | None = None
@@ -346,7 +334,7 @@ class PendingTrigger(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class MasterRunRecord(BaseModel):
+class MasterRunRecord(pydantic.BaseModel):
   """Identity of one in-flight master turn at restart re-attach.
 
   ``task_execution._resume_manager_turn`` builds the record from the
@@ -360,15 +348,15 @@ class MasterRunRecord(BaseModel):
   raw_log: str  # absolute path to this turn's raw NDJSON transport file
   # Chat events this turn answers, in arrival order: one event on every
   # single-input turn, the whole batch on a merged one.
-  user_event_ids: list[str] = Field(default_factory=list)
+  user_event_ids: list[str] = pydantic.Field(default_factory=list)
 
 
-class SessionMetadata(BaseModel):
+class SessionMetadata(pydantic.BaseModel):
   # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the
   # declared fields and are written back unchanged.
-  model_config = ConfigDict(extra="allow")
+  model_config = pydantic.ConfigDict(extra="allow")
 
-  id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+  id: str = pydantic.Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
@@ -378,7 +366,7 @@ class SessionMetadata(BaseModel):
   work_state: WorkState | None = None
   has_pending_trigger: bool = False
   pending_trigger_count: int = 0
-  next_trigger_at: datetime | None = None
+  next_trigger_at: datetime.datetime | None = None
   has_pending_plan_approval: bool = False
   starred: bool = False
   # Transient runtime fact derived from src.runtime.thinking_state at read time;
@@ -390,9 +378,9 @@ class SessionMetadata(BaseModel):
   # first work Run; readers prefer run_backend and fall back to backend. Never
   # persisted (excluded by session_store.TRANSIENT_METADATA_FIELDS).
   run_backend: str | None = None
-  created_at: UtcDatetime = Field(default_factory=utc_now)
+  created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)
   # The sidebar sort key: records the user's last action on the row; server bookkeeping writes keep it.
-  updated_at: UtcDatetime = Field(default_factory=utc_now)
+  updated_at: UtcDatetime = pydantic.Field(default_factory=utc_now)
   cc_session_id: str | None = None
   cc_session_started_at: UtcDatetime | None = None
   backend: str = ""
@@ -444,7 +432,7 @@ class SessionMetadata(BaseModel):
 
   # Key is the round event id (UUID generated at event write time, or
   # "legacy:<event_index>" for events predating the UUID migration).
-  round_ratings: dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)
+  round_ratings: dict[str, Literal['thumbs_up', 'thumbs_down']] = pydantic.Field(default_factory=dict)
   # Grouping
   group: str | None = None
   # Number of chat events that have been moved out of the live chat_events.jsonl
@@ -452,8 +440,9 @@ class SessionMetadata(BaseModel):
   # archive_offset + line_in_live_file.
   archive_offset: int = 0
 
-  @model_serializer(mode="wrap")
-  def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+  @pydantic.model_serializer(mode="wrap")
+  def _serialize_with_slots(self, handler: pydantic.SerializerFunctionWrapHandler,
+                            info: pydantic.SerializationInfo) -> dict[str, Any]:
     return metadata_slots.arrange(metadata_slot_registration.ON_SESSION, type(self).model_fields, handler(self), info)
 
 
@@ -472,7 +461,7 @@ def validate_session_metadata(data: Any, path: str | None = None) -> SessionMeta
         "run scripts/v1_session_conversion.py")
   try:
     return SessionMetadata.model_validate(data)
-  except ValidationError as exc:
+  except pydantic.ValidationError as exc:
     if path is None:
       raise
     raise ValueError(f"{path}: invalid session metadata: {exc}") from exc
@@ -483,10 +472,10 @@ def validate_session_metadata(data: Any, path: str | None = None) -> SessionMeta
 # ---------------------------------------------------------------------------
 
 
-class CreateSessionRequest(BaseModel):
+class CreateSessionRequest(pydantic.BaseModel):
   # The keys a package registered on the session file ride beside the declared fields; any other key is
   # refused. ``model_extra`` holds them, and create writes them through metadata_slots.set_registered.
-  model_config = ConfigDict(extra="allow")
+  model_config = pydantic.ConfigDict(extra="allow")
 
   name: str | None = None
   backend: str | None = None
@@ -501,19 +490,19 @@ class CreateSessionRequest(BaseModel):
   # group-header "+" create). Stored verbatim, same as set_group stores it.
   group: str | None = None
 
-  @model_validator(mode="after")
+  @pydantic.model_validator(mode="after")
   def _registered_keys_only(self) -> Self:
     metadata_slots.check_registered(metadata_slot_registration.ON_SESSION, self.model_extra or {})
     return self
 
 
-class PatchSessionTaskRequest(BaseModel):
+class PatchSessionTaskRequest(pydantic.BaseModel):
   # v2 PATCH /api/sessions/{id} body: task metadata mutations.
   #
   # Field absence (None + not in model_fields_set) means "no change"; an
   # explicit null clears where clearing is legal (task_parent_id -> root,
   # prompts -> no local rule). Name rides the same PATCH as the rename route.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   name: str | None = None
   task_parent_id: str | None = None
@@ -525,17 +514,17 @@ class PatchSessionTaskRequest(BaseModel):
   node_prompt: str | None = None
 
 
-class AncestorRef(BaseModel):
+class AncestorRef(pydantic.BaseModel):
   # One entry of a session detail's ancestors path (the task-parent chain).
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   id: str
   name: str
 
 
-class SessionRow(BaseModel):
+class SessionRow(pydantic.BaseModel):
   # One task summary row of GET /api/sessions/tree (and the archive/search projection).
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   id: str
   name: str
@@ -565,116 +554,116 @@ class RunRow(RunRecord):
   stop_requested: bool = False
 
 
-class RunPage(BaseModel):
+class RunPage(pydantic.BaseModel):
   # GET /api/sessions/{id}/runs response: one keyset page plus its cursor.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   items: list[RunRow]
   next_cursor: str | None = None
 
 
-class RetryRunRequest(BaseModel):
+class RetryRunRequest(pydantic.BaseModel):
   # POST /api/sessions/{id}/retry body.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   request_id: str
   run_id: str
 
 
-class CompleteTaskRequest(BaseModel):
+class CompleteTaskRequest(pydantic.BaseModel):
   # POST /api/sessions/{id}/complete body: the completion claim (plan 4.1).
   # owner_run_id is NEVER accepted here: an own-run close request takes the
   # verified caller's bound run id, never a spoofable payload field.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   request_id: str
   summary: str = ""
-  result_refs: list[str] = Field(default_factory=list)
-  run_ids: list[str] = Field(default_factory=list)
+  result_refs: list[str] = pydantic.Field(default_factory=list)
+  run_ids: list[str] = pydantic.Field(default_factory=list)
 
 
-class CancelTaskRequest(BaseModel):
+class CancelTaskRequest(pydantic.BaseModel):
   # POST /api/sessions/{id}/cancel body: explicit operator cancellation.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   request_id: str
   reason: str
 
 
-class AcknowledgeTaskInputsRequest(BaseModel):
+class AcknowledgeTaskInputsRequest(pydantic.BaseModel):
   # POST /api/sessions/{id}/task-inputs/acknowledge body: the operator's
   # durable confirmation that exact task inputs were handled out-of-band
   # (the terminal-driven node's normal case). Never a skip-all guard: every
   # id is acknowledged individually, later arrivals still block closure.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   request_id: str
   input_ids: list[str]
   note: str = ""
 
 
-class CancelRunRequest(BaseModel):
+class CancelRunRequest(pydantic.BaseModel):
   # POST /api/sessions/{id}/runs/{run_id}/cancel body.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   request_id: str
 
 
-class RunCancelResponse(BaseModel):
+class RunCancelResponse(pydantic.BaseModel):
   # Run cancel response: outcome is null while a stop is only requested, not observed.
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   run_id: str
   stop_requested: bool
   outcome: RunOutcomeValue | None = None
 
 
-class ForkSessionRequest(BaseModel):
+class ForkSessionRequest(pydantic.BaseModel):
   event_index: int | None = None
   backend: str | None = None
 
 
-class EloneSessionRequest(BaseModel):
+class EloneSessionRequest(pydantic.BaseModel):
   event_index: int
   backend: str | None = None
 
 
-class UploadedFileRef(BaseModel):
+class UploadedFileRef(pydantic.BaseModel):
   filename: str
   path: str
   size: int | None = None
 
 
-class SendMessageRequest(BaseModel):
+class SendMessageRequest(pydantic.BaseModel):
   content: str
-  uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
+  uploaded_files: list[UploadedFileRef] = pydantic.Field(default_factory=list)
   input_mode: str | None = None
 
 
-class SwitchBackendRequest(BaseModel):
+class SwitchBackendRequest(pydantic.BaseModel):
   backend: str
 
 
-class RateRoundRequest(BaseModel):
+class RateRoundRequest(pydantic.BaseModel):
   rating: Literal['thumbs_up', 'thumbs_down'] | None
 
 
-class SetGroupRequest(BaseModel):
+class SetGroupRequest(pydantic.BaseModel):
   group: str | None = None
 
 
-class RenameGroupRequest(BaseModel):
+class RenameGroupRequest(pydantic.BaseModel):
   old_name: str
   new_name: str
 
 
-class DeleteGroupRequest(BaseModel):
+class DeleteGroupRequest(pydantic.BaseModel):
   group: str
 
 
-class DelegateInvocationMetadata(BaseModel):
+class DelegateInvocationMetadata(pydantic.BaseModel):
   """CLI invocation metadata to render delegate handoffs without inlining task specs."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   task_type: TaskType
   repo_path: str | None = None
@@ -685,7 +674,7 @@ class DelegateInvocationMetadata(BaseModel):
   backend: str | None = None
 
 
-class DelegateRequest(BaseModel):
+class DelegateRequest(pydantic.BaseModel):
   """Request body for the internal delegation endpoint.
 
   ``request_id`` is the v2 operation identity: on a task-tree manager it binds
@@ -706,19 +695,19 @@ class DelegateRequest(BaseModel):
   cold_read: ColdReadSpec | None = None
 
 
-class ScheduleTriggerRequest(BaseModel):
+class ScheduleTriggerRequest(pydantic.BaseModel):
   """Request body for the internal schedule-trigger endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   delay_seconds: int
-  message: str = Field(max_length=MAX_TRIGGER_MESSAGE_CHARS)
+  message: str = pydantic.Field(max_length=constants.MAX_TRIGGER_MESSAGE_CHARS)
   watch_targets: list[WatchTarget] | None = None
 
 
-class SessionMessageRequest(BaseModel):
+class SessionMessageRequest(pydantic.BaseModel):
   """Request body for the internal session-message (agent relay) endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str  # caller session (provenance)
   target_session_id: str
@@ -730,7 +719,7 @@ class SessionMessageRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SessionCallbacks:
   """Bundle of session block hooks passed to run_message as a single unit."""
   persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
@@ -746,10 +735,10 @@ class SessionCallbacks:
   persist_account_label: Callable[[str, str], Awaitable[str | None]] | None = None
   # (context_tokens, last_request_at) for the account pool's cold-cache rule;
   # None when the caller wired no pool (tests).
-  context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
+  context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime.datetime | None]]] | None = None
   # The task-tree owner supplies its shared activity verdict for sidebar updates.
   task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
   # Runs after each finished round (session naming today) with the round's config and the session
   # id. Optional so callback bundles built without it (tests) stay valid; the live bundle always
   # sets it.
-  after_round: Callable[[CharlieBotConfig, str], Awaitable[None]] | None = None
+  after_round: Callable[[config.CharlieBotConfig, str], Awaitable[None]] | None = None

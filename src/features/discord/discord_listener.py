@@ -47,7 +47,7 @@ side reads), marks them read, and flags the pending summon the round answers
 (``summon: true``) — and to ack before replying. A mention in a plain text channel starts a
 thread from the mention message (named from the stripped content); a mention
 inside an existing thread summons into that thread. Every Discord id is a
-snowflake, so ids are compared and sorted through ``snowflake_key`` — never as
+snowflake, so ids are compared and sorted through ``discord_client.snowflake_key`` — never as
 strings, whose order flips whenever the digit counts differ.
 
 Thread follow: after the first summon, eligible thread messages (human,
@@ -73,36 +73,15 @@ import uuid
 from typing import TYPE_CHECKING
 
 from src.features.chat_threads import thread_entry
-from src.features.chat_threads.thread_entry import (
-    LINKED_PAGES_LINE,
-    ThreadAdapter,
-    ThreadMessage,
-    ThreadPlatform,
-)
-from src.features.discord.discord_client import (
-    DiscordClient,
-    message_content_intent_enabled,
-    missing_permissions,
-    snowflake_key,
-)
-from src.features.discord.event_types import DISCORD_REPLY
-from src.features.discord.metadata import DiscordOrigin
-from src.infra import timeouts
-from src.infra.config import CharlieBotConfig, get_credentials
-from src.infra.http import get_http_client
-from src.infra.log_once import LazyStructlogLogger
+from src.features.discord import discord_client, event_types, metadata
+from src.infra import config, http, log_once, timeouts
+from src.runtime import session_lifecycle, session_listing, session_store, session_successor, task_execution, triggers
 from src.runtime.session_events import SessionEvents
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_store import SessionStore
-from src.runtime.session_successor import SessionSuccessor
-from src.runtime.task_execution import task_manager
-from src.runtime.triggers import TriggerManager
 
 if TYPE_CHECKING:
   from websockets.asyncio.client import ClientConnection
 
-logger = LazyStructlogLogger()
+logger = log_once.LazyStructlogLogger()
 
 # Gateway intents for the listener: GUILDS (thread/channel events), GUILD_MESSAGES,
 # DIRECT_MESSAGES (DM mentions get the notice) and MESSAGE_CONTENT (reading thread
@@ -155,15 +134,15 @@ _DM_NOTICE = "请在服务器频道里 @ 我。"
 
 # The platform description every shared thread helper takes; each value keeps
 # its one home in the constants above.
-DISCORD = ThreadPlatform(
+DISCORD = thread_entry.ThreadPlatform(
     name="discord",
     display_name="Discord",
-    reply_event_type=DISCORD_REPLY,
+    reply_event_type=event_types.DISCORD_REPLY,
     reply_command=_REPLY_COMMAND,
     max_post_chars=_MAX_POST_CHARS,
     scope_doc="discord_reply_scope.md",
     follow_trigger_prefix=_FOLLOW_TRIGGER_PREFIX,
-    id_key=snowflake_key,
+    id_key=discord_client.snowflake_key,
     origin_field="discord_origin",
     watermark_field="discord_watermark_id",
     id_label="id",
@@ -184,7 +163,7 @@ def summon_session_id(guild_id: str, thread_id: str) -> str:
 
 _PLATFORM_LINE = (
     f"Platform: Discord. Reply command: `{_REPLY_COMMAND} --file <path>`. "
-    f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")
+    f"Per-message limit: {_MAX_POST_CHARS} characters. {thread_entry.LINKED_PAGES_LINE}")
 
 
 def thread_contract_part() -> str:
@@ -227,10 +206,10 @@ def eligible_message(message: dict, allowed_users: dict[str, str]) -> bool:
       author.get("id") in allowed_users)
 
 
-def _bot_client() -> DiscordClient:
+def _bot_client() -> discord_client.DiscordClient:
   """The client every outbound path (reply, notice, backfill) posts through."""
-  creds = get_credentials()
-  return DiscordClient(get_http_client(), bot_token=str(creds.require("discord", "bot_token")))
+  creds = config.get_credentials()
+  return discord_client.DiscordClient(http.get_http_client(), bot_token=str(creds.require("discord", "bot_token")))
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +217,7 @@ def _bot_client() -> DiscordClient:
 # ---------------------------------------------------------------------------
 
 
-class DiscordThreadAdapter(ThreadAdapter):
+class DiscordThreadAdapter(thread_entry.ThreadAdapter):
   """The round side's face onto the Discord REST client.
 
   The client is built lazily — a given one is used as is; without one,
@@ -248,10 +227,10 @@ class DiscordThreadAdapter(ThreadAdapter):
 
   platform = DISCORD
 
-  def __init__(self, client: DiscordClient | None = None) -> None:
+  def __init__(self, client: discord_client.DiscordClient | None = None) -> None:
     self._client = client
 
-  def _ensure_client(self) -> DiscordClient:
+  def _ensure_client(self) -> discord_client.DiscordClient:
     """The bot client every platform call posts through: built once, then reused."""
     if self._client is None:
       self._client = _bot_client()
@@ -267,7 +246,8 @@ class DiscordThreadAdapter(ThreadAdapter):
     await self._ensure_client().remove_own_reaction(
         block["channel_id"], block[self.platform.mention_key], _ACCEPTANCE_EMOJI)
 
-  async def read_eligible(self, origin: DiscordOrigin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+  async def read_eligible(self, origin: metadata.DiscordOrigin,
+                          cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
     """The thread's eligible messages, paged oldest-first through the REST readback.
 
     Discord returns at most 100 messages per call, so the read pages from id
@@ -276,18 +256,20 @@ class DiscordThreadAdapter(ThreadAdapter):
     sorted oldest-first by the client; eligibility is the shared rule.
     """
     client = self._ensure_client()
-    messages: list[ThreadMessage] = []
+    messages: list[thread_entry.ThreadMessage] = []
     after = "0"
     while True:
       page = await client.get_messages(origin.thread_id, after=after, limit=100)
       messages.extend(
-          ThreadMessage(m["id"], m["author"]["id"],
-                        m.get("content") or "") for m in page if eligible_message(m, cfg.discord.allowed_users))
+          thread_entry.ThreadMessage(m["id"], m["author"]["id"],
+                                     m.get("content") or "")
+          for m in page
+          if eligible_message(m, cfg.discord.allowed_users))
       if len(page) < 100:
         return messages
       after = page[-1]["id"]
 
-  def address_of(self, origin: DiscordOrigin) -> dict:
+  def address_of(self, origin: metadata.DiscordOrigin) -> dict:
     return {"guild_id": origin.guild_id, "thread_id": origin.thread_id}
 
   def log_fields(self, address: dict) -> dict:
@@ -320,13 +302,13 @@ def _thread_name(content: str) -> str:
 
 async def handle_message_create(
     message: dict,
-    cfg: CharlieBotConfig,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
-    successor: SessionSuccessor,
-    client: DiscordClient,
-    trigger_mgr: TriggerManager,
+    successor: session_successor.SessionSuccessor,
+    client: discord_client.DiscordClient,
+    trigger_mgr: triggers.TriggerManager,
     *,
     bot_user_id: str,
 ) -> str | None:
@@ -408,7 +390,7 @@ async def handle_message_create(
       trigger_mgr,
       session_id=summon_session_id(guild_id, thread_id),
       label=f"Discord #{parent['name']}",
-      origin=DiscordOrigin(guild_id=guild_id, parent_channel_id=parent_channel_id, thread_id=thread_id),
+      origin=metadata.DiscordOrigin(guild_id=guild_id, parent_channel_id=parent_channel_id, thread_id=thread_id),
       block={
           "guild_id": guild_id,
           "channel_id": channel_id,
@@ -425,7 +407,7 @@ async def handle_message_create(
 # ---------------------------------------------------------------------------
 
 
-async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: SessionStore) -> None:
+async def assert_thread_fresh(session_id: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
@@ -435,7 +417,7 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: Ses
 
 
 async def ack_messages(
-    session_id: str, message_ids: list[str], cfg: CharlieBotConfig, store: SessionStore,
+    session_id: str, message_ids: list[str], cfg: config.CharlieBotConfig, store: session_store.SessionStore,
     session_events: SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
@@ -447,7 +429,8 @@ async def ack_messages(
 
 
 async def post_reply(
-    session_id: str, text: str, cfg: CharlieBotConfig, store: SessionStore, session_events: SessionEvents) -> dict:
+    session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
+    session_events: SessionEvents) -> dict:
   """Post *text* to the session's Discord thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
@@ -458,8 +441,9 @@ async def post_reply(
 
 
 async def deliver_done(
-    session_id: str, done: dict, cfg: CharlieBotConfig, store: SessionStore, lifecycle: SessionLifecycle,
-    session_events: SessionEvents, successor: SessionSuccessor) -> bool:
+    session_id: str, done: dict, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    successor: session_successor.SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
@@ -471,8 +455,9 @@ async def deliver_done(
 
 
 async def backfill_lost_summons(
-    cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore, lifecycle: SessionLifecycle,
-    session_events: SessionEvents, successor: SessionSuccessor) -> int:
+    cfg: config.CharlieBotConfig, listing: session_listing.SessionListing, store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    successor: session_successor.SessionSuccessor) -> int:
   """Boot pass over every Discord session; returns how many notices and nudges it produced.
 
   One-line pass-through to the shared boot audit
@@ -484,8 +469,9 @@ async def backfill_lost_summons(
 
 
 async def _backfill_followed_threads(
-    cfg: CharlieBotConfig, listing: SessionListing, lifecycle: SessionLifecycle, session_events: SessionEvents,
-    client: DiscordClient, trigger_mgr: TriggerManager) -> int:
+    cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
+    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents, client: discord_client.DiscordClient,
+    trigger_mgr: triggers.TriggerManager) -> int:
   """Arm the follow trigger of every followed Discord session holding unread messages; return the count.
 
   Active and archived sessions both ride the backfill: an archived session
@@ -506,7 +492,7 @@ async def _backfill_followed_threads(
 # ---------------------------------------------------------------------------
 
 
-async def _preflight(client: DiscordClient) -> bool:
+async def _preflight(client: discord_client.DiscordClient) -> bool:
   """Check the intent grant and per-guild permissions once per listener start; False means don't start.
 
   Without the Message Content intent every message arrives content-less, so
@@ -515,11 +501,11 @@ async def _preflight(client: DiscordClient) -> bool:
   should, so the loop keeps running either way.
   """
   application = await client.get_current_application()
-  if not message_content_intent_enabled(int(application["flags"])):
+  if not discord_client.message_content_intent_enabled(int(application["flags"])):
     logger.error("discord_listener_message_content_intent_off")
     return False
   for guild in await client.list_current_user_guilds():
-    missing = missing_permissions(int(guild["permissions"]))
+    missing = discord_client.missing_permissions(int(guild["permissions"]))
     if missing:
       logger.error("discord_listener_missing_permissions", guild=guild["id"], missing=missing)
   return True
@@ -557,14 +543,14 @@ async def _connect(url: str) -> ClientConnection:
 async def _run_connection(
     ws: ClientConnection,
     token: str,
-    cfg: CharlieBotConfig,
-    listing: SessionListing,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    listing: session_listing.SessionListing,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
-    successor: SessionSuccessor,
-    client: DiscordClient,
-    trigger_mgr: TriggerManager,
+    successor: session_successor.SessionSuccessor,
+    client: discord_client.DiscordClient,
+    trigger_mgr: triggers.TriggerManager,
 ) -> None:
   """Drive one gateway connection from HELLO to close; every end raises.
 
@@ -573,7 +559,7 @@ async def _run_connection(
   its backoff when a READY had landed). There is no RESUME: every connection
   identifies afresh, and the READY backfill covers anything the gap lost.
   """
-  from websockets.exceptions import ConnectionClosed  # lazy: rides first use with _connect
+  from websockets import exceptions  # lazy: rides first use with _connect
 
   hello = json.loads(await ws.recv())
   if hello.get("op") != 10:
@@ -595,7 +581,7 @@ async def _run_connection(
           return
         acked = False
         await ws.send(json.dumps({"op": 1, "d": last_seq}))
-      except ConnectionClosed:
+      except exceptions.ConnectionClosed:
         return  # the receive loop's exception already reports the dead socket
       await asyncio.sleep(interval_s)  # the next beat — and its ACK check — is one interval away
 
@@ -640,7 +626,7 @@ async def _run_connection(
           logger.info("discord_listener_message_handled", channel=message.get("channel_id"), session=sid)
         except Exception as e:
           logger.exception("discord_listener_message_handle_failed", channel=message.get("channel_id"), error=str(e))
-  except ConnectionClosed as e:
+  except exceptions.ConnectionClosed as e:
     close = e.rcvd if e.rcvd is not None else e.sent
     code = close.code if close is not None else None
     if code in _STOP_CLOSE_CODES:
@@ -654,12 +640,12 @@ async def _run_connection(
 
 
 async def run_listener(
-    cfg: CharlieBotConfig,
-    listing: SessionListing,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    listing: session_listing.SessionListing,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     events: SessionEvents,
-    successor: SessionSuccessor,
+    successor: session_successor.SessionSuccessor,
 ) -> None:
   """Discord gateway connect/receive/reconnect loop; returns only on a stop close code.
 
@@ -669,8 +655,8 @@ async def run_listener(
   connection proved itself.
   """
   client = _bot_client()
-  trigger_mgr = TriggerManager(cfg, task_manager())
-  token = str(get_credentials().require("discord", "bot_token"))
+  trigger_mgr = triggers.TriggerManager(cfg, task_execution.task_manager())
+  token = str(config.get_credentials().require("discord", "bot_token"))
   if not await _preflight(client):
     return
   backoff = 1.0

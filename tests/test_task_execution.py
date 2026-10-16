@@ -760,8 +760,7 @@ async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
     # continuation is refused with the archived sentence, and the operator
     # restore reopens the node for the second run. The archive rides the
     # failed run's delivery chain, so it can land after the terminal fact.
-    await poll_until(
-        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the failed child's archive")
+    await poll_until(lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the failed child's archive")
     relay = client.post(
         "/api/internal/session-message",
         json={
@@ -874,8 +873,7 @@ async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
     # run's delivery chain, so it can land after the terminal fact.
     first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
     assert first_outcome == "failed" and first_run.input_event_ids == []
-    await poll_until(
-        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the first failure's archive")
+    await poll_until(lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the first failure's archive")
     restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
     assert restored.status_code == 200, restored.text
     first_relay = client.post(
@@ -892,8 +890,7 @@ async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
     assert len(agent_messages) == 1 and second_run.input_event_ids == [str(agent_messages[0]["id"])]
     second_run, second_outcome = await wait_for_terminal_run(tree, child_id, second_run.id)
     assert second_outcome == "failed"
-    await poll_until(
-        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the second failure's archive")
+    await poll_until(lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the second failure's archive")
     restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
     assert restored.status_code == 200, restored.text
     second_relay = client.post(
@@ -1523,13 +1520,19 @@ async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_ope
   # that turn so no unstubbed build outlives the test.
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
   gate = asyncio.Event()
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("review ok")], gate=gate.wait)])
+  install_worker_launch_and_resume_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("review ok")], gate=gate.wait)])
 
   work = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(work, task_spec_text=task_spec["goal"])
   await tree.dispatch.finish_run(worker.id, "run-work", outcome="success", exit_code=0)
   review = RunRecord(
-      id="run-review-1", session_id=worker.id, kind="review", review_of_run_id="run-work", backend="fake2", model="fake2-model")
+      id="run-review-1",
+      session_id=worker.id,
+      kind="review",
+      review_of_run_id="run-work",
+      backend="fake2",
+      model="fake2-model")
   await tree.runs.register_run(review, task_spec_text="review of work run run-work")
   await tree.dispatch.finish_run(worker.id, "run-review-1", outcome="failed", exit_code=1)
 

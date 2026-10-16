@@ -46,7 +46,6 @@ from tests.test_task_execution import (
     build_pooled_env,
     build_spawning_env,
     result_event,
-    wait_for_terminal_run,
 )
 
 
@@ -438,22 +437,29 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   reports = blocked_reports(tree, manager.id)
   assert len(reports) == 1
   assert "withheld" in str(reports[0]["summary"])
-  # The retained pending request: the queued step Run with no terminal fact.
+  # The retained pending request: the queued step Run with no terminal fact,
+  # settled by the closed node's one system stop request.
   runs = tree.runs.list_run_records_sync(leaf.id)
   assert len(runs) == 1
   assert runs[0].pid is None
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf.id), runs[0].id) is None
   assert builds == []
-  # A replayed reconciliation after the precondition clears (the leaf reopens)
-  # launches the SAME step run (no duplicate) — no second report.
+  events = tree.runs.load_events_sync(leaf.id)
+  stops = [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED and e.get("run_id") == runs[0].id]
+  assert len(stops) == 1 and stops[0]["request_id"] == f"closed-task:{runs[0].id}"
+  # The stop request holds across the leaf's reopen: the replayed
+  # reconciliation re-drives the same queued run and the durable stop refuses
+  # the launch — no process, no terminal fact, no duplicate run.
   await reopen_task_node(tree, leaf.id, "clear-leaf")
   assert tree.task_state(leaf.id) == "open"
   builds2 = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("first done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   await asyncio.wait_for(cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id), 20)
-  await wait_for_terminal_run(tree, leaf.id, runs[0].id, timeout=15.0)
-  assert len(builds2) == 1
-  assert len(tree.runs.list_run_records_sync(leaf.id)) == 1
+  runs_after = tree.runs.list_run_records_sync(leaf.id)
+  assert len(runs_after) == 1
+  assert runs_after[0].pid is None
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf.id), runs_after[0].id) is None
+  assert builds2 == []
 
 
 @pytest.mark.asyncio

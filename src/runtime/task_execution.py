@@ -231,6 +231,16 @@ def is_out_of_space_error(exc: BaseException) -> bool:
   return False
 
 
+def closed_task_stop_request_id(run_id: str) -> str:
+  """The stop-request id settling a never-launched Run on a closed node.
+
+  The launch path's closed-task withhold and the startup reconcile derive
+  the same id, so a Run both paths settle still carries exactly one
+  run_stop_requested fact.
+  """
+  return f"closed-task:{run_id}"
+
+
 def free_disk_gib(path: Path) -> float:
   """Free bytes on the filesystem holding *path*, in GiB.
 
@@ -777,16 +787,22 @@ class TaskExecutionAdapter:
         withheld launch records its durable ``run_launch_withheld`` event on
         the node — task closed, a durable stop request, or prompt assembly
         failed — and one blocked child report to the parent (once per run and
-        reason, by stable id). An exception escaping before the adapter was
+        reason, by stable id). A closed-task withhold also settles the
+        never-launched Run with its durable stop request (request id
+        ``closed-task:<run id>``), the state the archive check and the
+        dispatch already read as resolved; every other withhold reason
+        leaves the Run queued without one. An exception escaping before the
+        adapter was
         entered is a
         failed-to-start launch: the caller's settlement sees it, never an
         endless wait.
         """
     tree = self._tree
-    # The withheld verdict (closed node or durable stop) is recorded after
-    # the lock releases: the durable record and the parent report take the
-    # lock themselves.
-    withheld: tuple[SessionMetadata, RunRecord, str] | None = None
+    # The withheld verdict (closed node, durable stop, or disk headroom) is
+    # recorded after the lock releases: the durable record and the parent
+    # report take the lock themselves. The last tuple field marks the
+    # closed-task withhold, whose Run the stop request settles below.
+    withheld: tuple[SessionMetadata, RunRecord, str, bool] | None = None
     async with tree.control_lock:
       meta = await tree.load_task_meta(session_id)
       run = await tree.runs.get_run(session_id, run_id)
@@ -796,7 +812,7 @@ class TaskExecutionAdapter:
       if state != "open":
         reason = f"task {session_id} is {state}"
         log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
-        withheld = (meta, run, reason)
+        withheld = (meta, run, reason, True)
       else:
         await tree._require_open_ancestry(session_id)
         events = tree.runs.load_events_sync(session_id)
@@ -806,7 +822,7 @@ class TaskExecutionAdapter:
         if tree.runs.stop_requested(events, run_id):
           reason = f"run {run_id} has a durable stop request"
           log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
-          withheld = (meta, run, reason)
+          withheld = (meta, run, reason, False)
         else:
           # Trade-off 1: worker-class runs are the write-heavy launches
           # (environment installs, test runs) — below the configured free-space
@@ -817,10 +833,13 @@ class TaskExecutionAdapter:
             reason = self._disk_headroom_withhold_reason()
             if reason is not None:
               log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
-              withheld = (meta, run, reason)
+              withheld = (meta, run, reason, False)
     if withheld is not None:
-      meta, run, reason = withheld
-      return await self._record_launch_withheld(meta, run, reason)
+      meta, run, reason, settle = withheld
+      verdict = await self._record_launch_withheld(meta, run, reason)
+      if settle:
+        await tree.runs.request_stop(session_id, run.id, closed_task_stop_request_id(run.id))
+      return verdict
     # Backend resolution is the first post-admission act: an exception here
     # is a launch failure on an ADMITTED run and lands the run's durable
     # failure (terminal fact, error evidence, after-run) before it
@@ -2560,6 +2579,20 @@ async def _reconcile_node(
       # request and claims nothing); a launched run is identity-checked,
       # signalled, and its observed exit lands as the terminal fact.
       await tree.runs.reconcile_stop_request(session_id, run.id)
+
+  # A queued run on a non-open node never launches, and without a stop
+  # request it sits queued forever and blocks the node's archive. The
+  # request id is the launch path's, so a run both paths settle carries one
+  # fact; the pass records it before the replay and dispatch below run.
+  if tree.task_state(session_id) != "open":
+    for run in run_records:
+      if run.pid is not None:
+        continue
+      if tree.runs.run_has_terminal_fact(run, events):
+        continue
+      if tree.runs.stop_requested(events, run.id):
+        continue
+      await tree.runs.request_stop(session_id, run.id, closed_task_stop_request_id(run.id))
 
   # --- 2. launched, non-terminal Runs re-attach or drain -----------------
   for run in run_records:

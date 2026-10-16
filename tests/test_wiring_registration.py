@@ -9,9 +9,9 @@ exist only while its line is in PACKAGES.
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
-from pathlib import Path
 
 import conftest
 import pytest
@@ -19,7 +19,7 @@ import uvicorn
 
 import server
 from src.app import registrations
-from src.infra.config import CharlieBotConfig
+from src.infra import config
 from src.runtime import templating, v1_sessions
 from src.runtime.hooks import page_render, wiring
 
@@ -88,17 +88,18 @@ def test_a_second_registration_of_one_name_raises() -> None:
 
 
 def _run_server_main(
-    monkeypatch: pytest.MonkeyPatch, cfg: CharlieBotConfig, events: list[str], check_error: ValueError | None) -> None:
+    monkeypatch: pytest.MonkeyPatch, cfg: config.CharlieBotConfig, events: list[str],
+    check_error: ValueError | None) -> None:
   """Run server.main() against *cfg* with one recording startup check and a recording uvicorn.run;
   *events* receives their calls in run order."""
 
-  def recording_check(_cfg: CharlieBotConfig) -> None:
+  def recording_check(_cfg: config.CharlieBotConfig) -> None:
     events.append("startup_check")
     if check_error is not None:
       raise check_error
 
-  monkeypatch.setattr(server, "apply_agent_environment", lambda: None)
-  monkeypatch.setattr(server, "get_config", lambda: cfg)
+  monkeypatch.setattr(server.agent_environment, "apply_agent_environment", lambda: None)
+  monkeypatch.setattr(server.config, "get_config", lambda: cfg)
   monkeypatch.setattr(server.wiring, "startup_checks", lambda: [recording_check])
   monkeypatch.setattr(uvicorn, "run", lambda *_args, **_kwargs: events.append("uvicorn.run"))
   server.main()
@@ -109,14 +110,14 @@ def test_server_main_stops_on_an_empty_backend_catalog_before_any_startup_check(
   events: list[str] = []
 
   with pytest.raises(ValueError, match=r"backends\.options"):
-    _run_server_main(monkeypatch, CharlieBotConfig(), events, None)
+    _run_server_main(monkeypatch, config.CharlieBotConfig(), events, None)
 
   assert events == []
 
 
 def test_server_main_serves_only_after_every_startup_check_passes(monkeypatch: pytest.MonkeyPatch) -> None:
   option = conftest.backend_option(id="claude-opus", label="Opus", type="cc-claude", model="m")
-  cfg = CharlieBotConfig(backends={"options": [option]})
+  cfg = config.CharlieBotConfig(backends={"options": [option]})
   passed: list[str] = []
   stopped: list[str] = []
 
@@ -147,7 +148,7 @@ backends:
 """
 
 
-async def _write_home_with_sessions(tmp_path: Path, *, v1_count: int) -> Path:
+async def _write_home_with_sessions(tmp_path: pathlib.Path, *, v1_count: int) -> pathlib.Path:
   """A home on disk with two task-tree sessions and *v1_count* sessions whose metadata has no profile."""
   cfg, _, tree = conftest.build_env(tmp_path)
   cfg.charliebot_home.mkdir(parents=True, exist_ok=True)
@@ -164,7 +165,7 @@ async def _write_home_with_sessions(tmp_path: Path, *, v1_count: int) -> Path:
   return cfg.charliebot_home
 
 
-def _start_server_main(home: Path) -> subprocess.CompletedProcess:
+def _start_server_main(home: pathlib.Path) -> subprocess.CompletedProcess:
   return subprocess.run(
       [sys.executable, "-c", START_PROBE],
       cwd=conftest.ROOT,
@@ -180,7 +181,8 @@ def _start_server_main(home: Path) -> subprocess.CompletedProcess:
 @pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.parametrize("v1_count", [1, 3])
-async def test_server_main_refuses_a_home_with_v1_sessions_before_it_serves(tmp_path: Path, v1_count: int) -> None:
+async def test_server_main_refuses_a_home_with_v1_sessions_before_it_serves(
+    tmp_path: pathlib.Path, v1_count: int) -> None:
   home = await _write_home_with_sessions(tmp_path, v1_count=v1_count)
 
   result = _start_server_main(home)
@@ -196,7 +198,7 @@ async def test_server_main_refuses_a_home_with_v1_sessions_before_it_serves(tmp_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_server_main_serves_a_home_without_v1_sessions(tmp_path: Path) -> None:
+async def test_server_main_serves_a_home_without_v1_sessions(tmp_path: pathlib.Path) -> None:
   home = await _write_home_with_sessions(tmp_path, v1_count=0)
 
   result = _start_server_main(home)
@@ -205,7 +207,7 @@ async def test_server_main_serves_a_home_without_v1_sessions(tmp_path: Path) -> 
   assert result.stdout.splitlines()[-1] == "SERVING"
 
 
-def test_count_v1_sessions_reads_the_profile_key_of_published_sessions_only(tmp_path: Path) -> None:
+def test_count_v1_sessions_reads_the_profile_key_of_published_sessions_only(tmp_path: pathlib.Path) -> None:
   sessions_dir = tmp_path / "sessions"
   files = {
       "with-profile": {
@@ -277,7 +279,7 @@ print(json.dumps({{
 """
 
 
-def probe_diff_page(deleted_package: str, home: Path) -> dict:
+def probe_diff_page(deleted_package: str, home: pathlib.Path) -> dict:
   probe = subprocess.run(
       [sys.executable, "-c", DIFF_PROBE.format(deleted=deleted_package)],
       cwd=conftest.ROOT,
@@ -293,7 +295,7 @@ def probe_diff_page(deleted_package: str, home: Path) -> dict:
 
 
 @pytest.mark.integration  # the probe is a fresh interpreter importing the server
-def test_the_diff_page_renders_without_the_code_server_package(tmp_path: Path) -> None:
+def test_the_diff_page_renders_without_the_code_server_package(tmp_path: pathlib.Path) -> None:
   without_package = probe_diff_page("src.features.code_server", tmp_path / "home")
 
   assert without_package == {"status": 200, "button": False, "global": False}
@@ -314,7 +316,7 @@ print(json.dumps({{"status": response.status_code, "body": response.text}}))
 
 
 @pytest.mark.integration  # the probe is a fresh interpreter importing the server
-def test_a_session_artifact_page_is_a_plain_file_without_the_artifacts_package(tmp_path: Path) -> None:
+def test_a_session_artifact_page_is_a_plain_file_without_the_artifacts_package(tmp_path: pathlib.Path) -> None:
   home = tmp_path / "home"
   page = home / "sessions" / "S" / "artifacts" / "plan_01.html"
   page.parent.mkdir(parents=True)
@@ -346,7 +348,7 @@ def test_a_second_registration_of_one_template_global_raises() -> None:
   assert page_render.template_globals() == globals_before
 
 
-def test_one_template_name_in_two_directories_raises(tmp_path: Path) -> None:
+def test_one_template_name_in_two_directories_raises(tmp_path: pathlib.Path) -> None:
   first, second = tmp_path / "first", tmp_path / "second"
   for directory in (first, second):
     (directory / "partials").mkdir(parents=True)

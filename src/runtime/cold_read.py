@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pathlib
 
-from src.runtime.spawner_prompt import load_marker_sections
+from src.runtime import spawner_prompt
 
 PROMPT_FILENAME = "cold_read.md"
 _SYSTEM_SECTION = "system_prompt"
@@ -35,7 +35,7 @@ def load_texts(repo: pathlib.Path) -> tuple[str, str]:
   The marker section keeps the file's own trailing newline out of both texts,
   so the probe input stays byte-identical to the pre-file constants.
   """
-  sections = load_marker_sections(
+  sections = spawner_prompt.load_marker_sections(
       repo / "prompts" / PROMPT_FILENAME, (_SYSTEM_SECTION, _QUESTIONS_SECTION), extraction="cold-read")
   return sections[_SYSTEM_SECTION].rstrip("\n"), sections[_QUESTIONS_SECTION].rstrip("\n")
 

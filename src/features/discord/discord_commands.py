@@ -27,7 +27,7 @@ from src.features.discord import discord_client, discord_listener, metadata
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
 from src.runtime import session_events, session_store
-from src.runtime.api.message_utils import master_done_input_event_ids
+from src.runtime.api import message_utils
 
 
 def _message_view(message: dict, *, unread: bool, summon: bool, allowed_users: dict[str, str]) -> dict:
@@ -70,7 +70,7 @@ def _pending_summon_mention_ids(events: list[dict]) -> set[str]:
   backfill_key = discord_listener.DISCORD.backfill_key
   for ev in events:
     if ev.get("type") == ET.MASTER_DONE:
-      answered.update(master_done_input_event_ids(ev))
+      answered.update(message_utils.master_done_input_event_ids(ev))
     elif backfill_key in ev:
       marked.add(ev[backfill_key].get(ET.INPUT_EVENT_ID))
   pending: set[str] = set()

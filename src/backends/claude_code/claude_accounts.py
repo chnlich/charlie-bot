@@ -31,38 +31,27 @@ selection reads all of ``accounts.claude``.
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import json
 import os
+import pathlib
 import shutil
 from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.backends.claude_code.claude_config import ClaudeAccount
-from src.backends.claude_code.login_dirs import CREDENTIALS_FILE, claude_config_dir
-from src.backends.claude_code.options import CcClaudeBackend
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import BackendOption
-from src.runtime.hooks.usage_sources import (
-    PANEL_FETCHED_AT,
-    PANEL_RESETS_AT,
-    PANEL_SCOPE_LABEL,
-    PANEL_UTILIZATION,
-    PANEL_WINDOWS,
-    panel_window_expired,
-    parse_iso_utc,
-)
-from src.runtime.model_family import model_family
+from src.backends.claude_code import claude_config, login_dirs, options
+from src.infra import log_once, models
+from src.runtime import model_family
+from src.runtime.hooks import usage_sources
 
 # future-annotations keep every cfg: CharlieBotConfig hint unevaluated, so the config
 # model stack stays out of this module's import.
 if TYPE_CHECKING:
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Resume domain shared by every pooled cc-claude entry (continuation_domain below):
 # Fable, Opus and Sonnet switch in place inside the pool without touching accounts.
@@ -74,18 +63,18 @@ WARNING_UTILIZATION = 0.90
 
 # An account whose last authentication failure is younger than this is skipped:
 # a failed OAuth refresh is not cleared by retrying within minutes.
-AUTH_FAILURE_COOLDOWN = timedelta(minutes=15)
+AUTH_FAILURE_COOLDOWN = datetime.timedelta(minutes=15)
 
 # The two binding windows every ``rate_limit_event`` carries under
 # ``unifiedWindows``; the overage window is not a limit on the subscription.
 _EVENT_WINDOWS = ("five_hour", "seven_day")
 
 # A rejected event without ``resetsAt`` keeps the account out for this long.
-_REJECTED_WITHOUT_RESET = timedelta(hours=1)
+_REJECTED_WITHOUT_RESET = datetime.timedelta(hours=1)
 
 # Last-active timestamp of an account with no event reading: a never-active
 # account sorts before every active one.
-_NEVER_ACTIVE = datetime.min.replace(tzinfo=UTC)
+_NEVER_ACTIVE = datetime.datetime.min.replace(tzinfo=datetime.UTC)
 
 # A live window that resets within a day earns its account up to
 # ``_RESET_BONUS_SCALE`` of bonus headroom: quota about to lapse is spent
@@ -98,7 +87,7 @@ _RESET_BONUS_MIN_HEADROOM = 0.10
 _SCORE_TIE = 0.02
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class RateLimitReading:
   """Newest utilization known for one account, from either reading source.
 
@@ -107,9 +96,9 @@ class RateLimitReading:
   weekly bucket. ``rejected_until`` is the reset time of a rejected
   ``rate_limit_event``; None for every other reading.
   """
-  at: datetime
+  at: datetime.datetime
   utilization: float
-  rejected_until: datetime | None = None
+  rejected_until: datetime.datetime | None = None
 
 
 # Newest ``rate_limit_event`` per account label, written by the master and
@@ -119,7 +108,7 @@ _event_readings: dict[str, RateLimitReading] = {}
 # scoped windows were folded for ("" = plan-wide only), written by the Claude quota account.
 _panel_readings: dict[str, dict[str, Any]] = {}
 # Time of the last authentication failure per account label.
-_auth_failures: dict[str, datetime] = {}
+_auth_failures: dict[str, datetime.datetime] = {}
 # Accounts already reported as needing a login, cleared when they recover.
 _login_notified: set[str] = set()
 
@@ -132,9 +121,9 @@ def reset_for_tests() -> None:
   _login_notified.clear()
 
 
-def now_or(now: datetime | None) -> datetime:
+def now_or(now: datetime.datetime | None) -> datetime.datetime:
   """The injected clock, or the wall clock when the caller passed none."""
-  return now if now is not None else datetime.now(UTC)
+  return now if now is not None else datetime.datetime.now(datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -142,15 +131,15 @@ def now_or(now: datetime | None) -> datetime:
 # ---------------------------------------------------------------------------
 
 
-def pool(cfg: CharlieBotConfig) -> list[ClaudeAccount]:
+def pool(cfg: config.CharlieBotConfig) -> list[claude_config.ClaudeAccount]:
   """The configured accounts with ``config_dir`` expanded to an absolute path."""
   return [
-      ClaudeAccount(label=account.label, config_dir=str(Path(account.config_dir).expanduser()))
+      claude_config.ClaudeAccount(label=account.label, config_dir=str(pathlib.Path(account.config_dir).expanduser()))
       for account in cfg.accounts.claude
   ]
 
 
-def is_pooled(option: BackendOption, cfg: CharlieBotConfig) -> bool:
+def is_pooled(option: models.BackendOption, cfg: config.CharlieBotConfig) -> bool:
   """True when *option* draws its login from the pool.
 
   A cc-claude entry has no login field of its own: a non-empty ``accounts.claude``
@@ -160,12 +149,12 @@ def is_pooled(option: BackendOption, cfg: CharlieBotConfig) -> bool:
   return option.type == "cc-claude" and bool(cfg.accounts.claude)
 
 
-def option_pool(option: BackendOption) -> str | None:
+def option_pool(option: models.BackendOption) -> str | None:
   """The named pool *option* draws its login from; None when the option type carries no pool."""
-  return option.account_pool if isinstance(option, CcClaudeBackend) else None
+  return option.account_pool if isinstance(option, options.CcClaudeBackend) else None
 
 
-def pool_accounts(cfg: CharlieBotConfig, name: str | None) -> list[ClaudeAccount]:
+def pool_accounts(cfg: config.CharlieBotConfig, name: str | None) -> list[claude_config.ClaudeAccount]:
   """The accounts of pool *name*, or every configured account when *name* is None.
 
   A named pool holds the accounts its ``claude_pools`` labels list; a name
@@ -178,20 +167,20 @@ def pool_accounts(cfg: CharlieBotConfig, name: str | None) -> list[ClaudeAccount
   return [account for account in pool(cfg) if account.label in members]
 
 
-def in_pool(cfg: CharlieBotConfig, label: str, name: str | None) -> bool:
+def in_pool(cfg: config.CharlieBotConfig, label: str, name: str | None) -> bool:
   """Whether *label* is one of pool *name*'s accounts; every label is when *name* is None."""
   if name is None:
     return True
   return label in cfg.accounts.claude_pools[name]
 
 
-def account_by_label(cfg: CharlieBotConfig, label: str | None) -> ClaudeAccount | None:
+def account_by_label(cfg: config.CharlieBotConfig, label: str | None) -> claude_config.ClaudeAccount | None:
   if not label:
     return None
   return next((account for account in pool(cfg) if account.label == label), None)
 
 
-def continuation_domain(option: BackendOption, cfg: CharlieBotConfig) -> str:
+def continuation_domain(option: models.BackendOption, cfg: config.CharlieBotConfig) -> str:
   """The continuation domain *option* belongs to: the backends that can continue
   each other's native conversation.
 
@@ -209,11 +198,11 @@ def continuation_domain(option: BackendOption, cfg: CharlieBotConfig) -> str:
   if option.type == "cc-claude":
     if is_pooled(option, cfg):
       return POOL_DOMAIN
-    return str(claude_config_dir())
+    return str(login_dirs.claude_config_dir())
   return option.id
 
 
-def same_continuation_domain(current_id: str, target_id: str, cfg: CharlieBotConfig) -> bool:
+def same_continuation_domain(current_id: str, target_id: str, cfg: config.CharlieBotConfig) -> bool:
   """True when the two configured backend ids share one continuation domain.
 
   False when either id is not a configured option: an unknown id has no domain
@@ -231,14 +220,14 @@ def same_continuation_domain(current_id: str, target_id: str, cfg: CharlieBotCon
 # ---------------------------------------------------------------------------
 
 
-def credentials_present(account: ClaudeAccount) -> bool:
+def credentials_present(account: claude_config.ClaudeAccount) -> bool:
   """True when the login's credential file carries a non-empty access token.
 
   A failed OAuth refresh can rewrite the file with both tokens emptied while the
   metadata survives, so the token field itself is the test;
   a missing or unreadable file counts as absent credentials.
   """
-  path = Path(account.config_dir) / CREDENTIALS_FILE
+  path = pathlib.Path(account.config_dir) / login_dirs.CREDENTIALS_FILE
   try:
     data = json.loads(path.read_text(encoding="utf-8"))
   except (OSError, ValueError):
@@ -247,12 +236,12 @@ def credentials_present(account: ClaudeAccount) -> bool:
   return bool(isinstance(oauth, dict) and oauth.get("accessToken"))
 
 
-def record_auth_failure(label: str, now: datetime | None = None) -> None:
+def record_auth_failure(label: str, now: datetime.datetime | None = None) -> None:
   """Remember that a process on *label* failed to authenticate at *now*."""
   _auth_failures[label] = now_or(now)
 
 
-def auth_failed_recently(label: str, now: datetime | None) -> bool:
+def auth_failed_recently(label: str, now: datetime.datetime | None) -> bool:
   failed_at = _auth_failures.get(label)
   return failed_at is not None and now_or(now) - failed_at < AUTH_FAILURE_COOLDOWN
 
@@ -269,7 +258,7 @@ def login_notice_due(label: str, *, unhealthy: bool) -> bool:
   return True
 
 
-def healthy(account: ClaudeAccount, now: datetime | None = None) -> bool:
+def healthy(account: claude_config.ClaudeAccount, now: datetime.datetime | None = None) -> bool:
   """An account with credentials on disk and no authentication failure in the cooldown."""
   return credentials_present(account) and not auth_failed_recently(account.label, now)
 
@@ -279,7 +268,7 @@ def healthy(account: ClaudeAccount, now: datetime | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def observe_rate_limit(label: str, info: dict, now: datetime | None = None) -> RateLimitReading | None:
+def observe_rate_limit(label: str, info: dict, now: datetime.datetime | None = None) -> RateLimitReading | None:
   """Fold one ``rate_limit_info`` payload into the account's newest event reading.
 
   Returns the reading stored, or None when the payload carries neither a
@@ -297,11 +286,11 @@ def observe_rate_limit(label: str, info: dict, now: datetime | None = None) -> R
   rejected = info.get("status") == "rejected"
   if not values and not rejected:
     return None
-  rejected_until: datetime | None = None
+  rejected_until: datetime.datetime | None = None
   if rejected:
     resets_at = info.get("resetsAt")
     if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool):
-      rejected_until = datetime.fromtimestamp(float(resets_at), UTC)
+      rejected_until = datetime.datetime.fromtimestamp(float(resets_at), datetime.UTC)
     else:
       rejected_until = moment + _REJECTED_WITHOUT_RESET
   reading = RateLimitReading(at=moment, utilization=max(values) if values else 1.0, rejected_until=rejected_until)
@@ -315,20 +304,21 @@ def observe_usage_panel(label: str, usage: dict) -> None:
   Panel utilizations are percentages; they are kept as reported and scaled when
   read, together with the ``scope_label`` that names a model-scoped window.
   """
-  windows = usage.get(PANEL_WINDOWS) if isinstance(usage, dict) else None
+  windows = usage.get(usage_sources.PANEL_WINDOWS) if isinstance(usage, dict) else None
   if not isinstance(windows, list):
     return
-  fetched_at = usage.get(PANEL_FETCHED_AT)
+  fetched_at = usage.get(usage_sources.PANEL_FETCHED_AT)
   try:
-    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else datetime.now(UTC)
+    at = datetime.datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else datetime.datetime.now(
+        datetime.UTC)
   except ValueError:
-    at = datetime.now(UTC)
+    at = datetime.datetime.now(datetime.UTC)
   if at.tzinfo is None:
-    at = at.replace(tzinfo=UTC)
-  _panel_readings[label] = {"at": at, PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}
+    at = at.replace(tzinfo=datetime.UTC)
+  _panel_readings[label] = {"at": at, usage_sources.PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}
 
 
-def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str, Any]]:
+def _live_windows(label: str, model: str | None, now: datetime.datetime) -> list[dict[str, Any]]:
   """The stored panel windows of *label* that are live at *now* and readable by *model*.
 
   Windows the shared ``panel_window_expired`` rule marks expired are dropped,
@@ -339,26 +329,26 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
   stored = _panel_readings.get(label)
   if stored is None:
     return []
-  family = model_family(model)
+  family = model_family.model_family(model)
   live: list[dict[str, Any]] = []
-  for window in stored[PANEL_WINDOWS]:
-    if panel_window_expired(window, stored["at"], now):
+  for window in stored[usage_sources.PANEL_WINDOWS]:
+    if usage_sources.panel_window_expired(window, stored["at"], now):
       continue
-    scope = window.get(PANEL_SCOPE_LABEL)
+    scope = window.get(usage_sources.PANEL_SCOPE_LABEL)
     if scope and not (family and family in str(scope).lower()):
       continue
     live.append(window)
   return live
 
 
-def _panel_reading(label: str, model: str | None, now: datetime | None) -> RateLimitReading | None:
+def _panel_reading(label: str, model: str | None, now: datetime.datetime | None) -> RateLimitReading | None:
   """The panel reading folded for *model* over its live windows."""
   stored = _panel_readings.get(label)
   if stored is None:
     return None
   values: list[float] = []
   for window in _live_windows(label, model, now_or(now)):
-    value = window.get(PANEL_UTILIZATION)
+    value = window.get(usage_sources.PANEL_UTILIZATION)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
       values.append(float(value) / 100.0)
   if not values:
@@ -366,7 +356,7 @@ def _panel_reading(label: str, model: str | None, now: datetime | None) -> RateL
   return RateLimitReading(at=stored["at"], utilization=max(values))
 
 
-def latest_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
+def latest_reading(label: str, model: str | None, now: datetime.datetime | None = None) -> RateLimitReading | None:
   """The account's effective reading for *model*: its windows fused orthogonally.
 
   A live model-scoped panel window (the Fable weekly bucket) is never masked by
@@ -379,7 +369,8 @@ def latest_reading(label: str, model: str | None, now: datetime | None = None) -
   """
   moment = now_or(now)
   general = _newest_reading(_event_readings.get(label), _panel_reading(label, None, moment))
-  if model is None or not any(window.get(PANEL_SCOPE_LABEL) for window in _live_windows(label, model, moment)):
+  if model is None or not any(window.get(usage_sources.PANEL_SCOPE_LABEL)
+                              for window in _live_windows(label, model, moment)):
     return general
   scoped = _panel_reading(label, model, moment)
   if scoped is None:
@@ -400,7 +391,7 @@ def _newest_reading(*readings: RateLimitReading | None) -> RateLimitReading | No
   return max(present, key=lambda reading: reading.at) if present else None
 
 
-def headroom(label: str, model: str | None, now: datetime | None) -> float:
+def headroom(label: str, model: str | None, now: datetime.datetime | None) -> float:
   """Remaining share of the tightest window, 0 while a rejection's reset is ahead.
 
   An account nobody has read yet scores a full window: it is tried first and
@@ -415,14 +406,14 @@ def headroom(label: str, model: str | None, now: datetime | None) -> float:
 
 
 def select(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     model: str | None,
     exclude: Iterable[str] = (),
     busy_accounts: AbstractSet[str] | None = None,
-    now: datetime | None = None,
+    now: datetime.datetime | None = None,
     account_pool: str | None = None,
     min_headroom: float = 0.0,
-) -> ClaudeAccount | None:
+) -> claude_config.ClaudeAccount | None:
   """The healthy account with the most headroom for *model*, ranked statelessly.
 
   The score is headroom plus a bonus for a window that resets within a day --
@@ -443,7 +434,7 @@ def select(
   """
   moment = now_or(now)
   excluded = set(exclude)
-  available: list[tuple[ClaudeAccount, float]] = []
+  available: list[tuple[claude_config.ClaudeAccount, float]] = []
   for account in pool_accounts(cfg, account_pool):
     if account.label in excluded or not healthy(account, moment):
       continue
@@ -460,11 +451,11 @@ def select(
 
 
 def cool_destination(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     model: str | None,
     account_pool: str | None = None,
-    now: datetime | None = None,
-) -> ClaudeAccount | None:
+    now: datetime.datetime | None = None,
+) -> claude_config.ClaudeAccount | None:
   """The best account strictly below the warning line for *model*, or None.
 
   ``select`` at the armed-safe-point bar (headroom above ``1 - WARNING_UTILIZATION``),
@@ -477,13 +468,13 @@ def cool_destination(
   return select(cfg, model, now=now, account_pool=account_pool, min_headroom=1.0 - WARNING_UTILIZATION)
 
 
-def _last_active_at(label: str) -> datetime:
+def _last_active_at(label: str) -> datetime.datetime:
   """When the account's newest rate-limit event was read; a never-active account sorts first."""
   reading = _event_readings.get(label)
   return reading.at if reading is not None else _NEVER_ACTIVE
 
 
-def _time_to_reset(label: str, model: str | None, now: datetime) -> float | None:
+def _time_to_reset(label: str, model: str | None, now: datetime.datetime) -> float | None:
   """Seconds until the binding panel window for *model* resets, or None when unknown.
 
   The binding window is the live window with the highest utilization -- the one
@@ -493,18 +484,18 @@ def _time_to_reset(label: str, model: str | None, now: datetime) -> float | None
   """
   limiting: tuple[float, dict[str, Any]] | None = None
   for window in _live_windows(label, model, now):
-    value = window.get(PANEL_UTILIZATION)
+    value = window.get(usage_sources.PANEL_UTILIZATION)
     if not isinstance(value, (int, float)) or isinstance(value, bool):
       continue
     if limiting is None or float(value) > limiting[0]:
       limiting = (float(value), window)
   if limiting is None:
     return None
-  resets_at = parse_iso_utc(limiting[1].get(PANEL_RESETS_AT))
+  resets_at = usage_sources.parse_iso_utc(limiting[1].get(usage_sources.PANEL_RESETS_AT))
   return (resets_at - now).total_seconds() if resets_at is not None else None
 
 
-def _reset_bonus(label: str, model: str | None, moment: datetime, headroom_left: float) -> float:
+def _reset_bonus(label: str, model: str | None, moment: datetime.datetime, headroom_left: float) -> float:
   """Bonus for a live window that resets within a day: spend the quota before it lapses."""
   if headroom_left <= _RESET_BONUS_MIN_HEADROOM:
     return 0.0
@@ -514,7 +505,10 @@ def _reset_bonus(label: str, model: str | None, moment: datetime, headroom_left:
   return _RESET_BONUS_SCALE * (1.0 - ttr / _RESET_BONUS_HORIZON)
 
 
-def earliest_reset(cfg: CharlieBotConfig, now: datetime | None, account_pool: str | None = None) -> datetime | None:
+def earliest_reset(
+    cfg: config.CharlieBotConfig,
+    now: datetime.datetime | None,
+    account_pool: str | None = None) -> datetime.datetime | None:
   """The nearest rejection reset among pool *account_pool*'s accounts, for the pool-exhausted error."""
   moment = now_or(now)
   resets = [
@@ -526,7 +520,8 @@ def earliest_reset(cfg: CharlieBotConfig, now: datetime | None, account_pool: st
   return min(resets) if resets else None
 
 
-def unavailable_detail(cfg: CharlieBotConfig, now: datetime | None, account_pool: str | None = None) -> str:
+def unavailable_detail(
+    cfg: config.CharlieBotConfig, now: datetime.datetime | None, account_pool: str | None = None) -> str:
   """Every unavailable pool account as ``<label>: <reason>``, joined for an error message.
 
   The reasons: an authentication-failure cooldown names when it lifts; missing
@@ -546,13 +541,13 @@ def unavailable_detail(cfg: CharlieBotConfig, now: datetime | None, account_pool
   return "; ".join(entries)
 
 
-def _unavailable_reason(account: ClaudeAccount, moment: datetime) -> str | None:
+def _unavailable_reason(account: claude_config.ClaudeAccount, moment: datetime.datetime) -> str | None:
   """Why *account* cannot take a run at *moment*, or None when it can."""
   if not credentials_present(account):
     return "missing credentials"
   failed_at = _auth_failures.get(account.label)
   if failed_at is not None and moment - failed_at < AUTH_FAILURE_COOLDOWN:
-    until = (failed_at + AUTH_FAILURE_COOLDOWN).astimezone(UTC).strftime("%H:%M")
+    until = (failed_at + AUTH_FAILURE_COOLDOWN).astimezone(datetime.UTC).strftime("%H:%M")
     return f"auth-failure cooldown until {until} UTC"
   if headroom(account.label, None, moment) <= 0.0:
     return "zero headroom"
@@ -590,28 +585,28 @@ def is_newer_transcript_refusal(error: BaseException) -> bool:
   return isinstance(error, TranscriptMoveError) and GUARD_REFUSAL_MARKER in str(error)
 
 
-def transcript_matches(config_dir: str | Path, cc_session_id: str) -> list[Path]:
+def transcript_matches(config_dir: str | pathlib.Path, cc_session_id: str) -> list[pathlib.Path]:
   """Every top-level conversation transcript for *cc_session_id* under *config_dir*, sorted.
 
   Top-level conversations live at ``projects/<cwd-slug>/<uuid>.jsonl``; the glob
   avoids depending on Claude Code's undocumented cwd-slug rule, and files nested
   deeper are subagent logs named ``agent-*.jsonl`` that cannot collide.
   """
-  return sorted((Path(config_dir).expanduser() / "projects").glob(f"*/{cc_session_id}.jsonl"))
+  return sorted((pathlib.Path(config_dir).expanduser() / "projects").glob(f"*/{cc_session_id}.jsonl"))
 
 
-def transcript_path(config_dir: str | Path, cc_session_id: str) -> Path | None:
+def transcript_path(config_dir: str | pathlib.Path, cc_session_id: str) -> pathlib.Path | None:
   """The first sorted transcript match from :func:`transcript_matches`, or None."""
   matches = transcript_matches(config_dir, cc_session_id)
   return matches[0] if matches else None
 
 
-def find_transcript_account(cfg: CharlieBotConfig, cc_session_id: str) -> ClaudeAccount | None:
+def find_transcript_account(cfg: config.CharlieBotConfig, cc_session_id: str) -> claude_config.ClaudeAccount | None:
   """The first pool account whose transcript store holds *cc_session_id*."""
   return next((account for account in pool(cfg) if transcript_path(account.config_dir, cc_session_id)), None)
 
 
-def _dst_holds_newer_transcript(src: Path, dst: Path) -> bool:
+def _dst_holds_newer_transcript(src: pathlib.Path, dst: pathlib.Path) -> bool:
   """True when copying *src* over *dst* would overwrite a strictly newer transcript.
 
   The single-writer invariant grounds the mtime reading: the only writer of a
@@ -630,25 +625,26 @@ def _dst_holds_newer_transcript(src: Path, dst: Path) -> bool:
   return dst_stat.st_mtime_ns == src_stat.st_mtime_ns and dst_stat.st_size > src_stat.st_size
 
 
-def _refusal_detail(src: Path, dst: Path) -> str:
+def _refusal_detail(src: pathlib.Path, dst: pathlib.Path) -> str:
   src_stat, dst_stat = src.stat(), dst.stat()
   return (
-      f"dst {dst} (mtime {datetime.fromtimestamp(dst_stat.st_mtime, UTC).isoformat()}, size {dst_stat.st_size})"
-      f" vs src {src} (mtime {datetime.fromtimestamp(src_stat.st_mtime, UTC).isoformat()}, size {src_stat.st_size})")
+      f"dst {dst} (mtime {datetime.datetime.fromtimestamp(dst_stat.st_mtime, datetime.UTC).isoformat()}, size {dst_stat.st_size})"
+      f" vs src {src} (mtime {datetime.datetime.fromtimestamp(src_stat.st_mtime, datetime.UTC).isoformat()}, size {src_stat.st_size})"
+  )
 
 
 def _is_staging_name(name: str) -> bool:
   return name.endswith(_STAGING_SUFFIX)
 
 
-def _sidecar_files(root: Path) -> set[Path]:
+def _sidecar_files(root: pathlib.Path) -> set[pathlib.Path]:
   """Relative paths of *root*'s files, staged half-products excluded."""
   if not root.is_dir():
     return set()
   return {path.relative_to(root) for path in root.rglob("*") if path.is_file() and not _is_staging_name(path.name)}
 
 
-def _sidecar_file_diff(sidecar: Path, dst_sidecar: Path) -> str:
+def _sidecar_file_diff(sidecar: pathlib.Path, dst_sidecar: pathlib.Path) -> str:
   """The two sidecar trees' file-set diff: missing at the destination, born at the
   destination, or present on both sides with different sizes."""
   src_rels, dst_rels = _sidecar_files(sidecar), _sidecar_files(dst_sidecar)
@@ -663,7 +659,7 @@ def _sidecar_file_diff(sidecar: Path, dst_sidecar: Path) -> str:
   return "; ".join(parts) if parts else "file sets equal"
 
 
-def _move_sidecar(sidecar: Path, dst_sidecar: Path) -> tuple[int, int, int] | None:
+def _move_sidecar(sidecar: pathlib.Path, dst_sidecar: pathlib.Path) -> tuple[int, int, int] | None:
   """Stage *sidecar*'s files into *dst_sidecar* one by one; report the file-set outcome.
 
   Per file: copy2 to a staging file in the destination tree, verify the size
@@ -677,7 +673,7 @@ def _move_sidecar(sidecar: Path, dst_sidecar: Path) -> tuple[int, int, int] | No
   """
   if not sidecar.is_dir():
     return None
-  staged: list[Path] = []
+  staged: list[pathlib.Path] = []
   try:
     for src_file in sorted(path for path in sidecar.rglob("*") if path.is_file()):
       dst_file = dst_sidecar / src_file.relative_to(sidecar)
@@ -702,7 +698,7 @@ def _move_sidecar(sidecar: Path, dst_sidecar: Path) -> tuple[int, int, int] | No
   return len(src_rels), len(dst_only), total_bytes
 
 
-def move_transcript(cc_session_id: str, src_dir: str | Path, dst_dir: str | Path) -> Path:
+def move_transcript(cc_session_id: str, src_dir: str | pathlib.Path, dst_dir: str | pathlib.Path) -> pathlib.Path:
   """Copy the conversation ``<uuid>.jsonl`` and its ``<uuid>/`` sidecar into *dst_dir*.
 
   The destination keeps the source's cwd-slug directory, so a ``--resume`` from
@@ -721,8 +717,9 @@ def move_transcript(cc_session_id: str, src_dir: str | Path, dst_dir: str | Path
   """
   src = transcript_path(src_dir, cc_session_id)
   if src is None:
-    raise TranscriptMoveError(f"no transcript {cc_session_id}.jsonl under {Path(src_dir).expanduser() / 'projects'}")
-  dst = Path(dst_dir).expanduser() / "projects" / src.parent.name / src.name
+    raise TranscriptMoveError(
+        f"no transcript {cc_session_id}.jsonl under {pathlib.Path(src_dir).expanduser() / 'projects'}")
+  dst = pathlib.Path(dst_dir).expanduser() / "projects" / src.parent.name / src.name
   dst.parent.mkdir(parents=True, exist_ok=True)
   if _dst_holds_newer_transcript(src, dst):
     src_stat, dst_stat = src.stat(), dst.stat()
@@ -758,15 +755,16 @@ def move_transcript(cc_session_id: str, src_dir: str | Path, dst_dir: str | Path
   return dst
 
 
-def newest_transcript_copy(cfg: CharlieBotConfig, cc_session_id: str) -> tuple[ClaudeAccount, Path] | None:
+def newest_transcript_copy(cfg: config.CharlieBotConfig,
+                           cc_session_id: str) -> tuple[claude_config.ClaudeAccount, pathlib.Path] | None:
   """The pool account holding the mtime-newest copy of *cc_session_id*'s transcript, with its path.
 
   The same per-cc-id ``*/<cc-id>.jsonl`` traversal across every pool root the
   resume fallback uses; the newest copy is where the session's live content
   continues, and equal mtimes break by path so the answer is deterministic.
   """
-  best_key: tuple[int, Path] | None = None
-  best: tuple[ClaudeAccount, Path] | None = None
+  best_key: tuple[int, pathlib.Path] | None = None
+  best: tuple[claude_config.ClaudeAccount, pathlib.Path] | None = None
   for account in pool(cfg):
     for path in transcript_matches(account.config_dir, cc_session_id):
       key = (path.stat().st_mtime_ns, path)
@@ -775,7 +773,7 @@ def newest_transcript_copy(cfg: CharlieBotConfig, cc_session_id: str) -> tuple[C
   return best
 
 
-def _tail_window(path: Path) -> str:
+def _tail_window(path: pathlib.Path) -> str:
   """The file's last ``PROBE_TAIL_BYTES``, decoded leniently."""
   with path.open("rb") as fh:
     fh.seek(0, os.SEEK_END)
@@ -784,7 +782,7 @@ def _tail_window(path: Path) -> str:
     return fh.read(PROBE_TAIL_BYTES).decode("utf-8", errors="replace")
 
 
-def transcript_lineage_split(label_copy: Path, newest_copy: Path) -> bool:
+def transcript_lineage_split(label_copy: pathlib.Path, newest_copy: pathlib.Path) -> bool:
   """True when the label copy's tail line is absent from the newest copy's tail window.
 
   The placement probe's lineage reading, additive to mtime: mtime alone proves
@@ -802,13 +800,13 @@ def transcript_lineage_split(label_copy: Path, newest_copy: Path) -> bool:
   return tail_line not in _tail_window(newest_copy)
 
 
-def transcript_tail_line(path: Path) -> str | None:
+def transcript_tail_line(path: pathlib.Path) -> str | None:
   """The last non-empty line inside *path*'s tail window, or None when it is blank."""
   lines = [line for line in _tail_window(path).splitlines() if line.strip()]
   return lines[-1] if lines else None
 
 
-def retire_transcript_copies(cfg: CharlieBotConfig, cc_session_id: str, keep: int = 2) -> None:
+def retire_transcript_copies(cfg: config.CharlieBotConfig, cc_session_id: str, keep: int = 2) -> None:
   """Retire every pool copy of *cc_session_id*'s transcript except the newest *keep*.
 
   The live-session counterpart of the cold-session sweep

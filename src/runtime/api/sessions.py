@@ -1869,7 +1869,7 @@ async def cancel_session_run(
     run_store=Depends(get_run_store),
     caller: CallerIdentity = Depends(require_caller),
 ) -> models.RunCancelResponse:
-  """fastapi.Request one stop: durable fact first, then identity-checked signal and exit observation."""
+  """Request one stop: durable fact first, then identity-checked signal and exit observation."""
   _require_own_run_scope(caller, session_id, run_id)
   try:
     result = await run_store.request_stop(session_id, run_id, req.request_id)

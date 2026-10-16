@@ -1,36 +1,29 @@
 import asyncio
+import datetime
 import json
+import pathlib
 import types
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
+import conftest
 import pytest
-from conftest import codex_token_count_event, fresh_state_fixture
 
+from src.backends.claude_code import claude_config
 from src.backends.claude_code import usage_quota as claude_quota
-from src.backends.claude_code.claude_config import ClaudeAccount
-from src.backends.claude_code.usage_quota import ClaudeQuotaAccount
 from src.backends.codex import usage_quota as codex_quota
-from src.backends.codex.usage_quota import (
-    _extract_codex_spend_events,
-    _latest_token_count_event,
-    _sum_codex_spend_events,
-    _transform_codex_response,
-)
 from src.features.usage import api as usage_api
 from src.features.usage import ext_usage as ext_usage_mod
-from src.features.usage.ext_usage import _poll_loop
-from src.infra.config import CharlieBotConfig
+from src.infra import config
 from src.runtime.hooks import usage_sources, wiring
 
-_fresh_unknown_limit_shape_registry = fresh_state_fixture(usage_sources._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
-_fresh_credential_read_warning_registry = fresh_state_fixture(claude_quota._CREDENTIAL_READ_WARNINGS_SEEN.clear)
-_fresh_usage_cache = fresh_state_fixture(ext_usage_mod._cached_usage.clear)
-_fresh_user_agent_cache = fresh_state_fixture(claude_quota._reset_user_agent_for_tests)
-_fresh_claude_accounts = fresh_state_fixture(claude_quota._accounts.clear)
-_fresh_codex_account = fresh_state_fixture(lambda: setattr(codex_quota, "_account", None))
+_fresh_unknown_limit_shape_registry = conftest.fresh_state_fixture(usage_sources._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
+_fresh_credential_read_warning_registry = conftest.fresh_state_fixture(
+    claude_quota._CREDENTIAL_READ_WARNINGS_SEEN.clear)
+_fresh_usage_cache = conftest.fresh_state_fixture(ext_usage_mod._cached_usage.clear)
+_fresh_user_agent_cache = conftest.fresh_state_fixture(claude_quota._reset_user_agent_for_tests)
+_fresh_claude_accounts = conftest.fresh_state_fixture(claude_quota._accounts.clear)
+_fresh_codex_account = conftest.fresh_state_fixture(lambda: setattr(codex_quota, "_account", None))
 
 
 def _build_token_count_event(
@@ -42,7 +35,7 @@ def _build_token_count_event(
     secondary_resets_at: int,
 ) -> dict:
   """A legacy two-window Codex payload: a 5h primary plus a 7d secondary."""
-  return codex_token_count_event(
+  return conftest.codex_token_count_event(
       timestamp,
       rate_limits={
           "primary": {
@@ -77,7 +70,7 @@ def _build_spend_token_count_event(
   prices. Every field is ``Any`` so malformed-row probes pass bad values
   through verbatim.
   """
-  return codex_token_count_event(
+  return conftest.codex_token_count_event(
       timestamp,
       info={
           "last_token_usage":
@@ -102,9 +95,9 @@ def test_codex_usage_transform_adds_token_count_observed_at() -> None:
           ))
   ]
 
-  event = _latest_token_count_event(lines)
+  event = codex_quota._latest_token_count_event(lines)
   assert event is not None
-  usage = _transform_codex_response(event, fetched_at=fetched_at)
+  usage = codex_quota._transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
       "windows":
@@ -112,12 +105,12 @@ def test_codex_usage_transform_adds_token_count_observed_at() -> None:
               {
                   "window_minutes": 300,
                   "utilization": 8.0,
-                  "resets_at": datetime.fromtimestamp(1774653423, tz=UTC).isoformat(),
+                  "resets_at": datetime.datetime.fromtimestamp(1774653423, tz=datetime.UTC).isoformat(),
               },
               {
                   "window_minutes": 10080,
                   "utilization": 2.0,
-                  "resets_at": datetime.fromtimestamp(1775240223, tz=UTC).isoformat(),
+                  "resets_at": datetime.datetime.fromtimestamp(1775240223, tz=datetime.UTC).isoformat(),
               },
           ],
       "fetched_at": fetched_at,
@@ -155,8 +148,8 @@ def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: p
 
   def transform(raw_credits: Any) -> dict:
     rate_limits = {"primary": None, "secondary": None, "plan_type": "business", "credits": raw_credits}
-    event = codex_token_count_event("2026-03-27T18:39:35.694Z", rate_limits=rate_limits)
-    return _transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
+    event = conftest.codex_token_count_event("2026-03-27T18:39:35.694Z", rate_limits=rate_limits)
+    return codex_quota._transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
 
   for unreadable in ("yes", {"unlimited": "false"}):
     usage = transform(unreadable)
@@ -170,33 +163,33 @@ def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: p
   assert reasons == ["credits is not an object", "unlimited is not a bool", "missing or unparseable balance"]
 
 
-def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: Path) -> None:
-  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: pathlib.Path) -> None:
+  now = datetime.datetime(2026, 6, 1, 12, 0, 0, tzinfo=datetime.UTC)
   rollout_path = tmp_path / "rollout-recent.jsonl"
 
   events = [
       _build_turn_context_event(model="gpt-5.5"),
       _build_spend_token_count_event(
-          timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          timestamp=(now - datetime.timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
           input_tokens=1_000_000,
           cached_input_tokens=100_000,
           output_tokens=10_000),
       _build_spend_token_count_event(
-          timestamp=(now - timedelta(days=2)).isoformat().replace("+00:00", "Z"),
+          timestamp=(now - datetime.timedelta(days=2)).isoformat().replace("+00:00", "Z"),
           input_tokens=2_000_000,
           cached_input_tokens=500_000,
           output_tokens=20_000),
       _build_spend_token_count_event(
-          timestamp=(now - timedelta(days=8)).isoformat().replace("+00:00", "Z"),
+          timestamp=(now - datetime.timedelta(days=8)).isoformat().replace("+00:00", "Z"),
           input_tokens=5_000_000,
           cached_input_tokens=0,
           output_tokens=100_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
 
-  extracted = _extract_codex_spend_events(rollout_path)
+  extracted = codex_quota._extract_codex_spend_events(rollout_path)
   assert extracted is not None
-  spend = _sum_codex_spend_events([extracted], now=now)
+  spend = codex_quota._sum_codex_spend_events([extracted], now=now)
 
   assert spend["last_24h_usd"] == pytest.approx(4.85)
   assert spend["last_7d_usd"] == pytest.approx(13.20)
@@ -207,20 +200,21 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _use_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *pool: ClaudeAccount) -> None:
+def _use_config(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, *pool: claude_config.ClaudeAccount) -> None:
   """Serve a config whose Claude pool is *pool*, and a HOME under tmp_path so no real login is named."""
   monkeypatch.setenv("HOME", str(tmp_path))
-  monkeypatch.setattr("src.infra.config.get_config", lambda: CharlieBotConfig(accounts={"claude": list(pool)}))
+  monkeypatch.setattr("src.infra.config.get_config", lambda: config.CharlieBotConfig(accounts={"claude": list(pool)}))
 
 
-def test_claude_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_claude_accounts_label_collision_skip_fail_loud(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   # Two distinct dirs both labelled "invite-1": the later one is skipped (logged)
   # rather than overwriting the first.
   _use_config(
       monkeypatch,
       tmp_path,
-      ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
-      ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
+      claude_config.ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
+      claude_config.ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
   )
 
   labels = [account.label for account in claude_quota.quota_accounts()]
@@ -228,10 +222,11 @@ def test_claude_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.Monk
   assert labels == ["main", "invite-1"]
 
 
-def test_claude_accounts_keep_their_backoff_between_rounds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_claude_accounts_keep_their_backoff_between_rounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """A login that stays in the config comes back as the same account with its backoff armed; a login the
   config dropped is forgotten, and returns fresh."""
-  invite = ClaudeAccount(label="invite-1", config_dir=str(tmp_path / ".claude-invite-1"))
+  invite = claude_config.ClaudeAccount(label="invite-1", config_dir=str(tmp_path / ".claude-invite-1"))
   _use_config(monkeypatch, tmp_path, invite)
   main, invite_account = claude_quota.quota_accounts()
   invite_account._arm_backoff()
@@ -249,11 +244,12 @@ def test_claude_accounts_keep_their_backoff_between_rounds(monkeypatch: pytest.M
   assert readded._backoff_until == 0.0
 
 
-def test_claude_account_marks_login_and_expired_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_claude_account_marks_login_and_expired_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """A pool login without credentials carries ``login_required`` with its directory; a window whose reset has
   passed since the sample carries ``expired`` on an emit copy, and the cached entry stays as fetched."""
   pool_dir = tmp_path / ".claude-invite-1"
-  _use_config(monkeypatch, tmp_path, ClaudeAccount(label="invite-1", config_dir=str(pool_dir)))
+  _use_config(monkeypatch, tmp_path, claude_config.ClaudeAccount(label="invite-1", config_dir=str(pool_dir)))
   _, account = claude_quota.quota_accounts()
   entry = {
       "provider": "claude",
@@ -272,7 +268,7 @@ def test_claude_account_marks_login_and_expired_windows(monkeypatch: pytest.Monk
   account.mark_login_required(entry)
   assert "login_required" not in entry
 
-  emitted = account.mark_expired(entry, datetime(2026, 1, 2, tzinfo=UTC))
+  emitted = account.mark_expired(entry, datetime.datetime(2026, 1, 2, tzinfo=datetime.UTC))
   assert [w.get("expired") for w in emitted["windows"]] == [True, None]
   assert all("expired" not in w for w in entry["windows"])
   main_account, _ = claude_quota.quota_accounts()
@@ -339,7 +335,7 @@ def _run_poll_cycles(
   ext_usage_mod._cached_usage.clear()
 
   with pytest.raises(_StopAfter):
-    asyncio.run(_poll_loop())
+    asyncio.run(ext_usage_mod._poll_loop())
 
   return state
 
@@ -542,22 +538,23 @@ class _FakeUsageHTTP:
     return _FakeResponse(self._renewal_status, self._renewal, text=self._renewal_body)
 
 
-def _write_credentials(path: Path, *, access: str = "tok-stored", refresh: str = "ref-stored") -> None:
+def _write_credentials(path: pathlib.Path, *, access: str = "tok-stored", refresh: str = "ref-stored") -> None:
   payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh, "expiresAt": _STALE_EXPIRES_AT_MS}}
   path.write_text(json.dumps(payload))
 
 
 def _claude_provider(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeUsageHTTP, **creds: Any) -> ClaudeQuotaAccount:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, fake: _FakeUsageHTTP,
+    **creds: Any) -> claude_quota.ClaudeQuotaAccount:
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, **creds)
   monkeypatch.setattr("src.infra.http.get_http_client", lambda: fake)
-  return ClaudeQuotaAccount("ext-test", credentials_path)
+  return claude_quota.ClaudeQuotaAccount("ext-test", credentials_path)
 
 
 @pytest.mark.asyncio
 async def test_claude_fetch_renews_once_and_retries_once_after_401(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   fake = _FakeUsageHTTP([401, 200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 

@@ -68,8 +68,8 @@ def build_agent_message_event(content: str, *, from_session: str, from_session_n
 
   Parallel to ``build_scheduled_trigger_event`` but carries the dedicated
   ``ET.AGENT_MESSAGE`` type plus the caller session's provenance. Agent
-  messages are not real user messages: the authorization gate excludes them
-  by type, so they neither mint nor revoke an authorization window.
+  messages are not real user messages: the runtime gate, which counts real
+  user messages on the task chain, excludes them by type.
   """
   return {
       "type": ET.AGENT_MESSAGE,

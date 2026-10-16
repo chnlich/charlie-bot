@@ -54,8 +54,8 @@ Task spec format (--task-spec-file):
   Task specs must not forbid test edits: updating affected tests is
   part of the change — tests asserting removed behavior get updated
   or deleted with it.
-  Runtime authorization (takeoff gate) is derived from the chat
-  event log; see skills/plan-approval/SKILL.md for the full contract.
+  Runtime authorization is derived from the task tree and the chat event log;
+  see skills/plan-approval/SKILL.md for the full contract.
 
 Backend selection (--backend):
 

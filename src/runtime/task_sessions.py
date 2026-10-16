@@ -1176,10 +1176,11 @@ class TaskTreeManager:
 
     A logical manager child directly under the caller's own manager task is
     coordination work and needs no user authorization; a worker child is
-    implementation delegation and still rides the nearest-real-user-ancestor
-    gate (takeoff_gate) — except a read-only delegation (verify, cold-read),
-    which the one shared judgment (takeoff_gate.is_read_only_exempt) excuses
-    here exactly as it does on the route and at the launch. On a replayed create *task* is
+    implementation delegation and still rides the runtime gate (takeoff_gate:
+    a real user message somewhere on the open task chain) — except a read-only
+    delegation (verify, cold-read), which the one shared judgment
+    (takeoff_gate.is_read_only_exempt) excuses here exactly as it does on the
+    route and at the launch. On a replayed create *task* is
     the ORIGINAL node's spec, so re-labeling a replay cannot borrow the
     exemption for a node created as implementation. Any other shape — an
     unrelated root, a foreign parent, a worker parent — is
@@ -1192,8 +1193,8 @@ class TaskTreeManager:
       raise task_errors.TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
     if profile == "worker" and not takeoff_gate.is_read_only_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
-      # the nearest-real-user-ancestor gate (takeoff_gate) decides. A
-      # read-only delegation (verify, cold-read) needs no window, on the same
+      # the runtime gate (takeoff_gate) decides. A read-only delegation
+      # (verify, cold-read) needs no user message on the chain, on the same
       # task-type judgment the route and the launch apply.
       await self.check_task_authorization(claims.session_id)
 
@@ -1271,12 +1272,12 @@ class TaskTreeManager:
       return None
     return validate_session_metadata(path.read_text(encoding="utf-8"), str(path))
 
-  async def check_task_authorization(self, session_id: str, now: datetime.datetime | None = None) -> str:
-    """The nearest-real-user-ancestor gate for a v2 task caller (takeoff_gate).
+  async def check_task_authorization(self, session_id: str) -> str:
+    """The runtime gate for a v2 task caller (takeoff_gate).
 
-    Every ancestor must be open and the calling node a manager; the first node
-    holding a real user instruction is where the time-window rules
-    apply, and a failure there blocks without borrowing from higher ancestors.
+    The calling node must be a manager, every node up to the root an open
+    task, and some node on that chain must hold a real user message; agent
+    messages, scheduled triggers and child reports never count.
     """
     index = await self._get_index()
 
@@ -1297,7 +1298,6 @@ class TaskTreeManager:
         load_events=self.events.load_events,
         task_meta_of=meta_of,
         task_state_of=state_of,
-        now=now,
     )
 
   async def update_slot_fields(self, session_id: str, owner: str, **values: Any) -> SessionMetadata:

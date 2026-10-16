@@ -111,9 +111,8 @@ class DispatchTree(Protocol):
 
 # The event types that carry consumable task input. Real user input is the
 # USER type and nothing else: agent relays, scheduled triggers, and child
-# reports keep their own types even when their text contains a takeoff
-# phrase, so machine input can never mint or revoke a user authorization
-# window (the takeoff gate judges ET.USER events only).
+# reports keep their own types, so the runtime gate (takeoff_gate), which
+# counts real user messages on the task chain, never counts machine input.
 INPUT_EVENT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 
@@ -283,8 +282,8 @@ class TaskInputDispatcher:
 
         The one judgment `_authorize_agent_creation` applies when the worker is
         created, re-applied where a new instruction enters the tree: the sender
-        must be the worker's own parent, and the parent must hold the
-        nearest-real-user-ancestor authorization (takeoff_gate) for
+        must be the worker's own parent, and the parent must pass the runtime
+        gate (takeoff_gate: a real user message on its open task chain) for
         implementation work. The read-only exemption rides the same
         one shared judgment (takeoff_gate.is_read_only_exempt). A refusal raises
         TaskForbiddenError before anything is enqueued; every entry that

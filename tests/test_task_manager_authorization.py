@@ -3,11 +3,12 @@
 The user's correction: a logical manager session is agent-organizable — a valid
 active manager Run creates logical manager children under its own open task
 through the ordinary task-create API/CLI at any depth, and requests its own
-task's normal completion through the completion owner, both with no takeoff
-anywhere on the tree. Implementation stays gated: worker children and their
-launches still ride the nearest-real-user-ancestor takeoff gate, agent relay
-text and child reports never mint authorization, and caller scope (own parent,
-manager parent, open ancestry, replay identity) is enforced exactly as before.
+task's normal completion through the completion owner, both with no user
+message anywhere on the tree. Implementation stays gated: worker children ride
+the runtime gate (a real user message on the open task chain), agent relay
+text and child reports never count as user messages, and caller scope (own
+parent, manager parent, open ancestry, replay identity) is enforced exactly as
+before.
 Every scenario here runs the actual HTTP routes against a synthetic instance
 with scripted backends; no real model or provider takes part.
 """
@@ -200,10 +201,11 @@ async def three_manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
 async def test_implementation_blocked_until_real_user_authorizes_then_delegates_from_depth(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """On the same manager tree, implementation (worker delegation) is refused
-  with no real user instruction; agent relay text saying "take off" and child
-  reports never authorize. Once a real user authorizes the scope at the root,
-  the grandchild delegates through the existing boundary with no per-manager
-  takeoff, and the launched leaf run completes on the scripted backend."""
+  with no real user message; agent relay text saying "take off" and child
+  reports never count. Once the user's request reaches the root, a plain
+  question, the grandchild delegates through the existing boundary with no
+  per-manager message, and the launched leaf run completes on the scripted
+  backend."""
   cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   builds = conftest.install_scripted_backends(
@@ -216,10 +218,10 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
         json=conftest.delegate_payload(grand_id, repo),
         headers=conftest.agent_headers(grand_id, grand_run))
     assert blocked.status_code == 403, blocked.text
-    assert "no real user instruction" in blocked.json()["detail"]
+    assert "no user request" in blocked.json()["detail"]
 
     # Agent relay text containing "take off", and a delivered child report,
-    # never mint authorization: the refusal stands.
+    # never count as user messages: the refusal stands.
     await tree.events.append(
         grand_id,
         control_events.build_control_event(
@@ -242,14 +244,13 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
         json=conftest.delegate_payload(grand_id, repo),
         headers=conftest.agent_headers(grand_id, grand_run))
     assert still_blocked.status_code == 403, still_blocked.text
-    assert "no real user instruction" in still_blocked.json()["detail"]
+    assert "no user request" in still_blocked.json()["detail"]
     assert builds == []
     assert [m for m in (await tree._get_index()).metas.values() if m.task_parent_id == grand_id] == []
 
-    # The real user authorizes the scope at the root. The grandchild delegates
-    # with its own token: no additional takeoff at any manager depth.
-    await tree.dispatch.admit_input(
-        ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
+    # The user's request reaches the root as a question. The grandchild
+    # delegates with its own token: no user message at any other manager depth.
+    await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Can you ship the feature?", actor="user")
     ok = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(grand_id, repo),
@@ -264,48 +265,11 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
     _run, outcome = await test_task_execution.wait_for_terminal_run(tree, leaf_id, leaf_run)
     assert outcome == "success"
 
-  # The delegation rode the root's single real-user authorization: the child
-  # and grandchild never saw a user message.
+  # The delegation rode the root's single user message: the child and
+  # grandchild never saw one.
   for sid in (ids["child"], grand_id):
     assert not [e for e in tree.facts_of(sid).events_by_id.values() if e.get("type") == ET.USER]
   assert len(builds) == 1
-
-
-@pytest.mark.asyncio
-async def test_expired_and_shadowing_authorization_still_block_delegation_at_depth(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
-  """Expired pre-takeoff windows and a shadowing local instruction keep current
-  semantics at manager depth: the nearest real user instruction decides."""
-  cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
-  conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  grand_id, grand_run = ids["grandchild"], "grandchild-run"
-  child_id = ids["child"]
-
-  # Expired pre-takeoff on the root (a later ordinary user message follows it,
-  # per the established file-last matching).
-  issued = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=13)).isoformat()
-  await tree.dispatch.admit_input(
-      ids["root"], event_type=ET.USER, content="pre take off", actor="user", timestamp=issued)
-  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="carry on with the plan", actor="user")
-  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
-    expired = client.post(
-        "/api/internal/delegate",
-        json=conftest.delegate_payload(grand_id, repo),
-        headers=conftest.agent_headers(grand_id, grand_run))
-  assert expired.status_code == 403
-  assert "no active authorization" in expired.json()["detail"]
-
-  # A fresh root authorization, then a local user instruction on the child
-  # without a takeoff shadows the ancestor: the gate fails at the child.
-  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
-  await tree.dispatch.admit_input(child_id, event_type=ET.USER, content="please look into this first", actor="user")
-  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
-    shadowed = client.post(
-        "/api/internal/delegate",
-        json=conftest.delegate_payload(grand_id, repo),
-        headers=conftest.agent_headers(grand_id, grand_run))
-  assert shadowed.status_code == 403
-  assert "no active authorization" in shadowed.json()["detail"]
 
 
 @pytest.mark.integration  # polls the retried run's terminal fact in real time through the dispatch pipeline
@@ -314,9 +278,8 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """A queued retry of an implementation run is never re-judged at the actual
   launch: the authorization the delegation rode in on carried it into the
-  queue, and a later conversation cannot withhold the launch (the takeoff gate
-  is a request-entry check). A read-only verify run under the same tree still
-  launches (the established exemption)."""
+  queue (the runtime gate is a request-entry check). A read-only verify run
+  under the same tree still launches (the established exemption)."""
   cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
@@ -334,21 +297,18 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
     assert ok.status_code == 200, ok.text
     leaf_id, leaf_run = ok.json()["session_id"], ok.json()["run_id"]
 
-  # The work run fails; its explicit retry is a queued run. Authorization
-  # "expires" before the retry launches (a later real user message without the
-  # phrase shadows the authorized one) — and the retry launches anyway: the
-  # launch carries no gate, so later conversation never withholds it.
+  # The work run fails; its explicit retry is a queued run, and it launches
+  # with no gate at the launch.
   await tree.dispatch.finish_run(leaf_id, leaf_run, outcome="failed")
   retry = await tree.create_retry(leaf_id, "retry-1", leaf_run)
   assert retry["run_id"]
-  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="hold on, new plan", actor="user")
 
   tree.dispatch.executor.launch(leaf_id, retry["run_id"])
   _run, outcome = await test_task_execution.wait_for_terminal_run(tree, leaf_id, retry["run_id"])
   assert outcome == "success"
-  assert len(builds) == 1  # the retry's own backend build, unblocked by the shadowing message
+  assert len(builds) == 1  # the retry's own backend build
 
-  # The read-only verify exemption still launches under the same expired tree.
+  # The read-only verify exemption still launches under the same tree.
   verify = await tree.create_task(
       request_id="verify-leaf",
       task_parent_id=grand_id,
@@ -427,48 +387,38 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
 async def test_profile_changing_replay_never_bypasses_authorization(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The replay judgment reads the ORIGINAL product's profile: a worker create
-  replayed as a manager request stays blocked once the takeoff window is gone,
-  and a manager create replayed as a worker request returns the original
-  manager product without minting a worker."""
+  replayed as a manager request stays gated while no user message is on the
+  chain, and a manager create replayed as a worker request returns the
+  original manager product without minting a worker."""
   cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
-  await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
+  # The operator's create needs no gate; the agent's replays below bind to the
+  # same (parent, request_id) node.
+  worker = await tree.create_task(
+      request_id="w1",
+      task_parent_id=root.id,
+      profile="worker",
+      task=models.TaskSpec(goal="leaf"),
+      name="W",
+      backend=None,
+      caller=conftest.OPERATOR)
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     token = conftest.agent_headers(root.id, "root-run")
-    worker_resp = client.post(
-        "/api/sessions/", json={
-            "request_id": "w1",
-            "task_parent_id": root.id,
-            "profile": "worker"
-        }, headers=token)
-    assert worker_resp.status_code == 200, worker_resp.text
-    worker_id = worker_resp.json()["id"]
-    assert worker_resp.json()["profile"] == "worker"
 
-    # The authorization window closes (a later real user message without the
-    # phrase is the file-last one): re-labeling the replay cannot turn the
-    # gated worker create into an ungated manager create.
-    await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="hold on, new plan", actor="user")
-    relabeled = client.post(
-        "/api/sessions/", json={
-            "request_id": "w1",
-            "task_parent_id": root.id,
-            "profile": "manager"
-        }, headers=token)
-    assert relabeled.status_code == 403, relabeled.text
-    assert "no active authorization" in relabeled.json()["detail"]
-
-    # An authorized-shape replay (the original worker profile) still replays
-    # the original product stably.
-    stable = client.post(
-        "/api/sessions/", json={
-            "request_id": "w1",
-            "task_parent_id": root.id,
-            "profile": "worker"
-        }, headers=token)
-    assert stable.status_code == 403, stable.text  # the gate now blocks even the original shape
+    # No user message on the chain: re-labeling the replay cannot turn the
+    # gated worker create into an ungated manager create, and the original
+    # shape is gated too.
+    for profile in ("manager", "worker"):
+      replay = client.post(
+          "/api/sessions/", json={
+              "request_id": "w1",
+              "task_parent_id": root.id,
+              "profile": profile
+          }, headers=token)
+      assert replay.status_code == 403, replay.text
+      assert "no user request" in replay.json()["detail"]
 
     # A manager original replayed with a worker label: the judgment reads the
     # manager product (no gate), returns it unchanged, and mints no worker.
@@ -490,6 +440,19 @@ async def test_profile_changing_replay_never_bypasses_authorization(
     assert replay_as_worker.json()["id"] == manager_id
     assert replay_as_worker.json()["profile"] == "manager"
 
+    # Once the user's message reaches the root, the relabeled worker replay
+    # returns the original worker product.
+    await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Can you ship the feature?", actor="user")
+    relabeled = client.post(
+        "/api/sessions/", json={
+            "request_id": "w1",
+            "task_parent_id": root.id,
+            "profile": "manager"
+        }, headers=token)
+    assert relabeled.status_code == 200, relabeled.text
+    assert relabeled.json()["id"] == worker.id
+    assert relabeled.json()["profile"] == "worker"
+
   metas = (await tree._get_index()).metas
   children = [m for m in metas.values() if m.task_parent_id == root.id]
-  assert sorted(m.id for m in children) == sorted([worker_id, manager_id])
+  assert sorted(m.id for m in children) == sorted([worker.id, manager_id])

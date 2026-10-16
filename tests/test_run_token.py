@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import datetime
 import json
 
 import conftest
 import pytest
 
+from src.infra import event_types as ET
 from src.runtime import run_token, takeoff_gate
 from src.runtime.api import auth
 
@@ -70,49 +70,82 @@ async def test_invalid_run_bearer_never_falls_back_to_operator_cookie() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The v2 task gate: nearest real user instruction, unchanged time rules
+# The v2 task gate: an open manager chain that a real user message started
 # ---------------------------------------------------------------------------
 
-
-def _gate_env(
-    events_by_session: dict[str, list[dict]], parents: dict[str, str | None], profiles: dict[str, str],
-    states: dict[str, str]):
-
-  def load_events(session_id: str) -> list[dict]:
-    return events_by_session.get(session_id, [])
-
-  def meta_of(session_id: str) -> tuple[str | None, str | None]:
-    return parents.get(session_id), profiles.get(session_id)
-
-  def state_of(session_id: str) -> str:
-    return states.get(session_id, "open")
-
-  return load_events, meta_of, state_of
+_PARENTS = {"root": None, "child": "root", "grandchild": "child"}
+_MANAGERS = {"root": "manager", "child": "manager", "grandchild": "manager"}
 
 
-def _user(content: str, at: datetime.datetime) -> dict:
-  return {"id": content, "type": "user", "timestamp": at.isoformat(), "actor": "user", "content": content}
+def _gate(start: str, events_by_session: dict[str, list[dict]], states: dict[str, str] | None = None) -> str:
+  """Run the gate from *start* over in-memory chat logs on the root -> child -> grandchild manager chain.
+
+  A node missing from *states* is open.
+  """
+  return takeoff_gate.check_takeoff_gate_for_task(
+      start,
+      load_events=lambda session_id: events_by_session.get(session_id, []),
+      task_meta_of=lambda session_id: (_PARENTS.get(session_id), _MANAGERS.get(session_id)),
+      task_state_of=lambda session_id: (states or {}).get(session_id, "open"))
 
 
-NOW = datetime.datetime.now(datetime.UTC)
+def _user(content: str) -> dict:
+  return {"id": content, "type": ET.USER, "timestamp": "2026-10-15T00:00:00+00:00", "actor": "user", "content": content}
 
 
-def test_task_gate_borrows_from_the_nearest_user_ancestor() -> None:
-  # root holds a valid take off; child has nothing; grandchild only agent chatter.
+def _event(event_type: str, content: str = "take off") -> dict:
+  return {"type": event_type, "content": content}
+
+
+def test_task_gate_admits_a_user_question_anywhere_on_the_chain() -> None:
+  """A question with no take off starts the line: the root and a child that holds its own question
+  delegate, and a grandchild with only agent chatter rides the root's request."""
   events = {
-      "root":
-          [
-              _user("plan the thing", NOW - datetime.timedelta(hours=1)),
-              _user("take off", NOW - datetime.timedelta(minutes=5))
-          ],
-      "child": [{
-          "type": "agent_message",
-          "content": "progress",
-          "timestamp": NOW.isoformat()
-      }],
+      "root": [_user("Can you look at the flaky test?")],
+      "child": [_user("Which file holds it?"), _event(ET.AGENT_MESSAGE, "progress")],
   }
-  parents = {"root": None, "child": "root", "grandchild": "child"}
-  profiles = {"root": "manager", "child": "manager", "grandchild": "manager"}
-  load_events, meta_of, state_of = _gate_env(events, parents, profiles, {})
-  assert takeoff_gate.check_takeoff_gate_for_task(
-      "grandchild", load_events=load_events, task_meta_of=meta_of, task_state_of=state_of) == "root"
+  assert _gate("root", events) == "root"
+  assert _gate("child", events) == "child"
+  assert _gate("grandchild", {"root": events["root"], "child": [_event(ET.AGENT_MESSAGE)]}) == "root"
+
+
+@pytest.mark.parametrize("state", ["completed", "cancelled", "archived"])
+def test_task_gate_refuses_under_a_closed_task(state: str) -> None:
+  """Every node up to the root must be open, even past a node that holds the user's message."""
+  events = {"root": [_user("Ship it?")], "grandchild": [_user("go ahead")]}
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match=f"ancestor task root is {state}"):
+    _gate("grandchild", events, states={"root": state})
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match=f"task grandchild is {state}"):
+    _gate("grandchild", events, states={"grandchild": state})
+
+
+def test_task_gate_refuses_a_chain_with_machine_input_only() -> None:
+  """Agent messages, scheduled triggers, child reports and tool-result echoes never count, whatever their text."""
+  machine = [
+      _event(ET.AGENT_MESSAGE),
+      _event(ET.SCHEDULED_TRIGGER),
+      _event(ET.CHILD_REPORT),
+      {
+          "type": ET.USER,
+          "content": [{
+              "type": "tool_result",
+              "content": "take off"
+          }]
+      },
+  ]
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match="no user request on the task chain"):
+    _gate("grandchild", {"root": machine, "child": machine, "grandchild": machine})
+
+
+def test_task_gate_counts_user_messages_after_the_newest_clone_start_only() -> None:
+  """A fork's copied user messages belong to its source; the node's own later message counts, and a later
+  marker voids it again. The log grows in place, so the calls after the first fold only the appended suffix."""
+  child_log = [_user("the source's request"), _event(ET.CLONE_START, "")]
+  events = {"root": [_event(ET.AGENT_MESSAGE)], "child": child_log}
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match="no user request"):
+    _gate("child", events)
+  child_log.append(_user("the child's own request"))
+  assert _gate("child", events) == "child"
+  child_log.append(_event(ET.CLONE_START, ""))
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match="no user request"):
+    _gate("child", events)

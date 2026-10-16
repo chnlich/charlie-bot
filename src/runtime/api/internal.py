@@ -82,13 +82,12 @@ async def _authorize_spawn_request(
     store: SessionStore,
     task_mgr: TaskTreeManager,
 ) -> tuple[str | None, str | None]:
-  """Validate session, enforce the takeoff gate, and resolve backend/model for spawn-style endpoints.
+  """Validate session, enforce the runtime gate, and resolve backend/model for spawn-style endpoints.
 
   A task-tree node takes the one central authorization owner —
-  ``TaskTreeManager.check_task_authorization``, the nearest-real-user-ancestor
-  gate (judged where the delegation request enters; the Run launch re-judges
-  nothing).
-  A node inherits authorization from its nearest real-user ancestor.
+  ``TaskTreeManager.check_task_authorization``, the runtime gate (judged where
+  the delegation request enters; the Run launch re-judges nothing): an open
+  manager chain with a real user message on some node of it.
   """
   require_found(await store.get_session(req.session_id))
 
@@ -141,11 +140,11 @@ async def _delegate_task_tree(
   """
 
   try:
-    # The nearest-user-ancestor gate judges here, where the delegation request
-    # enters; the child run's launch re-judges nothing. The read-only
-    # exemption rides the one shared judgment (is_read_only_exempt) here, at
-    # the admission check above, and at the agent-creation check; the
-    # structural create checks still apply to a read-only child.
+    # The runtime gate judges here, where the delegation request enters; the
+    # child run's launch re-judges nothing. The read-only exemption rides the
+    # one shared judgment (is_read_only_exempt) here, at the admission check
+    # above, and at the agent-creation check; the structural create checks
+    # still apply to a read-only child.
     if not is_read_only_exempt(req.task_type):
       await task_mgr.check_task_authorization(req.session_id)
     request_id = delegate_request_id(req)
@@ -338,9 +337,9 @@ async def session_message(
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
-  Persists an ``agent_message`` event (never a ``user`` event, so no takeoff
-  window is minted or revoked), then wakes the target master with the relay
-  prefix. A mid-run target session enqueues the wake on the master
+  Persists an ``agent_message`` event (never a ``user`` event, so the runtime
+  gate never counts it as a user message), then wakes the target master with
+  the relay prefix. A mid-run target session enqueues the wake on the master
   work-item queue. An archived task target refuses the relay with 409
   (``task <id> is archived``);
   only the user's own message restores an archived node. A message over

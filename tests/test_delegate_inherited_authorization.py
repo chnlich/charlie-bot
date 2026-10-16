@@ -1,19 +1,17 @@
-"""Inherited authorization on the real v2 entry points.
+"""The runtime gate on the real v2 entry points.
 
-The accepted v2 policy is one central owner: the nearest-real-user-ancestor
-gate (``TaskTreeManager.check_task_authorization``), applied at the request
+The v2 policy is one central owner: the runtime gate
+(``TaskTreeManager.check_task_authorization``), applied at the request
 entries — delegation, improve, and agent messages to worker nodes — and never
-re-judged at a Run's launch. A sub-task manager under an authorized project
-delegates through the real /api/internal/delegate route without carrying its
-own take-off; a local user instruction shadows the ancestor; agent, cron, and
-report texts never mint authorization; verify stays exempt (read-only) on the
-route. Every scenario here runs the actual HTTP route against a synthetic task
-tree with a scripted backend.
+re-judged at a Run's launch. A manager delegates through the real
+/api/internal/delegate route when its open task chain holds a real user
+message, a question included; a closed ancestor refuses; verify stays exempt
+(read-only) on the route. Every scenario here runs the actual HTTP route
+against a synthetic task tree with a scripted backend.
 """
 
 from __future__ import annotations
 
-import datetime
 import pathlib
 
 import conftest
@@ -56,7 +54,7 @@ async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 @pytest.mark.integration  # polls the delegated run's terminal fact in real time on the API loop
-async def test_authorized_ancestor_delegates_without_a_local_takeoff(
+async def test_authorized_ancestor_delegates_without_a_local_user_message(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """The real route from a child manager with NO local user message and an
     authorized ancestor creates one leaf and one launched Run; a replay returns
@@ -101,38 +99,36 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
 
 
 @pytest.mark.asyncio
-async def test_shadowing_local_instruction_blocks_inherited_delegation(
+async def test_user_questions_admit_root_and_child_delegations(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
-  """A local real user instruction without a take-off shadows the authorized
-    ancestor: the nearest node with a real user instruction is where the gate
-    applies, and it fails there."""
+  """No take off anywhere: the root's question starts the line, so the root delegates an
+    implement worker, and the child manager, whose own user message is a question too,
+    delegates on the same route."""
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
-  builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
-  await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="please look into this", actor="user")
+  monkeypatch.setattr(tree.dispatch.executor, "_schedule_launch", lambda *args, **kwargs: None)
+  await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Can you fix the flaky test?", actor="user")
+  await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="Which file holds it?", actor="user")
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
-    resp = client.post(
-        "/api/internal/delegate",
-        json=conftest.delegate_payload(child.id, repo),
-        headers=test_task_execution.OP_HEADERS)
-  assert resp.status_code == 403
-  assert "no active authorization" in resp.json()["detail"]
-  assert builds == []
-  assert [m for m in (await tree._get_index()).metas.values() if m.task_parent_id == child.id] == []
+    for caller_id in (root.id, child.id):
+      resp = client.post(
+          "/api/internal/delegate",
+          json=conftest.delegate_payload(caller_id, repo, task_type="implement"),
+          headers=test_task_execution.OP_HEADERS)
+      assert resp.status_code == 200, resp.text
+      leaf = await tree.load_meta(resp.json()["session_id"])
+      assert leaf is not None and leaf.profile == "worker" and leaf.task_parent_id == caller_id
 
 
 @pytest.mark.asyncio
-async def test_expired_pre_takeoff_on_the_ancestor_blocks(
+async def test_closed_ancestor_refuses_delegation(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
+  """The child holds its own user message, but the archived root closes the line: the route
+    refuses and names the closed task, and nothing is created."""
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  # The established matching: the ordinary "take off" phrase is judged on the
-  # FILE-LAST real user message, so an expiring window needs a later ordinary
-  # message after the stamp (the same shape the legacy gate's expiry test uses).
-  issued = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=13)).isoformat()
-  await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="pre take off", actor="user", timestamp=issued)
-  await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="carry on with the plan", actor="user")
+  await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="Can you fix it?", actor="user")
+  await tree.events.append(root.id, tree.archived_close_event(root.id, "close-root", summary="archived by the user"))
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
@@ -140,8 +136,9 @@ async def test_expired_pre_takeoff_on_the_ancestor_blocks(
         json=conftest.delegate_payload(child.id, repo),
         headers=test_task_execution.OP_HEADERS)
   assert resp.status_code == 403
-  assert "no active authorization" in resp.json()["detail"]
+  assert f"ancestor task {root.id} is archived" in resp.json()["detail"]
   assert builds == []
+  assert [m for m in (await tree._get_index()).metas.values() if m.task_parent_id == child.id] == []
 
 
 @pytest.mark.asyncio
@@ -210,7 +207,7 @@ async def test_foreign_run_token_cannot_delegate(
 @pytest.mark.asyncio
 async def test_verify_exemption_on_the_v2_route_and_launch(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
-  """A read-only verify delegation needs no authorization window on the real
+  """A read-only verify delegation needs no user message on the real
     v2 route and still launches (and runs) with no user instruction anywhere —
     while a repo task type under the same tree stays blocked."""
   cfg, session_blocks, tree, _root, child = await make_tree(tmp_path, monkeypatch)
@@ -253,7 +250,7 @@ async def register_active_run(tree, session_id: str, run_id: str, kind: str = "m
 async def test_agent_run_token_delegates_verify_without_a_takeoff(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """The CLI's real credential — a run token — delegating a read-only verify
-    needs no takeoff window: with no user instruction anywhere, the delegation
+    needs no user message on the chain: with no user instruction anywhere, the delegation
     returns 200, creates a repo-less verify child, and its run launches and
     settles (the agent-creation check reads the same verify exemption the
     route and the launch read)."""

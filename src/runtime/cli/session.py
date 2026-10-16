@@ -13,7 +13,7 @@ it becomes the v2 task create: the task-file carries the ``task`` object
 the server binds (parent, request_id) to one stable node, and a replayed
 request returns the original product. A run-token agent organizes only its own
 task: logical manager children under its own open task need no user
-authorization, while worker children ride the implementation takeoff gate; any
+authorization, while worker children ride the runtime gate; any
 parent other than the caller's own task is refused. ``tree`` pages the task
 tree. ``retry`` creates the request-bound retry run of one recorded run.
 
@@ -32,8 +32,8 @@ out-of-band (the terminal-driven node's resolution step): operator scope,
 exact input ids, idempotent replay; later arrivals keep blocking closure.
 
 ``send`` relays a message into the target session as an ``agent_message``
-event (never a ``user`` event), so it neither mints nor revokes a takeoff
-authorization window. The server refuses a message over
+event (never a ``user`` event), so the runtime gate never counts it as a user message.
+The server refuses a message over
 MAX_AGENT_MESSAGE_WEIGHTED_CHARS weighted characters (CJK characters, CJK
 punctuation, and fullwidth characters count 2) with exit code 2 and no
 effect; long content belongs in a file the message points at. The caller

@@ -133,10 +133,10 @@ An understanding page precedes the plan when the master must first align the rea
 - Before each consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
 - After `charliebot plan approve` and before delegation, post one English comment on
-  the plan's ticket carrying the design conclusion and the choices the user judged. One
-  comment per plan lineage. The plan stage never creates a ticket; a plan whose work has
-  no ticket posts nothing. Design changes after take off are reported to the user as
-  deviations and are not written back to Linear.
+  the plan's ticket carrying the design conclusion and the resolved choices. One comment
+  per plan lineage. The plan stage never creates a ticket; a plan whose work has no ticket
+  posts nothing. Design changes after plan approval reach the user as deviations; Linear
+  keeps the approved design.
 
 ## Verify
 

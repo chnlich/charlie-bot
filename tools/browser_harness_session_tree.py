@@ -36,10 +36,10 @@ stopped or contacted.
 
 from __future__ import annotations
 
+import pathlib
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -53,7 +53,7 @@ import time  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
 
-def open_evidence_dir(evidence_dir: Path) -> str:
+def open_evidence_dir(evidence_dir: pathlib.Path) -> str:
   """Create the run's evidence directory and return the commit it documents (the
     checkout's HEAD), so every artifact names the code it was produced from.
     """
@@ -95,7 +95,7 @@ def mint_access_key(prefix: str) -> str:
   return prefix + os.urandom(8).hex()
 
 
-def write_credentials_yaml(home: Path, access_key: str) -> None:
+def write_credentials_yaml(home: pathlib.Path, access_key: str) -> None:
   """Seed the trial home's credentials.yaml with its operator key.
 
   The body is the ``charliebot.access_key`` secret shape the credentials
@@ -190,7 +190,7 @@ DESKTOP_CAPTURE_FLAGS = [
 ]
 
 
-def launch_chrome(chrome: str, profile: Path, debug_port: int, flags: list[str]) -> subprocess.Popen:
+def launch_chrome(chrome: str, profile: pathlib.Path, debug_port: int, flags: list[str]) -> subprocess.Popen:
   """Start headless chrome with a CDP endpoint and a private profile; return the process.
 
     The caller owns the returned process: terminate and reap it when the run

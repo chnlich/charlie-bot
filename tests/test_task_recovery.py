@@ -719,7 +719,8 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
 
 
 @pytest.mark.asyncio
-async def test_recovery_replays_a_lost_cold_read_interrupted_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recovery_replays_a_lost_cold_read_interrupted_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An interrupted cold-read Run reports at replay exactly as the live
     chain's fall-through does (never through the next-backend retry), and the
     report's delivery archives the child; a repeated pass lands nothing twice."""
@@ -758,9 +759,11 @@ async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a
   cfg, _session_blocks, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
-  await tree.runs.register_run(RunRecord(id="run-a", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.runs.register_run(
+      RunRecord(id="run-a", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, "run-a", outcome="failed", exit_code=1)
-  await tree.runs.register_run(RunRecord(id="run-b", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.runs.register_run(
+      RunRecord(id="run-b", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, "run-b", outcome="success", exit_code=0)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
@@ -783,7 +786,8 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
   cfg, _session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
   run_id = "run-failed"
-  await tree.runs.register_run(RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.runs.register_run(
+      RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, run_id, outcome="failed", exit_code=1)
   # The pre-fix live path's delivery: the one report in the parent's log,
   # consumed by the parent's own turn, the node still open.
@@ -798,11 +802,11 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
       recipient=manager.id)
   assert created
   assert tree.task_state(worker.id) == "open"
+
   def report_turns() -> list:
     return [r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn"]
 
-  await poll_until(
-      lambda: len(report_turns()) == 2, timeout=15.0, what="the setup delivery's parent turn")
+  await poll_until(lambda: len(report_turns()) == 2, timeout=15.0, what="the setup delivery's parent turn")
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
   await task_recovery.reconcile_task_tree(cfg, tree)

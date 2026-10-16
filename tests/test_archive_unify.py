@@ -414,8 +414,7 @@ async def test_archive_unsuccessful_worker_refuses_a_node_that_is_not_open(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_archive_unsuccessful_worker_refuses_when_the_run_is_not_the_last_ended(
-    tmp_path: pathlib.Path) -> None:
+async def test_archive_unsuccessful_worker_refuses_when_the_run_is_not_the_last_ended(tmp_path: pathlib.Path) -> None:
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   # An implement worker's successful run awaits its review, so the node stays
   # open with a later-ended run.
@@ -462,7 +461,8 @@ async def test_archive_unsuccessful_worker_refuses_a_node_with_a_pending_trigger
   _manager, worker = await build_failed_worker(tree)
   trigger_mgr = triggers.TriggerManager(cfg, tree)
   await trigger_mgr._save_trigger(
-      models.PendingTrigger(id="trig-1", session_id=worker.id, fire_at=datetime.datetime.now(datetime.UTC), message="wake"))
+      models.PendingTrigger(
+          id="trig-1", session_id=worker.id, fire_at=datetime.datetime.now(datetime.UTC), message="wake"))
 
   assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
   assert close_facts(tree, worker.id) == []
@@ -484,8 +484,7 @@ async def test_a_parent_message_to_the_server_archived_worker_draws_the_archived
 
 
 @pytest.mark.asyncio
-async def test_the_users_message_restores_the_server_archived_worker_and_starts_a_round(
-    tmp_path: pathlib.Path) -> None:
+async def test_the_users_message_restores_the_server_archived_worker_and_starts_a_round(tmp_path: pathlib.Path) -> None:
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   # run-0: the executor's own round below takes the name run-1.
   _manager, worker = await build_failed_worker(tree, run_id="run-0")
@@ -495,7 +494,8 @@ async def test_the_users_message_restores_the_server_archived_worker_and_starts_
   # reads the round's own input batch instead of racing the completion close.
   executor = ScriptedExecutor(tree, finish=False)
   tree.dispatch.executor = executor
-  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="continue from here", actor="user", input_id="msg-1")
+  await tree.dispatch.admit_input(
+      worker.id, event_type=ET.USER, content="continue from here", actor="user", input_id="msg-1")
   decision = await tree.dispatch.dispatch_pending(worker.id)
 
   assert tree.task_state(worker.id) == "open"

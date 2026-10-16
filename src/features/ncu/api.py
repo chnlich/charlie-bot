@@ -1,21 +1,22 @@
 """The Nsight Compute (.ncu-rep) report viewer page."""
 
 import asyncio
-from pathlib import Path
+import pathlib
 
-from fastapi import APIRouter, Query, Request, responses
+import fastapi
+from fastapi import responses
 
 from src.features.ncu import ncu_parsing
 from src.runtime import file_urls, templating
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 # The viewer route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
 # reads local report files, so it sits behind the access key like the file server.
 NCU_VIEWER_PATH = "/ncu"
 
 
-def _ncu_error_page(request: Request, message: str, status_code: int) -> responses.HTMLResponse:
+def _ncu_error_page(request: fastapi.Request, message: str, status_code: int) -> responses.HTMLResponse:
   """Render ncu.html with a clean error message and a 4xx status."""
   return templating.templates().TemplateResponse(
       request,
@@ -30,8 +31,8 @@ def _ncu_error_page(request: Request, message: str, status_code: int) -> respons
 
 @router.get(NCU_VIEWER_PATH, response_class=responses.HTMLResponse)
 async def ncu_viewer(
-    request: Request,
-    file: list[str] = Query(default=[]),
+    request: fastapi.Request,
+    file: list[str] = fastapi.Query(default=[]),
 ) -> responses.Response:
   """Render the Nsight Compute (.ncu-rep) report viewer page.
 
@@ -46,7 +47,7 @@ async def ncu_viewer(
     )
 
   target = file[0]
-  path = Path(target)
+  path = pathlib.Path(target)
   if not path.is_absolute():
     return _ncu_error_page(request, f"Report path must be absolute: {target}", 400)
 

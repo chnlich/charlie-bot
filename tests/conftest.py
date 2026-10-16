@@ -1653,15 +1653,16 @@ CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.runtime.cli.common._maybe
 CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.infra.timeouts.CLI_CONNECT_TOTAL_TIMEOUT"
 
 # Import-path patch target for the logged-task spawner the shared thread core
-# (src/features/chat_threads/thread_entry.py) fires: the round side's ack-clear and nudge tasks
-# are created there once the round side moves into the core, so mock setattrs
-# the stand-in on the src.features.chat_threads.thread_entry module attribute.
-THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.features.chat_threads.thread_entry.create_logged_task"
+# (src/features/chat_threads/thread_entry.py) fires for the round side's ack-clear and nudge
+# tasks: thread_entry reads it through its home module at call time (`tasks.create_logged_task`),
+# so mock setattrs the stand-in on the src.infra.tasks module attribute.
+THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.infra.tasks.create_logged_task"
 
-# Import-path patch target for the master wake the shared thread core's round-end
-# audit fires (the nudge): once the audit moves into src/features/chat_threads/thread_entry.py, mock
-# setattrs the stand-in on the src.features.chat_threads.thread_entry module attribute.
-THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.features.chat_threads.thread_entry.trigger_master"
+# Import-path patch target for the master wake the shared thread core's round-end audit fires
+# (the nudge): thread_entry reads it through its home module at call time
+# (`master_trigger.trigger_master`), so mock setattrs the stand-in on the
+# src.runtime.master_trigger module attribute.
+THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 
 # Import-path patch targets for the platform client factories every listener outbound path
 # posts through. src/features/slack/slack_listener.py and src/features/discord/discord_listener.py each define

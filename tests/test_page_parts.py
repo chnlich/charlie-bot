@@ -8,7 +8,7 @@ takes effect without a restart.
 import pathlib
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 import server
 from src.app import registrations
@@ -85,7 +85,7 @@ def test_the_asset_version_covers_package_static_files_by_url_path(fake_repo: pa
 def test_the_server_serves_a_package_static_file_under_its_url_path() -> None:
   path = constants.REPO_ROOT / "src/features/artifacts/static/artifact-comments.js"
 
-  response = TestClient(server.app).get("/static/features/artifacts/artifact-comments.js")
+  response = testclient.TestClient(server.app).get("/static/features/artifacts/artifact-comments.js")
 
   assert response.status_code == 200
   assert response.content == path.read_bytes()

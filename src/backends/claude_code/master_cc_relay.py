@@ -236,7 +236,7 @@ async def _report_login_required(
   leaves through the run's ``emit``.
   """
   log.error(
-      claude_relay.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
+      claude_relay.event_types.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       session=ctx.session_meta.id,
       account=account.label,
       config_dir=account.config_dir,

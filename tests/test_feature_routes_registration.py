@@ -13,12 +13,12 @@ from typing import Any, NamedTuple
 
 import conftest
 import pytest
-from fastapi.testclient import TestClient
-from starlette.routing import Match
+from fastapi import testclient
+from starlette import routing
 
 import server
 from src.features.artifacts import api as artifacts_api
-from src.infra.config import CharlieBotConfig
+from src.infra import config
 from src.runtime.api import deps
 
 ACCESS_KEY = "op-secret"
@@ -84,7 +84,7 @@ def _request_path(route: MovedRoute) -> str:
   return route.path.format(session_id=SESSION)
 
 
-def _send(client: TestClient, route: MovedRoute, headers: dict[str, str]) -> Any:
+def _send(client: testclient.TestClient, route: MovedRoute, headers: dict[str, str]) -> Any:
   kwargs: dict[str, Any] = {"headers": headers}
   if route.method == "POST":
     kwargs["json"] = route.body
@@ -92,14 +92,14 @@ def _send(client: TestClient, route: MovedRoute, headers: dict[str, str]) -> Any
 
 
 @pytest.fixture
-def keyed_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def keyed_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> testclient.TestClient:
   """The real app under an access key, over session blocks that know no session."""
   conftest.stub_credentials({"charliebot": {"access_key": ACCESS_KEY}})
-  cfg = CharlieBotConfig(charliebot_home=tmp_path)
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path)
   session_blocks = conftest.build_session_blocks(cfg)
   conftest.bind_deps_blocks(monkeypatch, conftest.build_task_tree(cfg, session_blocks), session_blocks)
   monkeypatch.setattr(artifacts_api, "_plan_manager", None)
-  return TestClient(server.app)
+  return testclient.TestClient(server.app)
 
 
 def _served_by_feature_apis() -> set[tuple[str, str, str]]:
@@ -120,7 +120,7 @@ def test_the_table_names_every_route_the_feature_api_modules_serve() -> None:
 
 @pytest.mark.parametrize("route", MOVED_ROUTES, ids=lambda r: f"{r.method} {r.path}")
 def test_the_access_key_gates_a_moved_route_and_a_keyed_request_reaches_its_endpoint(
-    keyed_client: TestClient, route: MovedRoute) -> None:
+    keyed_client: testclient.TestClient, route: MovedRoute) -> None:
   no_credential = _send(keyed_client, route, {})
   wrong_credential = _send(keyed_client, route, {"Authorization": "Bearer wrong"})
   keyed = _send(keyed_client, route, {"Authorization": f"Bearer {ACCESS_KEY}"})
@@ -143,7 +143,7 @@ def test_a_moved_path_resolves_to_its_own_feature_endpoint(route: MovedRoute) ->
       "headers": [],
   }
 
-  first = next(r for r in server.app.routes if r.matches(scope)[0] == Match.FULL)
+  first = next(r for r in server.app.routes if r.matches(scope)[0] == routing.Match.FULL)
 
   assert first.endpoint.__module__ == f"{route.package}.api"
 

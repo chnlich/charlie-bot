@@ -13,15 +13,19 @@ import conftest
 import pytest
 from core import test_discord_commands, test_discord_gateway, test_discord_listener
 
-from src.features.discord.discord_client import DiscordClient
-from src.features.slack.slack_listener import SlackClient
+from src.features.discord import discord_client
+from src.features.slack import slack_listener
 
 # (label, double, real class). The label names the double's module: two doubles are both called FakeDiscordClient.
 DOUBLE_PAIRS = [
-    ("conftest.FakeSlackClient", conftest.FakeSlackClient, SlackClient),
-    ("core.test_discord_listener.FakeDiscordClient", test_discord_listener.FakeDiscordClient, DiscordClient),
-    ("core.test_discord_commands.FakeDiscordClient", test_discord_commands.FakeDiscordClient, DiscordClient),
-    ("core.test_discord_gateway.FakeDiscordREST", test_discord_gateway.FakeDiscordREST, DiscordClient),
+    ("conftest.FakeSlackClient", conftest.FakeSlackClient, slack_listener.SlackClient),
+    (
+        "core.test_discord_listener.FakeDiscordClient", test_discord_listener.FakeDiscordClient,
+        discord_client.DiscordClient),
+    (
+        "core.test_discord_commands.FakeDiscordClient", test_discord_commands.FakeDiscordClient,
+        discord_client.DiscordClient),
+    ("core.test_discord_gateway.FakeDiscordREST", test_discord_gateway.FakeDiscordREST, discord_client.DiscordClient),
 ]
 
 # Known parameter drift, each entry a strict xfail. The mark must come off once the double's parameter names

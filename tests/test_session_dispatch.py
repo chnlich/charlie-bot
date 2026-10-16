@@ -245,10 +245,10 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
 
   # Agent and cron input carry their own types even with takeoff in the text;
-  # they never mint a user authorization window. The agent message is refused
-  # at request entry (the sender holds no implementation authorization), so
-  # only the server-owned cron trigger is enqueued — whose takeoff text still
-  # mints nothing.
+  # the runtime gate never counts them as user messages. The agent message is
+  # refused at request entry (the sender holds no implementation
+  # authorization), so only the server-owned cron trigger is enqueued — and it
+  # counts for nothing either.
   with pytest.raises(task_errors.TaskForbiddenError):
     await admit(tree, worker.id, "take off now", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
   await admit(tree, worker.id, "take off (cron)", event_type=ET.SCHEDULED_TRIGGER, actor="system")
@@ -267,8 +267,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   assert executor.batches[1][0] == root.id and len(executor.batches[1][1]) == 1
   assert tree.task_state(worker.id) == "completed"  # auto-close landed
 
-  # The closed node keeps a late machine input as history (and the machine
-  # refusal never mints an authorization window).
+  # The closed node keeps a late machine input as history.
   with pytest.raises(task_errors.TaskArchivedError):
     await admit(
         tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)

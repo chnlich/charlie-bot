@@ -39,8 +39,8 @@ The CLI creates a live goal at loops/{loop_id}/goal.md. Each
 iteration re-reads it, so editing the file steers the remaining
 iterations. The launch response includes loop_id and goal_path.
 
-Runtime authorization (takeoff gate) is derived from the chat
-event log; see skills/plan-approval/SKILL.md for the full contract.
+Runtime authorization is derived from the task tree and the chat event log;
+see skills/plan-approval/SKILL.md for the full contract.
 
 Invalid iterations (a missing, malformed, or zero-commit-no-verdict
 report) are quarantined from loop context and still consume an

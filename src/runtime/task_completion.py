@@ -949,9 +949,9 @@ class TaskCompletionManager:
     """Wake the requesting session with the blockers its saved request hit.
 
         A server-minted scheduled input (actor system, never a user event, so
-        it opens or closes no authorization window) under a stable id per
-        request: recovery replays of the same request admit nothing new. The
-        notice targets open nodes only.
+        the runtime gate never counts it as a user message) under a stable id
+        per request: recovery replays of the same request admit nothing new.
+        The notice targets open nodes only.
         """
     tree = self._tree
     lines = "\n".join(f"- {b}" for b in blockers)

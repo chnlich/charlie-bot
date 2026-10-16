@@ -255,10 +255,10 @@ def usage_counts(usage: dict) -> tuple[int, int, int, int]:
 
 
 # -- Shared event predicates -------------------------------------------------
-# One definition, two consumers: the takeoff authorization gate
-# (src/runtime/takeoff_gate.py) and the task-tree fold's input candidacy
-# (src/runtime/task_sessions.py) both judge USER events through this function,
-# so no site can fork the rule.
+# One definition, two consumers: the runtime gate, which counts real user
+# messages on the task chain (src/runtime/takeoff_gate.py), and the task-tree
+# fold's input candidacy (src/runtime/task_sessions.py) both judge USER events
+# through this function, so no site can fork the rule.
 
 
 def is_real_user_message(event: dict) -> bool:

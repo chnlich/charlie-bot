@@ -324,7 +324,7 @@ async def test_live_goal_change_affects_next_iteration(
 @pytest.mark.asyncio
 async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-  """No take-off anywhere in the chain: 403 with the gate's reason, never a
+  """No user message anywhere in the chain: 403 with the gate's reason, never a
   500, and nothing reserved."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
@@ -341,7 +341,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
   with make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
   assert resp.status_code == 403, resp.text
-  assert "take off" in str(resp.json()["detail"]).lower() or "authorization" in str(resp.json()["detail"]).lower()
+  assert "no user request" in str(resp.json()["detail"])
   assert not improve_command._active_loop_path(manager.id, cfg).exists()
   assert await improve_command.find_running_loop(manager.id, cfg) is None
   loops_dir = improve_command._loops_dir(manager.id, cfg)

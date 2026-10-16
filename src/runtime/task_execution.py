@@ -772,7 +772,7 @@ class TaskExecutionAdapter:
 
         Rechecks run under the control lock immediately before the launch:
         role (the kind/profile pairing), open ancestry and any durable stop
-        request. There is no authorization re-judgment here — the takeoff
+        request. There is no authorization re-judgment here — the runtime
         gate is a request-entry check (delegation, the sequence commands,
         agent messages to worker nodes), so review Runs, manual retries,
         startup recovery and scheduled fires are never withheld by later

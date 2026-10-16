@@ -81,9 +81,9 @@ async def _start_improve_sequence(
 ) -> dict:
   """The v2 improve path: one worker child, iteration Runs, one final report.
 
-  The nearest-real-user-ancestor gate re-judges here (whatever credential
-  carried the request), the loop state and the child are reserved under the
-  stable ids, and the controller task owns the iterations from there.
+  The runtime gate re-judges here (whatever credential carried the request),
+  the loop state and the child are reserved under the stable ids, and the
+  controller task owns the iterations from there.
   """
   try:
     await task_mgr.check_task_authorization(req.session_id)

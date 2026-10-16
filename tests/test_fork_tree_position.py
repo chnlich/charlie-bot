@@ -483,19 +483,19 @@ async def test_closed_parent_refuses_clone_and_elone(tmp_path: pathlib.Path, mon
 
 
 # ---------------------------------------------------------------------------
-# (n) Copied take-off words authorize nobody on the new node
+# (n) Copied user messages authorize nobody on the new node
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_copied_pre_take_off_does_not_authorize_the_successor(tmp_path: pathlib.Path) -> None:
-  """(n) A fresh pre take off in the source log authorizes the source itself,
-  and neither its clone nor its elone child: the gate reads only the user
-  messages after the newest clone_start."""
+async def test_copied_user_message_does_not_authorize_the_successor(tmp_path: pathlib.Path) -> None:
+  """(n) A user message in the source log authorizes the source itself, and
+  neither its clone nor its elone child when no user message sits up the
+  chain: the gate reads only the user messages after the newest clone_start."""
   _cfg, blocks, tree = await make_tree(tmp_path)
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
-  await tree.dispatch.admit_input(source.id, event_type=ET.USER, content="pre take off, prepare the work", actor="user")
+  await tree.dispatch.admit_input(source.id, event_type=ET.USER, content="Can you prepare the work?", actor="user")
   assert await tree.check_task_authorization(source.id) == source.id
 
   clone = await blocks.fork.fork_session(source.id)

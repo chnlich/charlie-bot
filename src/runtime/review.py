@@ -5,8 +5,7 @@ import pathlib
 
 from src.infra import config, log_once, models, ndjson
 from src.infra import event_types as ET
-from src.runtime import message_aggregator
-from src.runtime.task_errors import TaskInvalidError
+from src.runtime import message_aggregator, task_errors
 
 log = log_once.LazyStructlogLogger()
 
@@ -129,7 +128,7 @@ def review_spec_text(task: models.TaskSpec) -> str:
   goal raises, because a review with no spec has nothing to judge the work against.
   """
   if not task.goal.strip():
-    raise TaskInvalidError("review has no task spec: the task record's goal is empty")
+    raise task_errors.TaskInvalidError("review has no task spec: the task record's goal is empty")
   parts = [task.goal]
   if task.acceptance:
     parts.append("\n".join(["## Acceptance Tests", *[f"- {a}" for a in task.acceptance]]))

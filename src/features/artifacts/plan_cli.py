@@ -23,10 +23,16 @@ from src.features.artifacts import plans as core_plans
 from src.infra import help_formatter
 from src.runtime.cli import common as cli_common
 
-_PLAN_REMINDER = (
-    "A read-only verify delegation runs, and its adequacy findings are reported alongside "
-    "the plan, before the plan reaches the user. The full lifecycle contract is the "
-    "plan-approval skill.")
+# The next steps each registering verb prints: a new lineage takes an Improve
+# round before its checks, a later version only the checks.
+_PRESENT_REMINDER = (
+    "Run one Improve round on this version, then verify and the cold read. "
+    "The parent node or the root line approves the plan after both. "
+    "Contract: the plan-approval skill.")
+_AMEND_REMINDER = (
+    "A verify round and the cold read check this version before approval. "
+    "Contract: the plan-approval skill.")
+_PLAN_REMINDERS = {"present": _PRESENT_REMINDER, "amend": _AMEND_REMINDER}
 
 
 def _same_file(a: str | None, b: str | None) -> bool:
@@ -160,7 +166,10 @@ def _build_parser() -> argparse.ArgumentParser:
           formatter_class=help_formatter.CliHelpFormatter))
   _add_approve(
       sub.add_parser(
-          "approve", parents=[parent], help="Record a takeoff", formatter_class=help_formatter.CliHelpFormatter))
+          "approve",
+          parents=[parent],
+          help="Record the plan's approval",
+          formatter_class=help_formatter.CliHelpFormatter))
   _add_close(
       sub.add_parser(
           "close", parents=[parent], help="Terminate a plan lineage", formatter_class=help_formatter.CliHelpFormatter))
@@ -276,8 +285,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         payload,
         readback=lambda: _readback_plan(session_id, args.verb, args),
     )
-    if args.verb in ("present", "amend"):
-      result.setdefault("reminder", _PLAN_REMINDER)
+    if args.verb in _PLAN_REMINDERS:
+      result.setdefault("reminder", _PLAN_REMINDERS[args.verb])
   print(json.dumps(result, indent=2))
 
 

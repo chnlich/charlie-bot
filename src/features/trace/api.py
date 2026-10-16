@@ -10,15 +10,16 @@ import fnmatch
 import hashlib
 import json
 import os
+import pathlib
 import subprocess
 import tempfile
 import threading
 import types
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from urllib import parse
 
-from fastapi import APIRouter, HTTPException, Query, Request, responses
+import fastapi
+from fastapi import responses
 
 import src.features.trace.trace_merge
 from src.features.trace import direct_pass_child, trace_merge_child
@@ -28,7 +29,7 @@ from src.runtime.hooks import wiring
 
 log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 # The viewer route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
 # reads local trace files, so it sits behind the access key like the file server.
@@ -64,7 +65,7 @@ _MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 _merge_build_gate = threading.BoundedSemaphore(_MERGE_POOL_WORKERS)
 
 
-def _perfetto_merge_cache_dir() -> Path:
+def _perfetto_merge_cache_dir() -> pathlib.Path:
   """This profile's Perfetto merge cache. Resolved per call, never at import."""
   return config.get_config().charliebot_home / "cache" / "perfetto_merge"
 
@@ -76,10 +77,10 @@ def _trace_merge() -> types.ModuleType:
 
 @router.get(PERFETTO_VIEWER_PATH, response_class=responses.HTMLResponse)
 async def perfetto_viewer(
-    request: Request,
-    trace: list[str] = Query(default=[]),
+    request: fastapi.Request,
+    trace: list[str] = fastapi.Query(default=[]),
     # alias keeps the URL query key 'dir': the page's own merged-trace link builds it.
-    dir_path: str | None = Query(default=None, alias="dir"),
+    dir_path: str | None = fastapi.Query(default=None, alias="dir"),
     pattern: str = "*.json",
     title: str | None = None,
     slim: bool | None = None,
@@ -94,7 +95,8 @@ async def perfetto_viewer(
     inputs.extend((f"{file_urls.FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
 
   if not inputs:
-    raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
+    raise fastapi.HTTPException(
+        status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
 
   warn = None
   if await asyncio.to_thread(_all_local_json_traces, inputs):
@@ -125,8 +127,8 @@ async def perfetto_viewer(
       })
 
 
-def _discover_trace_paths(directory: str, pattern: str) -> list[Path]:
-  dir_path = Path(directory)
+def _discover_trace_paths(directory: str, pattern: str) -> list[pathlib.Path]:
+  dir_path = pathlib.Path(directory)
   if not dir_path.is_dir():
     log.warning("perfetto_dir_not_found", dir=directory)
     return []
@@ -136,20 +138,20 @@ def _discover_trace_paths(directory: str, pattern: str) -> list[Path]:
   )
 
 
-def _trace_input(value: str) -> tuple[str, Path | None]:
+def _trace_input(value: str) -> tuple[str, pathlib.Path | None]:
   for prefix in file_urls.FILE_SERVER_MOUNTS:
     if value.startswith(f"{prefix}/"):
-      return value, Path(value.removeprefix(prefix))
+      return value, pathlib.Path(value.removeprefix(prefix))
   if value.startswith("/"):
-    return f"{file_urls.FILE_SERVER_MOUNTS[0]}{value}", Path(value)
+    return f"{file_urls.FILE_SERVER_MOUNTS[0]}{value}", pathlib.Path(value)
   return value, None
 
 
-def _all_local_json_traces(inputs: list[tuple[str, Path | None]]) -> bool:
+def _all_local_json_traces(inputs: list[tuple[str, pathlib.Path | None]]) -> bool:
   return all(path is not None and path.is_file() and _is_json_trace(path) for _, path in inputs)
 
 
-def _is_json_trace(path: Path) -> bool:
+def _is_json_trace(path: pathlib.Path) -> bool:
   with path.open("rb") as trace_file:
     prefix = trace_file.read(64)
   for byte in prefix:
@@ -159,7 +161,7 @@ def _is_json_trace(path: Path) -> bool:
   return False
 
 
-def _merge_cache_key(paths: list[Path], slim: bool, mode: str) -> str:
+def _merge_cache_key(paths: list[pathlib.Path], slim: bool, mode: str) -> str:
   inputs = []
   for path in paths:
     stat = path.stat()
@@ -168,7 +170,7 @@ def _merge_cache_key(paths: list[Path], slim: bool, mode: str) -> str:
   return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
+def _prune_perfetto_merge_cache(fresh_path: pathlib.Path) -> None:
   entries = sorted(
       (path for path in _perfetto_merge_cache_dir().glob("*.json.gz") if path != fresh_path),
       key=lambda path: path.stat().st_mtime_ns,
@@ -209,7 +211,7 @@ async def stop_service() -> None:
     instance.shutdown(wait=False, cancel_futures=True)
 
 
-async def _await_shared_merge(cache_key: str, build_fn: Callable[[], Awaitable[Path]]) -> Path:
+async def _await_shared_merge(cache_key: str, build_fn: Callable[[], Awaitable[pathlib.Path]]) -> pathlib.Path:
   """Return the cached product for *cache_key*, sharing any in-flight build for it.
 
   The shared build is awaited through ``asyncio.shield`` so a client that disconnects
@@ -224,7 +226,7 @@ async def _await_shared_merge(cache_key: str, build_fn: Callable[[], Awaitable[P
   return await asyncio.shield(existing)
 
 
-async def _cached_gzip_build(cache_key: str, build: Callable[[Path], Awaitable[None]]) -> Path:
+async def _cached_gzip_build(cache_key: str, build: Callable[[pathlib.Path], Awaitable[None]]) -> pathlib.Path:
   """Serve the cached ``<cache_key>.json.gz``; on a miss, run *build* and cache its product.
 
   The build writes a temp file that ``os.replace`` moves into place only on success —
@@ -238,10 +240,10 @@ async def _cached_gzip_build(cache_key: str, build: Callable[[Path], Awaitable[N
     os.utime(cache_path, None)
     return cache_path
 
-  async def run_build() -> Path:
+  async def run_build() -> pathlib.Path:
     descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
     os.close(descriptor)
-    temp_path = Path(temp_name)
+    temp_path = pathlib.Path(temp_name)
     try:
       await build(temp_path)
     except Exception:
@@ -254,9 +256,9 @@ async def _cached_gzip_build(cache_key: str, build: Callable[[Path], Awaitable[N
   return await _await_shared_merge(cache_key, run_build)
 
 
-async def _cached_merge(paths: list[Path], slim: bool) -> Path:
+async def _cached_merge(paths: list[pathlib.Path], slim: bool) -> pathlib.Path:
 
-  async def build(temp_path: Path) -> None:
+  async def build(temp_path: pathlib.Path) -> None:
     if len(paths) == 1:
       await asyncio.get_running_loop().run_in_executor(None, _build_single_trace_merge, paths, temp_path, slim)
       return
@@ -265,7 +267,7 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
   return await _cached_gzip_build(_merge_cache_key(paths, slim, "merge"), build)
 
 
-def _build_single_trace_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+def _build_single_trace_merge(paths: list[pathlib.Path], out_path: pathlib.Path, slim: bool) -> None:
   """Build the single-trace merged artifact in its own lean child process.
 
   The child is a fresh address space per build — the property the merge pool's
@@ -275,7 +277,7 @@ def _build_single_trace_merge(paths: list[Path], out_path: Path, slim: bool) -> 
   M99 floor prices (~0.6 s on every first view; a forkserver child pays it too).
   The gate keeps the concurrency bound the pool's max_workers was.
   """
-  argv = trace_merge_child.parent_argv(paths, out_path, slim, str(Path(__file__).resolve().parents[3]))
+  argv = trace_merge_child.parent_argv(paths, out_path, slim, str(pathlib.Path(__file__).resolve().parents[3]))
   with _merge_build_gate:
     proc = subprocess.Popen(argv, stderr=subprocess.PIPE)
     _, stderr = proc.communicate()
@@ -287,7 +289,7 @@ def _build_single_trace_merge(paths: list[Path], out_path: Path, slim: bool) -> 
   raise RuntimeError(f"merged-trace build child failed rc={proc.returncode}: {detail}")
 
 
-async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path) -> None:
+async def _build_multi_trace_merge(paths: list[pathlib.Path], slim: bool, out_path: pathlib.Path) -> None:
   """Build the multi-trace merged artifact off the event loop: member tasks on
   the merge pool, the parent thread streaming each fragment into the single
   gzip subprocess as its member completes (``build_multi_trace_merge`` owns
@@ -297,7 +299,7 @@ async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path
       _trace_merge().build_multi_trace_merge, paths, out_path, slim, _merge_executor())
 
 
-def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
+def _build_direct_pass_gzip(path: pathlib.Path, out_path: pathlib.Path) -> None:
   """Validate the input is a parseable Chrome-JSON trace while a child process stream-compresses the original bytes.
 
   The artifact is the original bytes compressed and the parse result is discarded, so the two
@@ -312,7 +314,7 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   json accepts fail the build loudly here too — a literal Perfetto cannot render must not
   reach the cache.
   """
-  argv = direct_pass_child.parent_argv(path, out_path, str(Path(__file__).resolve().parents[3]))
+  argv = direct_pass_child.parent_argv(path, out_path, str(pathlib.Path(__file__).resolve().parents[3]))
   proc = subprocess.Popen(argv, stderr=subprocess.PIPE)
   _, stderr = proc.communicate()
   detail = stderr.decode(errors="replace").strip()
@@ -327,9 +329,9 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   raise RuntimeError(f"direct-pass build child failed rc={proc.returncode}: {detail}")
 
 
-async def _cached_direct_pass(path: Path) -> Path:
+async def _cached_direct_pass(path: pathlib.Path) -> pathlib.Path:
 
-  async def build(temp_path: Path) -> None:
+  async def build(temp_path: pathlib.Path) -> None:
     await asyncio.get_running_loop().run_in_executor(None, _build_direct_pass_gzip, path, temp_path)
 
   return await _cached_gzip_build(_merge_cache_key([path], slim=False, mode="gzip"), build)
@@ -337,30 +339,30 @@ async def _cached_direct_pass(path: Path) -> Path:
 
 @router.get(PERFETTO_MERGED_PATH)
 async def perfetto_merged(
-    trace: list[str] = Query(default=[]),
+    trace: list[str] = fastapi.Query(default=[]),
     # alias keeps the URL query key 'dir': perfetto_viewer's merged-trace link builds it.
-    dir_path: str | None = Query(default=None, alias="dir"),
+    dir_path: str | None = fastapi.Query(default=None, alias="dir"),
     pattern: str = "*.json",
     slim: bool = False,
 ) -> responses.FileResponse:
   """Merge local Chrome JSON traces and serve the cached gzip output."""
   if not trace and dir_path is None:
-    raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
+    raise fastapi.HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
 
-  paths = [Path(value) for value in trace]
+  paths = [pathlib.Path(value) for value in trace]
   if dir_path is not None:
     discovered = await asyncio.to_thread(_discover_trace_paths, dir_path, pattern)
     if not discovered:
-      raise HTTPException(status_code=400, detail="Provide at least one trace path; 'dir' matched no files.")
+      raise fastapi.HTTPException(status_code=400, detail="Provide at least one trace path; 'dir' matched no files.")
     paths.extend(discovered)
 
-  resolved_paths: list[Path] = []
+  resolved_paths: list[pathlib.Path] = []
   for path in paths:
     if not await asyncio.to_thread(path.is_file):
-      raise HTTPException(status_code=404, detail=f"Trace path not found: {path}")
+      raise fastapi.HTTPException(status_code=404, detail=f"Trace path not found: {path}")
     resolved_path = await asyncio.to_thread(path.resolve)
     if not await asyncio.to_thread(_is_json_trace, resolved_path):
-      raise HTTPException(status_code=400, detail=f"Trace is not JSON: {path}")
+      raise fastapi.HTTPException(status_code=400, detail=f"Trace is not JSON: {path}")
     resolved_paths.append(resolved_path)
 
   try:
@@ -370,5 +372,5 @@ async def perfetto_merged(
       cache_path = await _cached_merge(resolved_paths, bool(slim))
   except Exception as error:
     log.exception("perfetto_merge_failed", paths=[str(path) for path in resolved_paths], slim=slim)
-    raise HTTPException(status_code=500, detail=str(error)) from error
+    raise fastapi.HTTPException(status_code=500, detail=str(error)) from error
   return responses.FileResponse(cache_path, media_type="application/gzip")

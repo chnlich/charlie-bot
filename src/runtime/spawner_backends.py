@@ -1,9 +1,22 @@
-"""Spawn-time backend+model resolution — explicit requests, session defaults, verify selection."""
+"""Spawn-time backend+model resolution — explicit requests, the worker default, session defaults, verify selection."""
+
+from typing import Literal
 
 from src.infra import config, log_once, models
 from src.runtime import review, session_store
 
 log = log_once.LazyStructlogLogger()
+
+# The improve loop's worker child carries no task type; its spawn names this role instead.
+IMPROVE_ROLE = "improve"
+
+SubagentRole = models.TaskType | Literal["improve"]
+
+# The roles that run on backends.worker_default when the request names no
+# backend. Verify and cold-read pick a cross-model backend (select_verify_backend)
+# and the reviewer its own (review.select_reviewer_backend).
+_WORKER_DEFAULT_ROLES: frozenset[str] = frozenset(
+    {models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN, IMPROVE_ROLE})
 
 
 def resolve_backend_option(cfg: config.CharlieBotConfig, backend_id: str, model: str | None) -> models.BackendOption:
@@ -78,12 +91,17 @@ async def resolve_requested_subagent_backend_model(
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
     requested_backend: str | None,
+    role: SubagentRole,
 ) -> tuple[str, str | None]:
-  """Resolve backend+model from an explicit configured backend or the session default.
+  """Resolve a subagent's backend+model: the explicit request, the worker default, or the session default.
 
-  Both paths are strict: an unknown explicit `requested_backend` (a typo in user input) and a
-  session pinned to an id config.yaml no longer defines both raise. Only an empty session
-  backend defaults, and it defaults to cfg.backends.options[0].
+  An explicit `requested_backend` wins. Without one, an implementation worker
+  (a `_WORKER_DEFAULT_ROLES` role) runs on cfg.backends.worker_default when that
+  key is set; every other case inherits the session's backend. Every path is
+  strict: an unknown explicit `requested_backend` (a typo in user input), a
+  worker_default id config.yaml no longer defines, and a session pinned to an
+  unknown id all raise. Only an empty session backend defaults, and it defaults
+  to cfg.backends.options[0].
   """
   session_meta = await _require_session(store, session_id)
   if requested_backend is not None:
@@ -91,6 +109,9 @@ async def resolve_requested_subagent_backend_model(
       raise ValueError("requested backend is required")
     option = config.require_backend_option(cfg, requested_backend, subject="requested ")
     return option.id, models.option_default_model(option, subject="requested backend ")
+  if role in _WORKER_DEFAULT_ROLES and cfg.backends.worker_default is not None:
+    option = config.require_backend_option(cfg, cfg.backends.worker_default, subject="worker default ")
+    return option.id, models.option_default_model(option, subject="worker default backend ")
   return _resolve_session_default_backend_model(cfg, session_meta)
 
 

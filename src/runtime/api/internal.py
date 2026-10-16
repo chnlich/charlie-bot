@@ -1,7 +1,6 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
 from pathlib import Path
-from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -71,18 +70,12 @@ def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
   return invocation.model_dump(mode="json")
 
 
-class _SpawnRequest(Protocol):
-  """The fields every spawn-style request body carries for ``_authorize_spawn_request``."""
-  session_id: str
-  backend: str | None
-
-
 async def _authorize_spawn_request(
-    req: _SpawnRequest,
+    req: DelegateRequest,
     store: SessionStore,
     task_mgr: TaskTreeManager,
 ) -> tuple[str | None, str | None]:
-  """Validate session, enforce the runtime gate, and resolve backend/model for spawn-style endpoints.
+  """Validate session, enforce the runtime gate, and resolve backend/model for a delegation.
 
   A task-tree node takes the one central authorization owner —
   ``TaskTreeManager.check_task_authorization``, the runtime gate (judged where
@@ -91,7 +84,7 @@ async def _authorize_spawn_request(
   """
   require_found(await store.get_session(req.session_id))
 
-  if not (isinstance(req, DelegateRequest) and is_read_only_exempt(req.task_type)):
+  if not is_read_only_exempt(req.task_type):
     try:
       await task_mgr.check_task_authorization(req.session_id)
     except DelegationBlockedError as e:
@@ -99,12 +92,11 @@ async def _authorize_spawn_request(
 
   cfg = get_config()
   try:
-    if (isinstance(req, DelegateRequest) and req.task_type in (TaskType.VERIFY, TaskType.COLD_READ) and
-        req.backend is None):
+    if req.task_type in (TaskType.VERIFY, TaskType.COLD_READ) and req.backend is None:
       resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(req.session_id, cfg, store, [])
     else:
       resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
-          req.session_id, cfg, store, requested_backend=req.backend)
+          req.session_id, cfg, store, requested_backend=req.backend, role=req.task_type)
   except ValueError as e:
     raise bad_request(e) from e
 

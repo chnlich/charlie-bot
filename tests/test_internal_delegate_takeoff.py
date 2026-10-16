@@ -1,4 +1,4 @@
-"""Regression tests for the /api/internal delegate and improve entries: the takeoff gate,
+"""Regression tests for the /api/internal delegate and improve entries: the runtime gate,
 and the worker child record carrying the backend its creator resolved.
 """
 
@@ -304,6 +304,7 @@ def _backend_tree_env(
     monkeypatch: pytest.MonkeyPatch,
     *,
     preference: list[str],
+    worker_default: str | None = None,
 ) -> tuple[CharlieBotConfig, SessionBlocks, TaskTreeManager, TaskExecutionAdapter]:
   """A real task tree over a synthetic home, parent backend Y = OPUS_BACKEND_ID, launches disarmed.
 
@@ -316,7 +317,8 @@ def _backend_tree_env(
       paths={"worktree_dir": str(tmp_path / "worktrees")},
       backends={
           "options": VERIFY_BACKEND_OPTIONS,
-          "preference": preference
+          "preference": preference,
+          "worker_default": worker_default
       },
   )
   session_blocks = build_session_blocks(cfg)
@@ -434,9 +436,48 @@ async def test_implement_delegate_without_backend_resolves_to_the_parent_backend
 
 
 @pytest.mark.asyncio
-async def test_improve_child_records_the_requested_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An improve request naming backend X: the loop's worker child record keeps X."""
-  cfg, session_blocks, tree, _adapter = _backend_tree_env(tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID])
+async def test_worker_default_runs_unnamed_workers_and_leaves_verify_routing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """With backends.worker_default set, an implement delegation that names no backend runs on it,
+  a named backend wins, and verify keeps its cross-model backends.preference routing."""
+  _cfg, session_blocks, tree, _adapter = _backend_tree_env(
+      tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID, "codex-o3"], worker_default="kimi-k2.5")
+  manager = await _backend_test_manager(tree)
+
+  async def delegated_backend(**overrides: Any) -> str | None:
+    result = await internal.delegate_task(
+        _build_request(session_id=manager.id, **overrides),
+        session_events=session_blocks.events,
+        store=session_blocks.store,
+        task_mgr=tree,
+        caller=OPERATOR,
+    )
+    child = await tree.load_meta(result["session_id"])
+    first = await tree.runs.get_run(result["session_id"], result["run_id"])
+    assert child is not None and first is not None and child.backend == first.backend
+    return first.backend
+
+  assert await delegated_backend(backend=None) == "kimi-k2.5"
+  assert await delegated_backend(task_type=TaskType.QUICK_EDIT, backend="codex-o3") == "codex-o3"
+  assert await delegated_backend(
+      task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=None) == "codex-o3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend", "worker_default", "expected"),
+    [
+        pytest.param("codex-o3", None, "codex-o3", id="requested"),
+        pytest.param("codex-o3", "kimi-k2.5", "codex-o3", id="requested-over-worker-default"),
+        pytest.param(None, "kimi-k2.5", "kimi-k2.5", id="worker-default"),
+    ],
+)
+async def test_improve_child_records_the_resolved_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str | None, worker_default: str | None,
+    expected: str) -> None:
+  """The loop's worker child record keeps the resolved backend: the requested one, else backends.worker_default."""
+  cfg, session_blocks, tree, _adapter = _backend_tree_env(
+      tmp_path, monkeypatch, preference=[OPUS_BACKEND_ID], worker_default=worker_default)
   manager = await _backend_test_manager(tree)
   spawned: list[str] = []
 
@@ -461,7 +502,7 @@ async def test_improve_child_records_the_requested_backend(tmp_path: Path, monke
           session_id=manager.id,
           repo_path="/tmp/repo",
           base_branch="main",
-          backend="codex-o3",
+          backend=backend,
           goal="Improve this",
       ),
       cfg=cfg,
@@ -470,5 +511,5 @@ async def test_improve_child_records_the_requested_backend(tmp_path: Path, monke
   )
 
   child = await tree.load_meta(result["child_session_id"])
-  assert child is not None and child.backend == "codex-o3"
+  assert child is not None and child.backend == expected
   assert spawned, "the loop controller was never scheduled on an accepted request"

@@ -59,10 +59,11 @@ Task spec format (--task-spec-file):
 
 Backend selection (--backend):
 
-  Omit --backend unless the user explicitly named a backend for this
-  delegation. Omitted: implement / quick-edit / script-run inherit the
-  session backend;   verify is routed to the first backends.preference entry
-  that differs from it. An explicit --backend replaces that routing for
+  Pass --backend only when the user or the line's goal names a backend. Omitted:
+  implement / quick-edit / script-run run on backends.worker_default, or inherit the
+  session backend when that key is absent.
+  Verify is routed to the first backends.preference entry that differs from
+  the session backend. An explicit --backend replaces that routing for
   every task type, verify included. The resolved backend runs every
   work Run of the worker session.
 """
@@ -93,8 +94,8 @@ def main() -> None:
       "--backend",
       default=None,
       help=(
-          "Configured backend option id from ~/.charliebot/config.yaml; omit unless the user "
-          "explicitly named a backend for this delegation (see epilog)"))
+          "Configured backend option id from ~/.charliebot/config.yaml; pass only when the user "
+          "or the line's goal names a backend (see epilog)"))
   parser.add_argument(
       "--keep-worktree",
       required=True,

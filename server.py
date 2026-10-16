@@ -8,11 +8,10 @@ import io
 import json
 import time
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from typing import Any
 
 from src.app import registrations
-from src.infra.gc_control import gc_off
+from src.infra import gc_control
 
 # The backend packages register their types before the import chain below can parse a config.
 registrations.register_all()
@@ -23,35 +22,31 @@ registrations.register_all()
 # only grows — ~43 ms of the import wall (the M99 floor) that reclaims nothing
 # the process keeps, so the whole chain runs inside the same bounded span the
 # server's other bulk builds use; gc is back on before any request can arrive.
-with gc_off(collect=False):
-  from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-  from fastapi.staticfiles import StaticFiles
-  from isal.igzip import IGzipFile
-  from starlette.datastructures import Headers
-  from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
-  from starlette.types import ASGIApp, Message, Receive, Scope, Send
+with gc_control.gc_off(collect=False):
+  import fastapi
+  from fastapi import staticfiles
+  from isal import igzip
+  from starlette import datastructures, types
+  from starlette.middleware import gzip
 
   from src.app import pages, registrations
-  from src.infra import constants, responses, timeouts
-  from src.infra.buildinfo import init_build_info
-  from src.infra.config import CharlieBotConfig, get_config, require_backends
-  from src.infra.constants import REPO_ROOT
-  from src.infra.http import close_http_client
-  from src.infra.log_once import LazyStructlogLogger
-  from src.infra.models import SessionMetadata, utc_now
-  from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-  from src.runtime import init_seed, session_events, session_store, templating
-  from src.runtime.agent_environment import apply_agent_environment
-  from src.runtime.api import chat, internal, sessions
-  from src.runtime.api.auth import AuthMiddleware, check_ws_auth
+  from src.infra import buildinfo, config, constants, http, log_once, models, process, responses, timeouts
+  from src.runtime import (
+      agent_environment,
+      init_seed,
+      message_aggregator,
+      session_events,
+      session_store,
+      streaming,
+      task_execution,
+      templating,
+      triggers,
+      v1_sessions,
+  )
+  from src.runtime.api import auth, chat, internal, sessions
   from src.runtime.hooks import wiring
-  from src.runtime.message_aggregator import MessageAggregator
-  from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-  from src.runtime.task_execution import task_manager
-  from src.runtime.triggers import TriggerManager, set_trigger_manager
-  from src.runtime.v1_sessions import require_no_v1_sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Every registered router, command and service exists because its package's line in
 # registrations.PACKAGES ran register(); the routers below are read from that registry.
@@ -95,22 +90,22 @@ _TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES = (
 )
 
 
-class _IsalGZipResponder(GZipResponder):
+class _IsalGZipResponder(gzip.GZipResponder):
   """A GZipResponder that deflates through ISA-L and skips the media types of the skip list."""
 
-  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int) -> None:
+  def __init__(self, app: types.ASGIApp, minimum_size: int, compresslevel: int) -> None:
     # IdentityResponder.__init__ binds the chain without the zlib file the
     # GZipResponder layer would construct per request and this responder
     # replaces; the deflate state builds at the first deflated body instead
     # (through ISA-L, mtime=0 like the one-shot gzip memos'): a request the
     # middleware skips — precompressed, excluded type, small body —
     # constructs none of it.
-    IdentityResponder.__init__(self, app, minimum_size)
+    gzip.IdentityResponder.__init__(self, app, minimum_size)
     self.compresslevel = compresslevel
     self.gzip_buffer = None
     self.gzip_file = None
 
-  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+  async def __call__(self, scope: types.Scope, receive: types.Receive, send: types.Send) -> None:
     # IdentityResponder.__call__ mounts the ASGI chain without the super's
     # always-entered file contexts; the state built mid-flight closes through
     # the stack when the request ends, written or not.
@@ -122,28 +117,28 @@ class _IsalGZipResponder(GZipResponder):
   def apply_compression(self, body: bytes, *, more_body: bool) -> bytes:
     if self.gzip_file is None:
       self.gzip_buffer = io.BytesIO()
-      self.gzip_file = IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=self.compresslevel, mtime=0)
+      self.gzip_file = igzip.IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=self.compresslevel, mtime=0)
       self._exit_stack.enter_context(self.gzip_buffer)
       self._exit_stack.enter_context(self.gzip_file)
     return super().apply_compression(body, more_body=more_body)
 
-  async def send_with_compression(self, message: Message) -> None:
+  async def send_with_compression(self, message: types.Message) -> None:
     if message["type"] == "http.response.start":
       # The superclass sets content_type_is_excluded from its own one-entry
       # constant at the start message; this responder's body branches read the
       # flag only after that point, so recompute it here from the wider list.
       await super().send_with_compression(message)
-      content_type = Headers(raw=self.initial_message["headers"]).get("content-type", "")
+      content_type = datastructures.Headers(raw=self.initial_message["headers"]).get("content-type", "")
       self.content_type_is_excluded = content_type.startswith(_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES)
       return
     await super().send_with_compression(message)
 
 
-class _CharlieBotGZipMiddleware(GZipMiddleware):
+class _CharlieBotGZipMiddleware(gzip.GZipMiddleware):
   """Skips transport compression where it cannot pay: media types by prefix."""
 
-  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-    if scope["type"] == "http" and "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):
+  async def __call__(self, scope: types.Scope, receive: types.Receive, send: types.Send) -> None:
+    if scope["type"] == "http" and "gzip" in datastructures.Headers(scope=scope).get("Accept-Encoding", ""):
       responder = _IsalGZipResponder(self.app, self.minimum_size, compresslevel=self.compresslevel)
       await responder(scope, receive, send)
       return
@@ -165,17 +160,17 @@ class _RequestLogMiddleware:
   single producer of request logs.
   """
 
-  def __init__(self, app: ASGIApp) -> None:
+  def __init__(self, app: types.ASGIApp) -> None:
     self.app = app
 
-  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+  async def __call__(self, scope: types.Scope, receive: types.Receive, send: types.Send) -> None:
     if scope["type"] != "http":
       await self.app(scope, receive, send)
       return
     started = time.monotonic()
     status: int | None = None
 
-    async def send_capturing_status(message: Message) -> None:
+    async def send_capturing_status(message: types.Message) -> None:
       nonlocal status
       if message["type"] == "http.response.start":
         status = message["status"]
@@ -188,7 +183,8 @@ class _RequestLogMiddleware:
       raise
     self._log_http_request(scope, status, started)
 
-  def _log_http_request(self, scope: Scope, status: int | None, started: float, *, error: str | None = None) -> None:
+  def _log_http_request(
+      self, scope: types.Scope, status: int | None, started: float, *, error: str | None = None) -> None:
     """The one http_request log site: five fields, plus `error` on the exception path only."""
     client = scope.get("client")
     fields: dict[str, object] = {
@@ -203,7 +199,7 @@ class _RequestLogMiddleware:
     log.info("http_request", **fields)
 
 
-async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: object) -> None:
+async def _ws_keepalive(websocket: fastapi.WebSocket, log_label: str, **log_context: object) -> None:
   """Hold a WebSocket open with periodic pings until the client disconnects."""
   try:
     while True:
@@ -211,29 +207,29 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
         await asyncio.wait_for(websocket.receive_text(), timeout=timeouts.WS_KEEPALIVE_TIMEOUT)
       except TimeoutError:
         await websocket.send_json({"type": "ping"})
-  except WebSocketDisconnect:
+  except fastapi.WebSocketDisconnect:
     pass
   except Exception as e:
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
-async def _run_task_recovery(cfg: CharlieBotConfig, tree) -> None:
+async def _run_task_recovery(cfg: config.CharlieBotConfig, tree) -> None:
   """Reconcile task Runs before startup opens input and trigger routes."""
-  started = utc_now()
+  started = models.utc_now()
   try:
-    from src.runtime.task_recovery import reconcile_task_tree
-    stats = await reconcile_task_tree(cfg, tree)
-    elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
+    from src.runtime import task_recovery
+    stats = await task_recovery.reconcile_task_tree(cfg, tree)
+    elapsed_ms = round((models.utc_now() - started).total_seconds() * 1000)
     log.info("task_tree_recovery_done", elapsed_ms=elapsed_ms, **stats)
   except Exception:
     log.exception("task_tree_recovery_failed")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
-  cfg = get_config()
-  boot_time = utc_now()
+  cfg = config.get_config()
+  boot_time = models.utc_now()
 
   # The home writer fence: this server is THE writer of its selected home, and
   # a session-tree migration apply takes the same exclusive exclusion. Startup
@@ -241,11 +237,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   # holding it makes a concurrent apply refuse with this server's identity.
   # See src/runtime/home_writer_fence.py — the flock is the exclusion, the
   # identity record is only the holder's name plate.
-  from src.runtime.home_writer_fence import HomeWriterActiveError, acquire_home_writer_fence
+  from src.runtime import home_writer_fence
   writer_fence = None
   try:
-    writer_fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="server startup")
-  except HomeWriterActiveError as e:
+    writer_fence = home_writer_fence.acquire_home_writer_fence(cfg.charliebot_home, purpose="server startup")
+  except home_writer_fence.HomeWriterActiveError as e:
     log.error("server_startup_refused_home_writer_fence", home=str(cfg.charliebot_home), error=str(e))
     raise
   # Every exit path of a still-live process releases the exclusion: a startup
@@ -257,7 +253,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Capture build info (git SHA + start time) for the /api/internal/version endpoint
     # and the CLI version-skew hint. Runs synchronously; ~2 s worst case for git rev-parse.
-    init_build_info()
+    buildinfo.init_build_info()
 
     # Ensure home directory structure exists (fast, mandatory part of startup).
     await init_seed.init_charliebot_home()
@@ -267,11 +263,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # whether the feature is on for this host (off when the memory cap is 0 or
     # the delegated app.slice is missing/unwritable). Then sweep cgroup
     # directories a previous server life left behind (empty ones only).
-    log_session_cgroup_startup(
+    process.log_session_cgroup_startup(
         cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, cfg.server.session_tasks_max)
-    sweep_stale_session_cgroups()
+    process.sweep_stale_session_cgroups()
 
-    app.state.recovery_task = asyncio.create_task(_run_task_recovery(cfg, task_manager()))
+    app.state.recovery_task = asyncio.create_task(_run_task_recovery(cfg, task_execution.task_manager()))
     service_ctx = wiring.ServiceContext(app, cfg, app.state.recovery_task)
     for _, start_service in wiring.service_starts("early"):
       await start_service(service_ctx)
@@ -280,15 +276,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # compete with a recorded Run.
     await app.state.recovery_task
 
-    trigger_mgr = TriggerManager(cfg, task_manager())
-    set_trigger_manager(trigger_mgr)
+    trigger_mgr = triggers.TriggerManager(cfg, task_execution.task_manager())
+    triggers.set_trigger_manager(trigger_mgr)
     app.state.trigger_mgr = trigger_mgr
     await trigger_mgr.recover_pending()
 
     for _, start_service in wiring.service_starts("ready"):
       await start_service(service_ctx)
 
-    log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
+    log.info("server_ready", ready_in_ms=round((models.utc_now() - boot_time).total_seconds() * 1000))
     yield
 
     # Each step keeps its exact call and its order; the timing only wraps it.
@@ -306,8 +302,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     for name, stop_service in wiring.service_stops():
       await timed_step(f"{name}_ms", stop_service)
-    await timed_step("http_client_ms", close_http_client)
-    await timed_step("ws_close_ms", streaming_manager.close_all)
+    await timed_step("http_client_ms", http.close_http_client)
+    await timed_step("ws_close_ms", streaming.streaming_manager.close_all)
   finally:
     if writer_fence is not None:
       writer_fence.release()
@@ -326,8 +322,8 @@ def _include_registered_routers(*, before_runtime: bool) -> None:
 # The app assembly is the import's second bulk build: FastAPI's route
 # registration analyzes every endpoint's annotations and builds the pydantic
 # response models — the same gen-2-heavy allocation shape as the import chain.
-with gc_off(collect=False):
-  app = FastAPI(
+with gc_control.gc_off(collect=False):
+  app = fastapi.FastAPI(
       title="CharlieBot",
       description="Multi-agent Claude Code orchestration system",
       version="0.1.0",
@@ -338,7 +334,7 @@ with gc_off(collect=False):
   # compression), so every big page pays it per fetch: the 633 KB events page
   # measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
   app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-  app.add_middleware(AuthMiddleware)
+  app.add_middleware(auth.AuthMiddleware)
   # Added last, so starlette's insert(0)/reversed build order makes it the
   # outermost user middleware: AuthMiddleware's 401 responses are logged too.
   app.add_middleware(_RequestLogMiddleware)
@@ -360,11 +356,11 @@ with gc_off(collect=False):
 
 
 @app.websocket("/ws/sessions/{session_id}")
-async def session_websocket(websocket: WebSocket, session_id: str) -> None:
+async def session_websocket(websocket: fastapi.WebSocket, session_id: str) -> None:
   """Push session-level events (master CC output, worker summaries) to the browser."""
   # Auth + accept happen inline here because cursor negotiation (unique to this
   # endpoint) must read a message from the accepted socket before subscribing.
-  if not await check_ws_auth(websocket):
+  if not await auth.check_ws_auth(websocket):
     return
   await websocket.accept()
   log.info("session_ws_connected", session_id=session_id)
@@ -375,16 +371,16 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     msg = json.loads(raw)
     if msg.get("type") == "cursor":
       cursor = int(msg.get("index", 0))
-  except WebSocketDisconnect:
+  except fastapi.WebSocketDisconnect:
     log.debug("session_ws_early_disconnect", session_id=session_id)
     return
   except (TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
     log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
 
   # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
-  channel = session_channel(session_id)
-  await streaming_manager.subscribe(channel, websocket)
-  await streaming_manager.subscribe(SIDEBAR_CHANNEL, websocket)
+  channel = streaming.session_channel(session_id)
+  await streaming.streaming_manager.subscribe(channel, websocket)
+  await streaming.streaming_manager.subscribe(streaming.SIDEBAR_CHANNEL, websocket)
   try:
     meta = await session_store.store().get_session(session_id)
     try:
@@ -403,17 +399,17 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
 
     await _ws_keepalive(websocket, "session_ws", session_id=session_id)
   finally:
-    await streaming_manager.unsubscribe(channel, websocket)
-    await streaming_manager.unsubscribe(SIDEBAR_CHANNEL, websocket)
+    await streaming.streaming_manager.unsubscribe(channel, websocket)
+    await streaming.streaming_manager.unsubscribe(streaming.SIDEBAR_CHANNEL, websocket)
     log.info("session_ws_disconnected", session_id=session_id)
 
 
 async def _send_session_catchup(
-    websocket: WebSocket,
+    websocket: fastapi.WebSocket,
     events_block: session_events.SessionEvents,
     session_id: str,
     cursor: int,
-    meta: SessionMetadata | None,
+    meta: models.SessionMetadata | None,
 ) -> tuple[int, int]:
   """Send catchup frames, fast-skipping replay when the client cursor is current."""
   event_index_offset = meta.archive_offset if meta else 0
@@ -423,7 +419,7 @@ async def _send_session_catchup(
     # and the first paint read the same projected event list, so the client's
     # cursor is one space across both.
     from src.runtime import worker_transcript
-    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_manager(), session_id)
+    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_execution.task_manager(), session_id)
     events = entry.events
     return await _replay_aggregated_catchup(websocket, events, cursor, session_id), len(events)
   try:
@@ -466,7 +462,7 @@ class _CatchupWalk:
   def __init__(self, cursor: int, event_index_offset: int = 0) -> None:
     self._cursor = cursor
     self._event_index_offset = event_index_offset
-    self._aggregator = MessageAggregator(event_index_offset=event_index_offset)
+    self._aggregator = message_aggregator.MessageAggregator(event_index_offset=event_index_offset)
     self._frames: list[dict] = []
     self._latest_stream: dict | None = None
 
@@ -512,7 +508,7 @@ def _render_frames(frames: list[dict]) -> list[str]:
 
 
 async def _replay_aggregated_catchup(
-    websocket: WebSocket,
+    websocket: fastapi.WebSocket,
     events: list[dict],
     cursor: int,
     session_id: str,
@@ -555,7 +551,7 @@ async def _replay_aggregated_catchup(
 # The same bulk build as the assembly above: importing each router module registers its
 # routes against pydantic models. The file server's catch-all routes register last, so
 # every other route answers first.
-with gc_off(collect=False):
+with gc_control.gc_off(collect=False):
   _include_registered_routers(before_runtime=False)
 
 # ---------------------------------------------------------------------------
@@ -566,12 +562,12 @@ with gc_off(collect=False):
 # would answer their paths first. check_dir=False checks the directory per request, so a static/ directory that a
 # fast-forward creates serves without a restart.
 for _url_path, _package_static in templating.page_package_static():
-  app.mount(f"/static/{_url_path}", StaticFiles(directory=str(_package_static), check_dir=False))
+  app.mount(f"/static/{_url_path}", staticfiles.StaticFiles(directory=str(_package_static), check_dir=False))
 
-_static_dir = REPO_ROOT / "web" / "static"
+_static_dir = constants.REPO_ROOT / "web" / "static"
 
 if _static_dir.exists():
-  app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+  app.mount("/static", staticfiles.StaticFiles(directory=str(_static_dir)), name="static")
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -583,12 +579,12 @@ def main() -> None:
   import uvicorn
 
   # Every agent process copies this environment.
-  apply_agent_environment()
-  cfg = get_config()
-  require_backends(cfg)
+  agent_environment.apply_agent_environment()
+  cfg = config.get_config()
+  config.require_backends(cfg)
   # The sessions tree belongs to the runtime, and wiring carries only what feature and backend
   # packages register, so the runtime's own check runs here.
-  require_no_v1_sessions(cfg)
+  v1_sessions.require_no_v1_sessions(cfg)
   for startup_check in wiring.startup_checks():
     startup_check(cfg)
   uvicorn.run(

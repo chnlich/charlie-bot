@@ -95,16 +95,16 @@ def lifespan_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   import conftest
   conftest.reset_config_caches()
 
-  monkeypatch.setattr(server_module, "get_config", lambda: cfg)
+  monkeypatch.setattr(server_module.config, "get_config", lambda: cfg)
   monkeypatch.setattr(server_module, "_run_task_recovery", _AsyncStub())
   monkeypatch.setattr(voice_service, "_provision_speech_models", lambda cfg: None)
-  monkeypatch.setattr(server_module, "log_session_cgroup_startup", lambda *a, **k: None)
-  monkeypatch.setattr(server_module, "sweep_stale_session_cgroups", lambda *a, **k: None)
+  monkeypatch.setattr(server_module.process, "log_session_cgroup_startup", lambda *a, **k: None)
+  monkeypatch.setattr(server_module.process, "sweep_stale_session_cgroups", lambda *a, **k: None)
   monkeypatch.setattr(scheduler_module, "Scheduler", _StubScheduler)
-  monkeypatch.setattr(server_module, "TriggerManager", _StubTriggerManager)
-  monkeypatch.setattr(server_module, "set_trigger_manager", lambda *a, **k: None)
-  monkeypatch.setattr(server_module, "close_http_client", _AsyncStub())
-  monkeypatch.setattr(server_module.streaming_manager, "close_all", _AsyncStub())
+  monkeypatch.setattr(server_module.triggers, "TriggerManager", _StubTriggerManager)
+  monkeypatch.setattr(server_module.triggers, "set_trigger_manager", lambda *a, **k: None)
+  monkeypatch.setattr(server_module.http, "close_http_client", _AsyncStub())
+  monkeypatch.setattr(server_module.streaming.streaming_manager, "close_all", _AsyncStub())
   monkeypatch.setattr(usage_sources, "quota_accounts", list)
   from src.runtime import task_recovery
   monkeypatch.setattr(task_recovery, "reconcile_task_tree", _AsyncStub(return_value={}))
@@ -133,7 +133,7 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
 async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> None:
   import fastapi
   server_module = lifespan_env
-  home = server_module.get_config().charliebot_home
+  home = server_module.config.get_config().charliebot_home
   apply_fence = home_writer_fence.acquire_home_writer_fence(home, purpose="apply --add-backend")
   try:
     with pytest.raises(home_writer_fence.HomeWriterActiveError) as excinfo:
@@ -239,7 +239,7 @@ async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, 
 
   from src.features.cron import scheduler as scheduler_module
   server_module = lifespan_env
-  home = server_module.get_config().charliebot_home
+  home = server_module.config.get_config().charliebot_home
 
   class _FailingScheduler(_StubScheduler):
 

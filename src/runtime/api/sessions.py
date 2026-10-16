@@ -1,16 +1,16 @@
 """Session management API routes."""
 
 import asyncio
+import datetime
 import json
+import pathlib
 import uuid
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import get_args
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, TypeAdapter, field_validator
-from starlette.responses import Response
+import fastapi
+import pydantic
+from fastapi import Depends
+from starlette import responses
 
 from src.infra import event_types as ET
 from src.infra import models
@@ -93,12 +93,12 @@ from src.runtime.thinking_state import run_backend
 from src.runtime.triggers import TriggerManager
 
 log = LazyStructlogLogger()
-router = APIRouter()
+router = fastapi.APIRouter()
 
 # The search route's read-only overlay serializes derived datetimes through the
 # model's own JSON scheme: a hand-rolled isoformat() emits +00:00 where the
 # model's UtcDatetime fields emit Z.
-_UTC_DATETIME_JSON = TypeAdapter(models.UtcDatetime | None)
+_UTC_DATETIME_JSON = pydantic.TypeAdapter(models.UtcDatetime | None)
 
 # Read from the Literal so the preview's 400 cannot drift from the type home.
 _RUN_KINDS = frozenset(get_args(models.RunKind))
@@ -198,7 +198,7 @@ def _switchable_backend_ids(
 # same sentence.
 _UNKNOWN_BACKEND_DETAIL = "backend '{}' is not a recognized backend id; valid ids: {}"
 
-# Shared Query description: the routes exposing the sidebar's ids parameter must
+# Shared fastapi.Query description: the routes exposing the sidebar's ids parameter must
 # carry word-identical OpenAPI metadata, so the text has one copy here.
 _SIDEBAR_IDS_QUERY_DESC = "Comma-separated ids of the sessions the sidebar is rendering"
 
@@ -211,7 +211,7 @@ def _resolve_requested_backend(
 ) -> str:
   """Resolve a backend override with family-prefix alias support (a codex id resolves to the codex option).
 
-  Raises HTTPException(400) for any non-None backend id -- whether it arrives
+  Raises fastapi.HTTPException(400) for any non-None backend id -- whether it arrives
   explicitly via ``requested_backend`` or is inherited via ``fallback_backend``
   -- that isn't a member of ``cfg.backends.options`` and doesn't resolve through
   the codex-family alias below.
@@ -237,7 +237,7 @@ def _resolve_requested_backend(
         valid=list(valid_backend_ids),
         fallback=resolved_fallback,
     )
-    raise HTTPException(
+    raise fastapi.HTTPException(
         status_code=400,
         detail=_UNKNOWN_BACKEND_DETAIL.format(requested_backend, sorted(valid_backend_ids)),
     )
@@ -248,7 +248,7 @@ def _resolve_requested_backend(
         fallback=resolved_fallback,
         valid=list(valid_backend_ids),
     )
-    raise HTTPException(
+    raise fastapi.HTTPException(
         status_code=400,
         detail=_UNKNOWN_BACKEND_DETAIL.format(resolved_fallback, sorted(valid_backend_ids)),
     )
@@ -336,11 +336,11 @@ async def _active_listing_corpus(listing: SessionListing) -> tuple[list[models.S
 
 
 async def _sessions_list_response(
-    request: Request,
+    request: fastapi.Request,
     rows: list[models.SessionMetadata],
     derived: dict[str, dict],
     memos: _SessionsListMemos,
-) -> Response:
+) -> responses.Response:
   """Render one sidebar list body and serve it from the route's own memos.
 
   The one render/memo body both sidebar routes share: each route selects its
@@ -354,7 +354,7 @@ async def _sessions_list_response(
   key, so a controller config change or a passing next-run re-renders the bound
   rows. Each task row carries its own overlay state.
   """
-  listing_fields = sequence_listing_fields((row.id for row in rows), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for row in rows), datetime.datetime.now(datetime.UTC))
   rendered: list[tuple[models.SessionMetadata, tuple, tuple]] = []
   for row in rows:
     listing_state = tuple(listing_fields[row.id].items())
@@ -366,7 +366,7 @@ async def _sessions_list_response(
     # own persisted backend. The in-memory read rides the overlay tuple so a
     # backend change re-renders the memoized body.
     display_backend = (run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
-    # Both datetimes ride the model's JSON scheme (pydantic-core renders UTC as
+    # Both datetimes ride the model's JSON scheme (pydantic-core renders datetime.UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(
         (
@@ -409,16 +409,16 @@ async def _sessions_list_response(
       del memos.row_render[stale]
   body = fast_json_bytes(payload)
   memos.whole_body = (list_rows, list_states, body)
-  # The Response return skips response_model's jsonable_encoder pass over every
+  # The responses.Response return skips response_model's jsonable_encoder pass over every
   # row; the body-keyed memo serves the middleware's deflate.
   return await gzip_body_response(request, body, {}, memos.gzip_memo)
 
 
 @router.get("/")
 async def list_sessions(
-    request: Request,
+    request: fastapi.Request,
     listing: SessionListing = Depends(get_session_listing),
-) -> Response:
+) -> responses.Response:
   """List active task nodes newest first.
 
   Sequence-subtree rows and every sidebar view's subtree ride no listing: a
@@ -444,7 +444,7 @@ async def create_session(
   if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
     # v2 task create: the task-tree owner binds (parent, request_id) to one node.
     if req.request_id is None:
-      raise HTTPException(status_code=400, detail=TASK_CREATE_REQUEST_ID_REQUIRED)
+      raise fastapi.HTTPException(status_code=400, detail=TASK_CREATE_REQUEST_ID_REQUIRED)
     if req.backend is not None:
       _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
     try:
@@ -466,7 +466,7 @@ async def create_session(
   if not caller.is_operator:
     # Run credentials create only their own child tasks under their own manager
     # node (the v2 path above); the legacy create shape is operator scope.
-    raise HTTPException(status_code=403, detail=AGENT_CREATE_SCOPE_REFUSAL)
+    raise fastapi.HTTPException(status_code=403, detail=AGENT_CREATE_SCOPE_REFUSAL)
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   # The legacy create shape (the sidebar's new-session action) now opens a
@@ -484,12 +484,12 @@ async def create_session(
       caller=caller)
 
 
-class ArchivedGroupCount(BaseModel):
+class ArchivedGroupCount(pydantic.BaseModel):
   group: str | None
   total: int
 
 
-class ArchivedSessionsPage(BaseModel):
+class ArchivedSessionsPage(pydantic.BaseModel):
   sessions: list[dict]
   has_more: bool
   next_before: str | None
@@ -517,7 +517,7 @@ async def list_archived_sessions(
   try:
     page = await listing.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
   except ValueError as e:
-    raise HTTPException(status_code=422, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=422, detail=str(e)) from e
   rows = page["sessions"]
   sequence_subtree = sequence_subtree_roots(rows)
   rows = [row for row in rows if row.id not in sequence_subtree]
@@ -528,7 +528,8 @@ async def list_archived_sessions(
       [*((False, row) for row in rows), *((True, row) for row in context)],
       key=lambda pair: (pair[1].updated_at, pair[1].id),
       reverse=True)
-  listing_fields = sequence_listing_fields((row.id for _context_only, row in merged), datetime.now(UTC))
+  listing_fields = sequence_listing_fields(
+      (row.id for _context_only, row in merged), datetime.datetime.now(datetime.UTC))
   page["sessions"] = []
   for context_only, row in merged:
     dump = apply_listing_fields(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), listing_fields[row.id])
@@ -551,7 +552,7 @@ async def list_starred_sessions(listing: SessionListing = Depends(get_session_li
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  listing_fields = sequence_listing_fields((row.id for row in sessions), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for row in sessions), datetime.datetime.now(datetime.UTC))
   return [
       apply_listing_fields(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), listing_fields[row.id])
       for row in sessions
@@ -586,7 +587,7 @@ def _parse_session_ids(ids: str) -> list[str]:
   # filter runs after it because a stripped-to-empty part is dropped either way.
   parsed = [sid for sid in dict.fromkeys(map(str.strip, ids.split(','))) if sid]
   if not parsed:
-    raise HTTPException(status_code=422, detail="ids must name at least one session")
+    raise fastapi.HTTPException(status_code=422, detail="ids must name at least one session")
   return parsed
 
 
@@ -607,12 +608,12 @@ _status_body_memo: BoundedMemo[tuple, bytes] = BoundedMemo(_STATUS_BODY_MEMO_LIM
 
 @router.get('/status', response_model=None)
 async def all_sessions_status(
-    request: Request,
-    ids: str = Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
+    request: fastapi.Request,
+    ids: str = fastapi.Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     force: bool = False,
     sidebar: SessionSidebar = Depends(get_session_sidebar),
     store: SessionStore = Depends(get_session_store),
-) -> Response:
+) -> responses.Response:
   """Return derived sidebar state for the requested sessions.
 
   A poll at an unchanged sidebar generation serves the last rendered body
@@ -686,7 +687,7 @@ _SEARCH_DERIVED_PREFIXES: dict[str, bytes] = {
     sidebar_state.WORK_STATE: b'"work_state":',
 }
 _SEARCH_DERIVED_KEYS = frozenset(_SEARCH_DERIVED_PREFIXES)
-# The two datetime fields are None for the common idle session; their whole
+# The two datetime.datetime fields are None for the common idle session; their whole
 # ``"key":null`` piece is prebuilt so neither the pydantic dump_python call
 # nor the scalar render ever runs for them. The other fields' types (bool, int,
 # the work verdict's str-or-None) render through _json_scalar_bytes directly.
@@ -764,7 +765,7 @@ def _json_scalar_bytes(value: object) -> bytes:
   """Render one overlay value as JSON bytes.
 
   The overlay's value types are code-fixed (None, bool, int, and the ISO
-  strings the two datetime slots carry); these renderings are byte-identical
+  strings the two datetime.datetime slots carry); these renderings are byte-identical
   to the response render's own (orjson's) for those types, and an ISO 8601
   string is pure ASCII with no quote or backslash, so the quoted form needs no
   escape pass. Any other type fails loudly instead of rendering.
@@ -787,7 +788,7 @@ class SessionDetailResponse(models.SessionMetadata):
   task_state: models.TaskState = "open"
   work_state: models.WorkState = "idle"
 
-  @field_validator("work_state", mode="before")
+  @pydantic.field_validator("work_state", mode="before")
   @classmethod
   def _unprobed_verdict_stays_idle(cls, value: object) -> object:
     """A row whose sidebar state was never probed carries no verdict (the
@@ -802,55 +803,55 @@ class SessionDetailResponse(models.SessionMetadata):
   prompt_rules: dict = {}
 
 
-class TreePageResponse(BaseModel):
+class TreePageResponse(pydantic.BaseModel):
   """GET /api/sessions/tree response."""
   items: list[models.SessionRow]
   next_cursor: str | None = None
   tree_revision: str
 
 
-class PendingTaskInput(BaseModel):
+class PendingTaskInput(pydantic.BaseModel):
   """One pending task input with the source/text facts the acknowledgement UI shows."""
   id: str
   type: str
-  timestamp: datetime | None = None
+  timestamp: datetime.datetime | None = None
   actor: str | None = None
   source_session_id: str | None = None
   from_session_name: str | None = None
   text: str = ""
 
 
-class PendingTaskInputsResponse(BaseModel):
+class PendingTaskInputsResponse(pydantic.BaseModel):
   """GET /api/sessions/{id}/task-inputs/pending response."""
   items: list[PendingTaskInput]
 
 
-def _task_http_error(e: Exception) -> HTTPException:
+def _task_http_error(e: Exception) -> fastapi.HTTPException:
   """Translate one task-tree domain error into its planned HTTP shape."""
   if isinstance(e, TaskArchivedError):
     # The archived refusal's sentence is the whole detail: the sender reads
     # exactly "task <id> is archived".
-    return HTTPException(status_code=409, detail=str(e))
+    return fastapi.HTTPException(status_code=409, detail=str(e))
   if isinstance(e, (TaskInvalidError,)):
-    return HTTPException(status_code=400, detail=str(e))
+    return fastapi.HTTPException(status_code=400, detail=str(e))
   if isinstance(e, (TaskNotFoundError, RunNotFoundError)):
-    return HTTPException(status_code=404, detail=str(e))
+    return fastapi.HTTPException(status_code=404, detail=str(e))
   if isinstance(e, (TaskForbiddenError, DelegationBlockedError)):
-    return HTTPException(status_code=403, detail=str(e))
+    return fastapi.HTTPException(status_code=403, detail=str(e))
   if isinstance(e, (TaskConflictError, RunIdentityConflictError)):
     blockers = getattr(e, "blockers", None)
     if blockers is None:
       blockers = [str(e)]
-    return HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers})
+    return fastapi.HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers})
   raise e
 
 
 @router.get("/tree", response_model=TreePageResponse)
 async def get_session_tree(
-    parent_id: str | None = Query(default=None),
-    include_archived: bool = Query(default=False),
-    limit: int = Query(default=100, ge=1, le=500),
-    cursor: str | None = Query(default=None),
+    parent_id: str | None = fastapi.Query(default=None),
+    include_archived: bool = fastapi.Query(default=False),
+    limit: int = fastapi.Query(default=100, ge=1, le=500),
+    cursor: str | None = fastapi.Query(default=None),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """One revision-bound page of the task tree; empty parent_id queries the roots."""
@@ -867,11 +868,11 @@ async def get_session_tree(
 
 @router.get('/search', response_model=list[models.SessionMetadata])
 async def search_sessions(
-    request: Request,
+    request: fastapi.Request,
     q: str = '',
     listing: SessionListing = Depends(get_session_listing),
     search: SessionSearch = Depends(get_session_search),
-) -> list[models.SessionMetadata] | Response:
+) -> list[models.SessionMetadata] | responses.Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
     # A whitespace query never reaches the capped scan: the route serves the
@@ -898,10 +899,10 @@ async def search_sessions(
 
 
 async def _serve_search_rows(
-    request: Request,
+    request: fastapi.Request,
     rows: list[models.SessionMetadata],
     derived: dict[str, dict],
-) -> Response:
+) -> responses.Response:
   """Render the search route's rows through the whole-body memo and serve.
 
   Both query shapes feed it — the capped name-match search and the
@@ -917,7 +918,7 @@ async def _serve_search_rows(
   # byte-identical to the FastJsonResponse render of the merged dicts: the
   # segments follow the model's own key order, which is the order the in-place
   # overlay leaves the merged dicts in. Key prefixes ride the prebuilt bytes in
-  # _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole prebuilt
+  # _SEARCH_DERIVED_PREFIXES, and a None datetime.datetime field rides its whole prebuilt
   # null piece (both fields are None on the common idle row), so the pydantic
   # dump_python call under it never runs.
   rendered: list[tuple[models.SessionMetadata, tuple]] = []
@@ -990,7 +991,7 @@ _SWITCH_GZIP_MEMO_LIMIT = 16
 _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
 
 
-async def _switch_payload_response(request: Request, payload: dict | list) -> Response:
+async def _switch_payload_response(request: fastapi.Request, payload: dict | list) -> responses.Response:
   """Render a request-path payload once and serve its gzip form from the body-keyed memo."""
   return await gzip_body_response(request, fast_json_bytes(payload), {}, _switch_gzip_memo)
 
@@ -1020,13 +1021,13 @@ async def get_pending_triggers(
 @router.get('/{session_id}/bootstrap')
 async def get_session_bootstrap(
     session_id: str,
-    request: Request,
+    request: fastapi.Request,
     _meta: models.SessionMetadata = Depends(require_session),
     store: SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-) -> Response:
+) -> responses.Response:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
@@ -1077,13 +1078,13 @@ async def get_session_usage(
 @router.get('/{session_id}/events')
 async def get_session_events_page(
     session_id: str,
-    request: Request,
+    request: fastapi.Request,
     before: int,
     limit: int = 40,
     meta: models.SessionMetadata = Depends(require_session),
     session_events: SessionEvents = Depends(get_session_events),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-) -> Response:
+) -> responses.Response:
   """Paginate backwards through session messages by message ordinal.
 
   ``before`` is a message ordinal (exclusive upper bound). ``limit`` is the
@@ -1139,8 +1140,8 @@ async def get_session_events_page(
 @router.get('/{session_id}/transcript')
 async def get_session_transcript(
     session_id: str,
-    after: int = Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
-    revision: str = Query(default='', description="The revision the client last rendered"),
+    after: int = fastapi.Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
+    revision: str = fastapi.Query(default='', description="The revision the client last rendered"),
     meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
@@ -1154,7 +1155,7 @@ async def get_session_transcript(
   set, so the client re-renders instead of appending.
   """
   if meta.profile != "worker":
-    raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
+    raise fastapi.HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
   thinking_since = thinking_state.busy_since(session_id)
   reset = _transcript_reset(entry.revision, revision)
@@ -1235,7 +1236,7 @@ async def fork_session(
         backend=backend,
     )
   except FileNotFoundError as e:
-    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
+    raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except TaskConflictError as e:
     raise _task_http_error(e) from e
   except ValueError as e:
@@ -1268,7 +1269,7 @@ async def elone_session(
   try:
     meta = await fork.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError as e:
-    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
+    raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except TaskConflictError as e:
     raise _task_http_error(e) from e
   except ValueError as e:
@@ -1315,7 +1316,7 @@ async def switch_session_backend(
   """
   valid_ids = {opt.id for opt in cfg.backends.options}
   if body.backend not in valid_ids:
-    raise HTTPException(status_code=400, detail=_UNKNOWN_BACKEND_DETAIL.format(body.backend, sorted(valid_ids)))
+    raise fastapi.HTTPException(status_code=400, detail=_UNKNOWN_BACKEND_DETAIL.format(body.backend, sorted(valid_ids)))
 
   effective_current = parent.backend or _default_backend_id(cfg)
   if body.backend == effective_current:
@@ -1324,7 +1325,7 @@ async def switch_session_backend(
   binding = binding_for(parent.id)
   if (binding is not None and binding.dedicated_backend and
       not backend_types.same_continuation_domain(effective_current, body.backend, cfg)):
-    raise HTTPException(
+    raise fastapi.HTTPException(
         status_code=400,
         detail=binding.backend_lock_detail(body.backend),
     )
@@ -1372,7 +1373,7 @@ async def archive_session(
     session_id: str,
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> Response:
+) -> responses.Response:
   """Archive a task subtree as one end state.
 
   A task node's archive ends its whole subtree: every open node gets one
@@ -1382,12 +1383,12 @@ async def archive_session(
   archived node returns an empty list.
   """
   if not caller.is_operator:
-    raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
+    raise fastapi.HTTPException(status_code=403, detail="archiving a task requires operator credentials")
   try:
     archived = await task_mgr.archive_subtree(session_id, caller=caller)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
-  return JSONResponse({"archived": archived})
+  return responses.JSONResponse({"archived": archived})
 
 
 @router.delete("/{session_id}/permanent", status_code=204)
@@ -1395,15 +1396,15 @@ async def delete_session_permanently(
     session_id: str,
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> Response:
+) -> responses.Response:
   """Permanently delete an empty, unreferenced task under the control lock."""
   try:
     deleted = await task_mgr.delete_permanently(session_id, caller=caller)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   if not deleted:
-    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
-  return Response(status_code=204)
+    raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
+  return responses.Response(status_code=204)
 
 
 @router.post("/{session_id}/unarchive")
@@ -1412,7 +1413,7 @@ async def unarchive_session(
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> Response:
+) -> responses.Response:
   """Restore an archived task node.
 
   On a task node this is the end state's only exit: the target and every
@@ -1421,13 +1422,13 @@ async def unarchive_session(
   required, and the response names the restored ids.
   """
   if not caller.is_operator:
-    raise HTTPException(status_code=403, detail="unarchiving a task requires operator credentials")
+    raise fastapi.HTTPException(status_code=403, detail="unarchiving a task requires operator credentials")
   try:
     restored = await task_mgr.completion.restore_task(
         session_id, request_id=str(uuid.uuid4()), reason="sidebar unarchive", caller=caller)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
-  return JSONResponse({"restored": restored["restored"]})
+  return responses.JSONResponse({"restored": restored["restored"]})
 
 
 @router.post("/{session_id}/star", response_model=models.SessionMetadata)
@@ -1454,7 +1455,7 @@ async def rate_round(
     meta.round_ratings.pop(round_id, None)
   else:
     meta.round_ratings[round_id] = req.rating
-  meta.updated_at = datetime.now(UTC)
+  meta.updated_at = datetime.datetime.now(datetime.UTC)
   await store.save_metadata(meta)
   log.info("round_rated", session_id=session_id, round_id=round_id, rating=req.rating)
   return meta
@@ -1475,7 +1476,7 @@ async def patch_session(
   """
   if req.model_fields_set <= {"name"}:
     if not req.name:
-      raise HTTPException(status_code=400, detail="rename requires a non-empty name")
+      raise fastapi.HTTPException(status_code=400, detail="rename requires a non-empty name")
     meta = require_found(await lifecycle.rename_session(session_id, req.name))
     task_mgr.invalidate_tree_index()
     await task_mgr.events.notify_tree_changed(session_id, "task_updated")
@@ -1501,23 +1502,23 @@ async def set_session_group(
 # limit holds one big session's wire form per open events-viewer tab — a second
 # flipped-to session misses once and re-compresses.
 _EVENTS_GZIP_MEMO_LIMIT = 2
-_events_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_EVENTS_GZIP_MEMO_LIMIT)
+_events_gzip_memo: StatSignatureMemo[pathlib.Path, bytes] = StatSignatureMemo(_EVENTS_GZIP_MEMO_LIMIT)
 
 
 @router.get("/{session_id}/events.jsonl")
-async def get_events_jsonl(session_id: str, request: Request) -> Response:
+async def get_events_jsonl(session_id: str, request: fastapi.Request) -> responses.Response:
   """Serve the raw chat_events.jsonl file for a session."""
   cfg = get_config()
   path = chat_events_path(cfg.sessions_dir / session_id)
   if not path.exists():
-    raise HTTPException(status_code=404, detail="Events file not found")
+    raise fastapi.HTTPException(status_code=404, detail="Events file not found")
   if not request_wants_gzip(request):
-    return FileResponse(path, media_type="application/x-ndjson")
-  # The read and the deflate ride one executor hop: FileResponse streams 64 KiB
+    return responses.FileResponse(path, media_type="application/x-ndjson")
+  # The read and the deflate ride one executor hop: responses.FileResponse streams 64 KiB
   # chunks and the gzip middleware compresses every chunk inline on the event
   # loop (the M101 loop-lag readings).
   body = await asyncio.to_thread(gzip_file_fresh, _events_gzip_memo, path)
-  return Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
+  return responses.Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -1528,9 +1529,9 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
 @router.get("/{session_id}/runs", response_model=models.RunPage)
 async def list_session_runs(
     session_id: str,
-    limit: int = Query(default=100, ge=1, le=500),
-    cursor: str | None = Query(default=None),
-    order: str = Query(default="asc"),
+    limit: int = fastapi.Query(default=100, ge=1, le=500),
+    cursor: str | None = fastapi.Query(default=None),
+    order: str = fastapi.Query(default="asc"),
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> models.RunPage:
@@ -1550,7 +1551,7 @@ async def list_session_runs(
   badge.
   """
   if order not in ("asc", "desc"):
-    raise HTTPException(status_code=400, detail=f"unknown runs order: {order!r} (use 'asc' or 'desc')")
+    raise fastapi.HTTPException(status_code=400, detail=f"unknown runs order: {order!r} (use 'asc' or 'desc')")
   try:
     slice_ = await asyncio.to_thread(
         task_mgr.runs.list_runs_page_sync, session_id, limit, cursor, descending=(order == "desc"))
@@ -1571,7 +1572,7 @@ async def list_session_runs(
 @router.get("/{session_id}/effective-prompt")
 async def get_effective_prompt(
     session_id: str,
-    kind: str | None = Query(default=None),
+    kind: str | None = fastapi.Query(default=None),
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
@@ -1588,24 +1589,24 @@ async def get_effective_prompt(
   default_kind = "manager_turn" if meta.profile == "manager" else "work"
   resolved_kind = kind or default_kind
   if resolved_kind not in _RUN_KINDS:
-    raise HTTPException(status_code=400, detail=f"unknown run kind: {kind!r}")
+    raise fastapi.HTTPException(status_code=400, detail=f"unknown run kind: {kind!r}")
   # The preview must resolve the backend exactly as a launch would
   # (_resolve_session_default_backend_model): a task without its own backend
   # previews with the configured default option; a stale pinned id is refused.
   option = cfg.get_backend_option(meta.backend) if meta.backend else None
   if option is None:
     if meta.backend:
-      raise HTTPException(
+      raise fastapi.HTTPException(
           status_code=400,
           detail=(f"session backend {meta.backend!r} is not configured; "
                   "update the task backend before previewing"))
     if not cfg.backends.options:
-      raise HTTPException(status_code=400, detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
+      raise fastapi.HTTPException(status_code=400, detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
     option = cfg.backends.options[0]
   try:
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(cfg, task_mgr, meta, resolved_kind, option)
   except TaskPromptError as e:
-    raise HTTPException(status_code=500, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
   payload = {
       "session_id": session_id,
       "kind": resolved_kind,
@@ -1623,11 +1624,11 @@ async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> mode
   """The task metadata a context read needs, with the task-tree 404 mapping."""
   meta = await task_mgr.load_meta(session_id)
   if meta is None:
-    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
+    raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   return meta
 
 
-def _legacy_prompt_payload(path: Path) -> dict:
+def _legacy_prompt_payload(path: pathlib.Path) -> dict:
   """The legacy_prompt payload for one recorded raw launch-text file: ref, content hash, note."""
   return {
       "ref":
@@ -1659,7 +1660,7 @@ async def get_run_context(
   """
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
-    raise HTTPException(status_code=404, detail=run_not_found_in_task_text(run_id, session_id))
+    raise fastapi.HTTPException(status_code=404, detail=run_not_found_in_task_text(run_id, session_id))
   snapshot_payload: dict | None = None
   legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:
@@ -1667,25 +1668,27 @@ async def get_run_context(
     # current contents: the snapshot stage records ``prompt_snapshot.json``
     # (validated, provenance-carrying); a pre-stage run recorded a raw
     # launch-text path instead.
-    ref_path = Path(run.prompt_snapshot_ref)
+    ref_path = pathlib.Path(run.prompt_snapshot_ref)
     if ref_path.name == SNAPSHOT_FILENAME:
       if not ref_path.is_file():
-        raise HTTPException(status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
+        raise fastapi.HTTPException(
+            status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
       try:
         stored = json.loads(ref_path.read_text(encoding="utf-8"))
       except (OSError, ValueError) as e:
-        raise HTTPException(
+        raise fastapi.HTTPException(
             status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
       try:
         snapshot_payload = PromptSnapshot.from_json_dict(stored).to_json_dict()
       except TaskPromptError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
     else:
       # A recorded raw launch-text ref: limited historical evidence — the
       # managed instructions are visible but per-source provenance was never
       # recorded. Never recomposed into snapshot-shaped provenance.
       if not ref_path.is_file():
-        raise HTTPException(status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
+        raise fastapi.HTTPException(
+            status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
       legacy_prompt = _legacy_prompt_payload(ref_path)
   else:
     legacy_path = task_mgr.runs.run_dir(session_id, run_id) / LAUNCH_TEXT_FILENAME
@@ -1724,7 +1727,7 @@ async def retry_session_run(
   it to the execution adapter (a stopped queued retry never launches).
   """
   if not caller.is_operator:
-    raise HTTPException(status_code=403, detail="retrying a run requires operator credentials")
+    raise fastapi.HTTPException(status_code=403, detail="retrying a run requires operator credentials")
   try:
     result = await task_mgr.create_retry(session_id, req.request_id, req.run_id)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
@@ -1796,7 +1799,7 @@ async def complete_session_task(
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> Response:
+) -> responses.Response:
   """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
 
   A run-token agent may request closure only of its own manager task through
@@ -1811,9 +1814,9 @@ async def complete_session_task(
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   if status == 202:
-    return JSONResponse(status_code=202, content=payload)
+    return responses.JSONResponse(status_code=202, content=payload)
   detail = await _completed_session_detail(task_mgr, session_id)
-  return JSONResponse(status_code=200, content=detail)
+  return responses.JSONResponse(status_code=200, content=detail)
 
 
 async def _completed_session_detail(task_mgr: TaskTreeManager, session_id: str) -> dict:
@@ -1855,7 +1858,7 @@ def _require_own_run_scope(caller: CallerIdentity, session_id: str, run_id: str)
   claims = caller.claims
   assert claims is not None
   if claims.session_id != session_id or claims.run_id != run_id:
-    raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
+    raise fastapi.HTTPException(status_code=403, detail="an agent may only stop its own bound run")
 
 
 @router.post("/{session_id}/runs/{run_id}/cancel", response_model=models.RunCancelResponse)
@@ -1866,7 +1869,7 @@ async def cancel_session_run(
     run_store=Depends(get_run_store),
     caller: CallerIdentity = Depends(require_caller),
 ) -> models.RunCancelResponse:
-  """Request one stop: durable fact first, then identity-checked signal and exit observation."""
+  """fastapi.Request one stop: durable fact first, then identity-checked signal and exit observation."""
   _require_own_run_scope(caller, session_id, run_id)
   try:
     result = await run_store.request_stop(session_id, run_id, req.request_id)

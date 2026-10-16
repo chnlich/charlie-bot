@@ -8,39 +8,26 @@ as a reader. The read side is a tail-follow offset loop
 at the recorded cursor without the agent noticing anything.
 """
 
+import abc
 import asyncio
+import datetime
+import functools
 import mmap
 import os
+import pathlib
 import shutil
 import signal
 import tempfile
 import time
-from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, datetime
-from functools import partial
-from pathlib import Path
 from typing import BinaryIO
 
+from src.infra import config, log_once, models, ndjson, process, timeouts
 from src.infra import event_types as ET
-from src.infra.config import get_config
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import utc_now_iso
-from src.infra.ndjson import parse_ndjson_line, write_all
-from src.infra.process import (
-    SessionCgroup,
-    compose_preexec,
-    kill_process_group,
-    make_nice_preexec,
-    make_session_cgroup_preexec,
-    prepare_session_cgroup,
-)
-from src.infra.timeouts import NO_OUTPUT_REPORT_THRESHOLD, SUBPROCESS_DIAG_CAPTURE_TIMEOUT
-from src.runtime import runs
-from src.runtime.agent_process.spawn import SpawnedProcess, spawn_subprocess
-from src.runtime.message_aggregator import extract_text_from_message
+from src.runtime import message_aggregator, runs
+from src.runtime.agent_process import spawn
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Claude-compatible CLI flags shared by backend packages.
 SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
@@ -60,7 +47,7 @@ TURN_TREE_NICE = 10
 # No fdatasync on the fd — these logs are diagnostic streams, not the chat
 # funnel.
 async def _write_chunk(fd: int, chunk: bytes) -> None:
-  await asyncio.to_thread(write_all, fd, chunk)
+  await asyncio.to_thread(ndjson.write_all, fd, chunk)
 
 
 # The chunk size every pump reads its subprocess stream with, and the buffer a
@@ -110,7 +97,7 @@ _TAIL_POLL_INTERVAL = 0.02
 
 async def _capture_proc_diagnostics(pid: int) -> dict:
   """Best-effort snapshot of a hung subprocess: pgid, ps tree, /proc state, fds, children."""
-  out: dict = {"captured_at": utc_now_iso(), "pid": pid}
+  out: dict = {"captured_at": models.utc_now_iso(), "pid": pid}
   try:
     out["pgid"] = os.getpgid(pid)
   except Exception as e:
@@ -124,7 +111,7 @@ async def _capture_proc_diagnostics(pid: int) -> dict:
   ]:
     try:
       r = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-      data, _ = await asyncio.wait_for(r.communicate(), timeout=SUBPROCESS_DIAG_CAPTURE_TIMEOUT)
+      data, _ = await asyncio.wait_for(r.communicate(), timeout=timeouts.SUBPROCESS_DIAG_CAPTURE_TIMEOUT)
       out[key] = data.decode("utf-8", errors="replace")
     except Exception as e:
       out[key] = f"<capture failed: {e}>"
@@ -135,7 +122,7 @@ async def _capture_proc_diagnostics(pid: int) -> dict:
 # scripts). Both the resolve_binary fallback dir and the child-PATH prepend
 # point at it, and the two must stay the same dir: a binary the resolver
 # finds there must also be on the spawned CLI's PATH.
-USER_LOCAL_BIN = str(Path.home() / ".local" / "bin")
+USER_LOCAL_BIN = str(pathlib.Path.home() / ".local" / "bin")
 
 # The attachment extensions the CLI backends accept as image attachments:
 # opencode turns each mapped ref into a file part, charlie-code passes a
@@ -159,7 +146,7 @@ def resolve_binary(name: str, fallback_dir: str) -> str:
   path = shutil.which(name)
   if path:
     return path
-  fallback = Path(fallback_dir) / name
+  fallback = pathlib.Path(fallback_dir) / name
   if fallback.exists():
     return str(fallback)
   raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
@@ -360,12 +347,12 @@ def make_context_compact_failed_event(error: str | None, model: str | None) -> d
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 
-  Raw byte lines ride :func:`parse_ndjson_line` directly: orjson parses the
+  Raw byte lines ride :func:`ndjson.parse_ndjson_line` directly: orjson parses the
   wire's UTF-8 bytes natively, so a valid line pays no decode pass, and the
   contract's replace fallback inside the parse decides torn bytes.
   """
   async for raw_line in stdout:
-    event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
+    event = ndjson.parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
     if event is not None:
       yield event
 
@@ -380,8 +367,8 @@ def _clamp_event_timestamp(translated: dict, mtime: float) -> None:
   """
   if translated.get("timestamp"):
     return
-  now = datetime.now(UTC)
-  mtime_dt = datetime.fromtimestamp(mtime, tz=UTC)
+  now = datetime.datetime.now(datetime.UTC)
+  mtime_dt = datetime.datetime.fromtimestamp(mtime, tz=datetime.UTC)
   translated["timestamp"] = min(now, mtime_dt).isoformat()
 
 
@@ -409,17 +396,17 @@ def _tail_region_has_content(f: BinaryIO, start: int, end: int) -> bool:
 
 
 async def tail_follow_events(
-    raw_path: Path,
+    raw_path: pathlib.Path,
     *,
     translate: Callable[[dict], list[dict]],
     is_alive: Callable[[], bool],
-    cursor: Path | None = None,
+    cursor: pathlib.Path | None = None,
     start_offset: int = 0,
     post_result_timeout: float,
     buffer_limit: int,
     poll_interval: float = _TAIL_POLL_INTERVAL,
     on_silence: Callable[[], Awaitable[None]] | None = None,
-    silence_threshold: float = NO_OUTPUT_REPORT_THRESHOLD,
+    silence_threshold: float = timeouts.NO_OUTPUT_REPORT_THRESHOLD,
 ) -> AsyncIterator[dict]:
   """Tail-follow a raw NDJSON log from *start_offset*, yielding translated events.
 
@@ -447,7 +434,7 @@ async def tail_follow_events(
       still counts as alive — liveness never reads the fd.
     - ``on_silence`` is the follow-time silence recheck: invoked at most once
       per mount when the raw log's last write ages past ``silence_threshold``
-      (production default ``NO_OUTPUT_REPORT_THRESHOLD``; its silence age is
+      (production default ``timeouts.NO_OUTPUT_REPORT_THRESHOLD``; its silence age is
       seeded from the file's mtime, so pre-follow silence counts). It never
       judges death —
       the follow continues unchanged afterwards.
@@ -520,7 +507,7 @@ async def tail_follow_events(
                 log.debug("backend_line_over_limit", bytes=nl - pos, limit=buffer_limit)
                 pos = nl + 1
                 continue
-              event = parse_ndjson_line(view[pos:nl], log_event="backend_line_not_json", log_fields={})
+              event = ndjson.parse_ndjson_line(view[pos:nl], log_event="backend_line_not_json", log_fields={})
               pos = nl + 1
               if event is None:
                 continue
@@ -606,7 +593,8 @@ async def tail_follow_events(
       cursor_writer.close()
 
 
-def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:
+def _rotate_stale_transport(
+    log_dir: pathlib.Path, raw_path: pathlib.Path, stderr_path: pathlib.Path, cursor_path: pathlib.Path) -> None:
   """Move a previous attempt's transport files aside before a fresh spawn.
 
   The raw log is opened O_APPEND and a fresh tail-follow always starts at
@@ -630,7 +618,7 @@ def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cu
   cursor_path.unlink(missing_ok=True)
 
 
-def _read_stderr_tail(stderr_path: Path) -> str:
+def _read_stderr_tail(stderr_path: pathlib.Path) -> str:
   """Last 64 KB of the stderr log, decoded; '' when the file is missing."""
   try:
     size = stderr_path.stat().st_size
@@ -650,7 +638,7 @@ def _keep_stderr_tail(tail: bytearray, chunk: bytes) -> None:
     del tail[:len(tail) - _STDERR_TAIL_BYTES]
 
 
-class AgentBackend(ABC):
+class AgentBackend(abc.ABC):
   """Abstract interface for running a Claude agent subprocess.
 
   Subclasses encapsulate subprocess lifecycle management and NDJSON streaming
@@ -680,9 +668,9 @@ class AgentBackend(ABC):
       buffer_limit: int | None = None,
       on_spawn: Callable[[int], Awaitable[None]] | None = None,
       instructions_content: str | None = None,
-      instructions_file: Path | None = None,
+      instructions_file: pathlib.Path | None = None,
       resume_session_id: str | None = None,
-      log_dir: Path | None = None,
+      log_dir: pathlib.Path | None = None,
       cgroup_session_id: str | None = None,
       **_extra: object,
   ) -> None:
@@ -700,8 +688,8 @@ class AgentBackend(ABC):
     # point below forks its child into that session's cgroup; None
     # (a backend with no session home — an unowned one-shot) never enters one.
     self._cgroup_session_id = cgroup_session_id
-    self._active_session_cgroup: SessionCgroup | None = None
-    self._proc: SpawnedProcess | None = None
+    self._active_session_cgroup: process.SessionCgroup | None = None
+    self._proc: spawn.SpawnedProcess | None = None
     self._stderr_task: asyncio.Task | None = None
     self._stdin_task: asyncio.Task | None = None
     self._stderr_tail = bytearray()
@@ -725,7 +713,7 @@ class AgentBackend(ABC):
     """Frame a system prompt into the user prompt for backends lacking a system-prompt flag."""
     return f"<system-instructions>\n{system_prompt}\n</system-instructions>\n\n{prompt}"
 
-  @abstractmethod
+  @abc.abstractmethod
   def _build_command(self, prompt: str) -> list[str]:
     """Build the full CLI command list for the subprocess.
 
@@ -748,9 +736,9 @@ class AgentBackend(ABC):
       self._write_instructions_file(self._instructions_file, "run_instructions_written")
     elif self._INSTRUCTIONS_TARGET is not None:
       filename, log_event = self._INSTRUCTIONS_TARGET
-      self._write_instructions_file(Path(cwd) / filename, log_event)
+      self._write_instructions_file(pathlib.Path(cwd) / filename, log_event)
 
-  def _prepare_transport(self, log_dir: Path) -> None:
+  def _prepare_transport(self, log_dir: pathlib.Path) -> None:
     """Hook to prepare the transport directory before ``_build_command()`` runs.
 
     Runs once per ``run()`` after the transport directory is resolved, created,
@@ -760,7 +748,7 @@ class AgentBackend(ABC):
     No-op default.
     """
 
-  def _write_instructions_file(self, path: Path, log_event: str) -> None:
+  def _write_instructions_file(self, path: pathlib.Path, log_event: str) -> None:
     """Write _instructions_content to *path* as UTF-8, or no-op when none is set.
 
     log_event stays caller-chosen so each backend keeps its own structured-log event name.
@@ -806,7 +794,7 @@ class AgentBackend(ABC):
     parent-side after the handshake, the raw-log shape's ordering.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
-    self._proc = await spawn_subprocess(
+    self._proc = await spawn.spawn_subprocess(
         *cmd,
         cwd=cwd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -821,7 +809,7 @@ class AgentBackend(ABC):
     self._apply_turn_tree_limits(self._proc.pid)
     await self._pin_identity_and_fire_on_spawn()
 
-  async def _spawn_one_shot_subprocess(self, cmd: list[str], env: dict, *, pdeathsig: bool) -> SpawnedProcess:
+  async def _spawn_one_shot_subprocess(self, cmd: list[str], env: dict, *, pdeathsig: bool) -> spawn.SpawnedProcess:
     """Spawn the one-shot child: devnull stdin, piped stdout/stderr for the collector.
 
     The unpinned counterpart of :meth:`_spawn_piped_and_pin_identity`: the
@@ -832,7 +820,7 @@ class AgentBackend(ABC):
     raw-log shape. Both apply the nice raise and the cgroup move parent-side.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
-    proc = await spawn_subprocess(
+    proc = await spawn.spawn_subprocess(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
@@ -846,7 +834,7 @@ class AgentBackend(ABC):
     self._apply_turn_tree_limits(proc.pid)
     return proc
 
-  def _prepare_session_cgroup(self) -> SessionCgroup | None:
+  def _prepare_session_cgroup(self) -> process.SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
 
     Every spawn point calls this once, parent-side, before its spawn. The
@@ -859,8 +847,8 @@ class AgentBackend(ABC):
     """
     if self._cgroup_session_id is None:
       return None
-    cfg = get_config()
-    return prepare_session_cgroup(
+    cfg = config.get_config()
+    return process.prepare_session_cgroup(
         self._cgroup_session_id,
         memory_max_mb=cfg.server.session_memory_max_mb,
         swap_max_mb=cfg.server.session_swap_max_mb,
@@ -883,9 +871,9 @@ class AgentBackend(ABC):
     so an uncontended box schedules identically.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
-    cgroup_preexec = make_session_cgroup_preexec(
+    cgroup_preexec = process.make_session_cgroup_preexec(
         self._active_session_cgroup.path if self._active_session_cgroup else None)
-    return compose_preexec(make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
+    return process.compose_preexec(process.make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
 
   def _apply_turn_tree_limits(self, pid: int) -> None:
     """Apply the turn-tree limits parent-side for spawns that carry no preexec.
@@ -970,11 +958,11 @@ class AgentBackend(ABC):
     # The raw log files are the run's transport. When the caller gave no log
     # dir (one-shot use), use a throwaway dir so every covered backend shares
     # exactly one transport.
-    temp_log_dir: Path | None = None
+    temp_log_dir: pathlib.Path | None = None
     if self._log_dir is not None:
       log_dir = self._log_dir
     else:
-      temp_log_dir = Path(tempfile.mkdtemp(prefix="charliebot-run-"))
+      temp_log_dir = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-run-"))
       log_dir = temp_log_dir
     try:
       log_dir.mkdir(parents=True, exist_ok=True)
@@ -1008,7 +996,7 @@ class AgentBackend(ABC):
         # limits (nice raise, session cgroup move) apply parent-side right
         # after the exec handshake, via _apply_turn_tree_limits.
         self._active_session_cgroup = self._prepare_session_cgroup()
-        self._proc = await spawn_subprocess(
+        self._proc = await spawn.spawn_subprocess(
             *cmd,
             cwd=cwd,
             stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
@@ -1064,16 +1052,16 @@ class AgentBackend(ABC):
   ) -> None:
     """Send SIGTERM, wait for exit, and escalate to SIGKILL if the process does not exit in time."""
     assert self._proc is not None
-    sigterm_sent = kill_process_group(self._proc.pid, signal.SIGTERM)
+    sigterm_sent = process.kill_process_group(self._proc.pid, signal.SIGTERM)
     if not sigterm_sent and not wait_even_if_sigterm_not_sent:
       return
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except TimeoutError:
       log.warning(timeout_log_event, pid=self._proc.pid)
-      kill_process_group(self._proc.pid, signal.SIGKILL)
+      process.kill_process_group(self._proc.pid, signal.SIGKILL)
 
-  async def _stream_stderr(self, stderr_log_path: Path | None) -> None:
+  async def _stream_stderr(self, stderr_log_path: pathlib.Path | None) -> None:
     """Continuously read subprocess stderr; tee to <log_dir>/stderr.log and a 64 KB tail buffer.
 
     Streams live so `tail -f stderr.log` works during long runs and the in-memory
@@ -1085,7 +1073,7 @@ class AgentBackend(ABC):
     # empty for its tail -f readers.
     fd = os.open(stderr_log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666) if stderr_log_path is not None else None
     try:
-      await _tee_stream(self._proc.stderr.read, fd, partial(_keep_stderr_tail, self._stderr_tail))
+      await _tee_stream(self._proc.stderr.read, fd, functools.partial(_keep_stderr_tail, self._stderr_tail))
     finally:
       if fd is not None:
         os.close(fd)
@@ -1126,7 +1114,7 @@ class AgentBackend(ABC):
           wait_even_if_sigterm_not_sent=True,
       )
 
-  async def _wait_for_exit_and_cleanup(self, timeout: float, stderr_path: Path) -> None:
+  async def _wait_for_exit_and_cleanup(self, timeout: float, stderr_path: pathlib.Path) -> None:
     """Raw-transport cleanup: finish stdin, wait for process exit, escalate on hang.
 
     Companion to the tail-follow read loop: stdout/stderr are file-descriptor
@@ -1187,7 +1175,7 @@ class AgentBackend(ABC):
       async for event in self.run(framed, cwd, env):
         evt_type = event.get("type")
         if not seen_result and evt_type == ET.ASSISTANT:
-          parts.append(extract_text_from_message(event.get("message")))
+          parts.append(message_aggregator.extract_text_from_message(event.get("message")))
         elif evt_type == ET.RESULT:
           seen_result = True
       return "".join(parts).strip()
@@ -1210,7 +1198,7 @@ class AgentBackend(ABC):
   def detach(self) -> None:
     """Forget the running child without signalling it (graceful-shutdown let-go).
 
-    The launch path spawns through ``spawn_subprocess`` (src/runtime/agent_process/
+    The launch path spawns through ``spawn.spawn_subprocess`` (src/runtime/agent_process/
     spawn.py) — a ``subprocess.Popen`` (or the vfork twin) reaped by a daemon
     thread, with no asyncio subprocess transport — so nothing at event-loop
     teardown signals the child: dropping the handle is the whole let-go. The

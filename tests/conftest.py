@@ -1743,13 +1743,13 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.runtime.runs.STOP_EXIT_WAIT_SECO
 # ``*_RESOLVE_BINARY_PATCH_TARGET`` is the shared base attribute, where
 # monkeypatch.setattr lands the stand-in and the __init__ reads the helper at
 # call time and never probes PATH. The backend start contract spawns through the
-# off-loop spawn seam (src/runtime/agent_process/spawn.py), which base.py imports and reads
-# as a module global at call time, so both ``*_SPAWN_SUBPROCESS_PATCH_TARGET`` spellings
-# land the stand-in on that one shared attribute; the caller-qualified form records
-# which backend's spawn a test drives.
-BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.base.spawn_subprocess"
+# off-loop spawn seam (src/runtime/agent_process/spawn.py), which base.py reads as
+# a module attribute at call time, so both ``*_SPAWN_SUBPROCESS_PATCH_TARGET`` spellings
+# land the stand-in on the spawn module's one shared attribute; the caller-qualified
+# constant name records which backend's spawn a test drives.
+BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.base.spawn_subprocess"
+OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"

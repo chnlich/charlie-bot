@@ -49,32 +49,16 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from src.features.chat_threads import thread_entry
-from src.features.chat_threads.thread_entry import (
-    LINKED_PAGES_LINE,
-    ThreadAdapter,
-    ThreadMessage,
-    ThreadPlatform,
-    ThreadReplyError,
-)
-from src.features.slack.event_types import SLACK_REPLY
-from src.features.slack.metadata import SlackOrigin
-from src.infra import timeouts
-from src.infra.config import CharlieBotConfig, get_credentials
-from src.infra.http import get_http_client
-from src.infra.log_once import LazyStructlogLogger
+from src.features.slack import event_types, metadata
+from src.infra import config, http, log_once, timeouts
+from src.runtime import session_lifecycle, session_listing, session_store, session_successor, task_execution, triggers
 from src.runtime.session_events import SessionEvents
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_store import SessionStore
-from src.runtime.session_successor import SessionSuccessor
-from src.runtime.task_execution import task_manager
-from src.runtime.triggers import TriggerManager
 
 if TYPE_CHECKING:
   import httpx
   from websockets.asyncio.client import ClientConnection
 
-logger = LazyStructlogLogger()
+logger = log_once.LazyStructlogLogger()
 
 # Fixed namespace UUID for Slack summon session ids. Arbitrary but stable
 # across process restarts; changing it would orphan every existing Slack-backed
@@ -92,17 +76,17 @@ _REPLY_COMMAND = "charliebot slack reply"
 
 _PLATFORM_LINE = (
     f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
-    f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")
+    f"Per-message limit: {_MAX_POST_CHARS} characters. {thread_entry.LINKED_PAGES_LINE}")
 
 # Trigger-label prefix identifying a session's armed thread-follow record.
 _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
 
 # The platform description every shared thread helper takes; each value keeps
 # its one home in the constants above.
-SLACK = ThreadPlatform(
+SLACK = thread_entry.ThreadPlatform(
     name="slack",
     display_name="Slack",
-    reply_event_type=SLACK_REPLY,
+    reply_event_type=event_types.SLACK_REPLY,
     reply_command=_REPLY_COMMAND,
     max_post_chars=_MAX_POST_CHARS,
     scope_doc="slack_reply_scope.md",
@@ -126,8 +110,8 @@ class SlackClient:
   """Thin Slack Web API wrapper: open_connection / post_message / get_thread_replies /
   add_reaction / remove_reaction / get_channel_name."""
 
-  def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
-    self._http = http
+  def __init__(self, http_client: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
+    self._http = http_client
     self._bot_headers = {"Authorization": f"Bearer {bot_token}"}
     self._app_headers = {"Authorization": f"Bearer {app_token}"}
     # In-process channel-name cache, keyed by channel id; failures cache as None.
@@ -218,7 +202,7 @@ class SlackClient:
     return name
 
 
-def thread_contract_part(origin: SlackOrigin) -> str:
+def thread_contract_part(origin: metadata.SlackOrigin) -> str:
   """The Slack part of the thread reply contract: the platform line, this thread's address, and the read/ack rules.
 
   The thread session's managed instructions carry this part once, joined with
@@ -243,13 +227,13 @@ def thread_contract_part(origin: SlackOrigin) -> str:
 
 async def handle_app_mention(
     event: dict,
-    cfg: CharlieBotConfig,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     events: SessionEvents,
-    successor: SessionSuccessor,
+    successor: session_successor.SessionSuccessor,
     client: SlackClient,
-    trigger_mgr: TriggerManager | None = None,
+    trigger_mgr: triggers.TriggerManager | None = None,
 ) -> str | None:
   """Accept or drop one app_mention. Returns the session id when accepted, else None.
 
@@ -273,7 +257,7 @@ async def handle_app_mention(
   the group assignment, the summon persistence, and the round and ack tasks
   are the shared core's (``thread_entry.accept_summon``).
   """
-  trigger_mgr = trigger_mgr or TriggerManager(cfg, task_manager())
+  trigger_mgr = trigger_mgr or triggers.TriggerManager(cfg, task_execution.task_manager())
   channel_id = event.get("channel")
   thread_ts = event.get("thread_ts") or event.get("ts")
   slack_user = event.get("user")
@@ -303,7 +287,7 @@ async def handle_app_mention(
       trigger_mgr,
       session_id=sid,
       label=label,
-      origin=SlackOrigin(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts),
+      origin=metadata.SlackOrigin(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts),
       block=block,
       content=SLACK.summon_line,
       user=slack_user,
@@ -329,12 +313,12 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
 
 async def handle_thread_message(
     event: dict,
-    cfg: CharlieBotConfig,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
     client: SlackClient,
-    trigger_mgr: TriggerManager,
+    trigger_mgr: triggers.TriggerManager,
 ) -> str | None:
   """Accept or drop one thread message event; returns the session id when it armed a follow.
 
@@ -375,12 +359,12 @@ async def handle_thread_message(
 
 
 async def _backfill_followed_threads(
-    cfg: CharlieBotConfig,
-    listing: SessionListing,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    listing: session_listing.SessionListing,
+    lifecycle: session_lifecycle.SessionLifecycle,
     session_events: SessionEvents,
     client: SlackClient,
-    trigger_mgr: TriggerManager,
+    trigger_mgr: triggers.TriggerManager,
 ) -> int:
   """Arm the follow trigger of every followed Slack session holding unread messages; return the count.
 
@@ -404,14 +388,14 @@ async def _backfill_followed_threads(
 
 def _bot_client() -> SlackClient:
   """The client every outbound path (reply, notice, backfill) posts through."""
-  creds = get_credentials()
+  creds = config.get_credentials()
   return SlackClient(
-      get_http_client(),
+      http.get_http_client(),
       bot_token=str(creds.require("slack", "bot_token")),
       app_token=str(creds.require("slack", "app_token")))
 
 
-class SlackThreadAdapter(ThreadAdapter):
+class SlackThreadAdapter(thread_entry.ThreadAdapter):
   """The round side's face onto the Slack Web API client."""
 
   platform = SLACK
@@ -441,14 +425,17 @@ class SlackThreadAdapter(ThreadAdapter):
   async def remove_ack(self, block: dict) -> None:
     await self._client.remove_reaction(block["channel_id"], _ACCEPTANCE_REACTION, block[self.platform.mention_key])
 
-  async def read_eligible(self, origin: SlackOrigin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+  async def read_eligible(self, origin: metadata.SlackOrigin,
+                          cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
     messages = await self._client.get_thread_replies(origin.channel_id, origin.thread_ts)
     return [
-        ThreadMessage(m["ts"], m.get("user"),
-                      m.get("text") or "") for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)
+        thread_entry.ThreadMessage(m["ts"], m.get("user"),
+                                   m.get("text") or "")
+        for m in messages
+        if _eligible_thread_message(m, cfg.slack.allowed_user_ids)
     ]
 
-  def address_of(self, origin: SlackOrigin) -> dict:
+  def address_of(self, origin: metadata.SlackOrigin) -> dict:
     return {"channel_id": origin.channel_id, "thread_ts": origin.thread_ts}
 
   def log_fields(self, address: dict) -> dict:
@@ -461,10 +448,10 @@ class SlackThreadAdapter(ThreadAdapter):
 
 # The shared reply refusal lives in src/features/chat_threads/thread_entry.py; the Slack name
 # stays for the adapter's callers (the server endpoint and the tests).
-SlackReplyError = ThreadReplyError
+SlackReplyError = thread_entry.ThreadReplyError
 
 
-async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: SessionStore) -> None:
+async def assert_thread_fresh(session_id: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
@@ -474,7 +461,7 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: Ses
 
 
 async def ack_messages(
-    session_id: str, message_ids: list[str], cfg: CharlieBotConfig, store: SessionStore,
+    session_id: str, message_ids: list[str], cfg: config.CharlieBotConfig, store: session_store.SessionStore,
     session_events: SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
@@ -486,7 +473,8 @@ async def ack_messages(
 
 
 async def post_reply(
-    session_id: str, text: str, cfg: CharlieBotConfig, store: SessionStore, session_events: SessionEvents) -> dict:
+    session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
+    session_events: SessionEvents) -> dict:
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
@@ -502,8 +490,9 @@ async def post_reply(
 
 
 async def deliver_done(
-    session_id: str, done: dict, cfg: CharlieBotConfig, store: SessionStore, lifecycle: SessionLifecycle,
-    session_events: SessionEvents, successor: SessionSuccessor) -> bool:
+    session_id: str, done: dict, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    successor: session_successor.SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
@@ -519,8 +508,9 @@ async def deliver_done(
 
 
 async def backfill_lost_summons(
-    cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore, lifecycle: SessionLifecycle,
-    session_events: SessionEvents, successor: SessionSuccessor) -> int:
+    cfg: config.CharlieBotConfig, listing: session_listing.SessionListing, store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    successor: session_successor.SessionSuccessor) -> int:
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
   One-line pass-through to the shared boot audit
@@ -540,12 +530,12 @@ async def _expect_hello(ws: ClientConnection) -> None:
 
 
 async def run_listener(
-    cfg: CharlieBotConfig,
-    listing: SessionListing,
-    store: SessionStore,
-    lifecycle: SessionLifecycle,
+    cfg: config.CharlieBotConfig,
+    listing: session_listing.SessionListing,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
     events: SessionEvents,
-    successor: SessionSuccessor,
+    successor: session_successor.SessionSuccessor,
 ) -> None:
   """Socket Mode connect/receive/reconnect loop; never returns."""
   # websockets (~13 ms with its asyncio client) rides first use: the import
@@ -553,11 +543,12 @@ async def run_listener(
   # floor (docs/perf_baseline.md@5175adf09) depends on it staying out of the chain.
   import websockets
 
-  http = get_http_client()
-  creds = get_credentials()
+  creds = config.get_credentials()
   client = SlackClient(
-      http, bot_token=str(creds.require("slack", "bot_token")), app_token=str(creds.require("slack", "app_token")))
-  trigger_mgr = TriggerManager(cfg, task_manager())
+      http.get_http_client(),
+      bot_token=str(creds.require("slack", "bot_token")),
+      app_token=str(creds.require("slack", "app_token")))
+  trigger_mgr = triggers.TriggerManager(cfg, task_execution.task_manager())
   backoff = 1.0
 
   while True:
@@ -590,9 +581,9 @@ async def run_listener(
 
 
 async def _serve_socket_mode(
-    ws: ClientConnection, cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore,
-    lifecycle: SessionLifecycle, events: SessionEvents, successor: SessionSuccessor, client: SlackClient,
-    trigger_mgr: TriggerManager) -> None:
+    ws: ClientConnection, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
+    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, events: SessionEvents,
+    successor: session_successor.SessionSuccessor, client: SlackClient, trigger_mgr: triggers.TriggerManager) -> None:
   """One Socket Mode connection's serve: hello, thread backfill, envelope loop.
 
   Returns on the server-sent disconnect; every other exit raises and the

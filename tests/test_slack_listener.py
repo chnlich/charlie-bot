@@ -4,38 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import pathlib
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest import mock
 
+import conftest
 import httpx
 import pytest
-from conftest import (
-    FakeSlackClient,
-    SessionBlocks,
-    WsServerNeverAnswersClose,
-    bind_deps_blocks,
-    build_session_blocks,
-    build_slack_cfg,
-    build_task_tree,
-    create_root_session,
-    mention_seam,
-    thread_blocks,
-)
 
-from src.features.slack.slack_listener import (
-    _REPLY_COMMAND,
-    SLACK,
-    SlackClient,
-    SlackThreadAdapter,
-    handle_app_mention,
-    summon_session_id,
-    thread_contract_part,
-)
+from src.features.slack import metadata, slack_listener
+from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
-from src.infra import metadata_slots
-from src.infra.config import CharlieBotConfig
-from src.infra.models import CreateSessionRequest
 
 _TS = "1700000000.000100"
 
@@ -69,30 +48,32 @@ def _thread_ts(event: dict) -> str:
 
 
 def _sid(event: dict) -> str:
-  return summon_session_id(event["team"], event["channel"], _thread_ts(event))
+  return slack_listener.summon_session_id(event["team"], event["channel"], _thread_ts(event))
 
 
-def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotConfig, SessionBlocks, FakeSlackClient]:
+def _rig(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[config.CharlieBotConfig, conftest.SessionBlocks, conftest.FakeSlackClient]:
   """Summon rig: cfg and session blocks rooted at tmp_path, plus the recording fake client.
 
   The summon creates its manager root through the deps task-tree singleton, so the rig binds a tree over the
   same session blocks.
   """
-  cfg = build_slack_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  bind_deps_blocks(monkeypatch, build_task_tree(cfg, session_blocks), session_blocks)
-  return cfg, session_blocks, FakeSlackClient()
+  cfg = conftest.build_slack_cfg(tmp_path)
+  session_blocks = conftest.build_session_blocks(cfg)
+  conftest.bind_deps_blocks(monkeypatch, conftest.build_task_tree(cfg, session_blocks), session_blocks)
+  return cfg, session_blocks, conftest.FakeSlackClient()
 
 
 @pytest.mark.asyncio
 async def test_allowed_user_creates_session_and_persists_agent_message(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
-  with mention_seam(tasks) as trigger:
-    sid = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
+  with conftest.mention_seam(tasks) as trigger:
+    sid = await slack_listener.handle_app_mention(event, cfg, *conftest.thread_blocks(session_blocks), client)
     await asyncio.gather(*tasks)
 
   assert sid == _sid(event)
@@ -129,24 +110,22 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
   }
   # The summon input is the one fixed line: the rules ride the session's
   # managed instructions (the thread reply contract), not the input.
-  assert agent_messages[0]["content"] == SLACK.summon_line
+  assert agent_messages[0]["content"] == slack_listener.SLACK.summon_line
   assert agent_messages[0]["content"] == "Slack 线程召唤"
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
-  assert trigger.await_args.args[1] == SLACK.summon_line
+  assert trigger.await_args.args[1] == slack_listener.SLACK.summon_line
 
 
 def test_contract_part_carries_the_platform_line_the_address_and_the_rules() -> None:
   """The Slack contract part states the platform line, this thread's address, the
   summon rule, and the wake's read and ack rules."""
-  from src.features.slack.metadata import SlackOrigin
-
-  part = thread_contract_part(SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS))
+  part = slack_listener.thread_contract_part(metadata.SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS))
   # The platform line carries the facts the shared reply-format contract defers
   # to it: the reply command and the per-message limit.
   expected_platform_line = (
-      f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
+      f"Platform: Slack. Reply command: `{slack_listener._REPLY_COMMAND} --file <path>`. "
       "Per-message limit: 40000 characters. "
       "Linked pages: publish each page with `charliebot publish <path>` and write the URL it prints "
       "into the reply; a CharlieBot file-server link refuses the reply.")
@@ -164,11 +143,9 @@ def test_contract_part_carries_the_platform_line_the_address_and_the_rules() -> 
 
 
 @pytest.mark.asyncio
-async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messages(tmp_path: Path) -> None:
+async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messages(tmp_path: pathlib.Path) -> None:
   """The eligible readback through a real SlackClient: the thread is read with conversations.replies
   on its channel and ts, and only the allowed human's message comes back."""
-  from src.features.slack.metadata import SlackOrigin
-
   reply = {"type": "message", "user": "U_ALLOWED", "ts": "1700000000.000200", "text": "hi"}
   bot = {"type": "message", "subtype": "bot_message", "bot_id": "B_TEST", "ts": "1700000000.000300", "text": "bot"}
   requests: list[httpx.Request] = []
@@ -178,9 +155,9 @@ async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messa
     return httpx.Response(200, json={"ok": True, "messages": [reply, bot]})
 
   async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-    client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")
-    origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS)
-    messages = await SlackThreadAdapter(client).read_eligible(origin, build_slack_cfg(tmp_path))
+    client = slack_listener.SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")
+    origin = metadata.SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts=_TS)
+    messages = await slack_listener.SlackThreadAdapter(client).read_eligible(origin, conftest.build_slack_cfg(tmp_path))
 
   [request] = requests
   assert request.url.path == "/api/conversations.replies"
@@ -189,13 +166,13 @@ async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messa
 
 
 @pytest.mark.asyncio
-async def test_same_thread_twice_reuses_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_same_thread_twice_reuses_the_session(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
 
-  with mention_seam():
-    first = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
-    second = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
+  with conftest.mention_seam():
+    first = await slack_listener.handle_app_mention(event, cfg, *conftest.thread_blocks(session_blocks), client)
+    second = await slack_listener.handle_app_mention(event, cfg, *conftest.thread_blocks(session_blocks), client)
 
   assert first == second
   sessions = await session_blocks.listing.list_sessions()
@@ -212,12 +189,12 @@ _DROP_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("event_overrides",), _DROP_ROWS)
 async def test_unhandled_event_drops_with_no_side_effects(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_overrides: dict) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, event_overrides: dict) -> None:
   cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event(**event_overrides)
 
-  with mention_seam():
-    result = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
+  with conftest.mention_seam():
+    result = await slack_listener.handle_app_mention(event, cfg, *conftest.thread_blocks(session_blocks), client)
 
   assert result is None
   assert not client.calls
@@ -226,13 +203,13 @@ async def test_unhandled_event_drops_with_no_side_effects(
 
 @pytest.mark.asyncio
 async def test_trigger_master_forwards_input_id_to_the_task_wake(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import master_trigger
 
   _, session_blocks, _ = _rig(tmp_path, monkeypatch)
-  meta = await create_root_session(session_blocks, CreateSessionRequest(name="t"))
+  meta = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="t"))
 
-  with patch.object(master_trigger, "_wake_task_node", new=AsyncMock()) as wake_mock:
+  with mock.patch.object(master_trigger, "_wake_task_node", new=mock.AsyncMock()) as wake_mock:
     await master_trigger.trigger_master(
         meta.id,
         "s",
@@ -268,11 +245,10 @@ _WS_HELLO = [{"type": "hello"}]
 
 
 async def _run_listener_against(
-    stand_in: WsServerNeverAnswersClose, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> asyncio.Task:
+    stand_in: conftest.WsServerNeverAnswersClose, tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch) -> asyncio.Task:
   """Start the stand-in and run the real run_listener with its Slack Web API side
   pointed at it; the caller stops the stand-in when the listener task is done."""
-  from src.features.slack import slack_listener
-
   cfg, session_blocks, _ = _rig(tmp_path, monkeypatch)
   url = await stand_in.start()
 
@@ -286,9 +262,9 @@ async def _run_listener_against(
   monkeypatch.setattr(slack_listener, "_backfill_followed_threads", no_backfill)
   # The listener never issues an HTTP request once open_connection is the seam
   # under stub; keep it off the shared httpx client other tests may have faked.
-  monkeypatch.setattr(slack_listener, "get_http_client", lambda: object())
+  monkeypatch.setattr("src.infra.http.get_http_client", lambda: object())
   return asyncio.create_task(
-      slack_listener.run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)),
+      slack_listener.run_listener(cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks)),
       name="slack-listener-under-test")
 
 
@@ -302,13 +278,13 @@ async def _await_listener_cancel(task: asyncio.Task) -> float:
 
 
 @pytest.mark.asyncio
-async def test_listener_cancel_skips_the_close_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_listener_cancel_skips_the_close_wait(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Cancelling the listener aborts the transport instead of waiting out
   WS_CLIENT_CLOSE_TIMEOUT for the close frame the stand-in never answers."""
   from src.infra import timeouts
 
   monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
-  stand_in = WsServerNeverAnswersClose(_WS_HELLO)
+  stand_in = conftest.WsServerNeverAnswersClose(_WS_HELLO)
   try:
     task = await _run_listener_against(stand_in, tmp_path, monkeypatch)
     async with asyncio.timeout(5):
@@ -326,11 +302,11 @@ async def test_listener_cancel_skips_the_close_wait(tmp_path: Path, monkeypatch:
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_listener_reconnects_within_three_seconds_after_disconnect(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A Socket Mode refresh (the server-sent disconnect) has the listener's next
   connection on the wire within 3 s: the session exit aborts the transport, so
   the bound is the reconnect backoff alone."""
-  stand_in = WsServerNeverAnswersClose([*_WS_HELLO, {"type": "disconnect"}])
+  stand_in = conftest.WsServerNeverAnswersClose([*_WS_HELLO, {"type": "disconnect"}])
   try:
     task = await _run_listener_against(stand_in, tmp_path, monkeypatch)
     async with asyncio.timeout(9):

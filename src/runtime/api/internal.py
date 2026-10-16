@@ -17,7 +17,6 @@ from src.infra.models import (
     SessionMessageRequest,
     TaskSpec,
     TaskType,
-    WatchKind,
 )
 from src.runtime import spawner_backends
 from src.runtime.api.deps import (
@@ -272,7 +271,7 @@ async def schedule_trigger(
     if len(req.watch_targets) == 0:
       raise HTTPException(status_code=400, detail="watch_targets must be non-empty when provided")
     for t in req.watch_targets:
-      if t.kind == WatchKind.SLURM_JOB:
+      if t.kind == constants.WatchKind.SLURM_JOB:
         if t.job_id <= 0:
           raise HTTPException(status_code=400, detail="watch_targets slurm job_id must be a positive integer")
       elif t.pid <= 0:

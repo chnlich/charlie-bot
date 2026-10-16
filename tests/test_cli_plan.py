@@ -49,6 +49,27 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: pathlib.Path, monkeypa
   assert payload["base_sha"] is None
 
 
+@pytest.mark.parametrize(
+    ("argv", "reminder"),
+    [
+        (["plan", "present", "--file", "artifacts/plan_01.html", "--title", "P1"], plan._PRESENT_REMINDER),
+        (["plan", "amend", "--file", "artifacts/plan_02.html", "--note", "n"], plan._AMEND_REMINDER),
+    ],
+    ids=["present", "amend"],
+)
+def test_plan_registration_prints_its_verbs_reminder(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str],
+    reminder: str) -> None:
+  """present prints the Improve-round reminder; amend prints the verify-and-cold-read one."""
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  resp = conftest.make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
+  with conftest.patched_cli_post(cfg, argv, return_value=resp):
+    plan.main()
+
+  assert json.loads(capsys.readouterr().out)["reminder"] == reminder
+  assert plan._PRESENT_REMINDER != plan._AMEND_REMINDER
+
+
 def test_plan_approve_posts_plan_id(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")

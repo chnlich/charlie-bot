@@ -153,7 +153,7 @@ async def plan_approve(
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     plan_mgr: plans.PlanRegistryManager = fastapi.Depends(get_plan_manager),
 ) -> dict:
-  """Record a takeoff against the latest version of a plan lineage."""
+  """Record the plan's approval against the latest version of a plan lineage."""
   await _authorize_plan_session(req.session_id, store)
   try:
     return await plan_mgr.approve(req.session_id, plan_id=req.plan_id)

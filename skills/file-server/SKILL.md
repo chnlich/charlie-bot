@@ -129,7 +129,7 @@ Start the cold read with this command:
 
     charliebot artifact check <page-file> --genre <genre> --trigger "<trigger>"
 
-- After `charliebot plan present` or `charliebot plan amend`, start the cold read.
+- After the Improve round, and after each later `charliebot plan amend`, start the cold read.
 - When verify runs on the plan version, start the cold read in the same turn as the verify delegation.
 - For a page of any other genre: after you share the page, start the cold read.
 

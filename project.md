@@ -156,7 +156,7 @@ For complex tasks, the master plans before building; the plan registry keeps tha
 
 - **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/features/artifacts/plan_cli.py` → `PlanRegistryManager` in `src/features/artifacts/plans.py`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
 - **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`src/features/artifacts/static/plan-panel.js`).
-- **Approve**: The user's "take off" approves the settled terms; `charliebot plan approve` records it against the latest version. The takeoff gate (`src/runtime/takeoff_gate.py`) lets `/delegate` and `/improve` proceed only when the session's latest real user message carries the approval (or a "pre take off" stamp within 12 hours).
+- **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`src/runtime/takeoff_gate.py`) admits `/delegate` and `/improve` when the calling manager and its ancestors are open and the chain holds a real user message.
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 
 ---

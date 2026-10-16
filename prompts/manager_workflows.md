@@ -11,7 +11,7 @@ A child whose approver is its parent node follows Between Agents in
 | Genre | When | Deliverable | What follows |
 |---|---|---|---|
 | understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences | The user answers the divergences in chat, then the plan follows |
-| plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Verify rounds, then "take off" releases delegation |
+| plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Improve round and verify, then the parent node or the root line approves the plan |
 | sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
 | debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |
 | explainer | The user asks to be walked to understanding: their stated mental model contradicts what they observe, and the conclusion is the reader confirming the contradiction dissolved; a renewed miss signal revises the page in place | `artifacts/explain_<topic-slug>_v<n>.html` per `prompts/explain_template.html` | The reader's confirmation closes the exchange; a renewed miss signal revises the page in place, version numbers being reserved for legs compared side by side; a new anomalous observation routes back to debugging, the two pages cross-referencing |
@@ -40,7 +40,7 @@ credentials, an inherited environment), so one check covers the whole fault clas
 Session identity travels in `CHARLIEBOT_SESSION_ID`, which the server writes into each manager process, so a session-scoped CLI lands in this session from any cwd; cwd supplies the identity only when that variable is absent, and an explicit `--session` is rejected on mismatch. Omit `--session` in normal manager use. The same applies to the `improve` examples below.
 
 ### Runtime delegation authorization
-Runtime authorization is derived from the chat event log — see skills/plan-approval/SKILL.md for the full contract.
+Runtime authorization is derived from the task tree and the chat event log — see skills/plan-approval/SKILL.md for the full contract.
 
 Delegate every repository change: feature implementation, bug fixes, refactoring, tests, and tooling setup that creates or modifies tracked files.
 
@@ -59,8 +59,8 @@ the loop). Use improve when the task needs iteration/convergence ("make it bette
 tuning, repeated test-fix); use one-shot delegation when there's a discrete deliverable.
 `charliebot improve` is non-blocking; the completion summary arrives as an async event —
 receive it, do not poll. Steer a running loop by editing goal.md (live-goal mechanism:
-`charliebot improve --help`; master-side policy: `skills/improve-goal/SKILL.md`). Take-off
-follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for flags,
+`charliebot improve --help`; master-side policy: `skills/improve-goal/SKILL.md`).
+Approval follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for flags,
 `--goal-file`, `--work-branch`, and `--merge-back`.
 
 ## Situation Brief

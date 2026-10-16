@@ -49,10 +49,10 @@ there and passes here is the regression evidence.
 
 from __future__ import annotations
 
+import pathlib
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -506,7 +506,7 @@ async def anchor_y(cdp: CDP, session_id: str, anchor_id: str) -> dict | None:
   return await ev(cdp, session_id, ANCHOR_Y_JS + f'("{anchor_id}")')
 
 
-async def screenshot(cdp: CDP, session_id: str, evidence_dir: Path, name: str) -> str:
+async def screenshot(cdp: CDP, session_id: str, evidence_dir: pathlib.Path, name: str) -> str:
   res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
   path = evidence_dir / f"{name}.png"
   path.write_bytes(base64.b64decode(res["data"]))
@@ -620,27 +620,30 @@ async def seed_sessions() -> tuple[str, str, list[dict], object, object]:
   model. Returns (main session id, second session id, bootstrap messages,
   session store block, session events block).
   """
-  from src.infra.config import get_config
-  from src.runtime.api.message_utils import build_session_bootstrap_data
-  from src.runtime.run_token import CallerIdentity
-  from src.runtime.session_anchors import SessionAnchors
-  from src.runtime.session_events import SessionEvents
-  from src.runtime.session_fork import SessionFork
-  from src.runtime.session_lifecycle import SessionLifecycle
-  from src.runtime.session_listing import SessionListing
-  from src.runtime.session_sidebar import SessionSidebar
-  from src.runtime.session_store import SessionStore
-  from src.runtime.session_successor import SessionSuccessor
-  from src.runtime.task_sessions import TaskTreeManager
+  from src.infra import config
+  from src.runtime import (
+      run_token,
+      session_anchors,
+      session_events,
+      session_fork,
+      session_lifecycle,
+      session_listing,
+      session_sidebar,
+      session_store,
+      session_successor,
+      task_sessions,
+  )
+  from src.runtime.api import message_utils
 
-  cfg = get_config()
-  store = SessionStore(cfg)
-  sidebar = SessionSidebar(cfg, store)
-  events = SessionEvents(cfg, store)
-  tree = TaskTreeManager(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionLifecycle(cfg, store, events),
-      SessionFork(cfg, store, events), SessionAnchors(cfg, store, events), SessionSuccessor(cfg, store, events))
-  operator = CallerIdentity(kind="operator")
+  cfg = config.get_config()
+  store = session_store.SessionStore(cfg)
+  sidebar = session_sidebar.SessionSidebar(cfg, store)
+  events = session_events.SessionEvents(cfg, store)
+  tree = task_sessions.TaskTreeManager(
+      cfg, store, events, sidebar, session_listing.SessionListing(cfg, store, sidebar),
+      session_lifecycle.SessionLifecycle(cfg, store, events), session_fork.SessionFork(cfg, store, events),
+      session_anchors.SessionAnchors(cfg, store, events), session_successor.SessionSuccessor(cfg, store, events))
+  operator = run_token.CallerIdentity(kind="operator")
   main = await tree.create_task(
       request_id="seed-main",
       task_parent_id=None,
@@ -712,7 +715,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object, object]:
             }
         })
     await events.save_chat_event(sid_c, {"type": "master_done"})
-  bootstrap = await build_session_bootstrap_data(sid, store, events)
+  bootstrap = await message_utils.build_session_bootstrap_data(sid, store, events)
   return sid, sid_b, sid_c, bootstrap.messages, store, events
 
 
@@ -741,8 +744,8 @@ async def bootstrap_messages_now(sid: str, store, events) -> list[dict]:
   The transcript-reset payload must carry what the view now holds (the seeded
   history plus the live messages the scenarios broadcast).
   """
-  from src.runtime.api.message_utils import build_session_bootstrap_data
-  bootstrap = await build_session_bootstrap_data(sid, store, events)
+  from src.runtime.api import message_utils
+  bootstrap = await message_utils.build_session_bootstrap_data(sid, store, events)
   return bootstrap.messages
 
 
@@ -750,7 +753,7 @@ async def bootstrap_messages_now(sid: str, store, events) -> list[dict]:
 
 
 async def run_scenarios(
-    cdp: CDP, page: str, sid: str, sid_b: str, sid_c: str, store, events, evidence_dir: Path,
+    cdp: CDP, page: str, sid: str, sid_b: str, sid_c: str, store, events, evidence_dir: pathlib.Path,
     results: list[dict]) -> None:
   """The ordered scenario flow; each scenario starts from a state it sets.
 
@@ -1300,25 +1303,25 @@ async def run_scenarios(
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-  evidence_dir = Path(args.evidence_dir)
+  evidence_dir = pathlib.Path(args.evidence_dir)
   commit = open_evidence_dir(evidence_dir)
 
   # The run's whole footprint (home, profile) lives in one temp directory;
   # --keep names it for debugging instead of deleting it at the end.
-  tmp_path = Path(tempfile.mkdtemp(prefix="charliebot-scroll-regression-"))
+  tmp_path = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-scroll-regression-"))
   # The browser binary is host-local, so the synthetic home inherits the host
   # config's headless_chrome_bin — read through the existing config entry
   # BEFORE the env override (both caches hot-reload per file fingerprint).
   from src.app import registrations
-  from src.infra.config import get_config as read_host_config
+  from src.infra import config
   registrations.register_all()
-  host_chrome_bin = str(read_host_config().headless_chrome_bin or "")
+  host_chrome_bin = str(config.get_config().headless_chrome_bin or "")
 
   home = tmp_path / "charliebot-home"
   home.mkdir()
   profile = tmp_path / "chrome-profile"
   server_port = pick_free_port()
-  config = {
+  home_config = {
       "headless_chrome_bin": host_chrome_bin,
       "server": {
           "port": server_port,
@@ -1341,7 +1344,7 @@ async def run_harness(args: argparse.Namespace) -> None:
           "worktree_dir": str(home / "worktrees")
       },
   }
-  (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
+  (home / "config.yaml").write_text(json.dumps(home_config, indent=2), encoding="utf-8")
   access_key = mint_access_key("scroll-regression-key-")
   write_credentials_yaml(home, access_key)
   for var in ("CHARLIEBOT_ACCESS_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
@@ -1350,12 +1353,11 @@ async def run_harness(args: argparse.Namespace) -> None:
 
   # The existing config entry provides the credential the browser will use,
   # and the config's own headless-chrome entry is the first browser candidate.
-  from src.infra.config import get_config
-  from src.infra.credentials import configured_access_key
-  key = configured_access_key()
+  from src.infra import credentials
+  key = credentials.configured_access_key()
   if not key:
     fail("configured_access_key() returned nothing for the synthetic home")
-  chrome = resolve_chrome(args.chrome or get_config().headless_chrome_bin or None, fail)
+  chrome = resolve_chrome(args.chrome or config.get_config().headless_chrome_bin or None, fail)
   log(f"chat scroll regression · commit {commit} · chrome {chrome}")
 
   sid, sid_b, sid_c, _bootstrap_messages, store, events = await seed_sessions()
@@ -1363,12 +1365,12 @@ async def run_harness(args: argparse.Namespace) -> None:
   # Isolated server: the real app, lifespan disabled, this checkout's files.
   import uvicorn
 
-  from server import app as server_app
-  server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port, log_level="error", lifespan="off")
-  server = uvicorn.Server(server_config)
-  serve_task = asyncio.get_running_loop().create_task(server.serve())
+  import server
+  server_config = uvicorn.Config(server.app, host="127.0.0.1", port=server_port, log_level="error", lifespan="off")
+  app_server = uvicorn.Server(server_config)
+  serve_task = asyncio.get_running_loop().create_task(app_server.serve())
   deadline = time.monotonic() + 30
-  while not server.started:
+  while not app_server.started:
     if serve_task.done():
       fail(f"isolated server failed to start: {serve_task.exception()}")
     if time.monotonic() > deadline:
@@ -1436,7 +1438,7 @@ async def run_harness(args: argparse.Namespace) -> None:
     await cdp.close()
     stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
     log(f"test browser pid {chrome_proc.pid} stopped")
-    server.should_exit = True
+    app_server.should_exit = True
     try:
       await asyncio.wait_for(serve_task, timeout=10)
     except Exception:
@@ -1465,7 +1467,7 @@ def main() -> None:
   args = parser.parse_args()
   if args.evidence_dir is None:
     args.evidence_dir = str(
-        Path(tempfile.gettempdir()) /
+        pathlib.Path(tempfile.gettempdir()) /
         ("charliebot-scroll-regression-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
   try:
     asyncio.run(run_harness(args))

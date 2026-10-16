@@ -682,7 +682,8 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed cold-read Run whose chain a crash cut with no backend left: the
     replay reports the parent with the attempt line and the all-failed trailer,
-    and the child stays open; a repeated pass lands nothing twice."""
+    and the report's delivery archives the child; a repeated pass lands nothing
+    twice."""
   cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
   page = tmp_path / "page.html"
   worker = await _cold_read_child(tmp_path, tree, manager, page=page)
@@ -702,13 +703,125 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
           "attempt fake failed: run run-cold-1 failed without a reportable output",
           "every model failed (1 tried)",
       ])
-  assert tree.task_state(worker.id) == "open"
+  assert tree.task_state(worker.id) == "archived"
+  closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
+  assert closes[0]["outcome"] == "archived"
+  assert closes[0]["actor"] == "system"
+  assert closes[0]["request_id"] == f"unsuccessful:{failed_run}"
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
   assert len(child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
+  assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
+  assert tree.task_state(worker.id) == "archived"
+
+
+@pytest.mark.asyncio
+async def test_recovery_replays_a_lost_cold_read_interrupted_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An interrupted cold-read Run reports at replay exactly as the live
+    chain's fall-through does (never through the next-backend retry), and the
+    report's delivery archives the child; a repeated pass lands nothing twice."""
+  cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  page = tmp_path / "page.html"
+  worker = await _cold_read_child(tmp_path, tree, manager, page=page)
+  run_id = "run-cold-1"
+  await tree.runs.register_run(
+      RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, run_id, outcome="interrupted", exit_code=-1)
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  reports = child_reports(tree, manager.id)
+  assert [r["outcome"] for r in reports] == ["interrupted"]
+  # No retry run: an interrupted cold read never takes the next-backend chain.
+  assert len(tree.runs.list_run_records_sync(worker.id)) == 1
+  assert tree.task_state(worker.id) == "archived"
+  closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
+  assert closes[0]["actor"] == "system"
+  assert closes[0]["request_id"] == f"unsuccessful:{run_id}"
+  assert closes[0]["summary"] == f"run {run_id} ended interrupted; archived by the server"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  # A repeated pass lands nothing twice.
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert len(child_reports(tree, manager.id)) == 1
+  assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The last-ended verdict: a node whose failed run A preceded a successful
+    run B keeps A's replayed report (one, waking the parent once) but is never
+    archived by it — run B ended last."""
+  cfg, _session_blocks, tree, manager, worker = await _manager_and_worker(
+      tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  await tree.runs.register_run(RunRecord(id="run-a", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, "run-a", outcome="failed", exit_code=1)
+  await tree.runs.register_run(RunRecord(id="run-b", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, "run-b", outcome="success", exit_code=0)
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  reports = child_reports(tree, manager.id)
+  assert [r["outcome"] for r in reports] == ["failed"]
+  assert [r["result_refs"] for r in reports] == [["run:run-a"]]
+  # Run B ended last and awaits its review: the node stays open, unarchived.
   assert tree.task_state(worker.id) == "open"
+  assert [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED] == []
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+
+
+@pytest.mark.asyncio
+async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The pre-fix leftover: an open worker whose last run failed and whose
+    report already sits in the parent's log. The startup pass re-delivers
+    nothing (the stable report id dedups, no wake) and archives the worker; a
+    second pass writes no second fact."""
+  cfg, _session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  run_id = "run-failed"
+  await tree.runs.register_run(RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, run_id, outcome="failed", exit_code=1)
+  # The pre-fix live path's delivery: the one report in the parent's log,
+  # consumed by the parent's own turn, the node still open.
+  events = tree.runs.load_events_sync(worker.id)
+  source = next(e for e in reversed(events) if e["type"] == ET.RUN_FINISHED and e["run_id"] == run_id)
+  _report, created = await tree.dispatch.deliver_child_report(
+      worker.id,
+      source_event=source,
+      outcome="failed",
+      summary=f"run {run_id} failed",
+      result_refs=[f"run:{run_id}"],
+      recipient=manager.id)
+  assert created
+  assert tree.task_state(worker.id) == "open"
+  def report_turns() -> list:
+    return [r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn"]
+
+  await poll_until(
+      lambda: len(report_turns()) == 2, timeout=15.0, what="the setup delivery's parent turn")
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  # No second report and no second wake: the manager holds exactly the one
+  # delivery and its takeoff + report turns.
+  assert len(child_reports(tree, manager.id)) == 1
+  assert len(report_turns()) == 2
+  assert tree.task_state(worker.id) == "archived"
+  closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
+  assert closes[0]["outcome"] == "archived"
+  assert closes[0]["actor"] == "system"
+  assert closes[0]["request_id"] == f"unsuccessful:{run_id}"
+
+  # A second startup writes no second fact.
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert len(child_reports(tree, manager.id)) == 1
+  assert len(report_turns()) == 2
+  assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
 
 
 @pytest.mark.asyncio
@@ -794,7 +907,9 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   else:
     pytest.fail("the review chain never reported to the manager")
   assert [r["outcome"] for r in reports] == ["blocked"]
-  assert tree.task_state(worker.id) == "open"
+  # The blocked report's delivery archived the stopped worker; the archive
+  # rides the review run's delivery chain, so it can land after the report.
+  await poll_until(lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
 
   # The blocked report wakes the manager, and its turn runs in flight beside
   # the steps below. The startup pass below runs boot-style — no is_driven

@@ -122,7 +122,9 @@ async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
   summary = reports[0]["summary"]
   assert "passed review but its branch did not land on main: " in summary
   assert "ancestry check failed" in summary and "(origin/main)" in summary
-  assert tree.task_state(worker_id) == "open"
+  # The blocked report's delivery archived the stopped worker.
+  await test_task_execution.poll_until(
+      lambda: tree.task_state(worker_id) == "archived", timeout=15.0, what="the blocked worker's archive")
 
 
 @pytest.mark.asyncio

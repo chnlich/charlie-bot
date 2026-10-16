@@ -649,6 +649,31 @@ class RunStore:
     runs = self.list_run_records_sync(session_id)
     return runs[-1] if runs else None
 
+  def last_ended_run_id(self, session_id: str) -> str | None:
+    """The id of the Run that ended last on one node, by ``ended_at`` (None before any end).
+
+    Only a Run with a terminal fact has ended. A terminal Run whose metadata
+    mirror missed its ``ended_at`` (the crash window the recovery repair
+    fills) ranks by its run_finished fact's timestamp, so a pass that has
+    not repaired it yet never misreads it as not-yet-ended; launch order
+    breaks ties.
+    """
+    events = self.load_events_sync(session_id)
+    fact_times: dict[str, datetime] = {}
+    for event in events:
+      if event.get("type") == ET.RUN_FINISHED and isinstance(event.get("run_id"), str):
+        fact_times[event["run_id"]] = ensure_utc(datetime.fromisoformat(str(event["timestamp"])))
+    last_key: tuple[datetime, int] | None = None
+    last_id: str | None = None
+    for position, run in enumerate(self.list_run_records_sync(session_id)):
+      fact_time = fact_times.get(run.id)
+      if fact_time is None:
+        continue
+      key = (run.ended_at or fact_time, position)
+      if last_key is None or key > last_key:
+        last_key, last_id = key, run.id
+    return last_id
+
   def list_runs_page_sync(
       self,
       session_id: str,

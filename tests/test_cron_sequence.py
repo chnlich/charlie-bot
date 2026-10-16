@@ -230,10 +230,17 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
   # The chain stopped at the failed step: no later step run exists.
   records = tree.runs.list_run_records_sync(leaf_id)
   assert [r.sequence_ref.position for r in records] == [0]
-  # The failed step's report names the stop and the leaf stays open (a failed
-  # Run is not a terminal task state and paints no sidebar activity).
+  # The failed step's report names the stop, and the report's delivery
+  # archives the stopped leaf: exactly one report, then the end state.
   assert "stopped at step 'selector'" in str(reports[0].get("summary"))
-  assert tree.task_state(leaf_id) != "completed"
+  assert len(reports) == 1
+  await _async_wait_for(lambda: tree.task_state(leaf_id) == "archived", 15.0, "the failed leaf's archive")
+  closes = [e for e in tree.events.load_events(leaf_id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
+  assert closes[0]["outcome"] == "archived"
+  assert closes[0]["actor"] == "system"
+  assert closes[0]["request_id"] == f"unsuccessful:{records[0].id}"
+  assert closes[0]["run_ids"] == [records[0].id]
 
 
 # ---------------------------------------------------------------------------
@@ -874,7 +881,9 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
   assert [r.sequence_ref.position for r in records] == [0]
   assert records[0].pid is None
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), records[0].id) is None
-  assert tree.task_state(leaf_id) != "completed"
+  # The retained queued step Run keeps the leaf open: the archive entry
+  # refuses a node with a queued run.
+  assert tree.task_state(leaf_id) == "open"
   # The report names both steps and the shared backend.
   summary = str(reports[0].get("summary"))
   assert "stopped before its first step" in summary
@@ -944,7 +953,10 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   # The next position never launched: no step-1 Run exists, no process started.
   records = tree.runs.list_run_records_sync(leaf_id)
   assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0]
-  assert tree.task_state(leaf_id) != "completed"
+  # The stopped chain's report archived the leaf: step 0 ended last and no
+  # run is queued.
+  await _async_wait_for(lambda: tree.task_state(leaf_id) == "archived", 15.0, "the stopped leaf's archive")
+  assert len(reports) == 1
   summary = str(reports[0].get("summary"))
   assert "stopped before launching step 'reviewer'" in summary
   assert "steps 'selector' and 'reviewer'" in summary

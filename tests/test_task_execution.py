@@ -53,12 +53,12 @@ from src.backends.claude_code import claude_accounts, claude_relay, master_cc_re
 from src.features.voice.turn_contribution import VOICE_NOTE
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.infra.models import PatchSessionTaskRequest, RunRecord, SessionMetadata, TaskSpec
+from src.infra.models import PatchSessionTaskRequest, RunRecord, SequenceRef, SessionMetadata, TaskSpec
 from src.runtime import runs as runs_mod
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
-from src.runtime.task_errors import TaskInvalidError
+from src.runtime.task_errors import TaskConflictError, TaskInvalidError
 from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests
@@ -756,9 +756,24 @@ async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
     child_id, run_id = response.json()["session_id"], response.json()["run_id"]
     first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
     assert first_outcome == "failed" and first_run.input_event_ids == []
-    # A failed run keeps the task open; the manager's rule change rides the
-    # agent-relay route, which dispatches the node's second work run — the run
-    # claims exactly that message.
+    # The failed run's report archived the child: the manager's in-place
+    # continuation is refused with the archived sentence, and the operator
+    # restore reopens the node for the second run. The archive rides the
+    # failed run's delivery chain, so it can land after the terminal fact.
+    await poll_until(
+        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the failed child's archive")
+    relay = client.post(
+        "/api/internal/session-message",
+        json={
+            "session_id": manager.id,
+            "target_session_id": child_id,
+            "content": "## Rule change: keep the legacy key working",
+        },
+        headers=OP_HEADERS)
+    assert relay.status_code == 409, relay.text
+    assert relay.json()["detail"] == f"task {child_id} is archived"
+    restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
+    assert restored.status_code == 200, restored.text
     relay = client.post(
         "/api/internal/session-message",
         json={
@@ -853,10 +868,16 @@ async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
         headers=OP_HEADERS)
     assert response.status_code == 200, response.text
     child_id, run_id = response.json()["session_id"], response.json()["run_id"]
-    # Each failed run keeps the task open, so each relayed message dispatches
-    # its own follow-up work run: two runs, one claimed message apiece.
+    # Each failed run's report archives the child, so each relayed message
+    # follows an operator restore and dispatches its own follow-up work run:
+    # two runs, one claimed message apiece. The archive rides the failed
+    # run's delivery chain, so it can land after the terminal fact.
     first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
     assert first_outcome == "failed" and first_run.input_event_ids == []
+    await poll_until(
+        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the first failure's archive")
+    restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
+    assert restored.status_code == 200, restored.text
     first_relay = client.post(
         "/api/internal/session-message",
         json={
@@ -871,6 +892,10 @@ async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
     assert len(agent_messages) == 1 and second_run.input_event_ids == [str(agent_messages[0]["id"])]
     second_run, second_outcome = await wait_for_terminal_run(tree, child_id, second_run.id)
     assert second_outcome == "failed"
+    await poll_until(
+        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the second failure's archive")
+    restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
+    assert restored.status_code == 200, restored.text
     second_relay = client.post(
         "/api/internal/session-message",
         json={
@@ -1051,26 +1076,32 @@ async def test_implement_delivery_requires_review_and_real_landing(
   assert review_run.branch_name == work_run.branch_name
   assert review_run.worktree_path == work_run.worktree_path
   # Review-only success is not delivery: the work commit never landed on the
-  # requested target, so the task stays open with a blocked report and the
-  # worktree preserved.
-  assert tree.task_state(worker.id) == "open"
-  # The blocked report rides the delivery chain's own awaits (the landing
-  # check shells out to git), so it can land after the review's terminal
-  # fact is readable; wait for it the way the waits above wait for the
-  # worktree and the terminal fact.
+  # requested target, so the task reports blocked and the report's delivery
+  # archives the worker with its worktree preserved. The blocked report and
+  # the archive ride the delivery chain's own awaits (the landing check
+  # shells out to git), so they can land after the review's terminal fact is
+  # readable; wait for them the way the waits above wait for the worktree
+  # and the terminal fact.
   reports: list[dict] = []
   deadline = asyncio.get_event_loop().time() + 10
   while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-    if reports and reports[-1]["outcome"] == "blocked":
+    if reports and reports[-1]["outcome"] == "blocked" and tree.task_state(worker.id) == "archived":
       break
     await asyncio.sleep(0.05)
   assert reports and reports[-1]["outcome"] == "blocked"
+  assert tree.task_state(worker.id) == "archived"
   assert Path(work_run.worktree_path).exists()
 
   # The explicit authorized retry of the review — this time with the
   # reviewer's landing work enabled — executes through the same launch path,
-  # and its landing completes the delivery.
+  # and its landing completes the delivery. The archived worker refuses a
+  # retry (only an open task accepts one); the operator restore reopens it.
+  with pytest.raises(TaskConflictError, match="is archived"):
+    await tree.create_retry(worker.id, "review-retry-0", review_run.id)
+  await tree.completion.restore_task(
+      worker.id, request_id="restore-1", reason="retry the review with the push enabled", caller=OPERATOR)
+  assert tree.task_state(worker.id) == "open"
   push_state["enabled"] = True
   retry = await tree.create_retry(worker.id, "review-retry-1", review_run.id)
   assert retry["run_id"]
@@ -1377,12 +1408,182 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-    if reports and reports[-1]["outcome"] == "blocked":
+    if reports and reports[-1]["outcome"] == "blocked" and tree.task_state(worker.id) == "archived":
       break
     await asyncio.sleep(0.1)
   else:
     pytest.fail("the failed repo-less review never reported blocked to the parent")
   assert "review of work run run-work failed on every configured reviewer backend" in reports[-1]["summary"]
+  # The blocked report's delivery archived the stopped worker.
+  assert tree.task_state(worker.id) == "archived"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_worker_run_reports_once_and_archives_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A run that fails while running: one failed report wakes the parent once,
+    and the report's delivery archives the worker with the system archive fact."""
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "say the phrase", "task_type": "quick-edit"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  pm_builds: list = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted", pm_builds))
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and say it.", actor="user")
+  install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([assistant_text_event("started")], exit_code=1)],
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
+
+  await wait_for_terminal_run(tree, worker.id, "run-work")
+  await poll_until(lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the failed worker's archive")
+  reports = child_reports(tree, manager.id)
+  assert [r["outcome"] for r in reports] == ["failed"]
+  closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
+  fact = closes[0]
+  assert fact["outcome"] == "archived"
+  assert fact["actor"] == "system"
+  assert fact.get("report_to") is None
+  assert fact["request_id"] == "unsuccessful:run-work"
+  assert fact["run_ids"] == ["run-work"]
+  assert fact["summary"] == "run run-work ended failed; archived by the server"
+  # One report, one wake: the parent's report turn built exactly one turn.
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+  assert len(pm_builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_interrupted_worker_run_reports_once_and_archives_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An interrupted run reports on the spot through the same failure entry
+    (the report used to wait for the next restart's replay), and the report's
+    delivery archives the worker."""
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "say the phrase", "task_type": "quick-edit"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  pm_builds: list = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("stop noted", pm_builds))
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+
+  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  await tree.dispatch.finish_run(worker.id, "run-work", outcome="interrupted", exit_code=-1)
+  # The durable interrupted fact drives exactly the finish chain the live
+  # finalize runs.
+  meta = await tree.load_meta(worker.id)
+  fresh = await tree.runs.get_run(worker.id, "run-work")
+  await tree.dispatch.executor._after_worker_run(meta, fresh, "interrupted")
+
+  assert tree.task_state(worker.id) == "archived"
+  reports = child_reports(tree, manager.id)
+  assert [r["outcome"] for r in reports] == ["interrupted"]
+  closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1
+  fact = closes[0]
+  assert fact["outcome"] == "archived"
+  assert fact["actor"] == "system"
+  assert fact["request_id"] == "unsuccessful:run-work"
+  assert fact["run_ids"] == ["run-work"]
+  assert fact["summary"] == "run run-work ended interrupted; archived by the server"
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+  assert len(pm_builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A failed review whose next-backend retry is already queued reports
+    nothing and archives nothing: the retry's own finish drives the chain."""
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  # Two reviewer entries beyond the worker's own backend: the failed first
+  # attempt leaves a second one to retry on.
+  import conftest as conftest_module
+  cfg.backends.options.extend(
+      [
+          conftest_module.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"),
+          conftest_module.backend_option(id="fake3", label="Fake3", type="codex", model="fake3-model"),
+      ])
+  cfg.backends.preference = ["fake2", "fake3"]
+  task_spec = {"goal": "say the phrase", "task_type": "implement"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  # The settled retry's completion close reports and wakes the parent; script
+  # that turn so no unstubbed build outlives the test.
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  gate = asyncio.Event()
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("review ok")], gate=gate.wait)])
+
+  work = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(work, task_spec_text=task_spec["goal"])
+  await tree.dispatch.finish_run(worker.id, "run-work", outcome="success", exit_code=0)
+  review = RunRecord(
+      id="run-review-1", session_id=worker.id, kind="review", review_of_run_id="run-work", backend="fake2", model="fake2-model")
+  await tree.runs.register_run(review, task_spec_text="review of work run run-work")
+  await tree.dispatch.finish_run(worker.id, "run-review-1", outcome="failed", exit_code=1)
+
+  meta = await tree.load_meta(worker.id)
+  fresh = await tree.runs.get_run(worker.id, "run-review-1")
+  await tree.dispatch.executor._after_review_run(meta, fresh, "failed")
+
+  # The retry launched (its gated backend holds it active): no report, no
+  # close fact, the node open.
+  reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+  assert len(reviews) == 2
+  retried = next(r for r in reviews if r.id != "run-review-1")
+  assert retried.backend == "fake3"
+  assert child_reports(tree, manager.id) == []
+  assert [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED] == []
+  assert tree.task_state(worker.id) == "open"
+
+  # Let the gated retry finish so no launch task outlives the test.
+  gate.set()
+  await wait_for_terminal_run(tree, worker.id, retried.id)
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+
+
+@pytest.mark.asyncio
+async def test_an_improve_childs_failed_run_keeps_the_loop_controllers_close_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A run a sequence controller launched (the improve loop's iteration)
+    reports and archives through its controller alone: the worker failure
+    entry never fires for it."""
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "tighten the loop", "task_type": "implement"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  owner_ref = str(Path(cfg.sessions_dir) / manager.id / "loops" / "1")
+  record = RunRecord(
+      id="run-iter",
+      session_id=worker.id,
+      kind="work",
+      backend="fake",
+      model="fake-model",
+      sequence_ref=SequenceRef(kind="improve", owner_ref=owner_ref, position=0))
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  await tree.dispatch.finish_run(worker.id, "run-iter", outcome="failed", exit_code=1)
+
+  meta = await tree.load_meta(worker.id)
+  fresh = await tree.runs.get_run(worker.id, "run-iter")
+  await tree.dispatch.executor._after_worker_run(meta, fresh, "failed")
+
+  # The loop's close step found no ended loop (the ref names none), and the
+  # generic failure entry never ran: no report, no archive, the node open.
+  assert child_reports(tree, manager.id) == []
+  assert [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED] == []
   assert tree.task_state(worker.id) == "open"
 
 
@@ -2116,6 +2317,18 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     assert report.get("outcome") == "failed"
     assert "differs from origin/main" in str(
         report.get("summary")), (f"the report summary must name the actual error, got: {report.get('summary')!r}")
+    # The failed-before-start report's delivery archived the worker: the one
+    # report, then the end state.
+    await poll_until(
+        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the launch-failed worker's archive")
+    assert len(child_reports(tree, manager.id)) == 1
+    closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
+    assert len(closes) == 1
+    assert closes[0]["outcome"] == "archived"
+    assert closes[0]["actor"] == "system"
+    assert closes[0]["request_id"] == f"unsuccessful:{run_id}"
+    assert closes[0]["run_ids"] == [run_id]
+    assert closes[0]["summary"] == f"run {run_id} ended failed; archived by the server"
 
     # The delivered report is the parent's new durable input: its next
     # serialized turn consumes it. All of that runs on the API client's

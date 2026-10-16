@@ -26,13 +26,13 @@ could not run, or the assembled page failed the byte self-check, 2 = usage error
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
 import pathlib
 import sys
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.features.artifacts import artifact_check, artifact_wrap, constants
@@ -108,7 +108,7 @@ def _delegate_cold_read(
   time, so a replayed call returns the original child and a changed page a new one.
   """
   digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-  timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+  timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
   request_id = f"cold-read:{session_id}:{digest[:12]}:{timestamp}"
   description = f"cold read of {artifact}"
   payload = {

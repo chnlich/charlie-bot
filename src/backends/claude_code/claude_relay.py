@@ -27,14 +27,12 @@ usage panel.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import datetime
 from typing import NamedTuple
 
-from src.backends.claude_code import claude_accounts
-from src.backends.claude_code.claude_config import ClaudeAccount
-from src.backends.claude_code.event_types import CLAUDE_ACCOUNT_LOGIN_REQUIRED
+from src.backends.claude_code import claude_accounts, claude_config, event_types
+from src.infra import config
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
 
 # One run relays at most this many times: four accounts rejecting in turn must
 # end in a loud error, never a loop.
@@ -47,7 +45,7 @@ MAX_RELAYS_PER_TURN = 3
 
 # A warning whose window resets sooner than this is left alone: waiting for the
 # reset costs less than a cold start on another account.
-RELAY_MIN_RESET_AHEAD = timedelta(minutes=45)
+RELAY_MIN_RESET_AHEAD = datetime.timedelta(minutes=45)
 
 # The prompt the resumed process receives after a mid-run relay. The transcript
 # already holds the task and every completed tool call, so re-sending the task
@@ -94,11 +92,11 @@ def _assistant_texts(event: dict) -> list[str]:
   return [block["text"] for block in content if isinstance(block, dict) and isinstance(block.get("text"), str)]
 
 
-def _reset_far_enough(info: dict, now: datetime) -> bool:
+def _reset_far_enough(info: dict, now: datetime.datetime) -> bool:
   resets_at = info.get("resetsAt")
   if not isinstance(resets_at, (int, float)) or isinstance(resets_at, bool):
     return True
-  return datetime.fromtimestamp(float(resets_at), UTC) - now > RELAY_MIN_RESET_AHEAD
+  return datetime.datetime.fromtimestamp(float(resets_at), datetime.UTC) - now > RELAY_MIN_RESET_AHEAD
 
 
 class RelayWatch:
@@ -113,9 +111,9 @@ class RelayWatch:
       self,
       label: str,
       model: str | None,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       account_pool: str | None,
-      now: datetime | None = None,
+      now: datetime.datetime | None = None,
   ) -> None:
     self.label = label
     self.model = model
@@ -173,18 +171,19 @@ class RelayWatch:
     return self.decided is not None
 
 
-def _pool_detail(cfg: CharlieBotConfig, now: datetime | None, account_pool: str | None) -> str:
+def _pool_detail(cfg: config.CharlieBotConfig, now: datetime.datetime | None, account_pool: str | None) -> str:
   """The pool state both relay error messages render: that pool's earliest reset or, with
   no rejection reset ahead, each account's unavailability."""
   reset = claude_accounts.earliest_reset(cfg, now, account_pool)
   if reset is not None:
-    when = f"earliest reset {reset.astimezone(UTC).strftime('%H:%M')} UTC"
+    when = f"earliest reset {reset.astimezone(datetime.UTC).strftime('%H:%M')} UTC"
   else:
     when = claude_accounts.unavailable_detail(cfg, now, account_pool) or "no unavailability recorded"
   return f"pool '{account_pool}'; {when}" if account_pool else when
 
 
-def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None, account_pool: str | None = None) -> str:
+def pool_exhausted_message(
+    cfg: config.CharlieBotConfig, now: datetime.datetime | None = None, account_pool: str | None = None) -> str:
   """The pool-exhausted error: it names the pool and that pool's earliest reset.
 
   A named pool renders ``... no available account (pool 'alpha'; earliest reset
@@ -196,17 +195,17 @@ def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None, a
   return f"{POOL_EXHAUSTED_PHRASE} ({_pool_detail(cfg, now, account_pool)}); this run did not complete."
 
 
-def relay_limit_message(cfg: CharlieBotConfig, account_pool: str | None = None) -> str:
+def relay_limit_message(cfg: config.CharlieBotConfig, account_pool: str | None = None) -> str:
   """The relay-cap error; the pool detail is ``pool_exhausted_message``'s rendering."""
   return (
       f"Claude account relay limit reached ({MAX_RELAYS_PER_TURN} relays in one run; "
       f"{_pool_detail(cfg, None, account_pool)}); this run did not complete.")
 
 
-def login_required_event(account: ClaudeAccount, reason: str) -> dict:
+def login_required_event(account: claude_config.ClaudeAccount, reason: str) -> dict:
   """The operator notice for an account that needs a new login; chat renders it account-free."""
   return {
-      "type": CLAUDE_ACCOUNT_LOGIN_REQUIRED,
+      "type": event_types.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       "account": account.label,
       "config_dir": account.config_dir,
       "reason": reason,
@@ -221,18 +220,18 @@ class RelayMove(NamedTuple):
   newer-transcript guard refused the copy. ``pool_exhausted`` is True when no pool login could
   take the run.
   """
-  account: ClaudeAccount | None
+  account: claude_config.ClaudeAccount | None
   error: str | None
-  refused_holder: ClaudeAccount | None
+  refused_holder: claude_config.ClaudeAccount | None
   pool_exhausted: bool
 
 
 def relay_move(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     model: str | None,
-    current: ClaudeAccount,
+    current: claude_config.ClaudeAccount,
     cc_session_id: str | None,
-    now: datetime | None = None,
+    now: datetime.datetime | None = None,
     account_pool: str | None = None,
     min_headroom: float = 0.0,
 ) -> RelayMove:

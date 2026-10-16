@@ -2604,6 +2604,33 @@ async def _reconcile_node(
   await tree.dispatch.dispatch_pending(session_id)
 
 
+def _replay_owes_review(
+    tree: TaskTreeManager,
+    session_id: str,
+    run_records: list[RunRecord],
+    run: RunRecord,
+) -> bool:
+  """Whether the startup replay owes a successful implement work run its review.
+
+  The live finish path's verdict, re-derived at replay time: the task is
+  still open, and no other work run followed this one. A work run that
+  started later followed; a registered work run with no ``started_at``
+  followed too — the live path read its reservation as a pause — even
+  though the run list sorts it first (``runs._run_sort_key``), so the list
+  position alone never answers this.
+  """
+  if tree.task_state(session_id) != "open":
+    return False
+  for other in run_records:
+    if other.kind != "work" or other.id == run.id:
+      continue
+    if other.started_at is None:
+      return False
+    if run.started_at is None or (other.started_at, other.id) > (run.started_at, run.id):
+      return False
+  return True
+
+
 async def _replay_followups(
     session_id: str,
     tree: TaskTreeManager,
@@ -2696,7 +2723,7 @@ async def _replay_followups(
           pause = tree.completion.pause_reason(session_id)
           if pause is not None:
             log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)
-          else:
+          elif _replay_owes_review(tree, session_id, run_records, run):
             await adapter._maybe_spawn_review(session_id, run)
       elif outcome in ("failed", "interrupted", "blocked"):
         await adapter._report_failure_to_parent(session_id, run, outcome)

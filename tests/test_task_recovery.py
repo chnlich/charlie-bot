@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 
@@ -221,6 +221,149 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
     assert len(reviews) == 1, f"recovery registered a new review: {[r.id for r in reviews]}"
     assert reviews[0].id == review_id
+
+
+async def _implement_worker_with_landed_branch(tmp_path, monkeypatch):
+  """One implement worker on a repo whose reviewed branch already landed on
+    origin's base, the worker backend doubles and the parent's report-turn build
+    installed: the durable shape a restart reconciles, awaiting the test's run
+    records."""
+
+  cfg, session_blocks, tree, manager, worker = await _manager_and_worker(
+      tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
+  repo, _origin = init_repo_with_origin(tmp_path / "repo")
+  # The reviewer's landing: the reviewed branch fast-forwards origin's base.
+  conftest.run_git(repo, "checkout", "-q", "-b", "task/work")
+  (repo / "marker.txt").write_text("implemented\n")
+  conftest.run_git(repo, "add", "-A")
+  conftest.run_git(repo, "commit", "-q", "-m", "implement marker")
+  conftest.run_git(repo, "push", "-q", "origin", "task/work:main")
+  install_scripted_backends(
+      monkeypatch, [
+          SpawningScriptedBackend([result_event("review ok")]),
+          SpawningScriptedBackend([result_event("review ok again")])
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The delivered report's parent turn: one fresh scripted double per build.
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  return cfg, session_blocks, tree, manager, worker, repo
+
+
+async def _register_successful_work_run(tree, worker_id, run_id, repo, *, started_at, worktree_path):
+  """One work run in its delivered durable shape: launched at *started_at*,
+    finished success, never reviewed."""
+  await tree.runs.register_run(
+      RunRecord(
+          id=run_id,
+          session_id=worker_id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          repo_path=str(repo),
+          base_branch="main",
+          branch_name="task/work",
+          worktree_path=worktree_path,
+          started_at=started_at))
+  await tree.dispatch.finish_run(worker_id, run_id, outcome="success", exit_code=0)
+
+
+@pytest.mark.asyncio
+async def test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A completed implement worker whose earlier work run a later one superseded
+    before any review: the startup replay registers no review for it (the live
+    path read the later run as a pause), however many times recovery runs."""
+  cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
+  worktree_gone = str(tmp_path / "charliebot-home" / "worktrees" / "task-work-gone")
+  started = datetime.now(UTC) - timedelta(hours=1)
+  await _register_successful_work_run(
+      tree, worker.id, "run-work-early", repo, started_at=started, worktree_path=worktree_gone)
+  await _register_successful_work_run(
+      tree, worker.id, "run-work-late", repo, started_at=started + timedelta(minutes=30), worktree_path=worktree_gone)
+  review_id = "review-done"
+  await tree.runs.register_run(
+      RunRecord(
+          id=review_id,
+          session_id=worker.id,
+          kind="review",
+          review_of_run_id="run-work-late",
+          backend="fake",
+          model="fake-model",
+          started_at=started + timedelta(minutes=45)))
+  await tree.dispatch.finish_run(worker.id, review_id, outcome="success", exit_code=0)
+
+  # The first pass replays the review's landing proof and closes the task; no
+  # pass ever registers a review for the superseded run.
+  for _round in range(2):
+    await task_recovery.reconcile_task_tree(cfg, tree)
+    reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+    assert [r.id for r in reviews] == [review_id], f"recovery registered a new review: {[r.id for r in reviews]}"
+  assert tree.task_state(worker.id) == "completed"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+
+
+@pytest.mark.asyncio
+async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An open idle implement worker: the replay spawns no review for an earlier
+    work run a later one superseded, and exactly one for the newest successful
+    work run that has none — the one the live path would have reviewed."""
+  cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
+  started = datetime.now(UTC) - timedelta(hours=1)
+  # The spawned review launches in the work run's worktree: an existing path.
+  await _register_successful_work_run(
+      tree, worker.id, "run-work-early", repo, started_at=started, worktree_path=str(repo))
+  await _register_successful_work_run(
+      tree, worker.id, "run-work-late", repo, started_at=started + timedelta(minutes=30), worktree_path=str(repo))
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+
+  reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+  assert len(reviews) == 1, f"recovery registered {[r.id for r in reviews]}"
+  assert reviews[0].review_of_run_id == "run-work-late"
+  # The spawned review runs to its own success and delivers; a repeated pass
+  # registers nothing more.
+  _run, outcome = await wait_for_terminal_run(tree, worker.id, reviews[0].id)
+  assert outcome == "success"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+  assert len(reviews) == 1, f"recovery registered a new review: {[r.id for r in reviews]}"
+
+
+@pytest.mark.asyncio
+async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An open idle implement worker whose newest work run is registered but
+    never started: the replay spawns no review for the earlier successful run
+    (the live path read the reservation as a pause), and the queued run's own
+    withheld launch on an open node keeps today's shape — queued, no stop
+    request."""
+  cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
+  cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: the queued run's launch is withheld
+  started = datetime.now(UTC) - timedelta(hours=1)
+  await _register_successful_work_run(
+      tree, worker.id, "run-work-early", repo, started_at=started, worktree_path=str(repo))
+  queued_id = "run-work-queued"
+  await tree.runs.register_run(
+      RunRecord(id=queued_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+
+  reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+  assert reviews == [], f"recovery registered a review: {[r.id for r in reviews]}"
+  # The queued run's dispatch was withheld for disk headroom: an open node's
+  # withhold records no stop request, and the run stays queued.
+  await poll_until(
+      lambda: any(
+          e.get("type") == ET.RUN_LAUNCH_WITHHELD and e.get("run_id") == queued_id
+          for e in tree.runs.load_events_sync(worker.id)),
+      what="the disk-headroom withheld event")
+  events = tree.runs.load_events_sync(worker.id)
+  assert not tree.runs.stop_requested(events, queued_id)
+  run = await tree.runs.get_run(worker.id, queued_id)
+  assert run is not None and run.pid is None
+  assert tree.runs.terminal_outcome(events, queued_id) is None
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
 
 def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:

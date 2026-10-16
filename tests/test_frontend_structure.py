@@ -74,17 +74,17 @@ of a generated onclick string that names a higher function.
 """
 
 import json
+import pathlib
 import re
 import shutil
 import subprocess
 from collections.abc import Callable
-from pathlib import Path
 
 import conftest
 import pytest
 import test_package_structure
 
-GRAPH_SCRIPT = Path(__file__).with_name("frontend_structure_graph.js")
+GRAPH_SCRIPT = pathlib.Path(__file__).with_name("frontend_structure_graph.js")
 PAGE_NAMES = ("chat", "diff", "artifact")
 
 FIX_THE_UPWARD_USE = (

@@ -1,17 +1,17 @@
 """Session explain API: register a divider's explain task, read one entry, read every entry's status."""
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+import fastapi
+import pydantic
 
 from src.features.explain import explain
 from src.infra import config, models, responses
 from src.runtime import session_events
 from src.runtime.api import deps
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
-class ExplainRequest(BaseModel):
+class ExplainRequest(pydantic.BaseModel):
   """One explain (btw-style) request for a divider: the chosen backend is required."""
   event_index: int
   backend: str
@@ -21,9 +21,9 @@ class ExplainRequest(BaseModel):
 async def request_session_explain(
     session_id: str,
     body: ExplainRequest,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    events: session_events.SessionEvents = Depends(deps.get_session_events),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> responses.FastJsonResponse:
   """Register (or return) the explain task for a divider; generation runs detached.
 
@@ -42,21 +42,21 @@ async def request_session_explain(
 async def get_session_explain(
     session_id: str,
     upto: int,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
 ) -> responses.FastJsonResponse:
   """The single explain entry for a divider; answer and error bodies included."""
   entry = await explain.get_explain_entry(events, session_id, upto)
   if entry is None:
-    raise HTTPException(status_code=404, detail=f"no explain entry for event_index {upto}")
+    raise fastapi.HTTPException(status_code=404, detail=f"no explain entry for event_index {upto}")
   return responses.FastJsonResponse(entry)
 
 
 @router.get('/{session_id}/explain/status')
 async def get_session_explain_status(
     session_id: str,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    events: session_events.SessionEvents = Depends(deps.get_session_events),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
 ) -> responses.FastJsonResponse:
   """Every explain entry's ``{upto: {state, backend, generated_at}}`` summary; bodies excluded.
 

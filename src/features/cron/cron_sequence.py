@@ -326,7 +326,7 @@ async def run_firing_steps(
   failure stops the chain. The boundary report carries one block per executed
   step; a fully successful chain closes the leaf through the common completion
   owner (whose close delivers the report), a stopped chain reports the
-  failure and keeps the leaf open with its evidence.
+  failure and the report's delivery archives the leaf.
   """
   steps = task_cfg.steps or []
   conflict = distinct_backend_conflict(task_cfg, tree)
@@ -404,7 +404,10 @@ async def deliver_boundary_report(
   The delivered report is the manager's new durable input; the task tree
   dispatches its next serialized turn. The stable report id deduplicates the
   delivery, and only a freshly created report wakes, so recovery never wakes
-  twice for one firing.
+  twice for one firing. A failed boundary then runs the leaf's archive entry
+  (a stopped chain's leaf provably stopped; a queued step Run refuses it), a
+  blocked one never does: a fully successful chain whose automatic close is
+  blocked keeps its leaf open for repair.
   """
   source = tree.dispatch.report_source_event(leaf_id, "scheduled firing leaf")
   epoch = await tree.session_events.prime_aggregator(recipient)
@@ -420,6 +423,10 @@ async def deliver_boundary_report(
   if created:
     await tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
     await tree.dispatch.wake_parent(recipient, report=report)
+  if outcome == "failed":
+    last_run_id = tree.runs.last_ended_run_id(leaf_id)
+    if last_run_id is not None:
+      await tree.archive_unsuccessful_worker(leaf_id, run_id=last_run_id, outcome="failed")
   log.info(
       "cron_sequence_report_delivered",
       task=task_cfg.name,

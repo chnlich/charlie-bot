@@ -463,7 +463,9 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
       break
     await asyncio.sleep(0.1)
   assert reports and reports[-1]["outcome"] == "failed"
-  assert tree.task_state(worker.id) == "open"
+  # The failed continuation's report delivery archived the stopped worker.
+  await test_task_execution.poll_until(
+      lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the failed continuation's archive")
 
 
 @pytest.mark.asyncio

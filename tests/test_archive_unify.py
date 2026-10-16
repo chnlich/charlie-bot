@@ -24,7 +24,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import run_token, task_errors, task_sessions
+from src.runtime import control_events, run_token, task_errors, task_sessions
 
 
 class ScriptedExecutor:
@@ -136,6 +136,7 @@ async def test_cascade_archive_writes_one_fact_per_open_node_with_archived_with(
     fact = closes[0]
     assert fact["outcome"] == "archived"
     assert fact["actor"] == "user"
+    assert fact["run_ids"] == []
     assert fact.get("report_to") is None  # an archive reports to nobody
   # The descendant facts name the node the user archived; the target's own fact
   # carries no archived_with.
@@ -342,3 +343,163 @@ async def test_child_report_into_an_archived_parent_is_history_and_wakes_nobody(
   assert (mid.id, "late-result") in tree.facts_of(mid.id).delivered_reports
   assert tree.dispatch.pending_inputs(mid.id) == []
   assert executor.batches == []
+
+
+# ---------------------------------------------------------------------------
+# The server's archive of an unsuccessful worker
+# ---------------------------------------------------------------------------
+
+
+async def build_failed_worker(
+    tree: task_sessions.TaskTreeManager,
+    *,
+    outcome: str = "failed",
+    run_id: str = "run-1",
+    task: models.TaskSpec | None = None,
+):
+  """manager -> worker whose one work run ended with *outcome*; no report was delivered."""
+  manager = await conftest.create_task(tree, parent=None, request_id="mgr", name="Mgr")
+  worker = await conftest.create_task(tree, parent=manager.id, request_id="w", profile="worker", task=task, name="W")
+  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=worker.id, kind="work"))
+  await tree.dispatch.finish_run(worker.id, run_id, outcome=outcome)
+  return manager, worker
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_writes_the_system_archive_fact(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  manager, worker = await build_failed_worker(tree)
+
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is True
+
+  assert tree.task_state(worker.id) == "archived"
+  closes = close_facts(tree, worker.id)
+  assert len(closes) == 1
+  fact = closes[0]
+  assert fact["outcome"] == "archived"
+  assert fact["actor"] == "system"
+  assert fact.get("report_to") is None
+  assert fact["request_id"] == "unsuccessful:run-1"
+  assert fact["id"] == control_events.stable_close_event_id(worker.id, "unsuccessful:run-1")
+  assert fact["run_ids"] == ["run-1"]
+  assert fact["summary"] == "run run-1 ended failed; archived by the server"
+  # The archive delivered no report of its own to the parent.
+  assert [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT] == []
+  # A repeat call for the same run finds the recorded fact and writes nothing.
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
+  assert len(close_facts(tree, worker.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_refuses_a_non_worker_node(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  manager = await conftest.create_task(tree, parent=None, request_id="mgr", name="Mgr")
+  await tree.runs.register_run(models.RunRecord(id="run-m", session_id=manager.id, kind="manager_turn"))
+  await tree.dispatch.finish_run(manager.id, "run-m", outcome="failed")
+
+  assert await tree.archive_unsuccessful_worker(manager.id, run_id="run-m", outcome="failed") is False
+  assert close_facts(tree, manager.id) == []
+  assert tree.task_state(manager.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_refuses_a_node_that_is_not_open(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  manager, worker = await build_failed_worker(tree)
+  await tree.archive_subtree(manager.id, caller=conftest.OPERATOR)
+
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
+  # The only close fact is the user's own archive.
+  assert [c["actor"] for c in close_facts(tree, worker.id)] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_refuses_when_the_run_is_not_the_last_ended(
+    tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  # An implement worker's successful run awaits its review, so the node stays
+  # open with a later-ended run.
+  task = models.TaskSpec(goal="do the work", task_type=models.TaskType.IMPLEMENT)
+  _manager, worker = await build_failed_worker(tree, task=task)
+  await tree.runs.register_run(models.RunRecord(id="run-2", session_id=worker.id, kind="work"))
+  await tree.dispatch.finish_run(worker.id, "run-2", outcome="success")
+  assert tree.task_state(worker.id) == "open"
+
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
+  assert close_facts(tree, worker.id) == []
+  assert tree.task_state(worker.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_refuses_a_node_with_a_queued_run(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  _manager, worker = await build_failed_worker(tree)
+  await tree.runs.register_run(models.RunRecord(id="run-2", session_id=worker.id, kind="work"))
+
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
+  assert close_facts(tree, worker.id) == []
+  assert tree.task_state(worker.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_refuses_a_node_with_an_unprocessed_input(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  _manager, worker = await build_failed_worker(tree)
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="one more thing", actor="user")
+
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
+  assert close_facts(tree, worker.id) == []
+  assert tree.task_state(worker.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_archive_unsuccessful_worker_refuses_a_node_with_a_pending_trigger(tmp_path: pathlib.Path) -> None:
+  import datetime
+
+  from src.runtime import triggers
+
+  cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  _manager, worker = await build_failed_worker(tree)
+  trigger_mgr = triggers.TriggerManager(cfg, tree)
+  await trigger_mgr._save_trigger(
+      models.PendingTrigger(id="trig-1", session_id=worker.id, fire_at=datetime.datetime.now(datetime.UTC), message="wake"))
+
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
+  assert close_facts(tree, worker.id) == []
+  assert tree.task_state(worker.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_a_parent_message_to_the_server_archived_worker_draws_the_archived_refusal(
+    tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  manager, worker = await build_failed_worker(tree)
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is True
+
+  with pytest.raises(task_errors.TaskArchivedError) as excinfo:
+    await tree.dispatch.admit_input(
+        worker.id, event_type=ET.AGENT_MESSAGE, content="continue in place", actor="agent", from_session=manager.id)
+  assert str(excinfo.value) == f"task {worker.id} is archived"
+  assert input_events(tree, worker.id) == []
+
+
+@pytest.mark.asyncio
+async def test_the_users_message_restores_the_server_archived_worker_and_starts_a_round(
+    tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  # run-0: the executor's own round below takes the name run-1.
+  _manager, worker = await build_failed_worker(tree, run_id="run-0")
+  assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-0", outcome="failed") is True
+
+  # finish=False: the round claims its batch and stays open, so the assertion
+  # reads the round's own input batch instead of racing the completion close.
+  executor = ScriptedExecutor(tree, finish=False)
+  tree.dispatch.executor = executor
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="continue from here", actor="user", input_id="msg-1")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+
+  assert tree.task_state(worker.id) == "open"
+  reopens = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_REOPENED]
+  assert [e["reason"] for e in reopens] == ["user message"]
+  assert decision["launch"] is True
+  assert executor.batches == [(worker.id, ["msg-1"])]

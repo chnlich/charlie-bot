@@ -2081,12 +2081,12 @@ class TaskExecutionAdapter:
 
         A work Run finishing is not delivery: an implement task's review and
         target-branch landing must complete first, and a failed or blocked
-        outcome reports the parent with durable stable evidence while the task
-        and its worktree stay available for the explicit retry. A Run that a
-        sequence controller launched has no delivery chain of its own: its
-        controller owns progression and the one final report, so this method
-        only asks it and re-enters the node's own dispatcher for inputs the
-        Run left pending.
+        outcome reports the parent with durable stable evidence; the report's
+        delivery archives the stopped worker (its worktree stays on disk —
+        only a completed node removes it). A Run that a sequence controller
+        launched has no delivery chain of its own: its controller owns
+        progression and the one final report, so this method only asks it and
+        re-enters the node's own dispatcher for inputs the Run left pending.
         """
     session_id = meta.id
     try:
@@ -2122,7 +2122,7 @@ class TaskExecutionAdapter:
         else:
           await self._cleanup_worktree_if_delivered(session_id, run)
         return
-      if durable_outcome == "failed":
+      if durable_outcome in ("failed", "interrupted"):
         await self._report_failure_to_parent(session_id, run, durable_outcome)
     finally:
       # Inputs admitted during this run waited for the serialized
@@ -2144,11 +2144,17 @@ class TaskExecutionAdapter:
             session_id,
             work_run,
             "blocked",
-            summary=f"review of work run {work_run.id} failed on every configured reviewer backend")
+            summary=f"review of work run {work_run.id} failed on every configured reviewer backend",
+            deciding_run=run)
       elif self._tree.runs.terminal_outcome(self._tree.runs.load_events_sync(session_id), retried) == "success":
         # The chain ends at the first successful review, so no retry exists for a failed run that follows
         # one: it is the continuation of a paused review, and it reports like any failed run.
         await self._report_failure_to_parent(session_id, run, durable_outcome)
+      return
+    if durable_outcome == "interrupted":
+      # An interrupted review reports like an interrupted work run; it never
+      # retries, and its own end is the node's last.
+      await self._report_failure_to_parent(session_id, run, durable_outcome)
       return
     if durable_outcome != "success":
       return
@@ -2188,7 +2194,8 @@ class TaskExecutionAdapter:
             work_run,
             "blocked",
             summary=f"work run {work_run.id} passed review but its branch did not land on "
-            f"{work_run.base_branch or 'the requested base'}: {reason}")
+            f"{work_run.base_branch or 'the requested base'}: {reason}",
+            deciding_run=run)
         return
       branch, commit, repo_path = landing
       refs.append(f"{LANDING_REF_PREFIX}{branch}@{commit}")
@@ -2308,8 +2315,8 @@ class TaskExecutionAdapter:
   async def _cleanup_worktree_if_delivered(self, session_id: str, work_run: RunRecord) -> None:
     """Remove the shared worktree only once the task actually delivered.
 
-        Failed, blocked and unproven outcomes keep the worktree; keep_worktree
-        pins it; a task that did not close keeps it for the explicit retry.
+        Only a completed node loses its worktree: failed, blocked, unproven
+        and archived outcomes all keep it, and keep_worktree pins it.
         """
     meta = await self._tree.load_meta(session_id)
     if meta is None or meta.task is None or meta.task.keep_worktree:
@@ -2339,8 +2346,8 @@ class TaskExecutionAdapter:
         backend and error on the run's evidence file, and the next backend
         from ``select_verify_backend`` (the requesting session's order, tried
         backends skipped) takes a new work run in the same child session. When
-        no backend remains, the parent gets the failure report and the child
-        stays open, as a failed verify does.
+        no backend remains, the parent gets the failure report and the
+        report's delivery archives the child, as a failed verify does.
         """
     session_id = meta.id
     answer: str | None = None
@@ -2436,14 +2443,25 @@ class TaskExecutionAdapter:
     return cold_read.format_report(cold.page_path, page_sha256, attempts, backend_id, answer)
 
   async def _report_failure_to_parent(
-      self, session_id: str, run: RunRecord, outcome: str, *, summary: str | None = None) -> None:
+      self,
+      session_id: str,
+      run: RunRecord,
+      outcome: str,
+      *,
+      summary: str | None = None,
+      deciding_run: RunRecord | None = None,
+  ) -> None:
     """Persist one failed/blocked child_report with stable source/recipient evidence.
 
         The source event is the Run's durable run_finished fact and the
         recipient is the close-time fixed parent, so the stable report id
         dedups across recovery and repeated finalize. Only a freshly created
         report wakes the parent, so a recovery re-delivery of an already
-        delivered report never wakes twice.
+        delivered report never wakes twice. Once the report is delivered, the
+        worker's archive entry runs: it archives the node when it provably
+        stopped, and delivers no report of its own. ``deciding_run`` names
+        the run the archive judges — the review run whose own ending decided
+        the outcome — when the report names another run.
         """
     meta = await self._tree.load_meta(session_id)
     if meta is None or not meta.task_parent_id:
@@ -2464,6 +2482,8 @@ class TaskExecutionAdapter:
         result_refs=[f"{RUN_REF_PREFIX}{run.id}"],
         recipient=meta.task_parent_id,
     )
+    archive_run = deciding_run if deciding_run is not None else run
+    await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 
   async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:
     """The failed run's own closing words (or its error, or the bare outcome).
@@ -2735,14 +2755,18 @@ async def _replay_followups(
         # close-request recheck first, exactly as the live finish ran it. A
         # failed Run re-drives only when no retry Run follows it: a
         # registered retry's own finish drives the rest, and step 4's
-        # dispatch launches a queued one. An interrupted Run keeps the live
-        # chain's silence (no report, no retry).
+        # dispatch launches a queued one. An interrupted Run reports through
+        # the generic failure entry, exactly as the live chain's fall-through
+        # does — never through _after_cold_read_run, whose next-backend
+        # retry belongs to failed Runs.
         later_work = [r for r in run_records[run_index + 1:] if r.kind == "work"]
         if outcome == "success":
           await tree.completion.after_run_finished(session_id, run.id)
           await adapter._after_cold_read_run(meta, run, outcome)
         elif outcome == "failed" and not later_work:
           await adapter._after_cold_read_run(meta, run, outcome)
+        elif outcome == "interrupted":
+          await adapter._report_failure_to_parent(session_id, run, outcome)
         continue
       if outcome == "success":
         # The completion owner's post-success follow-up replays exactly

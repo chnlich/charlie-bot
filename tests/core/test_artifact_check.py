@@ -660,7 +660,7 @@ async def test_cold_read_retry_selects_the_next_backend_with_the_tried_list(
 
 
 @pytest.mark.asyncio
-async def test_cold_read_every_backend_failed_reports_and_the_child_stays_open(
+async def test_cold_read_every_backend_failed_reports_and_the_child_is_archived(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
@@ -685,7 +685,13 @@ async def test_cold_read_every_backend_failed_reports_and_the_child_stays_open(
           "attempt opus failed: opus exploded",
           "every model failed (3 tried)",
       ])
-  assert tree.task_state(child_id) == "open"
+  # The all-failed report's delivery archived the stopped child.
+  await test_task_execution.poll_until(
+      lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the failed cold-read child's archive")
+  closes = [e for e in tree.events.load_events(child_id) if e["type"] == "task_closed"]
+  assert len(closes) == 1
+  assert closes[0]["outcome"] == "archived"
+  assert closes[0]["actor"] == "system"
 
 
 # ---------------------------------------------------------------------------

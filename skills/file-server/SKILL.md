@@ -141,7 +141,6 @@ Then the report lists each failed model attempt, the answering model, and the se
 In a worker session, the command runs the cold read in the foreground and prints the same lines.
 
 When the cold read fails, state in the reply that the cold read failed.
-In a manager session, cancel the failed child next: `charliebot session cancel <child id> --reason "cold read failed"`.
 When the page changed after the cold read started, check each answer against the current page.
 Each item below is a signal to revise the page:
 

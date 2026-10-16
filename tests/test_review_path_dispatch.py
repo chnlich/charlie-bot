@@ -148,15 +148,16 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
 
   # Released, the continuation finishes successfully — and only now does the
   # landing check run: the unlanded commit defeats it, so the chain reports
-  # "passed review but its branch did not land" and the child stays open.
+  # "passed review but its branch did not land" and the report's delivery
+  # archives the child.
   _tweak_record, tweak_outcome = await test_task_execution.wait_for_terminal_run(
       tree, child.id, next_runs[0].id, timeout=10.0)
   assert tweak_outcome == "success"
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-    if any("review" in str(e.get("summary", "")).lower() for e in reports):
+    if any("review" in str(e.get("summary", "")).lower() for e in reports) and tree.task_state(child.id) == "archived":
       break
     await asyncio.sleep(0.1)
   assert any("review" in str(e.get("summary", "")).lower() for e in reports), reports
-  assert tree.task_state(child.id) == "open"
+  assert tree.task_state(child.id) == "archived"

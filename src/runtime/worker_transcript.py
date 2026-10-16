@@ -27,8 +27,7 @@ import pathlib
 
 from src.infra import event_types as ET
 from src.infra import memo, models
-from src.runtime import message_projection, task_prompts
-from src.runtime.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME, parse_raw_lines, read_host_boot_time
+from src.runtime import message_projection, runs, task_prompts
 
 # One entry per open worker page, bounded like the other read-path memos.
 _WORKER_PROJECTION_MEMO_LIMIT = 32
@@ -144,14 +143,14 @@ def _header_error(state: str, events: list[dict]) -> tuple[str, int | None]:
   return "", None
 
 
-def _delivery_event(task_state: str, facts_events: list[dict], runs: list[models.RunRecord]) -> dict | None:
+def _delivery_event(task_state: str, facts_events: list[dict], run_records: list[models.RunRecord]) -> dict | None:
   """The closing delivery summary once the task stands resolved (not open).
 
   The summary and result refs ride the node's task_closed fact; the four
   evidence links ride the delivered Run's record (newest successful run, else
   the newest run when a resolved task never recorded a success).
   """
-  if task_state == "open" or not runs:
+  if task_state == "open" or not run_records:
     return None
   summary = ""
   close_refs: list[str] = []
@@ -163,7 +162,7 @@ def _delivery_event(task_state: str, facts_events: list[dict], runs: list[models
       close_refs = [str(ref) for ref in (event.get("result_refs") or [])]
     elif kind == ET.RUN_FINISHED:
       outcomes[str(event.get("run_id"))] = str(event.get("outcome") or "")
-  delivered = next((run for run in reversed(runs) if outcomes.get(run.id) == "success"), runs[-1])
+  delivered = next((run for run in reversed(run_records) if outcomes.get(run.id) == "success"), run_records[-1])
   return {
       "type": ET.RUN_DELIVERY,
       "task_state": task_state,
@@ -197,7 +196,7 @@ def _read_events(path: pathlib.Path) -> list[dict]:
     return []
   if not raw:
     return []
-  return [event for event in parse_raw_lines(raw) if event.get("type") not in _TRANSCRIPT_SKIP_TYPES]
+  return [event for event in runs.parse_raw_lines(raw) if event.get("type") not in _TRANSCRIPT_SKIP_TYPES]
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +213,9 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
       if not entry.is_dir():
         continue
       parts.append(
-          (entry.name, memo.stat_signature(entry / RUN_METADATA_NAME), memo.stat_signature(entry / RUN_EVENTS_NAME)))
+          (
+              entry.name, memo.stat_signature(entry / runs.RUN_METADATA_NAME),
+              memo.stat_signature(entry / runs.RUN_EVENTS_NAME)))
   parts.append(("chat", memo.stat_signature(tree.session_events.get_chat_events_path(session_id))))
   return tuple(parts)
 
@@ -226,15 +227,15 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   task-tree worker node; this builder reads only the run store and the node's
   chat facts.
   """
-  runs = tree.runs.list_run_records_sync(session_id)
+  run_records = tree.runs.list_run_records_sync(session_id)
   facts_events = tree.runs.load_events_sync(session_id)
-  host_boot = read_host_boot_time()
-  states = {run.id: tree.runs.run_display_state(run, facts_events, host_boot) for run in runs}
+  host_boot = runs.read_host_boot_time()
+  states = {run.id: tree.runs.run_display_state(run, facts_events, host_boot) for run in run_records}
   transcript: list[dict] = []
-  for run in runs:
+  for run in run_records:
     state = states.get(run.id, "queued")
     run_dir = tree.runs.run_dir(session_id, run.id)
-    run_events = _read_events(run_dir / RUN_EVENTS_NAME)
+    run_events = _read_events(run_dir / runs.RUN_EVENTS_NAME)
     error, error_index = _header_error(state, run_events)
     if error_index is not None:
       # The header carries this event's text in full; the chat row would read
@@ -260,10 +261,10 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
         ))
     transcript.extend(run_events)
   task_state = tree.task_state(session_id)
-  delivery = _delivery_event(task_state, facts_events, runs)
+  delivery = _delivery_event(task_state, facts_events, run_records)
   if delivery is not None:
     transcript.append(delivery)
-  active_run_id = next((run.id for run in reversed(runs) if states.get(run.id) in _SIGNALLABLE_STATES), None)
+  active_run_id = next((run.id for run in reversed(run_records) if states.get(run.id) in _SIGNALLABLE_STATES), None)
   signature = worker_signature_sync(tree, session_id)
   return TranscriptEntry(
       revision=_revision(signature, states, task_state),

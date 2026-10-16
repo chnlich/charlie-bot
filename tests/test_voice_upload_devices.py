@@ -9,6 +9,7 @@ logs all five as None. Every string here is synthetic.
 
 import json
 import pathlib
+import types
 
 import conftest
 import pytest
@@ -39,7 +40,7 @@ DEVICES = {
 def endpoint(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """The upload endpoint against a temporary sessions dir and a faked decode."""
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  monkeypatch.setattr(voice, "get_config", lambda: cfg)
+  monkeypatch.setattr(voice, "config", types.SimpleNamespace(get_config=lambda: cfg))
   monkeypatch.setattr(voice, "_speech_bundle", _fake_bundle)
   monkeypatch.setattr(voice, "_transcribe_with_bundle", _fake_decode)
   return cfg

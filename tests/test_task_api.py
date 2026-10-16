@@ -396,7 +396,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
 
 
 # ---------------------------------------------------------------------------
-# Authorization: nearest real user instruction wins
+# Authorization: a real user message on the chain, machine input never
 # ---------------------------------------------------------------------------
 
 

@@ -43,10 +43,10 @@ Run:  uv run python tools/live_smoke_task_tree.py [--backend ID] [--purge]
 
 from __future__ import annotations
 
+import pathlib
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -62,12 +62,8 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
-from tools.browser_harness_session_tree import (  # noqa: E402
-    mint_access_key,
-    pick_free_port,
-    write_credentials_yaml,
-)
+from src.infra import constants  # noqa: E402
+from tools import browser_harness_session_tree  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
 RUN_TIMEOUT_SECONDS = 420.0
@@ -118,14 +114,14 @@ def load_production_backend_entry(backend_id: str) -> dict:
     Only this entry is copied into the synthetic home; nothing else from the
     production config (triggers, accounts, session state) reaches it.
     """
-  from src.infra.config import load_config
-  option = load_config().get_backend_option(backend_id)
+  from src.infra import config
+  option = config.load_config().get_backend_option(backend_id)
   if option is None:
     fail(f"backend option {backend_id!r} is not configured in the production config")
   return json.loads(option.model_dump_json())
 
 
-def install_native_session_dir_isolation(clc_sessions: Path) -> None:
+def install_native_session_dir_isolation(clc_sessions: pathlib.Path) -> None:
   """Route charlie-code builds' extra_flags through --session-dir in THIS process.
 
     The production config is untouched: the harness wraps the two build entry
@@ -147,9 +143,9 @@ def install_native_session_dir_isolation(clc_sessions: Path) -> None:
   worker_module.build_backend = wrapped
 
 
-def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int, str]:
+def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tuple[int, str]:
   """Write the synthetic home's config and credentials; return (port, access_key)."""
-  port = pick_free_port()
+  port = browser_harness_session_tree.pick_free_port()
   entry = dict(entry)
   clc_sessions = home / "clc-sessions"
   clc_sessions.mkdir(parents=True, exist_ok=True)
@@ -165,8 +161,8 @@ def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int,
       },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-  access_key = mint_access_key("smoke-operator-key-")
-  write_credentials_yaml(home, access_key)
+  access_key = browser_harness_session_tree.mint_access_key("smoke-operator-key-")
+  browser_harness_session_tree.write_credentials_yaml(home, access_key)
   register_secret(access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
   return port, access_key
 
@@ -180,17 +176,17 @@ def preflight(backend_id: str) -> None:
   if "--session-dir" not in help_text.stdout + help_text.stderr:
     fail("installed charlie-code does not support --session-dir; native session "
          "isolation cannot be guaranteed")
-  from src.infra.config import load_config
-  if load_config().get_backend_option(backend_id) is None:
+  from src.infra import config
+  if config.load_config().get_backend_option(backend_id) is None:
     fail(f"backend option {backend_id!r} missing from the production config")
 
 
 def deps_tree():
-  from src.runtime.task_execution import task_manager
-  return task_manager()
+  from src.runtime import task_execution
+  return task_execution.task_manager()
 
 
-def tree_run_dir(session_id: str, run_id: str) -> Path:
+def tree_run_dir(session_id: str, run_id: str) -> pathlib.Path:
   return deps_tree().runs.run_dir(session_id, run_id)
 
 
@@ -203,14 +199,13 @@ async def start_server(port: int, title: str) -> None:
     The started server lands in _SERVERS, so shutdown_servers() stops it; *title*
     names the app in /docs and openapi.json and is the calling harness's own.
     """
+  import fastapi
   import uvicorn
-  from fastapi import FastAPI
 
-  from src.runtime.api import chat, internal, sessions
-  from src.runtime.api.auth import AuthMiddleware
+  from src.runtime.api import auth, chat, internal, sessions
 
-  app = FastAPI(title=title)
-  app.add_middleware(AuthMiddleware)
+  app = fastapi.FastAPI(title=title)
+  app.add_middleware(auth.AuthMiddleware)
   app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
   app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
   app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
@@ -260,7 +255,7 @@ async def wait_for_dispatch_run(session_id: str, label: str) -> str:
     The reservation id is deterministic (the dispatch request binds the sorted
     pending-batch ids), so the poll reads the same fact the dispatcher wrote.
     """
-  from src.runtime.control_events import sha256_hex, stable_run_id
+  from src.runtime import control_events
 
   tree = deps_tree()
   deadline = time.monotonic() + 30
@@ -268,7 +263,7 @@ async def wait_for_dispatch_run(session_id: str, label: str) -> str:
     pending = tree.dispatch.pending_inputs(session_id)
     ids = sorted(str(e.get("id")) for e in pending)
     if ids:
-      predicted = stable_run_id(session_id, "dispatch:" + sha256_hex("\x00".join(ids)))
+      predicted = control_events.stable_run_id(session_id, "dispatch:" + control_events.sha256_hex("\x00".join(ids)))
       run = await tree.runs.get_run(session_id, predicted)
       if run is not None:
         return run.id
@@ -293,12 +288,12 @@ async def smoke(backend_id: str, purge: bool) -> None:
   preflight(backend_id)
   entry = load_production_backend_entry(backend_id)
 
-  home = Path(tempfile.mkdtemp(prefix="charliebot-live-smoke-"))
+  home = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-live-smoke-"))
   port, access_key = build_synthetic_home(home, backend_id, entry)
   os.environ["CHARLIEBOT_HOME"] = str(home)
   # Clear inherited production identity: the smoke's children route through
   # the synthetic home only.
-  for var in (SESSION_ID_ENV_VAR, RUN_TOKEN_ENV):
+  for var in (constants.SESSION_ID_ENV_VAR, constants.RUN_TOKEN_ENV):
     os.environ.pop(var, None)
 
   base = f"http://127.0.0.1:{port}"
@@ -349,12 +344,12 @@ async def smoke(backend_id: str, purge: bool) -> None:
       fail(f"manager run {run_id} did not persist a native session id")
     if not manager_run.model:
       fail(f"manager run {run_id} did not persist its model")
-    if not manager_run.raw_log_ref or not Path(manager_run.raw_log_ref).is_file():
+    if not manager_run.raw_log_ref or not pathlib.Path(manager_run.raw_log_ref).is_file():
       fail(f"manager run {run_id} raw log missing: {manager_run.raw_log_ref}")
     # -- context-stage equality and provenance (manager launch) ----------
-    if not manager_run.prompt_snapshot_ref or not Path(manager_run.prompt_snapshot_ref).is_file():
+    if not manager_run.prompt_snapshot_ref or not pathlib.Path(manager_run.prompt_snapshot_ref).is_file():
       fail(f"manager run {run_id} has no durable snapshot reference")
-    stored = json.loads(Path(manager_run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+    stored = json.loads(pathlib.Path(manager_run.prompt_snapshot_ref).read_text(encoding="utf-8"))
     joined = "\n\n".join(b["text"] for b in stored["blocks"])
     if stored["char_count"] != len(joined):
       fail(f"manager snapshot char_count {stored['char_count']} != measured {len(joined)}")
@@ -447,12 +442,12 @@ async def smoke(backend_id: str, purge: bool) -> None:
       fail(f"worker run failed: outcome={worker_outcome} raw_log={worker_run.raw_log_ref}")
     if not worker_run.native_session_id:
       fail(f"worker run {worker_run_id} did not persist a native session id")
-    if not worker_run.raw_log_ref or not Path(worker_run.raw_log_ref).is_file():
+    if not worker_run.raw_log_ref or not pathlib.Path(worker_run.raw_log_ref).is_file():
       fail(f"worker run {worker_run_id} raw log missing: {worker_run.raw_log_ref}")
     # -- context-stage equality and provenance (worker launch) -----------
-    if not worker_run.prompt_snapshot_ref or not Path(worker_run.prompt_snapshot_ref).is_file():
+    if not worker_run.prompt_snapshot_ref or not pathlib.Path(worker_run.prompt_snapshot_ref).is_file():
       fail(f"worker run {worker_run_id} has no durable snapshot reference")
-    w_stored = json.loads(Path(worker_run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+    w_stored = json.loads(pathlib.Path(worker_run.prompt_snapshot_ref).read_text(encoding="utf-8"))
     w_joined = "\n\n".join(b["text"] for b in w_stored["blocks"])
     if w_stored["char_count"] != len(w_joined):
       fail(f"worker snapshot char_count {w_stored['char_count']} != measured {len(w_joined)}")
@@ -496,7 +491,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
     reports = [e for e in manager_events if e.get("type") == "child_report" and e.get("child_session_id") == child_id]
     if not reports or reports[-1].get("outcome") != "completed":
       fail(f"the manager never received the worker's completed report: {reports}")
-    raw_tail = Path(worker_run.raw_log_ref).read_text(encoding="utf-8", errors="replace")[-6000:]
+    raw_tail = pathlib.Path(worker_run.raw_log_ref).read_text(encoding="utf-8", errors="replace")[-6000:]
     if SMOKE_PHRASE not in raw_tail and SMOKE_PHRASE not in json.dumps(reports[-1]):
       fail("the worker's real output did not contain the synthetic phrase")
 
@@ -532,7 +527,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
              f"(raw_log={r.raw_log_ref})")
     log(f"manager report turn {manager_runs[-1].id}: report consumed, outcome=success")
     # -- native continuation kept the instruction hash and the anchor ----
-    report_snapshot = json.loads(Path(manager_runs[-1].prompt_snapshot_ref).read_text(encoding="utf-8"))
+    report_snapshot = json.loads(pathlib.Path(manager_runs[-1].prompt_snapshot_ref).read_text(encoding="utf-8"))
     if report_snapshot["prompt_hash"] != stored["prompt_hash"]:
       fail(
           "the manager's second turn changed the instruction hash without a "

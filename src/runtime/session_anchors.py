@@ -5,22 +5,19 @@
 the pool account holding the transcript. Each write is a fresh read-modify-write under the session's lock that goes
 through ``SessionStore.save_metadata(anchor_write=True)``, so a stale whole-object save cannot roll an anchor back.
 The block also reads the context size for the account pool, persists ``updated_at`` for the thinking state, and
-resolves the usage panel through ``SessionUsageResolver``. The reset-note helpers live here because they describe
-a fresh native conversation. The process builds one block (``anchors()``); tests monkeypatch the ``_anchors``
-global.
+resolves the usage panel through ``session_usage.SessionUsageResolver``. The reset-note helpers live here because
+they describe a fresh native conversation. The process builds one block (``anchors()``); tests monkeypatch the
+``_anchors`` global.
 """
 
 import asyncio
+import datetime
 from collections.abc import Callable
-from datetime import datetime
 
+from src.infra import config, models
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.models import SessionMetadata, parse_utc_datetime, utc_now
-from src.runtime import session_events, session_store
+from src.runtime import session_events, session_fork, session_store, session_usage
 from src.runtime.hooks import backend_types
-from src.runtime.session_fork import HISTORY_LOCATION_NOTE
-from src.runtime.session_usage import SessionUsageResolver
 
 # The clone-style instruction context-reset notes append after the
 # history note: the fresh native conversation must read the chat log first and
@@ -56,8 +53,9 @@ def context_reset_note(reason: str, task_goal: str | None = None) -> str:
   names what the fresh context is working on.
   """
   task_part = "" if task_goal is None else f" The task is: {task_goal}."
-  return (f"[Context reset: {reason}.{task_part} {HISTORY_LOCATION_NOTE} "
-          f"{CONTEXT_RESET_INSTRUCTION}]")
+  return (
+      f"[Context reset: {reason}.{task_part} {session_fork.HISTORY_LOCATION_NOTE} "
+      f"{CONTEXT_RESET_INSTRUCTION}]")
 
 
 class SessionAnchors:
@@ -65,14 +63,14 @@ class SessionAnchors:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       events: session_events.SessionEvents,
   ) -> None:
     self._cfg = cfg
     self._store = store
     self._events = events
-    self._session_usage = SessionUsageResolver(
+    self._session_usage = session_usage.SessionUsageResolver(
         cfg,
         events.chat_events.events_cache,
         events.get_chat_events_path,
@@ -80,7 +78,7 @@ class SessionAnchors:
     )
 
   async def _persist_anchor_fresh(
-      self, session_id: str, mutate: Callable[[SessionMetadata], bool]) -> SessionMetadata | None:
+      self, session_id: str, mutate: Callable[[models.SessionMetadata], bool]) -> models.SessionMetadata | None:
     """Run one authorized anchor channel: fresh read-modify-write under the per-session lock.
 
     *mutate* projects the new anchor values onto the fresh metadata and returns
@@ -114,10 +112,10 @@ class SessionAnchors:
     clobbers concurrent single-field writes like ``has_unread``.
     """
 
-    def set_anchor(meta: SessionMetadata) -> bool:
+    def set_anchor(meta: models.SessionMetadata) -> bool:
       if meta.cc_session_id != cc_session_id:
         meta.cc_session_id = cc_session_id
-        meta.cc_session_started_at = utc_now()
+        meta.cc_session_started_at = models.utc_now()
       if native_backend is not None:
         meta.native_backend = native_backend
       return True
@@ -138,7 +136,7 @@ class SessionAnchors:
     writes nothing.
     """
 
-    def set_backend(meta: SessionMetadata) -> bool:
+    def set_backend(meta: models.SessionMetadata) -> bool:
       if meta.native_backend == native_backend:
         return False
       meta.native_backend = native_backend
@@ -159,7 +157,7 @@ class SessionAnchors:
     deliberately voided anchor stays on ``clear_cc_session_anchor``.
     """
 
-    def set_provenance(meta: SessionMetadata) -> bool:
+    def set_provenance(meta: models.SessionMetadata) -> bool:
       meta.native_prompt_hash = prompt_hash
       meta.native_backend = native_backend
       meta.native_model = model
@@ -190,14 +188,15 @@ class SessionAnchors:
     suppressed next-round alarm.
     """
 
-    def clear(meta: SessionMetadata) -> bool:
+    def clear(meta: models.SessionMetadata) -> bool:
       meta.cc_session_id = None
       meta.cc_session_started_at = None
       return True
 
     await self._persist_anchor_fresh(session_id, clear)
 
-  async def context_state(self, session_id: str, session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
+  async def context_state(self, session_id: str,
+                          session_meta: models.SessionMetadata) -> tuple[int | None, datetime.datetime | None]:
     """Context size and the time of the last model request, for the account pool.
 
     ``context_tokens`` is the usage panel's reading (``resolve_session_usage``);
@@ -207,25 +206,25 @@ class SessionAnchors:
     usage = await self.resolve_session_usage(session_id, session_meta)
     context_tokens = usage.get(ET.CONTEXT_TOKENS) if isinstance(usage, dict) else None
 
-    def newest_request() -> datetime | None:
+    def newest_request() -> datetime.datetime | None:
       for ev in reversed(self._events.load_chat_events_sync(session_id)):
         if ev.get("type") in (ET.ASSISTANT, ET.RESULT) and isinstance(ev.get("timestamp"), str):
           try:
-            return parse_utc_datetime(ev["timestamp"])
+            return models.parse_utc_datetime(ev["timestamp"])
           except ValueError:
             continue
       return None
 
     return context_tokens, await asyncio.to_thread(newest_request)
 
-  async def update_thinking_state(self, session_id: str, updated_at: datetime) -> None:
+  async def update_thinking_state(self, session_id: str, updated_at: datetime.datetime) -> None:
     """Persist updated_at without clobbering unrelated fields."""
     await self._store.save_field_fresh(session_id, "updated_at", updated_at)
 
   async def resolve_session_usage(
       self,
       session_id: str,
-      session_meta: SessionMetadata,
+      session_meta: models.SessionMetadata,
   ) -> dict | None:
     """Resolve display usage for a session view as a projection over its events.
 
@@ -244,5 +243,5 @@ def anchors() -> SessionAnchors:
   """The process-wide session anchors block."""
   global _anchors
   if _anchors is None:
-    _anchors = SessionAnchors(get_config(), session_store.store(), session_events.events())
+    _anchors = SessionAnchors(config.get_config(), session_store.store(), session_events.events())
   return _anchors

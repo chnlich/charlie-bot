@@ -33,7 +33,7 @@ When the user gives explicit directions, choose exactly one action:
 3. Otherwise, execute the directions within the user's stated scope.
 
 Keep your interpretation within the user's stated goal.
-Required planning and `take off` remain prerequisites within execution under `skills/plan-approval/SKILL.md`.
+Plan approval and the take off of each consequence step follow `skills/plan-approval/SKILL.md`.
 Keep progress updates and completion reports tied to the requested work.
 If execution is blocked, report the blocker and the next step needed to continue.
 
@@ -194,8 +194,6 @@ The reader's established terms stay preferred, and extending a numbered series c
 Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
 
 Keep repo content free of PII and secrets; charlie-bot is a public repo.
-
-During execution of an approved plan, the agent may autonomously complete any reversible operation at similar cost; only irreversible actions outside the plan require re-approval. Report deviations at completion.
 
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search

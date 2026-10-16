@@ -11,11 +11,10 @@ user-invocable: false
 - This skill governs only the CharlieBot master-to-user approval boundary; a
   delegated task is already past that boundary.
 - Plan approval and runtime delegation authorization are separate boundaries. The
-  approval interaction approves the settled plan terms; the runtime gate decides
-  whether a later `/delegate` or `/improve` request has an active user-message
-  authorization window.
-- A delegated worker, reviewer, or improve-loop worker does not present another plan
-  and does not wait for another `take off`; it follows its delegated task contract.
+  approval interaction approves the settled plan terms; the runtime gate judges each
+  later `/delegate` or `/improve` request.
+- A delegated worker, reviewer, or improve-loop worker does not present another plan;
+  it follows its delegated task contract.
 - A delegated agent still stops and reports a blocker, contract conflict, or required
   scope expansion.
 - A child whose approver is its parent node follows Between Agents in
@@ -23,16 +22,15 @@ user-invocable: false
 
 ## The principle
 
-The user judges before what they cannot judge after. Exactly two things need that
-before-judgment: the design, because implementation builds on it and reversing it
-later means redoing the work; and any action the user cannot take back afterward —
-because something is destroyed, or because it has already reached other people.
-Everything else the user can still correct after the fact, so it belongs to
-execution — done autonomously, logged, and surfaced in the completion report,
-which is where after-the-fact judgment happens.
+The user judges two things before they happen:
+
+- the reading of a line: what it delivers, and what done means;
+- each consequence step: a step that fails the reversibility test (Execution section).
+
+The agent tree judges the rest. The user reviews it in the completion report.
 
 **approval object = sections 1 and 3 + 4.1 Schema + resolved Trade-offs + entries
-promoted from Other Details.** These are the exact terms a "take off" approves. The `BLOCK KIT` comment
+promoted from Other Details.** Plan approval covers these exact terms. The `BLOCK KIT` comment
 in `prompts/plan_template.html` is the canonical grammar for the plan surface; do
 not restate it here.
 
@@ -75,7 +73,7 @@ An understanding page precedes the plan when the master must first align the rea
 - Facts before design: when the fix follows from why something happened, settle the
   root cause before drafting and state the case for it in one block between goal and
   deliverable, each claim carrying its evidence anchor.
-- The plan registry, the plan verify round, and take off start with the plan that follows.
+- The plan registry, the plan verify round, and plan approval start with the plan that follows.
   The user confirms by answering the numbered divergences in chat; unmentioned
   items take their recommendation. Confirmation is ordinary feedback and introduces no new
   approval token. External system writes follow the master prompt's External System Writes rule.
@@ -104,18 +102,18 @@ An understanding page precedes the plan when the master must first align the rea
 - Render the artifact per the USAGE note atop the BLOCK KIT comment in `prompts/plan_template.html`.
 - Run the Cold-Read Gate of the file-server skill with `--genre plan`.
 - Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the code baseline when the plan pins one.
-- An improve-loop takeoff plan follows this same contract; its approval object covers
+- An improve-loop plan follows this same contract; its approval object covers
   repo, goal, iterations, work branch, and merge-back — loop parameters with reasonable
   alternatives (iteration count, merge-back) make natural Trade-offs.
-- End with: "Say **take off** when ready to implement."
 
 ## Feedback
 
 - Replies that touch the plan are feedback, not approval: Trade-off resolutions by
-  number, added constraints, questions, changed terms. Fold each into the plan and
-  re-present what changed, then wait. A revision registers with `charliebot plan amend`,
-  which requires `--note`: the one line saying why this version differs from its
-  predecessor. The note rides on the version record; the body stays the complete
+  number, added constraints, questions, changed terms.
+  Fold each into the plan, and register the revision with `charliebot plan amend`.
+  The line continues after the revision's verify round.
+  A revision registers with `charliebot plan amend`, which requires `--note`: the one
+  line saying why this version differs from its predecessor. The note rides on the version record; the body stays the complete
   current design and carries no revision marks, and the reader gets the differences
   from `charliebot plan diff`.
 - A style finding on one passage stands for its pattern: sweep the whole artifact for that
@@ -128,17 +126,12 @@ An understanding page precedes the plan when the master must first align the rea
 
 ## Approval
 
-- "take off" (case-insensitive) is the only trigger. Anything else — "go ahead",
-  "LGTM", "ship it" — gets: "Say **take off** to confirm."
-- Trade-off resolutions may ride in the approval message ("1 default, 2 both, take
-  off"): resolve them first; the approval covers the result.
-- Approval binds to the approval object as it stands: progress never expires it,
-  change does. If an approval-object term must change mid-flight, surface it to the user;
-  nothing forces a re-presentation, the user decides whether to revisit.
-- Verify is a required independent step; its results live in the verify thread's own log, never in the
-  plan registry. `approve` records a takeoff unconditionally; the runtime delegation gate reads the chat
-  log, not the registry, so approve bookkeeping does not gate execution.
-- After the user says take off, record it via `charliebot plan approve`.
+- When a line's reading is confirmed, carry its reversible work to delivery.
+- A user message in a running line is feedback.
+- A request to stop, in any wording or language, or a cancel stops the line.
+- The parent node approves a child line's plan. A root line approves its own plan.
+- Before each consequence step, ask the user for a take off that names the step.
+- A pre take off names lines and steps ahead of time. It holds until those lines deliver.
 - After `charliebot plan approve` and before delegation, post one English comment on
   the plan's ticket carrying the design conclusion and the choices the user judged. One
   comment per plan lineage. The plan stage never creates a ticket; a plan whose work has
@@ -151,9 +144,11 @@ An understanding page precedes the plan when the master must first align the rea
   1. Draft the plan.
   2. Run the assertions.
   3. Register the plan with `charliebot plan present`.
-  4. Start verify and the cold read in the same turn.
-  5. Revise from both results.
-  6. Hand the plan to the user with its findings.
+  4. Run one Improve round: answer the plan page's Improve prompt
+     (src/features/artifacts/static/artifact-comments.js) yourself.
+  5. Start verify and the cold read in the same turn.
+  6. Revise from both results.
+  7. Approve the plan with `charliebot plan approve`, and send the user its link.
   Verify is a read-only repo-less delegation and runs on
   a registered plan, so the goal it measures against has one home and the plan is listed
   while the rounds run.
@@ -180,38 +175,13 @@ An understanding page precedes the plan when the master must first align the rea
 - A revision answers findings by correcting the plan against the goal it was registered with;
   section 1 keeps saying what the first version said. When a finding argues the goal itself
   is the problem, that is a `gap-goal:` question for the user.
-- Report the adequacy findings when presenting the plan, so the user can weigh them too.
+- Report the adequacy findings when you send the user the plan link, so the user can weigh them too.
 
 ## Runtime delegation authorization
 
-This runtime contract is separate from the plan-approval interaction above. It is
-derived statelessly from the existing chat event log and applies at the three
-request-entry checkpoints — `/api/internal/delegate`, `/api/internal/improve`,
-and `/api/internal/session-message` delivering an agent message to a worker node
-(the same judgment the worker's creation applies). There is no check at Run
-launch: once a Run is registered, review Runs, manual retries, startup recovery
-and cron fires are never withheld by later conversation.
-
-- `verify` is always allowed without authorization and remains repo-less.
-- A real user event is `ET.USER` with string `content`. Scheduled-trigger events
-  are `ET.SCHEDULED_TRIGGER`, not `ET.USER`, and are excluded on that basis.
-  Agent-relay events (`ET.AGENT_MESSAGE`, injected cross-session via
-  `/api/internal/session-message`) are excluded by type alongside
-  `scheduled_trigger`: an `agent_message` neither mints nor revokes an
-  authorization window. Nested
-  tool-result events are not real user messages for authorization.
-- Match `pre take off` and `take off` independently, case-insensitively, after
-  normalizing consecutive whitespace. The `take off` substring inside `pre take off`
-  counts, so one message can create both windows.
-- A real `pre take off` authorizes every non-`verify` behavior for exactly 12 hours
-  from its valid UTC event timestamp, survives later real user messages, and is
-  restarted by a new pre token. Missing or unparseable pre timestamps fail closed.
-- Ordinary `take off` authorizes every non-`verify` delegation type without a count
-  limit when the latest real user message contains it. The next real user message
-  ends that window. Scheduled-trigger and nested tool-result events do not mint or cancel it.
-- Scheduled fires stay outside this user-facing gate. No authorization file, field,
-  event, counter, lease, consumption marker, or `TASK_DELEGATED` authorization read is
-  permitted; it remains delegation history/UI data.
+The runtime gate admits a delegation when the calling manager and its ancestors are open
+and the chain holds a real user message. Verify and cold-read always pass.
+The gate judges the chain alone; its definitions live in src/runtime/takeoff_gate.py.
 
 ## Execution
 
@@ -220,7 +190,7 @@ and cron fires are never withheld by later conversation.
   other people nor systems they rely on), do it without asking.
 - When reality forces a change that leaves the approval object intact, make it,
   log it as a deviation, and keep going.
-- Between "take off" and the report there is nothing to ask: return to the user
+- Between plan approval and the report there is nothing to ask: return to the user
   only at a checkpoint the plan assigns to the user, at an unapproved action that
   fails the test, or at a blocking failure. Progress updates are fine; requests
   for permission are not.

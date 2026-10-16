@@ -14,7 +14,8 @@ import socket
 import time
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request, responses
+import fastapi
+from fastapi import responses
 
 from src.features import usage
 from src.infra import log_once, tasks
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 
 log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
 def preload_usage_tally_stack() -> None:
@@ -301,7 +302,7 @@ def _token_usage_context(
 
 
 @router.get("/token-usage", response_class=responses.HTMLResponse)
-async def token_usage_viewer(request: Request) -> responses.HTMLResponse:
+async def token_usage_viewer(request: fastapi.Request) -> responses.HTMLResponse:
   """Render the per-model token usage tally page from the ledger as of the last capture.
 
   The read runs in a thread pool, never on the event loop, and never captures.

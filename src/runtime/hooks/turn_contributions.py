@@ -1,7 +1,7 @@
 """Turn contributions: how a feature package adds to a master turn.
 
 A master turn runs one path for every session: it builds the instruction segments, prepares state before the turn,
-picks the context window, opens each user input in the prompt, renders chat events, and reacts when the turn ends.
+opens each user input in the prompt, renders chat events, and reacts when the turn ends.
 A feature package that takes part in one of these steps registers a ``TurnContribution`` from its ``register()``
 function (the packages listed in ``src/app/registrations.py``). The runtime asks every registered contribution at
 each step and names no feature.
@@ -62,13 +62,6 @@ class TurnContribution:
   async def after_turn(self, meta: models.SessionMetadata, done_event: dict, *, cfg: config.CharlieBotConfig) -> None:
     """Runs as its own logged task after ``done_event`` (a MASTER_DONE) is appended and broadcast."""
     return
-
-  def context_window(self, meta: models.SessionMetadata) -> int | None:
-    """The context window in tokens for this session, or None to keep the backend option's own.
-
-    At most one contribution answers non-None for one session. A backend that reads no context window ignores it.
-    """
-    return None
 
   def input_preamble(self, meta: models.SessionMetadata, input_event: dict) -> str | None:
     """The text that opens *input_event* (a user input) in the turn prompt, or None to open it with no text.
@@ -145,12 +138,3 @@ def resolve_input_preamble(meta: models.SessionMetadata, input_event: dict) -> s
   return _the_one_answer(
       "input preamble",
       [(contribution, contribution.input_preamble(meta, input_event)) for contribution in turn_contributions()])
-
-
-def resolve_context_window(meta: models.SessionMetadata) -> int | None:
-  """The context window a contribution sets for *meta*, or None when none does.
-
-  Two contributions that set one raise ValueError.
-  """
-  return _the_one_answer(
-      "context window", [(contribution, contribution.context_window(meta)) for contribution in turn_contributions()])

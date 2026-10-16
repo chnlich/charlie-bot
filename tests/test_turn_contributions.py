@@ -2,8 +2,7 @@
 
 The runtime turn path names no feature. Each feature package registers one TurnContribution, and the path
 asks every registered contribution at its step: the instruction build (rule file, segments), the queue
-(before a turn), the run (context window), the session funnel (after a MASTER_DONE) and the chat aggregator
-(event renderers). The tests drive each call site through the real registrations that conftest makes.
+(before a turn), the session funnel (after a MASTER_DONE) and the chat aggregator (event renderers). The tests drive each call site through the real registrations that conftest makes.
 """
 
 from __future__ import annotations
@@ -27,8 +26,7 @@ from src.features.slack import metadata as slack_metadata
 from src.features.slack import turn_contribution as slack_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import master_cc_run, master_cc_state, message_aggregator, streaming, task_prompts
-from src.runtime.agent_process import base
+from src.runtime import master_cc_state, message_aggregator, streaming, task_prompts
 from src.runtime.hooks import turn_contributions
 
 SLACK_ORIGIN = slack_metadata.SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")
@@ -177,52 +175,18 @@ def test_contract_segment_goes_to_manager_rounds_only(contribution, kind: str) -
 
 
 # ---------------------------------------------------------------------------
-# The context window: a thread session runs the thread window, any other session keeps the option's
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("kind, window", [("slack", 96_000), ("discord", 96_000), ("plain", None)])
-def test_context_window_is_set_for_a_thread_session_only(kind: str, window: int | None) -> None:
-  _, origin = SESSION_KINDS[kind]
-  meta = models.SessionMetadata(id="s", name="s", profile="manager", **origin)
-
-  assert turn_contributions.resolve_context_window(meta) == window
-
-
-@pytest.mark.asyncio
-async def test_a_backend_that_reads_no_context_window_keeps_its_option(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The run applies the thread window only to a backend type whose traits read one: the codex type
-  does not, so a thread session's option reaches the backend unchanged. The reading backend's two
-  cases (thread window, main session's own) run through the charlie-code tests of the backend routing suite."""
-  cfg = conftest.build_master_cc_cfg(tmp_path)
-  builds = conftest.install_scripted_backends(
-      monkeypatch, [conftest.ScriptedRelayBackend([base.make_result_event()], exit_code=0)],
-      conftest.BUILD_BACKEND_PATCH_TARGET)
-  thread_meta = models.SessionMetadata(
-      id="thread", name="thread", backend="fake", profile="manager", slack_origin=SLACK_ORIGIN)
-
-  await master_cc_run._run_cc(conftest.make_work_item(cfg, thread_meta, cfg.backends.options[0]))
-
-  assert builds[0]["option"] == cfg.backends.options[0]
-
-
-# ---------------------------------------------------------------------------
 # The registry's contract
 # ---------------------------------------------------------------------------
 
 
 class _Names(turn_contributions.TurnContribution):
-  """A contribution that names a workflow rules file, a context window and one renderer."""
+  """A contribution that names a workflow rules file and one renderer."""
 
-  def __init__(self, rules_file: str | None, window: int | None, renderers: dict) -> None:
-    self._rules_file, self._window, self._renderers = rules_file, window, renderers
+  def __init__(self, rules_file: str | None, renderers: dict) -> None:
+    self._rules_file, self._renderers = rules_file, renderers
 
   def workflow_rules_file(self, meta: models.SessionMetadata) -> str | None:
     return self._rules_file
-
-  def context_window(self, meta: models.SessionMetadata) -> int | None:
-    return self._window
 
   def event_renderers(self) -> dict:
     return self._renderers
@@ -232,9 +196,9 @@ def _row(event: dict) -> dict:
   return {"role": "system", "content": "row"}
 
 
-FIRST = _Names("first.md", 1000, {"first_event": _row})
-SECOND = _Names("second.md", 2000, {"second_event": _row})
-SILENT = _Names(None, None, {})
+FIRST = _Names("first.md", {"first_event": _row})
+SECOND = _Names("second.md", {"second_event": _row})
+SILENT = _Names(None, {})
 
 
 class _Opens(turn_contributions.TurnContribution):
@@ -285,17 +249,14 @@ def test_one_named_rule_file_wins_and_none_means_the_manager_workflows(empty_reg
   register(silent="SILENT", first="FIRST")
 
   assert turn_contributions.resolve_workflow_rules_file(meta) == "first.md"
-  assert turn_contributions.resolve_context_window(meta) == 1000
 
 
-def test_two_named_rule_files_or_two_context_windows_raise(empty_registry: None) -> None:
+def test_two_named_rule_files_raise(empty_registry: None) -> None:
   meta = models.SessionMetadata(profile="manager", id="s", name="s")
   register(first="FIRST", second="SECOND")
 
   with pytest.raises(ValueError, match="workflow rules file"):
     turn_contributions.resolve_workflow_rules_file(meta)
-  with pytest.raises(ValueError, match="context window"):
-    turn_contributions.resolve_context_window(meta)
 
 
 def test_one_input_preamble_wins_and_two_raise(empty_registry: None) -> None:
@@ -325,7 +286,7 @@ def test_two_named_rule_files_fail_the_task_path_build(empty_registry: None, tmp
 
 
 def test_an_event_type_rendered_twice_raises(empty_registry: None) -> None:
-  other_first = _Names(None, None, {"first_event": _row})
+  other_first = _Names(None, {"first_event": _row})
   table = {"existing": lambda event: None}
 
   merged = message_aggregator.merge_event_renderers(table, (FIRST, SECOND))
@@ -334,7 +295,7 @@ def test_an_event_type_rendered_twice_raises(empty_registry: None) -> None:
     message_aggregator.merge_event_renderers(table, (FIRST, other_first))
   with pytest.raises(ValueError, match="master_done"):
     message_aggregator.merge_event_renderers(
-        message_aggregator._SIMPLE_HANDLERS, (_Names(None, None, {ET.MASTER_DONE: _row}),))
+        message_aggregator._SIMPLE_HANDLERS, (_Names(None, {ET.MASTER_DONE: _row}),))
 
 
 def test_registration_imports_no_contribution_module() -> None:

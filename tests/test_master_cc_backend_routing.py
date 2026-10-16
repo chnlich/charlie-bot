@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator
 import conftest
 import pytest
 
-from src.features.chat_threads import thread_sessions
 from src.features.slack import metadata
 from src.infra import config as core_config
 from src.infra import constants, models
@@ -98,39 +97,23 @@ def command_window(cmd: list[str]) -> str:
   return cmd[cmd.index("--context-window") + 1]
 
 
+@pytest.mark.parametrize(
+    "slack_origin", [
+        metadata.SlackOrigin(team_id="T", channel_id="C", thread_ts="1700000000.000100"),
+        None,
+    ],
+    ids=["slack-thread", "main"])
 @pytest.mark.asyncio
-async def test_run_cc_thread_session_pins_clc_context_window(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A thread session on a charlie-code option runs the fixed thread window: the resolved
-  option carries THREAD_CONTEXT_WINDOW and the CLC command line passes it as
-  --context-window, in place of the option's own value."""
+async def test_run_cc_passes_option_context_window_to_clc(
+    slack_origin: metadata.SlackOrigin | None, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A charlie-code session, thread or main, runs with the option's own context window: the resolved
+  option and the CLC command line both carry 409_600."""
   cfg = build_charlie_code_cfg(tmp_path)
   captured: dict[str, object] = {}
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
 
   session_meta = models.SessionMetadata(
-      profile="manager",
-      id="session-id",
-      name="Thread",
-      backend="charlie-code-kimi-k3",
-      slack_origin=metadata.SlackOrigin(team_id="T", channel_id="C", thread_ts="1700000000.000100"))
-  item = conftest.make_work_item(cfg, session_meta, cfg.backends.options[0])
-  await master_cc.master_cc_run._run_cc(item)
-
-  assert captured["option"].context_window == thread_sessions.THREAD_CONTEXT_WINDOW  # type: ignore[attr-defined]
-  assert command_window(captured["cmd"]) == "96000"  # type: ignore[index]
-
-
-@pytest.mark.asyncio
-async def test_run_cc_main_session_keeps_option_context_window(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A main session on the same option keeps the option's own context window, on the resolved
-  option and on the CLC command line alike."""
-  cfg = build_charlie_code_cfg(tmp_path)
-  captured: dict[str, object] = {}
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
-
-  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="Main", backend="charlie-code-kimi-k3")
+      profile="manager", id="session-id", name="Session", backend="charlie-code-kimi-k3", slack_origin=slack_origin)
   item = conftest.make_work_item(cfg, session_meta, cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item)
 

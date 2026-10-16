@@ -33,7 +33,6 @@ def register() -> None:
           resume="cli_flag",
           restart_reattach=True,
           preassigned_session_id=True,
-          reads_context_window=False,
           family_prefix=None,
           manual_compact=True,
           compact_hint=None,

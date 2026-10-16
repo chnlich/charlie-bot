@@ -7,8 +7,7 @@ import re
 import zoneinfo
 
 from src.features.cron import config as cron_config
-from src.infra import config, home, json_utils, log_once, notifications, yaml_utils
-from src.infra.tasks import create_logged_task
+from src.infra import config, home, json_utils, log_once, notifications, tasks, yaml_utils
 
 log = log_once.LazyStructlogLogger()
 
@@ -267,7 +266,7 @@ def _reload_cron_snapshot() -> _CronSnapshot:
   repo = config.get_config().charlie_bot_repo
   cron_d = cron_dir()
 
-  tasks: list[cron_config.ScheduledTaskConfig] = []
+  loaded: list[cron_config.ScheduledTaskConfig] = []
   errors: list[cron_config.ScheduledTaskError] = []
   prompt_mtimes: dict[pathlib.Path, float] = {}
 
@@ -311,14 +310,14 @@ def _reload_cron_snapshot() -> _CronSnapshot:
                 name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
         log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))
         continue
-      tasks.append(task)
+      loaded.append(task)
       prompt_mtimes.update(file_prompt_mtimes)
 
-  tasks.sort(key=lambda t: t.name)
+  loaded.sort(key=lambda t: t.name)
   errors.sort(key=lambda e: e.name)
   _fire_cron_error_alert([e.name for e in errors])
   snapshot = _CronSnapshot()
-  snapshot.tasks = tasks
+  snapshot.tasks = loaded
   snapshot.errors = errors
   snapshot.prompt_mtimes = prompt_mtimes
   snapshot.fingerprint = _cron_fingerprint(prompt_mtimes)
@@ -388,7 +387,7 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   names = sorted(new_set)
   message = "⚠️ cron tasks failed to load: " + ", ".join(names) if names else "✅ all cron load failures resolved"
   try:
-    create_logged_task(notifications.send_telegram(message, config.get_config()), name="cron-load-alert")
+    tasks.create_logged_task(notifications.send_telegram(message, config.get_config()), name="cron-load-alert")
   except Exception:
     log.exception("cron_alert_dispatch_failed", names=names)
   try:

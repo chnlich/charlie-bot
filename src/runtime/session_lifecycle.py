@@ -8,18 +8,15 @@ tree-projection input call it. The process builds one block (``lifecycle()``); t
 """
 
 import asyncio
+import datetime
 import shutil
 from collections.abc import Callable
-from datetime import datetime
 
+from src.infra import config, log_once, models, process
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionMetadata, SessionStatus, utc_now
-from src.infra.process import cleanup_session_cgroup
 from src.runtime import session_events, session_store, sidebar_state
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 class SessionLifecycle:
@@ -27,7 +24,7 @@ class SessionLifecycle:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       store: session_store.SessionStore,
       events: session_events.SessionEvents,
   ) -> None:
@@ -41,11 +38,11 @@ class SessionLifecycle:
     # before that wiring exists (no tree consumer constructed in this process).
     self.tree_index_invalidator: Callable[[], None] | None = None
 
-  async def rename_session(self, session_id: str, new_name: str) -> SessionMetadata | None:
+  async def rename_session(self, session_id: str, new_name: str) -> models.SessionMetadata | None:
     """Rename a session and return the updated metadata."""
     return await self._store.update_field(session_id, "name", new_name, "session_renamed", new_name=new_name)
 
-  async def switch_backend(self, session_id: str, backend: str) -> SessionMetadata | None:
+  async def switch_backend(self, session_id: str, backend: str) -> models.SessionMetadata | None:
     """Set the session's backend and return the updated metadata.
 
     Performs only the metadata write — the caller (API layer) is responsible
@@ -58,7 +55,7 @@ class SessionLifecycle:
       await self._events.broadcast_sidebar(session_id, ET.BACKEND_SWITCHED, backend=backend)
     return meta
 
-  async def mark_read(self, session_id: str) -> SessionMetadata | None:
+  async def mark_read(self, session_id: str) -> models.SessionMetadata | None:
     """Clear the unread flag for a session."""
     return await self._set_unread_flag(session_id, has_unread=False)
 
@@ -66,7 +63,7 @@ class SessionLifecycle:
     """Set the unread flag for a session (called when master/workers produce output)."""
     await self._set_unread_flag(session_id, has_unread=True)
 
-  async def _set_unread_flag(self, session_id: str, has_unread: bool) -> SessionMetadata | None:
+  async def _set_unread_flag(self, session_id: str, has_unread: bool) -> models.SessionMetadata | None:
     """Write the unread flag and broadcast only when it actually flips.
 
     Unlike ``SessionStore.update_field`` this must not bump ``updated_at``: the sidebar
@@ -87,7 +84,7 @@ class SessionLifecycle:
     await self._events.broadcast_sidebar(session_id, ET.UNREAD_CHANGED, has_unread=has_unread)
     return meta
 
-  async def archive_session(self, session_id: str) -> SessionMetadata | None:
+  async def archive_session(self, session_id: str) -> models.SessionMetadata | None:
     """Mark a session as archived (does not delete files).
 
     The stored status is a tree-projection input: an archived parent archives
@@ -96,7 +93,7 @@ class SessionLifecycle:
     without it, a listing within _TREE_INDEX_TTL_SECONDS would compute the
     children's inherited state from the parent's pre-archive status.
     """
-    meta = await self._store.update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
+    meta = await self._store.update_field(session_id, "status", models.SessionStatus.ARCHIVED, "session_archived")
     self._events.drop_session_runtime_state(session_id)
     if meta is not None and self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
@@ -112,7 +109,7 @@ class SessionLifecycle:
       # The session's cgroup: removed only when empty (no live
       # member left); a retained directory is logged debug and reclaimed by
       # the kernel once its last process exits.
-      await asyncio.to_thread(cleanup_session_cgroup, session_id)
+      await asyncio.to_thread(process.cleanup_session_cgroup, session_id)
       self._events.drop_session_runtime_state(session_id)
       self._store.invalidate_cache(session_id)
       # The sidebar's whole-body memo keys on (requested ids, generation), so a
@@ -126,19 +123,19 @@ class SessionLifecycle:
     log.info("session_deleted_permanently", session_id=session_id)
     return True
 
-  async def unarchive_session(self, session_id: str) -> SessionMetadata | None:
+  async def unarchive_session(self, session_id: str) -> models.SessionMetadata | None:
     """Restore an archived session back to active.
 
     The status flip moves the tree projection the same way the archive write
     does (descendants inherit the ancestor's restored visibility), so the
     rebuildable index drops through the same hook.
     """
-    meta = await self._store.update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
+    meta = await self._store.update_field(session_id, "status", models.SessionStatus.ACTIVE, "session_unarchived")
     if meta is not None and self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
     return meta
 
-  async def recycle_history_before(self, session_id: str, cutoff_utc: datetime) -> dict:
+  async def recycle_history_before(self, session_id: str, cutoff_utc: datetime.datetime) -> dict:
     """Move old chat events out of the live log into weekly archive files."""
     archive_result = await asyncio.to_thread(
         self._events.chat_events.archive_old_chat_events_sync, session_id, cutoff_utc)
@@ -153,15 +150,15 @@ class SessionLifecycle:
       self._events.drop_session_runtime_state(session_id)
     return {"events_archived": events_archived, "archive_file": archive_file}
 
-  async def star_session(self, session_id: str) -> SessionMetadata | None:
+  async def star_session(self, session_id: str) -> models.SessionMetadata | None:
     """Star a session."""
     return await self._store.update_field(session_id, "starred", value=True, log_event="session_starred")
 
-  async def unstar_session(self, session_id: str) -> SessionMetadata | None:
+  async def unstar_session(self, session_id: str) -> models.SessionMetadata | None:
     """Unstar a session."""
     return await self._store.update_field(session_id, "starred", value=False, log_event="session_unstarred")
 
-  async def set_group(self, session_id: str, group: str | None) -> SessionMetadata | None:
+  async def set_group(self, session_id: str, group: str | None) -> models.SessionMetadata | None:
     """Set or clear the group for a session."""
     meta = await self._store.update_field(session_id, "group", group, "session_group_set")
     if meta:
@@ -196,7 +193,7 @@ class SessionLifecycle:
         if not fresh or fresh.group != old_name:
           continue
         fresh.group = new_name
-        fresh.updated_at = utc_now()
+        fresh.updated_at = models.utc_now()
         await self._store.save_metadata(fresh, lock_held=True)
       count += 1
     return count
@@ -210,5 +207,5 @@ def lifecycle() -> SessionLifecycle:
   """The process-wide session lifecycle block."""
   global _lifecycle
   if _lifecycle is None:
-    _lifecycle = SessionLifecycle(get_config(), session_store.store(), session_events.events())
+    _lifecycle = SessionLifecycle(config.get_config(), session_store.store(), session_events.events())
   return _lifecycle

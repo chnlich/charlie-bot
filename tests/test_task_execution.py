@@ -98,18 +98,25 @@ def build_spawning_env(
   return cfg, session_blocks, build_task_tree(cfg, session_blocks)
 
 
-def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_ids: list[str] | None = None):
+def build_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend_ids: list[str] | None = None,
+    *,
+    pool: list[str] | None = None):
   """One fake backend registered, so task creation's default resolution works.
 
     ``backend_ids`` names every configured option (default: the single "fake");
     tests that switch a session's backend pin build a config with more than one.
+    ``pool`` overrides the rotation members (default: the first option); a test that
+    expects a review names a second member — the reviewer never uses the worker's member.
     """
   ids = backend_ids if backend_ids is not None else ["fake"]
   return build_spawning_env(
       tmp_path,
       monkeypatch,
       options=[backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
-      pool=ids[:1])
+      pool=pool if pool is not None else ids[:1])
 
 
 class SpawningScriptedBackend:
@@ -1004,7 +1011,7 @@ async def test_first_terminal_fact_wins_governs_followups(tmp_path: Path, monkey
 @pytest.mark.asyncio
 async def test_implement_delivery_requires_review_and_real_landing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, _origin = init_repo_with_origin(tmp_path)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
@@ -1152,7 +1159,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   """The bare-branch base form when the shared checkout's local branch is only
     behind origin (the 2026-09-26 incident shape): the Run launches anyway, its
     work branch starts at the origin tip, and the local main ref is untouched."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, origin = init_repo_with_origin(tmp_path)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
@@ -1310,7 +1317,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
 @pytest.mark.asyncio
 async def test_repo_less_implement_delivers_after_review_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n",
@@ -1382,7 +1389,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
 @pytest.mark.asyncio
 async def test_repo_less_implement_review_failure_takes_the_failure_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "fix the host script", "task_type": "implement"}
   worker = await create_task(
@@ -1393,9 +1400,9 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and fix it.", actor="user")
 
   work_backend = SpawningScriptedBackend([result_event("done; modified /tmp/x.sh")])
-  # The single configured reviewer fails (no result event: the durable
-  # outcome is failed); the retry policy exhausts and the existing
-  # blocked-report path reports to the parent.
+  # The review on the pool's other member fails (no result event: the durable
+  # outcome is failed); no untried member remains, so the retry policy
+  # exhausts and the existing blocked-report path reports to the parent.
   review_backend = SpawningScriptedBackend([])
   install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -3526,6 +3533,38 @@ async def test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled(
   assert len(summaries) == 1
   assert [r for r in tree.runs.list_run_records_sync(worker.id) if r.retry_of_run_id == run.id] == []
   assert "fake2 not cooling" in backend_pool.recovery_report(cfg)
+
+
+@pytest.mark.asyncio
+async def test_a_successful_worker_with_no_available_reviewer_reports_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The reviewer never runs on a member the worker node used: with the only other pool member
+    cooling, no review spawns and the parent's blocked report names each member's recovery time."""
+  _cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  worker = await tree.create_task(
+      request_id="worker",
+      task_parent_id=manager.id,
+      profile="worker",
+      task=TaskSpec(goal="do the work", task_type=TaskType.IMPLEMENT),
+      name=None,
+      backend="fake2",
+      caller=OPERATOR,
+  )
+  run = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake2", model="fake-model")
+  await tree.runs.register_run(run)
+  await tree.dispatch.finish_run(worker.id, run.id, outcome="success", exit_code=0)
+  backend_pool.cool("fake3", datetime(2030, 1, 2, 3, 4, tzinfo=UTC))
+  summaries = _record_parent_reports(adapter, monkeypatch)
+
+  await adapter._after_worker_run(await tree.load_meta(worker.id), run, "success")
+
+  assert launched == []
+  assert [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"] == []
+  assert len(summaries) == 1 and summaries[0] is not None
+  assert "found no available reviewer backend" in summaries[0]
+  assert "fake2 not cooling" in summaries[0]
+  assert "fake3 cooling until 2030-01-02T03:04" in summaries[0]
 
 
 @pytest.mark.asyncio

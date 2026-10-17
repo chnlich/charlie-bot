@@ -32,7 +32,8 @@ async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
   does, which moves origin's main and leaves the clone's local main behind.
   Returns once the review Run's delivery chain has reported to the manager.
   """
-  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(
+      tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, _origin = conftest.init_repo_with_origin(tmp_path)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")

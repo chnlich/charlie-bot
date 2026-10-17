@@ -35,7 +35,8 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
     during the first review makes it honestly fail, so the chain reports
     "passed review but its branch did not land".
     """
-  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(
+      tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   repo, _origin = conftest.init_repo_with_origin(tmp_path / "repo")
   manager = await conftest.create_task(

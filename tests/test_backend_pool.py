@@ -80,3 +80,25 @@ def test_reviewer_avoids_every_member_the_worker_node_used(tmp_path) -> None:
   cfg = _cfg(tmp_path, ["a", "b", "c"])
   selection = review.select_reviewer_backend(cfg, "reviewer", "a", "m", [], used_backends={"a", "b"})
   assert selection is not None and selection[0] == "c"
+
+
+def test_reviewer_never_falls_back_to_a_member_the_worker_node_used(tmp_path) -> None:
+  """Every candidate used or cooling: the reviewer gets None, never the worker's own member."""
+  cfg = _cfg(tmp_path, ["a", "b"])
+  backend_pool.cool("b", None)
+  assert review.select_reviewer_backend(cfg, "reviewer", "a", "m", [], used_backends={"a"}) is None
+  assert review.select_reviewer_backend(cfg, "reviewer", "a", "m", [], used_backends={"a", "b"}) is None
+
+
+def test_a_check_without_used_members_keeps_the_session_backend_fallback(tmp_path) -> None:
+  """Verify and the cold read name no used members: a spent pool falls back to the session backend, as today."""
+  cfg = _cfg(tmp_path, ["a", "b"])
+  backend_pool.cool("b", None)
+  selection = review.select_reviewer_backend(cfg, "verify", "a", "m", [])
+  assert selection is not None and selection[0] == "a"
+
+
+def test_an_empty_pool_runs_the_check_on_the_workers_backend(tmp_path) -> None:
+  cfg = _cfg(tmp_path, [])
+  selection = review.select_reviewer_backend(cfg, "reviewer", "a", "m", [], used_backends={"a"})
+  assert selection is not None and selection[0] == "a"

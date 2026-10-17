@@ -309,6 +309,9 @@ async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_t
     work run a later one superseded, and exactly one for the newest successful
     work run that has none — the one the live path would have reviewed."""
   cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
+  # A second member for the reviewer: it never runs on the worker's member.
+  cfg.backends.options.append(conftest.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"))
+  cfg.backends.pool = ["fake", "fake2"]
   started = datetime.now(UTC) - timedelta(hours=1)
   # The spawned review launches in the work run's worktree: an existing path.
   await _register_successful_work_run(
@@ -329,6 +332,27 @@ async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_t
   await task_recovery.reconcile_task_tree(cfg, tree)
   reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
   assert len(reviews) == 1, f"recovery registered a new review: {[r.id for r in reviews]}"
+
+
+@pytest.mark.asyncio
+async def test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A single-member pool can never staff the reviewer (it never uses the worker's member): the
+    startup replay of a successful unreviewed work run reports blocked instead of hanging open."""
+  cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
+  started = datetime.now(UTC) - timedelta(hours=1)
+  await _register_successful_work_run(tree, worker.id, "run-work", repo, started_at=started, worktree_path=str(repo))
+
+  await task_recovery.reconcile_task_tree(cfg, tree)
+
+  assert [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"] == []
+  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  assert len(reports) == 1 and reports[0]["outcome"] == "blocked"
+  assert "found no available reviewer backend" in reports[0]["summary"]
+  await poll_until(lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
+  # A repeated pass lands nothing twice.
+  await task_recovery.reconcile_task_tree(cfg, tree)
+  assert [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT] == reports
 
 
 @pytest.mark.asyncio
@@ -869,7 +893,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
     report already in the manager's log — must append nothing.
     """
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, _origin = init_repo_with_origin(tmp_path)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await create_root_session(session_blocks, CreateSessionRequest(name="Manager"), backend="fake")

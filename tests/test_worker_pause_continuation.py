@@ -112,7 +112,9 @@ async def _worker_child(
     ``backend_options`` configures several backends; the pool follows their
     order, so the reviewer is the first option that is not the worker's."""
   if backend_options is None:
-    cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+    # Two members: the reviewer never uses the worker's member, so the review takes the second.
+    cfg, session_blocks, tree = test_task_execution.build_env(
+        tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   else:
     cfg, session_blocks, tree = test_task_execution.build_spawning_env(
         tmp_path, monkeypatch, options=backend_options, pool=[option.id for option in backend_options])

@@ -245,9 +245,11 @@ def select_reviewer_backend(
   """Select a checking-role backend (reviewer, verify, cold read) from backends.pool.
 
   The pool skips the worker's own backend, every *used_backends* member, the *tried_backends*
-  members and the cooling members. When it has no member left and the worker's backend is untried,
-  the worker's backend runs the check, as it always has. Returns (resolved_backend, resolved_model,
-  updated_tried_backends), or None when every route is spent.
+  members and the cooling members. Returns (resolved_backend, resolved_model,
+  updated_tried_backends), or None when every route is spent. An empty pool runs the check on
+  the worker's backend, as it always has; so does a spent pool for a caller that names no
+  *used_backends* (verify, cold read — the reviewer's exclusion rule is absolute: it never
+  reviews on a member the worker node used).
   """
   option = backend_pool.select(cfg, caller=caller, exclude={worker_backend, *used_backends, *tried_backends})
   if option is not None:
@@ -255,7 +257,7 @@ def select_reviewer_backend(
     return option.id, model, [*tried_backends, option.id]
   if not cfg.backends.pool:
     return worker_backend, worker_model, [*tried_backends, worker_backend]
-  if worker_backend in tried_backends:
+  if worker_backend in tried_backends or worker_backend in used_backends:
     log.warning("reviewer_all_backends_exhausted", caller=caller, tried=tried_backends)
     return None
   log.info("reviewer_fallback_to_worker_backend", caller=caller, worker_backend=worker_backend, tried=tried_backends)

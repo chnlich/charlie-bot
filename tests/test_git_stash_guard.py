@@ -203,7 +203,8 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   """Both launch paths hand the backend spawn a PATH led by the guard."""
   from tests import test_task_execution
 
-  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(
+      tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, _origin = conftest.init_repo_with_origin(tmp_path)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {

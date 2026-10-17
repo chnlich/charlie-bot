@@ -137,7 +137,9 @@ async def _delegate_task_tree(
     )
     # A cold-read child is named at creation (no automatic naming call); every
     # other child takes the default node name.
-    name = f"Cold read: {pathlib.Path(req.cold_read.page_path).name}" if req.task_type == models.TaskType.COLD_READ else None
+    name = (
+        f"Cold read: {pathlib.Path(req.cold_read.page_path).name}"
+        if req.task_type == models.TaskType.COLD_READ else None)
     child = await task_mgr.create_task(
         request_id=request_id,
         task_parent_id=req.session_id,

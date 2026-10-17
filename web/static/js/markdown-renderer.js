@@ -461,6 +461,31 @@ function recordCodeTokens(tokens) {
   }
 }
 
+// Status block paragraphs: the master opens each turn's final message with
+// a **Goal** / **Now** / **Waiting on you** block whose lines single
+// newlines separate. Marked's defaults (breaks off) render those lines as
+// one <p> and the browser shows the newlines as spaces, so the three items
+// read as one run-on line. The global breaks option would re-linebreak
+// every paragraph of every message, so the rule narrows to the block:
+// when a paragraph's every line starts with one of the three labels — the
+// first line required to be **Goal**, the colon after a label ASCII or
+// full-width and left to the line body — render one <p>
+// with a <br> between consecutive lines, each line keeping its inline
+// rendering. Every other paragraph returns false and takes marked's default
+// paragraph bytes, as does a matched paragraph whose inline tokens do not
+// split cleanly on the line boundaries (a code span or hard break crossing
+// one): the default then renders it as before. Registered in the same use()
+// below, so the completed-message parse, the streaming paint, and the
+// Rendered Markdown modal all take it. The session page's progress strip
+// (chat/for-you.js) reads the same labels and lines.
+const STATUS_BLOCK_LABELS = ['**Goal**', '**Now**', '**Waiting on you**'];
+function statusBlockParagraphLines(text) {
+  const lines = typeof text === 'string' ? text.split('\n') : [];
+  if (lines.length < 2 || !lines[0].startsWith('**Goal**')) return null;
+  return lines.every((line) => STATUS_BLOCK_LABELS.some((label) => line.startsWith(label)))
+    ? lines : null;
+}
+
 // ---------------------------------------------------------------------------
 // Marked.js renderer: highlight.js syntax highlighting + code block headers
 // ---------------------------------------------------------------------------
@@ -561,29 +586,6 @@ function recordCodeTokens(tokens) {
     const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
     return `<img src="${src}" alt="${alt}"${title}>`;
   };
-  // Status block paragraphs: the master opens each turn's final message with
-  // a **Goal** / **Now** / **Waiting on you** block whose lines single
-  // newlines separate. Marked's defaults (breaks off) render those lines as
-  // one <p> and the browser shows the newlines as spaces, so the three items
-  // read as one run-on line. The global breaks option would re-linebreak
-  // every paragraph of every message, so the rule narrows to the block:
-  // when a paragraph's every line starts with one of the three labels — the
-  // first line required to be **Goal**, the colon after a label ASCII or
-  // full-width and left to the line body — render one <p>
-  // with a <br> between consecutive lines, each line keeping its inline
-  // rendering. Every other paragraph returns false and takes marked's default
-  // paragraph bytes, as does a matched paragraph whose inline tokens do not
-  // split cleanly on the line boundaries (a code span or hard break crossing
-  // one): the default then renders it as before. Registered in the same use()
-  // below, so the completed-message parse, the streaming paint, and the
-  // Rendered Markdown modal all take it.
-  const STATUS_BLOCK_LABELS = ['**Goal**', '**Now**', '**Waiting on you**'];
-  function statusBlockParagraphLines(text) {
-    const lines = typeof text === 'string' ? text.split('\n') : [];
-    if (lines.length < 2 || !lines[0].startsWith('**Goal**')) return null;
-    return lines.every((line) => STATUS_BLOCK_LABELS.some((label) => line.startsWith(label)))
-      ? lines : null;
-  }
   // One token list per line: the tokens' raws concatenate to the paragraph
   // text, and only a text token can carry one of its line breaks — any other
   // token spanning a newline means the block is not a clean label-per-line

@@ -14,10 +14,11 @@ const {baseSessionContext, createChatSidebarContext} = require('./session_contex
 const {readStatic} = require('./read_static');
 
 // ---------------------------------------------------------------------------
-// The session page's view at open: a root web session opens in For you, a child
-// or a thread session in Everything; a manual switch holds for its session until
-// the page reloads. These cases drive the real renderSessionView through the
-// sidebar context, the way a first load and a session switch land.
+// The session page's view at open: a web session, root or child, opens in For you;
+// a thread session and a worker session open in Everything; a manual switch holds
+// for its session until the page reloads. These cases drive the real
+// renderSessionView through the sidebar context, the way a first load and a
+// session switch land.
 // ---------------------------------------------------------------------------
 
 const SLACK_ORIGIN = {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'};
@@ -133,10 +134,10 @@ test('a root web session opens in For you', () => {
   assert.deepEqual(pressed(rig), ['true', 'false']);
 });
 
-test('a child session opens in Everything', () => {
+test('a child web session opens in For you', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {task_parent_id: 'parent-1'}), 'everything');
-  assert.deepEqual(pressed(rig), ['false', 'true']);
+  assert.equal(openedView(rig, {task_parent_id: 'parent-1'}), 'foryou');
+  assert.deepEqual(pressed(rig), ['true', 'false']);
 });
 
 test('a Slack thread session opens in Everything', () => {
@@ -149,12 +150,20 @@ test('a Discord thread session opens in Everything', () => {
   assert.equal(openedView(rig, {discord_origin: DISCORD_ORIGIN}), 'everything');
 });
 
+test('a worker session opens in Everything, root or child', () => {
+  const rig = pageRig();
+  assert.equal(openedView(rig, {profile: 'worker'}), 'everything');
+  assert.equal(openedView(rig, {profile: 'worker', task_parent_id: 'parent-1'}), 'everything');
+});
+
 test('a web session shows the status panel in both views', () => {
   const rig = pageRig();
   openedView(rig, {});
   assert.equal(rig.panel.classList.contains('hidden'), false, 'For you shows the panel');
   rig.context.setChatView('everything');
   assert.equal(rig.panel.classList.contains('hidden'), false, 'Everything shows the panel');
+  openedView(rig, {id: 'child-a', task_parent_id: 'parent-1'});
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'a child web session shows the panel');
 });
 
 test('a thread session and a worker session show no status panel', () => {
@@ -178,12 +187,15 @@ test('a manual switch holds for its session across a re-open, and other sessions
   assert.equal(openedView(rig, {}), 'everything', 'and the first session still holds its choice');
 });
 
-test('a reload forgets the manual choice', () => {
+test('a reload forgets the manual choice and returns each session to its default', () => {
   const first = pageRig();
   openedView(first, {});
   first.context.setChatView('everything');
+
   const reloaded = pageRig();
   assert.equal(openedView(reloaded, {}), 'foryou');
+  assert.equal(openedView(reloaded, {id: 'child-a', task_parent_id: 'parent-1'}), 'foryou',
+      'a child web session opens in For you after a reload');
 });
 
 test('a view switch keeps the pagination sentinel on the page', () => {

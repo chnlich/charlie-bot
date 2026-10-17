@@ -162,10 +162,9 @@
       this.everythingPlace = null;
       // For-you state: the fold lines the reader opened (keys from
       // the registered rules' items), the fold line elements by key, and the persistent
-      // strip, working line and stream holder.
+      // working line and stream holder.
       this.forYouExpanded = new Set();
       this.forYouFolds = new Map();
-      this.forYouStrip = null;
       this.forYouWorking = null;
       this.forYouHolder = null;
       this.entries = [];
@@ -1174,16 +1173,14 @@
       else if (anchor) this.restoreReadingAnchor(anchor);
     }
 
-    // The list's children, in order: the pagination sentinel, the progress
-    // strip, the rows, the working line, and the stream holder (hidden: For
-    // you shows the working line in the streaming output's place).
+    // The list's children, in order: the pagination sentinel, the rows, the
+    // working line, and the stream holder (hidden: For you shows the working
+    // line in the streaming output's place).
     syncForYouChildren() {
       const children = [];
       const sentinel = document.getElementById('load-more-sentinel');
       if (sentinel) children.push(sentinel);
       const entries = this.displayEntries();
-      const progress = forYouRules.progress(entries);
-      if (progress) children.push(this.forYouStripNode(progress));
       for (const item of forYouRules.items(entries)) {
         if (item.kind === 'message') {
           children.push(this.forYouEntryNode(item.entry));
@@ -1204,12 +1201,6 @@
       const out = [];
       this.segments.forEach((seg) => seg.entries.forEach((entry) => out.push(entry)));
       return out;
-    }
-
-    forYouStripNode(progress) {
-      if (!this.forYouStrip) this.forYouStrip = forYouRules.buildStrip();
-      forYouRules.fillStrip(this.forYouStrip, progress);
-      return this.forYouStrip;
     }
 
     forYouFoldNode(item, expanded) {

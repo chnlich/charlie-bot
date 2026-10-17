@@ -476,8 +476,8 @@ function recordCodeTokens(tokens) {
 // split cleanly on the line boundaries (a code span or hard break crossing
 // one): the default then renders it as before. Registered in the same use()
 // below, so the completed-message parse, the streaming paint, and the
-// Rendered Markdown modal all take it. The session page's progress strip
-// (chat/for-you.js) reads the same labels and lines.
+// Rendered Markdown modal all take it. Thread sessions and older messages
+// still open with a status block, so this rule keeps rendering those.
 const STATUS_BLOCK_LABELS = ['**Goal**', '**Now**', '**Waiting on you**'];
 function statusBlockParagraphLines(text) {
   const lines = typeof text === 'string' ? text.split('\n') : [];

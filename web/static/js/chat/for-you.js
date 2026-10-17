@@ -12,8 +12,7 @@
 // switch holds for that session until the page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
-// (what shows, where a fold falls, which status block leads the strip), the row
-// builders and the toggle.
+// (what shows and where a fold falls), the row builders and the toggle.
 // ---------------------------------------------------------------------------
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
@@ -57,47 +56,6 @@ function items(entries) {
   return out;
 }
 
-// The progress strip's fields: the newest agent message whose status block
-// names a Now or Waiting on you line. Null when no message has one yet.
-function progress(entries) {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const msg = entries[i].msg;
-    if (msg.role !== 'assistant') continue;
-    const fields = statusFieldsOf(msg);
-    if (fields) return fields;
-  }
-  return null;
-}
-
-// A message's status fields are a pure function of its text, and every stream
-// paint re-reads the progress, so each message parses once.
-const statusCache = new WeakMap();
-function statusFieldsOf(msg) {
-  if (!statusCache.has(msg)) statusCache.set(msg, statusFields(msg.content));
-  return statusCache.get(msg);
-}
-
-// The first paragraph the renderer's status rule accepts (markdown-renderer.js),
-// read into its Now and Waiting on you values. Null when there is none.
-function statusFields(content) {
-  for (const paragraph of String(content || '').split(/\n\s*\n/)) {
-    const lines = statusBlockParagraphLines(paragraph.trim());
-    if (!lines) continue;
-    const fields = {now: null, waiting: null};
-    for (const line of lines) {
-      const label = STATUS_BLOCK_LABELS.find((known) => line.startsWith(known));
-      if (label === '**Now**') fields.now = labelValue(line, label);
-      else if (label === '**Waiting on you**') fields.waiting = labelValue(line, label);
-    }
-    return fields;
-  }
-  return null;
-}
-
-function labelValue(line, label) {
-  return line.slice(label.length).replace(/^\s*[:：]?\s*/, '').replace(/\*\*|`/g, '');
-}
-
 // The turn is running: the page's thinking state, set by startThinking and cleared
 // by stopThinking (session-view.js).
 function turnRunning() {
@@ -109,30 +67,6 @@ function textSpan(className, text) {
   span.className = className;
   span.textContent = text;
   return span;
-}
-
-function clearChildren(el) {
-  while (el.firstChild) el.removeChild(el.firstChild);
-}
-
-function buildStrip() {
-  const el = document.createElement('div');
-  el.className = 'for-you-strip sticky top-0 z-10 bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1';
-  return el;
-}
-
-// One row per field the status block carries; a field the block lacks gets no row.
-function fillStrip(el, fields) {
-  clearChildren(el);
-  const rows = [['Now', fields.now], ['Waiting on you', fields.waiting]];
-  for (const [label, value] of rows) {
-    if (value === null) continue;
-    const row = document.createElement('div');
-    row.className = 'flex gap-3';
-    row.appendChild(textSpan('shrink-0 w-28 text-slate-500', label));
-    row.appendChild(textSpan('min-w-0 break-words text-slate-200', value));
-    el.appendChild(row);
-  }
 }
 
 function buildFoldLine(onToggle) {
@@ -200,10 +134,7 @@ const ForYou = {
   FOR_YOU,
   EVERYTHING,
   items,
-  progress,
   turnRunning,
-  buildStrip,
-  fillStrip,
   buildFoldLine,
   fillFoldLine,
   buildWorkingLine,

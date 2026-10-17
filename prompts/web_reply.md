@@ -10,9 +10,9 @@ The Everything view keeps the full output of each turn for the user.
 - When a user message woke this turn, post exactly one web reply.
 - When another input woke this turn, post a web reply only for one of these results:
   - a new or changed item in **Waiting on you**;
-  - a delivery that you read back;
-  - a result that the user asked you to report;
-  - the completion of a request from the user.
+  - the completion of a request that the user made in this session;
+  - a result that the user asked you to report.
+- When a child session reports progress, put the progress in **Now**.
 - When a turn has none of these results, post no web reply.
 
 ## When to set the session status

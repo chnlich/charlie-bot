@@ -72,6 +72,8 @@ function baseSessionContext(overrides = {}) {
     autoResize: () => {},
     startThinking: () => {},
     stopThinking: () => {},
+    // platform.js's desktop face: the chat status panel reads isMobile and registers its layout callback at load.
+    platform: {isMobile: false, onChange() {}},
     relativeTime: (txt) => txt,
     // utils.js's trigger clock form; harnesses needing the real one load utils.js
     // (pending_triggers_tray.test.js does) and its top-level functions overwrite these.

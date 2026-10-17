@@ -790,6 +790,16 @@ function renderMessage(msg, sessionId) {
       + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</div>"
       + timeDiv() + "</div></div>";
   }
+  if (msg.role === "web_reply") {
+    // The agent's message to the user: an agent-side bubble with the markdown body.
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
+      + "<div class=\"text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">Reply</div>"
+      + mdDiv(msg.content) + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "web_reply_notice") {
+    return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden\">"
+      + escapeHtml(msg.content) + "</div></div>";
+  }
   if (msg.role === "separator") {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
     var secondsAttr = msg.thinking_seconds != null

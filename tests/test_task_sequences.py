@@ -25,7 +25,7 @@ from src.backends.claude_code import claude_accounts, claude_relay
 from src.features.improve import improve_command, improve_sequence, sequence_controller
 from src.infra import event_types as ET
 from src.infra import models, tasks
-from src.runtime import control_events, runs, task_execution, task_recovery, task_sessions
+from src.runtime import backend_pool, control_events, runs, task_execution, task_recovery, task_sessions
 from src.runtime.hooks import sequence_controllers
 from tests import test_task_execution
 
@@ -505,6 +505,75 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   # per-iteration report exists.
   assert wakes == [manager.id]
   assert _iteration_reports(tree, manager.id) == []
+
+
+@pytest.mark.asyncio
+async def test_a_quota_failed_iteration_cools_its_member_and_the_next_runs_on_the_next_member(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
+  """An unnamed-backend loop: the iteration that ends on quota exhaustion cools its member and
+    counts as failed, and the next iteration takes the next pool member."""
+  cfg, session_blocks, tree = test_task_execution.build_env(
+      tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
+  manager = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
+  builds = conftest.install_scripted_backends(
+      monkeypatch, [
+          test_task_execution.SpawningScriptedBackend([{
+              "type": "error",
+              "message": "You've hit your usage limit"
+          }]),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("iter two words")]),
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  await _admit_takeoff(tree, manager)
+
+  async def _wait_done(client, body):
+    await _wait_for_iterations_settled(tree, body["child_session_id"], manager.id, timeout=30.0)
+
+  body, child_id = await _start_loop(cfg, session_blocks, tree, manager, repo, monkeypatch, wait_effect=_wait_done)
+
+  records = tree.runs.list_run_records_sync(child_id)
+  assert [r.backend for r in records] == ["fake", "fake2"]
+  outcomes = [tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), r.id) for r in records]
+  assert outcomes == ["failed", "success"]
+  assert "fake cooling until" in backend_pool.recovery_report(cfg)
+  assert "fake2 not cooling" in backend_pool.recovery_report(cfg)
+  # The quota failure counted as one failed iteration; the loop still ran both and ended on
+  # exhaustion without a landing, not on the quota blocker.
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "blocked"
+  assert len(builds) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_loop_blocks_only_when_every_member_is_cooling(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
+  """A one-member pool: the first iteration's quota failure cools the member, the next selection
+    finds no free member, and the loop stops on its blocked path naming the recovery time."""
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  manager = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
+  conftest.install_scripted_backends(
+      monkeypatch,
+      [test_task_execution.SpawningScriptedBackend([{
+          "type": "error",
+          "message": "Budget has been exceeded!"
+      }])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  await _admit_takeoff(tree, manager)
+
+  async def _wait_done(client, body):
+    await _wait_for_final_report(tree, manager.id, timeout=30.0)
+
+  body, child_id = await _start_loop(cfg, session_blocks, tree, manager, repo, monkeypatch, wait_effect=_wait_done)
+  report = await _wait_for_final_report(tree, manager.id, timeout=5.0)
+
+  records = tree.runs.list_run_records_sync(child_id)
+  assert [r.kind for r in records] == ["iteration"]  # the loop never launched iteration 2
+  state = await improve_command.load_loop_state(manager.id, body["loop_id"], cfg)
+  assert state is not None and state.status == "failed"
+  assert "no backends.pool member is available" in report["summary"]
+  assert "fake cooling until" in report["summary"]
 
 
 @pytest.mark.parametrize(

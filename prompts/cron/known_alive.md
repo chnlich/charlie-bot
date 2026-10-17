@@ -276,13 +276,13 @@ Known-alive symbols:
   drive the wrapper as the semantics reference. A src-only vulture scan flags it as an unused
   method; a whole-repo grep finds only that test file, one docstring cross-reference, the
   same-named route handler in `src/runtime/api/sessions.py`, and the perf doc.
-- `ClientConnection` (`src/features/slack/slack_listener.py`, the `TYPE_CHECKING`-guarded
-  `websockets.asyncio.client` import) — reached by string: `_expect_hello`'s parameter is
-  annotated `"ClientConnection"`, and that import is what resolves the forward reference
-  for type checkers and IDEs. No type checker runs in CI, so a deletion stays suite-green
-  while leaving the annotation unresolved. Current vulture reads the annotation as a use and
-  no longer flags the import; the no-type-checker fact is what keeps a deletion suite-green,
-  so the guard stays.
+- `client` (`src/features/slack/slack_listener.py`, the `TYPE_CHECKING`-guarded
+  `from websockets.asyncio import client` import) — reached by string: the `_expect_hello`
+  and `_serve_socket_mode` parameters are annotated `client.ClientConnection`, and that
+  import is what resolves the forward reference for type checkers and IDEs. No type checker
+  runs in CI, so a deletion stays suite-green while leaving the annotations unresolved.
+  Current vulture reads the annotations as a use and no longer flags the import; the
+  no-type-checker fact is what keeps a deletion suite-green, so the guard stays.
 - `__getattr__` (`src/features/artifacts/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
   delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`), which serves
   `load_requests`. (The former `src/runtime/cli/common.py` hook left with the phase-separated

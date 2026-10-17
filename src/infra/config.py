@@ -1,32 +1,16 @@
 """Configuration loading for CharlieBot."""
 
 import os
-from pathlib import Path
+import pathlib
 from typing import Annotated, Any, TypeVar
 
-from pydantic import (
-    AliasChoices,
-    AliasPath,
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    SerializeAsAny,
-    ValidationError,
-    model_validator,
-)
+import pydantic
 
-from src.infra import config_registry, home
-from src.infra.backend_models import BackendOption, parse_option
-from src.infra.config_registry import CREDENTIALS_PREFIX
-from src.infra.constants import REPO_ROOT
+from src.infra import backend_models, config_registry, constants, credentials, home, log_once, yaml_utils
 from src.infra.credentials import (  # noqa: F401  (re-export: the established src.infra.config import path)
     CREDENTIALS_FILENAME,
     Credentials,
     _credentials_cache,
-    # Not facade surface: nothing reaches this name through src.infra.config — its call
-    # sites go through src.infra.credentials, and it serves this module's own _config_cache.
-    _HotReloadCache,
     configured_access_key,
     get_credentials,
     load_credentials,
@@ -37,10 +21,8 @@ from src.infra.home import (  # noqa: F401  (re-export: the established src.infr
     charliebot_home_dir,
     default_charliebot_home,
 )
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.yaml_utils import load_yaml
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Fixed house wall clock pinned by the feature code that stamps chat session names with a timestamp
 # and by the feature code that anchors the weekly recycle to Saturday 1 AM. Distinct from the
@@ -55,20 +37,20 @@ HOUSE_TIMEZONE = "America/Los_Angeles"
 CONFIG_FILENAME = "config.yaml"
 
 
-class HomeService(BaseModel):
+class HomeService(pydantic.BaseModel):
   """A service this host runs, listed on the /home page and probed for reachability."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   name: str  # card title
   description: str  # one line saying what it is for
   url: str  # what the card links to; the probe connects to this URL's host and port
 
 
-class ServerConfig(BaseModel):
+class ServerConfig(pydantic.BaseModel):
   """``server:`` section: the bind address uvicorn listens on."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # The bind address uvicorn listens on. Loopback by default; a host that
   # fronts the server itself (reverse proxy on another interface, Tailscale) sets it.
@@ -101,10 +83,10 @@ class ServerConfig(BaseModel):
   min_free_disk_gib: int = 10
 
 
-class PathsConfig(BaseModel):
+class PathsConfig(pydantic.BaseModel):
   """``paths:`` section: repos to scan and where worker worktrees live."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Workspace directories to scan for git repos
   workspace_dirs: list[str] = ["~/workspace"]
@@ -112,7 +94,7 @@ class PathsConfig(BaseModel):
   # Root directory for worker worktrees
   worktree_dir: str = "~/worktrees"
 
-  @model_validator(mode="after")
+  @pydantic.model_validator(mode="after")
   def _expand_tilde(self) -> PathsConfig:
     """Expand ``~`` in both path settings against the process HOME."""
     self.workspace_dirs = [os.path.expanduser(p) for p in self.workspace_dirs]
@@ -120,10 +102,10 @@ class PathsConfig(BaseModel):
     return self
 
 
-class BackendsConfig(BaseModel):
+class BackendsConfig(pydantic.BaseModel):
   """``backends:`` section: model-switch options, the selector preference order and the worker default."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Backend id rule (the one home of it; other docs point here). An option id is
   # "<type prefix>-<family>" (claude-opus, oc-kimi-k3, clc-glm5-flash), the
@@ -157,35 +139,36 @@ class BackendsConfig(BaseModel):
   # Backend options available for model switching. Each entry parses as the option model that
   # its ``type`` names in the config registry (src/infra/config_registry.py). Additional
   # backends must be configured via ~/.charliebot/config.yaml -> backends.options.
-  options: list[Annotated[SerializeAsAny[BackendOption], BeforeValidator(parse_option)]] = []
+  options: list[Annotated[pydantic.SerializeAsAny[backend_models.BackendOption],
+                          pydantic.BeforeValidator(backend_models.parse_option)]] = []
 
 
-class UiConfig(BaseModel):
+class UiConfig(pydantic.BaseModel):
   """``ui:`` section: the /home page service cards."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Home page — services this host runs, probed for reachability; default empty. Each card
   # links to the URL and the probe connects to the same host and port.
   home_services: list[HomeService] = []
 
 
-class TelegramConfig(BaseModel):
+class TelegramConfig(pydantic.BaseModel):
   """``telegram:`` section: the notification target."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   # Telegram notifications
   chat_id: str | None = None
 
 
-def _alias_field_names(alias: str | AliasChoices | AliasPath | None) -> set[str]:
+def _alias_field_names(alias: str | pydantic.AliasChoices | pydantic.AliasPath | None) -> set[str]:
   """Flat string names behind an alias declaration, for known-name checks."""
   if isinstance(alias, str):
     return {alias}
-  if isinstance(alias, AliasChoices):
+  if isinstance(alias, pydantic.AliasChoices):
     return set().union(*(_alias_field_names(choice) for choice in alias.choices))
-  if isinstance(alias, AliasPath):
+  if isinstance(alias, pydantic.AliasPath):
     return {str(alias.path[0])}
   return set()
 
@@ -198,7 +181,7 @@ def _locate_in_section(key: str, err: Any) -> Any:
   return located
 
 
-class CharlieBotConfig(BaseModel):
+class CharlieBotConfig(pydantic.BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml.
 
   The mapping is sectioned: each settings group lives under its top-level
@@ -215,21 +198,21 @@ class CharlieBotConfig(BaseModel):
   registered section.
   """
 
-  model_config = ConfigDict(extra='allow')
+  model_config = pydantic.ConfigDict(extra='allow')
 
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
-  charliebot_home: Path = Field(default_factory=charliebot_home_dir)
+  charliebot_home: pathlib.Path = pydantic.Field(default_factory=charliebot_home_dir)
 
   # Plan registration page-height gate — absolute path of a headless-chromium-compatible
   # binary on the host running the server. The value stays host-local in config.yaml;
   # nothing in the repo hardcodes a path.
   headless_chrome_bin: str = ""
 
-  server: ServerConfig = Field(default_factory=ServerConfig)
-  paths: PathsConfig = Field(default_factory=PathsConfig)
-  backends: BackendsConfig = Field(default_factory=BackendsConfig)
-  ui: UiConfig = Field(default_factory=UiConfig)
-  telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+  server: ServerConfig = pydantic.Field(default_factory=ServerConfig)
+  paths: PathsConfig = pydantic.Field(default_factory=PathsConfig)
+  backends: BackendsConfig = pydantic.Field(default_factory=BackendsConfig)
+  ui: UiConfig = pydantic.Field(default_factory=UiConfig)
+  telegram: TelegramConfig = pydantic.Field(default_factory=TelegramConfig)
 
   @classmethod
   def _field_names(cls) -> set[str]:
@@ -239,7 +222,7 @@ class CharlieBotConfig(BaseModel):
       names |= _alias_field_names(field.alias) | _alias_field_names(field.validation_alias)
     return names
 
-  @model_validator(mode='before')
+  @pydantic.model_validator(mode='before')
   @classmethod
   def _parse_package_sections(cls, data: Any) -> Any:
     """Parse the registered sections and refuse every key that no field or section names.
@@ -253,7 +236,7 @@ class CharlieBotConfig(BaseModel):
     known = cls._field_names() | set(sections)
     unknown = [key for key in data if key not in known]
     if unknown:
-      raise ValidationError.from_exception_data(
+      raise pydantic.ValidationError.from_exception_data(
           cls.__name__, [{
               "type": "extra_forbidden",
               "loc": (key,),
@@ -263,12 +246,12 @@ class CharlieBotConfig(BaseModel):
     for key, model in sections.items():
       try:
         parsed[key] = model.model_validate(data[key]) if key in data else model()
-      except ValidationError as exc:
-        raise ValidationError.from_exception_data(
+      except pydantic.ValidationError as exc:
+        raise pydantic.ValidationError.from_exception_data(
             cls.__name__, [_locate_in_section(key, err) for err in exc.errors(include_url=False)]) from exc
     return parsed
 
-  @model_validator(mode='after')
+  @pydantic.model_validator(mode='after')
   def _run_package_checks(self) -> CharlieBotConfig:
     """Run the checks that packages registered, once the whole config has validated."""
     config_registry.run_config_checks(self)
@@ -304,33 +287,33 @@ class CharlieBotConfig(BaseModel):
     return f"http://localhost:{self.server.port}"
 
   @property
-  def sessions_dir(self) -> Path:
+  def sessions_dir(self) -> pathlib.Path:
     return self.charliebot_home / "sessions"
 
   @property
-  def claude_md_file(self) -> Path:
+  def claude_md_file(self) -> pathlib.Path:
     """The master agent prompt: ~/.charliebot/MASTER_AGENT_PROMPT.md."""
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
   @property
-  def charlie_bot_repo(self) -> Path:
+  def charlie_bot_repo(self) -> pathlib.Path:
     """Root of the charlie-bot repository (derived from package location)."""
-    return REPO_ROOT
+    return constants.REPO_ROOT
 
   @property
-  def config_file(self) -> Path:
+  def config_file(self) -> pathlib.Path:
     return self.charliebot_home / CONFIG_FILENAME
 
   @property
-  def credentials_file(self) -> Path:
+  def credentials_file(self) -> pathlib.Path:
     """The profile's credentials.yaml: the secrets split out of config.yaml."""
     return self.charliebot_home / CREDENTIALS_FILENAME
 
   @property
-  def config_d_dir(self) -> Path:
+  def config_d_dir(self) -> pathlib.Path:
     return self.charliebot_home / "config.d"
 
-  def get_backend_option(self, backend_id: str) -> BackendOption | None:
+  def get_backend_option(self, backend_id: str) -> backend_models.BackendOption | None:
     """Look up a backend option by exact id; None when no entry matches."""
     return next((opt for opt in self.backends.options if opt.id == backend_id), None)
 
@@ -342,7 +325,7 @@ class CharlieBotConfig(BaseModel):
     """
     found: dict[str, dict[str, str]] = {}
     for dir_str in self.paths.workspace_dirs:
-      parent = Path(dir_str)
+      parent = pathlib.Path(dir_str)
       if not parent.is_dir():
         continue
       for child in parent.iterdir():
@@ -353,7 +336,7 @@ class CharlieBotConfig(BaseModel):
     return sorted(found.values(), key=lambda repo: repo["name"])
 
 
-def require_backend_option(cfg: CharlieBotConfig, backend_id: str, *, subject: str) -> BackendOption:
+def require_backend_option(cfg: CharlieBotConfig, backend_id: str, *, subject: str) -> backend_models.BackendOption:
   """Return the configured backend option for `backend_id`; raise ValueError when none matches.
 
   The error names the checked surface with the caller's role as prefix:
@@ -388,7 +371,7 @@ def _install_config_snapshot(current: CharlieBotConfig | None, fresh: CharlieBot
   return current
 
 
-_config_cache = _HotReloadCache(
+_config_cache = credentials._HotReloadCache(
     fingerprint=_config_fingerprint, event="config_reload_failed", install=_install_config_snapshot)
 
 # Retired config.yaml top-level keys: the loader rejects any file still carrying
@@ -408,26 +391,26 @@ LEGACY_KEYS: dict[str, str] = {
     "model_preference": "backends.preference",
     "home_services": "ui.home_services",
     "telegram_chat_id": "telegram.chat_id",
-    CREDENTIALS_PREFIX + "telegram_bot_token": "telegram.bot_token",
-    CREDENTIALS_PREFIX + "charliebot_access_key": "charliebot.access_key",
-    CREDENTIALS_PREFIX + "moonshot_api_key": "moonshot.api_key",
-    CREDENTIALS_PREFIX + "aigw_api_key": "aigw.api_key",
-    CREDENTIALS_PREFIX + "linear_api_key": "linear.api_key",
-    CREDENTIALS_PREFIX + "feishu_app_id": "feishu.app_id",
-    CREDENTIALS_PREFIX + "feishu_app_secret": "feishu.app_secret",
-    CREDENTIALS_PREFIX + "feishu_refresh_token": "feishu.refresh_token",
-    CREDENTIALS_PREFIX + "feishu_user_access_token": "feishu.user_access_token",
-    CREDENTIALS_PREFIX + "google_client_id": "google.client_id",
-    CREDENTIALS_PREFIX + "google_client_secret": "google.client_secret",
-    CREDENTIALS_PREFIX + "google_refresh_token": "google.refresh_token",
-    CREDENTIALS_PREFIX + "google_docs_client_id": "google.client_id",
-    CREDENTIALS_PREFIX + "google_docs_client_secret": "google.client_secret",
-    CREDENTIALS_PREFIX + "google_docs_refresh_token": "google.refresh_token",
-    CREDENTIALS_PREFIX + "google_docs_default_folder_id": "google.docs_default_folder_id",
-    CREDENTIALS_PREFIX + "twitter_api_key": "twitter.api_key",
-    CREDENTIALS_PREFIX + "twitter_api_secret": "twitter.api_secret",
-    CREDENTIALS_PREFIX + "twitter_access_token": "twitter.access_token",
-    CREDENTIALS_PREFIX + "twitter_access_token_secret": "twitter.access_token_secret",
+    config_registry.CREDENTIALS_PREFIX + "telegram_bot_token": "telegram.bot_token",
+    config_registry.CREDENTIALS_PREFIX + "charliebot_access_key": "charliebot.access_key",
+    config_registry.CREDENTIALS_PREFIX + "moonshot_api_key": "moonshot.api_key",
+    config_registry.CREDENTIALS_PREFIX + "aigw_api_key": "aigw.api_key",
+    config_registry.CREDENTIALS_PREFIX + "linear_api_key": "linear.api_key",
+    config_registry.CREDENTIALS_PREFIX + "feishu_app_id": "feishu.app_id",
+    config_registry.CREDENTIALS_PREFIX + "feishu_app_secret": "feishu.app_secret",
+    config_registry.CREDENTIALS_PREFIX + "feishu_refresh_token": "feishu.refresh_token",
+    config_registry.CREDENTIALS_PREFIX + "feishu_user_access_token": "feishu.user_access_token",
+    config_registry.CREDENTIALS_PREFIX + "google_client_id": "google.client_id",
+    config_registry.CREDENTIALS_PREFIX + "google_client_secret": "google.client_secret",
+    config_registry.CREDENTIALS_PREFIX + "google_refresh_token": "google.refresh_token",
+    config_registry.CREDENTIALS_PREFIX + "google_docs_client_id": "google.client_id",
+    config_registry.CREDENTIALS_PREFIX + "google_docs_client_secret": "google.client_secret",
+    config_registry.CREDENTIALS_PREFIX + "google_docs_refresh_token": "google.refresh_token",
+    config_registry.CREDENTIALS_PREFIX + "google_docs_default_folder_id": "google.docs_default_folder_id",
+    config_registry.CREDENTIALS_PREFIX + "twitter_api_key": "twitter.api_key",
+    config_registry.CREDENTIALS_PREFIX + "twitter_api_secret": "twitter.api_secret",
+    config_registry.CREDENTIALS_PREFIX + "twitter_access_token": "twitter.access_token",
+    config_registry.CREDENTIALS_PREFIX + "twitter_access_token_secret": "twitter.access_token_secret",
 }
 
 
@@ -453,14 +436,16 @@ def load_config() -> CharlieBotConfig:
             f"{entry} is not a config location: package fragment files live in config.d/ subdirectories; "
             "keys belong in config.yaml (structure) or credentials.yaml (secrets)")
 
-  yaml_data: dict = load_yaml(config_path, default={})
+  yaml_data: dict = yaml_utils.load_yaml(config_path, default={})
   legacy_keys = {**LEGACY_KEYS, **config_registry.legacy_keys()}
-  legacy_hits = [key for key in yaml_data if key in legacy_keys or CREDENTIALS_PREFIX + key in legacy_keys]
+  legacy_hits = [
+      key for key in yaml_data if key in legacy_keys or config_registry.CREDENTIALS_PREFIX + key in legacy_keys
+  ]
   if legacy_hits:
     lines = "\n".join(
-        f"  {key} -> " +
-        (legacy_keys[key] if key in legacy_keys else "credentials.yaml " + legacy_keys[CREDENTIALS_PREFIX + key])
-        for key in legacy_hits)
+        f"  {key} -> " + (
+            legacy_keys[key] if key in legacy_keys else "credentials.yaml " +
+            legacy_keys[config_registry.CREDENTIALS_PREFIX + key]) for key in legacy_hits)
     raise ValueError(f"{config_path} still uses retired top-level keys; move each one:\n{lines}")
 
   # The home directory is chosen by the environment, never by a file that lives
@@ -472,7 +457,7 @@ def load_config() -> CharlieBotConfig:
         f"{CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
   try:
     return CharlieBotConfig(charliebot_home=home, **yaml_data)
-  except ValidationError as e:
+  except pydantic.ValidationError as e:
     # An unknown field inside a backend entry gets its own message: the raw
     # entry's id and type are what the operator greps the file for. The error
     # path is ("backends", "options", index, field), so the field name is the

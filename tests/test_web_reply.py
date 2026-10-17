@@ -1,5 +1,6 @@
 """Acceptance tests for the web reply channel (src.features.web_reply): the reply record and its refusals, the answers
-binding, the round-end audit, the For-you layer, the rules segment, and the live broadcast of a reply."""
+binding, the round-end audit, the For-you layer, the rules segment, the live broadcast of a reply, and the session
+status: its set and read, their refusals, the bootstrap object, the rendering and the ancestor notice."""
 
 from __future__ import annotations
 
@@ -15,7 +16,9 @@ from collections.abc import Iterator
 from unittest import mock
 
 import conftest
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from src.features.chat_threads import thread_sessions
 from src.features.discord import metadata as discord_metadata
@@ -24,7 +27,8 @@ from src.features.web_reply import audit, reply
 from src.features.web_reply import turn_contribution as web_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import master_cc_state, task_prompts
+from src.runtime import master_cc_state, streaming, task_prompts
+from src.runtime.api import deps, message_utils
 from src.runtime.cli import common
 
 _SLACK_ORIGIN = slack_metadata.SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")
@@ -530,3 +534,318 @@ async def test_a_live_web_reply_and_notice_reach_a_connected_client_once_each(tm
       ("web_reply_notice", "the notice"),
   ]
   assert [frame for frame in frames if frame.get("type") in (ET.WEB_REPLY, ET.WEB_REPLY_NOTICE)] == []
+
+
+# ---------------------------------------------------------------------------
+# The session status: the set, its refusals, the read, the bootstrap, the rendering and the ancestor notice
+# ---------------------------------------------------------------------------
+
+_STATUS_URL = "/api/internal/web/status"
+_VALID_SET = json.dumps({"now": "Running"})
+
+
+def _status_client(blocks: conftest.SessionBlocks) -> TestClient:
+  return conftest.make_internal_router_client(blocks.cfg, blocks, blocks.tree)
+
+
+def _set(client: TestClient, sid: str, text: str) -> httpx.Response:
+  return client.post(_STATUS_URL, json={"session_id": sid, "text": text})
+
+
+def _waiting_set(text: str) -> str:
+  return json.dumps({"waiting": [{"text": text}]})
+
+
+async def _stored_status(blocks: conftest.SessionBlocks, sid: str) -> dict | None:
+  return (await blocks.store.get_session(sid)).model_dump(mode="json")["web_status"]
+
+
+def _status_events(blocks: conftest.SessionBlocks, sid: str) -> list[dict]:
+  return _of_type(_events(blocks, sid), ET.WEB_STATUS)
+
+
+@pytest.mark.asyncio
+async def test_a_status_set_of_now_alone_keeps_the_other_items_and_records_one_event(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+
+  first = _set(
+      client, sid, json.dumps({
+          "goal": "Ship the panel",
+          "waiting": [{
+              "text": "Pick a layout",
+              "link": "/p"
+          }]
+      }))
+  second = _set(client, sid, _VALID_SET)
+
+  assert first.status_code == 200 and second.status_code == 200
+  stored = second.json()
+  assert stored["goal"] == "Ship the panel"
+  assert stored["now"] == "Running"
+  assert stored["waiting"] == [{"text": "Pick a layout", "link": "/p"}]
+  assert stored["updated_at"] != first.json()["updated_at"]
+  assert await _stored_status(blocks, sid) == stored
+  events = _status_events(blocks, sid)
+  assert [ev["web_status_changed"] for ev in events] == [["goal", "waiting"], ["now"]]
+  assert events[-1]["content"] == "Status updated: Now"
+  assert events[-1]["web_status"] == stored
+
+
+@pytest.mark.asyncio
+async def test_a_null_goal_clears_the_goal_and_keeps_the_other_items(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  _set(client, sid, json.dumps({"goal": "Ship the panel", "now": "Running"}))
+
+  resp = _set(client, sid, json.dumps({"goal": None}))
+
+  assert resp.status_code == 200
+  assert (resp.json()["goal"], resp.json()["now"]) == (None, "Running")
+  assert _status_events(blocks, sid)[-1]["web_status_changed"] == ["goal"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case, text, status", [
+        ("unknown", _VALID_SET, 404),
+        ("thread", _VALID_SET, 409),
+        ("worker", _VALID_SET, 409),
+        ("own", "not json", 422),
+        ("own", "[1, 2]", 422),
+        ("own", json.dumps({"colour": "red"}), 422),
+        ("own", "{}", 422),
+        ("own", json.dumps({"goal": " "}), 422),
+        ("own", json.dumps({"waiting": [{
+            "text": " "
+        }]}), 422),
+        ("own", json.dumps({"waiting": [{
+            "text": "Decide",
+            "due": "today"
+        }]}), 422),
+    ])
+async def test_a_refused_status_set_stores_nothing_and_records_no_event(
+    tmp_path: pathlib.Path, case: str, text: str, status: int) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks, slack_origin=_SLACK_ORIGIN if case == "thread" else None)
+  if case == "worker":
+    await blocks.store.update_field(sid, "profile", "worker", "test_worker_profile")
+  client = _status_client(blocks)
+
+  resp = _set(client, "no-such-session" if case == "unknown" else sid, text)
+
+  assert resp.status_code == status
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
+
+
+@pytest.mark.asyncio
+async def test_the_bootstrap_session_object_carries_the_session_status(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = conftest.make_sessions_client(blocks.cfg, blocks)
+  client.app.dependency_overrides[deps.get_task_manager] = lambda: blocks.tree
+  assert client.get(f"/api/sessions/{sid}/bootstrap").json()["session"]["web_status"] is None
+
+  _set(_status_client(blocks), sid, _VALID_SET)
+
+  assert client.get(f"/api/sessions/{sid}/bootstrap").json()["session"]["web_status"]["now"] == "Running"
+
+
+@pytest.mark.asyncio
+async def test_the_history_renders_a_status_set_as_a_web_status_message(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  _set(_status_client(blocks), sid, _VALID_SET)
+
+  rows = [m for m in message_utils.events_to_messages(_events(blocks, sid)) if m["role"] == ET.WEB_STATUS]
+
+  assert [(m["content"], m["web_status"]["now"]) for m in rows] == [("Status updated: Now", "Running")]
+  assert rows[0]["id"] and rows[0]["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_a_live_status_set_reaches_a_connected_client_once(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+
+  with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast:
+    _set(client, sid, _VALID_SET)
+
+  frames = [call.args[1] for call in broadcast.await_args_list]
+  rendered = [frame["message"] for frame in frames if frame.get("type") == "message"]
+  assert [(m["role"], m["content"]) for m in rendered if m["role"] == ET.WEB_STATUS] == [
+      (ET.WEB_STATUS, "Status updated: Now")
+  ]
+  assert [frame for frame in frames if frame.get("type") == ET.WEB_STATUS] == []
+
+
+@pytest.mark.asyncio
+async def test_a_child_status_set_notifies_its_parent_and_grandparent_pages_and_a_root_set_notifies_none(
+    tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  root_id = await _session(blocks)
+  child = await conftest.create_task(blocks.tree, parent=root_id, request_id="child", name="Child")
+  grandchild = await conftest.create_task(blocks.tree, parent=child.id, request_id="grandchild", name="Grandchild")
+  client = _status_client(blocks)
+
+  with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast:
+    _set(client, grandchild.id, _VALID_SET)
+    _set(client, root_id, _VALID_SET)
+
+  notices = [
+      (call.args[0], call.args[1])
+      for call in broadcast.await_args_list
+      if call.args[1].get("type") == "web_status_subtree"
+  ]
+  assert notices == [
+      (streaming.session_channel(child.id), {
+          "type": "web_status_subtree",
+          "source_session_id": grandchild.id
+      }),
+      (streaming.session_channel(root_id), {
+          "type": "web_status_subtree",
+          "source_session_id": grandchild.id
+      }),
+  ]
+
+
+@pytest.mark.asyncio
+async def test_the_status_read_lists_open_waiting_descendants_newest_first(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  root_id = await _session(blocks)
+  tree = blocks.tree
+  old = await conftest.create_task(tree, parent=root_id, request_id="old", name="Old")
+  new = await conftest.create_task(tree, parent=root_id, request_id="new", name="New")
+  deep = await conftest.create_task(tree, parent=old.id, request_id="deep", name="Deep")
+  empty = await conftest.create_task(tree, parent=root_id, request_id="empty", name="Empty")
+  closed = await conftest.create_task(tree, parent=root_id, request_id="closed", name="Closed")
+  archived = await conftest.create_task(tree, parent=root_id, request_id="archived", name="Archived")
+  client = _status_client(blocks)
+  for child, text in [
+      (old, _waiting_set("Old decision")),
+      (new, _waiting_set("New decision")),
+      (deep, _waiting_set("Deep decision")),
+      (empty, json.dumps({"waiting": []})),
+      (closed, _waiting_set("Closed decision")),
+      (archived, _waiting_set("Archived decision")),
+  ]:
+    _set(client, child.id, text)
+  await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)
+  await blocks.lifecycle.archive_session(archived.id)
+
+  body = client.get(_STATUS_URL, params={"session_id": root_id}).json()
+
+  assert body["web_status"] is None
+  assert [row["session_id"] for row in body["descendants"]] == [deep.id, new.id, old.id]
+  assert [row["waiting"] for row in body["descendants"]] == [
+      [{
+          "text": "Deep decision",
+          "link": None
+      }],
+      [{
+          "text": "New decision",
+          "link": None
+      }],
+      [{
+          "text": "Old decision",
+          "link": None
+      }],
+  ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case, status", [("unknown", 404), ("thread", 409), ("worker", 409)])
+async def test_the_status_read_refuses_an_unknown_thread_or_worker_session(
+    tmp_path: pathlib.Path, case: str, status: int) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks, slack_origin=_SLACK_ORIGIN if case == "thread" else None)
+  if case == "worker":
+    await blocks.store.update_field(sid, "profile", "worker", "test_worker_profile")
+  client = _status_client(blocks)
+
+  resp = client.get(_STATUS_URL, params={"session_id": "no-such-session" if case == "unknown" else sid})
+
+  assert resp.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_a_status_event_leaves_the_unread_mark_unchanged(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  assert not (await blocks.store.get_session(sid)).has_unread
+
+  _set(client, sid, _VALID_SET)
+  assert not (await blocks.store.get_session(sid)).has_unread
+
+  await blocks.lifecycle.mark_unread(sid)
+  _set(client, sid, json.dumps({"now": "Done"}))
+  assert (await blocks.store.get_session(sid)).has_unread
+
+
+@pytest.mark.parametrize("stdin", [False, True])
+def test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_json_line(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stdin: bool) -> None:
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  stored = {"goal": "g", "now": "n", "waiting": [], "updated_at": "2026-10-16T21:00:00+00:00"}
+  argv = ["web", "status", "set", "--file", "-"]
+  if stdin:
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"now": "n"}'))
+  else:
+    status_file = tmp_path / "status.json"
+    status_file.write_text('{"now": "n"}', encoding="utf-8")
+    argv = ["web", "status", "set", "--file", str(status_file)]
+
+  with conftest.patched_cli_post(cfg, argv, return_value=conftest.make_json_response(stored)) as post_mock:
+    importlib.import_module("src.features.web_reply.cli").main()
+
+  assert post_mock.call_args.args[0].endswith("/api/internal/web/status")
+  assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": '{"now": "n"}'}
+  out = capsys.readouterr().out
+  assert out.count("\n") == 1
+  assert json.loads(out) == stored
+
+
+@pytest.mark.parametrize("has_status", [False, True])
+def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_waiting_items(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    has_status: bool) -> None:
+  conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  web_status = {
+      "goal": "Ship",
+      "now": "Testing",
+      "waiting": [{
+          "text": "Pick a layout",
+          "link": None
+      }],
+      "updated_at": "2026-10-16T21:00:00+00:00",
+  } if has_status else None
+  child = {
+      "session_id": "d7645e8f-0000-4000-8000-000000000000",
+      "name": "Panel child",
+      "updated_at": "2026-10-16T21:05:00+00:00",
+      "waiting": [{
+          "text": "Answer plan 5",
+          "link": "/x"
+      }],
+  }
+  calls: list[tuple[str, dict]] = []
+
+  def fake_get(endpoint: str, params: dict | None = None) -> dict:
+    calls.append((endpoint, params or {}))
+    return {"session_id": "abc", "web_status": web_status, "descendants": [child]}
+
+  monkeypatch.setattr(common, "get_api", fake_get)
+  monkeypatch.setattr(sys, "argv", ["web", "status", "show"])
+
+  importlib.import_module("src.features.web_reply.cli").main()
+
+  assert calls == [("/api/internal/web/status", {"session_id": "abc"})]
+  out = capsys.readouterr().out
+  assert ("No status yet" in out) is (not has_status)
+  assert "Panel child (d7645e8f)" in out
+  assert out.index("Panel child (d7645e8f)") < out.index("Answer plan 5 (/x)")

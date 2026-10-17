@@ -30,6 +30,7 @@ RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset(
         ET.TASK_REOPENED,
         ET.WEB_REPLY,
         ET.WEB_REPLY_NOTICE,
+        ET.WEB_STATUS,
     })
 
 log = log_once.LazyStructlogLogger()

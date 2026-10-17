@@ -1,4 +1,4 @@
-"""The web_reply turn contribution: the reply rules, the round-end audit, the unread claim, and the reply lines."""
+"""The web_reply turn contribution: the reply rules, the round-end audit, the unread claim and the chat lines."""
 
 from collections.abc import Callable
 
@@ -15,6 +15,10 @@ def _web_reply_message(event: dict) -> dict:
 
 def _web_reply_notice_message(event: dict) -> dict:
   return {"role": ET.WEB_REPLY_NOTICE, "content": event.get("content", "")}
+
+
+def _web_status_message(event: dict) -> dict:
+  return {"role": ET.WEB_STATUS, "content": event.get("content", ""), "web_status": event.get(ET.WEB_STATUS)}
 
 
 class WebReplyTurnContribution(turn_contributions.TurnContribution):
@@ -47,7 +51,11 @@ class WebReplyTurnContribution(turn_contributions.TurnContribution):
     return reply.is_web_session(meta)
 
   def event_renderers(self) -> dict[str, Callable[[dict], dict]]:
-    return {ET.WEB_REPLY: _web_reply_message, ET.WEB_REPLY_NOTICE: _web_reply_notice_message}
+    return {
+        ET.WEB_REPLY: _web_reply_message,
+        ET.WEB_REPLY_NOTICE: _web_reply_notice_message,
+        ET.WEB_STATUS: _web_status_message,
+    }
 
 
 CONTRIBUTION = WebReplyTurnContribution()

@@ -1,50 +1,41 @@
 """Master account relay: turn placement, the in-run watch, and _run_cc continuing a turn on another pool account."""
 
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+import datetime
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    FABLE_MODEL,
-    POOLED_FABLE_ID,
-    ScriptedRelayBackend,
-    assistant_text_event,
-    fable_pool_cfg,
-    fresh_state_fixture,
-    install_scripted_backends,
-    make_transcript,
-    make_work_item,
-    rate_limit_event,
-    user_tool_result_event,
-    write_pool_credentials,
-)
 
 from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
 from src.infra import event_types as ET
-from src.infra.models import SessionCallbacks, SessionMetadata
+from src.infra import models
 from src.runtime import master_cc_run
 from src.runtime.agent_process import base as backend_base
 
-NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
+NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 UUID = "uuid-relay-1"
 
-_fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
+_fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRelayBackend]) -> list[dict]:
+def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[conftest.ScriptedRelayBackend]) -> list[dict]:
   # The master-cc run path re-imports build_backend through the registry on
   # every call, so the patch lands there; the instructions builder is stubbed
   # with it because _run_cc builds instructions before the first backend build.
-  return install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
+  return conftest.install_scripted_backends(monkeypatch, backends, conftest.BUILD_BACKEND_PATCH_TARGET)
 
 
-def _session_on(label: str | None, cc_session_id: str | None = UUID) -> SessionMetadata:
-  return SessionMetadata(
-      profile="manager", id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
+def _session_on(label: str | None, cc_session_id: str | None = UUID) -> models.SessionMetadata:
+  return models.SessionMetadata(
+      profile="manager",
+      id="s1",
+      name="t",
+      backend=conftest.POOLED_FABLE_ID,
+      cc_session_id=cc_session_id,
+      claude_account=label)
 
 
-def _events_of(callbacks: SessionCallbacks, event_type: str) -> list[dict]:
+def _events_of(callbacks: models.SessionCallbacks, event_type: str) -> list[dict]:
   return [
       call.args[1] for call in callbacks.persist_and_broadcast.await_args_list if call.args[1].get("type") == event_type
   ]
@@ -55,12 +46,13 @@ def _events_of(callbacks: SessionCallbacks, event_type: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line(tmp_path: Path) -> None:
-  cfg = fable_pool_cfg(tmp_path)
-  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  claude_accounts.observe_rate_limit("main", conftest.rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
 
-  chosen, cold = master_cc_relay.choose_turn_account(cfg, meta, FABLE_MODEL, NOW - timedelta(minutes=10), now=NOW)
+  chosen, cold = master_cc_relay.choose_turn_account(
+      cfg, meta, conftest.FABLE_MODEL, NOW - datetime.timedelta(minutes=10), now=NOW)
 
   assert (chosen.label, cold) == ("main", False)
 
@@ -70,32 +62,33 @@ def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line
 # ---------------------------------------------------------------------------
 
 
-def test_choose_turn_account_reselects_inside_the_pool_when_the_current_account_is_outside(tmp_path: Path) -> None:
+def test_choose_turn_account_reselects_inside_the_pool_when_the_current_account_is_outside(
+    tmp_path: pathlib.Path) -> None:
   """A warm, healthy, under-warning account outside the option's pool does not stick: the turn
   re-selects inside the pool."""
-  cfg = fable_pool_cfg(tmp_path, claude_pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
-  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  cfg = conftest.fable_pool_cfg(tmp_path, claude_pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
+  claude_accounts.observe_rate_limit("ext-1", conftest.rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
   meta = _session_on("ext-1")
 
   chosen, cold = master_cc_relay.choose_turn_account(
-      cfg, meta, FABLE_MODEL, NOW - timedelta(minutes=10), now=NOW, account_pool="alpha")
+      cfg, meta, conftest.FABLE_MODEL, NOW - datetime.timedelta(minutes=10), now=NOW, account_pool="alpha")
 
   assert (chosen.label, cold) == ("main", False)
 
 
 @pytest.mark.asyncio
-async def test_place_turn_copies_the_transcript_into_the_option_pool(tmp_path: Path) -> None:
+async def test_place_turn_copies_the_transcript_into_the_option_pool(tmp_path: pathlib.Path) -> None:
   """A mid-session switch to another pool's option re-selects inside that pool and the existing
   move layer carries the transcript to the new account's directory."""
-  cfg = fable_pool_cfg(tmp_path, claude_pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
-  option = cfg.get_backend_option(POOLED_FABLE_ID)
-  make_transcript(tmp_path / "claude-ext-1", UUID)
+  cfg = conftest.fable_pool_cfg(tmp_path, claude_pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
+  option = cfg.get_backend_option(conftest.POOLED_FABLE_ID)
+  conftest.make_transcript(tmp_path / "claude-ext-1", UUID)
   meta = _session_on("ext-1")
-  item = make_work_item(cfg, meta, option)
+  item = conftest.make_work_item(cfg, meta, option)
 
   ctx = master_cc_run._turn_launch_context(item, option, str(tmp_path / "work"), UUID)
 
-  account = await master_cc_relay.place_turn(ctx, UUID, None, NOW - timedelta(minutes=10), now=NOW)
+  account = await master_cc_relay.place_turn(ctx, UUID, None, NOW - datetime.timedelta(minutes=10), now=NOW)
 
   assert account.label == "main"
   assert meta.claude_account == "main"
@@ -109,14 +102,16 @@ async def test_place_turn_copies_the_transcript_into_the_option_pool(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_run_cc_relays_a_rejected_turn_onto_another_account(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = fable_pool_cfg(tmp_path)
-  make_transcript(tmp_path / "claude-main", UUID)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
-  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  first = conftest.ScriptedRelayBackend(
+      [conftest.rate_limit_event("rejected", 1.0),
+       backend_base.make_result_event()], exit_code=1)
+  second = conftest.ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   cc_session_id, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -136,21 +131,21 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(
 
 @pytest.mark.asyncio
 async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = fable_pool_cfg(tmp_path)
-  make_transcript(tmp_path / "claude-main", UUID)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = ScriptedRelayBackend(
+  first = conftest.ScriptedRelayBackend(
       [
-          rate_limit_event("allowed_warning", 0.92),
-          assistant_text_event("step 1"),
-          user_tool_result_event(),
-          assistant_text_event("never streamed")
+          conftest.rate_limit_event("allowed_warning", 0.92),
+          conftest.assistant_text_event("step 1"),
+          conftest.user_tool_result_event(),
+          conftest.assistant_text_event("never streamed")
       ],
       exit_code=0)
-  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  second = conftest.ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -162,15 +157,18 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(
 
 
 @pytest.mark.asyncio
-async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = fable_pool_cfg(tmp_path)
-  write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
-  write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
-  make_transcript(tmp_path / "claude-main", UUID)
+async def test_run_cc_reports_loudly_when_no_account_is_left(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  conftest.write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
+  conftest.write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  first = conftest.ScriptedRelayBackend(
+      [conftest.rate_limit_event("rejected", 1.0),
+       backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [first])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
@@ -192,26 +190,26 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
 
 @pytest.mark.asyncio
 async def test_run_cc_stays_armed_without_a_below_line_account_and_completes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A pool with no account strictly below the warning line keeps the run going at the
   safe point: no termination, no relay, and both safe points let the turn complete on
   the same account."""
-  cfg = fable_pool_cfg(tmp_path, labels=("main",))
-  make_transcript(tmp_path / "claude-main", UUID)
+  cfg = conftest.fable_pool_cfg(tmp_path, labels=("main",))
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = ScriptedRelayBackend(
+  first = conftest.ScriptedRelayBackend(
       [
-          rate_limit_event("allowed_warning", 0.92),
-          assistant_text_event("step 1"),
-          user_tool_result_event(),
-          assistant_text_event("step 2"),
-          user_tool_result_event(),
-          assistant_text_event("done"),
+          conftest.rate_limit_event("allowed_warning", 0.92),
+          conftest.assistant_text_event("step 1"),
+          conftest.user_tool_result_event(),
+          conftest.assistant_text_event("step 2"),
+          conftest.user_tool_result_event(),
+          conftest.assistant_text_event("done"),
           backend_base.make_result_event(),
       ],
       exit_code=0)
   builds = _install_backends(monkeypatch, [first])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -223,31 +221,31 @@ async def test_run_cc_stays_armed_without_a_below_line_account_and_completes(
 
 @pytest.mark.asyncio
 async def test_run_cc_warning_relay_lands_strictly_below_the_line_in_the_tie_band(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The gate and the move share the below-line bar: an at-line account that an
   unrestricted select would reach through the tie band -- its score sits within
   ``_SCORE_TIE`` of the best and its reading is the older -- stays out, and the
   landing is strictly below the line."""
-  cfg = fable_pool_cfg(tmp_path)
-  make_transcript(tmp_path / "claude-main", UUID)
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   # ext-1 sits below the line (headroom 0.11); ext-2 sits at the line (headroom 0.095)
   # with the older reading: a min_headroom=0 select ties the two (0.015 apart) and would
   # land ext-2, re-arming at the next safe point.
   claude_accounts.observe_rate_limit(
-      "ext-1", rate_limit_event("allowed", 0.89)["rate_limit_info"], now=NOW - timedelta(minutes=5))
+      "ext-1", conftest.rate_limit_event("allowed", 0.89)["rate_limit_info"], now=NOW - datetime.timedelta(minutes=5))
   claude_accounts.observe_rate_limit(
-      "ext-2", rate_limit_event("allowed", 0.905)["rate_limit_info"], now=NOW - timedelta(minutes=30))
-  first = ScriptedRelayBackend(
+      "ext-2", conftest.rate_limit_event("allowed", 0.905)["rate_limit_info"], now=NOW - datetime.timedelta(minutes=30))
+  first = conftest.ScriptedRelayBackend(
       [
-          rate_limit_event("allowed_warning", 0.92),
-          assistant_text_event("step 1"),
-          user_tool_result_event(),
+          conftest.rate_limit_event("allowed_warning", 0.92),
+          conftest.assistant_text_event("step 1"),
+          conftest.user_tool_result_event(),
       ],
       exit_code=0)
-  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  second = conftest.ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -258,22 +256,23 @@ async def test_run_cc_warning_relay_lands_strictly_below_the_line_in_the_tie_ban
 
 @pytest.mark.asyncio
 async def test_run_cc_falls_back_to_the_regular_select_when_the_below_line_target_vanishes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The gate and the move read the pool at different moments: a target that rose to the
   line in between lands the regular select -- possibly at or above the line -- and the
   run continues instead of refusing."""
-  cfg = fable_pool_cfg(tmp_path)
-  make_transcript(tmp_path / "claude-main", UUID)
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   # ext-1 is the gate's below-line destination; ext-2 already sits at the line.
-  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.85)["rate_limit_info"], now=NOW)
-  claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.92)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", conftest.rate_limit_event("allowed", 0.85)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("ext-2", conftest.rate_limit_event("allowed", 0.92)["rate_limit_info"], now=NOW)
   real_select = claude_accounts.select
 
   def select_with_transient(cfg, model, exclude=(), busy_accounts=None, now=None, account_pool=None, min_headroom=0.0):
     if min_headroom > 0 and exclude:
       # The move's below-line select: the target's reading crosses the line first.
-      claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
+      claude_accounts.observe_rate_limit(
+          "ext-1", conftest.rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
     return real_select(
         cfg,
         model,
@@ -284,16 +283,16 @@ async def test_run_cc_falls_back_to_the_regular_select_when_the_below_line_targe
         min_headroom=min_headroom)
 
   monkeypatch.setattr(claude_accounts, "select", select_with_transient)
-  first = ScriptedRelayBackend(
+  first = conftest.ScriptedRelayBackend(
       [
-          rate_limit_event("allowed_warning", 0.92),
-          assistant_text_event("step 1"),
-          user_tool_result_event(),
+          conftest.rate_limit_event("allowed_warning", 0.92),
+          conftest.assistant_text_event("step 1"),
+          conftest.user_tool_result_event(),
       ],
       exit_code=0)
-  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  second = conftest.ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -305,20 +304,23 @@ async def test_run_cc_falls_back_to_the_regular_select_when_the_below_line_targe
 
 @pytest.mark.asyncio
 async def test_run_cc_warning_relays_past_the_cap_with_below_line_destinations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A warning relay with a strictly-below-line destination is exempt from the relay cap:
   the fourth relay proceeds and the turn completes on the fifth account."""
-  cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
-  make_transcript(tmp_path / "claude-main", UUID)
+  cfg = conftest.fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  warning = ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92), user_tool_result_event()], exit_code=0)
+  warning = conftest.ScriptedRelayBackend(
+      [conftest.rate_limit_event("allowed_warning", 0.92),
+       conftest.user_tool_result_event()], exit_code=0)
   backends = [warning] + [
-      ScriptedRelayBackend([rate_limit_event("allowed_warning", 0.92),
-                            user_tool_result_event()], exit_code=0) for _ in range(3)
+      conftest.ScriptedRelayBackend(
+          [conftest.rate_limit_event("allowed_warning", 0.92),
+           conftest.user_tool_result_event()], exit_code=0) for _ in range(3)
   ]
-  last = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  last = conftest.ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [*backends, last])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -328,19 +330,19 @@ async def test_run_cc_warning_relays_past_the_cap_with_below_line_destinations(
 
 @pytest.mark.asyncio
 async def test_run_cc_relay_limit_names_each_unavailable_account(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """With the relay count exhausted and no below-line destination -- every login
   authentication-failed, so no rejection reset exists either -- the cap error lists each
   account's cooldown."""
-  cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
-  make_transcript(tmp_path / "claude-main", UUID)
+  cfg = conftest.fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
+  conftest.make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   failed = [
-      ScriptedRelayBackend([assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1)
-      for _ in range(4)
+      conftest.ScriptedRelayBackend(
+          [conftest.assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1) for _ in range(4)
   ]
   builds = _install_backends(monkeypatch, failed)
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
@@ -358,29 +360,30 @@ async def test_run_cc_relay_limit_names_each_unavailable_account(
 # ---------------------------------------------------------------------------
 
 
-def test_watch_stays_armed_without_a_below_line_destination_and_fires_when_one_appears(tmp_path: Path) -> None:
+def test_watch_stays_armed_without_a_below_line_destination_and_fires_when_one_appears(tmp_path: pathlib.Path) -> None:
   """At an armed safe point with no strictly-below-line account the watch keeps the run
   going (armed, reason None); a target that appears by the next safe point fires once."""
-  cfg = fable_pool_cfg(tmp_path, labels=("main", "ext-1"))
-  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.95)["rate_limit_info"], now=NOW)
-  watch = claude_relay.RelayWatch("main", FABLE_MODEL, cfg=cfg, account_pool=None, now=NOW)
+  cfg = conftest.fable_pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("ext-1", conftest.rate_limit_event("allowed", 0.95)["rate_limit_info"], now=NOW)
+  watch = claude_relay.RelayWatch("main", conftest.FABLE_MODEL, cfg=cfg, account_pool=None, now=NOW)
 
-  assert watch.observe(rate_limit_event("allowed_warning", 0.92)) is False
+  assert watch.observe(conftest.rate_limit_event("allowed_warning", 0.92)) is False
   assert watch.armed is True
-  assert watch.observe(user_tool_result_event()) is False
+  assert watch.observe(conftest.user_tool_result_event()) is False
   assert watch.reason is None
 
-  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
-  assert watch.observe(user_tool_result_event()) is True
+  claude_accounts.observe_rate_limit("ext-1", conftest.rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  assert watch.observe(conftest.user_tool_result_event()) is True
   assert watch.reason == claude_relay.RELAY_WARNING
 
 
-def test_relay_limit_message_without_unavailability_falls_back_to_a_named_slot(tmp_path: Path) -> None:
+def test_relay_limit_message_without_unavailability_falls_back_to_a_named_slot(tmp_path: pathlib.Path) -> None:
   """Accounts healthy at or above the line carry no unavailability: the cap message says
   so instead of rendering an empty slot."""
-  cfg = fable_pool_cfg(tmp_path)
+  cfg = conftest.fable_pool_cfg(tmp_path)
   for label in ("main", "ext-1", "ext-2"):
-    claude_accounts.observe_rate_limit(label, rate_limit_event("allowed_warning", 0.92)["rate_limit_info"], now=NOW)
+    claude_accounts.observe_rate_limit(
+        label, conftest.rate_limit_event("allowed_warning", 0.92)["rate_limit_info"], now=NOW)
 
   message = claude_relay.relay_limit_message(cfg)
 

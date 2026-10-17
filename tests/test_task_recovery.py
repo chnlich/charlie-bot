@@ -11,11 +11,11 @@ instance's data and owned processes stay untouched.
 from __future__ import annotations
 
 import asyncio
+import datetime
+import functools
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
-from functools import partial
-from pathlib import Path
+import pathlib
 
 import conftest
 import pytest
@@ -92,7 +92,7 @@ async def _manager_and_worker(tmp_path, monkeypatch, task_type=None, repo=None):
 
 @pytest.mark.asyncio
 async def test_restart_before_launch_requeues_through_the_same_launch_checks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A run registered (reservation) but never launched: recovery dispatches it
     through the executor — one process, the exact registered provenance."""
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
@@ -119,7 +119,8 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
 
 
 @pytest.mark.asyncio
-async def test_restart_after_launch_reattaches_live_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_restart_after_launch_reattaches_live_process(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A recorded live (pid, pid_start) process is followed, never relaunched."""
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   gate = asyncio.Event()
@@ -154,7 +155,8 @@ async def test_restart_after_launch_reattaches_live_process(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_stop_request_wins_over_launch_and_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stop_request_wins_over_launch_and_recovery(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("x")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -177,7 +179,7 @@ async def test_stop_request_wins_over_launch_and_recovery(tmp_path: Path, monkey
 
 @pytest.mark.asyncio
 async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A work run whose review already succeeded never gets another review:
     restart recovery any number of times registers none (the chain ends at
     the first successful review), while the review's own follow-up replay
@@ -269,17 +271,22 @@ async def _register_successful_work_run(tree, worker_id, run_id, repo, *, starte
 
 @pytest.mark.asyncio
 async def test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A completed implement worker whose earlier work run a later one superseded
     before any review: the startup replay registers no review for it (the live
     path read the later run as a pause), however many times recovery runs."""
   cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
   worktree_gone = str(tmp_path / "charliebot-home" / "worktrees" / "task-work-gone")
-  started = datetime.now(UTC) - timedelta(hours=1)
+  started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
   await _register_successful_work_run(
       tree, worker.id, "run-work-early", repo, started_at=started, worktree_path=worktree_gone)
   await _register_successful_work_run(
-      tree, worker.id, "run-work-late", repo, started_at=started + timedelta(minutes=30), worktree_path=worktree_gone)
+      tree,
+      worker.id,
+      "run-work-late",
+      repo,
+      started_at=started + datetime.timedelta(minutes=30),
+      worktree_path=worktree_gone)
   review_id = "review-done"
   await tree.runs.register_run(
       RunRecord(
@@ -289,7 +296,7 @@ async def test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_t
           review_of_run_id="run-work-late",
           backend="fake",
           model="fake-model",
-          started_at=started + timedelta(minutes=45)))
+          started_at=started + datetime.timedelta(minutes=45)))
   await tree.dispatch.finish_run(worker.id, review_id, outcome="success", exit_code=0)
 
   # The first pass replays the review's landing proof and closes the task; no
@@ -304,7 +311,7 @@ async def test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_t
 
 @pytest.mark.asyncio
 async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An open idle implement worker: the replay spawns no review for an earlier
     work run a later one superseded, and exactly one for the newest successful
     work run that has none — the one the live path would have reviewed."""
@@ -312,12 +319,17 @@ async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_t
   # A second member for the reviewer: it never runs on the worker's member.
   cfg.backends.options.append(conftest.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"))
   cfg.backends.pool = ["fake", "fake2"]
-  started = datetime.now(UTC) - timedelta(hours=1)
+  started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
   # The spawned review launches in the work run's worktree: an existing path.
   await _register_successful_work_run(
       tree, worker.id, "run-work-early", repo, started_at=started, worktree_path=str(repo))
   await _register_successful_work_run(
-      tree, worker.id, "run-work-late", repo, started_at=started + timedelta(minutes=30), worktree_path=str(repo))
+      tree,
+      worker.id,
+      "run-work-late",
+      repo,
+      started_at=started + datetime.timedelta(minutes=30),
+      worktree_path=str(repo))
 
   await task_recovery.reconcile_task_tree(cfg, tree)
 
@@ -336,11 +348,11 @@ async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_t
 
 @pytest.mark.asyncio
 async def test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A single-member pool can never staff the reviewer (it never uses the worker's member): the
     startup replay of a successful unreviewed work run reports blocked instead of hanging open."""
   cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
-  started = datetime.now(UTC) - timedelta(hours=1)
+  started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
   await _register_successful_work_run(tree, worker.id, "run-work", repo, started_at=started, worktree_path=str(repo))
 
   await task_recovery.reconcile_task_tree(cfg, tree)
@@ -357,7 +369,7 @@ async def test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member(
 
 @pytest.mark.asyncio
 async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An open idle implement worker whose newest work run is registered but
     never started: the replay spawns no review for the earlier successful run
     (the live path read the reservation as a pause), and the queued run's own
@@ -365,7 +377,7 @@ async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
     request."""
   cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: the queued run's launch is withheld
-  started = datetime.now(UTC) - timedelta(hours=1)
+  started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
   await _register_successful_work_run(
       tree, worker.id, "run-work-early", repo, started_at=started, worktree_path=str(repo))
   queued_id = "run-work-queued"
@@ -393,7 +405,7 @@ async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
 
 @pytest.mark.asyncio
 async def test_reconcile_settles_a_queued_run_on_a_completed_node_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A completed node holding a queued run with no stop request: one startup
     pass records exactly one stop request (request id closed-task:<run id>),
     and a repeated pass records nothing more."""
@@ -492,7 +504,7 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_recovery_closed_task_skips_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recovery_closed_task_skips_landing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A closed task's replayed review follow-up re-proves nothing: repeated
     startup passes make zero landing git calls, append no fact on the worker or
     its parent, and leave the state completed."""
@@ -518,7 +530,7 @@ async def test_recovery_closed_task_skips_landing(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_recovery_reopened_task_reproves_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recovery_reopened_task_reproves_landing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A restored task derives "open" again, so its replayed review follow-up
     runs the full landing proof (the counter observes git_verify_commit_landed)."""
 
@@ -535,7 +547,7 @@ async def test_recovery_reopened_task_reproves_landing(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_recovery_open_task_landing_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recovery_open_task_landing_unchanged(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An open task's replayed review follow-up proves the landing and closes:
     one pass closes the task and delivers the completed report to the parent,
     exactly as the closed-task skip left it."""
@@ -553,7 +565,7 @@ async def test_recovery_open_task_landing_unchanged(tmp_path: Path, monkeypatch:
 
 @pytest.mark.asyncio
 async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed review is a used attempt: recovery registers the next review
     on the next pool backend (the existing policy, unchanged)."""
 
@@ -613,7 +625,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
   assert len([r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]) == 2
 
 
-async def _cold_read_child(tmp_path: Path, tree, manager, *, page: Path):
+async def _cold_read_child(tmp_path: pathlib.Path, tree, manager, *, page: pathlib.Path):
   """One cold-read worker child under the manager, its page already on disk."""
   page.write_text("<html><body><p>sitrep body</p></body></html>", encoding="utf-8")
   return await tree.create_task(
@@ -630,7 +642,8 @@ async def _cold_read_child(tmp_path: Path, tree, manager, *, page: Path):
 
 
 @pytest.mark.asyncio
-async def test_recovery_replays_a_lost_cold_read_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recovery_replays_a_lost_cold_read_delivery(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A cold-read Run whose terminal fact landed but whose delivery a crash cut:
     the replay reports the parent with the report body and closes the child; a
     repeated pass lands nothing twice."""
@@ -664,7 +677,8 @@ async def test_recovery_replays_a_lost_cold_read_delivery(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
-async def test_recovery_replays_a_lost_cold_read_failure_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_recovery_replays_a_lost_cold_read_failure_chain(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed cold-read Run whose chain a crash cut with one backend left: the
     replay records the attempt, starts the retry on the next pool
     backend, and the retry's answer delivers the report."""
@@ -702,7 +716,7 @@ async def test_recovery_replays_a_lost_cold_read_failure_chain(tmp_path: Path, m
 
 @pytest.mark.asyncio
 async def test_recovery_replays_a_lost_cold_read_all_failed_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed cold-read Run whose chain a crash cut with no backend left: the
     replay reports the parent with the attempt line and the all-failed trailer,
     and the report's delivery archives the child; a repeated pass lands nothing
@@ -743,7 +757,7 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
 
 @pytest.mark.asyncio
 async def test_recovery_replays_a_lost_cold_read_interrupted_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An interrupted cold-read Run reports at replay exactly as the live
     chain's fall-through does (never through the next-backend retry), and the
     report's delivery archives the child; a repeated pass lands nothing twice."""
@@ -775,7 +789,7 @@ async def test_recovery_replays_a_lost_cold_read_interrupted_report(
 
 @pytest.mark.asyncio
 async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The last-ended verdict: a node whose failed run A preceded a successful
     run B keeps A's replayed report (one, waking the parent once) but is never
     archived by it — run B ended last."""
@@ -801,7 +815,7 @@ async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a
 
 @pytest.mark.asyncio
 async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The pre-fix leftover: an open worker whose last run failed and whose
     report already sits in the parent's log. The startup pass re-delivers
     nothing (the stable report id dedups, no wake) and archives the worker; a
@@ -853,7 +867,7 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
 
 @pytest.mark.asyncio
 async def test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed cold-read Run whose retry a crash left registered but unlaunched:
     the replay launches the queued retry (step 4) and never re-drives the failed
     attempt's chain — one retry Run, one report."""
@@ -883,7 +897,7 @@ async def test_recovery_cold_read_failure_with_a_registered_retry_never_double_r
 
 @pytest.mark.asyncio
 async def test_reconcile_replays_an_already_delivered_blocked_report_without_duplication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The startup pass never wakes a parent for an already delivered report.
 
     The delivery-replay path: an implement child whose landing check keeps
@@ -910,7 +924,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend(
-              [result_event("implemented")], pre_run=partial(implement_marker_commit, tree, worker.id)),
+              [result_event("implemented")], pre_run=functools.partial(implement_marker_commit, tree, worker.id)),
           SpawningScriptedBackend([result_event("review ok")])
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The blocked report below wakes the manager. Script that turn too: left
@@ -983,7 +997,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
 
 @pytest.mark.asyncio
 async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(f) A run_finished fact whose metadata write failed out of space: the
     retry fills ended_at/exit_code from the raw log once space returns, and a
     boot reconcile fills them too — from the drain rule's values, once."""
@@ -1014,7 +1028,7 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
   run = await tree.runs.get_run(worker.id, run_id)
   assert run is not None
-  assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
+  assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < datetime.timedelta(seconds=1)
   assert run.exit_code == 0  # the raw log's successful result event
   finished = [e for e in tree.fact_history(worker.id) if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run_id]
   assert len(finished) == 1  # the retry never wrote a second end record
@@ -1037,12 +1051,13 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   await task_recovery.reconcile_task_tree(cfg2, tree2, tree2.dispatch.executor)
   boot_run = await tree2.runs.get_run(worker2.id, boot_run_id)
   assert boot_run is not None
-  assert boot_run.ended_at is not None and abs(boot_run.ended_at - boot_mtime) < timedelta(seconds=1)
+  assert boot_run.ended_at is not None and abs(boot_run.ended_at - boot_mtime) < datetime.timedelta(seconds=1)
   assert boot_run.exit_code == 0
 
 
 @pytest.mark.asyncio
-async def test_boot_node_out_of_space_hands_node_to_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_boot_node_out_of_space_hands_node_to_retry(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(g) Boot reconcile's node pass failing out of space hands the node to
     the retry entry; the retry's own round delivers the parent report."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
@@ -1069,7 +1084,7 @@ async def test_boot_node_out_of_space_hands_node_to_retry(tmp_path: Path, monkey
 
 @pytest.mark.asyncio
 async def test_retry_round_skips_runs_this_process_already_drives(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(h) A retry's node reconcile pass never makes a second follower for a
     run whose execute task is in flight, a run a previous round already
     follows, or a manager-turn follow queued in the master queue; replayed

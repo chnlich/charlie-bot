@@ -54,6 +54,7 @@ from src.features.voice.turn_contribution import VOICE_NOTE
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import PatchSessionTaskRequest, RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.runtime import message_events
 from src.runtime import runs as runs_mod
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
@@ -1627,6 +1628,57 @@ async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkey
   assert pm_builds, "the delivered report never triggered a parent manager turn"
 
 
+@pytest.mark.asyncio
+async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An upload admitted while a worker run holds its slot pauses that run. The
+    continuation resumes the run's native conversation, and its prompt names the
+    upload's path."""
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "## Goal\n\nbump the host cron schedule line\n", "task_type": "quick-edit"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
+
+  work_started = asyncio.Event()
+  work_gate = asyncio.Event()
+
+  async def hold_work_run() -> None:
+    work_started.set()
+    await work_gate.wait()
+
+  async def record_native_id() -> None:
+    # The finalize scan reads the native session id from the run's raw log.
+    work_run = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work"][-1]
+    init = {"type": "system", "subtype": "init", "session_id": "native-1"}
+    (tree.runs.run_dir(worker.id, work_run.id) / RAW_LOG_NAME).write_text(json.dumps(init) + "\n", encoding="utf-8")
+
+  first = SpawningScriptedBackend([result_event("did the work")], gate=hold_work_run, post_events=record_native_id)
+  continuation = SpawningScriptedBackend([result_event("looked at the screenshot")])
+  builds = install_scripted_backends(monkeypatch, [first, continuation], WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run1_id = decision["run_id"]
+  await asyncio.wait_for(work_started.wait(), timeout=15)
+
+  # Admitted while the first run holds its slot: pending at that run's end.
+  upload = {"filename": "screenshot.png", "path": str(tmp_path / "uploads" / "screenshot.png")}
+  admitted = await tree.dispatch.admit_input(
+      worker.id, event_type=ET.USER, content="see attached", actor="user", uploaded_files=[upload])
+  work_gate.set()
+  _run1, outcome1 = await wait_for_terminal_run(tree, worker.id, run1_id)
+  assert outcome1 == "success"
+
+  run2 = await _claimed_work_run_after(tree, worker.id, {run1_id}, timeout=15)
+  _run2, outcome2 = await wait_for_terminal_run(tree, worker.id, run2.id)
+  assert outcome2 == "success"
+  assert run2.input_event_ids == [str(admitted["id"])]
+  assert builds[1]["kwargs"].get("resume_session_id") == "native-1"
+  assert upload["path"] in continuation.prompt
+
+
 def _task_spec(tree: TaskTreeManager, spec: dict):
   from src.infra.models import TaskType
   return TaskSpec(
@@ -1802,6 +1854,31 @@ def test_the_voice_note_opens_a_dictated_user_input_only() -> None:
   assert prompt == "\n\n".join([f"{VOICE_NOTE}\nsaid aloud", "typed in", "[Message from session peer] from a peer"])
 
 
+def test_compose_input_prompt_puts_the_attachment_block_after_the_text() -> None:
+  meta = SessionMetadata(id="node", name="node", profile="manager")
+  first, second = "/sessions/node/uploads/one.png", "/sessions/node/uploads/two.png"
+  event = {"type": ET.USER, "content": "look at these", "uploaded_files": [{"path": first}, {"path": second}]}
+
+  prompt, uploads = task_execution_module.compose_input_prompt(meta, [event])
+
+  assert prompt == (
+      f"look at these{message_events._ATTACHED_FILES_MARKER}{message_events.DEFAULT_ATTACHED_FILES_PROMPT}"
+      f"\n- {first}\n- {second}")
+  assert uploads == event["uploaded_files"]
+
+
+def test_compose_input_prompt_gives_an_upload_only_event_the_block_alone() -> None:
+  meta = SessionMetadata(id="node", name="node", profile="manager")
+  path = "/sessions/node/uploads/shot.png"
+  event = {"type": ET.USER, "content": "", "uploaded_files": [{"path": path}]}
+
+  prompt, uploads = task_execution_module.compose_input_prompt(meta, [event])
+
+  assert prompt.startswith("[Attached files]")
+  assert path in prompt
+  assert uploads == event["uploaded_files"]
+
+
 @pytest.mark.asyncio
 async def test_a_dictated_message_launches_a_manager_turn_whose_prompt_opens_with_the_voice_note(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1819,6 +1896,42 @@ async def test_a_dictated_message_launches_a_manager_turn_whose_prompt_opens_wit
 
   assert outcome == "success"
   assert backend.prompt == f"{VOICE_NOTE}\nopen the settings page"
+
+
+class _UploadRecordingBackend(ScriptedRelayBackend):
+  """A scripted relay double that keeps the upload list its run() received."""
+
+  def __init__(self, events: list[dict], exit_code: int) -> None:
+    super().__init__(events, exit_code)
+    self.uploaded_files: list[dict] | None = None
+
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    self.uploaded_files = uploaded_files
+    async for event in super().run(prompt, cwd, env, uploaded_files):
+      yield event
+
+
+@pytest.mark.asyncio
+async def test_an_upload_only_message_launches_a_manager_turn_that_names_every_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  backend = _UploadRecordingBackend([result_event("saw both screenshots")], exit_code=0)
+  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  uploads = [{"filename": f"shot-{i}.png", "path": str(tmp_path / "uploads" / f"shot-{i}.png")} for i in (1, 2)]
+
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="", actor="user", uploaded_files=uploads)
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision.get("launch") is True, decision
+  _run, outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+
+  assert outcome == "success"
+  for upload in uploads:
+    assert upload["path"] in backend.prompt
+  assert [f["path"] for f in backend.uploaded_files] == [upload["path"] for upload in uploads]
 
 
 @pytest.mark.asyncio

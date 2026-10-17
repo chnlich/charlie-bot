@@ -222,15 +222,3 @@ test('a second open of a For you session keeps the stream element on the page', 
   assert.ok(under(rig.stream, rig.root), 'the stream element is still in the messages container');
 });
 
-test('the working line follows a turn start and end through the page thinking state', () => {
-  const rig = pageRig();
-  openedView(rig, {});
-  const rowsHaveWorking = () => rig.root.children.some((el) => el.classList.contains('for-you-working'));
-  assert.equal(rowsHaveWorking(), false);
-
-  rig.context.startThinking({keepSendEnabled: true});
-  assert.equal(rowsHaveWorking(), true, 'the line shows during the turn');
-
-  rig.context.stopThinking();
-  assert.equal(rowsHaveWorking(), false, 'the line goes at the turn end');
-});

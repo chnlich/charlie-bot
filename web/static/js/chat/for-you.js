@@ -2,18 +2,19 @@
   const Chat = globalThis.Chat;
 
 // ---------------------------------------------------------------------------
-// The For-you view: the session page's reading layer for a root web session.
+// The For-you view: the session page's reading layer for a web session.
 //
 // For you shows the user's messages, the agent's web replies (web_reply), the
-// web reply notices (web_reply_notice) and error rows, in place. Each run of
-// other messages folds into one line. Everything shows the whole record, as the
-// page always has. A web session (a manager session that is not a Slack or
-// Discord thread), root or child, opens in For you; a thread session and a worker
-// session open in Everything. A manual switch holds for that session until the
-// page reloads.
+// web reply notices (web_reply_notice) and error rows, in order, and nothing
+// else. When none of them is in the store, one row offers Everything. Everything
+// shows the whole record, as the page always has. A web session (a manager
+// session that is not a Slack or Discord thread), root or child, opens in For
+// you; a thread session and a worker session open in Everything. A manual switch
+// holds for that session until the page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
-// (what shows and where a fold falls), the row builders and the toggle.
+// (what shows, the web-session test and the default view), the empty-state row
+// and the toggle.
 // ---------------------------------------------------------------------------
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
@@ -33,66 +34,19 @@ function showsInForYou(msg) {
   return SHOWN_ROLES.includes(msg.role) || isErrorMessage(msg);
 }
 
-// The For-you rows over the store's entries, in order: a shown message is one
-// row; each run of other entries is one fold row, keyed by its first entry. A
-// separator ends a turn and is not a message, so the fold's count leaves it out,
-// and a run of separators alone gets no fold row.
+// The store's entries that For you shows, in order.
 function items(entries) {
-  const out = [];
-  let run = [];
-  const closeRun = () => {
-    const count = run.filter((entry) => entry.msg.role !== 'separator').length;
-    if (count > 0) out.push({kind: 'fold', key: 'fold:' + run[0].msg.id, count, hidden: run});
-    run = [];
-  };
-  for (const entry of entries) {
-    if (showsInForYou(entry.msg)) {
-      closeRun();
-      out.push({kind: 'message', entry});
-    } else {
-      run.push(entry);
-    }
-  }
-  closeRun();
-  return out;
+  return entries.filter((entry) => showsInForYou(entry.msg));
 }
 
-// The turn is running: the page's thinking state, set by startThinking and cleared
-// by stopThinking (session-view.js).
-function turnRunning() {
-  return masterThinking;
-}
-
-function textSpan(className, text) {
-  const span = document.createElement('span');
-  span.className = className;
-  span.textContent = text;
-  return span;
-}
-
-function buildFoldLine(onToggle) {
+// The row an empty For you shows: one button that switches the view to Everything.
+function buildEmptyLine() {
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'for-you-fold flex items-center gap-2 w-full py-1 text-xs text-slate-500 hover:text-slate-300 transition-colors';
-  btn.onclick = onToggle;
-  btn.appendChild(textSpan('for-you-fold-chevron w-3 text-center', ''));
-  btn.appendChild(textSpan('for-you-fold-label', ''));
+  btn.className = 'for-you-empty block w-full py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors';
+  btn.textContent = 'Nothing for you yet';
+  btn.onclick = () => setChatView(EVERYTHING);
   return btn;
-}
-
-function fillFoldLine(btn, count, expanded) {
-  btn.dataset.count = String(count);
-  btn.setAttribute('aria-expanded', String(expanded));
-  btn.querySelector('.for-you-fold-chevron').textContent = expanded ? '▾' : '▸';
-  btn.querySelector('.for-you-fold-label').textContent = count + ' hidden messages';
-}
-
-function buildWorkingLine() {
-  const el = document.createElement('div');
-  el.className = 'for-you-working flex items-center gap-2 px-4 py-2 text-sm text-slate-400';
-  el.appendChild(textSpan('w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot', ''));
-  el.appendChild(textSpan('', 'Working…'));
-  return el;
 }
 
 // A web session: a manager session with no Slack or Discord origin. The status panel
@@ -127,27 +81,17 @@ function setChatView(view) {
   renderToggle(view);
 }
 
-// A turn started or ended: the For you working line follows the running state.
-function refresh() {
-  const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
-  if (engine) engine.refreshForYou();
-}
-
 // The turn engine projects these rules, so they register with it; the page reads the same object as
 // Chat.ForYou.
 const ForYou = {
   FOR_YOU,
   EVERYTHING,
   items,
-  turnRunning,
-  buildFoldLine,
-  fillFoldLine,
-  buildWorkingLine,
+  buildEmptyLine,
   isWebSession,
   defaultView,
   viewFor,
   renderToggle,
-  refresh,
 };
 Chat.registerForYouRules(ForYou);
 Chat.wire({setChatView}, {ForYou});

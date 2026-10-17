@@ -35,25 +35,12 @@ import shutil
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import orjson
 
-from src.infra import config, json_utils, metadata_slots, ndjson, tasks
+from src.infra import config, json_utils, metadata_slots, models, ndjson, tasks
 from src.infra import event_types as ET
-from src.infra.models import (
-    AncestorRef,
-    EventRef,
-    PatchSessionTaskRequest,
-    SessionMetadata,
-    SessionRow,
-    SessionStatus,
-    TaskSpec,
-    WorkState,
-    ensure_utc,
-    utc_now,
-    validate_session_metadata,
-)
 from src.runtime import (
     chat_events,
     control_events,
@@ -82,9 +69,6 @@ from src.runtime.runs import (
     read_host_boot_time,
     stop_requested_in_events,
 )
-
-if TYPE_CHECKING:
-  from src.infra.models import RunRecord
 
 PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 
@@ -120,7 +104,7 @@ class _TaskFacts:
   task_state: str = "open"
   run_outcomes: dict[str, str] = dataclasses.field(default_factory=dict)
   # Each run's first run_finished fact's absolute log position (the durable
-  # order; RunRecord carries no creation timestamp).
+  # order; models.RunRecord carries no creation timestamp).
   run_finish_positions: dict[str, int] = dataclasses.field(default_factory=dict)
   # Input ids a successful run_finished acknowledged.
   confirmed_input_ids: set[str] = dataclasses.field(default_factory=set)
@@ -270,7 +254,7 @@ class TaskTreeActivity:
   and the sidebar's task-tree probe share.
   """
   has_running_tasks: bool
-  work_state: WorkState
+  work_state: models.WorkState
 
 
 def _run_outcomes(events: list[dict]) -> dict[str, str]:
@@ -286,7 +270,7 @@ def _run_outcomes(events: list[dict]) -> dict[str, str]:
 
 
 def derive_task_tree_activity(
-    runs: list[RunRecord],
+    runs: list[models.RunRecord],
     events: list[dict],
     host_boot_time: Callable[[], datetime.datetime],
     task_open: bool,
@@ -336,7 +320,7 @@ def derive_task_tree_activity(
     # A launched Run nobody observed exiting paints nothing: subagent failures
     # are routine and the manager resolves them by re-delegating, so a dead
     # process is not work the sidebar flags.
-  work_state: WorkState = "idle"
+  work_state: models.WorkState = "idle"
   for state in ("running", "waiting"):
     if state in verdicts:
       work_state = state  # type: ignore[assignment]
@@ -435,23 +419,23 @@ class TaskTreeManager:
   # Metadata reads/writes (single owner of the v2 fields)
   # ------------------------------------------------------------------
 
-  async def load_meta(self, session_id: str) -> SessionMetadata | None:
+  async def load_meta(self, session_id: str) -> models.SessionMetadata | None:
     return await self.session_store.get_session(session_id)
 
-  def _require_task(self, meta: SessionMetadata | None, session_id: str) -> SessionMetadata:
+  def _require_task(self, meta: models.SessionMetadata | None, session_id: str) -> models.SessionMetadata:
     if meta is None:
       raise task_errors.TaskNotFoundError(f"task {session_id} not found")
     return meta
 
-  async def load_task_meta(self, session_id: str) -> SessionMetadata:
+  async def load_task_meta(self, session_id: str) -> models.SessionMetadata:
     """The session's metadata, required to be a task-tree node.
 
     Raises TaskNotFoundError for an absent session.
     """
     return self._require_task(await self.load_meta(session_id), session_id)
 
-  async def _save_meta(self, meta: SessionMetadata) -> None:
-    meta.updated_at = utc_now()
+  async def _save_meta(self, meta: models.SessionMetadata) -> None:
+    meta.updated_at = models.utc_now()
     await self.session_store.save_metadata(meta)
     self._invalidate_index()  # any metadata write may move the projection inputs
 
@@ -512,7 +496,7 @@ class TaskTreeManager:
     must drop the projection cache here or tree_page serves a stale name."""
     self._invalidate_index()
 
-  def _build_index_sync(self, cached_metas: dict[str, SessionMetadata]) -> _TreeIndex:
+  def _build_index_sync(self, cached_metas: dict[str, models.SessionMetadata]) -> _TreeIndex:
     sessions_dir = self._cfg.sessions_dir
     root_sig = (0, 0)
     try:
@@ -520,7 +504,7 @@ class TaskTreeManager:
       root_sig = (st.st_mtime_ns, st.st_size)
     except OSError as e:
       raise RuntimeError(f"sessions dir unreadable at {sessions_dir}: {e}") from e
-    metas: dict[str, SessionMetadata] = {}
+    metas: dict[str, models.SessionMetadata] = {}
     try:
       entries = sorted(e.name for e in os.scandir(sessions_dir) if e.is_dir())
     except OSError as e:
@@ -541,11 +525,11 @@ class TaskTreeManager:
       except OSError:
         continue  # session dir without (yet readable) metadata: not a tree node
       try:
-        metas[name] = validate_session_metadata(raw, str(path))
+        metas[name] = models.validate_session_metadata(raw, str(path))
       except ValueError as e:
         raise RuntimeError(f"session metadata unparseable at {path}: {e}") from e
     children: dict[str | None, list[str]] = {}
-    task_nodes: list[tuple[str, SessionMetadata]] = []
+    task_nodes: list[tuple[str, models.SessionMetadata]] = []
     for sid, meta in metas.items():
       task_nodes.append((sid, meta))
       children.setdefault(meta.task_parent_id, []).append(sid)
@@ -571,7 +555,7 @@ class TaskTreeManager:
     index.revision = control_events.sha256_hex("\n".join(sorted(structural)))
     return index
 
-  def _index_meta(self, index: _TreeIndex, session_id: str) -> SessionMetadata:
+  def _index_meta(self, index: _TreeIndex, session_id: str) -> models.SessionMetadata:
     meta = index.metas.get(session_id)
     if meta is None:
       raise task_errors.TaskNotFoundError(f"task {session_id} not found")
@@ -596,9 +580,9 @@ class TaskTreeManager:
         raise task_errors.TaskConflictError([f"subtree of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} nodes"])
     return out
 
-  def _ancestors(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
+  def _ancestors(self, index: _TreeIndex, session_id: str) -> list[models.SessionMetadata]:
     """The task-parent chain above *session_id*, nearest first (cycle-guarded)."""
-    chain: list[SessionMetadata] = []
+    chain: list[models.SessionMetadata] = []
     seen = {session_id}
     current = self._index_meta(index, session_id)
     while current.task_parent_id is not None:
@@ -622,7 +606,7 @@ class TaskTreeManager:
     index = await self._get_index()
     return self._descendants(index, session_id)
 
-  async def _note_run_liveness(self, session_id: str, run: RunRecord, launched: bool) -> None:
+  async def _note_run_liveness(self, session_id: str, run: models.RunRecord, launched: bool) -> None:
     """The run owner's liveness notification: a worker node's busy interval.
 
     A worker node's busy interval (its thinking_since, the header timer) opens
@@ -644,7 +628,7 @@ class TaskTreeManager:
     if meta is not None and meta.profile == "worker":
       thinking_state.mark_run_busy(session_id, run.id, since=run.started_at)
 
-  async def _require_open_ancestry(self, session_id: str) -> list[SessionMetadata]:
+  async def _require_open_ancestry(self, session_id: str) -> list[models.SessionMetadata]:
     index = await self._get_index()
     return await self._require_open_ancestry_from_index(index, session_id)
 
@@ -758,7 +742,7 @@ class TaskTreeManager:
     """The task's derived lifecycle state."""
     return self._facts_of(session_id).task_state
 
-  def work_state_of(self, session_id: str) -> WorkState:
+  def work_state_of(self, session_id: str) -> models.WorkState:
     """idle | running | waiting, from CURRENT unresolved facts.
 
     One half of :meth:`activity_of` — the shared derivation's work verdict.
@@ -835,7 +819,8 @@ class TaskTreeManager:
   def _host_boot_time(self) -> datetime.datetime:
     return read_host_boot_time()
 
-  def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
+  def _archived_facts_based(
+      self, meta: models.SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
     """One node's OWN archive value from a pre-folded fact set (no inheritance).
 
     The subtree-inheritance fold around it lives in archived_of. A node is
@@ -861,10 +846,10 @@ class TaskTreeManager:
     pass_facts: dict[str, _TaskFacts] = {}
     return {
         session_id for session_id, meta in index.metas.items()
-        if meta.status != SessionStatus.ARCHIVED and self._archived_of_pass(index, meta, memo, pass_facts)
+        if meta.status != models.SessionStatus.ARCHIVED and self._archived_of_pass(index, meta, memo, pass_facts)
     }
 
-  def archived_of(self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool] | None = None) -> bool:
+  def archived_of(self, index: _TreeIndex, meta: models.SessionMetadata, memo: dict[str, bool] | None = None) -> bool:
     """Archive visibility with subtree inheritance (the effective archive's single owner).
 
     effective(n) is the node's own facts-based value or its parent's inherited
@@ -880,7 +865,8 @@ class TaskTreeManager:
     return self._effective_archived(index, meta.id, {} if memo is None else memo, {})
 
   def _archived_of_pass(
-      self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool], pass_facts: dict[str, _TaskFacts]) -> bool:
+      self, index: _TreeIndex, meta: models.SessionMetadata, memo: dict[str, bool],
+      pass_facts: dict[str, _TaskFacts]) -> bool:
     """archived_of inside one caller-owned pass: the memo and the facts cache
     both span the caller's whole node walk, so chains already resolved and
     facts already consulted serve the rest of the pass."""
@@ -899,7 +885,7 @@ class TaskTreeManager:
     (and the invariant forbids the reverse shape — an open node under an
     archived ancestor).
     """
-    chain: list[tuple[str, SessionMetadata]] = []
+    chain: list[tuple[str, models.SessionMetadata]] = []
     seen: set[str] = set()
     current = session_id
     inherited = False
@@ -923,14 +909,14 @@ class TaskTreeManager:
       memo[sid] = inherited
     return memo[session_id]
 
-  def session_row(self, index: _TreeIndex, session_id: str) -> SessionRow:
+  def session_row(self, index: _TreeIndex, session_id: str) -> models.SessionRow:
     meta = self._index_meta(index, session_id)
     child_ids = self._children_of(index, session_id)
     descendants = self._descendants(index, session_id)
     descendant_work = [self.work_state_of(d) for d in descendants]
     open_count = sum(1 for d in descendants if self.task_state(d) == "open")
     running_count = sum(1 for state in descendant_work if state == "running")
-    return SessionRow(
+    return models.SessionRow(
         id=meta.id,
         name=meta.name,
         profile=meta.profile,
@@ -978,7 +964,7 @@ class TaskTreeManager:
           # would silently do nothing.
           await self.session_anchors.clear_cc_session_anchor(session_id)
 
-  def prompt_rule_summaries(self, meta: SessionMetadata, index: _TreeIndex) -> dict:
+  def prompt_rule_summaries(self, meta: models.SessionMetadata, index: _TreeIndex) -> dict:
     """The scope/source/current-rule facts the Task/Context UI reads from the detail.
 
     Body content stays in the immutable store; this names each scope's ref,
@@ -1016,7 +1002,7 @@ class TaskTreeManager:
             "task_state": self.task_state(session_id),
             "work_state": self.work_state_of(session_id),
             "archived": self.archived_of(index, indexed),
-            "ancestors": [AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
+            "ancestors": [models.AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
             "prompt_rules": self.prompt_rule_summaries(indexed, index),
         })
     return payload
@@ -1028,18 +1014,18 @@ class TaskTreeManager:
   async def adopt_metadata_slot(
       self,
       session_id: str,
-      old: SessionMetadata,
+      old: models.SessionMetadata,
       owner: str,
       *,
       fields: tuple[str, ...] | None = None,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Copy selected fields from *owner* on *old* onto this node."""
     async with self.control_lock:
       meta = await self.load_meta(session_id)
       if meta is None:
         raise task_errors.TaskNotFoundError(f"session {session_id} not found")
       metadata_slots.copy_fields(old, meta, owner, names=fields)
-      meta.updated_at = utc_now()
+      meta.updated_at = models.utc_now()
       await self._save_meta(meta)
       return meta
 
@@ -1049,14 +1035,14 @@ class TaskTreeManager:
       request_id: str,
       task_parent_id: str | None,
       profile: str,
-      task: TaskSpec | None,
+      task: models.TaskSpec | None,
       name: str | None,
       backend: str | None,
       group: str | None = None,
       session_id: str | None = None,
       slot_values: dict[str, Any] | None = None,
       caller: object,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Create one task node; a replayed request returns the original product.
 
     The node id is (parent, request_id)-stable unless *session_id* names it:
@@ -1089,7 +1075,7 @@ class TaskTreeManager:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
           await self._authorize_agent_creation(caller, existing.profile, existing.task, task_parent_id, parent_meta)
         return existing
-      parent_meta: SessionMetadata | None = None
+      parent_meta: models.SessionMetadata | None = None
       # Caller scope first: an agent's 403 must not depend on the target's shape.
       if isinstance(caller, run_token.CallerIdentity) and not caller.is_operator:
         if task_parent_id is not None:
@@ -1135,7 +1121,7 @@ class TaskTreeManager:
     await self.events.notify_tree_changed(task_id, ET.TASK_CREATED)
     return fresh
 
-  async def _default_node_name(self, task: TaskSpec | None, profile: str) -> str:
+  async def _default_node_name(self, task: models.TaskSpec | None, profile: str) -> str:
     """A node created without a name takes the goal's first line when there is
     one; otherwise the session counter name ("Session N"), so the
     sidebar's one-click create names a task node the way it names a session.
@@ -1178,9 +1164,9 @@ class TaskTreeManager:
       self,
       caller: object,
       profile: str,
-      task: TaskSpec | None,
+      task: models.TaskSpec | None,
       task_parent_id: str | None,
-      parent_meta: SessionMetadata | None,
+      parent_meta: models.SessionMetadata | None,
   ) -> None:
     """An agent caller may organize only its own open manager task.
 
@@ -1208,7 +1194,7 @@ class TaskTreeManager:
       # task-type judgment the route and the launch apply.
       await self.check_task_authorization(claims.session_id)
 
-  async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
+  async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> list[models.SessionMetadata]:
     """Every ancestor of *session_id* must be an open task (API: 409 otherwise)."""
     chain = self._ancestors(index, session_id)
     closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
@@ -1223,19 +1209,19 @@ class TaskTreeManager:
       request_id: str,
       task_parent_id: str | None,
       profile: str,
-      task: TaskSpec | None,
+      task: models.TaskSpec | None,
       name: str | None,
       backend: str | None,
       group: str | None,
       slot_values: dict[str, Any],
-      parent_meta: SessionMetadata | None,
+      parent_meta: models.SessionMetadata | None,
       actor: str,
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     sessions_dir = self._cfg.sessions_dir
     sessions_dir.mkdir(parents=True, exist_ok=True)
     final_dir = sessions_dir / task_id
     temp_dir = sessions_dir / f".task-{task_id}-{os.getpid()}-{uuid.uuid4().hex}.tmp"
-    meta = SessionMetadata(
+    meta = models.SessionMetadata(
         id=task_id,
         name=name or await self._default_node_name(task, profile),
         schema_version=2,
@@ -1259,7 +1245,7 @@ class TaskTreeManager:
           task_spec_hash=canonical_task_spec_hash(task),
       )
       await ndjson.append_ndjson(chat_events.chat_events_path(temp_dir), created_event)
-      meta.created_by_event = EventRef(session_id=task_id, event_id=str(created_event["id"]))
+      meta.created_by_event = models.EventRef(session_id=task_id, event_id=str(created_event["id"]))
       await asyncio.to_thread(
           json_utils.atomic_write_text, temp_dir / METADATA_NAME,
           meta.model_dump_json(indent=2, exclude=session_store.TRANSIENT_METADATA_FIELDS))
@@ -1277,10 +1263,10 @@ class TaskTreeManager:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
   @staticmethod
-  def _read_metadata_file(path) -> SessionMetadata | None:
+  def _read_metadata_file(path) -> models.SessionMetadata | None:
     if not path.exists():
       return None
-    return validate_session_metadata(path.read_text(encoding="utf-8"), str(path))
+    return models.validate_session_metadata(path.read_text(encoding="utf-8"), str(path))
 
   async def check_task_authorization(self, session_id: str) -> str:
     """The runtime gate for a v2 task caller (takeoff_gate).
@@ -1310,7 +1296,7 @@ class TaskTreeManager:
         task_state_of=state_of,
     )
 
-  async def update_slot_fields(self, session_id: str, owner: str, **values: Any) -> SessionMetadata:
+  async def update_slot_fields(self, session_id: str, owner: str, **values: Any) -> models.SessionMetadata:
     """Write registered metadata-slot fields without refreshing the sidebar sort key.
 
     The node is re-read under the control lock, so a concurrent task edit
@@ -1377,7 +1363,8 @@ class TaskTreeManager:
   # Patch
   # ------------------------------------------------------------------
 
-  async def patch_task(self, session_id: str, req: PatchSessionTaskRequest, *, caller: object) -> SessionMetadata:
+  async def patch_task(
+      self, session_id: str, req: models.PatchSessionTaskRequest, *, caller: object) -> models.SessionMetadata:
     """Apply one v2 metadata mutation with its structural guards (operator-only)."""
     task_errors.require_operator(caller, "task metadata mutations require operator credentials")
     async with self.control_lock:
@@ -1458,7 +1445,8 @@ class TaskTreeManager:
       blockers.extend(f"{sid}: {b}" for b in self.dispatch.undelivered_report_blockers(sid))
     return blockers
 
-  async def _apply_prompt_change(self, session_id: str, meta: SessionMetadata, scope: str, body: str | None) -> None:
+  async def _apply_prompt_change(
+      self, session_id: str, meta: models.SessionMetadata, scope: str, body: str | None) -> None:
     """Store the rule body immutable, durably swap the reference, land the fact.
 
     The metadata write and the ``prompt_changed`` fact are two durable writes,
@@ -1483,7 +1471,7 @@ class TaskTreeManager:
     await self._save_meta(meta)
     await self._ensure_prompt_changed_fact(session_id, meta, scope)
 
-  async def _ensure_prompt_changed_fact(self, session_id: str, meta: SessionMetadata, scope: str) -> None:
+  async def _ensure_prompt_changed_fact(self, session_id: str, meta: models.SessionMetadata, scope: str) -> None:
     """Land the one ``prompt_changed`` fact the metadata's current ref implies.
 
     Idempotent across the crash boundary: a landed fact (the last event's
@@ -1690,12 +1678,12 @@ class TaskTreeManager:
 
   async def run_elone_replacement(
       self,
-      source: SessionMetadata,
+      source: models.SessionMetadata,
       event_index: int,
       backend: str | None,
-      publish: Callable[[], Awaitable[SessionMetadata]],
+      publish: Callable[[], Awaitable[models.SessionMetadata]],
       archive: Callable[[str], Awaitable[None]],
-  ) -> SessionMetadata:
+  ) -> models.SessionMetadata:
     """Replace one manager source with its elone child; returns the child.
 
     The whole replacement runs under the control lock, in this order: the
@@ -1729,7 +1717,7 @@ class TaskTreeManager:
         raise
     return new_meta
 
-  def _elone_blockers(self, source: SessionMetadata) -> list[str]:
+  def _elone_blockers(self, source: models.SessionMetadata) -> list[str]:
     """The elone refusals: an unfinished run on the source, a closed parent task."""
     blockers: list[str] = []
     events = self.runs.load_events_sync(source.id)
@@ -1782,7 +1770,7 @@ class TaskTreeManager:
     await self.events.append(source_id, event)
     self._invalidate_index()
 
-  async def _rebind_scheduled_tasks(self, source: SessionMetadata, new_meta: SessionMetadata) -> None:
+  async def _rebind_scheduled_tasks(self, source: models.SessionMetadata, new_meta: models.SessionMetadata) -> None:
     """Move every scheduled task bound to the source onto the new node.
 
     Each registered sequence controller rebinds its own bindings' yaml
@@ -1930,14 +1918,14 @@ def _create_actor_for(caller: object) -> str:
   return control_events.ACTOR_AGENT
 
 
-def canonical_task_spec_text(task: TaskSpec | None) -> str | None:
+def canonical_task_spec_text(task: models.TaskSpec | None) -> str | None:
   """The canonical serialized task-spec body a run pins (and hashes) at launch."""
   if task is None:
     return None
   return orjson.dumps(task.model_dump()).decode()
 
 
-def canonical_task_spec_hash(task: TaskSpec | None) -> str | None:
+def canonical_task_spec_hash(task: models.TaskSpec | None) -> str | None:
   """The SHA-256 fingerprint of the canonical task-spec body (None without a spec)."""
   text = canonical_task_spec_text(task)
   return control_events.sha256_hex(text) if text is not None else None
@@ -1946,7 +1934,7 @@ def canonical_task_spec_hash(task: TaskSpec | None) -> str | None:
 @dataclasses.dataclass
 class _TreeIndex:
   """The rebuildable parent/child index over one sessions directory."""
-  metas: dict[str, SessionMetadata]
+  metas: dict[str, models.SessionMetadata]
   children: dict[str | None, list[str]]
   revision: str
   root_sig: tuple[int, int]
@@ -1957,7 +1945,7 @@ class _TreeIndex:
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(\s|$)")
 
 
-def default_task_name(task: TaskSpec | None, profile: str) -> str:
+def default_task_name(task: models.TaskSpec | None, profile: str) -> str:
   """The goal's first content line, skipping Markdown headings because delegation goals open with a "## Goal" heading; else "New <profile> task"."""
   if task is not None and task.goal.strip():
     nonempty = [line for line in task.goal.splitlines() if line.strip()]
@@ -1970,7 +1958,7 @@ def default_task_name(task: TaskSpec | None, profile: str) -> str:
   return f"New {profile} task"
 
 
-def jsonable_row(row: SessionRow) -> dict:
+def jsonable_row(row: models.SessionRow) -> dict:
   return row.model_dump()
 
 
@@ -1984,7 +1972,7 @@ def _decode_tree_cursor(cursor: str) -> tuple[str, tuple[datetime.datetime, str]
   """Decode one tree cursor; a malformed value fails loud (API: 400)."""
   try:
     payload = orjson.loads(run_token.b64url_decode(cursor))
-    key = (ensure_utc(datetime.datetime.fromisoformat(payload["a"])), payload["i"])
+    key = (models.ensure_utc(datetime.datetime.fromisoformat(payload["a"])), payload["i"])
     return payload["r"], key
   except (ValueError, KeyError, TypeError) as e:
     raise task_errors.TaskInvalidError(f"malformed tree page cursor: {cursor!r}") from e

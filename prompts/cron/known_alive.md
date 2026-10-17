@@ -213,12 +213,6 @@ Known-alive symbols:
   must address raw source spans. Therefore `_Parser`'s `handle_entityref` and `handle_charref`,
   the only overrides of that pair, fire there. `_TreeBuilder` pins `convert_charrefs=True`, and
   under that setting the stdlib folds references into `handle_data`.
-- `isolation_level` (`src/backends/opencode/usage_sweep.py`) — attribute write on a stdlib
-  `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements
-  (`None` switches the connection to per-statement autocommit transactions, which the
-  inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in
-  the repo reads the name, so vulture flags the write as an unused attribute. Same class
-  as the sherpa-onnx `vad_config` attribute-write entry above.
 - `isolated_config` (`tests/test_absolute_filepath_prefix.py`) — pytest fixture (owns the config
   and credentials the file router reads: sessions root under tmp_path, empty access key so the
   gate is a no-op), requested by name in one test's parameter list; the body never references

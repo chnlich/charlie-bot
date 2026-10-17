@@ -15,6 +15,7 @@ import pytest
 
 from src.features.cron import loader as cron_loader
 from src.infra import config as core_config
+from src.infra import home
 
 # Both caches are keyed on nothing but their own mtimes, so a cached instance
 # from an earlier test would answer with the wrong profile.
@@ -55,6 +56,17 @@ def test_relative_path_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("CHARLIEBOT_HOME", "dbg-home")
   with pytest.raises(ValueError, match="absolute path"):
     core_config.charliebot_home_dir()
+
+
+def test_opencode_store_paths_derive_from_the_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  """The opencode store is a directory of the profile: the server's XDG bases and the 2.0 database sit under it."""
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
+  store = tmp_path / "opencode"
+  assert home.opencode_store_dir() == store
+  assert home.opencode_data_dir() == store / "data"
+  assert home.opencode_state_dir() == store / "state"
+  assert home.opencode_cache_dir() == store / "cache"
+  assert home.opencode_db() == store / "data" / "opencode" / "opencode.db"
 
 
 def test_config_yaml_may_not_set_the_home(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:

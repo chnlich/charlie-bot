@@ -21,13 +21,33 @@ CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 # It lives beside the profile home so it resolves without the config model stack.
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
+# The profile's opencode store directory name, under the profile home.
+OPENCODE_DIR_NAME = "opencode"
 
-def default_opencode_db() -> pathlib.Path:
-  """The default opencode database (``~/.local/share/opencode/opencode.db``), read from HOME on every call.
 
-  The usage logs and the cold-storage sweep both read it, so its one spelling lives here.
-  """
-  return pathlib.Path.home() / ".local/share/opencode/opencode.db"
+def opencode_store_dir() -> pathlib.Path:
+  """The opencode store root, ``<CHARLIEBOT_HOME>/opencode``; the server's XDG base directories sit under it."""
+  return charliebot_home_dir() / OPENCODE_DIR_NAME
+
+
+def opencode_data_dir() -> pathlib.Path:
+  """The server's ``XDG_DATA_HOME``, ``<store>/data``."""
+  return opencode_store_dir() / "data"
+
+
+def opencode_state_dir() -> pathlib.Path:
+  """The server's ``XDG_STATE_HOME``, ``<store>/state``."""
+  return opencode_store_dir() / "state"
+
+
+def opencode_cache_dir() -> pathlib.Path:
+  """The server's ``XDG_CACHE_HOME``, ``<store>/cache``."""
+  return opencode_store_dir() / "cache"
+
+
+def opencode_db() -> pathlib.Path:
+  """The opencode 2.0 database, ``<store>/data/opencode/opencode.db``: read by the usage log, vacuumed by the sweep."""
+  return opencode_data_dir() / "opencode" / "opencode.db"
 
 
 # The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus

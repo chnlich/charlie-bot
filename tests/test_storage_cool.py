@@ -33,6 +33,7 @@ SID_LIVE = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 SID_DEAD = "99999999-8888-4777-8666-555555555555"
 TID = "f0e1d2c3-a4b5-4c6d-8e7f-0a1b2c3d4e5f"
 CC_OPENCOLD = "ses_coldbackend0000000000000000000000"
+CC_OPENUNREF = "ses_unreferenced00000000000000000000"
 CODEX_COLD = "0f0e1d2c-3b4a-4c5d-8e9f-0a1b2c3d4e5f"
 
 
@@ -55,7 +56,7 @@ def cool_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> config.
   config dir and opencode db both under tmp."""
   monkeypatch.setenv("HOME", str(tmp_path))
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / CLAUDE_HOME))
-  monkeypatch.setattr(home, "default_opencode_db", lambda: tmp_path / "opencode.db")
+  monkeypatch.setattr(home, "opencode_db", lambda: tmp_path / "opencode.db")
   return build_cfg(tmp_path)
 
 
@@ -209,7 +210,7 @@ def write_rollout(tree: pathlib.Path, name: str, *, mtime: datetime.timedelta | 
 
 
 # ---------------------------------------------------------------------------
-# opencode event store
+# opencode store (2.0 shape)
 # ---------------------------------------------------------------------------
 
 _OPENCODE_SCHEMA = """
@@ -224,27 +225,31 @@ CREATE TABLE event (
     REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE
 );
 CREATE INDEX event_aggregate_seq_idx ON event (aggregate_id, seq);
-CREATE TABLE session (id TEXT PRIMARY KEY, time_updated INTEGER);
-CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL);
-CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE session_message (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  time_created INTEGER NOT NULL,
+  time_updated INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
 """
 
 
 def make_opencode_db(path: pathlib.Path, aggregates: dict[str, dict]) -> None:
-  """Fixture store with opencode's shape: a sequence row per aggregate, event rows
-  carrying the bytes behind an ON DELETE CASCADE foreign key, message rows for
-  usage accounting.  ``event_sizes`` builds the payload with ``zeroblob`` so a
-  worst-case-sized row does not cost its byte count in Python memory."""
+  """Fixture store with the 2.0 shape: a sequence row per aggregate, event rows carrying the bytes
+  behind an ON DELETE CASCADE foreign key, and assistant session_message rows (``messages`` each).
+  ``event_sizes`` builds the payload with ``zeroblob`` so a worst-case-sized row does not cost its
+  byte count in Python memory."""
   path.parent.mkdir(parents=True, exist_ok=True)
+  stamp = int(NOW.timestamp() * 1000)
   connection = sqlite3.connect(path)
   try:
     connection.executescript(_OPENCODE_SCHEMA)
     for aggregate_id, spec in aggregates.items():
       connection.execute(
           "insert into event_sequence (aggregate_id, seq, owner_id) values (?, 0, NULL)", (aggregate_id,))
-      connection.execute(
-          "insert into session (id, time_updated) values (?, ?)",
-          (aggregate_id, spec.get("updated_ms", int(NOW.timestamp() * 1000))))
       for index, payload in enumerate(spec.get("events", [])):
         connection.execute(
             "insert into event (id, aggregate_id, seq, type, data) values (?, ?, ?, 'message.updated', ?)",
@@ -255,9 +260,22 @@ def make_opencode_db(path: pathlib.Path, aggregates: dict[str, dict]) -> None:
             (f"{aggregate_id}-z{index}", aggregate_id, index, size))
       for index in range(spec.get("messages", 0)):
         connection.execute(
-            "insert into message (id, session_id, data) values (?, ?, '{}')",
-            (f"{aggregate_id}-m{index}", aggregate_id))
+            "insert into session_message (id, session_id, type, seq, time_created, time_updated, data)"
+            " values (?, ?, 'assistant', ?, ?, ?, '{}')",
+            (f"{aggregate_id}-m{index}", aggregate_id, index, stamp, stamp))
     connection.commit()
+  finally:
+    connection.close()
+
+
+def _opencode_rows(db: pathlib.Path) -> dict[str, list[tuple]]:
+  """Every row of the tables the sweep could reach, per table, in a stable order."""
+  connection = sqlite3.connect(db)
+  try:
+    return {
+        table: sorted(connection.execute(f"select * from {table}").fetchall())
+        for table in ("event_sequence", "event", "session_message")
+    }
   finally:
     connection.close()
 
@@ -281,6 +299,55 @@ def test_default_sweep_never_vacuums(
   storage_cool.run_cool_sweep(cfg=cfg, now=NOW, force=True)  # --force without --vacuum has no effect
 
   assert calls == []
+
+
+def test_sweep_deletes_no_opencode_row_in_any_mode(
+    tmp_path: pathlib.Path, cool_env: config.CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The store keeps every row: a cold referenced aggregate and an unreferenced one survive a plain
+  sweep and a forced vacuum alike, because the 2.0 event_sequence feeds live writes."""
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(
+      db, {
+          CC_OPENCOLD: {
+              "events": [b"event-bytes"],
+              "event_sizes": [1024],
+              "messages": 2
+          },
+          CC_OPENUNREF: {
+              "events": [b"unreferenced-bytes"]
+          },
+      })
+  write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
+  rows_before = _opencode_rows(db)
+  monkeypatch.setattr(opencode_sweep, "_count_opencode_writers", lambda: 0)
+
+  storage_cool.run_cool_sweep(cfg=cfg, now=NOW)
+  storage_cool.run_cool_sweep(cfg=cfg, now=NOW, vacuum=True, force=True)
+
+  assert _opencode_rows(db) == rows_before
+
+
+def test_vacuum_refuses_past_a_live_writer_without_force(
+    tmp_path: pathlib.Path, cool_env: config.CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A manual vacuum exits 1 while an opencode serve writer is alive and runs once --force is given;
+  the writer count is simulated, no process starts."""
+  cfg = cool_env
+  make_opencode_db(tmp_path / "opencode.db", {CC_OPENCOLD: {"events": [b"event-bytes"]}})
+  vacuumed: list[bool] = []
+  monkeypatch.setattr(opencode_sweep, "_count_opencode_writers", lambda: 1)
+  monkeypatch.setattr(
+      opencode_sweep, "_vacuum_opencode_db", lambda connection, db_path, *, force: vacuumed.append(force))
+
+  with pytest.raises(SystemExit) as exc_info:
+    storage_cool.run_cool_sweep(cfg=cfg, now=NOW, vacuum=True)
+
+  assert exc_info.value.code == 1
+  assert vacuumed == []
+
+  storage_cool.run_cool_sweep(cfg=cfg, now=NOW, vacuum=True, force=True)
+
+  assert vacuumed == [True]
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +376,7 @@ def test_every_backend_sweeps_through_its_source_in_registration_order(
   result = storage_cool.run_cool_sweep(cfg=cfg, now=NOW, dry_run=True)
 
   assert [(category.name, category.count) for category in result.categories] == [
-      ("raw-transport", 2), ("claude-transcripts", 1), ("codex-rollouts", 1), ("opencode-events", 1)
+      ("raw-transport", 2), ("claude-transcripts", 1), ("codex-rollouts", 1)
   ]
   assert [freelist.name for freelist in result.freelists] == ["opencode-freelist"]
 

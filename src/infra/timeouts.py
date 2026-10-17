@@ -207,10 +207,10 @@ SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
 
 # sqlite3.connect(timeout=...) installs the connection's busy handler, so the
 # seconds value governs every statement until _vacuum_opencode_db issues the
-# busy_timeout pragma below: connect, PRAGMA foreign_keys=ON, and the DELETE
-# loop. The pragma then lowers the bound for its freelist check and VACUUM,
-# which take the lock for longer stretches — hence the shorter ms value.
-SQLITE_LOCK_WAIT_SECONDS = 5.0  # seconds — connect through the DELETE loop
+# busy_timeout pragma below: the connect in _vacuum_opencode_store. The pragma
+# then lowers the bound for its freelist check and VACUUM, which take the lock
+# for longer stretches — hence the shorter ms value.
+SQLITE_LOCK_WAIT_SECONDS = 5.0  # seconds — the connect in _vacuum_opencode_store, until the busy_timeout pragma
 SQLITE_LOCK_WAIT_MS = 2000  # milliseconds — PRAGMA busy_timeout for VACUUM
 
 # The usage ledger's connections keep sqlite3.connect's busy handler for their

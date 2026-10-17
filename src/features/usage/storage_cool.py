@@ -18,8 +18,10 @@ The sweep reclaims exactly two things the approved design (plan 1 v10) names:
   session that is running right now, which refreshes its timestamp every few
   minutes). Each backend deletes its own store: every registered usage source that
   defines ``sweep(scope)`` (src/runtime/hooks/usage_sources.py) runs in registration
-  order and returns its categories. This module judges coldness and scans the metadata
-  into the ``SweepScope`` that the sources read.
+  order and returns its categories. The opencode store is the exception: its sweep
+  deletes nothing, because its 2.0 ``event`` table stays empty in use and its
+  ``event_sequence`` table feeds live writes. This module judges coldness and scans the
+  metadata into the ``SweepScope`` that the sources read.
 
 The sweep never compacts on its own: VACUUM of the opencode store is a manual
 ``--vacuum`` option that refuses while an ``opencode serve`` writer is alive

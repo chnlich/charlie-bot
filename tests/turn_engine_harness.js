@@ -350,6 +350,7 @@ function loadChatContext(document) {
     console: {error: () => {}},
     relativeTime: (iso) => `relative:${iso}`,
     window: {addEventListener() {}},
+    platform: {isMobile: false, onChange() {}},
     // Real parsing (the fold row formats a message timestamp), fixed "now"
     // (the sidebar bump stamps the current time).
     Date: class FakeDate extends Date {

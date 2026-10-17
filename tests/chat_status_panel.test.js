@@ -14,7 +14,9 @@ const {loadWebsocketModules} = require('./websocket_context_stub');
 // ---------------------------------------------------------------------------
 // The session status panel (chat/status-panel.js) on a page of the real chat,
 // sidebar and WebSocket modules. Rows are read back by their data attributes, so
-// a case asserts structure and the values the panel carries, not the labels.
+// a case asserts structure and the values the panel carries, not the labels. The
+// phone layout comes from a platform stub that switchLayout drives the way
+// platform.js does: a mode change runs each onChange callback.
 // ---------------------------------------------------------------------------
 
 const STATUS = {
@@ -64,6 +66,11 @@ function panelRig() {
   const page = {descendants: []};
   const statusGets = [];
   const {context} = baseSessionContext();
+  const layout = {mode: 'desktop', callbacks: []};
+  context.platform = {
+    get isMobile() { return layout.mode !== 'desktop'; },
+    onChange(fn) { layout.callbacks.push(fn); },
+  };
   context.document.createElement = (tag) => new FakeElement(tag);
   context.document.createTreeWalker = () => ({});
   context.document.getElementById = (id) => elements.get(id) || null;
@@ -94,7 +101,19 @@ function panelRig() {
   // The message list is the other suites' subject: a live message lands there
   // through the stub, and the status panel reads the message it is handed.
   context.appendMessageObject = () => {};
-  return {context, panel, page, statusGets, FakeWebSocket: context.WebSocket};
+  return {context, panel, page, statusGets, layout, FakeWebSocket: context.WebSocket};
+}
+
+// A layout switch as platform.js makes it: the mode changes, then each callback runs with the new and old mode.
+function switchLayout(rig, mode) {
+  const previous = rig.layout.mode;
+  rig.layout.mode = mode;
+  rig.layout.callbacks.forEach((fn) => fn(mode, previous));
+}
+
+// The element and every element under it, in document order.
+function allElements(el) {
+  return [el, ...el.children.flatMap(allElements)];
 }
 
 // The descendant GET resolves in microtasks: a case reads the panel after one turn of the queue.
@@ -310,4 +329,100 @@ test('a web_status message renders as a system line in Everything', () => {
   const status = rig.context.renderMessage({role: 'web_status', ...fields}, 'session-a');
   const system = rig.context.renderMessage({role: 'system', ...fields}, 'session-a');
   assert.equal(status, system.replace('data-message-role="system"', 'data-message-role="web_status"'));
+});
+
+test('a phone shows the panel as one collapsed row for a status with waiting items', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  await openSession(rig, {web_status: STATUS});
+  assert.deepEqual(rowKinds(rig.panel), ['toggle']);
+  const toggle = rig.panel.children[0];
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(toggle.dataset.waitingCount, '2');
+  assert.equal(toggle.dataset.childCount, '0');
+});
+
+test('a phone row for a status with no waiting item counts zero', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  await openSession(rig, {web_status: {...STATUS, waiting: []}});
+  assert.deepEqual(rowKinds(rig.panel), ['toggle']);
+  assert.equal(rig.panel.children[0].dataset.waitingCount, '0');
+});
+
+test('a phone row for a session with no status carries no waiting count', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  await openSession(rig, {web_status: null});
+  assert.deepEqual(rowKinds(rig.panel), ['toggle']);
+  assert.equal(rig.panel.children[0].dataset.waitingCount, undefined);
+});
+
+test('a phone collapsed row counts the descendant items and stays one row', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  rig.page.descendants = descendantRows(2, 1);
+  await openSession(rig, {web_status: STATUS});
+  assert.deepEqual(rowKinds(rig.panel), ['toggle']);
+  assert.equal(rig.panel.children[0].dataset.childCount, '3');
+});
+
+test('a tap expands the phone panel with the row at its top, and a second tap collapses it', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  rig.page.descendants = descendantRows(1);
+  await openSession(rig, {web_status: STATUS});
+  const toggle = () => rig.panel.children[0];
+
+  toggle().onclick();
+  assert.equal(toggle().getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(rowKinds(rig.panel), ['toggle', 'goal', 'now', 'waiting', 'children']);
+
+  toggle().onclick();
+  assert.equal(toggle().getAttribute('aria-expanded'), 'false');
+  assert.deepEqual(rowKinds(rig.panel), ['toggle']);
+});
+
+test('the expanded phone panel holds across a session switch', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  await openSession(rig, {web_status: STATUS});
+  rig.panel.children[0].onclick();
+  await openSession(rig, {id: 'session-b', web_status: NEWER});
+  assert.deepEqual(rowKinds(rig.panel), ['toggle', 'goal', 'now', 'waiting']);
+});
+
+test('the expanded phone layout stacks each label above its value, with no label column', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  await openSession(rig, {web_status: STATUS});
+  rig.panel.children[0].onclick();
+  assert.equal(allElements(rig.panel).filter((el) => el.classList.contains('w-28')).length, 0);
+  assert.equal(rowByKind(rig.panel, 'goal').classList.contains('flex-col'), true);
+  assert.equal(rowByKind(rig.panel, 'waiting').querySelectorAll('[data-waiting-item]').length, 2);
+});
+
+test('the desktop panel keeps its rows, label column and height cap', async () => {
+  const rig = panelRig();
+  rig.page.descendants = descendantRows(1);
+  await openSession(rig, {web_status: STATUS});
+  assert.deepEqual(rowKinds(rig.panel), ['goal', 'now', 'waiting', 'children']);
+  assert.equal(allElements(rig.panel).filter((el) => el.classList.contains('w-28')).length, 3,
+      'each of the three labelled rows keeps the label column');
+  assert.equal(rig.panel.classList.contains('max-h-48'), true);
+  assert.equal(rig.panel.children.some((el) => el.dataset.statusRow === 'toggle'), false);
+});
+
+test('a platform.onChange switch redraws the panel in the new layout', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  assert.deepEqual(rowKinds(rig.panel), ['goal', 'now', 'waiting']);
+
+  const panel = rig.panel;
+  switchLayout(rig, 'mobile');
+  assert.equal(rig.panel, panel, 'the panel element is the same');
+  assert.deepEqual(rowKinds(rig.panel), ['toggle']);
+
+  switchLayout(rig, 'desktop');
+  assert.deepEqual(rowKinds(rig.panel), ['goal', 'now', 'waiting']);
 });

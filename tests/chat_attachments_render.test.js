@@ -35,6 +35,7 @@ class FakeElement {
 function loadChatScript() {
   const context = {
     SESSION_ID: 'test-session',
+    platform: {isMobile: false, onChange() {}},
     console: {error: () => {}},
     fetch: async () => ({
       ok: true,

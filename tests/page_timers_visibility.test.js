@@ -143,6 +143,7 @@ function buildSidebarContext() {
   const context = {
     document,
     SESSION_ID: 'session-a',
+    platform: {isMobile: false, onChange() {}},
     THINKING_SINCE: null,
     masterThinking: false,
     switching: false,

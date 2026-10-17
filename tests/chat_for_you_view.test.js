@@ -43,6 +43,7 @@ function forYouRig(messages, {view = 'foryou', clientHeight = 900} = {}) {
     console: {error() {}, log() {}},
     marked: {Renderer: function Renderer() {}, use() {}},
     window: {addEventListener() {}},
+    platform: {isMobile: false, onChange() {}},
     fetch: async () => ({ok: false, status: 500, json: async () => ({})}),
     document: {
       addEventListener() {},

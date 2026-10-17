@@ -397,14 +397,13 @@ async def test_reconcile_settles_a_queued_run_on_a_completed_node_once(
 def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   """Count the landing-proof git calls at src.infra.git's module attributes.
 
-    task_completion resolves git_verify_commit_landed through the src.infra.git
-    module attribute and task_execution binds it at import, so the counter
-    replaces the module attribute and that binding; git_verify_commit_landed
-    itself resolves git_fetch through the same module global, so both counters
-    see every call a replayed follow-up makes.
+    task_completion and task_execution resolve git_verify_commit_landed through
+    the src.infra.git module attribute, so the counter replaces the module
+    attribute; git_verify_commit_landed itself resolves git_fetch through the
+    same module global, so both counters see every call a replayed follow-up
+    makes.
     """
   from src.infra import git as git_mod
-  from src.runtime import task_execution
 
   counts = {"git_fetch": 0, "git_verify_commit_landed": 0}
   real_fetch = git_mod.git_fetch
@@ -420,7 +419,6 @@ def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
 
   monkeypatch.setattr(git_mod, "git_fetch", counted_fetch)
   monkeypatch.setattr(git_mod, "git_verify_commit_landed", counted_verify)
-  monkeypatch.setattr(task_execution, "git_verify_commit_landed", counted_verify)
   return counts
 
 

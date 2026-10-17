@@ -2135,7 +2135,7 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
       raise OSError("injected snapshot publish failure")
     return real_atomic(path, text)
 
-  monkeypatch.setattr(task_execution_module, "atomic_write_text", failing_atomic)
+  monkeypatch.setattr(json_utils, "atomic_write_text", failing_atomic)
   admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
@@ -2360,7 +2360,7 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
   def explode(cfg, backend: str | None, model: str | None):
     raise ValueError(f"backend {backend!r} is not configured")
 
-  monkeypatch.setattr("src.runtime.task_execution.resolve_backend_option", explode)
+  monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
@@ -2755,7 +2755,6 @@ def inject_chat_append_fault(
     return await real(path, data)
 
   monkeypatch.setattr(ndjson, "append_ndjson", flaky)
-  monkeypatch.setattr(task_execution_module, "append_ndjson", flaky)
   return hits
 
 

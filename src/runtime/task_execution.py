@@ -46,15 +46,17 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 
+from src.infra import (
+    config,
+    constants,
+    git,
+    json_utils,
+    log_once,
+    models,
+    ndjson,
+)
 from src.infra import event_types as ET
-from src.infra import git, models
-from src.infra.config import CharlieBotConfig, configured_access_key, get_config
-from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.infra.git import git_verify_commit_landed
-from src.infra.json_utils import atomic_write_text
-from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
-from src.infra.ndjson import append_ndjson
 from src.infra.tasks import create_logged_task
 from src.runtime import (
     cold_read,
@@ -85,17 +87,7 @@ from src.runtime.hooks import backend_lifecycle, backend_types, turn_contributio
 from src.runtime.hooks.sequence_controllers import binding_for, controller_for_sequence
 from src.runtime.master_cc_state import TaskRunBinding
 from src.runtime.run_token import RunTokenClaims, sign_run_token
-from src.runtime.runs import (
-    RUN_EVENTS_NAME,
-    RunNotFoundError,
-    read_host_boot_time,
-    run_alive_probe,
-    run_not_found_in_task_text,
-    scan_result_exit,
-)
-from src.runtime.session_anchors import backend_switch_reset_reason, context_reset_note
 from src.runtime.session_dispatch import child_report_text
-from src.runtime.spawner_backends import _resolve_session_default_backend_model, resolve_backend_option
 from src.runtime.task_completion import (
     LANDING_REF_PREFIX,
     REVIEW_REF_PREFIX,
@@ -105,12 +97,10 @@ from src.runtime.task_completion import (
     LandingEvidence,
 )
 from src.runtime.task_errors import TaskConflictError, TaskInvalidError, TaskNotFoundError
-from src.runtime.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.runtime.task_sessions import TaskTreeManager, canonical_task_spec_text
-from src.runtime.thinking_state import clear_run_busy
 from src.runtime.worker import QuotaExhaustedError, Worker
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def run_worker_binding(
@@ -352,12 +342,12 @@ async def _capture_chain_under_control_lock(
 
 
 async def assemble_coherent_snapshot(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     tree: TaskTreeManager,
     meta: SessionMetadata,
     kind: str,
     option: BackendOption,
-) -> tuple[PromptSnapshot, OSError | None, bool]:
+) -> tuple[task_prompts.PromptSnapshot, OSError | None, bool]:
   """One coherent assembly pass over the tree, templates, memory and rules.
 
     Ancestor relations and refs are captured under the control lock; the
@@ -369,7 +359,7 @@ async def assemble_coherent_snapshot(
     configuration — one assembly path for both, never a preview-only selector.
     """
   overlay, declared = resolve_launch_overlay(option)
-  snapshot: PromptSnapshot | None = None
+  snapshot: task_prompts.PromptSnapshot | None = None
   overlay_error: OSError | None = None
   for _ in range(task_prompts._COHERENCE_PASSES):
     chain, node_ref, fresh_meta = await _capture_chain_under_control_lock(tree, meta)
@@ -389,7 +379,7 @@ async def assemble_coherent_snapshot(
     snapshot, overlay_error = candidate, (err or err2)
     break
   if snapshot is None:
-    raise TaskPromptError(
+    raise task_prompts.TaskPromptError(
         f"prompt sources for task {meta.id} did not settle across "
         f"{task_prompts._COHERENCE_PASSES} coherent-view attempts")
   return snapshot, overlay_error, declared
@@ -408,7 +398,7 @@ class TaskExecutionAdapter:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       successor: session_successor.SessionSuccessor,
       events: session_events.SessionEvents,
       lifecycle: session_lifecycle.SessionLifecycle,
@@ -471,7 +461,7 @@ class TaskExecutionAdapter:
       if launch_run_id is not None:
         run = await tree.runs.get_run(session_id, launch_run_id)
         if run is None:
-          raise TaskNotFoundError(run_not_found_in_task_text(launch_run_id, session_id))
+          raise TaskNotFoundError(runs.run_not_found_in_task_text(launch_run_id, session_id))
         events = tree.runs.load_events_sync(session_id)
         if (tree.runs.run_has_terminal_fact(run, events) or run.pid is not None or
             tree.runs.stop_requested(events, run.id)):
@@ -584,7 +574,7 @@ class TaskExecutionAdapter:
 
   def _reserve_backend_model(self, meta: SessionMetadata) -> tuple[str, str | None]:
     """The task's backend+model for a fresh reservation, resolved strictly."""
-    return _resolve_session_default_backend_model(self._cfg, meta)
+    return spawner_backends._resolve_session_default_backend_model(self._cfg, meta)
 
   # ------------------------------------------------------------------
   # Common launch interface
@@ -757,8 +747,8 @@ class TaskExecutionAdapter:
         """
     run = await self._tree.runs.get_run(session_id, run_id)
     if (run is not None and run.pid is not None and
-        not runs.is_run_alive(run.pid, run.pid_start, run.started_at, read_host_boot_time())):
-      clear_run_busy(session_id, run_id)
+        not runs.is_run_alive(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time())):
+      thinking_state.clear_run_busy(session_id, run_id)
     self.start_run_end_landing_retry(session_id, run_id)
 
   async def execute_run(
@@ -807,7 +797,7 @@ class TaskExecutionAdapter:
       meta = await tree.load_task_meta(session_id)
       run = await tree.runs.get_run(session_id, run_id)
       if run is None:
-        raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
+        raise runs.RunNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
       state = tree.task_state(session_id)
       if state != "open":
         reason = f"task {session_id} is {state}"
@@ -829,7 +819,7 @@ class TaskExecutionAdapter:
           # floor they stay queued with a blocked report instead of dying
           # mid-run. Manager turns always launch: they write little and are the
           # path that reports the shortage.
-          if meta.profile == "worker" and run.kind in WORKER_KINDS:
+          if meta.profile == "worker" and run.kind in task_prompts.WORKER_KINDS:
             reason = self._disk_headroom_withhold_reason()
             if reason is not None:
               log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
@@ -858,7 +848,7 @@ class TaskExecutionAdapter:
     # test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_failure).
     try:
       snapshot = await self._prepare_launch_snapshot(meta, run, option)
-    except TaskPromptError as e:
+    except task_prompts.TaskPromptError as e:
       log.error("task_prompt_preparation_failed", session_id=session_id, run_id=run_id, kind=run.kind, error=str(e))
       return await self._record_launch_withheld(meta, run, f"prompt preparation failed: {e}")
     # Adapter entry to process start: context build, worktree preparation
@@ -868,7 +858,7 @@ class TaskExecutionAdapter:
     try:
       if meta.profile == "manager" and run.kind == "manager_turn":
         await self._execute_manager_turn(meta, run, option, snapshot)
-      elif meta.profile == "worker" and run.kind in WORKER_KINDS:
+      elif meta.profile == "worker" and run.kind in task_prompts.WORKER_KINDS:
         await self._execute_worker_run(meta, run, option, snapshot, launch_prompt=launch_prompt)
       else:
         raise TaskInvalidError(f"run {run_id} (profile={meta.profile}, kind={run.kind}) has no executable adapter")
@@ -1027,7 +1017,7 @@ class TaskExecutionAdapter:
         None for every other launch failure: only a refusal's event carries the key.
         """
 
-    events_log = self._tree.runs.run_dir(session_id, run_id) / RUN_EVENTS_NAME
+    events_log = self._tree.runs.run_dir(session_id, run_id) / runs.RUN_EVENTS_NAME
     event: dict = {
         "type": ET.ERROR,
         "message": error_text,
@@ -1036,7 +1026,7 @@ class TaskExecutionAdapter:
     }
     if quota_exhausted is not None:
       event[ET.QUOTA_EXHAUSTED] = quota_exhausted
-    await append_ndjson(events_log, event)
+    await ndjson.append_ndjson(events_log, event)
     # The leaf card's Events link reads the record's events_ref: the
     # launch-failed run's evidence is reachable exactly the way a process
     # run's is (record_observation writes only the provided fields).
@@ -1073,7 +1063,7 @@ class TaskExecutionAdapter:
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
-      raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
+      raise runs.RunNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
     outcome = await tree.runs.terminal_outcome_of(session_id, run_id)
     if outcome is not None:
       return LaunchSettlement(outcome=outcome)
@@ -1107,7 +1097,7 @@ class TaskExecutionAdapter:
     """The Run's explicitly recorded backend/model, resolved strictly."""
     if not run.backend:
       raise ValueError(f"run {run.id} records no backend; refusing to substitute one")
-    return resolve_backend_option(self._cfg, run.backend, run.model)
+    return spawner_backends.resolve_backend_option(self._cfg, run.backend, run.model)
 
   def _child_env(self, session_id: str, run_id: str, agent_name: str) -> dict[str, str]:
     """The child CLI environment: its own identity, home and address.
@@ -1117,15 +1107,15 @@ class TaskExecutionAdapter:
         selected home so the child CLI resolves this instance's config,
         credentials and server address.
         """
-    key = configured_access_key()
+    key = config.configured_access_key()
     if not key:
       raise RuntimeError(
           "run-token signing requires credentials.yaml charliebot.access_key; "
           "agent child environments cannot be built without it")
     token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent=agent_name or "worker"), key)
     return {
-        SESSION_ID_ENV_VAR: session_id,
-        RUN_TOKEN_ENV: token,
+        constants.SESSION_ID_ENV_VAR: session_id,
+        constants.RUN_TOKEN_ENV: token,
         "CHARLIEBOT_HOME": str(self._cfg.charliebot_home),
     }
 
@@ -1163,7 +1153,7 @@ class TaskExecutionAdapter:
       meta: SessionMetadata,
       run: RunRecord,
       option: BackendOption,
-  ) -> PromptSnapshot:
+  ) -> task_prompts.PromptSnapshot:
     """Build, recheck, and durably commit this launch's instruction snapshot.
 
         The committed bytes are the bytes the adapters launch — never a second
@@ -1172,7 +1162,8 @@ class TaskExecutionAdapter:
         """
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(self._cfg, self._tree, meta, run.kind, option)
     path = self._tree.runs.run_dir(meta.id, run.id) / task_prompts.SNAPSHOT_FILENAME
-    await asyncio.to_thread(atomic_write_text, path, json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
+    await asyncio.to_thread(
+        json_utils.atomic_write_text, path, json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
     await self._tree.runs.record_observation(meta.id, run.id, prompt_snapshot_ref=str(path))
     if not declared or overlay_error is not None:
       await self._alert_overlay_inactive(meta.id, option, overlay_error)
@@ -1217,7 +1208,7 @@ class TaskExecutionAdapter:
       meta: SessionMetadata,
       run: RunRecord,
       option: BackendOption,
-      snapshot: PromptSnapshot,
+      snapshot: task_prompts.PromptSnapshot,
   ) -> None:
     """One manager turn on the existing per-session master queue.
 
@@ -1268,13 +1259,13 @@ class TaskExecutionAdapter:
       # the old conversation being copied or destroyed. A backend change
       # names the switch; every other change keeps the standing reason.
       if meta.native_backend and meta.native_backend != option.id:
-        reason = backend_switch_reset_reason(meta.native_backend, option.id)
+        reason = session_anchors.backend_switch_reset_reason(meta.native_backend, option.id)
       else:
         reason = (
             "this task's managed instructions or sources changed since the "
             "previous turn, so this turn starts a fresh native conversation")
       goal = meta.task.goal if meta.task is not None else meta.name
-      prompt = f"{context_reset_note(reason, goal)}\n\n{content}"
+      prompt = f"{session_anchors.context_reset_note(reason, goal)}\n\n{content}"
 
     async def on_task_spawn(pid: int, pid_start: str | None) -> None:
       if pid_start is None:
@@ -1328,7 +1319,7 @@ class TaskExecutionAdapter:
       meta: SessionMetadata,
       run: RunRecord,
       option: BackendOption,
-      snapshot: PromptSnapshot,
+      snapshot: task_prompts.PromptSnapshot,
       *,
       launch_prompt: str | None,
   ) -> None:
@@ -1344,7 +1335,7 @@ class TaskExecutionAdapter:
         """
     session_id, run_id = meta.id, run.id
     run_dir = self._tree.runs.run_dir(session_id, run_id)
-    events_log = run_dir / RUN_EVENTS_NAME
+    events_log = run_dir / runs.RUN_EVENTS_NAME
 
     task_type = task_prompts.prompt_task_type(meta.task)
     continuation = self._run_continuation(meta, run, option, snapshot)
@@ -1387,14 +1378,14 @@ class TaskExecutionAdapter:
       # way, and the previous Run's log carries what it already did.
       previous = continuation.previous
       if previous.backend and previous.backend != option.id:
-        reason = backend_switch_reset_reason(previous.backend, option.id)
+        reason = session_anchors.backend_switch_reset_reason(previous.backend, option.id)
       elif previous.native_session_id is None:
         reason = NO_NATIVE_ID_RESET_REASON
       else:
         reason = (
             "this task's managed instructions or sources changed since the previous "
             "run, so this run starts a fresh native conversation")
-      previous_log = self._tree.runs.run_dir(session_id, previous.id) / RUN_EVENTS_NAME
+      previous_log = self._tree.runs.run_dir(session_id, previous.id) / runs.RUN_EVENTS_NAME
       prompt = f"{worker_continuation_reset_note(reason, previous_log)}\n\n{context}"
     await self._persist_launch_text(session_id, run_id, prompt)
 
@@ -1487,7 +1478,7 @@ class TaskExecutionAdapter:
       meta: SessionMetadata,
       run: RunRecord,
       option: BackendOption,
-      snapshot: PromptSnapshot,
+      snapshot: task_prompts.PromptSnapshot,
   ) -> RunContinuation | None:
     """The continuation this launch performs, or None for an independent launch.
 
@@ -1574,7 +1565,7 @@ class TaskExecutionAdapter:
         native_session_id=native_session_id,
         model=option.model,
         raw_log_ref=str(raw_path),
-        events_ref=str(run_dir / RUN_EVENTS_NAME),
+        events_ref=str(run_dir / runs.RUN_EVENTS_NAME),
         result_ref=str(raw_path),
     )
     await self._tree.dispatch.finish_run(
@@ -1596,10 +1587,10 @@ class TaskExecutionAdapter:
     raw_path = run_dir / runs.RAW_LOG_NAME
     if raw_path.is_file():
       translate = self._fresh_translate(option)
-      _events, result, _code = await asyncio.to_thread(scan_result_exit, raw_path, translate)
+      _events, result, _code = await asyncio.to_thread(runs.scan_result_exit, raw_path, translate)
       if result is not None and runs.result_success(result):
         return "success"
-    events_log = run_dir / RUN_EVENTS_NAME
+    events_log = run_dir / runs.RUN_EVENTS_NAME
     if events_log.is_file():
       _found, success = await asyncio.to_thread(self._events_log_result_success, events_log)
       if success:
@@ -1720,7 +1711,7 @@ class TaskExecutionAdapter:
     page_bytes = await asyncio.to_thread(Path(cold.page_path).read_bytes)
     evidence = {"page_path": cold.page_path, "page_sha256": hashlib.sha256(page_bytes).hexdigest()}
     evidence_path = self._tree.runs.run_dir(meta.id, run.id) / cold_read.EVIDENCE_FILENAME
-    await asyncio.to_thread(atomic_write_text, evidence_path, json.dumps(evidence))
+    await asyncio.to_thread(json_utils.atomic_write_text, evidence_path, json.dumps(evidence))
     _system_prompt, questions = cold_read.load_texts(self._cfg.charlie_bot_repo)
     return cold_read.probe_input(page_bytes.decode("utf-8"), questions, cold.trigger)
 
@@ -1801,7 +1792,9 @@ class TaskExecutionAdapter:
     assert meta is not None and meta.task is not None, (
         f"review of work run {work_run.id} needs its node's task record for the spec")
     worker_summary = await review.extract_review_context(
-        session_id, work_run.id, worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
+        session_id,
+        work_run.id,
+        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME)
     context_lines = review.review_context_lines(
         review.review_spec_text(meta.task), await self._later_messages_section(meta, work_run), worker_summary,
         f"(work run {work_run.id})")
@@ -1810,7 +1803,7 @@ class TaskExecutionAdapter:
         wt_path=work_run.worktree_path,
         base_branch=work_run.base_branch,
         chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
+        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME,
         context_section="\n".join(context_lines),
     )
 
@@ -1829,10 +1822,12 @@ class TaskExecutionAdapter:
     assert meta is not None and meta.task is not None, (
         f"review of work run {work_run.id} needs its node's task record for the spec")
     worker_summary = await review.extract_review_context(
-        session_id, work_run.id, worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
+        session_id,
+        work_run.id,
+        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME)
     return task_prompts.repo_less_review_task_context(
         chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
+        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME,
         spec_text=review.review_spec_text(meta.task),
         later_messages=await self._later_messages_section(meta, work_run),
         work_report=worker_summary,
@@ -1847,7 +1842,7 @@ class TaskExecutionAdapter:
         positions — exactly as it was handed to the adapter.
         """
     path = self._tree.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
-    atomic_write_text(path, prompt)
+    json_utils.atomic_write_text(path, prompt)
 
   async def _prepare_worktree(self, meta: SessionMetadata, run: RunRecord,
                               repo_path: Path) -> tuple[str, str, str, str | None]:
@@ -1930,7 +1925,7 @@ class TaskExecutionAdapter:
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
-      raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
+      raise runs.RunNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
     if run.pid is None or run.pid_start is None:
       raise TaskInvalidError(f"run {run_id} records no launched process identity; nothing to re-attach")
     events = tree.runs.load_events_sync(session_id)
@@ -1942,7 +1937,7 @@ class TaskExecutionAdapter:
       # that kept stdout are judged by the existing identity rules on
       # every poll), and a stopped/ended process must converge to its
       # durable result instead of following forever.
-      is_alive = run_alive_probe(run.pid, run.pid_start, run.started_at, read_host_boot_time())
+      is_alive = runs.run_alive_probe(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time())
     meta = await tree.load_meta(session_id)
     if meta is None:
       raise TaskNotFoundError(f"task {session_id} not found")
@@ -1968,7 +1963,7 @@ class TaskExecutionAdapter:
       # follow failure to the end-landing retry.
       self._track_manager_follow(session_id, run_id, future)
       return True
-    if meta.profile == "worker" and run.kind in WORKER_KINDS:
+    if meta.profile == "worker" and run.kind in task_prompts.WORKER_KINDS:
       await self._resume_worker_run(meta, run, option, is_alive, ended_at=ended_at)
       return False
     raise TaskInvalidError(f"run {run_id} (kind={run.kind}) has no resume adapter")
@@ -2032,7 +2027,7 @@ class TaskExecutionAdapter:
         """
     session_id, run_id = meta.id, run.id
     run_dir = self._tree.runs.run_dir(session_id, run_id)
-    events_log = run_dir / RUN_EVENTS_NAME
+    events_log = run_dir / runs.RUN_EVENTS_NAME
     binding = run_worker_binding(run_id, session_id, pid=run.pid, pid_start=run.pid_start)
     if backend_types.traits_for(option.type).preassigned_session_id:
       backend_types.lifecycle_for(option).assign_thread_native_id(binding, run.native_session_id)
@@ -2307,7 +2302,7 @@ class TaskExecutionAdapter:
     if commit is None:
       return None, f"branch {work_run.branch_name} does not resolve in {work_run.repo_path}"
     target = review.review_landing_target(work_run.base_branch)
-    landed, reason = await git_verify_commit_landed(Path(work_run.repo_path), target, commit)
+    landed, reason = await git.git_verify_commit_landed(Path(work_run.repo_path), target, commit)
     if not landed:
       return None, reason
     return (target, commit, work_run.repo_path), ""
@@ -2352,7 +2347,7 @@ class TaskExecutionAdapter:
     session_id = meta.id
     answer: str | None = None
     if durable_outcome == "success":
-      events_log = self._tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME
+      events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
       answer = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
       if answer is not None:
         await self._complete_cold_read(meta, run, answer)
@@ -2393,7 +2388,7 @@ class TaskExecutionAdapter:
   async def _cold_read_attempt_error(self, session_id: str, run: RunRecord) -> str:
     """The failed cold-read run's error for the report's attempt line: the run's error
     event, its closing text when no error event exists, or the bare fallback."""
-    events_log = self._tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME
+    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
     if events_log.is_file():
       error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
       if error_text:
@@ -2412,7 +2407,7 @@ class TaskExecutionAdapter:
     if evidence_path.is_file():
       evidence = json.loads(await asyncio.to_thread(evidence_path.read_text, encoding="utf-8"))
     evidence["error"] = error
-    await asyncio.to_thread(atomic_write_text, evidence_path, json.dumps(evidence))
+    await asyncio.to_thread(json_utils.atomic_write_text, evidence_path, json.dumps(evidence))
 
   async def _cold_read_report(
       self, meta: SessionMetadata, run: RunRecord, *, backend_id: str | None, answer: str | None) -> str:
@@ -2492,7 +2487,7 @@ class TaskExecutionAdapter:
         a run that died before its process started carries its error as the
         events log's error event, and that text is the report's evidence.
         """
-    events_log = self._tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME
+    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
     if events_log.is_file():
       text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
       if text:
@@ -2518,7 +2513,7 @@ def task_manager() -> TaskTreeManager:
   global _task_manager
   if _task_manager is None:
     _task_manager = TaskTreeManager(
-        get_config(),
+        config.get_config(),
         session_store.store(),
         session_events.events(),
         session_sidebar.sidebar(),
@@ -2529,7 +2524,7 @@ def task_manager() -> TaskTreeManager:
         session_successor.successor(),
     )
     _task_manager.dispatch.executor = TaskExecutionAdapter(
-        get_config(),
+        config.get_config(),
         session_successor.successor(),
         session_events.events(),
         session_lifecycle.lifecycle(),
@@ -2555,7 +2550,7 @@ async def _reconcile_node(
     tree: TaskTreeManager,
     adapter: TaskExecutionAdapter | None,
     counters: dict,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     is_driven: Callable[[RunRecord], bool] | None = None,
 ) -> None:
   """Reconcile one node from its durable facts.
@@ -2689,7 +2684,7 @@ async def _replay_followups(
     tree: TaskTreeManager,
     adapter: TaskExecutionAdapter | None,
     counters: dict,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
 ) -> None:
   """Re-drive every completed Run's follow-up that its crash window lost.
 

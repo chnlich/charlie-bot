@@ -6,7 +6,10 @@ file (credentials.yaml) out of the archives it never deletes early. The
 profile home under test comes from the conftest autouse `_isolate_profile`
 fixture, which pins CHARLIEBOT_HOME at a fresh directory per test.
 """
+import pathlib
 import tarfile
+
+import pytest
 
 from src.features.backup import backup
 from src.infra import config
@@ -44,3 +47,21 @@ def test_create_backup_archive_round_trips_bytes() -> None:
     extracted = tar.extractfile("config.yaml")
     assert extracted is not None
     assert extracted.read().decode("utf-8") == payload
+
+
+def test_create_backup_leaves_out_only_the_top_level_opencode_store(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The profile's opencode/ store is left out at the top level only; a deeper path part of the same name stays."""
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(tmp_path / "profile"))
+  profile = config.charliebot_home_dir()
+  (profile / "opencode" / "data" / "opencode").mkdir(parents=True)
+  (profile / "opencode" / "data" / "opencode" / "opencode.db").write_bytes(b"db")
+  (profile / "sessions" / "s1" / "opencode").mkdir(parents=True)
+  (profile / "sessions" / "s1" / "opencode" / "note.json").write_text("{}", encoding="utf-8")
+
+  archive = backup.create_backup()
+  with tarfile.open(archive, "r:gz") as tar:
+    members = tar.getnames()
+
+  assert not any(name == "opencode" or name.startswith("opencode/") for name in members)
+  assert "sessions/s1/opencode/note.json" in members

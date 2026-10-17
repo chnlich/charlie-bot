@@ -7,7 +7,7 @@ import tarfile
 
 from isal import igzip
 
-from src.infra import config, log_once
+from src.infra import config, home, log_once
 from src.runtime import runs
 
 log = log_once.LazyStructlogLogger()
@@ -47,6 +47,9 @@ _MONTHLY_THRESHOLD = 90
 def _should_exclude(arcname: str) -> bool:
   """Return True if the archive member (relative path) should be excluded."""
   parts = pathlib.Path(arcname).parts
+  # The profile's opencode store is the top-level directory only; a deeper part with the same name stays.
+  if parts[:1] == (home.OPENCODE_DIR_NAME,):
+    return True
   for part in parts:
     # CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
     # backup, which the retention policy keeps for up to 90 days.
@@ -69,7 +72,7 @@ def _parse_backup_date(name: str) -> datetime.datetime | None:
 def create_backup() -> pathlib.Path:
   """Create a compressed backup of this profile's state directory.
 
-  Excludes: .git, .claude, credentials.yaml, sessions/*/threads, *.pyc, __pycache__.
+  Excludes: .git, .claude, credentials.yaml, sessions/*/threads, the top-level opencode/ store, *.pyc, __pycache__.
   The archive is a valid ``.tar.gz`` (isal level-1 gzip of the tar stream), readable
   by ``tarfile.open(path, 'r:gz')``.
 

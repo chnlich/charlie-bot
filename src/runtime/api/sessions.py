@@ -42,8 +42,10 @@ from src.runtime import (
     spawner_backends,
     takeoff_gate,
     task_completion,
+    task_errors,
     task_execution,
     task_prompts,
+    task_sessions,
     thinking_state,
     worker_transcript,
 )
@@ -67,17 +69,8 @@ from src.runtime.api.deps import (
     require_found,
     require_session,
 )
-from src.runtime.hooks import backend_types
-from src.runtime.hooks.sequence_controllers import binding_for, sequence_listing_fields
+from src.runtime.hooks import backend_types, sequence_controllers
 from src.runtime.session_events import SessionEvents
-from src.runtime.task_errors import (
-    TaskArchivedError,
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskInvalidError,
-    TaskNotFoundError,
-)
-from src.runtime.task_sessions import AGENT_CREATE_SCOPE_REFUSAL, TASK_CREATE_REQUEST_ID_REQUIRED, TaskTreeManager
 from src.runtime.triggers import TriggerManager
 
 log = log_once.LazyStructlogLogger()
@@ -99,7 +92,7 @@ def _default_backend_id(cfg: config.CharlieBotConfig) -> str:
 def _active_backend_payload(meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> dict:
   # A worker node displays its newest Run's backend (the delegation's target
   # model), never the inherited creation value the persisted field carries.
-  binding = binding_for(meta.id)
+  binding = sequence_controllers.binding_for(meta.id)
   active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
@@ -343,7 +336,8 @@ async def _sessions_list_response(
   key, so a controller config change or a passing next-run re-renders the bound
   rows. Each task row carries its own overlay state.
   """
-  listing_fields = sequence_listing_fields((row.id for row in rows), datetime.datetime.now(datetime.UTC))
+  listing_fields = sequence_controllers.sequence_listing_fields(
+      (row.id for row in rows), datetime.datetime.now(datetime.UTC))
   rendered: list[tuple[models.SessionMetadata, tuple, tuple]] = []
   for row in rows:
     listing_state = tuple(listing_fields[row.id].items())
@@ -427,13 +421,13 @@ async def list_sessions(
 async def create_session(
     req: models.CreateSessionRequest,
     cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.SessionMetadata:
   if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
     # v2 task create: the task-tree owner binds (parent, request_id) to one node.
     if req.request_id is None:
-      raise fastapi.HTTPException(status_code=400, detail=TASK_CREATE_REQUEST_ID_REQUIRED)
+      raise fastapi.HTTPException(status_code=400, detail=task_sessions.TASK_CREATE_REQUEST_ID_REQUIRED)
     if req.backend is not None:
       _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
     try:
@@ -448,15 +442,15 @@ async def create_session(
           slot_values=req.model_extra,
           caller=caller,
       )
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError,
-            takeoff_gate.DelegationBlockedError) as e:
+    except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+            task_errors.TaskConflictError, takeoff_gate.DelegationBlockedError) as e:
       raise _task_http_error(e) from e
     log.info("task_created", session_id=meta.id, task_parent_id=req.task_parent_id, profile=req.profile)
     return meta
   if not caller.is_operator:
     # Run credentials create only their own child tasks under their own manager
     # node (the v2 path above); the legacy create shape is operator scope.
-    raise fastapi.HTTPException(status_code=403, detail=AGENT_CREATE_SCOPE_REFUSAL)
+    raise fastapi.HTTPException(status_code=403, detail=task_sessions.AGENT_CREATE_SCOPE_REFUSAL)
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   # The legacy create shape (the sidebar's new-session action) now opens a
@@ -518,7 +512,7 @@ async def list_archived_sessions(
       [*((False, row) for row in rows), *((True, row) for row in context)],
       key=lambda pair: (pair[1].updated_at, pair[1].id),
       reverse=True)
-  listing_fields = sequence_listing_fields(
+  listing_fields = sequence_controllers.sequence_listing_fields(
       (row.id for _context_only, row in merged), datetime.datetime.now(datetime.UTC))
   page["sessions"] = []
   for context_only, row in merged:
@@ -542,7 +536,8 @@ async def list_starred_sessions(listing: session_listing.SessionListing = Depend
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  listing_fields = sequence_listing_fields((row.id for row in sessions), datetime.datetime.now(datetime.UTC))
+  listing_fields = sequence_controllers.sequence_listing_fields(
+      (row.id for row in sessions), datetime.datetime.now(datetime.UTC))
   return [
       apply_listing_fields(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), listing_fields[row.id])
       for row in sessions
@@ -822,17 +817,17 @@ class PendingTaskInputsResponse(pydantic.BaseModel):
 
 def _task_http_error(e: Exception) -> fastapi.HTTPException:
   """Translate one task-tree domain error into its planned HTTP shape."""
-  if isinstance(e, TaskArchivedError):
+  if isinstance(e, task_errors.TaskArchivedError):
     # The archived refusal's sentence is the whole detail: the sender reads
     # exactly "task <id> is archived".
     return fastapi.HTTPException(status_code=409, detail=str(e))
-  if isinstance(e, (TaskInvalidError,)):
+  if isinstance(e, (task_errors.TaskInvalidError,)):
     return fastapi.HTTPException(status_code=400, detail=str(e))
-  if isinstance(e, (TaskNotFoundError, runs.RunNotFoundError)):
+  if isinstance(e, (task_errors.TaskNotFoundError, runs.RunNotFoundError)):
     return fastapi.HTTPException(status_code=404, detail=str(e))
-  if isinstance(e, (TaskForbiddenError, takeoff_gate.DelegationBlockedError)):
+  if isinstance(e, (task_errors.TaskForbiddenError, takeoff_gate.DelegationBlockedError)):
     return fastapi.HTTPException(status_code=403, detail=str(e))
-  if isinstance(e, (TaskConflictError, runs.RunIdentityConflictError)):
+  if isinstance(e, (task_errors.TaskConflictError, runs.RunIdentityConflictError)):
     blockers = getattr(e, "blockers", None)
     if blockers is None:
       blockers = [str(e)]
@@ -846,7 +841,7 @@ async def get_session_tree(
     include_archived: bool = fastapi.Query(default=False),
     limit: int = fastapi.Query(default=100, ge=1, le=500),
     cursor: str | None = fastapi.Query(default=None),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """One revision-bound page of the task tree; empty parent_id queries the roots."""
   try:
@@ -856,7 +851,7 @@ async def get_session_tree(
         limit=limit,
         cursor=cursor,
     )
-  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
 
 
@@ -1020,7 +1015,7 @@ async def get_session_bootstrap(
     store: session_store.SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
     cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> responses.Response:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
@@ -1051,7 +1046,7 @@ async def get_session_usage(
     meta: models.SessionMetadata = Depends(require_session),
     anchors: session_anchors.SessionAnchors = Depends(get_session_anchors),
     cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
@@ -1077,7 +1072,7 @@ async def get_session_events_page(
     limit: int = 40,
     meta: models.SessionMetadata = Depends(require_session),
     session_events: SessionEvents = Depends(get_session_events),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> responses.Response:
   """Paginate backwards through session messages by message ordinal.
 
@@ -1137,7 +1132,7 @@ async def get_session_transcript(
     after: int = fastapi.Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
     revision: str = fastapi.Query(default='', description="The revision the client last rendered"),
     meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
   """The live-transcript poll for a worker task.
 
@@ -1180,7 +1175,7 @@ def _successor_tree_note(new_session_id: str) -> str:
 
 
 async def _start_successor_run(
-    task_mgr: TaskTreeManager,
+    task_mgr: task_sessions.TaskTreeManager,
     caller: run_token.CallerIdentity,
     meta: models.SessionMetadata,
     prompt_head: str,
@@ -1214,7 +1209,7 @@ async def fork_session(
     parent: models.SessionMetadata = Depends(require_session),
     fork: session_fork.SessionFork = Depends(get_session_fork),
     cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
@@ -1231,7 +1226,7 @@ async def fork_session(
     )
   except FileNotFoundError as e:
     raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
-  except TaskConflictError as e:
+  except task_errors.TaskConflictError as e:
     raise _task_http_error(e) from e
   except ValueError as e:
     raise bad_request(e) from e
@@ -1255,7 +1250,7 @@ async def elone_session(
     parent: models.SessionMetadata = Depends(require_session),
     fork: session_fork.SessionFork = Depends(get_session_fork),
     cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
@@ -1264,7 +1259,7 @@ async def elone_session(
     meta = await fork.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError as e:
     raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
-  except TaskConflictError as e:
+  except task_errors.TaskConflictError as e:
     raise _task_http_error(e) from e
   except ValueError as e:
     raise bad_request(e) from e
@@ -1316,7 +1311,7 @@ async def switch_session_backend(
   if body.backend == effective_current:
     return parent
 
-  binding = binding_for(parent.id)
+  binding = sequence_controllers.binding_for(parent.id)
   if (binding is not None and binding.dedicated_backend and
       not backend_types.same_continuation_domain(effective_current, body.backend, cfg)):
     raise fastapi.HTTPException(
@@ -1352,12 +1347,12 @@ async def switch_session_backend(
 @router.get("/{session_id}", response_model=SessionDetailResponse)
 async def get_session(
     meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> SessionDetailResponse:
   """Session detail; task-tree nodes carry the derived task fields from one projection owner."""
   try:
     detail = await task_mgr.session_detail(meta.id)
-  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   return SessionDetailResponse.model_validate(detail)
 
@@ -1365,7 +1360,7 @@ async def get_session(
 @router.delete("/{session_id}")
 async def archive_session(
     session_id: str,
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """Archive a task subtree as one end state.
@@ -1380,7 +1375,8 @@ async def archive_session(
     raise fastapi.HTTPException(status_code=403, detail="archiving a task requires operator credentials")
   try:
     archived = await task_mgr.archive_subtree(session_id, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   return responses.JSONResponse({"archived": archived})
 
@@ -1388,13 +1384,14 @@ async def archive_session(
 @router.delete("/{session_id}/permanent", status_code=204)
 async def delete_session_permanently(
     session_id: str,
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """Permanently delete an empty, unreferenced task under the control lock."""
   try:
     deleted = await task_mgr.delete_permanently(session_id, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   if not deleted:
     raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
@@ -1405,7 +1402,7 @@ async def delete_session_permanently(
 async def unarchive_session(
     session_id: str,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """Restore an archived task node.
@@ -1420,7 +1417,8 @@ async def unarchive_session(
   try:
     restored = await task_mgr.completion.restore_task(
         session_id, request_id=str(uuid.uuid4()), reason="sidebar unarchive", caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   return responses.JSONResponse({"restored": restored["restored"]})
 
@@ -1462,7 +1460,7 @@ async def patch_session(
     session_id: str,
     req: models.PatchSessionTaskRequest,
     lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
   """Rename plus the v2 task metadata mutations (one PATCH body).
@@ -1479,7 +1477,8 @@ async def patch_session(
     return SessionDetailResponse(**meta.model_dump())
   try:
     meta = await task_mgr.patch_task(session_id, req, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   return SessionDetailResponse.model_validate(await task_mgr.session_detail(meta.id))
 
@@ -1529,7 +1528,7 @@ async def list_session_runs(
     cursor: str | None = fastapi.Query(default=None),
     order: str = fastapi.Query(default="asc"),
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> models.RunPage:
   """One keyset page of the session's run records over the canonical launch order.
 
@@ -1570,7 +1569,7 @@ async def get_effective_prompt(
     session_id: str,
     kind: str | None = fastapi.Query(default=None),
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """The next-start snapshot-shaped preview: one assembly path with the launch.
@@ -1617,7 +1616,7 @@ async def get_effective_prompt(
   return payload
 
 
-async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> models.SessionMetadata:
+async def _require_task_meta(task_mgr: task_sessions.TaskTreeManager, session_id: str) -> models.SessionMetadata:
   """The task metadata a context read needs, with the task-tree 404 mapping."""
   meta = await task_mgr.load_meta(session_id)
   if meta is None:
@@ -1645,7 +1644,7 @@ async def get_run_context(
     session_id: str,
     run_id: str,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """One historical Run's stored startup snapshot plus its pinned evidence references.
 
@@ -1715,7 +1714,7 @@ async def retry_session_run(
     session_id: str,
     req: models.RetryRunRequest,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> dict:
   """Create the (session, request_id)-stable retry run of one recorded run.
@@ -1727,11 +1726,13 @@ async def retry_session_run(
     raise fastapi.HTTPException(status_code=403, detail="retrying a run requires operator credentials")
   try:
     result = await task_mgr.create_retry(session_id, req.request_id, req.run_id)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   try:
     await task_mgr.dispatch.dispatch_pending(session_id)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   return result
 
@@ -1740,7 +1741,7 @@ async def retry_session_run(
 async def list_pending_task_inputs(
     session_id: str,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """The task's currently pending inputs, with each one's source and text.
 
@@ -1750,7 +1751,7 @@ async def list_pending_task_inputs(
   """
   try:
     pending = task_mgr.dispatch.pending_inputs(session_id)
-  except (TaskInvalidError, TaskNotFoundError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError) as e:
     raise _task_http_error(e) from e
   items = [
       {
@@ -1771,7 +1772,7 @@ async def acknowledge_task_inputs(
     session_id: str,
     req: models.AcknowledgeTaskInputsRequest,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> dict:
   """Resolve exact task inputs the operator handled out-of-band, durably and idempotently.
@@ -1785,7 +1786,8 @@ async def acknowledge_task_inputs(
   try:
     return await task_mgr.completion.acknowledge_inputs(
         session_id, request_id=req.request_id, input_ids=req.input_ids, note=req.note, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
 
 
@@ -1794,7 +1796,7 @@ async def complete_session_task(
     session_id: str,
     req: models.CompleteTaskRequest,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
@@ -1808,7 +1810,8 @@ async def complete_session_task(
   try:
     status, payload = await task_mgr.completion.complete_task(
         session_id, request_id=req.request_id, evidence=evidence, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   if status == 202:
     return responses.JSONResponse(status_code=202, content=payload)
@@ -1816,10 +1819,10 @@ async def complete_session_task(
   return responses.JSONResponse(status_code=200, content=detail)
 
 
-async def _completed_session_detail(task_mgr: TaskTreeManager, session_id: str) -> dict:
+async def _completed_session_detail(task_mgr: task_sessions.TaskTreeManager, session_id: str) -> dict:
   try:
     return await task_mgr.session_detail(session_id)
-  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
 
 
@@ -1828,7 +1831,7 @@ async def cancel_session_task(
     session_id: str,
     req: models.CancelTaskRequest,
     _meta: models.SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = Depends(get_task_manager),
     caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
   """Explicit cancellation with reason, preserving evidence.
@@ -1840,7 +1843,8 @@ async def cancel_session_task(
   """
   try:
     await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
   return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
 

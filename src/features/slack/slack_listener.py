@@ -56,7 +56,7 @@ from src.runtime.session_events import SessionEvents
 
 if TYPE_CHECKING:
   import httpx
-  from websockets.asyncio.client import ClientConnection
+  from websockets.asyncio import client
 
 logger = log_once.LazyStructlogLogger()
 
@@ -521,7 +521,7 @@ async def backfill_lost_summons(
       SlackThreadAdapter(), cfg, listing, store, lifecycle, session_events, successor)
 
 
-async def _expect_hello(ws: ClientConnection) -> None:
+async def _expect_hello(ws: client.ClientConnection) -> None:
   """Consume the Socket Mode connection's ``hello`` frame."""
   raw = await ws.recv()
   envelope = json.loads(raw)
@@ -581,7 +581,7 @@ async def run_listener(
 
 
 async def _serve_socket_mode(
-    ws: ClientConnection, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
+    ws: client.ClientConnection, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
     store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, events: SessionEvents,
     successor: session_successor.SessionSuccessor, client: SlackClient, trigger_mgr: triggers.TriggerManager) -> None:
   """One Socket Mode connection's serve: hello, thread backfill, envelope loop.

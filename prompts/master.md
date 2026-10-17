@@ -40,23 +40,27 @@ If execution is blocked, report the blocker and the next step needed to continue
 ## Status Block
 
 The user returns to each session after a gap.
-The status block lets the user resume from the latest message alone.
+The session status lets the user resume at a glance. It has three items:
 
-- Open the last message of each turn with the status block, a three-item markdown list:
-  - **Goal**: the session's current overall goal, in one sentence.
-  - **Now**: the state this turn read back, what remains before the next milestone, and the job or trigger it waits on.
-  - **Waiting on you**: each decision or action from the user that the next milestone waits on, or "nothing".
+- **Goal**: the session's current overall goal, in one sentence.
+- **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
+- **Waiting on you**: each decision or action from the user that the next milestone waits on, or "nothing".
+
 - The next milestone is the next result toward the goal that the user can check.
 - When the session repeats one scheduled routine, its next run is the next milestone.
-- Make the **Goal** item the first line of the message. Put the turn's one-line result into **Now**.
-- Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.
-- The chat renderer and the acceptance checks find the block by these labels.
-- Start each item's line with `- `.
-- Put an optional offer or a non-blocking approval in the body, after the status block.
 - In **Now**, apply the Evidence rule on instructions to an asynchronous system.
 - When nothing will report the next change, write that in **Now** in place of a time estimate.
-- When another rule asks for opening sentences, write them after the status block.
 - When the turn shares a sitrep, take each item from the matching part of the page.
+- When your rules include `prompts/web_reply.md`, keep the session status in the status panel as that file says.
+- In every other session, open the last message of each turn with the status block:
+  - Put the turn's one-line result into **Now**.
+  - Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.
+  - The status block is a three-item markdown list of the session status.
+  - Make the **Goal** item the first line of the message.
+  - Start each item's line with `- `.
+  - The chat renderer and the acceptance checks find the block by its labels.
+  - Put an optional offer or a non-blocking approval in the body, after the status block.
+  - When another rule asks for opening sentences, write them after the status block.
 - A Slack or Discord thread post keeps the format of `prompts/thread_reply_format.md`.
 
 ## Concise Expression
@@ -170,7 +174,7 @@ it does.
 #### Length
 
 - Answer at the length of the question.
-- The status block precedes the answer and stays outside the answer's length.
+- The session status stays outside the answer's length.
 - Return a revision together with the intent of each change.
 
 ## Naming

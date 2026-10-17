@@ -49,7 +49,7 @@ def context_reset_note(reason: str, task_goal: str | None = None) -> str:
   The one assembly site for task-tree turn-start notes: the reason names why the previous
   conversation was left, the history note says where that history stays
   readable, and the instruction tells the new model to read the log and state
-  where things stand after the status block before responding. The task goal
+  where things stand (after the status block, when its rules carry one) before responding. The task goal
   names what the fresh context is working on.
   """
   task_part = "" if task_goal is None else f" The task is: {task_goal}."

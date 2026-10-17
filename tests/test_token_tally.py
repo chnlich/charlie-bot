@@ -1,9 +1,10 @@
 """Tests for the usage capture (src/features/usage/token_tally.py): per-source parsing into the
 usage ledger's records.
 
-Each test builds fixture logs under tmp_path and points HOME at it, so the registered sources' default
-homes (``~/.claude``, ``~/.codex``, the opencode db) resolve there and no test reads the real home
-directory. Every assertion checks a named mechanism rather than a hard-coded total.
+Each test builds fixture logs under tmp_path and points HOME and CHARLIEBOT_HOME at it, so the registered
+sources' default homes (``~/.claude``, ``~/.codex``, the opencode store under the profile home) resolve there
+and no test reads the real home directory. Every assertion checks a named mechanism rather than a hard-coded
+total.
 """
 
 from __future__ import annotations
@@ -38,9 +39,10 @@ SOURCE_ANTIGRAVITY = "Antigravity"
 
 @pytest.fixture(autouse=True)
 def _host(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """This host as the capture sees it: HOME under tmp_path, a config that names the second Claude
-  login directory and no backend options, and tmp_path/sessions as the session tree."""
+  """This host as the capture sees it: HOME and the profile home under tmp_path, a config that names the
+  second Claude login directory and no backend options, and tmp_path/sessions as the session tree."""
   monkeypatch.setenv("HOME", str(tmp_path))
+  monkeypatch.setenv(home.CHARLIEBOT_HOME_ENV, str(tmp_path / ".charliebot"))
   accounts = types.SimpleNamespace(claude=[types.SimpleNamespace(config_dir=str(tmp_path / ".claude-ext-1"))])
   cfg = types.SimpleNamespace(
       accounts=accounts, backends=types.SimpleNamespace(options=[]), sessions_dir=tmp_path / "sessions")
@@ -1281,16 +1283,16 @@ def test_capture_runs_second_capture_skips_by_stat_and_recaptures_an_append(
 
 
 class Opencode:
-  """Synthetic opencode db: the message table schema and rows the real one carries."""
+  """Synthetic opencode 2.0 store: the session_message table and the rows the real one carries."""
 
   def __init__(self, tmp_path: pathlib.Path) -> None:
-    self.db = tmp_path / home.default_opencode_db().relative_to(tmp_path)
+    self.db = home.opencode_db()
     self.db.parent.mkdir(parents=True)
     con = sqlite3.connect(self.db)
     try:
       con.execute(
-          "create table message(id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,"
-          " time_updated INTEGER, data TEXT)")
+          "create table session_message(id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,"
+          " time_created INTEGER, time_updated INTEGER, data TEXT)")
       con.commit()
     finally:
       con.close()
@@ -1299,35 +1301,42 @@ class Opencode:
       self,
       mid: str,
       updated: int,
-      usage: dict,
+      usage: dict | None,
       session: str = "sess-a",
       model: str = NAME,
       provider: str = "anthropic",
+      role: str = "assistant",
   ) -> None:
-    """Insert or replace one assistant message row; *updated* is its time_updated."""
+    """Insert or replace one message row of *role*; *updated* is its time_updated. A *usage* of None
+    writes an error row, which carries no tokens key."""
     data = {
-        "role": "assistant",
-        "modelID": model,
-        "providerID": provider,
         "time": {
             "created": 1_700_000_000_000
         },
-        "tokens":
-            {
-                "input": usage["input_tokens"],
-                "output": usage["output_tokens"],
-                "total": usage["input_tokens"] + usage["output_tokens"],
-                "cache": {
-                    "write": usage["cache_creation_input_tokens"],
-                    "read": usage["cache_read_input_tokens"],
-                },
-            },
+        "agent": "build",
+        "model": {
+            "id": model,
+            "providerID": provider,
+            "variant": "default"
+        },
+        "finish": "stop",
+        "cost": 0,
     }
+    if usage is not None:
+      data["tokens"] = {
+          "input": usage["input_tokens"],
+          "output": usage["output_tokens"],
+          "reasoning": 0,
+          "cache": {
+              "read": usage["cache_read_input_tokens"],
+              "write": usage["cache_creation_input_tokens"],
+          },
+      }
     con = sqlite3.connect(self.db)
     try:
       con.execute(
-          "insert or replace into message(id, session_id, time_created, time_updated, data)"
-          " values (?, ?, ?, ?, ?)", (mid, session, 1_700_000_000_000, updated, json.dumps(data)))
+          "insert or replace into session_message(id, session_id, type, seq, time_created, time_updated, data)"
+          " values (?, ?, ?, 0, ?, ?, ?)", (mid, session, role, 1_700_000_000_000, updated, json.dumps(data)))
       con.commit()
     finally:
       con.close()
@@ -1335,15 +1344,15 @@ class Opencode:
   def delete(self, mid: str) -> None:
     con = sqlite3.connect(self.db)
     try:
-      con.execute("delete from message where id = ?", (mid,))
+      con.execute("delete from session_message where id = ?", (mid,))
       con.commit()
     finally:
       con.close()
 
 
 def test_opencode_capture_rows(tmp_path: pathlib.Path) -> None:
-  """Every contributing message row becomes one ledger record; a zero-token row contributes
-  nothing, so the db's non-usage rows invent no ledger rows; a host without the db contributes
+  """Every assistant row with tokens becomes one ledger record. A zero-token row, an error row
+  without a tokens key and a user row contribute nothing; a host without the db contributes
   nothing."""
   with usage_ledger.UsageLedger(tmp_path / "absent.sqlite3") as ledger:
     assert _capture(ledger)["opencode"] == 0
@@ -1351,6 +1360,8 @@ def test_opencode_capture_rows(tmp_path: pathlib.Path) -> None:
   oc.write("m1", 100, _usage(100, 30))
   oc.write("m2", 200, _usage(50, 5), model="gpt-5", provider="openai")
   oc.write("m3", 300, _usage(0, 0))  # zero tokens: no record
+  oc.write("m4", 400, None)  # error row: no tokens key, no record
+  oc.write("m5", 500, _usage(70, 7), role="user")  # not an assistant row: no record
 
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert _capture(ledger)["opencode"] == 2

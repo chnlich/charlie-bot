@@ -12,7 +12,7 @@ import conftest
 import orjson
 import pytest
 
-from src.infra import models
+from src.infra import models, responses
 from src.runtime import session_listing, session_sidebar, sidebar_state, thinking_state
 from src.runtime.api import sessions as sessions_api
 
@@ -122,7 +122,7 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
     renders.append(content)
     return orjson.dumps(content)
 
-  monkeypatch.setattr(sessions_api, "fast_json_bytes", count_render)
+  monkeypatch.setattr(responses, "fast_json_bytes", count_render)
 
   with _build_client(cfg, session_blocks) as client:
     first = client.get(f"/api/sessions/status?ids={session.id}")

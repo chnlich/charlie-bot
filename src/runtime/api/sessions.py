@@ -9,20 +9,11 @@ from typing import get_args
 
 import fastapi
 import pydantic
-from fastapi import Depends
 from starlette import responses
 
 from src.infra import compression, config, log_once, memo, models
 from src.infra import event_types as ET
-from src.infra.responses import (
-    GZIP_RESPONSE_HEADERS,
-    FastJsonResponse,
-    PreencodedJSONResponse,
-    fast_json_bytes,
-    gzip_body_response,
-    gzip_file_fresh,
-    request_wants_gzip,
-)
+from src.infra import responses as infra_responses
 from src.runtime import (
     chat_events,
     control_events,
@@ -346,7 +337,7 @@ async def _sessions_list_response(
   cached = memos.whole_body
   if (cached is not None and len(cached[0]) == len(list_rows) and
       all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and cached[1] == list_states):
-    return await gzip_body_response(request, cached[2], {}, memos.gzip_memo)
+    return await infra_responses.gzip_body_response(request, cached[2], {}, memos.gzip_memo)
   payload = []
   for row, (state, listing_state) in zip(list_rows, list_states, strict=True):
     rendered = memos.row_render.get(id(row))
@@ -371,17 +362,17 @@ async def _sessions_list_response(
     live = {id(row) for row in list_rows}
     for stale in [row_id for row_id in memos.row_render if row_id not in live]:
       del memos.row_render[stale]
-  body = fast_json_bytes(payload)
+  body = infra_responses.fast_json_bytes(payload)
   memos.whole_body = (list_rows, list_states, body)
   # The responses.Response return skips response_model's jsonable_encoder pass over every
   # row; the body-keyed memo serves the middleware's deflate.
-  return await gzip_body_response(request, body, {}, memos.gzip_memo)
+  return await infra_responses.gzip_body_response(request, body, {}, memos.gzip_memo)
 
 
 @router.get("/")
 async def list_sessions(
     request: fastapi.Request,
-    listing: session_listing.SessionListing = Depends(deps.get_session_listing),
+    listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing),
 ) -> responses.Response:
   """List active task nodes newest first.
 
@@ -401,9 +392,9 @@ async def list_sessions(
 @router.post("/", response_model=models.SessionMetadata)
 async def create_session(
     req: models.CreateSessionRequest,
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> models.SessionMetadata:
   if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
     # v2 task create: the task-tree owner binds (parent, request_id) to one node.
@@ -468,7 +459,7 @@ async def list_archived_sessions(
     limit: int = 100,
     before: str | None = None,
     before_id: str | None = None,
-    listing: session_listing.SessionListing = Depends(deps.get_session_listing),
+    listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing),
 ) -> dict:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip.
 
@@ -506,7 +497,7 @@ async def list_archived_sessions(
 
 @router.get("/starred")
 async def list_starred_sessions(
-    listing: session_listing.SessionListing = Depends(deps.get_session_listing),) -> list[dict]:
+    listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing),) -> list[dict]:
   """List starred task nodes, newest first.
 
   Row shape matches the other sidebar lists: the model dump with the schedule
@@ -527,14 +518,15 @@ async def list_starred_sessions(
 
 
 @router.get("/groups")
-async def list_groups(listing: session_listing.SessionListing = Depends(deps.get_session_listing)) -> list[str]:
+async def list_groups(listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing)) -> list[str]:
   """Return sorted distinct group names across all sessions."""
   return await listing.list_group_names()
 
 
 @router.post("/groups/rename")
 async def rename_group(
-    req: models.RenameGroupRequest, lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle)
+    req: models.RenameGroupRequest,
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle)
 ) -> dict:
   """Rename a group across all sessions."""
   count = await lifecycle.rename_group(req.old_name, req.new_name)
@@ -543,7 +535,8 @@ async def rename_group(
 
 @router.post("/groups/delete")
 async def delete_group(
-    req: models.DeleteGroupRequest, lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle)
+    req: models.DeleteGroupRequest,
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle)
 ) -> dict:
   """Remove a group from all sessions (sets group to null)."""
   count = await lifecycle.delete_group(req.group)
@@ -580,8 +573,8 @@ async def all_sessions_status(
     request: fastapi.Request,
     ids: str = fastapi.Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     force: bool = False,
-    sidebar: session_sidebar.SessionSidebar = Depends(deps.get_session_sidebar),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
+    sidebar: session_sidebar.SessionSidebar = fastapi.Depends(deps.get_session_sidebar),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
 ) -> responses.Response:
   """Return derived sidebar state for the requested sessions.
 
@@ -607,7 +600,7 @@ async def all_sessions_status(
         active = [m for m in sessions if m.status != models.SessionStatus.ARCHIVED]
         if active:
           sidebar.schedule_sidebar_sweep(active)
-      return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
+      return await infra_responses.gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
   sessions = await store.get_sessions_readonly(requested)
   if not sessions:
     return await _switch_payload_response(request, {})
@@ -636,11 +629,11 @@ async def all_sessions_status(
       # Rows without a task activity snapshot keep the prior payload shape.
       payload[sidebar_state.WORK_STATE] = entry[sidebar_state.WORK_STATE]
     result[meta.id] = payload
-  body = fast_json_bytes(result)
+  body = infra_responses.fast_json_bytes(result)
   _status_body_memo.store(body_key, body)
   # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
   # rides the body-keyed memo (_switch_payload_response's memo).
-  return await gzip_body_response(request, body, {}, _switch_gzip_memo)
+  return await infra_responses.gzip_body_response(request, body, {}, _switch_gzip_memo)
 
 
 _SEARCH_ROW_FRAGMENT_CAP = 512
@@ -702,7 +695,7 @@ def _search_row_static_segments(meta: models.SessionMetadata) -> tuple[bytes | s
   The route's overlay assigns its derived fields onto keys the model
   already declares, so dict assignment keeps them at their model-definition
   positions; the segments preserve that order — static runs as rendered JSON
-  (no braces, rendered by :func:`fast_json_bytes`), each derived key as its
+  (no braces, rendered by :func:`infra_responses.fast_json_bytes`), each derived key as its
   name for the per-request value render.
 
   Memoized on the cached metadata object's identity, which the value pins with
@@ -721,13 +714,13 @@ def _search_row_static_segments(meta: models.SessionMetadata) -> tuple[bytes | s
   for key, value in row.items():
     if key in _SEARCH_DERIVED_KEYS:
       if static:
-        segments.append(fast_json_bytes(static)[1:-1])
+        segments.append(infra_responses.fast_json_bytes(static)[1:-1])
         static = {}
       segments.append(key)
     else:
       static[key] = value
   if static:
-    segments.append(fast_json_bytes(static)[1:-1])
+    segments.append(infra_responses.fast_json_bytes(static)[1:-1])
   _search_row_fragments.store(id(meta), (meta, tuple(segments)))
   return tuple(segments)
 
@@ -823,7 +816,7 @@ async def get_session_tree(
     include_archived: bool = fastapi.Query(default=False),
     limit: int = fastapi.Query(default=100, ge=1, le=500),
     cursor: str | None = fastapi.Query(default=None),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
   """One revision-bound page of the task tree; empty parent_id queries the roots."""
   try:
@@ -841,8 +834,8 @@ async def get_session_tree(
 async def search_sessions(
     request: fastapi.Request,
     q: str = '',
-    listing: session_listing.SessionListing = Depends(deps.get_session_listing),
-    search: session_search.SessionSearch = Depends(deps.get_session_search),
+    listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing),
+    search: session_search.SessionSearch = fastapi.Depends(deps.get_session_search),
 ) -> list[models.SessionMetadata] | responses.Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
@@ -858,7 +851,7 @@ async def search_sessions(
     return await _serve_search_rows(request, rows, derived)
   # The capped name-match shape (a short query) is this route's slowest
   # request: the read-only search serves cache references and the response
-  # renders through FastJsonResponse with the derived fields overlaid, the
+  # renders through infra_responses.FastJsonResponse with the derived fields overlaid, the
   # same shape the /status poll took — the search block's per-row copy+populate
   # pass and the response-model walk both measured multi-ms on the 200-row cap.
   rows, derived = await search.search_sessions_readonly(
@@ -886,7 +879,7 @@ async def _serve_search_rows(
   # values, rendered only when the row's state first produces a body (the whole
   # body serves the steady-state repeat, a churn round re-renders the moved
   # rows). orjson renders a dict context-free, so the spliced body is
-  # byte-identical to the FastJsonResponse render of the merged dicts: the
+  # byte-identical to the infra_responses.FastJsonResponse render of the merged dicts: the
   # segments follow the model's own key order, which is the order the in-place
   # overlay leaves the merged dicts in. Key prefixes ride the prebuilt bytes in
   # _SEARCH_DERIVED_PREFIXES, and a None datetime.datetime field rides its whole prebuilt
@@ -906,7 +899,7 @@ async def _serve_search_rows(
   cached = _search_whole_body
   if (cached is not None and len(cached[0]) == len(search_rows) and
       all(c is m for c, m in zip(cached[0], search_rows, strict=True)) and cached[1] == search_states):
-    return await gzip_body_response(request, cached[2], {}, _search_gzip_memo)
+    return await infra_responses.gzip_body_response(request, cached[2], {}, _search_gzip_memo)
   parts: list[bytes] = []
   for meta, (thinking_since, has_running, has_pending, pending_count, next_trigger_at, work_state) in \
           zip(search_rows, search_states, strict=True):
@@ -915,7 +908,7 @@ async def _serve_search_rows(
     parts.append(body)
   body = b"[" + b",".join(parts) + b"]"
   _search_whole_body = (search_rows, search_states, body)
-  return await gzip_body_response(request, body, {}, _search_gzip_memo)
+  return await infra_responses.gzip_body_response(request, body, {}, _search_gzip_memo)
 
 
 def _search_row_body(meta: models.SessionMetadata, row_key: tuple) -> bytes:
@@ -964,14 +957,15 @@ _switch_gzip_memo: memo.BoundedMemo[bytes, bytes] = memo.BoundedMemo(_SWITCH_GZI
 
 async def _switch_payload_response(request: fastapi.Request, payload: dict | list) -> responses.Response:
   """Render a request-path payload once and serve its gzip form from the body-keyed memo."""
-  return await gzip_body_response(request, fast_json_bytes(payload), {}, _switch_gzip_memo)
+  return await infra_responses.gzip_body_response(
+      request, infra_responses.fast_json_bytes(payload), {}, _switch_gzip_memo)
 
 
 @router.get('/{session_id}/pending-triggers')
 async def get_pending_triggers(
     session_id: str,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    trigger_mgr: TriggerManager = Depends(deps.get_trigger_manager),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    trigger_mgr: TriggerManager = fastapi.Depends(deps.get_trigger_manager),
 ) -> list[dict]:
   """Return the session's pending delayed triggers, fire_at ascending.
 
@@ -993,11 +987,11 @@ async def get_pending_triggers(
 async def get_session_bootstrap(
     session_id: str,
     request: fastapi.Request,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    session_events: SessionEvents = Depends(deps.get_session_events),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> responses.Response:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
@@ -1008,8 +1002,8 @@ async def get_session_bootstrap(
 @router.post('/{session_id}/read')
 async def mark_session_read(
     session_id: str,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
 ) -> dict:
   """Clear the session's unread flag; the client posts this after a render lands.
 
@@ -1025,11 +1019,11 @@ async def mark_session_read(
 @router.get('/{session_id}/usage')
 async def get_session_usage(
     session_id: str,
-    meta: models.SessionMetadata = Depends(deps.require_session),
-    anchors: session_anchors.SessionAnchors = Depends(deps.get_session_anchors),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-) -> FastJsonResponse:
+    meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    anchors: session_anchors.SessionAnchors = fastapi.Depends(deps.get_session_anchors),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+) -> infra_responses.FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
     usage = await message_utils._worker_usage(task_mgr, session_id)
@@ -1043,7 +1037,7 @@ async def get_session_usage(
     entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
     payload["active_run_id"] = entry.active_run_id
   payload.update(_active_backend_payload(meta, cfg))
-  return FastJsonResponse(payload)
+  return infra_responses.FastJsonResponse(payload)
 
 
 @router.get('/{session_id}/events')
@@ -1052,9 +1046,9 @@ async def get_session_events_page(
     request: fastapi.Request,
     before: int,
     limit: int = 40,
-    meta: models.SessionMetadata = Depends(deps.require_session),
-    session_events: SessionEvents = Depends(deps.get_session_events),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> responses.Response:
   """Paginate backwards through session messages by message ordinal.
 
@@ -1076,8 +1070,8 @@ async def get_session_events_page(
     # the transcript's own cursor space).
     entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
     messages, next_before, has_more = entry.projection.slice_before(before, limit)
-    return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": next_before})
-  # FastJsonResponse skips the jsonable_encoder pass FastAPI runs on mapped
+    return infra_responses.FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": next_before})
+  # infra_responses.FastJsonResponse skips the jsonable_encoder pass FastAPI runs on mapped
   # returns; on this payload (211 messages / 559 KB) that pass measures ~3x a
   # plain json.dumps, and every field is already a plain parsed-JSON type so
   # the dumped body is unchanged.
@@ -1091,21 +1085,21 @@ async def get_session_events_page(
       body = projection.cached_page_body(before, limit)
       if body is None:
         messages, next_before, has_more = projection.slice_before(before, limit)
-        body = fast_json_bytes({"messages": messages, "has_more": has_more, "next_before": next_before})
+        body = infra_responses.fast_json_bytes({"messages": messages, "has_more": has_more, "next_before": next_before})
         projection.store_page_body(before, limit, body)
-      if request_wants_gzip(request):
+      if infra_responses.request_wants_gzip(request):
         gz = projection.cached_page_body_gzip(before, limit)
         if gz is None:
           # One deflate per page per projection generation, in the executor the
           # middleware's replaced pass also used.
           gz = await asyncio.to_thread(compression.gzip_level1, body)
           projection.store_page_body_gzip(before, limit, gz)
-        return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
-      return PreencodedJSONResponse(body)
+        return infra_responses.PreencodedJSONResponse(gz, headers=infra_responses.GZIP_RESPONSE_HEADERS)
+      return infra_responses.PreencodedJSONResponse(body)
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_events.load_chat_events_range, session_id, start, before)
   messages = message_utils.events_to_messages(events, event_index_offset=start)
-  return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
+  return infra_responses.FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
 
 
 @router.get('/{session_id}/transcript')
@@ -1113,9 +1107,9 @@ async def get_session_transcript(
     session_id: str,
     after: int = fastapi.Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
     revision: str = fastapi.Query(default='', description="The revision the client last rendered"),
-    meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-) -> FastJsonResponse:
+    meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+) -> infra_responses.FastJsonResponse:
   """The live-transcript poll for a worker task.
 
   The open chat asks every ~2 s while the view shows one of them. An unchanged
@@ -1130,7 +1124,7 @@ async def get_session_transcript(
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
   thinking_since = thinking_state.busy_since(session_id)
   reset = _transcript_reset(entry.revision, revision)
-  return FastJsonResponse(
+  return infra_responses.FastJsonResponse(
       {
           "messages": entry.projection.committed if reset else entry.projection.committed[after:],
           "total": len(entry.projection.committed),
@@ -1188,11 +1182,11 @@ async def _start_successor_run(
 async def fork_session(
     session_id: str,
     body: models.ForkSessionRequest | None = None,
-    parent: models.SessionMetadata = Depends(deps.require_session),
-    fork: session_fork.SessionFork = Depends(deps.get_session_fork),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    parent: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    fork: session_fork.SessionFork = fastapi.Depends(deps.get_session_fork),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> models.SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
   backend = _resolve_requested_backend(
@@ -1229,11 +1223,11 @@ async def fork_session(
 async def elone_session(
     session_id: str,
     body: models.EloneSessionRequest,
-    parent: models.SessionMetadata = Depends(deps.require_session),
-    fork: session_fork.SessionFork = Depends(deps.get_session_fork),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    parent: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    fork: session_fork.SessionFork = fastapi.Depends(deps.get_session_fork),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> models.SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
@@ -1264,12 +1258,12 @@ async def elone_session(
 async def switch_session_backend(
     session_id: str,
     body: models.SwitchBackendRequest,
-    parent: models.SessionMetadata = Depends(deps.require_session),
-    anchors: session_anchors.SessionAnchors = Depends(deps.get_session_anchors),
-    lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    session_events: SessionEvents = Depends(deps.get_session_events),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+    parent: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    anchors: session_anchors.SessionAnchors = fastapi.Depends(deps.get_session_anchors),
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> models.SessionMetadata:
   """Switch a session's backend in place, across model families.
 
@@ -1328,8 +1322,8 @@ async def switch_session_backend(
 
 @router.get("/{session_id}", response_model=SessionDetailResponse)
 async def get_session(
-    meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> SessionDetailResponse:
   """Session detail; task-tree nodes carry the derived task fields from one projection owner."""
   try:
@@ -1342,8 +1336,8 @@ async def get_session(
 @router.delete("/{session_id}")
 async def archive_session(
     session_id: str,
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> responses.Response:
   """Archive a task subtree as one end state.
 
@@ -1366,8 +1360,8 @@ async def archive_session(
 @router.delete("/{session_id}/permanent", status_code=204)
 async def delete_session_permanently(
     session_id: str,
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> responses.Response:
   """Permanently delete an empty, unreferenced task under the control lock."""
   try:
@@ -1383,9 +1377,9 @@ async def delete_session_permanently(
 @router.post("/{session_id}/unarchive")
 async def unarchive_session(
     session_id: str,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> responses.Response:
   """Restore an archived task node.
 
@@ -1407,14 +1401,14 @@ async def unarchive_session(
 
 @router.post("/{session_id}/star", response_model=models.SessionMetadata)
 async def star_session(
-    session_id: str, lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle)
+    session_id: str, lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle)
 ) -> models.SessionMetadata:
   return deps.require_found(await lifecycle.star_session(session_id))
 
 
 @router.post("/{session_id}/unstar", response_model=models.SessionMetadata)
 async def unstar_session(
-    session_id: str, lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle)
+    session_id: str, lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle)
 ) -> models.SessionMetadata:
   return deps.require_found(await lifecycle.unstar_session(session_id))
 
@@ -1424,8 +1418,8 @@ async def rate_round(
     session_id: str,
     round_id: str,
     req: models.RateRoundRequest,
-    meta: models.SessionMetadata = Depends(deps.require_session),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
+    meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
 ) -> models.SessionMetadata:
   if req.rating is None:
     meta.round_ratings.pop(round_id, None)
@@ -1441,9 +1435,9 @@ async def rate_round(
 async def patch_session(
     session_id: str,
     req: models.PatchSessionTaskRequest,
-    lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> SessionDetailResponse:
   """Rename plus the v2 task metadata mutations (one PATCH body).
 
@@ -1469,7 +1463,7 @@ async def patch_session(
 async def set_session_group(
     session_id: str,
     req: models.SetGroupRequest,
-    lifecycle: session_lifecycle.SessionLifecycle = Depends(deps.get_session_lifecycle),
+    lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
 ) -> models.SessionMetadata:
   return deps.require_found(await lifecycle.set_group(session_id, req.group))
 
@@ -1489,13 +1483,14 @@ async def get_events_jsonl(session_id: str, request: fastapi.Request) -> respons
   path = chat_events.chat_events_path(cfg.sessions_dir / session_id)
   if not path.exists():
     raise fastapi.HTTPException(status_code=404, detail="Events file not found")
-  if not request_wants_gzip(request):
+  if not infra_responses.request_wants_gzip(request):
     return responses.FileResponse(path, media_type="application/x-ndjson")
   # The read and the deflate ride one executor hop: responses.FileResponse streams 64 KiB
   # chunks and the gzip middleware compresses every chunk inline on the event
   # loop (the M101 loop-lag readings).
-  body = await asyncio.to_thread(gzip_file_fresh, _events_gzip_memo, path)
-  return responses.Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
+  body = await asyncio.to_thread(infra_responses.gzip_file_fresh, _events_gzip_memo, path)
+  return responses.Response(
+      content=body, media_type="application/x-ndjson", headers=infra_responses.GZIP_RESPONSE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -1509,8 +1504,8 @@ async def list_session_runs(
     limit: int = fastapi.Query(default=100, ge=1, le=500),
     cursor: str | None = fastapi.Query(default=None),
     order: str = fastapi.Query(default="asc"),
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> models.RunPage:
   """One keyset page of the session's run records over the canonical launch order.
 
@@ -1550,9 +1545,9 @@ async def list_session_runs(
 async def get_effective_prompt(
     session_id: str,
     kind: str | None = fastapi.Query(default=None),
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """The next-start snapshot-shaped preview: one assembly path with the launch.
 
@@ -1625,8 +1620,8 @@ def _legacy_prompt_payload(path: pathlib.Path) -> dict:
 async def get_run_context(
     session_id: str,
     run_id: str,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
   """One historical Run's stored startup snapshot plus its pinned evidence references.
 
@@ -1695,9 +1690,9 @@ async def get_run_context(
 async def retry_session_run(
     session_id: str,
     req: models.RetryRunRequest,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> dict:
   """Create the (session, request_id)-stable retry run of one recorded run.
 
@@ -1722,8 +1717,8 @@ async def retry_session_run(
 @router.get("/{session_id}/task-inputs/pending", response_model=PendingTaskInputsResponse)
 async def list_pending_task_inputs(
     session_id: str,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
   """The task's currently pending inputs, with each one's source and text.
 
@@ -1753,9 +1748,9 @@ async def list_pending_task_inputs(
 async def acknowledge_task_inputs(
     session_id: str,
     req: models.AcknowledgeTaskInputsRequest,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> dict:
   """Resolve exact task inputs the operator handled out-of-band, durably and idempotently.
 
@@ -1777,9 +1772,9 @@ async def acknowledge_task_inputs(
 async def complete_session_task(
     session_id: str,
     req: models.CompleteTaskRequest,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> responses.Response:
   """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
 
@@ -1812,9 +1807,9 @@ async def _completed_session_detail(task_mgr: task_sessions.TaskTreeManager, ses
 async def cancel_session_task(
     session_id: str,
     req: models.CancelTaskRequest,
-    _meta: models.SessionMetadata = Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> SessionDetailResponse:
   """Explicit cancellation with reason, preserving evidence.
 
@@ -1849,8 +1844,8 @@ async def cancel_session_run(
     session_id: str,
     run_id: str,
     req: models.CancelRunRequest,
-    run_store=Depends(deps.get_run_store),
-    caller: run_token.CallerIdentity = Depends(deps.require_caller),
+    run_store=fastapi.Depends(deps.get_run_store),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> models.RunCancelResponse:
   """Request one stop: durable fact first, then identity-checked signal and exit observation."""
   _require_own_run_scope(caller, session_id, run_id)

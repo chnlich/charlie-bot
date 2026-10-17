@@ -87,6 +87,9 @@ AGENT_MESSAGE = "agent_message"
 WEB_REPLY = "web_reply"
 # The round-end notice that a user message got no reply; its payload key carries input_event_id.
 WEB_REPLY_NOTICE = "web_reply_notice"
+# A set of the web session's status through ``charliebot web status set``. The payload keys ``web_status`` (the status
+# after the set) and ``web_status_changed`` (the items the set named) carry the record; the status itself is metadata.
+WEB_STATUS = "web_status"
 
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"

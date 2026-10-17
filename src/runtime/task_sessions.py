@@ -612,6 +612,16 @@ class TaskTreeManager:
             [f"ancestor chain of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} hops"])
     return chain
 
+  async def ancestor_ids(self, session_id: str) -> list[str]:
+    """The ids of the task-parent chain above *session_id*, nearest first."""
+    index = await self._get_index()
+    return [meta.id for meta in self._ancestors(index, session_id)]
+
+  async def descendant_ids(self, session_id: str) -> list[str]:
+    """The ids of every descendant of *session_id*, at any depth."""
+    index = await self._get_index()
+    return self._descendants(index, session_id)
+
   async def _note_run_liveness(self, session_id: str, run: RunRecord, launched: bool) -> None:
     """The run owner's liveness notification: a worker node's busy interval.
 

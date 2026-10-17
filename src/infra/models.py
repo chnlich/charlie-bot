@@ -14,11 +14,13 @@ import pydantic
 from src.infra import config, constants, deferred, metadata_slot_registration, metadata_slots
 
 if TYPE_CHECKING:
-  from src.infra.backend_models import (  # noqa: F401  (re-export)
-      BackendOption,
-      backend_type_allows_missing_model,
-      option_default_model,
-  )
+  from src.infra import backend_models
+
+  # The static half of the _BACKEND_REEXPORTS re-export: the same names, bound
+  # for type checkers; __getattr__ binds them at runtime.
+  BackendOption = backend_models.BackendOption
+  backend_type_allows_missing_model = backend_models.backend_type_allows_missing_model
+  option_default_model = backend_models.option_default_model
 
 # The backend-field models live in backend_models so the config chain (every
 # CLI invocation's get_config) constructs no session/API models; the re-export

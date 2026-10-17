@@ -66,24 +66,7 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.request  # noqa: E402
 
-from tools.browser_harness_session_tree import (  # noqa: E402
-    CDP,
-    DESKTOP_CAPTURE_FLAGS,
-    connect_cdp,
-    devtools_ws_url,
-    evaluate,
-    fail,
-    launch_chrome,
-    log,
-    mint_access_key,
-    open_cdp_page,
-    open_evidence_dir,
-    pick_free_port,
-    resolve_chrome,
-    stop_child,
-    wait_for,
-    write_credentials_yaml,
-)
+from tools import browser_harness_session_tree  # noqa: E402
 
 ANCHOR_TOLERANCE_PX = 2.0
 SETTLE_S = 1.2
@@ -403,12 +386,12 @@ def build_stub_pages() -> tuple[list[dict], list[dict]]:
   return page1, page2
 
 
-async def ev(cdp: CDP, session_id: str, expression: str):
+async def ev(cdp: browser_harness_session_tree.CDP, session_id: str, expression: str):
   """One Runtime.evaluate with returnByValue; errors fail the run loudly."""
-  return await evaluate(cdp, session_id, expression)
+  return await browser_harness_session_tree.evaluate(cdp, session_id, expression)
 
 
-async def snap(cdp: CDP, session_id: str) -> dict:
+async def snap(cdp: browser_harness_session_tree.CDP, session_id: str) -> dict:
   return await ev(cdp, session_id, SNAP_JS)
 
 
@@ -417,7 +400,7 @@ async def settle() -> None:
   await asyncio.sleep(SETTLE_S)
 
 
-async def wheel(cdp: CDP, session_id: str, dy: int) -> None:
+async def wheel(cdp: browser_harness_session_tree.CDP, session_id: str, dy: int) -> None:
   """One real scroll gesture over the message container's center.
 
   ``dy`` is the distance the reader travels UP (positive scrolls up), matching
@@ -433,7 +416,7 @@ async def wheel(cdp: CDP, session_id: str, dy: int) -> None:
   await asyncio.sleep(0.35)
 
 
-async def wheel_notch(cdp: CDP, session_id: str, box: dict, delta_y: int = -100) -> None:
+async def wheel_notch(cdp: browser_harness_session_tree.CDP, session_id: str, box: dict, delta_y: int = -100) -> None:
   """One real mouse-wheel notch: a CDP mouseWheel event with a 100px delta,
   the distance one notch travels on the reader's machine."""
   await cdp.send(
@@ -447,7 +430,7 @@ async def wheel_notch(cdp: CDP, session_id: str, box: dict, delta_y: int = -100)
       session_id=session_id)
 
 
-async def wheel_until_trigger(cdp: CDP, session_id: str, max_gestures: int = 6) -> None:
+async def wheel_until_trigger(cdp: browser_harness_session_tree.CDP, session_id: str, max_gestures: int = 6) -> None:
   """Wheel up in real gestures until the pagination trigger fires.
 
   A synthesized gesture's realized travel varies between chromium builds, so
@@ -459,11 +442,12 @@ async def wheel_until_trigger(cdp: CDP, session_id: str, max_gestures: int = 6) 
     fired = await ev(cdp, session_id, "window.__fetchLog.length >= 1")
     if fired:
       return
-  fail("pagination trigger never fired within "
-       f"{max_gestures} gestures (fetch log empty)")
+  browser_harness_session_tree.fail(
+      "pagination trigger never fired within "
+      f"{max_gestures} gestures (fetch log empty)")
 
 
-async def wait_reader_settled(cdp: CDP, session_id: str, timeout_s: float = 30.0) -> None:
+async def wait_reader_settled(cdp: browser_harness_session_tree.CDP, session_id: str, timeout_s: float = 30.0) -> None:
   """Wait until the reader and the document are both at rest: no genuine scroll
   event for 400ms and the pre-render queue empty.
 
@@ -488,10 +472,10 @@ async def wait_reader_settled(cdp: CDP, session_id: str, timeout_s: float = 30.0
     if last and (last["age"] is None or last["age"] >= 400) and last["queue"] == 0:
       return
     await asyncio.sleep(0.25)
-  fail(f"the reader never settled within {timeout_s}s (last probe {last})")
+  browser_harness_session_tree.fail(f"the reader never settled within {timeout_s}s (last probe {last})")
 
 
-async def scroll_write(cdp: CDP, session_id: str, top: int) -> None:
+async def scroll_write(cdp: browser_harness_session_tree.CDP, session_id: str, top: int) -> None:
   """A plain position write: the reader parks at an absolute scrollTop.
 
   The engine reads any non-echo write as user motion, so the approach scroll
@@ -502,11 +486,12 @@ async def scroll_write(cdp: CDP, session_id: str, top: int) -> None:
   await asyncio.sleep(0.6)
 
 
-async def anchor_y(cdp: CDP, session_id: str, anchor_id: str) -> dict | None:
+async def anchor_y(cdp: browser_harness_session_tree.CDP, session_id: str, anchor_id: str) -> dict | None:
   return await ev(cdp, session_id, ANCHOR_Y_JS + f'("{anchor_id}")')
 
 
-async def screenshot(cdp: CDP, session_id: str, evidence_dir: pathlib.Path, name: str) -> str:
+async def screenshot(
+    cdp: browser_harness_session_tree.CDP, session_id: str, evidence_dir: pathlib.Path, name: str) -> str:
   res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
   path = evidence_dir / f"{name}.png"
   path.write_bytes(base64.b64decode(res["data"]))
@@ -528,7 +513,8 @@ class Scenario:
       self.ok = False
     return cond
 
-  async def finish(self, cdp: CDP, cs: str, results: list[dict], screenshot_name: str | None) -> None:
+  async def finish(
+      self, cdp: browser_harness_session_tree.CDP, cs: str, results: list[dict], screenshot_name: str | None) -> None:
     """Record the row with the engine trace tails as its diagnosis."""
     try:
       self.data["proj_tail"] = (await ev(cdp, cs, "window.__projLog || []"))[-40:]
@@ -545,7 +531,7 @@ class Scenario:
             "data": self.data,
             "screenshot": screenshot_name,
         })
-    log(f"  [{'PASS' if self.ok else 'FAIL'}] {self.name}: {detail[:400]}")
+    browser_harness_session_tree.log(f"  [{'PASS' if self.ok else 'FAIL'}] {self.name}: {detail[:400]}")
 
 
 def pos_holds(before: dict | None, after: dict | None, tol=ANCHOR_TOLERANCE_PX) -> bool:
@@ -562,7 +548,7 @@ def anchor_held(engine_anchor: dict | None, expected: dict | None) -> bool:
       engine_anchor.get("id") == expected.get("id") and engine_anchor.get("key") == expected.get("key"))
 
 
-async def pin_reading_place(cdp: CDP, session_id: str) -> dict:
+async def pin_reading_place(cdp: browser_harness_session_tree.CDP, session_id: str) -> dict:
   """Pin the reader's place before a walk: the visible message with its offset
   and spacing, its turn wrap, and the engine's own anchor with that anchor's
   wrap. Every later assertion reads these identities, never whatever the engine
@@ -581,7 +567,8 @@ async def pin_reading_place(cdp: CDP, session_id: str) -> dict:
   return {"msg": top_visible, "ay": ay, "wrap": wrap, "engine_anchor": engine_anchor, "engine_wrap": engine_wrap}
 
 
-async def fold_step_state(cdp: CDP, session_id: str, msg_id: str, wrap_key: str | None) -> dict:
+async def fold_step_state(
+    cdp: browser_harness_session_tree.CDP, session_id: str, msg_id: str, wrap_key: str | None) -> dict:
   """One measurement point of a collapse/reopen step: the pinned message's
   place, the read turn's row, the engine's anchor and clamp record, and the
   scroll snapshot."""
@@ -753,8 +740,8 @@ async def bootstrap_messages_now(sid: str, store, events) -> list[dict]:
 
 
 async def run_scenarios(
-    cdp: CDP, page: str, sid: str, sid_b: str, sid_c: str, store, events, evidence_dir: pathlib.Path,
-    results: list[dict]) -> None:
+    cdp: browser_harness_session_tree.CDP, page: str, sid: str, sid_b: str, sid_c: str, store, events,
+    evidence_dir: pathlib.Path, results: list[dict]) -> None:
   """The ordered scenario flow; each scenario starts from a state it sets.
 
   ``page`` is the CDP page session the browser calls ride; ``sid``/``sid_b``/
@@ -768,7 +755,7 @@ async def run_scenarios(
   # -- setup: engine mounted in outline; the reader opens the turns their
   # later reads park in by clicking the fold rows --------------------------
   sc = Scenario("setup_engine_mounted")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs, "Chat.TurnEngine && document.getElementById('messages') "
       "&& Chat.activeTurnEngineFor(document.getElementById('messages')) "
@@ -865,8 +852,8 @@ async def run_scenarios(
   lead_key = await ev(cdp, cs, "Chat.activeTurnEngineFor(document.getElementById('messages')).segments[0].key")
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
-  await wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="pagination fetch fired")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="pagination fetch fired")
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs, "Chat.activeTurnEngineFor(document.getElementById('messages'))"
       ".entries.some(e => e.msg && e.msg.id === 'pg1_00u')",
@@ -931,9 +918,9 @@ async def run_scenarios(
   await ev(cdp, cs, "window.__delayNextMs = 2500")
   await ev(cdp, cs, "window.__fetchLog = []")
   await scroll_write(cdp, cs, 0)
-  await wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="stale fetch in flight")
+  await browser_harness_session_tree.wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="stale fetch in flight")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid_b) + ")")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp, cs, "document.body.innerText.includes('Session B opening question 0')", label="session B rendered")
   await asyncio.sleep(3.0)
   body_text = await ev(cdp, cs, "document.body.innerText.includes('STALE-PAGE-MARKER')")
@@ -951,7 +938,7 @@ async def run_scenarios(
   # -- S7: pagination failure surfaces retry; retry loads the last page ------
   sc = Scenario("pagination_failure_retry_and_last_page")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid) + ")")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs,
       "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'))",
@@ -968,7 +955,7 @@ async def run_scenarios(
   # already stable; record it before the retry's prepend must hold it.
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs,
       "(document.getElementById('load-more-sentinel')||{dataset:{}}).dataset.state === 'failed'",
@@ -977,7 +964,8 @@ async def run_scenarios(
   failed = await snap(cdp, cs)
   sc.check(failed["sentinel"] == "failed", "failed pagination shows the retry hint")
   await ev(cdp, cs, "document.getElementById('load-more-sentinel').click()")
-  await wait_for(cdp, cs, "!document.getElementById('load-more-sentinel')", label="sentinel removed")
+  await browser_harness_session_tree.wait_for(
+      cdp, cs, "!document.getElementById('load-more-sentinel')", label="sentinel removed")
   await settle()
   settled = await snap(cdp, cs)
   ay_settled = await anchor_y(cdp, cs, anchor["id"])
@@ -997,10 +985,10 @@ async def run_scenarios(
   # per turn, and the read turn's fold row takes the reading offset — the
   # same rule the manual collapse follows.
   await ev(cdp, cs, "switchSession(" + json.dumps(sid_b) + ")")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp, cs, "document.body.innerText.includes('Session B opening question 0')", label="session B rendered")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid) + ")")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs,
       "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages'))",
@@ -1026,7 +1014,7 @@ async def run_scenarios(
   payload = {"reset": True, "messages": reset_messages, "revision": "regression-reset", "total": len(reset_messages)}
   await ev(cdp, cs, "window.__transcriptPayload = " + json.dumps(payload))
   await ev(cdp, cs, "setWorkerTranscriptMode({sessionId: SESSION_ID})")
-  await wait_for(cdp, cs, "window.__transcriptReads >= 1", label="transcript poll fetched")
+  await browser_harness_session_tree.wait_for(cdp, cs, "window.__transcriptReads >= 1", label="transcript poll fetched")
   await settle()
   await ev(cdp, cs, "stopPageTimer('transcript-poll'); setWorkerTranscriptMode(null)")
   await ev(cdp, cs, "window.__transcriptPayload = null")
@@ -1089,7 +1077,7 @@ async def run_scenarios(
           "mobile": False
       },
       session_id=cs)
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs,
       f"document.getElementById('messages').clientHeight < {before['viewport'] - 100}",
@@ -1105,7 +1093,7 @@ async def run_scenarios(
           "mobile": False
       },
       session_id=cs)
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs,
       f"document.getElementById('messages').clientHeight === {before['viewport']}",
@@ -1228,7 +1216,7 @@ async def run_scenarios(
           json.dumps(page_payload(page, has_more=page_i < len(wheel_pages) - 1, next_before=-1000 - page_i))
           for page_i, page in enumerate(wheel_pages)) + "]")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid_c) + ")")
-  await wait_for(
+  await browser_harness_session_tree.wait_for(
       cdp,
       cs, "Chat.TurnEngine && Chat.activeTurnEngineFor(document.getElementById('messages')) "
       "&& document.querySelector('#messages [data-message-id]')",
@@ -1304,7 +1292,7 @@ async def run_scenarios(
 
 async def run_harness(args: argparse.Namespace) -> None:
   evidence_dir = pathlib.Path(args.evidence_dir)
-  commit = open_evidence_dir(evidence_dir)
+  commit = browser_harness_session_tree.open_evidence_dir(evidence_dir)
 
   # The run's whole footprint (home, profile) lives in one temp directory;
   # --keep names it for debugging instead of deleting it at the end.
@@ -1320,7 +1308,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   home = tmp_path / "charliebot-home"
   home.mkdir()
   profile = tmp_path / "chrome-profile"
-  server_port = pick_free_port()
+  server_port = browser_harness_session_tree.pick_free_port()
   home_config = {
       "headless_chrome_bin": host_chrome_bin,
       "server": {
@@ -1345,8 +1333,8 @@ async def run_harness(args: argparse.Namespace) -> None:
       },
   }
   (home / "config.yaml").write_text(json.dumps(home_config, indent=2), encoding="utf-8")
-  access_key = mint_access_key("scroll-regression-key-")
-  write_credentials_yaml(home, access_key)
+  access_key = browser_harness_session_tree.mint_access_key("scroll-regression-key-")
+  browser_harness_session_tree.write_credentials_yaml(home, access_key)
   for var in ("CHARLIEBOT_ACCESS_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
     os.environ.pop(var, None)
   os.environ["CHARLIEBOT_HOME"] = str(home)
@@ -1356,9 +1344,10 @@ async def run_harness(args: argparse.Namespace) -> None:
   from src.infra import credentials
   key = credentials.configured_access_key()
   if not key:
-    fail("configured_access_key() returned nothing for the synthetic home")
-  chrome = resolve_chrome(args.chrome or config.get_config().headless_chrome_bin or None, fail)
-  log(f"chat scroll regression · commit {commit} · chrome {chrome}")
+    browser_harness_session_tree.fail("configured_access_key() returned nothing for the synthetic home")
+  chrome = browser_harness_session_tree.resolve_chrome(
+      args.chrome or config.get_config().headless_chrome_bin or None, browser_harness_session_tree.fail)
+  browser_harness_session_tree.log(f"chat scroll regression · commit {commit} · chrome {chrome}")
 
   sid, sid_b, sid_c, _bootstrap_messages, store, events = await seed_sessions()
 
@@ -1372,9 +1361,9 @@ async def run_harness(args: argparse.Namespace) -> None:
   deadline = time.monotonic() + 30
   while not app_server.started:
     if serve_task.done():
-      fail(f"isolated server failed to start: {serve_task.exception()}")
+      browser_harness_session_tree.fail(f"isolated server failed to start: {serve_task.exception()}")
     if time.monotonic() > deadline:
-      fail("isolated server did not start within 30s")
+      browser_harness_session_tree.fail("isolated server did not start within 30s")
     await asyncio.sleep(0.1)
   base = f"http://127.0.0.1:{server_port}"
 
@@ -1387,13 +1376,15 @@ async def run_harness(args: argparse.Namespace) -> None:
     # cold address check room, and keep the loop live while it runs.
     status = await asyncio.to_thread(_get, "/", 30)
     if status >= 500:
-      fail(f"server address check failed: GET / returned {status}")
-    log(f"server address verified: {base}")
+      browser_harness_session_tree.fail(f"server address check failed: GET / returned {status}")
+    browser_harness_session_tree.log(f"server address verified: {base}")
   except Exception as exc:
-    fail(f"server address check failed: {exc!r}")
+    browser_harness_session_tree.fail(f"server address check failed: {exc!r}")
 
-  chrome_proc = launch_chrome(chrome, profile, pick_free_port(), DESKTOP_CAPTURE_FLAGS)
-  log(f"test browser pid {chrome_proc.pid} (muted, private profile {profile})")
+  chrome_proc = browser_harness_session_tree.launch_chrome(
+      chrome, profile, browser_harness_session_tree.pick_free_port(),
+      browser_harness_session_tree.DESKTOP_CAPTURE_FLAGS)
+  browser_harness_session_tree.log(f"test browser pid {chrome_proc.pid} (muted, private profile {profile})")
   results_payload: dict = {
       "tested_commit": commit,
       "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1410,10 +1401,10 @@ async def run_harness(args: argparse.Namespace) -> None:
   def save() -> None:
     out.write_text(json.dumps(results_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
-  ws_url = await devtools_ws_url(chrome_proc, 30, fail)
-  cdp = await connect_cdp(ws_url)
+  ws_url = await browser_harness_session_tree.devtools_ws_url(chrome_proc, 30, browser_harness_session_tree.fail)
+  cdp = await browser_harness_session_tree.connect_cdp(ws_url)
   try:
-    page_session, _target = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
+    page_session, _target = await browser_harness_session_tree.open_cdp_page(cdp, ("Page", "Runtime", "Network"))
     await cdp.send(
         "Network.setCookie", {
             "name": "charliebot_access_key",
@@ -1436,8 +1427,8 @@ async def run_harness(args: argparse.Namespace) -> None:
     raise
   finally:
     await cdp.close()
-    stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
-    log(f"test browser pid {chrome_proc.pid} stopped")
+    browser_harness_session_tree.stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
+    browser_harness_session_tree.log(f"test browser pid {chrome_proc.pid} stopped")
     app_server.should_exit = True
     try:
       await asyncio.wait_for(serve_task, timeout=10)
@@ -1450,10 +1441,11 @@ async def run_harness(args: argparse.Namespace) -> None:
       shutil.rmtree(tmp_path, ignore_errors=True)
 
   failed = [s for s in results_payload["scenarios"] if not s["ok"]]
-  log(f"results written to {out}; "
+  browser_harness_session_tree.log(
+      f"results written to {out}; "
       f"{len(results_payload['scenarios']) - len(failed)} passed, {len(failed)} failed")
   if failed:
-    fail(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
+    browser_harness_session_tree.fail(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
 
 
 def main() -> None:
@@ -1474,7 +1466,7 @@ def main() -> None:
   except SystemExit:
     raise
   except Exception as exc:
-    fail(repr(exc))
+    browser_harness_session_tree.fail(repr(exc))
 
 
 if __name__ == "__main__":

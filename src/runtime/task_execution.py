@@ -61,6 +61,7 @@ from src.infra.tasks import create_logged_task
 from src.runtime import (
     cold_read,
     master_cc_queue,
+    message_events,
     review,
     runs,
     session_anchors,
@@ -259,7 +260,9 @@ def compose_input_prompt(
     scheduled triggers keep their own typed framing so the manager sees the
     provenance the event carries. A fork/elone child's report header also names
     its origin, resolved per child by the dispatcher
-    (``child_report_provenances``). Attachments ride the turn.
+    (``child_report_provenances``). Attachments reach the turn in two places:
+    each event's attachment block joins its text, and the upload list is
+    returned for the native image channels.
     """
   parts: list[str] = []
   uploads: list[dict] = []
@@ -268,19 +271,21 @@ def compose_input_prompt(
     content = str(event.get("content") or "")
     if event_type == ET.USER:
       preamble = turn_contributions.resolve_input_preamble(meta, event)
-      parts.append(content if preamble is None else f"{preamble}\n{content}")
+      text = content if preamble is None else f"{preamble}\n{content}"
     elif event_type == ET.AGENT_MESSAGE:
-      parts.append(
+      text = (
           f"[Message from session {event.get('from_session_name') or event.get('from_session') or 'unknown'}] "
           f"{content}")
     elif event_type == ET.CHILD_REPORT:
       provenance = (report_provenance or {}).get(str(event.get("child_session_id")))
-      parts.append(child_report_text(event, provenance))
+      text = child_report_text(event, provenance)
     elif event_type == ET.SCHEDULED_TRIGGER:
-      parts.append(f"[Scheduled trigger] {content}")
+      text = f"[Scheduled trigger] {content}"
     else:
-      parts.append(content)
-    uploads.extend(event.get("uploaded_files") or [])
+      text = content
+    event_uploads = event.get("uploaded_files") or []
+    parts.append(message_events.build_agent_input_content(text, event_uploads))
+    uploads.extend(event_uploads)
   return "\n\n".join(part for part in parts if part), uploads
 
 

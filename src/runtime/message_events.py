@@ -11,6 +11,11 @@ from src.infra import event_types as ET
 
 _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 
+# The fixed prompt under the attachment block's header, read by the agent before its answer.
+DEFAULT_ATTACHED_FILES_PROMPT = (
+    "The user attached these files to this message. Before you answer, open each file.\n"
+    "When the message has no other text, read the user's intent from the current conversation.")
+
 
 def _filename_from_path(path: str) -> str:
   """Display filename for an attachment path.
@@ -57,6 +62,22 @@ def strip_attached_files_block(content: str) -> tuple[str, list[dict]]:
     uploaded_files.append({"filename": _filename_from_path(path), "path": path})
 
   return body, uploaded_files
+
+
+def build_agent_input_content(content: str, uploaded_files: list[dict]) -> str:
+  """Append the attachment block for *uploaded_files* to an event's agent-visible text.
+
+  The block is the ``[Attached files]`` header, the default prompt, then one
+  absolute path per upload. An event with text gets the block after one blank
+  line; an event without text gets the block alone.
+  """
+  paths = [str(f.get("path", "")).strip() for f in uploaded_files if str(f.get("path", "")).strip()]
+  if not paths:
+    return content
+  body = "\n".join([DEFAULT_ATTACHED_FILES_PROMPT, *(f"- {path}" for path in paths)])
+  if not content.strip():
+    return f"[Attached files]\n{body}"
+  return content + _ATTACHED_FILES_MARKER + body
 
 
 def normalize_user_message_event(ev: dict) -> dict:

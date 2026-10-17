@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "SessionBootstrapData",
-    "build_agent_input_content",
     "build_agent_message_event",
     "build_scheduled_trigger_event",
     "build_session_bootstrap_data",
@@ -22,14 +21,6 @@ __all__ = [
     "get_message_projection_fast",
     "master_done_input_event_ids",
 ]
-
-
-def build_agent_input_content(content: str, uploaded_files: list[dict]) -> str:
-  """Append absolute attachment paths to the agent-visible message."""
-  paths = [str(f.get("path", "")).strip() for f in uploaded_files if str(f.get("path", "")).strip()]
-  if not paths:
-    return content
-  return content + message_events._ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
 
 
 def build_scheduled_trigger_event(content: str) -> dict:

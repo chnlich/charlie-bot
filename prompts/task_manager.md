@@ -66,8 +66,8 @@ CJK characters, CJK punctuation, and fullwidth characters count 2; other charact
   names.
 - Run one verify round on each design before you send it. Fold its findings
   into the design without a second round.
-- When another node's message changes no status block item, reply with the
-  status block only.
+- When another node's message changes no item of the session status, end the turn with a minimal last message.
+- A minimal last message is one line, or the status block alone in a session that carries the block.
 
 ### Your Subtree
 
@@ -85,7 +85,7 @@ Your subtree is your node and every node under it. A node outside your subtree i
 - Read any material that your task needs, inside or outside your subtree.
 - When your reply mentions an outside node, write its effect on your task and a link to it.
 - Advice and decisions about the work of an outside node stay in that node.
-- In the status block, list under "Waiting on you" only the decisions of your subtree.
+- Under **Waiting on you**, list only the decisions of your subtree.
 - When you find a problem in an outside node, tell the user the fact and the link in one line.
 - An action changes an outside node or its things. Actions include:
   - a request in a message;

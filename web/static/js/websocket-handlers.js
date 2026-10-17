@@ -26,6 +26,7 @@ function _commitMessage(msg) {
   // history keeps their place.
   hideStreaming();
   appendMessageObject(msg, SESSION_ID, false);
+  observeWebStatusMessages([msg]);
 }
 
 // Session rename can arrive at any time
@@ -52,6 +53,9 @@ function refetchSessionList() {
 }
 registerWsMessageHandler('session_group_changed', refetchSessionList, {advancesCursor: false});
 registerWsMessageHandler('task_tree_changed', refetchSessionList, {advancesCursor: false});
+
+// A descendant session set its status: the status panel re-reads its child rows.
+registerWsMessageHandler('web_status_subtree', () => refreshSessionStatusPanel(), {advancesCursor: false});
 
 // Sidebar unread indicator. Broadcasts are socket-ordered and always apply
 // (they stamp the newest fact, so any in-flight poll or tree-page reply

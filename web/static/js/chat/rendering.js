@@ -692,7 +692,8 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "system" && msg.kind === "run_header") {
     return runHeaderHtml(msg);
   }
-  if (msg.role === "system") {
+  // A web_status change reads as a system line; the For you view folds it instead.
+  if (msg.role === "system" || msg.role === "web_status") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
       + escapeHtml(msg.content) + "</div></div>";

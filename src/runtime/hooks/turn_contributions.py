@@ -77,6 +77,13 @@ class TurnContribution:
     """
     return {}
 
+  def claims_turn_end_unread(self, meta: models.SessionMetadata) -> bool:
+    """True when this contribution marks the session unread itself after a clean turn, so the runtime skips its mark.
+
+    A clean turn has no error message, a zero exit and no zero-output guard. An errored turn is always marked.
+    """
+    return False
+
 
 _registered: dict[str, str] = {}
 _instances: dict[str, TurnContribution] = {}
@@ -128,6 +135,11 @@ def resolve_workflow_rules_file(meta: models.SessionMetadata) -> str:
       "workflow rules file",
       [(contribution, contribution.workflow_rules_file(meta)) for contribution in turn_contributions()])
   return DEFAULT_WORKFLOW_RULES_FILE if named is None else named
+
+
+def turn_end_unread_claimed(meta: models.SessionMetadata) -> bool:
+  """True when a registered contribution claims the turn-end unread marker for *meta*."""
+  return any(contribution.claims_turn_end_unread(meta) for contribution in turn_contributions())
 
 
 def resolve_input_preamble(meta: models.SessionMetadata, input_event: dict) -> str | None:

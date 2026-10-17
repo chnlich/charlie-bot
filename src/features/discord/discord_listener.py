@@ -75,11 +75,18 @@ from typing import TYPE_CHECKING
 from src.features.chat_threads import thread_entry
 from src.features.discord import discord_client, event_types, metadata
 from src.infra import config, http, log_once, timeouts
-from src.runtime import session_lifecycle, session_listing, session_store, session_successor, task_execution, triggers
-from src.runtime.session_events import SessionEvents
+from src.runtime import (
+    session_events,
+    session_lifecycle,
+    session_listing,
+    session_store,
+    session_successor,
+    task_execution,
+    triggers,
+)
 
 if TYPE_CHECKING:
-  from websockets.asyncio.client import ClientConnection
+  from websockets.asyncio import client
 
 logger = log_once.LazyStructlogLogger()
 
@@ -305,7 +312,7 @@ async def handle_message_create(
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor,
     client: discord_client.DiscordClient,
     trigger_mgr: triggers.TriggerManager,
@@ -358,7 +365,7 @@ async def handle_message_create(
         DiscordThreadAdapter(client),
         store,
         lifecycle,
-        session_events,
+        events,
         trigger_mgr,
         summon_session_id(guild_id, channel_id),
         message_id,
@@ -385,7 +392,7 @@ async def handle_message_create(
       cfg,
       store,
       lifecycle,
-      session_events,
+      events,
       successor,
       trigger_mgr,
       session_id=summon_session_id(guild_id, thread_id),
@@ -418,31 +425,31 @@ async def assert_thread_fresh(session_id: str, cfg: config.CharlieBotConfig, sto
 
 async def ack_messages(
     session_id: str, message_ids: list[str], cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    session_events: SessionEvents) -> dict:
+    events: session_events.SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
   One-line pass-through to the shared ack (``thread_entry.ack_messages``) on a
   lazily-built Discord adapter; the refusal shapes, the ack event, and the
   readback keys live there.
   """
-  return await thread_entry.ack_messages(DiscordThreadAdapter(), session_id, message_ids, cfg, store, session_events)
+  return await thread_entry.ack_messages(DiscordThreadAdapter(), session_id, message_ids, cfg, store, events)
 
 
 async def post_reply(
     session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    session_events: SessionEvents) -> dict:
+    events: session_events.SessionEvents) -> dict:
   """Post *text* to the session's Discord thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
   on a lazily-built Discord adapter; the link check, chunking, refusals, reply
   event, and readback live there.
   """
-  return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, store, session_events)
+  return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, store, events)
 
 
 async def deliver_done(
     session_id: str, done: dict, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
@@ -451,12 +458,12 @@ async def deliver_done(
   live there.
   """
   return await thread_entry.deliver_done(
-      DiscordThreadAdapter(), session_id, done, cfg, store, lifecycle, session_events, successor)
+      DiscordThreadAdapter(), session_id, done, cfg, store, lifecycle, events, successor)
 
 
 async def backfill_lost_summons(
     cfg: config.CharlieBotConfig, listing: session_listing.SessionListing, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor) -> int:
   """Boot pass over every Discord session; returns how many notices and nudges it produced.
 
@@ -465,13 +472,13 @@ async def backfill_lost_summons(
   the lost-summon report and the per-round audit live there.
   """
   return await thread_entry.backfill_lost_summons(
-      DiscordThreadAdapter(), cfg, listing, store, lifecycle, session_events, successor)
+      DiscordThreadAdapter(), cfg, listing, store, lifecycle, events, successor)
 
 
 async def _backfill_followed_threads(
     cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
-    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents, client: discord_client.DiscordClient,
-    trigger_mgr: triggers.TriggerManager) -> int:
+    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
+    client: discord_client.DiscordClient, trigger_mgr: triggers.TriggerManager) -> int:
   """Arm the follow trigger of every followed Discord session holding unread messages; return the count.
 
   Active and archived sessions both ride the backfill: an archived session
@@ -484,7 +491,7 @@ async def _backfill_followed_threads(
   (re)connection.
   """
   return await thread_entry.backfill_followed_threads(
-      DiscordThreadAdapter(client), cfg, listing, lifecycle, session_events, trigger_mgr)
+      DiscordThreadAdapter(client), cfg, listing, lifecycle, events, trigger_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +534,7 @@ class _DroppedError(Exception):
     self.saw_ready = saw_ready
 
 
-async def _connect(url: str) -> ClientConnection:
+async def _connect(url: str) -> client.ClientConnection:
   """Open one gateway websocket; the seam tests patch instead of the network.
 
   websockets rides first use — only ``run_listener`` reaches here — because
@@ -541,13 +548,13 @@ async def _connect(url: str) -> ClientConnection:
 
 
 async def _run_connection(
-    ws: ClientConnection,
+    ws: client.ClientConnection,
     token: str,
     cfg: config.CharlieBotConfig,
     listing: session_listing.SessionListing,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor,
     client: discord_client.DiscordClient,
     trigger_mgr: triggers.TriggerManager,
@@ -617,12 +624,12 @@ async def _run_connection(
         saw_ready = True
         bot_user_id = payload["d"]["user"]["id"]
         logger.info("discord_listener_connected")
-        await _backfill_followed_threads(cfg, listing, lifecycle, session_events, client, trigger_mgr)
+        await _backfill_followed_threads(cfg, listing, lifecycle, events, client, trigger_mgr)
       elif op == 0 and payload.get("t") == "MESSAGE_CREATE":
         message = payload["d"]
         try:
           sid = await handle_message_create(
-              message, cfg, store, lifecycle, session_events, successor, client, trigger_mgr, bot_user_id=bot_user_id)
+              message, cfg, store, lifecycle, events, successor, client, trigger_mgr, bot_user_id=bot_user_id)
           logger.info("discord_listener_message_handled", channel=message.get("channel_id"), session=sid)
         except Exception as e:
           logger.exception("discord_listener_message_handle_failed", channel=message.get("channel_id"), error=str(e))
@@ -644,7 +651,7 @@ async def run_listener(
     listing: session_listing.SessionListing,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    events: SessionEvents,
+    events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor,
 ) -> None:
   """Discord gateway connect/receive/reconnect loop; returns only on a stop close code.

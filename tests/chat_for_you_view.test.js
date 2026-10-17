@@ -22,8 +22,8 @@ const {readStatic, chatModules, runStaticModules} = require('./read_static');
 // page's markdown-renderer.js with a stub marked, which its load never calls.
 // ---------------------------------------------------------------------------
 
-// The page's script order for these modules: markdown-renderer.js first (the
-// progress strip reads its status-block labels), then the chat modules.
+// The page's script order for these modules: markdown-renderer.js first, then
+// the chat modules. The message rows render through its prose rules.
 function loadPageModules(context) {
   vm.createContext(context);
   vm.runInContext(readStatic('markdown-renderer.js'), context, {filename: 'markdown-renderer.js'});
@@ -68,7 +68,6 @@ function forYouRig(messages, {view = 'foryou', clientHeight = 900} = {}) {
 // with N counted messages, and the structural rows by name.
 function rowsOf(root) {
   return root.children.map((el) => {
-    if (el.classList.contains('for-you-strip')) return 'strip';
     if (el.classList.contains('for-you-fold')) return 'fold:' + el.dataset.count;
     if (el.classList.contains('for-you-working')) return 'working';
     if (el.classList.contains('hidden')) return 'holder';
@@ -106,8 +105,11 @@ function fixture() {
 }
 
 const FIXTURE_ROWS = [
-  'strip', 'user', 'fold:1', 'web_reply', 'fold:1', 'web_reply_notice', 'user', 'fold:1', 'system', 'fold:2', 'holder',
+  'user', 'fold:1', 'web_reply', 'fold:1', 'web_reply_notice', 'user', 'fold:1', 'system', 'fold:2', 'holder',
 ];
+// The fixture after a web_status message lands behind its last separator: the
+// message joins the trailing fold and shows no row of its own.
+const FIXTURE_ROWS_WITH_STATUS = [...FIXTURE_ROWS.slice(0, -2), 'fold:3', 'holder'];
 
 test('For you shows the user, web reply, notice and error rows and folds the rest per run', () => {
   const rig = forYouRig(fixture());
@@ -142,16 +144,16 @@ test('a fold opens in place and closes again', () => {
   assert.equal(fold.getAttribute('aria-expanded'), 'false');
   fold.onclick();
   assert.equal(fold.getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(rowsOf(rig.root).slice(0, 4), ['strip', 'user', 'fold:1', 'assistant']);
-  assert.equal(messageIds(rig.root.children[3]), 'a1', 'the hidden message sits right after its fold line');
-  assert.equal(rig.root.children[4].dataset.messageId, 'r1', 'the next shown message follows it');
+  assert.deepEqual(rowsOf(rig.root).slice(0, 3), ['user', 'fold:1', 'assistant']);
+  assert.equal(messageIds(rig.root.children[2]), 'a1', 'the hidden message sits right after its fold line');
+  assert.equal(rig.root.children[3].dataset.messageId, 'r1', 'the next shown message follows it');
 
   foldLines(rig.root)[0].onclick();
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
   assert.equal(foldLines(rig.root)[0].getAttribute('aria-expanded'), 'false');
 });
 
-test('the fold counts recompute when an older page lands, and the strip stays on the newest status block', () => {
+test('the fold counts recompute when an older page lands', () => {
   const rig = forYouRig(fixture());
   rig.engine.prependMessages([
     eMsg('user', 'p0', 'older question'),
@@ -160,27 +162,16 @@ test('the fold counts recompute when an older page lands, and the strip stays on
   ]);
   settle(rig.timers);
   assert.deepEqual(rowsOf(rig.root), [
-    'strip', 'user', 'fold:1', 'user', 'fold:1', 'web_reply', 'fold:1', 'web_reply_notice',
+    'user', 'fold:1', 'user', 'fold:1', 'web_reply', 'fold:1', 'web_reply_notice',
     'user', 'fold:1', 'system', 'fold:2', 'holder',
   ]);
-  const values = rig.root.children[0].children.map((row) => row.children[1].textContent);
-  assert.deepEqual(values, ['patching the parser', 'nothing yet']);
 });
 
-test('the progress strip takes the newest status block and updates when a newer one lands', () => {
+test('a web status message folds into For you and adds no row of its own', () => {
   const rig = forYouRig(fixture());
-  const strip = rig.root.children[0];
-  const values = () => strip.children.map((row) => row.children[1].textContent);
-  // a3 is folded in For you, and the strip still reads it: the status block is
-  // the newest one in the loaded history.
-  assert.deepEqual(values(), ['patching the parser', 'nothing yet']);
-
-  rig.context.appendMessageObject(
-      eMsg('assistant', 'a4', '**Goal**: fix it\n**Now**: tests running\n**Waiting on you**: review the diff'),
-      'sess-fy', false);
+  rig.context.appendMessageObject(eMsg('web_status', 'w1', 'Status updated: Now'), 'sess-fy', false);
   settle(rig.timers);
-  assert.equal(rig.root.children[0], strip, 'the strip is the same element, updated in place');
-  assert.deepEqual(values(), ['tests running', 'review the diff']);
+  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS_WITH_STATUS);
 });
 
 test('a reader scrolled into history keeps their message in place when an older page lands', () => {
@@ -247,6 +238,7 @@ test('a refresh with nothing to move keeps every row element', () => {
 test('Everything is unchanged after a For you round trip', () => {
   const rig = forYouRig(fixture(), {view: 'everything'});
   rig.engine.setOverride('u1|a2|s1', true);
+  rig.context.appendMessageObject(eMsg('web_status', 'w1', 'Status updated: Now'), 'sess-fy', false);
   settle(rig.timers);
   const snapshot = () => domSnapshot(rig.root);
   const registry = () => JSON.stringify([...rig.engine.registry].map(([key, state]) => [
@@ -257,7 +249,7 @@ test('Everything is unchanged after a For you round trip', () => {
 
   rig.engine.setView('foryou');
   settle(rig.timers);
-  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
+  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS_WITH_STATUS);
   rig.engine.setView('everything');
   settle(rig.timers);
 

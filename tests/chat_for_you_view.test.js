@@ -109,6 +109,20 @@ test('For you shows only the user, web reply, notice and error rows, in order', 
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
+test('a web reply mid-turn shows in For you and sits inside the folded steps in Everything', () => {
+  const rig = forYouRig(fixture());
+  assert.ok(rowsOf(rig.root).includes('web_reply'), 'For you shows the reply');
+
+  const everything = forYouRig(fixture(), {view: 'everything'});
+  everything.engine.setOverride('u1|a2|s1', true);
+  settle(everything.timers);
+  const reply = everything.root.querySelectorAll('[data-message-id="r1"]');
+  assert.equal(reply.length, 1, 'the reply is in the Everything DOM');
+  const steps = reply[0].parentElement;
+  assert.ok(steps.classList.contains('turn-fold-content'), 'the reply sits in the steps region');
+  assert.ok(steps.classList.contains('hidden'), 'the steps region is folded');
+});
+
 test('no fold row shows for any mix of entries', () => {
   const work = [
     eMsg('assistant', 'x1', 'looking'),

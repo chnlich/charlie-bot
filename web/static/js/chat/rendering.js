@@ -734,20 +734,36 @@ function renderMessage(msg, sessionId) {
     var reportOutcome = String(msg.outcome || "completed");
     // Literal classes only: the Tailwind scanner never sees composed names.
     var outcomeColorCls = reportOutcome === "completed" ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
-    var refsHtml = "";
+    var reportText = String(msg.content || "");
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
+    // A report folds behind a button when it runs past three lines, or past a
+    // weight of 360 where each wide (CJK) code point counts 2, or it has refs.
+    var reportWeight = 0;
+    for (var ch of reportText) reportWeight += wc2chIsWide(ch.codePointAt(0)) ? 2 : 1;
+    var longText = reportText.split("\n").length > 3 || reportWeight > 360;
+    var foldable = longText || refs.length > 0;
+    var refsHtml = "";
     if (refs.length) {
-      refsHtml = "<div class=\"mt-2 pt-2 border-t border-emerald-700/30 text-xs text-emerald-400/50\">"
+      refsHtml = "<div class=\"child-report-refs mt-2 pt-2 border-t border-emerald-700/30 text-xs text-emerald-400/50\">"
         + refs.map(function(ref) { return "<div>" + escapeHtml(String(ref)) + "</div>"; }).join("")
         + "</div>";
     }
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
+    var moreLabel = (longText ? "Show full report" : "Show")
+      + (refs.length ? (longText ? " · " : " ") + refs.length + " ref" + (refs.length === 1 ? "" : "s") : "");
+    // The fold state lives on the card node only: a page reload folds the card again.
+    var toggleHtml = foldable
+      ? "<button type=\"button\" class=\"child-report-toggle\" aria-expanded=\"false\" onclick=\"var c=this.closest('.child-report');var o=c.dataset.folded==='true';c.dataset.folded=o?'false':'true';this.setAttribute('aria-expanded',String(o))\">"
+        + "<span class=\"child-report-more\">" + escapeHtml(moreLabel) + " ▾</span><span class=\"child-report-less\">Show less ▴</span></button>"
+      : "";
+    return openMessageWrapper("flex justify-start", msg)
+      + "<div class=\"child-report max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\""
+      + (foldable ? " data-folded=\"true\"" : "") + ">"
       + "<div class=\"flex items-center gap-2 " + outcomeColorCls + " text-xs font-semibold mb-2\">"
       + "<span class=\"px-1.5 py-0.5 rounded bg-emerald-900 text-[10px] tracking-wide\">CHILD " + escapeHtml(reportOutcome.toUpperCase()) + "</span>"
       + "<a href=\"/?session=" + encodeURIComponent(msg.child_session_id || "") + "\" class=\"text-emerald-400/50 underline truncate\">"
       + escapeHtml(msg.child_session_id || "") + "</a></div>"
-      + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(String(msg.content || "")) + "</div>"
-      + refsHtml + timeDiv() + "</div></div>";
+      + "<div class=\"" + (longText ? "child-report-clamp " : "") + "whitespace-pre-wrap break-words\">" + escapeHtml(reportText) + "</div>"
+      + refsHtml + toggleHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "worker_summary") {
     var originFooter = "";

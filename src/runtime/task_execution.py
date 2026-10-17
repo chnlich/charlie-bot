@@ -60,6 +60,7 @@ from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType
 from src.infra.tasks import create_logged_task
 from src.runtime import (
     cold_read,
+    control_events,
     master_cc_queue,
     message_events,
     review,
@@ -936,6 +937,8 @@ class TaskExecutionAdapter:
       await tree.session_events.announce_appended_event(meta.task_parent_id, report_event, epoch=parent_epoch)
     if report_event is not None and report_created and meta.task_parent_id:
       await tree.dispatch.wake_parent(meta.task_parent_id, report=report_event)
+    if meta.profile == "manager":
+      await self._record_turn_launch_notice(session_id, run_id, reason)
     return f"withheld: {reason}"
 
   async def _land_launch_failure(self, meta: SessionMetadata, run: RunRecord, exc: Exception) -> None:
@@ -986,6 +989,8 @@ class TaskExecutionAdapter:
       error_text = f"{type(exc).__name__}: {exc}"[:2000]
       await self._record_launch_error_event(session_id, run_id, error_text, quota_exhausted=None)
       await self._tree.dispatch.finish_run(session_id, run_id, outcome="failed", exit_code=-1)
+      if meta.profile == "manager":
+        await self._record_turn_launch_notice(session_id, run_id, error_text)
       fresh = await self._tree.runs.get_run(session_id, run_id)
       if fresh is not None:
         run = fresh
@@ -1036,6 +1041,36 @@ class TaskExecutionAdapter:
     # launch-failed run's evidence is reachable exactly the way a process
     # run's is (record_observation writes only the provided fields).
     await self._tree.runs.record_observation(session_id, run_id, events_ref=str(events_log))
+
+  async def _record_turn_launch_notice(self, session_id: str, run_id: str, reason: str) -> None:
+    """Persist and announce the chat error that reports a manager turn's launch failure or withhold.
+
+        The event id derives from the Run and the reason, so a repeated launch
+        failure or withhold of the same Run finds the event in the node's chat
+        events and writes nothing. The content follows the Run's fresh record: a
+        Run without a process id never started, one with a process id failed
+        after its process started.
+        """
+    tree = self._tree
+    run = await tree.runs.get_run(session_id, run_id)
+    if run is None:
+      raise runs.RunNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
+    outcome = "Turn failed" if run.pid is not None else "Turn did not start"
+    event_id = str(uuid.uuid5(control_events.TASK_ID_NAMESPACE, f"turn-launch:{run_id}:{reason}"))
+    epoch = await tree.session_events.prime_aggregator(session_id)
+    async with tree.control_lock:
+      if any(e.get("id") == event_id for e in tree.fact_history(session_id)):
+        return
+      event = {
+          "id": event_id,
+          "type": ET.ERROR,
+          "source": "turn_launch",
+          "run_id": run_id,
+          "content": f"{outcome}: {reason}",
+          "timestamp": utc_now_iso(),
+      }
+      await tree.events.append(session_id, event)
+    await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
 
   async def _await_terminal(self, session_id: str, run_id: str) -> str:
     """Await one Run's durable terminal fact; returns its outcome."""

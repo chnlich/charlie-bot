@@ -56,6 +56,7 @@ from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import PatchSessionTaskRequest, RunRecord, SequenceRef, SessionMetadata, TaskSpec
 from src.runtime import message_events
 from src.runtime import runs as runs_mod
+from src.runtime.api import message_utils
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
@@ -2491,6 +2492,89 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
   # behind the failure and the node is left with the fact, not a queued run.
   assert tree.dispatch.pending_inputs(manager.id) == []
   assert [r.id for r in tree.runs.list_run_records_sync(manager.id)] == [run_id]
+
+
+def _turn_launch_notices(tree: TaskTreeManager, session_id: str) -> list[dict]:
+  return [e for e in tree.fact_history(session_id) if e.get("source") == "turn_launch"]
+
+
+@pytest.mark.asyncio
+async def test_a_manager_turn_that_fails_to_launch_shows_one_error_row_on_the_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  raised: list[ValueError] = []
+
+  def explode(cfg, backend: str | None, model: str | None):
+    raised.append(ValueError(f"backend {backend!r} is not configured"))
+    raise raised[-1]
+
+  monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  run, outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  assert outcome == "failed"
+
+  notices = _turn_launch_notices(tree, manager.id)
+  assert len(notices) == 1, notices
+  notice = notices[0]
+  assert notice["type"] == ET.ERROR and notice["run_id"] == run.id
+  assert notice["content"].startswith("Turn did not start: ")
+  assert "is not configured" in notice["content"]
+  boot = await message_utils.build_session_bootstrap_data(manager.id, session_blocks.store, session_blocks.events)
+  rows = [m for m in boot.messages if str(m.get("content")).startswith("Error: Turn did not start: ")]
+  assert [m["role"] for m in rows] == ["system"]
+
+  # Landing the same failure again finds the event and writes nothing.
+  meta = await tree.load_meta(manager.id)
+  await tree.dispatch.executor._land_launch_failure(meta, run, raised[0])
+  assert _turn_launch_notices(tree, manager.id) == [notice]
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_manager_turn_shows_one_error_row_however_often_it_is_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
+  meta = await tree.load_meta(manager.id)
+  body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
+  body.unlink()  # the rule vanished before the launch
+  _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("never")])
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+
+  observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
+  assert observation.withheld is not None and "prompt preparation failed" in observation.withheld
+  notices = _turn_launch_notices(tree, manager.id)
+  assert len(notices) == 1, notices
+  assert notices[0]["content"].startswith("Turn did not start: ")
+
+  again = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
+  assert again.withheld == observation.withheld
+  assert _turn_launch_notices(tree, manager.id) == notices
+
+
+@pytest.mark.asyncio
+async def test_a_worker_launch_failure_writes_no_turn_launch_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
+
+  def explode(cfg, backend: str | None, model: str | None):
+    raise ValueError(f"backend {backend!r} is not configured")
+
+  monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
+  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
+
+  _run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
+  assert outcome == "failed"
+  assert _turn_launch_notices(tree, worker.id) == []
 
 
 # ---------------------------------------------------------------------------

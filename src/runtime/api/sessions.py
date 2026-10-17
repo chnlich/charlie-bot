@@ -12,13 +12,8 @@ import pydantic
 from fastapi import Depends
 from starlette import responses
 
+from src.infra import compression, config, log_once, memo, models
 from src.infra import event_types as ET
-from src.infra import models
-from src.infra.compression import gzip_level1
-from src.infra.config import CharlieBotConfig, get_config
-from src.infra.event_types import BACKEND_SWITCHED
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.memo import BoundedMemo, StatSignatureMemo
 from src.infra.responses import (
     GZIP_RESPONSE_HEADERS,
     FastJsonResponse,
@@ -28,7 +23,31 @@ from src.infra.responses import (
     gzip_file_fresh,
     request_wants_gzip,
 )
-from src.runtime import sidebar_state, task_completion, thinking_state, worker_transcript
+from src.runtime import (
+    chat_events,
+    control_events,
+    message_aggregator,
+    run_token,
+    runs,
+    scheduled_sessions,
+    session_anchors,
+    session_dispatch,
+    session_fork,
+    session_lifecycle,
+    session_listing,
+    session_search,
+    session_sidebar,
+    session_store,
+    sidebar_state,
+    spawner_backends,
+    takeoff_gate,
+    task_completion,
+    task_execution,
+    task_prompts,
+    thinking_state,
+    worker_transcript,
+)
+from src.runtime.api import message_utils
 from src.runtime.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     bad_request,
@@ -48,37 +67,9 @@ from src.runtime.api.deps import (
     require_found,
     require_session,
 )
-from src.runtime.api.message_utils import (
-    SessionBootstrapData,
-    _worker_usage,
-    build_session_bootstrap_data,
-    events_to_messages,
-    get_message_projection_fast,
-)
-from src.runtime.chat_events import chat_events_path
-from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import backend_types
 from src.runtime.hooks.sequence_controllers import binding_for, sequence_listing_fields
-from src.runtime.message_aggregator import tool_preview
-from src.runtime.run_token import CallerIdentity
-from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, read_host_boot_time, run_not_found_in_task_text
-from src.runtime.scheduled_sessions import sequence_subtree_roots
-from src.runtime.session_anchors import SessionAnchors
-from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
-from src.runtime.session_fork import (
-    ELONE_BOOTSTRAP_OPENER,
-    FORK_BOOTSTRAP_OPENER,
-    HISTORY_LOCATION_NOTE,
-    SessionFork,
-)
-from src.runtime.session_lifecycle import SessionLifecycle
-from src.runtime.session_listing import SessionListing
-from src.runtime.session_search import SessionSearch
-from src.runtime.session_sidebar import SessionSidebar
-from src.runtime.session_store import SessionStore
-from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
-from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_errors import (
     TaskArchivedError,
     TaskConflictError,
@@ -86,13 +77,10 @@ from src.runtime.task_errors import (
     TaskInvalidError,
     TaskNotFoundError,
 )
-from src.runtime.task_execution import assemble_coherent_snapshot
-from src.runtime.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.runtime.task_sessions import AGENT_CREATE_SCOPE_REFUSAL, TASK_CREATE_REQUEST_ID_REQUIRED, TaskTreeManager
-from src.runtime.thinking_state import run_backend
 from src.runtime.triggers import TriggerManager
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 router = fastapi.APIRouter()
 
 # The search route's read-only overlay serializes derived datetimes through the
@@ -104,11 +92,11 @@ _UTC_DATETIME_JSON = pydantic.TypeAdapter(models.UtcDatetime | None)
 _RUN_KINDS = frozenset(get_args(models.RunKind))
 
 
-def _default_backend_id(cfg: CharlieBotConfig) -> str:
+def _default_backend_id(cfg: config.CharlieBotConfig) -> str:
   return cfg.backends.options[0].id if cfg.backends.options else "claude"
 
 
-def _active_backend_payload(meta: models.SessionMetadata, cfg: CharlieBotConfig) -> dict:
+def _active_backend_payload(meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> dict:
   # A worker node displays its newest Run's backend (the delegation's target
   # model), never the inherited creation value the persisted field carries.
   binding = binding_for(meta.id)
@@ -124,7 +112,7 @@ def _active_backend_payload(meta: models.SessionMetadata, cfg: CharlieBotConfig)
   }
 
 
-# The bootstrap payload's tool rows render through tool_preview: the output and
+# The bootstrap payload's tool rows render through message_aggregator.tool_preview: the output and
 # the input fields the renderer reads cap at TOOL_PREVIEW_CHARS with their
 # truncation markers set, and the input's other string values carry the
 # dead-field bound — one home shared with the stream delta's tool shape.
@@ -141,7 +129,7 @@ def _bootstrap_tool_previews(messages: list[dict]) -> list[dict]:
     if not isinstance(tools, list):
       out.append(msg)
       continue
-    previews = [tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
+    previews = [message_aggregator.tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
     if all(new is old for new, old in zip(previews, tools, strict=True)):
       out.append(msg)
       continue
@@ -151,7 +139,7 @@ def _bootstrap_tool_previews(messages: list[dict]) -> list[dict]:
   return out
 
 
-def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -> dict:
+def _bootstrap_payload(bootstrap: message_utils.SessionBootstrapData, cfg: config.CharlieBotConfig) -> dict:
   payload = {
       "session": bootstrap.session.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE),
       "messages": _bootstrap_tool_previews(bootstrap.messages),
@@ -166,7 +154,7 @@ def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -
 
 def _switchable_backend_ids(
     active_backend: str,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     *,
     dedicated: bool,
 ) -> list[str]:
@@ -205,7 +193,7 @@ _SIDEBAR_IDS_QUERY_DESC = "Comma-separated ids of the sessions the sidebar is re
 
 def _resolve_requested_backend(
     requested_backend: str | None,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     *,
     fallback_backend: str | None,
 ) -> str:
@@ -299,7 +287,7 @@ class _SessionsListMemos:
   """
 
   def __init__(self) -> None:
-    self.gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
+    self.gzip_memo: memo.BoundedMemo[bytes, bytes] = memo.BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
     # One steady-state whole-body slot beside the gzip memo: the search
     # route's _search_whole_body mechanism. The slot is only ever replaced whole.
     self.whole_body: tuple[tuple[models.SessionMetadata, ...], tuple, bytes] | None = None
@@ -318,7 +306,8 @@ class _SessionsListMemos:
 _workspace_list_memos = _SessionsListMemos()
 
 
-async def _active_listing_corpus(listing: SessionListing) -> tuple[list[models.SessionMetadata], dict[str, dict]]:
+async def _active_listing_corpus(
+    listing: session_listing.SessionListing) -> tuple[list[models.SessionMetadata], dict[str, dict]]:
   """The active non-scheduled corpus with its status derivations, read-only.
 
   One home for the fetch both sidebar root lists ride: the Workspace list and
@@ -365,7 +354,7 @@ async def _sessions_list_response(
     # model), never the inherited creation value; every other row keeps its
     # own persisted backend. The in-memory read rides the overlay tuple so a
     # backend change re-renders the memoized body.
-    display_backend = (run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
+    display_backend = (thinking_state.run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
     # Both datetimes ride the model's JSON scheme (pydantic-core renders datetime.UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(
@@ -417,7 +406,7 @@ async def _sessions_list_response(
 @router.get("/")
 async def list_sessions(
     request: fastapi.Request,
-    listing: SessionListing = Depends(get_session_listing),
+    listing: session_listing.SessionListing = Depends(get_session_listing),
 ) -> responses.Response:
   """List active task nodes newest first.
 
@@ -437,9 +426,9 @@ async def list_sessions(
 @router.post("/", response_model=models.SessionMetadata)
 async def create_session(
     req: models.CreateSessionRequest,
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.SessionMetadata:
   if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
     # v2 task create: the task-tree owner binds (parent, request_id) to one node.
@@ -459,7 +448,8 @@ async def create_session(
           slot_values=req.model_extra,
           caller=caller,
       )
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, DelegationBlockedError) as e:
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError,
+            takeoff_gate.DelegationBlockedError) as e:
       raise _task_http_error(e) from e
     log.info("task_created", session_id=meta.id, task_parent_id=req.task_parent_id, profile=req.profile)
     return meta
@@ -503,7 +493,7 @@ async def list_archived_sessions(
     limit: int = 100,
     before: str | None = None,
     before_id: str | None = None,
-    listing: SessionListing = Depends(get_session_listing),
+    listing: session_listing.SessionListing = Depends(get_session_listing),
 ) -> dict:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip.
 
@@ -519,7 +509,7 @@ async def list_archived_sessions(
   except ValueError as e:
     raise fastapi.HTTPException(status_code=422, detail=str(e)) from e
   rows = page["sessions"]
-  sequence_subtree = sequence_subtree_roots(rows)
+  sequence_subtree = scheduled_sessions.sequence_subtree_roots(rows)
   rows = [row for row in rows if row.id not in sequence_subtree]
   context = await listing.archived_context_rows(rows)
   # One page list, newest first: the stable sort keeps the archived rows in
@@ -540,7 +530,7 @@ async def list_archived_sessions(
 
 
 @router.get("/starred")
-async def list_starred_sessions(listing: SessionListing = Depends(get_session_listing),) -> list[dict]:
+async def list_starred_sessions(listing: session_listing.SessionListing = Depends(get_session_listing),) -> list[dict]:
   """List starred task nodes, newest first.
 
   Row shape matches the other sidebar lists: the model dump with the schedule
@@ -560,14 +550,15 @@ async def list_starred_sessions(listing: SessionListing = Depends(get_session_li
 
 
 @router.get("/groups")
-async def list_groups(listing: SessionListing = Depends(get_session_listing)) -> list[str]:
+async def list_groups(listing: session_listing.SessionListing = Depends(get_session_listing)) -> list[str]:
   """Return sorted distinct group names across all sessions."""
   return await listing.list_group_names()
 
 
 @router.post("/groups/rename")
 async def rename_group(
-    req: models.RenameGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
+    req: models.RenameGroupRequest,
+    lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
   """Rename a group across all sessions."""
   count = await lifecycle.rename_group(req.old_name, req.new_name)
   return {"updated": count}
@@ -575,7 +566,8 @@ async def rename_group(
 
 @router.post("/groups/delete")
 async def delete_group(
-    req: models.DeleteGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
+    req: models.DeleteGroupRequest,
+    lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
   """Remove a group from all sessions (sets group to null)."""
   count = await lifecycle.delete_group(req.group)
   return {"updated": count}
@@ -603,7 +595,7 @@ def _parse_session_ids(ids: str) -> list[str]:
 # request started at: a bump that lands mid-handler keys the next poll's
 # rebuild, never this body. force=1 keeps its synchronous probe off this memo.
 _STATUS_BODY_MEMO_LIMIT = 4
-_status_body_memo: BoundedMemo[tuple, bytes] = BoundedMemo(_STATUS_BODY_MEMO_LIMIT)
+_status_body_memo: memo.BoundedMemo[tuple, bytes] = memo.BoundedMemo(_STATUS_BODY_MEMO_LIMIT)
 
 
 @router.get('/status', response_model=None)
@@ -611,8 +603,8 @@ async def all_sessions_status(
     request: fastapi.Request,
     ids: str = fastapi.Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     force: bool = False,
-    sidebar: SessionSidebar = Depends(get_session_sidebar),
-    store: SessionStore = Depends(get_session_store),
+    sidebar: session_sidebar.SessionSidebar = Depends(get_session_sidebar),
+    store: session_store.SessionStore = Depends(get_session_store),
 ) -> responses.Response:
   """Return derived sidebar state for the requested sessions.
 
@@ -696,8 +688,9 @@ _SEARCH_NULL_PIECES: dict[str, bytes] = {
     for key, prefix in _SEARCH_DERIVED_PREFIXES.items()
     if key in ("thinking_since", sidebar_state.NEXT_TRIGGER_AT)
 }
-_search_row_fragments: BoundedMemo[int, tuple[models.SessionMetadata,
-                                              tuple[bytes | str, ...]]] = BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
+_search_row_fragments: memo.BoundedMemo[int, tuple[models.SessionMetadata,
+                                                   tuple[bytes | str,
+                                                         ...]]] = memo.BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
 # The finished row's wire bytes: metadata object -> (that object, the row's five
 # derived values, the spliced body). The body is a pure function of the metadata
 # object and those five values, both in the value — the metadata cache replaces
@@ -706,7 +699,8 @@ _search_row_fragments: BoundedMemo[int, tuple[models.SessionMetadata,
 # stored object pins the row so an id reuse can never serve another object's
 # bytes.
 _SEARCH_ROW_BODY_CAP = 512
-_search_row_bodies: BoundedMemo[int, tuple[models.SessionMetadata, tuple, bytes]] = BoundedMemo(_SEARCH_ROW_BODY_CAP)
+_search_row_bodies: memo.BoundedMemo[int, tuple[models.SessionMetadata, tuple,
+                                                bytes]] = memo.BoundedMemo(_SEARCH_ROW_BODY_CAP)
 # The whole response body of the last render: (the rows' metadata objects, each
 # row's derived values, the body). The body is a pure function of the row
 # sequence and those values, both in the check — so the steady-state repeat
@@ -722,7 +716,7 @@ _search_whole_body: tuple[tuple[models.SessionMetadata, ...], tuple, bytes] | No
 # the gzip middleware's per-request deflate. Two slots cover the alternating
 # queries a correction keystroke re-fires; each slot holds one ~32 KB wire body.
 _SEARCH_GZIP_MEMO_LIMIT = 2
-_search_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SEARCH_GZIP_MEMO_LIMIT)
+_search_gzip_memo: memo.BoundedMemo[bytes, bytes] = memo.BoundedMemo(_SEARCH_GZIP_MEMO_LIMIT)
 
 
 def _search_row_static_segments(meta: models.SessionMetadata) -> tuple[bytes | str, ...]:
@@ -834,11 +828,11 @@ def _task_http_error(e: Exception) -> fastapi.HTTPException:
     return fastapi.HTTPException(status_code=409, detail=str(e))
   if isinstance(e, (TaskInvalidError,)):
     return fastapi.HTTPException(status_code=400, detail=str(e))
-  if isinstance(e, (TaskNotFoundError, RunNotFoundError)):
+  if isinstance(e, (TaskNotFoundError, runs.RunNotFoundError)):
     return fastapi.HTTPException(status_code=404, detail=str(e))
-  if isinstance(e, (TaskForbiddenError, DelegationBlockedError)):
+  if isinstance(e, (TaskForbiddenError, takeoff_gate.DelegationBlockedError)):
     return fastapi.HTTPException(status_code=403, detail=str(e))
-  if isinstance(e, (TaskConflictError, RunIdentityConflictError)):
+  if isinstance(e, (TaskConflictError, runs.RunIdentityConflictError)):
     blockers = getattr(e, "blockers", None)
     if blockers is None:
       blockers = [str(e)]
@@ -870,8 +864,8 @@ async def get_session_tree(
 async def search_sessions(
     request: fastapi.Request,
     q: str = '',
-    listing: SessionListing = Depends(get_session_listing),
-    search: SessionSearch = Depends(get_session_search),
+    listing: session_listing.SessionListing = Depends(get_session_listing),
+    search: session_search.SessionSearch = Depends(get_session_search),
 ) -> list[models.SessionMetadata] | responses.Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
@@ -988,7 +982,7 @@ def _search_row_body(meta: models.SessionMetadata, row_key: tuple) -> bytes:
 # pass. The limit covers one steady-state body per open tab's id set plus the
 # other callers'.
 _SWITCH_GZIP_MEMO_LIMIT = 16
-_switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
+_switch_gzip_memo: memo.BoundedMemo[bytes, bytes] = memo.BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
 
 
 async def _switch_payload_response(request: fastapi.Request, payload: dict | list) -> responses.Response:
@@ -1023,13 +1017,13 @@ async def get_session_bootstrap(
     session_id: str,
     request: fastapi.Request,
     _meta: models.SessionMetadata = Depends(require_session),
-    store: SessionStore = Depends(get_session_store),
+    store: session_store.SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> responses.Response:
   """Return the minimal data needed to make one chat session usable."""
-  bootstrap = await build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
+  bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
@@ -1038,14 +1032,14 @@ async def get_session_bootstrap(
 async def mark_session_read(
     session_id: str,
     _meta: models.SessionMetadata = Depends(require_session),
-    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
+    lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle),
 ) -> dict:
   """Clear the session's unread flag; the client posts this after a render lands.
 
   "Read" means "content rendered": the bootstrap GET stays side-effect-free
   and this explicit POST is the only flip-off path, so a bare data fetch can no
   longer wipe the sidebar's unread dot. Flip semantics and the unread_changed
-  broadcast (only on an actual flip) are SessionLifecycle.mark_read's own.
+  broadcast (only on an actual flip) are session_lifecycle.SessionLifecycle.mark_read's own.
   """
   await lifecycle.mark_read(session_id)
   return {"session_id": session_id, "has_unread": False}
@@ -1055,13 +1049,13 @@ async def mark_session_read(
 async def get_session_usage(
     session_id: str,
     meta: models.SessionMetadata = Depends(require_session),
-    anchors: SessionAnchors = Depends(get_session_anchors),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    anchors: session_anchors.SessionAnchors = Depends(get_session_anchors),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
-    usage = await _worker_usage(task_mgr, session_id)
+    usage = await message_utils._worker_usage(task_mgr, session_id)
   else:
     usage = await anchors.resolve_session_usage(session_id, meta)
   payload = {
@@ -1095,7 +1089,7 @@ async def get_session_events_page(
   ``next_before`` is the snapped page start, and ``has_more = next_before > 0``.
 
   Sessions with ``archive_offset > 0`` fall back entirely to the legacy
-  event-index cursor path (``load_chat_events_range`` + ``events_to_messages``)
+  event-index cursor path (``load_chat_events_range`` + ``message_utils.events_to_messages``)
   and never mix the two cursor domains.
   """
   limit = max(1, min(limit, 200))
@@ -1111,7 +1105,7 @@ async def get_session_events_page(
   # plain json.dumps, and every field is already a plain parsed-JSON type so
   # the dumped body is unchanged.
   if meta.archive_offset == 0:
-    projection = await get_message_projection_fast(session_events, session_id)
+    projection = await message_utils.get_message_projection_fast(session_events, session_id)
     if projection is not None:
       # The chat UI re-fetches a page whenever it re-enters the viewport or the
       # session is revisited, and the published projection is immutable, so a
@@ -1127,13 +1121,13 @@ async def get_session_events_page(
         if gz is None:
           # One deflate per page per projection generation, in the executor the
           # middleware's replaced pass also used.
-          gz = await asyncio.to_thread(gzip_level1, body)
+          gz = await asyncio.to_thread(compression.gzip_level1, body)
           projection.store_page_body_gzip(before, limit, gz)
         return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
       return PreencodedJSONResponse(body)
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_events.load_chat_events_range, session_id, start, before)
-  messages = events_to_messages(events, event_index_offset=start)
+  messages = message_utils.events_to_messages(events, event_index_offset=start)
   return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
 
 
@@ -1187,7 +1181,7 @@ def _successor_tree_note(new_session_id: str) -> str:
 
 async def _start_successor_run(
     task_mgr: TaskTreeManager,
-    caller: CallerIdentity,
+    caller: run_token.CallerIdentity,
     meta: models.SessionMetadata,
     prompt_head: str,
     directive: str,
@@ -1199,9 +1193,9 @@ async def _start_successor_run(
   what to do with the copied history. The parts join into one single-spaced paragraph — the
   child's first input, admitted the way the message route admits a caller's input.
   """
-  bootstrap_prompt = f"{prompt_head}{HISTORY_LOCATION_NOTE} {directive}"
-  event_type = input_event_type_for_caller(caller)
-  from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
+  bootstrap_prompt = f"{prompt_head}{session_fork.HISTORY_LOCATION_NOTE} {directive}"
+  event_type = session_dispatch.input_event_type_for_caller(caller)
+  from_session, from_session_name = session_dispatch.agent_provenance(caller) if event_type != ET.USER else (None, None)
   await task_mgr.dispatch.admit_input(
       meta.id,
       event_type=event_type,
@@ -1218,10 +1212,10 @@ async def fork_session(
     session_id: str,
     body: models.ForkSessionRequest | None = None,
     parent: models.SessionMetadata = Depends(require_session),
-    fork: SessionFork = Depends(get_session_fork),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    fork: session_fork.SessionFork = Depends(get_session_fork),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
   backend = _resolve_requested_backend(
@@ -1246,7 +1240,7 @@ async def fork_session(
       task_mgr,
       caller,
       meta,
-      prompt_head=f"{FORK_BOOTSTRAP_OPENER} ",
+      prompt_head=f"{session_fork.FORK_BOOTSTRAP_OPENER} ",
       directive=(
           "Get oriented from that log, summarize where things stand, and wait for the user's next instruction. " +
           _successor_tree_note(meta.id)))
@@ -1259,10 +1253,10 @@ async def elone_session(
     session_id: str,
     body: models.EloneSessionRequest,
     parent: models.SessionMetadata = Depends(require_session),
-    fork: SessionFork = Depends(get_session_fork),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    fork: session_fork.SessionFork = Depends(get_session_fork),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
@@ -1280,7 +1274,7 @@ async def elone_session(
       caller,
       meta,
       prompt_head=(
-          f"{ELONE_BOOTSTRAP_OPENER} "
+          f"{session_fork.ELONE_BOOTSTRAP_OPENER} "
           "The dissatisfaction is usually with the most recent exchange before the takeover point. "),
       directive=(
           "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
@@ -1294,11 +1288,11 @@ async def switch_session_backend(
     session_id: str,
     body: models.SwitchBackendRequest,
     parent: models.SessionMetadata = Depends(require_session),
-    anchors: SessionAnchors = Depends(get_session_anchors),
-    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
-    store: SessionStore = Depends(get_session_store),
+    anchors: session_anchors.SessionAnchors = Depends(get_session_anchors),
+    lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle),
+    store: session_store.SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
 ) -> models.SessionMetadata:
   """Switch a session's backend in place, across model families.
 
@@ -1345,7 +1339,7 @@ async def switch_session_backend(
   # the session holds no native id to attribute.
   durable = await store.read_metadata_fresh(session_id)
   audit_event = {
-      "type": BACKEND_SWITCHED,
+      "type": ET.BACKEND_SWITCHED,
       "from": previous,
       "to": body.backend,
       "previous_native_backend": durable.native_backend if durable is not None and durable.cc_session_id else None,
@@ -1372,7 +1366,7 @@ async def get_session(
 async def archive_session(
     session_id: str,
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """Archive a task subtree as one end state.
 
@@ -1395,7 +1389,7 @@ async def archive_session(
 async def delete_session_permanently(
     session_id: str,
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """Permanently delete an empty, unreferenced task under the control lock."""
   try:
@@ -1412,7 +1406,7 @@ async def unarchive_session(
     session_id: str,
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """Restore an archived task node.
 
@@ -1433,13 +1427,15 @@ async def unarchive_session(
 
 @router.post("/{session_id}/star", response_model=models.SessionMetadata)
 async def star_session(
-    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> models.SessionMetadata:
+    session_id: str, lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle)
+) -> models.SessionMetadata:
   return require_found(await lifecycle.star_session(session_id))
 
 
 @router.post("/{session_id}/unstar", response_model=models.SessionMetadata)
 async def unstar_session(
-    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> models.SessionMetadata:
+    session_id: str, lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle)
+) -> models.SessionMetadata:
   return require_found(await lifecycle.unstar_session(session_id))
 
 
@@ -1449,7 +1445,7 @@ async def rate_round(
     round_id: str,
     req: models.RateRoundRequest,
     meta: models.SessionMetadata = Depends(require_session),
-    store: SessionStore = Depends(get_session_store),
+    store: session_store.SessionStore = Depends(get_session_store),
 ) -> models.SessionMetadata:
   if req.rating is None:
     meta.round_ratings.pop(round_id, None)
@@ -1465,9 +1461,9 @@ async def rate_round(
 async def patch_session(
     session_id: str,
     req: models.PatchSessionTaskRequest,
-    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
+    lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
   """Rename plus the v2 task metadata mutations (one PATCH body).
 
@@ -1492,24 +1488,24 @@ async def patch_session(
 async def set_session_group(
     session_id: str,
     req: models.SetGroupRequest,
-    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
+    lifecycle: session_lifecycle.SessionLifecycle = Depends(get_session_lifecycle),
 ) -> models.SessionMetadata:
   return require_found(await lifecycle.set_group(session_id, req.group))
 
 
 # The raw events download's compressed serve memo: entries key on the file path
-# and StatSignatureMemo checks the (mtime_ns, size) the read served, and the
+# and memo.StatSignatureMemo checks the (mtime_ns, size) the read served, and the
 # limit holds one big session's wire form per open events-viewer tab — a second
 # flipped-to session misses once and re-compresses.
 _EVENTS_GZIP_MEMO_LIMIT = 2
-_events_gzip_memo: StatSignatureMemo[pathlib.Path, bytes] = StatSignatureMemo(_EVENTS_GZIP_MEMO_LIMIT)
+_events_gzip_memo: memo.StatSignatureMemo[pathlib.Path, bytes] = memo.StatSignatureMemo(_EVENTS_GZIP_MEMO_LIMIT)
 
 
 @router.get("/{session_id}/events.jsonl")
 async def get_events_jsonl(session_id: str, request: fastapi.Request) -> responses.Response:
   """Serve the raw chat_events.jsonl file for a session."""
-  cfg = get_config()
-  path = chat_events_path(cfg.sessions_dir / session_id)
+  cfg = config.get_config()
+  path = chat_events.chat_events_path(cfg.sessions_dir / session_id)
   if not path.exists():
     raise fastapi.HTTPException(status_code=404, detail="Events file not found")
   if not request_wants_gzip(request):
@@ -1558,7 +1554,7 @@ async def list_session_runs(
   except ValueError as e:
     raise bad_request(e) from e
   events = task_mgr.runs.load_events_sync(session_id)
-  host_boot = await asyncio.to_thread(read_host_boot_time)
+  host_boot = await asyncio.to_thread(runs.read_host_boot_time)
   rows = [
       models.RunRow(
           **run.model_dump(),
@@ -1575,7 +1571,7 @@ async def get_effective_prompt(
     kind: str | None = fastapi.Query(default=None),
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    cfg: config.CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """The next-start snapshot-shaped preview: one assembly path with the launch.
 
@@ -1601,11 +1597,12 @@ async def get_effective_prompt(
           detail=(f"session backend {meta.backend!r} is not configured; "
                   "update the task backend before previewing"))
     if not cfg.backends.options:
-      raise fastapi.HTTPException(status_code=400, detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
+      raise fastapi.HTTPException(status_code=400, detail=spawner_backends.EMPTY_BACKENDS_OPTIONS_REFUSAL)
     option = cfg.backends.options[0]
   try:
-    snapshot, overlay_error, declared = await assemble_coherent_snapshot(cfg, task_mgr, meta, resolved_kind, option)
-  except TaskPromptError as e:
+    snapshot, overlay_error, declared = await task_execution.assemble_coherent_snapshot(
+        cfg, task_mgr, meta, resolved_kind, option)
+  except task_prompts.TaskPromptError as e:
     raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
   payload = {
       "session_id": session_id,
@@ -1634,7 +1631,7 @@ def _legacy_prompt_payload(path: pathlib.Path) -> dict:
       "ref":
           str(path),
       "sha256":
-          sha256_hex(path.read_text(encoding="utf-8")),
+          control_events.sha256_hex(path.read_text(encoding="utf-8")),
       "note":
           (
               "raw launch text recorded before the context stage: the managed "
@@ -1660,7 +1657,7 @@ async def get_run_context(
   """
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
-    raise fastapi.HTTPException(status_code=404, detail=run_not_found_in_task_text(run_id, session_id))
+    raise fastapi.HTTPException(status_code=404, detail=runs.run_not_found_in_task_text(run_id, session_id))
   snapshot_payload: dict | None = None
   legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:
@@ -1669,7 +1666,7 @@ async def get_run_context(
     # (validated, provenance-carrying); a pre-stage run recorded a raw
     # launch-text path instead.
     ref_path = pathlib.Path(run.prompt_snapshot_ref)
-    if ref_path.name == SNAPSHOT_FILENAME:
+    if ref_path.name == task_prompts.SNAPSHOT_FILENAME:
       if not ref_path.is_file():
         raise fastapi.HTTPException(
             status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
@@ -1679,8 +1676,8 @@ async def get_run_context(
         raise fastapi.HTTPException(
             status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
       try:
-        snapshot_payload = PromptSnapshot.from_json_dict(stored).to_json_dict()
-      except TaskPromptError as e:
+        snapshot_payload = task_prompts.PromptSnapshot.from_json_dict(stored).to_json_dict()
+      except task_prompts.TaskPromptError as e:
         raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
     else:
       # A recorded raw launch-text ref: limited historical evidence — the
@@ -1691,7 +1688,7 @@ async def get_run_context(
             status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
       legacy_prompt = _legacy_prompt_payload(ref_path)
   else:
-    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / LAUNCH_TEXT_FILENAME
+    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
     if legacy_path.is_file():
       legacy_prompt = _legacy_prompt_payload(legacy_path)
   return {
@@ -1719,7 +1716,7 @@ async def retry_session_run(
     req: models.RetryRunRequest,
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> dict:
   """Create the (session, request_id)-stable retry run of one recorded run.
 
@@ -1775,7 +1772,7 @@ async def acknowledge_task_inputs(
     req: models.AcknowledgeTaskInputsRequest,
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> dict:
   """Resolve exact task inputs the operator handled out-of-band, durably and idempotently.
 
@@ -1798,7 +1795,7 @@ async def complete_session_task(
     req: models.CompleteTaskRequest,
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> responses.Response:
   """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
 
@@ -1832,7 +1829,7 @@ async def cancel_session_task(
     req: models.CancelTaskRequest,
     _meta: models.SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
   """Explicit cancellation with reason, preserving evidence.
 
@@ -1848,7 +1845,7 @@ async def cancel_session_task(
   return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
 
 
-def _require_own_run_scope(caller: CallerIdentity, session_id: str, run_id: str) -> None:
+def _require_own_run_scope(caller: run_token.CallerIdentity, session_id: str, run_id: str) -> None:
   """One cancel path's own-run scope: an operator passes; a run token must name this run.
 
   Raises 403 otherwise.
@@ -1867,12 +1864,12 @@ async def cancel_session_run(
     run_id: str,
     req: models.CancelRunRequest,
     run_store=Depends(get_run_store),
-    caller: CallerIdentity = Depends(require_caller),
+    caller: run_token.CallerIdentity = Depends(require_caller),
 ) -> models.RunCancelResponse:
   """Request one stop: durable fact first, then identity-checked signal and exit observation."""
   _require_own_run_scope(caller, session_id, run_id)
   try:
     result = await run_store.request_stop(session_id, run_id, req.request_id)
-  except (RunNotFoundError, RunIdentityConflictError) as e:
+  except (runs.RunNotFoundError, runs.RunIdentityConflictError) as e:
     raise _task_http_error(e) from e
   return models.RunCancelResponse(run_id=result.run_id, stop_requested=result.stop_requested, outcome=result.outcome)

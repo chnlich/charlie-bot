@@ -2,8 +2,8 @@
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+import fastapi
+import pydantic
 
 from src.features.improve import improve_command, improve_sequence
 from src.infra import config, log_once, tasks
@@ -12,12 +12,12 @@ from src.runtime.api import deps, sessions
 
 log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
-class ImproveRequest(BaseModel):
+class ImproveRequest(pydantic.BaseModel):
   """Request body for the internal improve endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   repo_path: str
@@ -30,9 +30,9 @@ class ImproveRequest(BaseModel):
   merge_back: bool = False
 
 
-class ImproveStopRequest(BaseModel):
+class ImproveStopRequest(pydantic.BaseModel):
   """Request body for the internal improve-stop endpoint."""
-  model_config = ConfigDict(extra="forbid")
+  model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
 
@@ -40,8 +40,8 @@ class ImproveStopRequest(BaseModel):
 @router.post("/improve/stop")
 async def stop_improve(
     req: ImproveStopRequest,
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
 ) -> dict:
   """Mark the session's running improve loop stopped (charliebot improve-stop).
 
@@ -51,7 +51,7 @@ async def stop_improve(
   """
   deps.require_found(await store.get_session(req.session_id))
   if not await improve_command.stop_improve_loop(req.session_id, cfg):
-    raise HTTPException(status_code=409, detail="No active improve loop in this session")
+    raise fastapi.HTTPException(status_code=409, detail="No active improve loop in this session")
   log.info("improve_loop_stopped", session=req.session_id)
   return {"status": "stopped", "session_id": req.session_id}
 
@@ -59,9 +59,9 @@ async def stop_improve(
 @router.post("/improve")
 async def start_improve_loop(
     req: ImproveRequest,
-    cfg: config.CharlieBotConfig = Depends(deps.get_config_on_loop),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
   """Launch an iterative improvement loop on the task tree as a background task.
 
@@ -88,7 +88,7 @@ async def _start_improve_sequence(
   try:
     await task_mgr.check_task_authorization(req.session_id)
   except takeoff_gate.DelegationBlockedError as e:
-    raise HTTPException(status_code=403, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=403, detail=str(e)) from e
 
   # Backend/model resolution comes BEFORE the reservation (the legacy path's
   # order): an unknown requested backend must fail the request, never leak a
@@ -114,7 +114,7 @@ async def _start_improve_sequence(
         resolved_model=resolved_model or "",
     )
   except improve_command.ImproveLoopAlreadyRunningError as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=409, detail=str(e)) from e
 
   try:
     child = await improve_sequence.create_improve_child(

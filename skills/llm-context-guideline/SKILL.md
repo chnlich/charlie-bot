@@ -144,6 +144,7 @@ so one Chinese character counts two. Keep code, paths, identifiers, and commands
 a semicolon joins two clauses, write them as two sentences. Entry prose follows the Writing Style
 section of prompts/master.md, its "Text a model reads" subsection included. Apply the admission
 test line by line as well as entry by entry.
+A user ruling stated with exceptions encodes as the criterion the exceptions reveal, not as a flat default with carve-outs; when no criterion is recoverable, present the cases to the user instead of flattening them.
 Keep each line whose removal changes what a capable model does.
 Brevity is part of the admission bar: lead with the action and keep the mechanism the action is
 unintelligible without; session reports and run dirs hold the receipts, verification notes, and

@@ -2209,7 +2209,18 @@ class TaskExecutionAdapter:
             # continuation run re-enters this chain when it ends.
             log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)
             return
-          await self._maybe_spawn_review(session_id, run)
+          review_id = await self._maybe_spawn_review(session_id, run)
+          if review_id is None:
+            # The reviewer never runs on a member the worker node used, so a
+            # pool without a free member spawns no review: report blocked with
+            # each member's recovery time, as an exhausted retry chain does.
+            await self._report_failure_to_parent(
+                session_id,
+                run,
+                "blocked",
+                summary=(
+                    f"review of work run {run.id} found no available reviewer backend; "
+                    f"backends.pool: {backend_pool.recovery_report(self._cfg)}"))
         else:
           await self._cleanup_worktree_if_delivered(session_id, run)
         return
@@ -2895,7 +2906,17 @@ async def _replay_followups(
           if pause is not None:
             log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)
           elif _replay_owes_review(tree, session_id, run_records, run):
-            await adapter._maybe_spawn_review(session_id, run)
+            review_id = await adapter._maybe_spawn_review(session_id, run)
+            if review_id is None:
+              # The live finish path's own no-reviewer report, replayed: the pool has no member
+              # the reviewer may use, and the report's stable id dedups against the live chain's.
+              await adapter._report_failure_to_parent(
+                  session_id,
+                  run,
+                  "blocked",
+                  summary=(
+                      f"review of work run {run.id} found no available reviewer backend; "
+                      f"backends.pool: {backend_pool.recovery_report(cfg)}"))
       elif outcome in ("failed", "interrupted", "blocked"):
         await adapter._report_failure_to_parent(session_id, run, outcome)
     elif run.kind == "review":

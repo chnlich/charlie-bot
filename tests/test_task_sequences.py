@@ -27,25 +27,14 @@ from src.infra import event_types as ET
 from src.infra import models, tasks
 from src.runtime import control_events, runs, task_execution, task_recovery, task_sessions
 from src.runtime.hooks import sequence_controllers
-from tests.test_task_execution import (
-    BUILD_BACKEND_PATCH_TARGET,
-    OP_HEADERS,
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
-    build_env,
-    build_pooled_env,
-    install_worker_launch_and_resume_backends,
-    make_api_client,
-    make_pm_build,
-    result_event,
-    write_raw_result,
-)
+from tests import test_task_execution
 
 
 def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
   """One scripted worker per iteration build, in launch order."""
   return conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event(text)]) for text in outcomes],
+      monkeypatch,
+      [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event(text)]) for text in outcomes],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
 
@@ -164,10 +153,10 @@ async def _start_loop(
   """POST the improve loop against the v2 manager and wait for the controller's child."""
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The final report's wake dispatches the manager's report-consuming turn;
   # script it through the registry builder so no external process starts.
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
   payload = {
       "session_id": manager.id,
       "goal": "## Goal\n\nimprove the thing\n",
@@ -177,8 +166,8 @@ async def _start_loop(
       "work_branch": "improve/test-branch",
   }
   payload.update(payload_overrides or {})
-  with make_api_client(cfg, session_blocks, tree) as client:
-    resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+    resp = client.post("/api/internal/improve", json=payload, headers=test_task_execution.OP_HEADERS)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "started"
@@ -203,7 +192,7 @@ async def _start_loop(
 async def test_two_iterations_stay_one_child_with_ordered_runs(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """Two iterations: ONE child, two ordered iteration Runs, one final report."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -267,7 +256,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
 async def test_live_goal_change_affects_next_iteration(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """The controller re-reads goal.md every iteration: a mid-loop edit steers the next one."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
 
@@ -277,19 +266,20 @@ async def test_live_goal_change_affects_next_iteration(
     goal_path = cfg.sessions_dir / manager.id / "loops" / "1" / "goal.md"
     goal_path.write_text("## Goal\n\nnow improve the OTHER thing\n")
 
-  first = SpawningScriptedBackend([result_event("one")], post_events=edit_goal_after_first_stream)
-  second = SpawningScriptedBackend([result_event("two")])
+  first = test_task_execution.SpawningScriptedBackend(
+      [test_task_execution.result_event("one")], post_events=edit_goal_after_first_stream)
+  second = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("two")])
   queue = [first, second]
   monkeypatch.setattr(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: queue.pop(0))
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The final report's wake dispatches the manager's report-consuming turn;
   # script it through the registry builder so no external process starts.
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
-  with make_api_client(cfg, session_blocks, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/improve",
         json={
@@ -300,7 +290,7 @@ async def test_live_goal_change_affects_next_iteration(
             "base_branch": "main",
             "work_branch": "improve/live-goal",
         },
-        headers=OP_HEADERS)
+        headers=test_task_execution.OP_HEADERS)
     assert resp.status_code == 200, resp.text
     child_id = resp.json()["child_session_id"]
 
@@ -316,7 +306,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """No user message anywhere in the chain: 403 with the gate's reason, never a
   500, and nothing reserved."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -328,8 +318,8 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
       "repo_path": str(repo),
       "base_branch": "main",
   }
-  with make_api_client(cfg, session_blocks, tree) as client:
-    resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+    resp = client.post("/api/internal/improve", json=payload, headers=test_task_execution.OP_HEADERS)
   assert resp.status_code == 403, resp.text
   assert "no user request" in str(resp.json()["detail"])
   assert not improve_command._active_loop_path(manager.id, cfg).exists()
@@ -409,7 +399,7 @@ async def _pooled_pm_manager(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
   and its root PM manager node. The pooled-account tests script their own
   backends and wake recording on top of this stage."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_pooled_env(tmp_path, monkeypatch)
   manager = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -599,7 +589,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   the iteration's own run_finished event, so the final report (the raw latest
   run_finished) is never deduplicated away."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words", "iter three words"])
@@ -652,7 +642,7 @@ async def test_iteration_report_header_carries_the_judgment(
   the reason "no report file" (decided before the controller's fallback file
   is written); an iteration with a well-formed report is valid."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   loop_dir = cfg.sessions_dir / manager.id / "loops" / "1"
@@ -665,14 +655,15 @@ async def test_iteration_report_header_carries_the_judgment(
         "- none \u2014 zero progress is acceptable per the goal.\n")
 
   backends = [
-      SpawningScriptedBackend([result_event("iter one words")]),
-      SpawningScriptedBackend([result_event("iter two words")], post_events=write_iter_two_report),
+      test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("iter one words")]),
+      test_task_execution.SpawningScriptedBackend(
+          [test_task_execution.result_event("iter two words")], post_events=write_iter_two_report),
   ]
   monkeypatch.setattr(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   _body, _child_id = await _start_loop(
@@ -715,20 +706,20 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   continues: only a quota blocker or a withheld launch skips the delivery
   point."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
-  failed = result_event("the build broke")
+  failed = test_task_execution.result_event("the build broke")
   failed["is_error"] = True  # an error result lands the failed durable outcome
   backends = [
-      SpawningScriptedBackend([failed], exit_code=1),
-      SpawningScriptedBackend([result_event("recovered words")]),
+      test_task_execution.SpawningScriptedBackend([failed], exit_code=1),
+      test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("recovered words")]),
   ]
   monkeypatch.setattr(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
@@ -761,7 +752,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   """A per-iteration report re-delivered under the same source id dedups: no
   second event lands in the parent's log and nobody is woken."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words"])
@@ -805,7 +796,7 @@ async def test_restart_recovery_marks_improve_loop_through_registered_controller
   """The registered improve controller marks a prior-process loop interrupted once."""
   import os
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -851,7 +842,7 @@ async def test_improve_controller_preserves_base_lookups_and_skips_recovery(
   """The kind lookup selects the improve controller; it binds, owns, and lists
     nothing, and recovery leaves an iteration Run alone (no replay, no follow-up)."""
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -912,20 +903,20 @@ async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_comp
   """The landing succeeds but no iteration did: lifecycle cancelled (an
   empty-handed delivery is never completed), report outcome completed."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
-  failed = result_event("the build broke")
+  failed = test_task_execution.result_event("the build broke")
   failed["is_error"] = True
   backends = [
-      SpawningScriptedBackend([failed], exit_code=1),
-      SpawningScriptedBackend([dict(failed)], exit_code=1),
+      test_task_execution.SpawningScriptedBackend([failed], exit_code=1),
+      test_task_execution.SpawningScriptedBackend([dict(failed)], exit_code=1),
   ]
   monkeypatch.setattr(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   body, child_id = await _start_loop(
@@ -957,7 +948,7 @@ async def test_ff_push_rejection_reports_the_landing_error_and_the_pushed_branch
   loop ends blocked and the final report names both facts (the old report
   always claimed the work branch was pushed)."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -1001,7 +992,7 @@ async def test_both_landing_pushes_failing_names_the_branch_push_error(
   """The fast-forward push AND the work branch push both fail: the final
   report no longer claims the work branch was pushed to origin."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -1039,7 +1030,7 @@ async def test_best_effort_branch_push_failure_is_reported_without_merge_back(
   failed push rides the final report so the manager knows origin holds
   nothing to land."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -1074,7 +1065,7 @@ async def test_controller_exception_closes_the_child_failed(
   """A controller failure after the iterations closes the child cancelled with
   the loop's failed outcome and exactly one final report."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -1111,7 +1102,7 @@ async def test_worktree_failure_closes_the_child_failed(
   """A worktree creation failure before the first iteration closes the child
   cancelled with the loop's failed outcome and exactly one final report."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["never launched"])
@@ -1153,15 +1144,16 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
   summary."""
 
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   gate = asyncio.Event()
-  first = SpawningScriptedBackend([result_event("iter one words")], gate=gate.wait)
-  second = SpawningScriptedBackend([result_event("never reached")])
+  first = test_task_execution.SpawningScriptedBackend(
+      [test_task_execution.result_event("iter one words")], gate=gate.wait)
+  second = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("never reached")])
   conftest.install_scripted_backends(monkeypatch, [first, second], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
   # Park the controller inside the judgment that follows the iteration's
   # finish, so the test observes the child between after_run and the
   # controller's own end path.
@@ -1216,7 +1208,7 @@ async def test_withheld_iteration_launch_closes_the_child_blocked(
   request and never launches; the child closes cancelled with the loop's
   blocked outcome and its work state reads idle."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: every worker launch is withheld
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1256,11 +1248,12 @@ async def test_controller_exception_while_an_iteration_runs_closes_after_its_fin
   leaves the child open, and the iteration's own finish closes it cancelled
   with the loop's failed outcome."""
   claude_accounts.reset_for_tests()
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   hold = asyncio.Event()
-  backend = SpawningScriptedBackend([result_event("iter words")], post_events=hold.wait)
+  backend = test_task_execution.SpawningScriptedBackend(
+      [test_task_execution.result_event("iter words")], post_events=hold.wait)
 
   def one_backend(option, cfg_, **kwargs):
     on_spawn = kwargs.get("on_spawn")
@@ -1269,9 +1262,9 @@ async def test_controller_exception_while_an_iteration_runs_closes_after_its_fin
     return backend
 
   monkeypatch.setattr(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, one_backend)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
   real_settle = adapter.launch_and_settle
   settle: dict = {}
 
@@ -1320,7 +1313,7 @@ async def test_startup_recovery_closes_an_interrupted_loop_whose_process_died(
   the loop interrupted, the Run's drain lands its terminal fact, and its
   after_run closes the child cancelled with the loop's failed outcome."""
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1334,10 +1327,10 @@ async def test_startup_recovery_closes_an_interrupted_loop_whose_process_died(
   run.pid_start = "1-424000"
   run.started_at = datetime.datetime(2026, 10, 8, tzinfo=datetime.UTC)
   await tree.runs.write_record(child_id, run)
-  write_raw_result(tree.runs.run_dir(child_id, run.id), "crashed mid-iteration")
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  test_task_execution.write_raw_result(tree.runs.run_dir(child_id, run.id), "crashed mid-iteration")
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  install_worker_launch_and_resume_backends(monkeypatch, [])
+  test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, [])
   _count_manager_wakes(monkeypatch, tree, manager.id)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
@@ -1359,7 +1352,7 @@ async def test_startup_recovery_leaves_a_live_iterations_child_open_until_its_fi
   import src.runtime.runs as runs_mod
   import src.runtime.task_execution as task_execution_module
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1372,7 +1365,7 @@ async def test_startup_recovery_leaves_a_live_iterations_child_open_until_its_fi
   run.started_at = datetime.datetime(2026, 10, 8, tzinfo=datetime.UTC)
   await tree.runs.write_record(child_id, run)
   monkeypatch.setattr(runs_mod, "is_run_alive", lambda *args, **kwargs: True)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   follows: list[tuple[str, str]] = []
   monkeypatch.setattr(adapter, "follow_run_in_background", lambda s, r: follows.append((s, r)))
@@ -1411,7 +1404,7 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
   """A launched iteration carrying a durable stop request at startup:
   recovery lands its interrupted finish and recover_run closes the child."""
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1435,9 +1428,9 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
             source_session_id=child_id,
             request_id="boot-stop",
             run_id=run.id))
-    adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+    adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
     tree.dispatch.executor = adapter
-    install_worker_launch_and_resume_backends(monkeypatch, [])
+    test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, [])
     _count_manager_wakes(monkeypatch, tree, manager.id)
 
     await task_recovery.reconcile_task_tree(cfg, tree)
@@ -1460,7 +1453,7 @@ async def test_startup_closes_a_loop_that_crashed_between_final_state_and_close(
   startup pass closes the child per the table and the parent receives one
   final report carrying the judged iterations' summaries."""
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
@@ -1489,7 +1482,7 @@ async def test_startup_closes_a_failed_loop_and_reports_its_end_error(
   error) and before the close: the startup pass closes the child and the
   parent's one final report carries the error text the controller wrote."""
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
@@ -1517,7 +1510,7 @@ async def test_legacy_state_without_end_error_loads_and_reports_clean(
   """A state.json written before end_error existed loads with end_error None,
   and its final report holds nothing between the sentence and the summaries."""
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
@@ -1551,8 +1544,8 @@ async def test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_u
   step stop-requests the queued Run, the child closes cancelled with the
   loop's blocked outcome, and the queued Run never launches afterwards."""
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1580,7 +1573,7 @@ async def test_startup_closes_a_loop_that_crashed_between_run_finished_and_after
   """Crash window after run_finished and before after_run: the startup pass
   closes the child per the table and the parent receives one final report."""
 
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
@@ -1601,7 +1594,7 @@ async def test_raced_close_step_calls_land_one_close_and_one_report(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Two call points running the close step at the same time (after_run
   racing a controller end path): one close fact and one final report."""
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
@@ -1624,7 +1617,7 @@ async def test_a_reopened_child_stays_open_across_restarts(
   """The user reopens a closed loop child: the next startup's close step
   returns at the recorded close before any stop request — the child stays
   open and its queued Run gains no new stop request."""
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(

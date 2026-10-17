@@ -17,9 +17,9 @@ const {readStatic, chatModules, runStaticModules} = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // The For-you projection of the turn engine, on the same fake DOM as the
-// Everything suites. Rows are read back by role, fold count and state, so a
-// case asserts structure, not wording. The status-block rule loads from the
-// page's markdown-renderer.js with a stub marked, which its load never calls.
+// Everything suites. Rows are read back by role, so a case asserts structure,
+// not wording. The page's markdown-renderer.js loads with a stub marked, which
+// its load never calls.
 // ---------------------------------------------------------------------------
 
 // The page's script order for these modules: markdown-renderer.js first, then
@@ -64,20 +64,16 @@ function forYouRig(messages, {view = 'foryou', clientHeight = 900} = {}) {
   return {context, root, stream, timers, engine};
 }
 
-// One row per child of the list: the role of a message, `fold:N` for a fold line
-// with N counted messages, and the structural rows by name.
+// One row per child of the list: the role of a message, `empty` for the empty-state
+// row, and `holder` and `sentinel` for the structural rows. A row no case expects
+// reads as undefined.
 function rowsOf(root) {
   return root.children.map((el) => {
-    if (el.classList.contains('for-you-fold')) return 'fold:' + el.dataset.count;
-    if (el.classList.contains('for-you-working')) return 'working';
+    if (el.classList.contains('for-you-empty')) return 'empty';
     if (el.classList.contains('hidden')) return 'holder';
     if (el.id === 'load-more-sentinel') return 'sentinel';
     return el.dataset.messageRole;
   });
-}
-
-function foldLines(root) {
-  return root.children.filter((el) => el.classList.contains('for-you-fold'));
 }
 
 function messageIds(el) {
@@ -85,8 +81,8 @@ function messageIds(el) {
 }
 
 // The fixture the cases read: a first turn with a web reply mid-steps, a notice
-// after it, a second turn that opens with a status block, an error row and a
-// child report under a trailing fold.
+// after it, a second turn with a status block, an error row, a plain system line
+// and a child report behind the last separator.
 function fixture() {
   return [
     eMsg('user', 'u1', 'first question'),
@@ -104,56 +100,57 @@ function fixture() {
   ];
 }
 
-const FIXTURE_ROWS = [
-  'user', 'fold:1', 'web_reply', 'fold:1', 'web_reply_notice', 'user', 'fold:1', 'system', 'fold:2', 'holder',
-];
-// The fixture after a web_status message lands behind its last separator: the
-// message joins the trailing fold and shows no row of its own.
-const FIXTURE_ROWS_WITH_STATUS = [...FIXTURE_ROWS.slice(0, -2), 'fold:3', 'holder'];
+// The shown rows of the fixture: the user's messages, the reply, the notice and the error row.
+const FIXTURE_ROWS = ['user', 'web_reply', 'web_reply_notice', 'user', 'system', 'holder'];
 
-test('For you shows the user, web reply, notice and error rows and folds the rest per run', () => {
+test('For you shows only the user, web reply, notice and error rows, in order', () => {
   const rig = forYouRig(fixture());
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
-test('a fold counts its messages and leaves separators out of the count', () => {
-  const rig = forYouRig(fixture());
-  // The run between r1 and n1 holds a2 and s1; the separator is not a message.
-  assert.equal(foldLines(rig.root)[1].dataset.count, '1');
-  // The trailing run holds o1, c1 and s2.
-  assert.equal(foldLines(rig.root)[3].dataset.count, '2');
+test('no fold row shows for any mix of entries', () => {
+  const work = [
+    eMsg('assistant', 'x1', 'looking'),
+    eMsg('separator', 'x2', '', {thinking_seconds: 4, event_index: 201}),
+  ];
+  const status = [
+    eMsg('web_status', 'x3', 'Status updated: Now'),
+    eMsg('child_report', 'x4', 'child finished'),
+  ];
+  const notes = [
+    eMsg('system', 'x5', 'Backend switched: one to two'),
+    eMsg('assistant', 'x6', 'more'),
+  ];
+  const turn = [
+    eMsg('user', 'x7', 'hi'),
+    eMsg('assistant', 'x8', 'working'),
+    eMsg('separator', 'x9', '', {thinking_seconds: 2, event_index: 202}),
+    eMsg('web_reply', 'x10', 'done'),
+  ];
+  assert.deepEqual(rowsOf(forYouRig(work).root), ['empty', 'holder']);
+  assert.deepEqual(rowsOf(forYouRig(status).root), ['empty', 'holder']);
+  assert.deepEqual(rowsOf(forYouRig(notes).root), ['empty', 'holder']);
+  assert.deepEqual(rowsOf(forYouRig(turn).root), ['user', 'web_reply', 'holder']);
+  assert.deepEqual(rowsOf(forYouRig([...work, ...turn, ...status]).root), ['user', 'web_reply', 'holder']);
 });
 
-test('a web reply mid-turn shows in For you and sits inside the folded steps in Everything', () => {
-  const rig = forYouRig(fixture());
-  assert.ok(rowsOf(rig.root).includes('web_reply'), 'For you shows the reply');
-
-  const everything = forYouRig(fixture(), {view: 'everything'});
-  everything.engine.setOverride('u1|a2|s1', true);
-  settle(everything.timers);
-  const reply = everything.root.querySelectorAll('[data-message-id="r1"]');
-  assert.equal(reply.length, 1, 'the reply is in the Everything DOM');
-  const steps = reply[0].parentElement;
-  assert.ok(steps.classList.contains('turn-fold-content'), 'the reply sits in the steps region');
-  assert.ok(steps.classList.contains('hidden'), 'the steps region is folded');
+test('the empty state is one button row when no message shows', () => {
+  const rig = forYouRig([
+    eMsg('assistant', 'a1', 'only work'),
+    eMsg('separator', 's1', '', {thinking_seconds: 3, event_index: 1}),
+  ]);
+  assert.deepEqual(rowsOf(rig.root), ['empty', 'holder']);
+  assert.equal(rig.root.children[0].tagName, 'BUTTON');
 });
 
-test('a fold opens in place and closes again', () => {
-  const rig = forYouRig(fixture());
-  const fold = foldLines(rig.root)[0];
-  assert.equal(fold.getAttribute('aria-expanded'), 'false');
-  fold.onclick();
-  assert.equal(fold.getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(rowsOf(rig.root).slice(0, 3), ['user', 'fold:1', 'assistant']);
-  assert.equal(messageIds(rig.root.children[2]), 'a1', 'the hidden message sits right after its fold line');
-  assert.equal(rig.root.children[3].dataset.messageId, 'r1', 'the next shown message follows it');
-
-  foldLines(rig.root)[0].onclick();
-  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
-  assert.equal(foldLines(rig.root)[0].getAttribute('aria-expanded'), 'false');
+test('a click on the empty-state row switches to Everything, and the switch holds', () => {
+  const rig = forYouRig([eMsg('assistant', 'a1', 'only work')]);
+  rig.root.children[0].onclick();
+  assert.equal(rig.engine.view, 'everything');
+  assert.equal(rig.context.Chat.ForYou.viewFor({id: 'sess-fy'}), 'everything');
 });
 
-test('the fold counts recompute when an older page lands', () => {
+test('an older page lands above the shown rows', () => {
   const rig = forYouRig(fixture());
   rig.engine.prependMessages([
     eMsg('user', 'p0', 'older question'),
@@ -162,16 +159,15 @@ test('the fold counts recompute when an older page lands', () => {
   ]);
   settle(rig.timers);
   assert.deepEqual(rowsOf(rig.root), [
-    'user', 'fold:1', 'user', 'fold:1', 'web_reply', 'fold:1', 'web_reply_notice',
-    'user', 'fold:1', 'system', 'fold:2', 'holder',
+    'user', 'user', 'web_reply', 'web_reply_notice', 'user', 'system', 'holder',
   ]);
 });
 
-test('a web status message folds into For you and adds no row of its own', () => {
+test('a web status message adds no row to For you', () => {
   const rig = forYouRig(fixture());
   rig.context.appendMessageObject(eMsg('web_status', 'w1', 'Status updated: Now'), 'sess-fy', false);
   settle(rig.timers);
-  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS_WITH_STATUS);
+  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
 test('a reader scrolled into history keeps their message in place when an older page lands', () => {
@@ -208,28 +204,23 @@ test('a live web reply lands at the bottom of For you', () => {
   const rig = forYouRig(fixture());
   rig.context.appendMessageObject(eMsg('web_reply', 'r2', 'Deployed.'), 'sess-fy', false);
   settle(rig.timers);
-  assert.deepEqual(rowsOf(rig.root).slice(-3), ['fold:2', 'web_reply', 'holder']);
+  assert.deepEqual(rowsOf(rig.root).slice(-3), ['system', 'web_reply', 'holder']);
 });
 
-test('the working line shows while a turn runs and goes at its end, with the stream output kept hidden', () => {
+test('no Working row shows while a turn runs, and the stream output stays in the hidden holder', () => {
   const rig = forYouRig(fixture());
-  assert.ok(!rowsOf(rig.root).includes('working'));
-
   rig.context.masterThinking = true;
-  rig.context.Chat.ForYou.refresh();
-  assert.deepEqual(rowsOf(rig.root).slice(-2), ['working', 'holder']);
+  rig.context.appendMessageObject(eMsg('assistant', 'a4', 'still going'), 'sess-fy', false);
+  settle(rig.timers);
+  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS, 'the running turn adds no row');
   const holder = rig.root.children[rig.root.children.length - 1];
   assert.equal(rig.stream.parentElement, holder, 'the stream output sits in the hidden holder');
-
-  rig.context.masterThinking = false;
-  rig.context.Chat.ForYou.refresh();
-  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
-test('a refresh with nothing to move keeps every row element', () => {
+test('a reprojection with nothing to move keeps every row element', () => {
   const rig = forYouRig(fixture());
   const before = rig.root.children.slice();
-  rig.engine.refreshForYou();
+  rig.engine.reproject('resize');
   const after = rig.root.children;
   assert.equal(after.length, before.length);
   after.forEach((el, i) => assert.equal(el, before[i], `row ${i} is the same element`));
@@ -249,7 +240,7 @@ test('Everything is unchanged after a For you round trip', () => {
 
   rig.engine.setView('foryou');
   settle(rig.timers);
-  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS_WITH_STATUS);
+  assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
   rig.engine.setView('everything');
   settle(rig.timers);
 

@@ -379,7 +379,6 @@ function startThinking(opts) {
   updateThinkingTime();
   startPageTimer('thinking-tick', updateThinkingTime, 1000);
   globalThis.ensureActiveSessionViewPolling();
-  Chat.ForYou.refresh();
 }
 
 // Resumes the indicator when a page load or SPA switch lands while the master
@@ -403,7 +402,6 @@ function stopThinking(opts) {
   // lock. Only refreshSendLock writes the button.
   stopActiveSessionViewPolling();
   if (!switching && !(opts && opts.preserveSessionIndicator)) Sidebar.updateSpinner();
-  Chat.ForYou.refresh();
 }
 
 function updateThinkingTime() {

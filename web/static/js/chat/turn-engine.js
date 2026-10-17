@@ -28,10 +28,9 @@
   // the queue and renders that single turn synchronously.
   //
   // The For-you view is a second projection of the same store, chosen per
-  // engine: a flat list of the shown messages in place, each run of other
-  // messages as one fold line, and no window, spacers or measurements. The
-  // store and the turn registry carry across a view switch; only the DOM is
-  // rebuilt.
+  // engine: a flat list of the shown messages in place, or one empty-state row
+  // when none shows, and no window, spacers or measurements. The store and the
+  // turn registry carry across a view switch; only the DOM is rebuilt.
   // ---------------------------------------------------------------------------
   const VIEW_EVERYTHING = 'everything';
   const VIEW_FOR_YOU = 'foryou';
@@ -160,12 +159,9 @@
       // The reader's place in Everything, kept while For you is shown, so a
       // switch back restores it.
       this.everythingPlace = null;
-      // For-you state: the fold lines the reader opened (keys from
-      // the registered rules' items), the fold line elements by key, and the persistent
-      // working line and stream holder.
-      this.forYouExpanded = new Set();
-      this.forYouFolds = new Map();
-      this.forYouWorking = null;
+      // For-you state: the empty-state row, and the stream holder that keeps the
+      // streaming output off the list.
+      this.forYouEmpty = null;
       this.forYouHolder = null;
       this.entries = [];
       this.knownIds = new Set();
@@ -1107,8 +1103,6 @@
       this.lastUserScrollTop = null;
       this.registry.clear();
       this.everythingPlace = null;
-      this.forYouExpanded.clear();
-      this.forYouFolds.clear();
       this.measuredFolded.clear();
       this.measuredOpen.clear();
       this.measuredFlat = new WeakMap();
@@ -1122,11 +1116,10 @@
     }
 
     // ---- For-you view -------------------------------------------------------
-    // The list reads the store flat: each shown message's own node in place,
-    // and each run of other messages as one fold line that opens in place. A
-    // node the store already built is the node the list shows, and the list's
-    // children are compared before the container changes, so a stream paint
-    // that moves nothing writes nothing.
+    // The list reads the store flat: each shown message's own node in place, or
+    // one empty-state row when no message shows. A node the store already built
+    // is the node the list shows, and the list's children are compared before
+    // the container changes, so a stream paint that moves nothing writes nothing.
 
     // Leaving Everything keeps the reader's place; entering For you pins the
     // bottom, where the newest message is. Returning restores the place.
@@ -1173,24 +1166,16 @@
       else if (anchor) this.restoreReadingAnchor(anchor);
     }
 
-    // The list's children, in order: the pagination sentinel, the rows, the
-    // working line, and the stream holder (hidden: For you shows the working
-    // line in the streaming output's place).
+    // The list's children, in order: the pagination sentinel, the shown rows or
+    // the empty-state row, and the stream holder (hidden: the streaming output
+    // sits in it, off the list).
     syncForYouChildren() {
       const children = [];
       const sentinel = document.getElementById('load-more-sentinel');
       if (sentinel) children.push(sentinel);
-      const entries = this.displayEntries();
-      for (const item of forYouRules.items(entries)) {
-        if (item.kind === 'message') {
-          children.push(this.forYouEntryNode(item.entry));
-          continue;
-        }
-        const expanded = this.forYouExpanded.has(item.key);
-        children.push(this.forYouFoldNode(item, expanded));
-        if (expanded) item.hidden.forEach((entry) => children.push(this.forYouEntryNode(entry)));
-      }
-      if (forYouRules.turnRunning()) children.push(this.forYouWorkingNode());
+      const shown = forYouRules.items(this.displayEntries());
+      if (!shown.length) children.push(this.forYouEmptyNode());
+      for (const entry of shown) children.push(this.forYouEntryNode(entry));
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);
     }
@@ -1203,25 +1188,14 @@
       return out;
     }
 
-    forYouFoldNode(item, expanded) {
-      let el = this.forYouFolds.get(item.key);
-      if (!el) {
-        const key = item.key;
-        el = forYouRules.buildFoldLine(() => this.toggleForYouFold(key));
-        this.forYouFolds.set(key, el);
-      }
-      forYouRules.fillFoldLine(el, item.count, expanded);
-      return el;
-    }
-
     forYouEntryNode(entry) {
       if (!entry.ready) this.renderAtom(entry, true);
       return entry.node;
     }
 
-    forYouWorkingNode() {
-      if (!this.forYouWorking) this.forYouWorking = forYouRules.buildWorkingLine();
-      return this.forYouWorking;
+    forYouEmptyNode() {
+      if (!this.forYouEmpty) this.forYouEmpty = forYouRules.buildEmptyLine();
+      return this.forYouEmpty;
     }
 
     forYouHolderNode() {
@@ -1230,18 +1204,6 @@
         this.forYouHolder.className = 'hidden';
       }
       return this.forYouHolder;
-    }
-
-    toggleForYouFold(key) {
-      if (this.forYouExpanded.has(key)) this.forYouExpanded.delete(key);
-      else this.forYouExpanded.add(key);
-      this.reproject('fold');
-    }
-
-    // The working line follows the turn's running state, which changes outside
-    // the store (the For-you module's refresh calls this when a turn starts or ends).
-    refreshForYou() {
-      if (this.view === VIEW_FOR_YOU) this.reproject('running');
     }
 
     // The reader's place in the For-you list: the message straddling the top

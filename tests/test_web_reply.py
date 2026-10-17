@@ -18,7 +18,7 @@ from unittest import mock
 import conftest
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 from src.features.chat_threads import thread_sessions
 from src.features.discord import metadata as discord_metadata
@@ -544,11 +544,11 @@ _STATUS_URL = "/api/internal/web/status"
 _VALID_SET = json.dumps({"now": "Running"})
 
 
-def _status_client(blocks: conftest.SessionBlocks) -> TestClient:
+def _status_client(blocks: conftest.SessionBlocks) -> testclient.TestClient:
   return conftest.make_internal_router_client(blocks.cfg, blocks, blocks.tree)
 
 
-def _set(client: TestClient, sid: str, text: str) -> httpx.Response:
+def _set(client: testclient.TestClient, sid: str, text: str) -> httpx.Response:
   return client.post(_STATUS_URL, json={"session_id": sid, "text": text})
 
 

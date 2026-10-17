@@ -327,6 +327,14 @@ body { overscroll-behavior: none; }
    border and the --watch spellings' mono face, per the reviewed mockup. */
 .tray-border { border: 1px dashed rgba(245, 158, 11, .55); }
 .tray-mono { font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+/* Child report card (rendering.js, child_report): a folded card clamps a long
+   report to three lines and hides its refs; data-folded="false" shows all of it. */
+.child-report[data-folded="true"] .child-report-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.child-report[data-folded="true"] .child-report-refs { display: none; }
+.child-report[data-folded="true"] .child-report-less,
+.child-report[data-folded="false"] .child-report-more { display: none; }
+.child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
+.child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
 /* Sidebar row settings popover (sidebar/row-menu.js): the one shared menu,
    appended to document.body and fixed-positioned under its anchor. */
 .row-menu {

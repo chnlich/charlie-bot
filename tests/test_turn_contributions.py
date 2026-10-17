@@ -363,7 +363,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
 
         session_events.tasks.create_logged_task = schedule
         meta = await conftest.create_root_session(manager, CreateSessionRequest(name="scratch"))
-        await manager.events.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE}})
+        await manager.events.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE, "exit_code": 0}})
         await asyncio.gather(*tasks)
         assert {contribution_type!r} not in [type(item).__name__ for item in turn_contributions.turn_contributions()]
         segments, _ = build_segments(cfg, meta, "manager_turn", overlay=None, chain=(), node_ref=None)

@@ -15,6 +15,7 @@ from unittest import mock
 import conftest
 import pytest
 
+from src.features.slack import metadata as slack_metadata
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.infra import tasks as infra_tasks
@@ -240,11 +241,12 @@ async def _run_stream_consumer(
     *,
     exit_code: int = 0,
     stderr_text: str = "",
+    meta: models.SessionMetadata | None = None,
 ) -> models.SessionCallbacks:
-  """Run a simulated event stream through the production consumer path."""
+  """Run a simulated event stream through the production consumer path; *meta* defaults to a plain manager session."""
   cfg = conftest.build_master_cc_cfg(tmp_path)
   conftest.bind_session_blocks(monkeypatch, conftest.build_session_blocks(cfg))
-  meta = _make_meta(session_id)
+  meta = meta if meta is not None else _make_meta(session_id)
   cb = conftest.mock_session_callbacks()
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
@@ -397,3 +399,65 @@ async def test_consumer_names_a_default_session_after_master_done(
   assert named is not None
   assert named.name == "7: Stub Title"
   assert named.group == "Stub"
+
+
+# ---------------------------------------------------------------------------
+# The turn-end unread mark: a clean turn that a turn contribution claims leaves the mark to it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_clean_web_turn_leaves_the_unread_mark_to_the_web_reply_contribution(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "web-clean",
+      [base.make_text_event("answer"), base.make_result_event()])
+
+  cb.mark_unread.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_errored_web_turn_still_marks_unread(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "web-error", [base.make_text_event("partial")], exit_code=1, stderr_text="backend failed")
+
+  cb.mark_unread.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_nonzero_exit_without_an_error_message_still_marks_unread_for_a_web_turn(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A silent failure has no error message to show, so only a zero exit counts as a clean turn."""
+  cb = await _run_stream_consumer(tmp_path, monkeypatch, "web-silent", [base.make_text_event("partial")], exit_code=1)
+
+  cb.mark_unread.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_clean_thread_session_turn_still_marks_unread(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  meta = models.SessionMetadata(
+      profile="manager",
+      id="thread-clean",
+      name="thread",
+      backend="fake",
+      cc_session_id=None,
+      slack_origin=slack_metadata.SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100"))
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "thread-clean",
+      [base.make_text_event("answer"), base.make_result_event()], meta=meta)
+
+  cb.mark_unread.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_web_turn_still_marks_unread(tmp_path: pathlib.Path) -> None:
+  """A turn with no backend to run on is refused before any spawn, and that refusal marks unread."""
+  cfg = conftest.build_master_cc_cfg(tmp_path)
+  cb = conftest.mock_session_callbacks()
+  item = conftest.make_work_item(
+      cfg, models.SessionMetadata(profile="manager", id="refused", name="r"), None, callbacks=cb)
+
+  await master_cc_run._run_cc(item)
+
+  cb.mark_unread.assert_awaited()

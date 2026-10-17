@@ -46,6 +46,7 @@ from src.runtime import (
     control_events,
     control_sink,
     run_token,
+    runs,
     session_anchors,
     session_dispatch,
     session_events,
@@ -61,14 +62,6 @@ from src.runtime import (
     thinking_state,
 )
 from src.runtime.hooks import sequence_controllers
-from src.runtime.runs import (
-    DATA_DIR_NAME,
-    METADATA_NAME,
-    RunStore,
-    is_run_alive,
-    read_host_boot_time,
-    stop_requested_in_events,
-)
 
 PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 
@@ -270,7 +263,7 @@ def _run_outcomes(events: list[dict]) -> dict[str, str]:
 
 
 def derive_task_tree_activity(
-    runs: list[models.RunRecord],
+    run_records: list[models.RunRecord],
     events: list[dict],
     host_boot_time: Callable[[], datetime.datetime],
     task_open: bool,
@@ -293,18 +286,18 @@ def derive_task_tree_activity(
   running verdict is not gated: closure is refused while a Run is active, so a
   closed task cannot hold a live Run.
   """
-  if not runs:
+  if not run_records:
     return TaskTreeActivity(has_running_tasks=False, work_state="idle")
   if outcomes is None:
     outcomes = _run_outcomes(events)
   verdicts: list[str] = []
   has_running = False
   boot: datetime.datetime | None = None
-  for run in runs:
+  for run in run_records:
     if outcomes.get(run.id) is not None:
       continue  # a terminal fact of any outcome is a settled Run, not activity
     if run.pid is None:
-      if stop_requested_in_events(events, run.id):
+      if runs.stop_requested_in_events(events, run.id):
         continue  # a stopped queued run is resolved-by-request, not waiting work
       if not task_open:
         continue  # a closed task's queued run never launches, so it is not waiting work
@@ -314,7 +307,7 @@ def derive_task_tree_activity(
     # fact — the sole case where a /proc read can change the verdict.
     if boot is None:
       boot = host_boot_time()
-    if is_run_alive(run.pid, run.pid_start, run.started_at, boot):
+    if runs.is_run_alive(run.pid, run.pid_start, run.started_at, boot):
       has_running = True
       verdicts.append("running")
     # A launched Run nobody observed exiting paints nothing: subagent failures
@@ -351,7 +344,7 @@ class TaskTreeManager:
     self.session_successor = successor
     self.control_lock = asyncio.Lock()
     self.events = control_sink.ControlEventSink(self.session_events)
-    self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events)
+    self.runs = runs.RunStore(cfg.sessions_dir, self.control_lock, self.events)
     # The run owner's terminal/stop/identity reads see the full fact history
     # (archived segments included), so a rotated acknowledgement never un-dones
     # itself and a repeat finish stays idempotent across rotation.
@@ -519,7 +512,7 @@ class TaskTreeManager:
       # No authoritative entry covers this name (cold cache, out-of-band
       # create): the strict read is the tree's own contract — an unparseable
       # file fails the build loud, where the listings readers drop and log.
-      path = sessions_dir / name / METADATA_NAME
+      path = sessions_dir / name / runs.METADATA_NAME
       try:
         raw = path.read_text(encoding="utf-8")
       except OSError:
@@ -761,7 +754,7 @@ class TaskTreeManager:
 
     Memoized per node on the inputs that can move the verdict: the run
     records' generation (every record mutation funnels through one
-    :meth:`RunStore.write_record` bump) plus, for a node with runs, the
+    :meth:`runs.RunStore.write_record` bump) plus, for a node with runs, the
     chat-events identity and its covered length. The length is in the key
     because the events cache takes an append in place — identity survives a
     new fact, and a fact transition with no record write (a stop request, a
@@ -780,8 +773,8 @@ class TaskTreeManager:
       live = self.session_events.load_chat_events_sync(session_id)
       if cached[1] is live and cached[2] == len(live):
         return cached[3]
-    runs = self.runs.list_run_records_sync(session_id)
-    if not runs:
+    run_records = self.runs.list_run_records_sync(session_id)
+    if not run_records:
       # No Run is no activity: the derivation's own guard answers without any
       # event load, so a listing's per-descendant derivation over a runless
       # node pays one runs-dir stat, not the node's whole event history.
@@ -800,7 +793,11 @@ class TaskTreeManager:
     events = self.runs.load_events_sync(session_id)
     task_open = self._facts_of(session_id).task_state == "open"
     activity = derive_task_tree_activity(
-        runs, events, host_boot_time, task_open, outcomes=self._run_outcomes_of(session_id, live, archived_count))
+        run_records,
+        events,
+        host_boot_time,
+        task_open,
+        outcomes=self._run_outcomes_of(session_id, live, archived_count))
     if probed:
       self._activity_memo.pop(session_id, None)
     else:
@@ -817,7 +814,7 @@ class TaskTreeManager:
     return (activity.has_running_tasks, activity.work_state)
 
   def _host_boot_time(self) -> datetime.datetime:
-    return read_host_boot_time()
+    return runs.read_host_boot_time()
 
   def _archived_facts_based(
       self, meta: models.SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
@@ -1233,7 +1230,7 @@ class TaskTreeManager:
     )
     metadata_slots.set_registered(meta, slot_values)
     try:
-      (temp_dir / DATA_DIR_NAME).mkdir(parents=True)
+      (temp_dir / runs.DATA_DIR_NAME).mkdir(parents=True)
       # The creation fact is written into the temp node itself, so metadata and
       # the event log publish together with the one rename; post-publication
       # facts go through the sink.
@@ -1247,13 +1244,13 @@ class TaskTreeManager:
       await ndjson.append_ndjson(chat_events.chat_events_path(temp_dir), created_event)
       meta.created_by_event = models.EventRef(session_id=task_id, event_id=str(created_event["id"]))
       await asyncio.to_thread(
-          json_utils.atomic_write_text, temp_dir / METADATA_NAME,
+          json_utils.atomic_write_text, temp_dir / runs.METADATA_NAME,
           meta.model_dump_json(indent=2, exclude=session_store.TRANSIENT_METADATA_FIELDS))
       try:
         os.replace(temp_dir, final_dir)
       except OSError:
         # Lost a create race for the same stable id: the original product exists.
-        existing = self._read_metadata_file(final_dir / METADATA_NAME)
+        existing = self._read_metadata_file(final_dir / runs.METADATA_NAME)
         if existing is None:
           raise
         return existing
@@ -1436,12 +1433,12 @@ class TaskTreeManager:
     blockers: list[str] = []
     if self.pending_input_blockers is not None:
       blockers.extend(self.pending_input_blockers(session_id))
-    runs = self.runs.list_run_records_sync(session_id)
-    if not runs:
+    run_records = self.runs.list_run_records_sync(session_id)
+    if not run_records:
       return blockers
     events = self.runs.load_events_sync(session_id)
     host_boot = self._host_boot_time()
-    for run in runs:
+    for run in run_records:
       blocker = self.runs.run_blocker(run, events, host_boot)
       if blocker is not None:
         blockers.append(blocker)
@@ -1597,9 +1594,9 @@ class TaskTreeManager:
     children = self._children_of(index, session_id)
     if children:
       blockers.append(f"has child task(s): {', '.join(children)}")
-    runs = self.runs.list_run_records_sync(session_id)
-    if runs:
-      blockers.append(f"has run record(s): {', '.join(r.id for r in runs)}")
+    run_records = self.runs.list_run_records_sync(session_id)
+    if run_records:
+      blockers.append(f"has run record(s): {', '.join(r.id for r in run_records)}")
     triggers_dir = self._cfg.sessions_dir / session_id / "triggers"
     if triggers_dir.is_dir() and any(triggers_dir.glob("*.json")):
       blockers.append("has saved trigger reference(s)")

@@ -9,6 +9,7 @@ from src.infra import event_types as ET
 from src.runtime import (
     backend_pool,
     control_events,
+    session_events,
     session_store,
     spawner_backends,
     takeoff_gate,
@@ -18,7 +19,6 @@ from src.runtime import (
     triggers,
 )
 from src.runtime.api import deps, sessions
-from src.runtime.session_events import SessionEvents
 
 log = log_once.LazyStructlogLogger()
 
@@ -105,7 +105,7 @@ def delegate_request_id(req: models.DelegateRequest) -> str:
 async def _delegate_task_tree(
     req: models.DelegateRequest,
     task_mgr: task_sessions.TaskTreeManager,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     caller: object,
     resolved_backend: str,
     resolved_model: str | None,
@@ -201,7 +201,7 @@ async def _delegate_task_tree(
       ET.DELEGATE_INVOCATION: _delegate_invocation_event_payload(req),
   }
   # The delegation card rides the delegating session's chat (persist + broadcast).
-  await session_events.persist_and_broadcast(req.session_id, task_event)
+  await events.persist_and_broadcast(req.session_id, task_event)
 
   log.info("task_delegated_task_tree", session=req.session_id, child=child.id, run_id=run_id)
   return {
@@ -216,7 +216,7 @@ async def _delegate_task_tree(
 @router.post("/delegate")
 async def delegate_task(
     req: models.DelegateRequest,
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
     caller: object = fastapi.Depends(deps.require_caller),
@@ -252,8 +252,7 @@ async def delegate_task(
           "give both for a repo task, neither for a repo-less one")
   deps.require_found(await store.get_session(req.session_id))
   resolved_backend, resolved_model, backend_from_pool = await _authorize_spawn_request(req, store, task_mgr)
-  return await _delegate_task_tree(
-      req, task_mgr, session_events, caller, resolved_backend, resolved_model, backend_from_pool)
+  return await _delegate_task_tree(req, task_mgr, events, caller, resolved_backend, resolved_model, backend_from_pool)
 
 
 @router.post("/schedule-trigger")

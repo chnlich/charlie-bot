@@ -422,7 +422,7 @@ async def test_cold_read_delegation_from_a_manager_succeeds_without_takeoff(
 
   result = await internal.delegate_task(
       _cold_read_request(manager.id, page),
-      session_events=session_blocks.events,
+      events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
       caller=conftest.OPERATOR)
@@ -449,7 +449,7 @@ async def test_cold_read_delegation_with_a_repo_field_gets_400(
   with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
         _cold_read_request(manager.id, page, **overrides),
-        session_events=session_blocks.events,
+        events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
         caller=conftest.OPERATOR)
@@ -466,7 +466,7 @@ async def test_cold_read_delegation_requires_cold_read(tmp_path: pathlib.Path, m
   with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
         _cold_read_request(manager.id, page, cold_read=None),
-        session_events=session_blocks.events,
+        events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
         caller=conftest.OPERATOR)
@@ -483,7 +483,7 @@ async def test_other_task_types_reject_cold_read(tmp_path: pathlib.Path, monkeyp
   with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
         _cold_read_request(manager.id, page, task_type=models.TaskType.VERIFY),
-        session_events=session_blocks.events,
+        events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
         caller=conftest.OPERATOR)
@@ -543,7 +543,7 @@ async def _delegate_cold_read(tree, session_blocks, manager, page: pathlib.Path)
   """Delegate one cold read through the real entry; return the child session id."""
   result = await internal.delegate_task(
       _cold_read_request(manager.id, page),
-      session_events=session_blocks.events,
+      events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
       caller=conftest.OPERATOR)

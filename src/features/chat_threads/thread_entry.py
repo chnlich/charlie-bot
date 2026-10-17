@@ -43,6 +43,7 @@ from src.runtime import (
     master_cc_queue,
     master_cc_state,
     master_trigger,
+    session_events,
     session_lifecycle,
     session_listing,
     session_store,
@@ -52,7 +53,6 @@ from src.runtime import (
     triggers,
 )
 from src.runtime.api import deps, message_utils
-from src.runtime.session_events import SessionEvents
 
 logger = log_once.LazyStructlogLogger()
 
@@ -522,7 +522,7 @@ _REPLY_BUDGET_CHARS = 500
 
 async def post_reply(
     adapter: ThreadAdapter, session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    session_events: SessionEvents) -> dict:
+    events: session_events.SessionEvents) -> dict:
   """Post *text* to the session's thread and return the readback the CLI prints.
 
   The text posts exactly as written — nothing in it is rewritten. Before any
@@ -547,10 +547,10 @@ async def post_reply(
   assert_no_file_server_links(text)
   operator_only_links = application_route_links(text, cfg)
 
-  events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
+  chat_events = await asyncio.to_thread(events.load_chat_events_sync, session_id)
   # The in-process work item owns the input batch answered by this reply.
   input_event_ids = master_cc_state.running_user_event_ids(session_id)
-  bound = newest_thread_input(platform, events, input_event_ids)
+  bound = newest_thread_input(platform, chat_events, input_event_ids)
   answers = summon_of(bound[1], bound[0]) if bound is not None else None
   fields = metadata_slots.fields_of(meta, platform.name)
   address = adapter.address_of(getattr(fields, platform.origin_field))
@@ -563,7 +563,7 @@ async def post_reply(
           "attempts; nothing was persisted")
 
   payload = {"answers": answers, "chars": len(text), "chunks": len(bodies)}
-  await session_events.persist_and_broadcast(
+  await events.persist_and_broadcast(
       session_id, {
           "type": platform.reply_event_type,
           "content": text,
@@ -594,7 +594,7 @@ async def post_reply(
 
 async def ack_messages(
     adapter: ThreadAdapter, session_id: str, message_ids: list[str], cfg: config.CharlieBotConfig,
-    store: session_store.SessionStore, session_events: SessionEvents) -> dict:
+    store: session_store.SessionStore, events: session_events.SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
   The follow round's proof-of-read. Refusals raise ``ThreadReplyError``: 404
@@ -631,7 +631,7 @@ async def ack_messages(
     metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: watermark})
     meta.updated_at = models.utc_now()
     await store.save_metadata(meta)
-  await session_events.persist_and_broadcast(
+  await events.persist_and_broadcast(
       session_id, {
           "type": platform.ack_event_type,
           "content": f"{platform.display_name} thread ack: {len(ids)} message(s) read through {ceiling}",
@@ -667,9 +667,9 @@ _NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the 
 
 
 async def audit_round(
-    adapter: ThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
+    adapter: ThreadAdapter, session_id: str, chat_events: list[dict], target: dict, input_event_id: str,
     cfg: config.CharlieBotConfig, store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents, successor: session_successor.SessionSuccessor) -> bool:
+    events: session_events.SessionEvents, successor: session_successor.SessionSuccessor) -> bool:
   """Act on one finished round whose input carried a summon block; True when it acted.
 
   Reads the log for the round's summon: a reply answering it ends the audit. A
@@ -683,25 +683,25 @@ async def audit_round(
   """
   platform = adapter.platform
   summon_id = summon_of(target, input_event_id)
-  summon = event_by_id(events, summon_id)
+  summon = event_by_id(chat_events, summon_id)
   # The current contract's summon is the one-line input; the older full-prompt
   # format named the reply command in its content. A summon from the earlier
   # marker contract (neither) stays outside this audit.
   content = (summon or {}).get("content") or ""
   if content != platform.summon_line and platform.reply_command not in content:
     return False
-  if replied(platform, events, summon_id):
+  if replied(platform, chat_events, summon_id):
     return False
 
   if "nudge_of" not in target:
-    if nudged(platform, events, summon_id):
+    if nudged(platform, chat_events, summon_id):
       return False
     content = _NUDGE_TEMPLATE.format(platform=platform.display_name)
     nudge = message_utils.build_agent_message_event(
         content, from_session=session_id, from_session_name=platform.display_name)
     nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
     nudge[platform.name]["nudge_of"] = summon_id
-    await session_events.persist_and_broadcast(session_id, nudge)
+    await events.persist_and_broadcast(session_id, nudge)
     tasks.create_logged_task(
         master_trigger.trigger_master(
             session_id,
@@ -724,12 +724,12 @@ async def audit_round(
         nudge_id=nudge["id"])
     return True
 
-  if noticed(platform, events, summon_id):
+  if noticed(platform, chat_events, summon_id):
     return False
   ok = await post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
   if not ok:
     return False  # the platform's post_gave_up log is the only trace; no marker, so the boot audit retries
-  await session_events.persist_and_broadcast(
+  await events.persist_and_broadcast(
       session_id, {
           "type": ET.ASSISTANT_ERROR,
           "content": _NO_REPLY_CONTENT.format(platform=platform.display_name),
@@ -744,8 +744,8 @@ async def audit_round(
 
 async def deliver_done(
     adapter: ThreadAdapter, session_id: str, done: dict, cfg: config.CharlieBotConfig,
-    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
-    successor: session_successor.SessionSuccessor) -> bool:
+    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents, successor: session_successor.SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
@@ -761,15 +761,15 @@ async def deliver_done(
   input_event_ids = message_utils.master_done_input_event_ids(done)
   if not input_event_ids:
     return False
-  events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
+  chat_events = await asyncio.to_thread(events.load_chat_events_sync, session_id)
   # The round-end audit targets the same input the reply binding does: the
   # newest thread-bearing one of the batch.
-  bound = newest_thread_input(platform, events, input_event_ids)
+  bound = newest_thread_input(platform, chat_events, input_event_ids)
   if bound is None:
     return False
   input_event_id, target = bound
   return await audit_round(
-      adapter, session_id, events, target, input_event_id, cfg, store, lifecycle, session_events, successor)
+      adapter, session_id, chat_events, target, input_event_id, cfg, store, lifecycle, events, successor)
 
 
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
@@ -779,8 +779,8 @@ _LOST_SUMMON_CONTENT = "这条 {platform} 召唤在服务重启时还排在队�
 
 async def backfill_lost_summons(
     adapter: ThreadAdapter, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
-    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
-    successor: session_successor.SessionSuccessor) -> int:
+    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents, successor: session_successor.SessionSuccessor) -> int:
   """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
 
   First the summons lost while queued: the startup replay covers ``ET.USER``
@@ -799,16 +799,16 @@ async def backfill_lost_summons(
   for meta in sessions:
     if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
       continue
-    events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
+    chat_events = await asyncio.to_thread(events.load_chat_events_sync, meta.id)
     lost = lost_summons(
         platform,
-        events,
+        chat_events,
         owned=master_cc_queue.queued_user_event_ids(meta.id),
         running=set(master_cc_state.running_user_event_ids(meta.id)))
     for ev in lost:
       # Persist the marker before posting: a crash in between costs one notice,
       # while posting first would re-post it on every boot until the marker landed.
-      await session_events.persist_and_broadcast(
+      await events.persist_and_broadcast(
           meta.id, {
               "type": ET.ASSISTANT_ERROR,
               "content": _LOST_SUMMON_CONTENT.format(platform=platform.display_name),
@@ -826,19 +826,21 @@ async def backfill_lost_summons(
           **adapter.log_fields(block),
           input_event_id=ev["id"])
     if lost:
-      events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
+      chat_events = await asyncio.to_thread(events.load_chat_events_sync, meta.id)
 
-    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and message_utils.master_done_input_event_ids(ev)]
+    dones = [
+        ev for ev in chat_events if ev.get("type") == ET.MASTER_DONE and message_utils.master_done_input_event_ids(ev)
+    ]
     for done in dones:
-      bound = newest_thread_input(platform, events, message_utils.master_done_input_event_ids(done))
+      bound = newest_thread_input(platform, chat_events, message_utils.master_done_input_event_ids(done))
       if bound is None:
         continue
       done_input_id, target = bound
-      if await audit_round(adapter, meta.id, events, target, done_input_id, cfg, store, lifecycle, session_events,
+      if await audit_round(adapter, meta.id, chat_events, target, done_input_id, cfg, store, lifecycle, events,
                            successor):
         reported += 1
         # The action appended an event the next done's predicates must see.
-        events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
+        chat_events = await asyncio.to_thread(events.load_chat_events_sync, meta.id)
   return reported
 
 
@@ -984,7 +986,7 @@ async def accept_summon(
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor,
     trigger_mgr: triggers.TriggerManager,
     *,
@@ -1033,7 +1035,7 @@ async def accept_summon(
     # The unarchive write alone notifies nobody: an open sidebar refetches its
     # current filter only on a task-tree notification, so the revived session
     # reappears on Threads (or vanishes from Archive) without a manual refresh.
-    await session_events.broadcast_task_tree_changed(session_id, "session_unarchived")
+    await events.broadcast_task_tree_changed(session_id, "session_unarchived")
   else:
     logger.info(f"{platform.name}_mention_session_existing", **fields, session=session_id)
 
@@ -1044,7 +1046,7 @@ async def accept_summon(
   evt = message_utils.build_agent_message_event(
       content, from_session=session_id, from_session_name=platform.display_name)
   evt[platform.name] = block
-  await session_events.persist_and_broadcast(session_id, evt)
+  await events.persist_and_broadcast(session_id, evt)
   round_event_id = evt.get("id")
   logger.info(f"{platform.name}_mention_round_started", **fields, session=session_id, user_event_id=round_event_id)
 
@@ -1069,7 +1071,7 @@ async def accept_summon(
 async def revive_and_arm_follow(
     platform: ThreadPlatform,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     trigger_mgr: triggers.TriggerManager,
     meta: models.SessionMetadata,
     *,
@@ -1092,7 +1094,7 @@ async def revive_and_arm_follow(
   if meta.status == models.SessionStatus.ARCHIVED:
     await lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_follow_session_unarchived", session=session_id, **log_fields)
-    await session_events.broadcast_task_tree_changed(session_id, "session_unarchived")
+    await events.broadcast_task_tree_changed(session_id, "session_unarchived")
   return await arm_follow_trigger(platform, trigger_mgr, session_id, floor=floor, log_fields=log_fields)
 
 
@@ -1100,7 +1102,7 @@ async def follow_message(
     adapter: ThreadAdapter,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     trigger_mgr: triggers.TriggerManager,
     session_id: str,
     message_id: str,
@@ -1134,7 +1136,7 @@ async def follow_message(
   trigger = await revive_and_arm_follow(
       platform,
       lifecycle,
-      session_events,
+      events,
       trigger_mgr,
       meta,
       session_id=session_id,
@@ -1145,7 +1147,7 @@ async def follow_message(
 
 async def backfill_followed_threads(
     adapter: ThreadAdapter, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
-    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
     trigger_mgr: triggers.TriggerManager) -> int:
   """Arm the follow trigger of every followed session holding unread messages; return the count.
 
@@ -1179,7 +1181,7 @@ async def backfill_followed_threads(
       trigger = await revive_and_arm_follow(
           platform,
           lifecycle,
-          session_events,
+          events,
           trigger_mgr,
           meta,
           session_id=meta.id,

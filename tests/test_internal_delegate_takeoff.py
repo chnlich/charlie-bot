@@ -73,7 +73,7 @@ def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
     del args, kwargs
     return "codex-o3", "o3", False
 
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   monkeypatch.setattr(spawner_backends, "resolve_requested_subagent_backend_model", fake_resolve)
   return cfg
 
@@ -199,7 +199,7 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
 
   monkeypatch.setattr(
       spawner_backends, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
-  monkeypatch.setattr(internal, "get_config", lambda: object())
+  monkeypatch.setattr("src.infra.config.get_config", lambda: object())
 
   with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
@@ -239,7 +239,7 @@ async def _authorize_verify(
     backend: str | None = None,
 ) -> tuple[str | None, str | None]:
   req = _build_request(task_type=models.TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
-  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(pool))
+  monkeypatch.setattr("src.infra.config.get_config", lambda: _build_verify_cfg(pool))
   store = BackendFakeSessionStore(session_backend)
   resolved_backend, resolved_model, _from_pool = await internal._authorize_spawn_request(
       req, store, _stub_task_manager())
@@ -323,7 +323,7 @@ def _backend_tree_env(
   monkeypatch.setattr(adapter, "_schedule_launch", lambda *args, **kwargs: None)
   tree.dispatch.executor = adapter
   tree.check_task_authorization = mock.AsyncMock()
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   return cfg, session_blocks, tree, adapter
 
 

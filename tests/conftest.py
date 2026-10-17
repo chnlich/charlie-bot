@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest import mock
 
 import fastapi
 import pytest
@@ -343,8 +343,8 @@ def mocked_callback_fields(**overrides: Any) -> dict[str, Any]:
   the consumer relies on; the consumer's producing-backend keyword rides through and is ignored.
   """
   fields: dict[str, Any] = {
-      "mark_unread": AsyncMock(),
-      "persist_cc_session_id": AsyncMock(side_effect=lambda sid, ccid, native_backend=None: ccid),
+      "mark_unread": mock.AsyncMock(),
+      "persist_cc_session_id": mock.AsyncMock(side_effect=lambda sid, ccid, native_backend=None: ccid),
   }
   fields.update(overrides)
   return fields
@@ -353,10 +353,10 @@ def mocked_callback_fields(**overrides: Any) -> dict[str, Any]:
 def mock_session_callbacks() -> models.SessionCallbacks:
   """SessionCallbacks with every field mocked; a test needing one real field constructs its own."""
   return models.SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
+      persist_and_broadcast=mock.AsyncMock(),
       **mocked_callback_fields(),
-      persist_account_label=AsyncMock(side_effect=lambda sid, label: label),
-      context_state=AsyncMock(return_value=(None, None)),
+      persist_account_label=mock.AsyncMock(side_effect=lambda sid, label: label),
+      context_state=mock.AsyncMock(return_value=(None, None)),
   )
 
 
@@ -364,13 +364,13 @@ def manager_backed_callbacks(mgr: SessionBlocks) -> models.SessionCallbacks:
   """SessionCallbacks whose anchor funnels are the real blocks', so anchor persistence is
   observable on disk rather than on a mock's call list; broadcast stays mocked."""
   return models.SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
+      persist_and_broadcast=mock.AsyncMock(),
       **mocked_callback_fields(
           persist_cc_session_id=mgr.anchors.persist_cc_session_id,
           task_tree_activity=mgr.sidebar.task_tree_activity,
       ),
       persist_account_label=mgr.anchors.persist_account_label,
-      context_state=AsyncMock(return_value=(None, None)),
+      context_state=mock.AsyncMock(return_value=(None, None)),
   )
 
 
@@ -478,8 +478,8 @@ async def _run_seeded_consumer(
     master_cc_state._session_queues[session_id].put_nowait(item)
   try:
     with (
-        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(streaming.streaming_manager, "broadcast", new=AsyncMock()),
+        mock.patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
+        mock.patch.object(streaming.streaming_manager, "broadcast", new=mock.AsyncMock()),
         manager_patch,
     ):
       await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
@@ -494,13 +494,13 @@ async def run_session_consumer(
     fake_run_cc: ConsumerRound,
 ) -> None:
   """Run _session_consumer with fake run execution, a missing metadata read, and silent broadcasts."""
-  workers_mock = MagicMock()
-  workers_mock.read_metadata_fresh = AsyncMock(return_value=None)
+  workers_mock = mock.MagicMock()
+  workers_mock.read_metadata_fresh = mock.AsyncMock(return_value=None)
   await _run_seeded_consumer(
       session_id,
       work_items,
       fake_run_cc,
-      patch(SESSION_STORE_ACCESSOR_PATCH_TARGET, return_value=workers_mock),
+      mock.patch(SESSION_STORE_ACCESSOR_PATCH_TARGET, return_value=workers_mock),
   )
 
 
@@ -545,7 +545,7 @@ async def drain_session_consumer(session_id: str, timeout: float) -> None:
 def patch_resume_seams(
     monkeypatch: pytest.MonkeyPatch,
     resume_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple]] | None = None,
-) -> AsyncMock:
+) -> mock.AsyncMock:
   """Install the three seams every re-attach round needs, and return the broadcast stub.
 
   The re-attach path (enqueue_master_resume) reads fresh metadata, broadcasts
@@ -558,10 +558,10 @@ def patch_resume_seams(
     monkeypatch.setattr(master_cc_run, "_resume_cc", resume_cc)
   else:
     monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
-  broadcast = AsyncMock()
+  broadcast = mock.AsyncMock()
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast)
-  workers_mock = MagicMock()
-  workers_mock.read_metadata_fresh = AsyncMock(return_value=None)
+  workers_mock = mock.MagicMock()
+  workers_mock.read_metadata_fresh = mock.AsyncMock(return_value=None)
   monkeypatch.setattr(SESSION_STORE_ACCESSOR_PATCH_TARGET, lambda *a, **k: workers_mock)
   return broadcast
 
@@ -857,10 +857,10 @@ def queued_user_reorder_events() -> list[dict]:
   ]
 
 
-def make_json_response(payload: dict[str, Any], status_code: int = 200) -> MagicMock:
+def make_json_response(payload: dict[str, Any], status_code: int = 200) -> mock.MagicMock:
   """A transport-response stand-in for patched CLI transport calls: `.status_code` is 200 (or the
   given code) and `.json()` returns payload, so the CLI's success path runs straight through."""
-  resp = MagicMock()
+  resp = mock.MagicMock()
   resp.status_code = status_code
   resp.json.return_value = payload
   return resp
@@ -932,23 +932,23 @@ async def make_parent(mgr: SessionBlocks, *, name: str = "Parent") -> str:
   return parent.id
 
 
-def make_sessions_dir_config(tmp_path: Path) -> MagicMock:
+def make_sessions_dir_config(tmp_path: Path) -> mock.MagicMock:
   """A MagicMock config for patched CLI ``get_config`` calls: ``sessions_dir`` points at a created
   dir under tmp_path. Callers rely on the sessions root existing while the test's cwd (tmp_path
   itself) sits outside it, so session resolution reads the cwd as sessionless. The dir name is
   arbitrary and no test reads it back."""
-  cfg = MagicMock()
+  cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "fake_sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   return cfg
 
 
-def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
+def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> mock.MagicMock:
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
   what the tests patch into src.runtime.cli.common.get_config (the readback/diff readers). The sessions
   root itself rides the light seam resolve_session_id reads, so the cwd derivation answers from
   the built tree."""
-  cfg = MagicMock()
+  cfg = mock.MagicMock()
   cfg.server.port = 9443
   cfg.sessions_dir = tmp_path / "sessions"
   session_dir = cfg.sessions_dir / sid
@@ -1673,7 +1673,8 @@ def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) ->
   module. The registry and the attribute return to their prior state on exit.
   """
   attr = f"_cron_handler_{name}"
-  with patch.dict(scheduled_handlers._HANDLERS), patch.object(sys.modules[__name__], attr, handler, create=True):
+  with mock.patch.dict(scheduled_handlers._HANDLERS), mock.patch.object(sys.modules[__name__], attr, handler,
+                                                                        create=True):
     scheduled_handlers.register_handler(name, __name__, attr=attr)
     yield
 
@@ -1821,7 +1822,7 @@ def build_cli_backend_rig(
   return build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=defaults, **kwargs)
 
 
-def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pid: int) -> MagicMock:
+def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pid: int) -> mock.MagicMock:
   """Install a MagicMock asyncio subprocess on a spawn patch target and return it.
 
   The one home of the backend-test spawn stub: stdin's drain and wait_closed are
@@ -1830,12 +1831,12 @@ def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pi
   that await. A test asserting the spawn call's own kwargs builds its AsyncMock
   instead, to hold the reference ``await_args`` reads.
   """
-  process = MagicMock()
+  process = mock.MagicMock()
   process.pid = pid
-  process.stdin = MagicMock()
-  process.stdin.drain = AsyncMock()
-  process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr(patch_target, AsyncMock(return_value=process))
+  process.stdin = mock.MagicMock()
+  process.stdin.drain = mock.AsyncMock()
+  process.stdin.wait_closed = mock.AsyncMock()
+  monkeypatch.setattr(patch_target, mock.AsyncMock(return_value=process))
   return process
 
 
@@ -2280,7 +2281,7 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
 
 
 def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
-                           **transport_kw: object) -> Iterator[MagicMock]:
+                           **transport_kw: object) -> Iterator[mock.MagicMock]:
   """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg (the
   readback/diff paths still read it), the request path's base URL derives from cfg's
   server_base_url when it is a plain attribute (MagicMock auto-attrs stringify harmlessly — the
@@ -2289,17 +2290,17 @@ def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
   given, so the CLI's success path runs; a test can set the response after entering). The mock is
   yielded for that and for call assertions."""
   base_url = str(getattr(cfg, "server_base_url", "http://localhost:18498"))
-  with patch("sys.argv", argv), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url), \
-       patch(transport_target, **transport_kw) as transport_mock:
+  with mock.patch("sys.argv", argv), \
+       mock.patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       mock.patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url), \
+       mock.patch(transport_target, **transport_kw) as transport_mock:
     if "return_value" not in transport_kw:
       transport_mock.return_value = make_json_response({})
     yield transport_mock
 
 
 @contextlib.contextmanager
-def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterator[MagicMock]:
+def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterator[mock.MagicMock]:
   """_patched_cli_transport with _request_post as the patched verb (the POST path every CLI command
   shares)."""
   yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, cfg, argv, **post_kw)
@@ -2386,7 +2387,7 @@ def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
 
 
 @contextlib.contextmanager
-def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock]:
+def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[mock.AsyncMock]:
   """Patch the seams an accepted mention fires through; yields the trigger mock.
 
   The one home both listener suites (Slack and Discord) drive an accepted
@@ -2397,9 +2398,10 @@ def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock]
   sibling context.
   """
   with contextlib.ExitStack() as stack:
-    trigger = stack.enter_context(patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()))
+    trigger = stack.enter_context(mock.patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()))
     if tasks is not None:
-      stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
+      stack.enter_context(
+          mock.patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     yield trigger
 
 
@@ -2848,7 +2850,7 @@ async def process_worker_event(
   event raises (the quota scan path); returns the log text so callers assert on
   the persisted lines without re-reading the file.
   """
-  monkeypatch.setattr(worker_module.streaming.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(worker_module.streaming.streaming_manager, "broadcast", mock.AsyncMock())
   fd = os.open(tmp_path / "events.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
   try:
     await worker._process_event(event, fd)
@@ -2895,7 +2897,7 @@ class FakeBackend(TerminateFlagBackend):
     yield backend_base.make_result_event()
 
 
-def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMock:
+def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> mock.AsyncMock:
   """Mock ``asyncio.create_subprocess_exec`` answering each sacct probe's scripted stdout.
 
   *scripted* maps ``(host, job_id)`` to that probe's sacct stdout payloads; each call pops the
@@ -2917,13 +2919,13 @@ def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncM
     out = queue[0] if len(queue) == 1 else queue.pop(0)
     return FakeAsyncProcess(stdout=out.encode())
 
-  return AsyncMock(side_effect=_factory)
+  return mock.AsyncMock(side_effect=_factory)
 
 
 @contextlib.contextmanager
 def patch_trigger_fire(
-    subprocess_mock: AsyncMock, sacct_available: bool | None,
-    sleep_mock: Callable[[float], Awaitable[None]] | None) -> Iterator[AsyncMock]:
+    subprocess_mock: mock.AsyncMock, sacct_available: bool | None,
+    sleep_mock: Callable[[float], Awaitable[None]] | None) -> Iterator[mock.AsyncMock]:
   """Patch the watcher externals and task-tree delivery seam.
 
   Broadcast and delivery are always patched. sacct_available=None leaves
@@ -2932,12 +2934,12 @@ def patch_trigger_fire(
   """
   patches = []
   if sacct_available is not None:
-    patches.append(patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, sacct_available))
-  patches.append(patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=subprocess_mock))
+    patches.append(mock.patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, sacct_available))
+  patches.append(mock.patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=subprocess_mock))
   if sleep_mock is not None:
-    patches.append(patch("src.runtime.triggers.asyncio.sleep", new=sleep_mock))
-  patches.append(patch(BROADCAST_PATCH_TARGET, new=AsyncMock()))
-  delivery_patch = patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=AsyncMock())
+    patches.append(mock.patch("src.runtime.triggers.asyncio.sleep", new=sleep_mock))
+  patches.append(mock.patch(BROADCAST_PATCH_TARGET, new=mock.AsyncMock()))
+  delivery_patch = mock.patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock())
   with contextlib.ExitStack() as stack:
     for p in patches:
       stack.enter_context(p)
@@ -2945,21 +2947,21 @@ def patch_trigger_fire(
 
 
 @contextlib.contextmanager
-def patch_trigger_mocks() -> Iterator[AsyncMock]:
+def patch_trigger_mocks() -> Iterator[mock.AsyncMock]:
   """Patch the watcher seams: streaming broadcast and task-tree delivery.
 
   Yields the delivery mock. Rigs that must run the real watch internals (real pids,
   real sleeps) use this instead of patch_trigger_fire, whose subprocess stub would hide them.
   """
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=AsyncMock()) as mock_delivery,
+      mock.patch(BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock()) as mock_delivery,
   ):
     yield mock_delivery
 
 
 async def assert_trigger_fired(
-    trigger_mgr: triggers.TriggerManager, session_id: str, trigger_id: str, mock_delivery: AsyncMock, *,
+    trigger_mgr: triggers.TriggerManager, session_id: str, trigger_id: str, mock_delivery: mock.AsyncMock, *,
     reason: str) -> str:
   """Asserts the trigger persisted FIRED with the given reason and the standard fired prefix;
   returns the fired message so the caller can assert its site-specific suffix (pids, slurm states).

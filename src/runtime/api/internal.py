@@ -2,7 +2,7 @@
 
 import pathlib
 
-from fastapi import APIRouter, Depends, HTTPException
+import fastapi
 
 from src.infra import buildinfo, config, constants, log_once, models, text_length
 from src.infra import event_types as ET
@@ -22,7 +22,7 @@ from src.runtime.session_events import SessionEvents
 
 log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
 @router.get("/version")
@@ -71,7 +71,7 @@ async def _authorize_spawn_request(
     try:
       await task_mgr.check_task_authorization(req.session_id)
     except takeoff_gate.DelegationBlockedError as e:
-      raise HTTPException(status_code=403, detail=str(e)) from e
+      raise fastapi.HTTPException(status_code=403, detail=str(e)) from e
 
   cfg = config.get_config()
   try:
@@ -187,7 +187,7 @@ async def _delegate_task_tree(
   # differently-configured singleton.
   adapter = task_mgr.dispatch.executor
   if not isinstance(adapter, task_execution.TaskExecutionAdapter):
-    raise HTTPException(status_code=503, detail="task execution adapter is not installed")
+    raise fastapi.HTTPException(status_code=503, detail="task execution adapter is not installed")
   adapter.launch(child.id, run_id)
 
   # Save and broadcast task_delegated so the cursor stays in sync on reconnect.
@@ -216,10 +216,10 @@ async def _delegate_task_tree(
 @router.post("/delegate")
 async def delegate_task(
     req: models.DelegateRequest,
-    session_events: SessionEvents = Depends(deps.get_session_events),
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
-    caller: object = Depends(deps.require_caller),
+    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: object = fastapi.Depends(deps.require_caller),
 ) -> dict:
   """Create a worker task under the calling manager and launch its first Run.
 
@@ -231,20 +231,22 @@ async def delegate_task(
   # replayed request must fail identically. The cold_read field rides exactly
   # the cold-read task type.
   if req.task_type == models.TaskType.COLD_READ and req.cold_read is None:
-    raise HTTPException(status_code=400, detail="cold-read delegations require cold_read")
+    raise fastapi.HTTPException(status_code=400, detail="cold-read delegations require cold_read")
   if req.task_type != models.TaskType.COLD_READ and req.cold_read is not None:
-    raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations reject cold_read")
+    raise fastapi.HTTPException(status_code=400, detail=f"{req.task_type.value} delegations reject cold_read")
   if req.task_type in (models.TaskType.VERIFY, models.TaskType.COLD_READ):
     if req.repo_path is not None:
-      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit repo_path")
+      raise fastapi.HTTPException(
+          status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit repo_path")
     if req.base_branch is not None:
-      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit base_branch")
+      raise fastapi.HTTPException(
+          status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit base_branch")
   else:
     # implement/quick-edit/script-run carry a repo, or neither field: a
     # repo-less Run works from its Run directory, and a base without its repo
     # (or the reverse) names a worktree that cannot exist.
     if (req.repo_path is None) != (req.base_branch is None):
-      raise HTTPException(
+      raise fastapi.HTTPException(
           status_code=400,
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
           "give both for a repo task, neither for a repo-less one")
@@ -257,21 +259,21 @@ async def delegate_task(
 @router.post("/schedule-trigger")
 async def schedule_trigger(
     req: models.ScheduleTriggerRequest,
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    trigger_mgr: triggers.TriggerManager = Depends(deps.get_trigger_manager),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    trigger_mgr: triggers.TriggerManager = fastapi.Depends(deps.get_trigger_manager),
 ) -> dict:
   """Schedule a delayed trigger that will wake the master CC after a delay."""
   deps.require_found(await store.get_session(req.session_id))
 
   if req.watch_targets is not None:
     if len(req.watch_targets) == 0:
-      raise HTTPException(status_code=400, detail="watch_targets must be non-empty when provided")
+      raise fastapi.HTTPException(status_code=400, detail="watch_targets must be non-empty when provided")
     for t in req.watch_targets:
       if t.kind == constants.WatchKind.SLURM_JOB:
         if t.job_id <= 0:
-          raise HTTPException(status_code=400, detail="watch_targets slurm job_id must be a positive integer")
+          raise fastapi.HTTPException(status_code=400, detail="watch_targets slurm job_id must be a positive integer")
       elif t.pid <= 0:
-        raise HTTPException(status_code=400, detail="watch_targets pids must be positive integers")
+        raise fastapi.HTTPException(status_code=400, detail="watch_targets pids must be positive integers")
 
   watch_probe: dict[str, str] = {}
   try:
@@ -286,7 +288,7 @@ async def schedule_trigger(
     # Verify-on-create rejection, a target archived without a successor, or a
     # registration past the session's pending-trigger limit: surface as 422 so
     # the CLI exits with code 2.
-    raise HTTPException(status_code=422, detail=str(e)) from e
+    raise fastapi.HTTPException(status_code=422, detail=str(e)) from e
   except RuntimeError as e:
     raise deps.bad_request(e) from e
   log.info(
@@ -306,21 +308,21 @@ async def schedule_trigger(
 async def cancel_trigger(
     session_id: str,
     trigger_id: str,
-    trigger_mgr: triggers.TriggerManager = Depends(deps.get_trigger_manager),
+    trigger_mgr: triggers.TriggerManager = fastapi.Depends(deps.get_trigger_manager),
 ) -> dict:
   """Cancel a pending trigger."""
   try:
     await trigger_mgr.cancel_trigger(session_id, trigger_id)
   except FileNotFoundError as exc:
-    raise HTTPException(status_code=404, detail="Trigger not found") from exc
+    raise fastapi.HTTPException(status_code=404, detail="Trigger not found") from exc
   return {"ok": True}
 
 
 @router.post("/session-message")
 async def session_message(
     req: models.SessionMessageRequest,
-    store: session_store.SessionStore = Depends(deps.get_session_store),
-    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
@@ -342,7 +344,7 @@ async def session_message(
         weighted_chars=weighted_chars,
         limit=constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS,
     )
-    raise HTTPException(
+    raise fastapi.HTTPException(
         status_code=422,
         detail=(
             f"Message is {weighted_chars} weighted characters; "
@@ -353,7 +355,7 @@ async def session_message(
   caller = deps.require_found(await store.get_session(req.session_id))
   target = await store.get_session(req.target_session_id)
   if target is None:
-    raise HTTPException(status_code=404, detail="Target session not found")
+    raise fastapi.HTTPException(status_code=404, detail="Target session not found")
 
   try:
     await task_mgr.dispatch.admit_input(

@@ -57,7 +57,6 @@ from src.infra import (
     ndjson,
 )
 from src.infra import event_types as ET
-from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
 from src.infra.tasks import create_logged_task
 from src.runtime import (
     backend_pool,
@@ -113,7 +112,7 @@ def run_worker_binding(
     *,
     pid: int | None = None,
     pid_start: str | None = None,
-) -> ThreadMetadata:
+) -> models.ThreadMetadata:
   """The Run-backed worker identity a v2 launch hands to :class:`Worker`.
 
     An in-memory thread record that is never written: the Worker reads its id,
@@ -121,7 +120,7 @@ def run_worker_binding(
     The pid/pid_start pair is persisted onto the Run by the adapter's
     ``on_spawned`` callback, not onto a thread file.
     """
-  return ThreadMetadata(id=run_id, session_id=session_id, description="", pid=pid, pid_start=pid_start)
+  return models.ThreadMetadata(id=run_id, session_id=session_id, description="", pid=pid, pid_start=pid_start)
 
 
 def _native_continuation_matches(
@@ -131,7 +130,7 @@ def _native_continuation_matches(
     recorded_model: str | None,
     *,
     prompt_hash: str,
-    option: BackendOption,
+    option: models.BackendOption,
 ) -> bool:
   """The one native-conversation continuation rule, shared by manager turns and worker runs.
 
@@ -144,7 +143,7 @@ def _native_continuation_matches(
       recorded_model == option.model)
 
 
-def _snapshot_prompt_hash(run: RunRecord) -> str | None:
+def _snapshot_prompt_hash(run: models.RunRecord) -> str | None:
   """The prompt hash of one launched Run's committed snapshot, or None for a Run that never committed one."""
   if run.prompt_snapshot_ref is None:
     return None
@@ -178,7 +177,7 @@ class RunContinuation:
   rule matched (the prompt carries only the new input batch); None means the
   branch and worktree are inherited but the conversation starts fresh.
   """
-  previous: RunRecord
+  previous: models.RunRecord
   native_id: str | None
 
 
@@ -251,7 +250,7 @@ def free_disk_gib(path: Path) -> float:
 
 
 def compose_input_prompt(
-    meta: SessionMetadata,
+    meta: models.SessionMetadata,
     events: list[dict],
     report_provenance: dict[str, str] | None = None,
 ) -> tuple[str, list[dict]]:
@@ -292,7 +291,7 @@ def compose_input_prompt(
   return "\n\n".join(part for part in parts if part), uploads
 
 
-def resolve_launch_overlay(option: BackendOption) -> tuple[str | None, bool]:
+def resolve_launch_overlay(option: models.BackendOption) -> tuple[str | None, bool]:
   """The three-state overlay judgment used by a task launch.
 
     Returns (overlay_name_or_None, declared). None + declared=False means
@@ -310,7 +309,7 @@ def resolve_launch_overlay(option: BackendOption) -> tuple[str | None, bool]:
 def capture_prompt_chain(
     tree: TaskTreeManager,
     index: object,
-    meta: SessionMetadata,
+    meta: models.SessionMetadata,
 ) -> tuple[tuple[tuple[str, str | None], ...], str | None]:
   """Subtree refs root → this node (inclusive) plus this node's own rule ref.
 
@@ -331,8 +330,8 @@ def capture_prompt_chain(
 
 async def _capture_chain_under_control_lock(
     tree: TaskTreeManager,
-    meta: SessionMetadata,
-) -> tuple[tuple[tuple[str, str | None], ...], str | None, SessionMetadata]:
+    meta: models.SessionMetadata,
+) -> tuple[tuple[tuple[str, str | None], ...], str | None, models.SessionMetadata]:
   """Reload *meta* and capture its prompt chain inside one control-lock hold.
 
   The index build, the meta reload, and the ancestor walk are one unit: the
@@ -352,9 +351,9 @@ async def _capture_chain_under_control_lock(
 async def assemble_coherent_snapshot(
     cfg: config.CharlieBotConfig,
     tree: TaskTreeManager,
-    meta: SessionMetadata,
+    meta: models.SessionMetadata,
     kind: str,
-    option: BackendOption,
+    option: models.BackendOption,
 ) -> tuple[task_prompts.PromptSnapshot, OSError | None, bool]:
   """One coherent assembly pass over the tree, templates, memory and rules.
 
@@ -393,7 +392,7 @@ async def assemble_coherent_snapshot(
   return snapshot, overlay_error, declared
 
 
-async def apply_sequence_wake_duties(meta: SessionMetadata, input_events: list[dict]) -> str | None:
+async def apply_sequence_wake_duties(meta: models.SessionMetadata, input_events: list[dict]) -> str | None:
   """Run the registered sequence binding's wake duties, if the node has one."""
   binding = binding_for(meta.id)
   if binding is None:
@@ -508,7 +507,7 @@ class TaskExecutionAdapter:
         existing = await tree.runs.get_run(session_id, run_id)
         if existing is None:
           kind = "manager_turn" if meta.profile == "manager" else "work"
-          record = RunRecord(
+          record = models.RunRecord(
               id=run_id,
               session_id=session_id,
               kind=kind,  # type: ignore[arg-type]
@@ -538,7 +537,7 @@ class TaskExecutionAdapter:
     self._schedule_launch(session_id, run_id)
     return run_id
 
-  def _inherit_worker_continuation(self, meta: SessionMetadata, record: RunRecord) -> None:
+  def _inherit_worker_continuation(self, meta: models.SessionMetadata, record: models.RunRecord) -> None:
     """Bind a fresh dispatch on an already-run worker node to the node's latest Run.
 
         The continuation inherits the latest Run's repo, base, branch and
@@ -569,7 +568,7 @@ class TaskExecutionAdapter:
       record.backend = latest.backend
       record.model = latest.model
 
-  def _blocked_report_sent(self, meta: SessionMetadata) -> bool:
+  def _blocked_report_sent(self, meta: models.SessionMetadata) -> bool:
     """True when this node ever delivered a blocked child report to its parent.
 
         The report fact lives in the recipient's own log (parent-log
@@ -583,7 +582,7 @@ class TaskExecutionAdapter:
         e.get("type") == ET.CHILD_REPORT and e.get("child_session_id") == meta.id and e.get("outcome") == "blocked"
         for e in self._tree.fact_history(parent))
 
-  def _reserve_backend_model(self, meta: SessionMetadata) -> tuple[str, str | None]:
+  def _reserve_backend_model(self, meta: models.SessionMetadata) -> tuple[str, str | None]:
     """The task's backend+model for a fresh reservation, resolved strictly."""
     return spawner_backends._resolve_session_default_backend_model(self._cfg, meta)
 
@@ -673,7 +672,7 @@ class TaskExecutionAdapter:
     finally:
       self._landing_retries.pop(session_id, None)
 
-  def _drives_run(self, session_id: str, run: RunRecord) -> bool:
+  def _drives_run(self, session_id: str, run: models.RunRecord) -> bool:
     """Whether this process is already driving *run*: its execute task is in
     flight, or a resume follow (worker or master-queue manager turn) holds it."""
     key = (session_id, run.id)
@@ -803,7 +802,7 @@ class TaskExecutionAdapter:
     # recorded after the lock releases: the durable record and the parent
     # report take the lock themselves. The last tuple field marks the
     # closed-task withhold, whose Run the stop request settles below.
-    withheld: tuple[SessionMetadata, RunRecord, str, bool] | None = None
+    withheld: tuple[models.SessionMetadata, models.RunRecord, str, bool] | None = None
     async with tree.control_lock:
       meta = await tree.load_task_meta(session_id)
       run = await tree.runs.get_run(session_id, run_id)
@@ -894,7 +893,7 @@ class TaskExecutionAdapter:
         return f"disk free {free_gib:.1f} GiB, below {min_gib} GiB ({path})"
     return None
 
-  async def _record_launch_withheld(self, meta: SessionMetadata, run: RunRecord, reason: str) -> str:
+  async def _record_launch_withheld(self, meta: models.SessionMetadata, run: models.RunRecord, reason: str) -> str:
     """Record one withheld launch durably and report it to the parent.
 
         The node's events log gains one ``run_launch_withheld`` fact per
@@ -946,7 +945,7 @@ class TaskExecutionAdapter:
       await self._record_turn_launch_notice(session_id, run_id, reason)
     return f"withheld: {reason}"
 
-  async def _land_launch_failure(self, meta: SessionMetadata, run: RunRecord, exc: Exception) -> None:
+  async def _land_launch_failure(self, meta: models.SessionMetadata, run: models.RunRecord, exc: Exception) -> None:
     """Land one post-admission launch exception as the Run's durable failure.
 
         The admitted run's evidence trail: the error text rides the run's
@@ -1037,7 +1036,7 @@ class TaskExecutionAdapter:
         "type": ET.ERROR,
         "message": error_text,
         "content": error_text,
-        "timestamp": utc_now_iso(),
+        "timestamp": models.utc_now_iso(),
     }
     if quota_exhausted is not None:
       event[ET.QUOTA_EXHAUSTED] = quota_exhausted
@@ -1072,7 +1071,7 @@ class TaskExecutionAdapter:
           "source": "turn_launch",
           "run_id": run_id,
           "content": f"{outcome}: {reason}",
-          "timestamp": utc_now_iso(),
+          "timestamp": models.utc_now_iso(),
       }
       await tree.events.append(session_id, event)
     await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
@@ -1138,7 +1137,7 @@ class TaskExecutionAdapter:
       return LaunchSettlement(withheld=verdict)
     return LaunchSettlement(outcome=await self._await_terminal(session_id, run_id))
 
-  def _resolve_run_backend(self, run: RunRecord) -> BackendOption:
+  def _resolve_run_backend(self, run: models.RunRecord) -> models.BackendOption:
     """The Run's explicitly recorded backend/model, resolved strictly."""
     if not run.backend:
       raise ValueError(f"run {run.id} records no backend; refusing to substitute one")
@@ -1171,7 +1170,7 @@ class TaskExecutionAdapter:
   async def _alert_overlay_inactive(
       self,
       session_id: str,
-      option: BackendOption,
+      option: models.BackendOption,
       overlay_error: OSError | None,
   ) -> None:
     """The unified fenceless-run alert (undeclared or unreadable overlay)."""
@@ -1195,9 +1194,9 @@ class TaskExecutionAdapter:
 
   async def _prepare_launch_snapshot(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
   ) -> task_prompts.PromptSnapshot:
     """Build, recheck, and durably commit this launch's instruction snapshot.
 
@@ -1215,7 +1214,7 @@ class TaskExecutionAdapter:
     return snapshot
 
   def _manager_finish_recorder(
-      self, session_id: str, run_id: str, option: BackendOption, transport_dir: Path, *,
+      self, session_id: str, run_id: str, option: models.BackendOption, transport_dir: Path, *,
       ended_at: datetime | None) -> Callable[[str | None, int, dict], Awaitable[None]]:
     """The finish recorder both manager-turn launch paths hand the master queue.
 
@@ -1250,9 +1249,9 @@ class TaskExecutionAdapter:
 
   async def _execute_manager_turn(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
       snapshot: task_prompts.PromptSnapshot,
   ) -> None:
     """One manager turn on the existing per-session master queue.
@@ -1361,9 +1360,9 @@ class TaskExecutionAdapter:
 
   async def _execute_worker_run(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
       snapshot: task_prompts.PromptSnapshot,
       *,
       launch_prompt: str | None,
@@ -1441,7 +1440,7 @@ class TaskExecutionAdapter:
       preassigned = continuation.native_id if continued else str(uuid.uuid4())
       backend_types.lifecycle_for(option).assign_thread_native_id(binding, preassigned)
 
-    async def on_spawned(spawned: ThreadMetadata) -> None:
+    async def on_spawned(spawned: models.ThreadMetadata) -> None:
       if spawned.pid is None or spawned.pid_start is None:
         raise RuntimeError(f"run {run_id} spawned without a pinned process identity")
       await self._tree.runs.record_launch(session_id, run_id, pid=spawned.pid, pid_start=spawned.pid_start)
@@ -1513,9 +1512,9 @@ class TaskExecutionAdapter:
       run = fresh
     await self._after_worker_run(meta, run, durable_outcome)
 
-  def _previous_run(self, session_id: str, run_id: str) -> RunRecord | None:
+  def _previous_run(self, session_id: str, run_id: str) -> models.RunRecord | None:
     """The node's latest Run record before *run_id* (the canonical launch order), or None."""
-    previous: RunRecord | None = None
+    previous: models.RunRecord | None = None
     for record in self._tree.runs.list_run_records_sync(session_id):
       if record.id != run_id:
         previous = record
@@ -1523,9 +1522,9 @@ class TaskExecutionAdapter:
 
   def _run_continuation(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
       snapshot: task_prompts.PromptSnapshot,
   ) -> RunContinuation | None:
     """The continuation this launch performs, or None for an independent launch.
@@ -1543,7 +1542,7 @@ class TaskExecutionAdapter:
         """
     if run.sequence_ref is not None or run.retry_of_run_id is not None:
       return None
-    if meta.task is not None and meta.task.task_type == TaskType.COLD_READ:
+    if meta.task is not None and meta.task.task_type == models.TaskType.COLD_READ:
       # Every cold-read run opens a new conversation: the reader answers from
       # the page alone, with no memory of a previous attempt.
       return None
@@ -1568,7 +1567,7 @@ class TaskExecutionAdapter:
       native_id = previous.native_session_id
     return RunContinuation(previous=previous, native_id=native_id)
 
-  async def _batch_only_context(self, meta: SessionMetadata, run: RunRecord) -> str:
+  async def _batch_only_context(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
     """The continued conversation's whole task/input context: this run's claimed batch.
 
         The conversation already holds the task spec and the worktree
@@ -1586,9 +1585,9 @@ class TaskExecutionAdapter:
 
   async def _finalize_worker_run(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
       *,
       exit_code: int,
       error: str,
@@ -1623,7 +1622,7 @@ class TaskExecutionAdapter:
       log.warning("task_run_error", session_id=session_id, run_id=run_id, error=error[:500])
     return durable
 
-  async def _worker_outcome(self, run_dir: Path, option: BackendOption) -> str:
+  async def _worker_outcome(self, run_dir: Path, option: models.BackendOption) -> str:
     """The terminal-status judgment from the Run's own transport records.
 
         The raw stream is the primary record; the run's translated events log
@@ -1656,7 +1655,7 @@ class TaskExecutionAdapter:
         success = runs.result_success(event)
     return found, success
 
-  async def _native_session_id(self, raw_path: Path, option: BackendOption) -> str | None:
+  async def _native_session_id(self, raw_path: Path, option: models.BackendOption) -> str | None:
     """The backend's native session id from the run's raw stream, when one exists."""
     if not raw_path.is_file():
       return None
@@ -1675,7 +1674,7 @@ class TaskExecutionAdapter:
 
     return await asyncio.to_thread(_scan)
 
-  def _fresh_translate(self, option: BackendOption) -> Callable[[dict], list[dict]]:
+  def _fresh_translate(self, option: models.BackendOption) -> Callable[[dict], list[dict]]:
     """A fresh translate callable for one whole-file scan (stateful translates need one instance)."""
     try:
       return backend_types.build_backend(option, self._cfg).translate_event
@@ -1690,7 +1689,7 @@ class TaskExecutionAdapter:
   # Prompts (existing sources; the launch text rides the Run as evidence)
   # ------------------------------------------------------------------
 
-  async def _work_description(self, meta: SessionMetadata, run: RunRecord) -> str:
+  async def _work_description(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
     """The task/input body: the pinned spec's goal plus this run's claimed batch."""
     task = meta.task
     spec_text = task.goal if (task is not None and task.goal.strip()) else ""
@@ -1703,7 +1702,8 @@ class TaskExecutionAdapter:
       raise TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")
     return description
 
-  async def _build_work_context(self, meta: SessionMetadata, run: RunRecord, task_type: TaskType) -> str:
+  async def _build_work_context(
+      self, meta: models.SessionMetadata, run: models.RunRecord, task_type: models.TaskType) -> str:
     """The work Run's task/input context from the maintained template sections.
 
         Verify runs stay read-only: their contract is entirely managed
@@ -1712,11 +1712,11 @@ class TaskExecutionAdapter:
         the working directory. A cold-read run's context is the page text and
         the seven questions alone (no session info, no task-body wrapper).
         """
-    if task_type == TaskType.COLD_READ:
+    if task_type == models.TaskType.COLD_READ:
       return await self._build_cold_read_context(meta, run)
     description = await self._work_description(meta, run)
     task = meta.task
-    if task_type == TaskType.VERIFY:
+    if task_type == models.TaskType.VERIFY:
       return task_prompts.render_task_body(self._cfg, description)
     parts = [task_prompts.render_session_info(self._cfg, meta.name)]
     if not (task is not None and task.repo_path):
@@ -1746,7 +1746,7 @@ class TaskExecutionAdapter:
       parts.append(task_prompts.render_worktree_persistence(self._cfg))
     return "\n\n".join(part for part in parts if part)
 
-  async def _build_cold_read_context(self, meta: SessionMetadata, run: RunRecord) -> str:
+  async def _build_cold_read_context(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
     """The cold-read run's whole input: the page text, one blank line, the seven questions.
 
         The reader answers from the page alone, so the context carries no
@@ -1765,10 +1765,10 @@ class TaskExecutionAdapter:
 
   async def _build_step_context(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
       step_prompt: str,
-      task_type: TaskType,
+      task_type: models.TaskType,
   ) -> str:
     """One scheduled step's context: the controller's prompt over the task's bindings.
 
@@ -1789,7 +1789,7 @@ class TaskExecutionAdapter:
     parts.append(task_prompts.render_task_body(self._cfg, step_prompt))
     return "\n\n".join(part for part in parts if part)
 
-  async def _later_messages_section(self, meta: SessionMetadata, work_run: RunRecord) -> str:
+  async def _later_messages_section(self, meta: models.SessionMetadata, work_run: models.RunRecord) -> str:
     """The review's Later Messages section: every input the node's work runs claimed, first run
     through *work_run*, rendered in claim order — or "" when they claimed none.
 
@@ -1820,7 +1820,7 @@ class TaskExecutionAdapter:
       return ""
     return f"**Later Messages:**\n{content}"
 
-  async def _build_review_context(self, session_id: str, work_run: RunRecord) -> str:
+  async def _build_review_context(self, session_id: str, work_run: models.RunRecord) -> str:
     """The review Run's task/input context: the work being judged and its git steps.
 
         The reviewer's stable contract rides the managed instructions
@@ -1855,7 +1855,7 @@ class TaskExecutionAdapter:
         context_section="\n".join(context_lines),
     )
 
-  async def _build_repo_less_review_context(self, session_id: str, work_run: RunRecord) -> str:
+  async def _build_repo_less_review_context(self, session_id: str, work_run: models.RunRecord) -> str:
     """The repo-less review's task/input context: spec and reported paths, no git.
 
         Without a repository there is no diff to read and nothing to merge:
@@ -1892,7 +1892,7 @@ class TaskExecutionAdapter:
     path = self._tree.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
     json_utils.atomic_write_text(path, prompt)
 
-  async def _prepare_worktree(self, meta: SessionMetadata, run: RunRecord,
+  async def _prepare_worktree(self, meta: models.SessionMetadata, run: models.RunRecord,
                               repo_path: Path) -> tuple[str, str, str, str | None]:
     """Create the Run's isolated worktree from the requested base; records it on the Run.
 
@@ -2018,9 +2018,9 @@ class TaskExecutionAdapter:
 
   async def _resume_manager_turn(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
       is_alive: Callable[[], bool],
       *,
       ended_at: datetime | None,
@@ -2060,9 +2060,9 @@ class TaskExecutionAdapter:
 
   async def _resume_worker_run(
       self,
-      meta: SessionMetadata,
-      run: RunRecord,
-      option: BackendOption,
+      meta: models.SessionMetadata,
+      run: models.RunRecord,
+      option: models.BackendOption,
       is_alive: Callable[[], bool],
       *,
       ended_at: datetime | None,
@@ -2094,7 +2094,7 @@ class TaskExecutionAdapter:
         meta, run, option, exit_code=exit_code, error="", ended_at=ended_at)
     await self._after_worker_run(meta, run, durable_outcome)
 
-  async def repair_end_metadata(self, session_id: str, run: RunRecord, outcome: str) -> None:
+  async def repair_end_metadata(self, session_id: str, run: models.RunRecord, outcome: str) -> None:
     """Fill a terminal Run's half-written end metadata (the node reconcile
     pass's step-3 repair; the boot reconcile repairs it the same way).
 
@@ -2128,13 +2128,13 @@ class TaskExecutionAdapter:
       return False, None
     return True, self._quota_failures.pop((session_id, run_id))
 
-  def _pool_chose_backend(self, meta: SessionMetadata, run: RunRecord) -> bool:
+  def _pool_chose_backend(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
     """True when the backends.pool picked the run's backend: a review run, or a node whose delegation named none."""
     if run.kind == "review":
       return True
     return metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).backend_from_pool
 
-  async def _fail_over_quota(self, meta: SessionMetadata, run: RunRecord) -> bool:
+  async def _fail_over_quota(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
     """Continue a quota-interrupted run on the next pool member, in the same worktree; False when none is available.
 
         The member that ran out is already cooling. The node moves to the new member, so its later
@@ -2164,7 +2164,7 @@ class TaskExecutionAdapter:
     self.launch(session_id, retry["run_id"])
     return True
 
-  async def _after_worker_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
+  async def _after_worker_run(self, meta: models.SessionMetadata, run: models.RunRecord, durable_outcome: str) -> None:
     """The delivery chain one worker Run's durable outcome drives.
 
         A work Run finishing is not delivery: an implement task's review and
@@ -2195,13 +2195,13 @@ class TaskExecutionAdapter:
       if run.kind == "review":
         await self._after_review_run(meta, run, durable_outcome)
         return
-      if (meta.task is not None and meta.task.task_type == TaskType.COLD_READ and
+      if (meta.task is not None and meta.task.task_type == models.TaskType.COLD_READ and
           durable_outcome in ("success", "failed")):
         await self._after_cold_read_run(meta, run, durable_outcome)
         return
       if durable_outcome == "success":
-        task_type = meta.task.task_type if meta.task is not None else TaskType.IMPLEMENT
-        if task_type == TaskType.IMPLEMENT:
+        task_type = meta.task.task_type if meta.task is not None else models.TaskType.IMPLEMENT
+        if task_type == models.TaskType.IMPLEMENT:
           pause = self._tree.completion.pause_reason(session_id)
           if pause is not None:
             # A paused run is not a delivery: no review spawns, the task
@@ -2241,15 +2241,16 @@ class TaskExecutionAdapter:
       # inputs admitted during a review Run dispatch here as well.
       await self._tree.dispatch.dispatch_pending(session_id)
 
-  def _fails_over(self, meta: SessionMetadata, run: RunRecord) -> bool:
+  def _fails_over(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
     """True when a run's quota failure moves to the next pool member: a work run of a pool-chosen node."""
     if run.kind != "work" or meta.task is None:
       return False
-    if meta.task.task_type not in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN, TaskType.VERIFY):
+    if meta.task.task_type not in (models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN,
+                                   models.TaskType.VERIFY):
       return False
     return self._pool_chose_backend(meta, run)
 
-  async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
+  async def _after_review_run(self, meta: models.SessionMetadata, run: models.RunRecord, durable_outcome: str) -> None:
     session_id = meta.id
     work_run = await self._tree.runs.get_run(session_id, run.review_of_run_id or "")
     if work_run is None:
@@ -2346,7 +2347,7 @@ class TaskExecutionAdapter:
     finally:
       await self._cleanup_worktree_if_delivered(session_id, work_run)
 
-  async def _maybe_spawn_review(self, session_id: str, work_run: RunRecord) -> str | None:
+  async def _maybe_spawn_review(self, session_id: str, work_run: models.RunRecord) -> str | None:
     """Spawn the work Run's review on the same task, repo, branch and worktree.
 
         Every successful implement work Run gets one; a repo-less work Run's
@@ -2402,7 +2403,7 @@ class TaskExecutionAdapter:
         return None
       resolved_backend, resolved_model, _tried = selection
       run_id = stable_run_id(session_id, f"review:{work_run.id}:{attempts + 1}")
-      record = RunRecord(
+      record = models.RunRecord(
           id=run_id,
           session_id=session_id,
           kind="review",
@@ -2418,7 +2419,7 @@ class TaskExecutionAdapter:
     self.launch(session_id, run_id)
     return run_id
 
-  async def _landing_for_work(self, work_run: RunRecord) -> tuple[tuple[str, str, str] | None, str]:
+  async def _landing_for_work(self, work_run: models.RunRecord) -> tuple[tuple[str, str, str] | None, str]:
     """The (branch, commit, repo) landing evidence of a reviewed work Run, or None and why.
 
         The commit is the work branch's tip in its repository; the check
@@ -2437,7 +2438,7 @@ class TaskExecutionAdapter:
       return None, reason
     return (target, commit, work_run.repo_path), ""
 
-  async def _cleanup_worktree_if_delivered(self, session_id: str, work_run: RunRecord) -> None:
+  async def _cleanup_worktree_if_delivered(self, session_id: str, work_run: models.RunRecord) -> None:
     """Remove the shared worktree only once the task actually delivered.
 
         Only a completed node loses its worktree: failed, blocked, unproven
@@ -2463,7 +2464,8 @@ class TaskExecutionAdapter:
         remove_failed_event="task_worktree_remove_failed",
     )
 
-  async def _after_cold_read_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
+  async def _after_cold_read_run(
+      self, meta: models.SessionMetadata, run: models.RunRecord, durable_outcome: str) -> None:
     """The cold-read delivery chain: report the answer, retry the next backend, or report every model failed.
 
         A cold-read run succeeds only when its final answer text is not empty.
@@ -2493,7 +2495,7 @@ class TaskExecutionAdapter:
       resolved_backend, resolved_model, _tried = selection
       async with self._tree.control_lock:
         run_id = stable_run_id(session_id, f"cold-read:work:{len(work_runs)}")
-        record = RunRecord(
+        record = models.RunRecord(
             id=run_id,
             session_id=session_id,
             kind="work",
@@ -2506,7 +2508,7 @@ class TaskExecutionAdapter:
     body = await self._cold_read_report(meta, run, backend_id=None, answer=None)
     await self._report_failure_to_parent(session_id, run, "failed", summary=body)
 
-  async def _complete_cold_read(self, meta: SessionMetadata, run: RunRecord, answer: str) -> None:
+  async def _complete_cold_read(self, meta: models.SessionMetadata, run: models.RunRecord, answer: str) -> None:
     """Write the success report body and close the child through the automatic completion."""
     body = await self._cold_read_report(meta, run, backend_id=run.backend, answer=answer)
     try:
@@ -2515,7 +2517,7 @@ class TaskExecutionAdapter:
       log.warning(
           "cold_read_delivery_close_blocked", session_id=meta.id, run_id=run.id, blockers=getattr(e, "blockers", None))
 
-  async def _cold_read_attempt_error(self, session_id: str, run: RunRecord) -> str:
+  async def _cold_read_attempt_error(self, session_id: str, run: models.RunRecord) -> str:
     """The failed cold-read run's error for the report's attempt line: the run's error
     event, its closing text when no error event exists, or the bare fallback."""
     events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
@@ -2528,7 +2530,7 @@ class TaskExecutionAdapter:
         return text
     return f"run {run.id} failed without a reportable output"
 
-  async def _record_cold_read_attempt(self, meta: SessionMetadata, run: RunRecord, error: str) -> None:
+  async def _record_cold_read_attempt(self, meta: models.SessionMetadata, run: models.RunRecord, error: str) -> None:
     """Record one failed cold-read attempt on the run's evidence file (the report reads it back)."""
     cold = meta.task.cold_read
     assert cold is not None
@@ -2540,7 +2542,7 @@ class TaskExecutionAdapter:
     await asyncio.to_thread(json_utils.atomic_write_text, evidence_path, json.dumps(evidence))
 
   async def _cold_read_report(
-      self, meta: SessionMetadata, run: RunRecord, *, backend_id: str | None, answer: str | None) -> str:
+      self, meta: models.SessionMetadata, run: models.RunRecord, *, backend_id: str | None, answer: str | None) -> str:
     """The report body for one settled cold-read: the page and its sha256, every failed
     attempt in run order, then the answering backend and its answer — or the all-failed
     trailer. The sha256 comes from the settling run's evidence file: what that run read."""
@@ -2570,11 +2572,11 @@ class TaskExecutionAdapter:
   async def _report_failure_to_parent(
       self,
       session_id: str,
-      run: RunRecord,
+      run: models.RunRecord,
       outcome: str,
       *,
       summary: str | None = None,
-      deciding_run: RunRecord | None = None,
+      deciding_run: models.RunRecord | None = None,
   ) -> None:
     """Persist one failed/blocked child_report with stable source/recipient evidence.
 
@@ -2610,7 +2612,7 @@ class TaskExecutionAdapter:
     archive_run = deciding_run if deciding_run is not None else run
     await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 
-  async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:
+  async def _worker_failure_summary(self, session_id: str, run: models.RunRecord) -> str:
     """The failed run's own closing words (or its error, or the bare outcome).
 
         The summary must name the actual error when the run produced no report:
@@ -2681,7 +2683,7 @@ async def _reconcile_node(
     adapter: TaskExecutionAdapter | None,
     counters: dict,
     cfg: config.CharlieBotConfig,
-    is_driven: Callable[[RunRecord], bool] | None = None,
+    is_driven: Callable[[models.RunRecord], bool] | None = None,
 ) -> None:
   """Reconcile one node from its durable facts.
 
@@ -2785,8 +2787,8 @@ async def _reconcile_node(
 def _replay_owes_review(
     tree: TaskTreeManager,
     session_id: str,
-    run_records: list[RunRecord],
-    run: RunRecord,
+    run_records: list[models.RunRecord],
+    run: models.RunRecord,
 ) -> bool:
   """Whether the startup replay owes a successful implement work run its review.
 
@@ -2872,7 +2874,7 @@ async def _replay_followups(
       continue
     if run.kind == "work":
       counters["followups"] += 1
-      if meta.task is not None and meta.task.task_type == TaskType.COLD_READ:
+      if meta.task is not None and meta.task.task_type == models.TaskType.COLD_READ:
         # The execution layer owns a cold-read Run's delivery (the report
         # body, the next-backend retry, the all-failed report), and the
         # generic completion skips the task type, so the replay re-drives
@@ -2901,7 +2903,7 @@ async def _replay_followups(
         # request/close/report ids, so a crash in the finish→follow-up
         # window is repaired and a repeated pass lands nothing twice.
         await tree.completion.after_run_finished(session_id, run.id)
-        if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT and run.repo_path:
+        if meta.task is not None and meta.task.task_type == models.TaskType.IMPLEMENT and run.repo_path:
           pause = tree.completion.pause_reason(session_id)
           if pause is not None:
             log.info("worker_delivery_paused", session_id=session_id, run_id=run.id, reason=pause)

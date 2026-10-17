@@ -199,16 +199,25 @@ async def start_server(port: int, title: str) -> None:
     The started server lands in _SERVERS, so shutdown_servers() stops it; *title*
     names the app in /docs and openapi.json and is the calling harness's own.
     """
+  import importlib
+
   import fastapi
   import uvicorn
 
   from src.runtime.api import auth, chat, internal, sessions
+  from src.runtime.hooks import wiring
 
   app = fastapi.FastAPI(title=title)
   app.add_middleware(auth.AuthMiddleware)
   app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
   app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
   app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
+  # The feature routes under /api/internal (the web reply verbs, for one) are the ones the CLI calls; the other
+  # registered prefixes need services that the skipped lifespan would start.
+  for router_module, router_prefix, router_tags, router_attr in wiring.routers():
+    if router_prefix == "/api/internal":
+      app.include_router(
+          getattr(importlib.import_module(router_module), router_attr), prefix=router_prefix, tags=list(router_tags))
   config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
   server = uvicorn.Server(config)
   task = asyncio.get_running_loop().create_task(server.serve())

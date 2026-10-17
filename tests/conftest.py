@@ -243,6 +243,7 @@ from src.runtime import (  # noqa: E402
     master_cc_queue,
     master_cc_run,
     master_cc_state,
+    run_token,
     session_anchors,
     session_events,
     session_fork,
@@ -253,58 +254,34 @@ from src.runtime import (  # noqa: E402
     session_store,
     session_successor,
     task_execution,
+    task_sessions,
+    triggers,
 )
 from src.runtime import backend_pool  # noqa: E402
 from src.runtime import worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
-from src.backends.antigravity.antigravity_cli import AntigravityCliBackend  # noqa: E402
-from src.backends.charlie_code.charlie_code import CharlieCodeBackend  # noqa: E402
-from src.backends.codex.codex import CodexBackend  # noqa: E402
-from src.backends.gemini.gemini_cli import GeminiCliBackend  # noqa: E402
-from src.backends.opencode.opencode import OpenCodeBackend  # noqa: E402
-from src.runtime.worker import Worker  # noqa: E402
+from src.backends.antigravity import antigravity_cli  # noqa: E402
+from src.backends.charlie_code import charlie_code  # noqa: E402
+from src.backends.codex import codex  # noqa: E402
+from src.backends.gemini import gemini_cli  # noqa: E402
+from src.backends.opencode import opencode  # noqa: E402
 from src.features.cron import loader as cron_loader  # noqa: E402
-from src.features.cron.api import router as cron_router  # noqa: E402
-from src.runtime.api.deps import get_session_store, get_task_manager  # noqa: E402
-from src.runtime.api.internal import router as internal_router  # noqa: E402
-from src.app.pages import router as pages_router  # noqa: E402
-from src.runtime.api.sessions import router as sessions_router  # noqa: E402
+from src.features.cron import api as cron_api  # noqa: E402
+from src.runtime.api import deps, internal, sessions  # noqa: E402
+from src.app import pages  # noqa: E402
 from src.infra import event_types as ET  # noqa: E402
 from src.runtime import runs  # noqa: E402
 from src.runtime import thinking_state  # noqa: E402
 from src.infra import backend_models, models  # noqa: E402
-from src.backends.claude_code.claude_config import ClaudeAccount  # noqa: E402
+from src.backends.claude_code import claude_config  # noqa: E402
 from src.runtime import streaming  # noqa: E402
-from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
-from src.runtime.api.deps import (  # noqa: E402
-    get_config_on_loop,
-    get_session_anchors,
-    get_session_events,
-    get_session_fork,
-    get_session_lifecycle,
-    get_session_listing,
-    get_session_search,
-    get_session_sidebar,
-)
+from src.features.memory import memory  # noqa: E402
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
-from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
-from src.backends.claude_code.login_dirs import CREDENTIALS_FILE  # noqa: E402
-from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
-from src.features.cron.scheduler import Scheduler  # noqa: E402
+from src.infra import constants  # noqa: E402
+from src.backends.claude_code import login_dirs  # noqa: E402
+from src.features.artifacts import plans  # noqa: E402
+from src.features.cron import scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
-from src.runtime.session_anchors import SessionAnchors  # noqa: E402
-from src.runtime.session_events import SessionEvents  # noqa: E402
-from src.runtime.session_fork import SessionFork  # noqa: E402
-from src.runtime.session_lifecycle import SessionLifecycle  # noqa: E402
-from src.runtime.session_listing import SessionListing  # noqa: E402
-from src.runtime.session_search import SessionSearch  # noqa: E402
-from src.runtime.session_sidebar import SessionSidebar  # noqa: E402
-from src.runtime.session_store import SessionStore  # noqa: E402
-from src.runtime.session_successor import SessionSuccessor  # noqa: E402
-from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
-from src.runtime.task_execution import TaskExecutionAdapter  # noqa: E402
-from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
-from src.runtime.triggers import TriggerManager  # noqa: E402
 
 from src.features.artifacts import headless_render  # noqa: E402
 from src.app import registrations  # noqa: E402
@@ -1016,16 +993,16 @@ class SessionBlocks:
   ``tree`` is None until ``build_task_tree`` builds one; ``create_root_session`` builds one on demand.
   """
   cfg: Any
-  store: SessionStore
-  events: SessionEvents
-  sidebar: SessionSidebar
-  listing: SessionListing
-  search: SessionSearch
-  lifecycle: SessionLifecycle
-  fork: SessionFork
-  anchors: SessionAnchors
-  successor: SessionSuccessor
-  tree: TaskTreeManager | None = None
+  store: session_store.SessionStore
+  events: session_events.SessionEvents
+  sidebar: session_sidebar.SessionSidebar
+  listing: session_listing.SessionListing
+  search: session_search.SessionSearch
+  lifecycle: session_lifecycle.SessionLifecycle
+  fork: session_fork.SessionFork
+  anchors: session_anchors.SessionAnchors
+  successor: session_successor.SessionSuccessor
+  tree: task_sessions.TaskTreeManager | None = None
 
   def callbacks(self) -> models.SessionCallbacks:
     """The run callbacks over these blocks, as ``master_cc_queue.session_callbacks`` builds them."""
@@ -1034,35 +1011,40 @@ class SessionBlocks:
 
 def build_session_blocks(cfg: Any) -> SessionBlocks:
   """The store, events, sidebar, listing, search, lifecycle, fork, anchors and successor blocks, all built on *cfg*."""
-  store = SessionStore(cfg)
-  sidebar = SessionSidebar(cfg, store)
-  events = SessionEvents(cfg, store)
+  store = session_store.SessionStore(cfg)
+  sidebar = session_sidebar.SessionSidebar(cfg, store)
+  events = session_events.SessionEvents(cfg, store)
   return SessionBlocks(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events),
-      SessionSuccessor(cfg, store, events))
+      cfg, store, events, sidebar, session_listing.SessionListing(cfg, store, sidebar),
+      session_search.SessionSearch(cfg, store, events, sidebar), session_lifecycle.SessionLifecycle(cfg, store, events),
+      session_fork.SessionFork(cfg, store, events), session_anchors.SessionAnchors(cfg, store, events),
+      session_successor.SessionSuccessor(cfg, store, events))
 
 
-def build_task_tree(cfg: Any, blocks: SessionBlocks) -> TaskTreeManager:
+def build_task_tree(cfg: Any, blocks: SessionBlocks) -> task_sessions.TaskTreeManager:
   """A task tree over *blocks*; the blocks remember it as their tree."""
-  blocks.tree = TaskTreeManager(
+  blocks.tree = task_sessions.TaskTreeManager(
       cfg, blocks.store, blocks.events, blocks.sidebar, blocks.listing, blocks.lifecycle, blocks.fork, blocks.anchors,
       blocks.successor)
   return blocks.tree
 
 
-def build_execution_adapter(cfg: Any, blocks: SessionBlocks, tree: TaskTreeManager) -> TaskExecutionAdapter:
+def build_execution_adapter(
+    cfg: Any, blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> task_execution.TaskExecutionAdapter:
   """A task execution adapter over *blocks* and *tree*."""
-  return TaskExecutionAdapter(
+  return task_execution.TaskExecutionAdapter(
       cfg, blocks.successor, blocks.events, blocks.lifecycle, blocks.anchors, blocks.sidebar, tree)
 
 
-def thread_blocks(blocks: Any) -> tuple[SessionStore, SessionLifecycle, SessionEvents, SessionSuccessor]:
+def thread_blocks(
+    blocks: Any
+) -> tuple[session_store.SessionStore, session_lifecycle.SessionLifecycle, session_events.SessionEvents,
+           session_successor.SessionSuccessor]:
   """The blocks the chat-thread entry points take, in their argument order: store, lifecycle, events, successor."""
   return blocks.store, blocks.lifecycle, blocks.events, blocks.successor
 
 
-def build_env(tmp_path: Path) -> tuple[object, SessionBlocks, TaskTreeManager]:
+def build_env(tmp_path: Path) -> tuple[object, SessionBlocks, task_sessions.TaskTreeManager]:
   """(cfg, SessionBlocks, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
   blocks' cfg, so tree-created sessions land in the same home."""
   cfg = make_home_config(tmp_path)
@@ -1088,7 +1070,8 @@ def bind_session_blocks(monkeypatch: pytest.MonkeyPatch, blocks: SessionBlocks) 
   monkeypatch.setattr(session_successor, "_successor", blocks.successor)
 
 
-def bind_deps_blocks(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, blocks: SessionBlocks) -> None:
+def bind_deps_blocks(
+    monkeypatch: pytest.MonkeyPatch, tree: task_sessions.TaskTreeManager, blocks: SessionBlocks) -> None:
   """Install *tree* and *blocks* as the process singletons.
 
   A task tree bound without its blocks leaves each block accessor free to build a second block
@@ -1106,11 +1089,11 @@ def identity_of(pid: int) -> tuple[int, str]:
   return pid, pair[0]
 
 
-OPERATOR = CallerIdentity(kind="operator")
+OPERATOR = run_token.CallerIdentity(kind="operator")
 
 
 async def create_task(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     *,
     parent: str | None,
     request_id: str,
@@ -1153,7 +1136,7 @@ async def create_root_session(
       caller=OPERATOR)
 
 
-async def create_scheduled_node(tree: TaskTreeManager, *, name: str, backend: str | None):
+async def create_scheduled_node(tree: task_sessions.TaskTreeManager, *, name: str, backend: str | None):
   """The manager node one ScheduledTaskConfig binds to, created the auto-bind way.
 
   request_id rides the scheduler's auto-bind prefix over the task name alone
@@ -1257,25 +1240,25 @@ async def make_home_session(
 def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
   """Bind both config dependency keys to the one instance on *app*.
 
-  A mounted route resolves cfg through either dependency (get_config_on_loop
+  A mounted route resolves cfg through either dependency (deps.get_config_on_loop
   on the polled routes, get_config on the sync ones), so a rig must carry the
   override on both keys — one key alone leaves routes on the other resolving
   the real config.
   """
   app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
 
 
 def override_session_blocks(app: FastAPI, session_blocks: Any) -> None:
   """Bind the session dependency keys on *app* to the blocks of *session_blocks*."""
-  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
-  app.dependency_overrides[get_session_events] = lambda: session_blocks.events
-  app.dependency_overrides[get_session_sidebar] = lambda: session_blocks.sidebar
-  app.dependency_overrides[get_session_listing] = lambda: session_blocks.listing
-  app.dependency_overrides[get_session_search] = lambda: session_blocks.search
-  app.dependency_overrides[get_session_lifecycle] = lambda: session_blocks.lifecycle
-  app.dependency_overrides[get_session_fork] = lambda: session_blocks.fork
-  app.dependency_overrides[get_session_anchors] = lambda: session_blocks.anchors
+  app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[deps.get_session_events] = lambda: session_blocks.events
+  app.dependency_overrides[deps.get_session_sidebar] = lambda: session_blocks.sidebar
+  app.dependency_overrides[deps.get_session_listing] = lambda: session_blocks.listing
+  app.dependency_overrides[deps.get_session_search] = lambda: session_blocks.search
+  app.dependency_overrides[deps.get_session_lifecycle] = lambda: session_blocks.lifecycle
+  app.dependency_overrides[deps.get_session_fork] = lambda: session_blocks.fork
+  app.dependency_overrides[deps.get_session_anchors] = lambda: session_blocks.anchors
 
 
 def make_router_client(
@@ -1306,7 +1289,7 @@ def include_registered_routers(app: FastAPI, prefix: str, *, before_runtime: boo
 
 def make_sessions_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> TestClient:
   """make_router_client over the sessions router, mounted at /api/sessions."""
-  return make_router_client(cfg, session_blocks, sessions_router, "/api/sessions")
+  return make_router_client(cfg, session_blocks, sessions.router, "/api/sessions")
 
 
 def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | None = None) -> TestClient:
@@ -1314,52 +1297,52 @@ def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | N
   registered under that prefix; the internal routes take cfg through the on-loop dependency
   (same instance the sync key serves), so the override keys in make_router_client cover them.
   cfg may be a MagicMock when the tested route never reads it."""
-  client = make_router_client(cfg, session_blocks, internal_router, "/api/internal")
+  client = make_router_client(cfg, session_blocks, internal.router, "/api/internal")
   if task_mgr is not None:
-    client.app.dependency_overrides[get_task_manager] = lambda: task_mgr
+    client.app.dependency_overrides[deps.get_task_manager] = lambda: task_mgr
   include_registered_routers(client.app, "/api/internal")
   return client
 
 
 def make_cron_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> TestClient:
   """make_router_client over the cron router, mounted at /api/cron."""
-  return make_router_client(cfg, session_blocks, cron_router, "/api/cron")
+  return make_router_client(cfg, session_blocks, cron_api.router, "/api/cron")
 
 
 def make_cron_sessions_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> TestClient:
   """TestClient mounting the cron router plus the sessions router (the scheduled listing and
   unarchive endpoints) with cfg/session_blocks/tree as dependency overrides."""
   app = FastAPI()
-  app.include_router(cron_router, prefix="/api/cron")
-  app.include_router(sessions_router, prefix="/api/sessions")
+  app.include_router(cron_api.router, prefix="/api/cron")
+  app.include_router(sessions.router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
-  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
   return TestClient(app)
 
 
 def make_sessions_listing_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> TestClient:
   """TestClient mounting the sessions router with its config and manager overrides."""
   app = FastAPI()
   include_registered_routers(app, "/api/sessions", before_runtime=True)
-  app.include_router(sessions_router, prefix="/api/sessions")
+  app.include_router(sessions.router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
-  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
   return TestClient(app)
 
 
 def make_sessions_listing_page_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> TestClient:
   """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
   same overrides make_sessions_listing_client carries."""
   app = FastAPI()
-  app.include_router(pages_router)
+  app.include_router(pages.router)
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
-  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
   return TestClient(app)
 
 
@@ -1386,7 +1369,7 @@ def walk_archived_pages(client: TestClient, limit: int = 2) -> list[dict]:
   returned page then still says ``has_more``, and the callers' exactly-once
   and membership asserts catch the short walk.
   """
-  pages: list[dict] = []
+  bodies: list[dict] = []
   before = None
   before_id = None
   for _ in range(10):
@@ -1396,11 +1379,11 @@ def walk_archived_pages(client: TestClient, limit: int = 2) -> list[dict]:
     resp = client.get("/api/sessions/archived", params=params)
     assert resp.status_code == 200
     page = resp.json()
-    pages.append(page)
+    bodies.append(page)
     if not page["has_more"]:
       break
     before, before_id = page["next_before"], page["next_before_id"]
-  return pages
+  return bodies
 
 
 def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
@@ -1486,7 +1469,7 @@ def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mti
 def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:
   """Write Claude OAuth credentials into a pool account's config dir, marking the login present."""
   config_dir.mkdir(parents=True, exist_ok=True)
-  (config_dir / CREDENTIALS_FILE).write_text(
+  (config_dir / login_dirs.CREDENTIALS_FILE).write_text(
       json.dumps({"claudeAiOauth": {
           "accessToken": access_token,
           "refreshToken": "r"
@@ -1507,7 +1490,9 @@ def pool_cfg(
   ``claude_pools`` splits the labels into named pools; the caller's cc-claude options then name
   their pool in ``account_pool`` (the config validator refuses an unpaired combination).
   """
-  accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
+  accounts = [
+      claude_config.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels
+  ]
   for account in accounts:
     write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
@@ -1797,25 +1782,29 @@ def build_cli_backend(
 # relies on. The per-backend test modules build through build_cli_backend_rig and
 # the cross-backend contract tables read these rows, so the (target, binary,
 # defaults) triple is spelled exactly once per backend.
-CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend], tuple[str, str, dict[str, Any]]] = {
-    AntigravityCliBackend: (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {}),
-    CharlieCodeBackend:
-        (
-            CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-            "/usr/bin/charlie-code",
-            {
-                "model": "charlie-code-test-model",
-                "api_base": "http://test.invalid/v1"
-            },
-        ),
-    CodexBackend: (CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", {
-        "model": "codex-test-model"
-    }),
-    GeminiCliBackend: (GEMINI_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/gemini", {
-        "model": "gemini-test-model"
-    }),
-    OpenCodeBackend: (OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}),
-}
+CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend],
+                       tuple[str, str, dict[str, Any]]] = {
+                           antigravity_cli.AntigravityCliBackend:
+                               (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {}),
+                           charlie_code.CharlieCodeBackend:
+                               (
+                                   CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+                                   "/usr/bin/charlie-code",
+                                   {
+                                       "model": "charlie-code-test-model",
+                                       "api_base": "http://test.invalid/v1"
+                                   },
+                               ),
+                           codex.CodexBackend:
+                               (CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", {
+                                   "model": "codex-test-model"
+                               }),
+                           gemini_cli.GeminiCliBackend:
+                               (GEMINI_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/gemini", {
+                                   "model": "gemini-test-model"
+                               }),
+                           opencode.OpenCodeBackend: (OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}),
+                       }
 
 
 def build_cli_backend_rig(
@@ -2236,12 +2225,12 @@ def plan_doc(
   }
 
 
-def build_scheduler(cfg: Any, blocks: SessionBlocks) -> Scheduler:
+def build_scheduler(cfg: Any, blocks: SessionBlocks) -> scheduler.Scheduler:
   """A scheduler over the store, events, listing and lifecycle blocks of *blocks*."""
-  return Scheduler(cfg, blocks.store, blocks.events, blocks.listing, blocks.lifecycle)
+  return scheduler.Scheduler(cfg, blocks.store, blocks.events, blocks.listing, blocks.lifecycle)
 
 
-def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, Scheduler]:
+def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, scheduler.Scheduler]:
   """Real cfg/blocks/scheduler trio for scheduler and cron-task tests; the scheduler holds the
   process-wide blocks because a private events block keeps its own chat-event cache and its
   rounds would never reach the HTTP/WS read paths."""
@@ -2251,21 +2240,21 @@ def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlock
 
 
 async def make_plan_setup(
-    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionBlocks, PlanRegistryManager, models.SessionMetadata]:
+    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionBlocks, plans.PlanRegistryManager, models.SessionMetadata]:
   """Session blocks and the plan manager plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
   session_blocks = build_session_blocks(cfg)
-  plan_mgr = PlanRegistryManager(cfg, session_blocks.events)
+  plan_mgr = plans.PlanRegistryManager(cfg, session_blocks.events)
   meta = await create_root_session(session_blocks, models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
   return cfg, session_blocks, plan_mgr, meta
 
 
-async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, TriggerManager, str]:
+async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, triggers.TriggerManager, str]:
   """Real cfg/blocks/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
   cfg = make_home_config(tmp_path)
   session_blocks = build_session_blocks(cfg)
   session = await create_root_session(session_blocks, models.CreateSessionRequest(name="Trigger watch"))
-  trigger_mgr = TriggerManager(cfg, session_blocks.tree)
+  trigger_mgr = triggers.TriggerManager(cfg, session_blocks.tree)
   return cfg, session_blocks, trigger_mgr, session.id
 
 
@@ -2277,8 +2266,7 @@ async def no_sleep(_seconds: float) -> None:
 @pytest.fixture
 def pidfd_open_available() -> None:
   """Skip when the production pidfd helpers are not supported on this host."""
-  from src.runtime.triggers import _PIDFD_SUPPORTED
-  if not _PIDFD_SUPPORTED:
+  if not triggers._PIDFD_SUPPORTED:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
 
 
@@ -2452,7 +2440,8 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
   really carries — never the operator access key the operator-header tests use — and
   the only credential that exercises the agent-creation check on the task tree.
   """
-  token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), "op-secret")
+  token = run_token.sign_run_token(
+      run_token.RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), "op-secret")
   return {"Authorization": f"Bearer {token}"}
 
 
@@ -2480,8 +2469,8 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   # and would override every test's cwd-derived session id. The run token rides
   # the same leak shape: internal_api_auth_headers sends it instead of the
   # credential each test planted, so the suite fences both.
-  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
-  monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
+  monkeypatch.delenv(constants.SESSION_ID_ENV_VAR, raising=False)
+  monkeypatch.delenv(constants.RUN_TOKEN_ENV, raising=False)
   # The worker Run busy map is process-memory state keyed by task-node id,
   # and task-node ids derive deterministically from (parent, request_id) —
   # two tests that create the "w" worker under a "root" manager address the
@@ -2666,7 +2655,7 @@ def write_memory_topics(memory_dir: Path, lines: list[str] | None = None) -> Non
   memory_dir.mkdir(parents=True, exist_ok=True)
   (memory_dir / "entries").mkdir(exist_ok=True)
   (memory_dir / "topics").write_text(
-      "".join(line + "\n" for line in (lines or DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
+      "".join(line + "\n" for line in (lines or memory.DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
 
 
 def write_memory_entry(memory_dir: Path, topic: str, slug: str, **kw: Any) -> Path:
@@ -2840,9 +2829,9 @@ def install_scripted_backends(
   return builds
 
 
-def make_worker(tmp_path: Path, thread_id: str) -> Worker:
+def make_worker(tmp_path: Path, thread_id: str) -> worker_module.Worker:
   """A Worker whose events log and config home both live under tmp_path."""
-  return Worker(
+  return worker_module.Worker(
       models.ThreadMetadata.model_construct(id=thread_id),
       tmp_path,
       tmp_path / "events.jsonl",
@@ -2851,7 +2840,8 @@ def make_worker(tmp_path: Path, thread_id: str) -> Worker:
   )
 
 
-async def process_worker_event(worker: Worker, tmp_path: Path, event: dict, monkeypatch: pytest.MonkeyPatch) -> str:
+async def process_worker_event(
+    worker: worker_module.Worker, tmp_path: Path, event: dict, monkeypatch: pytest.MonkeyPatch) -> str:
   """Append one event through Worker._process_event with the broadcast seam stubbed.
 
   The events log is driven through a real O_APPEND fd and closed even when the
@@ -2969,7 +2959,8 @@ def patch_trigger_mocks() -> Iterator[AsyncMock]:
 
 
 async def assert_trigger_fired(
-    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_delivery: AsyncMock, *, reason: str) -> str:
+    trigger_mgr: triggers.TriggerManager, session_id: str, trigger_id: str, mock_delivery: AsyncMock, *,
+    reason: str) -> str:
   """Asserts the trigger persisted FIRED with the given reason and the standard fired prefix;
   returns the fired message so the caller can assert its site-specific suffix (pids, slurm states).
 
@@ -2983,7 +2974,7 @@ async def assert_trigger_fired(
   return msg
 
 
-def shut_down_trigger_tasks(trigger_mgr: TriggerManager) -> None:
+def shut_down_trigger_tasks(trigger_mgr: triggers.TriggerManager) -> None:
   """Cancel every sleeping trigger task; persisted records are untouched.
 
   Reads ``TriggerManager._tasks`` because cancel-all has no public route: the
@@ -3135,7 +3126,7 @@ def reap_child(pid: int, timeout: float = 5) -> None:
 
 
 async def _settle_parent(
-    tree: TaskTreeManager, manager: models.SessionMetadata, *, timeout: float, poll: float) -> None:
+    tree: task_sessions.TaskTreeManager, manager: models.SessionMetadata, *, timeout: float, poll: float) -> None:
   # Shared by the task-tree execution and recovery files, whose report-delivery
   # assertions must wait out the parent's report turn without pinning a sleep.
   # Settled: the dispatch queue is drained and no run on the parent lacks a
@@ -3165,7 +3156,7 @@ class NotificationSpy:
   can read from the tree projection at signal time: the notified row and its
   parent row, each ``None`` when the projection does not hold it yet."""
 
-  def __init__(self, tree: TaskTreeManager) -> None:
+  def __init__(self, tree: task_sessions.TaskTreeManager) -> None:
     self.calls: list[tuple[str, str | None]] = []
     self.rows_at_signal: list[dict] = []
     self._tree = tree

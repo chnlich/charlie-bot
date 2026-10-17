@@ -435,3 +435,9 @@ Known-alive symbols:
   injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
   swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep
   finds only the definition and that test file, so vulture flags it as an unused function.
+- `PoolNodeMetadata` (`src/runtime/backend_pool.py`) — reached by string: the backend_pool
+  package's `register()` passes its "module:Class" string to
+  `metadata_slot_registration.register_metadata_fields("backend_pool",
+  "src.runtime.backend_pool:PoolNodeMetadata")` (`src/features/backend_pool/__init__.py`), and
+  `metadata_slots` imports the model from that string on its first call. A whole-repo grep finds
+  only the definition and the registration, so vulture flags the class as unused.

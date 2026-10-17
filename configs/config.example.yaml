@@ -118,9 +118,12 @@ slack:
 discord:
   allowed_users: {}
 
-# Publish: the outbound static publish lane (dir the static lane serves, base of
-# the links readers outside the operator's devices open).
+# Publish: the outbound publish lane. Set command (an external program's argv) or
+# the directory pair dir + public_base_url, never both: dir is what the static lane
+# serves, and public_base_url is the base of the links readers outside the
+# operator's devices open.
 publish:
+  command:
   dir:
   public_base_url:
 

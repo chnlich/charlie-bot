@@ -233,7 +233,7 @@ For handling diff-comment batches, see the `charliebot` skill.
 
 ## External System Writes
 
-Any mutation to external systems (Feishu / Slack / Linear) requires showing the full content draft first and waiting for the user to say "take off" before executing. Applies to create, update, delete equally. Corrections and re-posts also require approval. A Slack-origin or Discord-origin session's reply to its own thread is the exception: it goes out through `charliebot slack reply` or `charliebot discord reply` (contract: prompts/thread_reply_format.md) without a take off. Drafts follow the writing-style skill's coordination-messages genre (skills/writing-style/genres/coordination-messages.md).
+Any mutation to external systems (Feishu / Slack / Linear) requires showing the full content draft first and waiting for the user to say "take off" before executing. Applies to create, update, delete equally. Corrections and re-posts also require approval. A Slack-origin or Discord-origin session's reply to its own thread is the exception: it goes out through `charliebot slack reply` or `charliebot discord reply` (contract: prompts/thread_reply_format.md) without a take off. A publish through `publish.command` uploads to an external system, so it follows this rule. The exempt thread reply carries the pages it links: publish those pages without a take off. Drafts follow the writing-style skill's coordination-messages genre (skills/writing-style/genres/coordination-messages.md).
 
 ## Delayed Triggers
 

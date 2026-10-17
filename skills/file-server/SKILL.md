@@ -41,6 +41,8 @@ serves the publish directory publicly, so anyone holding a link opens it, and a 
 guessed from the page name. Publishing refuses unless `<publish.dir>/index.html` exists: without
 it the host's static server would list the directory, and that listing would expose every link.
 
+A host can publish through an external program in place of the publish directory. `publish.command` holds the program's argv. `charliebot publish <artifact-path> [-- <lane options>]` runs that argv with the artifact's absolute path and the lane options appended. The program prints the reader URL as its one line of stdout and exits 0. `charliebot publish` prints that URL. When the program exits non-zero, `charliebot publish` exits 1 and shows the program's stderr. The host skill that installs the program documents its lane options. A host configures one lane: `publish.command`, or the pair `publish.dir` and `publish.public_base_url`.
+
 Reader links come only from `charliebot publish`: the Slack and Discord reply paths post the
 reply text as written — they never rewrite links — and a reply that still contains a file-server
 URL is refused with a 422 naming the link and the publish command that fixes it. The server-port

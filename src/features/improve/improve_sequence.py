@@ -419,6 +419,7 @@ async def run_improve_sequence(
     # label are decided here.
     if blocked is not None:
       state.status = 'failed'
+      state.blocked_iteration, state.blocked_reason = blocked[0], blocked[1]
       outcome_label = "failed"
     elif stopped_by_user:
       state.status = 'stopped'
@@ -796,20 +797,23 @@ async def _loop_close_verdict(
       terminal.append((run, outcome))
   iteration_count = len(terminal)
   successful_ids = [run.id for run, outcome in terminal if outcome == "success"]
-  # The quota-blocked iteration (a failed loop's only mechanical sub-case the
-  # records still prove) ends the loop before its judgment: it contributes
-  # the blocked sentence and no iteration summary, exactly as the live
-  # controller composed it.
+  # The blocked iteration the controller recorded (a failed loop's only mechanical sub-case):
+  # it contributes the blocked sentence and no iteration summary, exactly as the live controller
+  # composed it. A state the controller never stamped falls back to what the records still prove
+  # — the quota-blocked iteration, from before the stamp existed.
   blocked_iter: tuple[int, str] | None = None
   if state.status == "failed":
-    for run, outcome in terminal:
-      if outcome == "success":
-        continue
-      position = run.sequence_ref.position if run.sequence_ref is not None else 0
-      reason, _summary = await _iteration_blocker(tree, child_id, run.id, position, outcome)
-      if reason:
-        blocked_iter = (position, reason)
-        break
+    if state.blocked_reason is not None:
+      blocked_iter = (state.blocked_iteration or 0, state.blocked_reason)
+    else:
+      for run, outcome in terminal:
+        if outcome == "success":
+          continue
+        position = run.sequence_ref.position if run.sequence_ref is not None else 0
+        reason, _summary = await _iteration_blocker(tree, child_id, run.id, position, outcome)
+        if reason:
+          blocked_iter = (position, reason)
+          break
   if state.status == "completed":
     sentence = (
         f"Improve loop completed {iteration_count} iteration(s); work branch "

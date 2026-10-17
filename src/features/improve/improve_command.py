@@ -54,6 +54,11 @@ class ImproveState(pydantic.BaseModel):
   # The error text the final report carries, written in the same save as the
   # final status.
   end_error: str | None = None
+  # The blocked loop's own (iteration, reason), written in the same save as the 'failed'
+  # status. The close step reports it verbatim: a block on pool exhaustion names recovery
+  # times that live only in process memory, so the records can never re-derive it.
+  blocked_iteration: int | None = None
+  blocked_reason: str | None = None
 
 
 class ImproveLoopAlreadyRunningError(RuntimeError):

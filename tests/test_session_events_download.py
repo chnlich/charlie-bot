@@ -26,7 +26,7 @@ def _gzip_client(cfg: config.CharlieBotConfig) -> testclient.TestClient:
   app = fastapi.FastAPI()
   app.include_router(sessions.router, prefix="/api/sessions")
   conftest.mount_production_gzip(app)
-  app.dependency_overrides[sessions.get_config] = lambda: cfg
+  app.dependency_overrides[config.get_config] = lambda: cfg
   return testclient.TestClient(app)
 
 

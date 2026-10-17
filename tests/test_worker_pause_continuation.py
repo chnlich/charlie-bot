@@ -12,18 +12,17 @@ by the standing rules.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
-from datetime import UTC, datetime
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+import pathlib
+from unittest import mock
 
 import conftest
 import pytest
 
 from src.infra import event_types as ET
-from src.infra.models import PendingTrigger
-from src.runtime.task_execution import NO_NATIVE_ID_RESET_REASON
-from src.runtime.triggers import TriggerManager
+from src.infra import models
+from src.runtime import task_execution, triggers
 from tests import test_task_execution
 
 
@@ -51,7 +50,7 @@ class NativeIdBackend(test_task_execution.SpawningScriptedBackend):
       yield event
     if self.raw_log_dir is not None:
       line = json.dumps({"type": "system", "subtype": "init", "session_id": self._native_id}) + "\n"
-      (Path(self.raw_log_dir) / "agent.raw.ndjson").write_text(line, encoding="utf-8")
+      (pathlib.Path(self.raw_log_dir) / "agent.raw.ndjson").write_text(line, encoding="utf-8")
 
 
 def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list) -> list[dict]:
@@ -72,8 +71,9 @@ def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list) -> list[di
   return builds
 
 
-def _trigger(session_id: str, trigger_id: str = "trig-1", message: str = "build finished") -> PendingTrigger:
-  return PendingTrigger(id=trigger_id, session_id=session_id, fire_at=datetime.now(UTC), message=message)
+def _trigger(session_id: str, trigger_id: str = "trig-1", message: str = "build finished") -> models.PendingTrigger:
+  return models.PendingTrigger(
+      id=trigger_id, session_id=session_id, fire_at=datetime.datetime.now(datetime.UTC), message=message)
 
 
 def _patch_parent_turn_build(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +99,7 @@ def _patch_parent_turn_build(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _worker_child(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     task_type: str = "implement",
@@ -134,14 +134,14 @@ async def _worker_child(
   return cfg, tree, manager, worker, repo
 
 
-async def _save_trigger(cfg, tree, trigger: PendingTrigger) -> TriggerManager:
-  mgr = TriggerManager(cfg, tree)
+async def _save_trigger(cfg, tree, trigger: models.PendingTrigger) -> triggers.TriggerManager:
+  mgr = triggers.TriggerManager(cfg, tree)
   await mgr._save_trigger(trigger)
   return mgr
 
 
-async def _fire(mgr: TriggerManager, trigger: PendingTrigger) -> None:
-  with patch(conftest.BROADCAST_PATCH_TARGET, new=AsyncMock()):
+async def _fire(mgr: triggers.TriggerManager, trigger: models.PendingTrigger) -> None:
+  with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()):
     await mgr._wait_and_fire(trigger)
 
 
@@ -175,7 +175,7 @@ def _launch_prompt(tree, session_id: str, run_id: str) -> str:
 
 @pytest.mark.asyncio
 async def test_implement_work_run_with_pending_trigger_pauses_then_continues_and_delivers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, _manager, worker, repo = await _worker_child(tmp_path, monkeypatch)
   builds = install_backends(
       monkeypatch, [
@@ -197,7 +197,7 @@ async def test_implement_work_run_with_pending_trigger_pauses_then_continues_and
   reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
   assert not reviews, f"the paused run spawned a review: {reviews}"
   assert tree.task_state(worker.id) == "open"
-  assert run1.worktree_path and Path(run1.worktree_path).is_dir()
+  assert run1.worktree_path and pathlib.Path(run1.worktree_path).is_dir()
   assert run1.branch_name and run1.branch_name in conftest.run_git(repo, "branch", "--list", run1.branch_name)
   # The first run's prompt is today's full context: spec, bindings and batch.
   assert "add a marker file" in _launch_prompt(tree, worker.id, run1_id)
@@ -225,7 +225,7 @@ async def test_implement_work_run_with_pending_trigger_pauses_then_continues_and
 
 @pytest.mark.asyncio
 async def test_input_admitted_during_a_work_run_pauses_it_the_same_way(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -284,7 +284,7 @@ async def test_input_admitted_during_a_work_run_pauses_it_the_same_way(
 
 @pytest.mark.asyncio
 async def test_non_implement_work_run_with_pending_trigger_skips_auto_complete(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch, task_type="quick-edit")
   builds = install_backends(
       monkeypatch, [
@@ -302,7 +302,7 @@ async def test_non_implement_work_run_with_pending_trigger_skips_auto_complete(
   assert tree.task_state(worker.id) == "open"
   closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
   assert not closes
-  assert run1.worktree_path and Path(run1.worktree_path).is_dir()
+  assert run1.worktree_path and pathlib.Path(run1.worktree_path).is_dir()
 
   # The wake's continuation ends with nothing pending: auto-complete delivers.
   await _fire(mgr, _trigger(worker.id))
@@ -316,12 +316,12 @@ async def test_non_implement_work_run_with_pending_trigger_skips_auto_complete(
       break
     await asyncio.sleep(0.1)
   assert tree.task_state(worker.id) == "completed"
-  assert not Path(run1.worktree_path).exists()
+  assert not pathlib.Path(run1.worktree_path).exists()
 
 
 @pytest.mark.asyncio
 async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, manager, worker, repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -340,7 +340,7 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
     """The reviewer's landing work: rebase the branch onto the target and push."""
     record = tree.runs.read_run_sync(worker.id, run1_id)
     assert record is not None and record.worktree_path and record.branch_name
-    work_wt = Path(record.worktree_path)
+    work_wt = pathlib.Path(record.worktree_path)
     for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
                                                                               f"{record.branch_name}:main")):
       conftest.run_git(work_wt, *args)
@@ -361,7 +361,7 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   # fake backend writes no commits itself).
   record = tree.runs.read_run_sync(worker.id, run1_id)
   assert record is not None and record.worktree_path
-  work_wt = Path(record.worktree_path)
+  work_wt = pathlib.Path(record.worktree_path)
   (work_wt / "marker.txt").write_text("marked\n")
   conftest.run_git(work_wt, "add", "-A")
   conftest.run_git(work_wt, "commit", "-q", "-m", "the work")
@@ -402,14 +402,14 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
     await asyncio.sleep(0.1)
   assert tree.task_state(worker.id) == "completed"
   assert conftest.run_git(repo, "rev-parse", "origin/main") != main_before
-  assert not Path(record.worktree_path).exists()
+  assert not pathlib.Path(record.worktree_path).exists()
   reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
   assert reports and reports[-1]["outcome"] == "completed"
 
 
 @pytest.mark.asyncio
 async def test_failed_review_continuation_reports_failure_to_the_parent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -437,7 +437,7 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
   await asyncio.wait_for(work_started.wait(), timeout=15)
   record = tree.runs.read_run_sync(worker.id, run1_id)
   assert record is not None and record.worktree_path
-  work_wt = Path(record.worktree_path)
+  work_wt = pathlib.Path(record.worktree_path)
   (work_wt / "marker.txt").write_text("marked\n")
   conftest.run_git(work_wt, "add", "-A")
   conftest.run_git(work_wt, "commit", "-q", "-m", "the work")
@@ -470,7 +470,7 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
 
 @pytest.mark.asyncio
 async def test_failed_run_with_pending_trigger_reports_failure_as_today(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   install_backends(monkeypatch, [test_task_execution.SpawningScriptedBackend([], exit_code=1)])
   mgr = await _save_trigger(cfg, tree, _trigger(worker.id))
@@ -491,7 +491,7 @@ async def test_failed_run_with_pending_trigger_reports_failure_as_today(
     await asyncio.sleep(0.1)
   assert reports and reports[-1]["outcome"] == "failed"
   assert tree.task_state(worker.id) == "open"
-  assert run1.worktree_path and Path(run1.worktree_path).is_dir()
+  assert run1.worktree_path and pathlib.Path(run1.worktree_path).is_dir()
   pending = await mgr.list_triggers(worker.id)
   assert any(t.status == "pending" for t in pending)
   reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
@@ -500,8 +500,7 @@ async def test_failed_run_with_pending_trigger_reports_failure_as_today(
 
 @pytest.mark.asyncio
 async def test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.infra.models import PatchSessionTaskRequest
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
   _cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
@@ -531,7 +530,7 @@ async def test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation(
   # The input and the instruction change both land during the run: its end is
   # a pause, and the continuation's prompt hash no longer matches.
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="keep going", actor="user")
-  await tree.patch_task(worker.id, PatchSessionTaskRequest(node_prompt="changed rule"), caller=conftest.OPERATOR)
+  await tree.patch_task(worker.id, models.PatchSessionTaskRequest(node_prompt="changed rule"), caller=conftest.OPERATOR)
   work_gate.set()
   run1, outcome1 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run1_id)
   assert outcome1 == "success"
@@ -556,7 +555,8 @@ async def test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation(
 
 
 @pytest.mark.asyncio
-async def test_delivery_without_pending_wake_behaves_as_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delivery_without_pending_wake_behaves_as_today(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Regression pin: with no pending trigger and no pending input, the whole
     implement delivery chain runs exactly as before the pause existed."""
   _cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
@@ -570,7 +570,7 @@ async def test_delivery_without_pending_wake_behaves_as_today(tmp_path: Path, mo
   def reviewer_push() -> None:
     record = tree.runs.read_run_sync(worker.id, run1_id)
     assert record is not None and record.worktree_path and record.branch_name
-    work_wt = Path(record.worktree_path)
+    work_wt = pathlib.Path(record.worktree_path)
     for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
                                                                               f"{record.branch_name}:main")):
       conftest.run_git(work_wt, *args)
@@ -587,7 +587,7 @@ async def test_delivery_without_pending_wake_behaves_as_today(tmp_path: Path, mo
   await asyncio.wait_for(work_started.wait(), timeout=15)
   record = tree.runs.read_run_sync(worker.id, run1_id)
   assert record is not None and record.worktree_path
-  work_wt = Path(record.worktree_path)
+  work_wt = pathlib.Path(record.worktree_path)
   (work_wt / "marker.txt").write_text("marked\n")
   conftest.run_git(work_wt, "add", "-A")
   conftest.run_git(work_wt, "commit", "-q", "-m", "the work")
@@ -607,7 +607,7 @@ async def test_delivery_without_pending_wake_behaves_as_today(tmp_path: Path, mo
       break
     await asyncio.sleep(0.1)
   assert tree.task_state(worker.id) == "completed"
-  assert not Path(record.worktree_path).exists()
+  assert not pathlib.Path(record.worktree_path).exists()
   reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
   assert reports and reports[-1]["outcome"] == "completed"
 
@@ -620,7 +620,7 @@ def _two_backends() -> list:
   ]
 
 
-async def _pause_review_with_pending_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, builds_extra: list):
+async def _pause_review_with_pending_wake(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, builds_extra: list):
   """Drive a work run on worker-a and its review on reviewer-b, with a wake pending when the review ends.
 
     Returns (cfg, tree, worker, work run id, review record, the wake's trigger manager, the launch builds)."""
@@ -651,7 +651,7 @@ async def _pause_review_with_pending_wake(tmp_path: Path, monkeypatch: pytest.Mo
   await asyncio.wait_for(work_started.wait(), timeout=15)
   record = tree.runs.read_run_sync(worker.id, run1_id)
   assert record is not None and record.worktree_path
-  work_wt = Path(record.worktree_path)
+  work_wt = pathlib.Path(record.worktree_path)
   (work_wt / "marker.txt").write_text("marked\n")
   conftest.run_git(work_wt, "add", "-A")
   conftest.run_git(work_wt, "commit", "-q", "-m", "the work")
@@ -667,7 +667,7 @@ async def _pause_review_with_pending_wake(tmp_path: Path, monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_review_continuation_runs_on_the_paused_reviews_backend_and_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A review continuation keeps the reviewer's backend and model: the worker's model never judges its own work."""
   _cfg, tree, worker, run1_id, review1, mgr, builds = await _pause_review_with_pending_wake(
       tmp_path, monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("ok")])])
@@ -684,7 +684,7 @@ async def test_review_continuation_runs_on_the_paused_reviews_backend_and_model(
 
 @pytest.mark.asyncio
 async def test_review_continuation_refuses_a_reviewer_backend_no_longer_configured(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No fallback: a paused reviewer whose backend left the config fails its continuation, never the worker's backend."""
   cfg, tree, worker, run1_id, review1, mgr, builds = await _pause_review_with_pending_wake(
       tmp_path, monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("ok")])])
@@ -700,7 +700,7 @@ async def test_review_continuation_refuses_a_reviewer_backend_no_longer_configur
 
 @pytest.mark.asyncio
 async def test_work_continuation_keeps_the_node_default_backend_and_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch, backend_options=_two_backends())
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -745,7 +745,7 @@ async def test_work_continuation_keeps_the_node_default_backend_and_model(
 
 @pytest.mark.asyncio
 async def test_native_session_id_reads_the_claude_system_init_event(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Claude's raw log opens with a system/init event carrying the conversation id; the finalize scan reads it there."""
   claude_option = conftest.backend_option(id="claude", label="Claude", type="cc-claude", model="claude-model")
   cfg, session_blocks, tree = test_task_execution.build_spawning_env(
@@ -759,7 +759,7 @@ async def test_native_session_id_reads_the_claude_system_init_event(
 
 @pytest.mark.asyncio
 async def test_continuation_on_an_unchanged_backend_names_a_missing_native_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, _manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -795,7 +795,7 @@ async def test_continuation_on_an_unchanged_backend_names_a_missing_native_id(
   await asyncio.wait_for(cont_started.wait(), timeout=15)
   run2 = await _wait_for_new_run(tree, worker.id, {run1_id})
   assert builds[1]["kwargs"].get("resume_session_id") is None
-  assert NO_NATIVE_ID_RESET_REASON in _launch_prompt(tree, worker.id, run2.id)
+  assert task_execution.NO_NATIVE_ID_RESET_REASON in _launch_prompt(tree, worker.id, run2.id)
   cont_gate.set()
   _run2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run2.id)
   assert outcome2 == "success"

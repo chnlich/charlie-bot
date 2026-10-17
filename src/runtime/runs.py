@@ -21,34 +21,28 @@ This module owns the pure/queryable parts of that contract:
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import os
+import pathlib
 import re
 import signal
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import orjson
 
 from src.infra import event_types as ET
-from src.infra.json_utils import atomic_write_text
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import RunRecord, ensure_utc, utc_now
-from src.infra.ndjson import HeadProvableFilter, parse_ndjson_events, parse_ndjson_file, parse_ndjson_line
-from src.runtime.chat_events import chat_events_path
-from src.runtime.control_events import ACTOR_SYSTEM, RunEventSink, build_control_event, sha256_hex, stable_run_id
-from src.runtime.run_token import b64url_decode, b64url_encode
-from src.runtime.sidebar_state import mark_sidebar_dirty
+from src.infra import json_utils, log_once, models, ndjson
+from src.runtime import chat_events, control_events, run_token, sidebar_state
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 if TYPE_CHECKING:
   import asyncio
 
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
 
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
@@ -82,7 +76,7 @@ EVENTS_LOG_NAME = "events.jsonl"
 from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
 
-def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
+def backend_type(cfg: config.CharlieBotConfig, backend_id: str | None) -> str | None:
   """The configured transport type of ``backend_id``; None when unset or unknown."""
   if not backend_id:
     return None
@@ -95,12 +89,12 @@ def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def read_host_boot_time() -> datetime:
+def read_host_boot_time() -> datetime.datetime:
   """Host boot time from /proc/stat ``btime`` as a tz-aware UTC datetime."""
   with open("/proc/stat", encoding="utf-8") as f:
     for line in f:
       if line.startswith("btime "):
-        return datetime.fromtimestamp(int(line.split()[1]), tz=UTC)
+        return datetime.datetime.fromtimestamp(int(line.split()[1]), tz=datetime.UTC)
   raise RuntimeError("/proc/stat missing btime line")
 
 
@@ -126,8 +120,8 @@ def read_pid_stat(pid: int) -> tuple[str, str] | None:
 def is_run_alive(
     pid: int | None,
     pid_start: str | None,
-    started_at: datetime | None,
-    host_boot_time: datetime,
+    started_at: datetime.datetime | None,
+    host_boot_time: datetime.datetime,
 ) -> bool:
   """Whether the recorded (pid, pid_start) pair still points at a live process.
 
@@ -148,14 +142,14 @@ def is_run_alive(
     return False
   if started_at.tzinfo is None:
     raise ValueError("started_at must be timezone-aware")
-  return started_at.astimezone(UTC) > host_boot_time
+  return started_at.astimezone(datetime.UTC) > host_boot_time
 
 
 def run_alive_probe(
     pid: int | None,
     pid_start: str | None,
-    started_at: datetime | None,
-    host_boot_time: datetime,
+    started_at: datetime.datetime | None,
+    host_boot_time: datetime.datetime,
 ) -> Callable[[], bool]:
   """The re-evaluable form of ``is_run_alive``: each call re-runs the judgment.
 
@@ -197,7 +191,7 @@ def parse_raw_lines(raw_bytes: bytes) -> list[dict]:
     try:
       events.append(orjson.loads(piece))
     except ValueError:
-      event = parse_ndjson_line(piece, log_event="raw_line_not_json", log_fields={})
+      event = ndjson.parse_ndjson_line(piece, log_event="raw_line_not_json", log_fields={})
       if event is not None:
         events.append(event)
   return events
@@ -270,14 +264,14 @@ def select_error_hint(error_messages: list[str], stderr_text: str) -> str | None
 
 
 def project_raw_file(
-    raw_path: Path,
+    raw_path: pathlib.Path,
     translate: Callable[[dict], list[dict]],
-    line_filter: HeadProvableFilter | None = None) -> list[dict]:
+    line_filter: ndjson.HeadProvableFilter | None = None) -> list[dict]:
   """Whole-file projection: read, parse, and project one raw log.
 
   ``translate`` must be fresh (see project_raw_events). The scan is a full
   read of the log's bytes, so event-loop callers reach it through
-  asyncio.to_thread. A *line_filter* (a HeadProvableFilter, the only filter
+  asyncio.to_thread. A *line_filter* (a ndjson.HeadProvableFilter, the only filter
   whose verdict a bounded head probe can answer) bounds the parse to the
   lines its keep-set names and rides the mapped walk, so a rejected line
   costs its 256-byte probe instead of its bytes and no whole-file copy
@@ -287,11 +281,12 @@ def project_raw_file(
   if line_filter is None:
     return project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
   return project_raw_events(
-      parse_ndjson_events(raw_path, log_event="raw_line_not_json", log_fields={}, parse_filter=line_filter), translate)
+      ndjson.parse_ndjson_events(raw_path, log_event="raw_line_not_json", log_fields={}, parse_filter=line_filter),
+      translate)
 
 
 def scan_result_exit(
-    raw_path: Path,
+    raw_path: pathlib.Path,
     translate: Callable[[dict], list[dict]],
 ) -> tuple[list[dict], dict | None, int]:
   """Whole-file result scan: projected events, last result event, and its exit code.
@@ -313,7 +308,7 @@ def scan_result_exit(
 # ---------------------------------------------------------------------------
 
 
-def raw_completion_time(raw_path: Path) -> datetime | None:
+def raw_completion_time(raw_path: pathlib.Path) -> datetime.datetime | None:
   """The raw log's final mtime as a tz-aware UTC datetime (None when missing).
 
   Backend- and content-agnostic: how long the server was down does not affect
@@ -323,10 +318,10 @@ def raw_completion_time(raw_path: Path) -> datetime | None:
     st = raw_path.stat()
   except OSError:
     return None
-  return datetime.fromtimestamp(st.st_mtime, tz=UTC)
+  return datetime.datetime.fromtimestamp(st.st_mtime, tz=datetime.UTC)
 
 
-def read_raw_cursor(cursor: Path) -> int:
+def read_raw_cursor(cursor: pathlib.Path) -> int:
   """Consumed byte offset; 0 (replay) on a missing or unparseable cursor file."""
   try:
     return int(cursor.read_text(encoding="utf-8").strip())
@@ -349,7 +344,7 @@ class RawCursorWriter:
   duplicates, never loss (the read_raw_cursor contract).
   """
 
-  def __init__(self, path: Path) -> None:
+  def __init__(self, path: pathlib.Path) -> None:
     self._path = path
     self._fd: int | None = None
 
@@ -471,7 +466,7 @@ class RunInputMismatchError(ValueError):
   """A finish acknowledgement payload that does not match the run's registered batch."""
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class RunStopResult:
   """The outcome of one stop request against one run."""
   run_id: str
@@ -480,20 +475,20 @@ class RunStopResult:
   outcome: str | None
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class RunPageSlice:
   """One keyset page of a session's run records."""
-  items: list[RunRecord]
+  items: list[models.RunRecord]
   next_cursor: str | None
 
 
-def _run_sort_key(run: RunRecord) -> tuple[datetime, str]:
+def _run_sort_key(run: models.RunRecord) -> tuple[datetime.datetime, str]:
   """Runs order chronologically by launch; a queued (never-launched) run sorts first."""
-  started = run.started_at if run.started_at is not None else datetime.min.replace(tzinfo=UTC)
+  started = run.started_at if run.started_at is not None else datetime.datetime.min.replace(tzinfo=datetime.UTC)
   return (started, run.id)
 
 
-def _encode_run_cursor(key: tuple[datetime, str], descending: bool) -> str:
+def _encode_run_cursor(key: tuple[datetime.datetime, str], descending: bool) -> str:
   """Opaque keyset cursor: base64url JSON of the (started_at, id) boundary.
 
   The page order rides inside the cursor so a cursor minted under one order
@@ -505,16 +500,17 @@ def _encode_run_cursor(key: tuple[datetime, str], descending: bool) -> str:
   payload: dict = {"s": key[0].isoformat(), "i": key[1]}
   if descending:
     payload["d"] = True
-  return b64url_encode(orjson.dumps(payload))
+  return run_token.b64url_encode(orjson.dumps(payload))
 
 
-def _decode_run_cursor(cursor: str) -> tuple[tuple[datetime, str], bool]:
+def _decode_run_cursor(cursor: str) -> tuple[tuple[datetime.datetime, str], bool]:
   """Decode one run-page cursor into its boundary and page order, failing loud
   on a malformed value."""
   try:
-    payload = orjson.loads(b64url_decode(cursor))
-    started = datetime.fromisoformat(payload["s"]) if payload["s"] else datetime.min.replace(tzinfo=UTC)
-    return (ensure_utc(started), payload["i"]), bool(payload.get("d", False))
+    payload = orjson.loads(run_token.b64url_decode(cursor))
+    started = datetime.datetime.fromisoformat(payload["s"]) if payload["s"] else datetime.datetime.min.replace(
+        tzinfo=datetime.UTC)
+    return (models.ensure_utc(started), payload["i"]), bool(payload.get("d", False))
   except (ValueError, KeyError, TypeError) as e:
     raise ValueError(f"malformed run page cursor: {cursor!r}") from e
 
@@ -524,9 +520,9 @@ class RunStore:
 
   def __init__(
       self,
-      sessions_dir: Path,
+      sessions_dir: pathlib.Path,
       control_lock: asyncio.Lock | None,
-      events: RunEventSink | None,
+      events: control_events.RunEventSink | None,
   ) -> None:
     """*sessions_dir* is the store's path root; *events* None wires a read-only
     store (the CLI's run-token identity resolution): the reads fall back to the
@@ -544,7 +540,7 @@ class RunStore:
     # node's busy interval, the display backend) the launch/finish paths fire
     # after the durable write. Best-effort by contract: a notification failure
     # is logged and never fails the durable operation.
-    self._liveness_notifier: Callable[[str, RunRecord, bool], Awaitable[None]] | None = None
+    self._liveness_notifier: Callable[[str, models.RunRecord, bool], Awaitable[None]] | None = None
     # Bumped after every record-mirror write below; every mutation of a record
     # a reader can observe funnels through write_record, so an unchanged
     # generation is the whole staleness contract for a reader memo keyed on it
@@ -555,11 +551,11 @@ class RunStore:
     """Install the tree owner's full-history reader (archived segments included)."""
     self._fact_history_loader = loader
 
-  def set_liveness_notifier(self, notifier: Callable[[str, RunRecord, bool], Awaitable[None]]) -> None:
+  def set_liveness_notifier(self, notifier: Callable[[str, models.RunRecord, bool], Awaitable[None]]) -> None:
     """Install the tree owner's Run liveness notification (launch/finish)."""
     self._liveness_notifier = notifier
 
-  async def notify_liveness(self, session_id: str, run: RunRecord, *, launched: bool) -> None:
+  async def notify_liveness(self, session_id: str, run: models.RunRecord, *, launched: bool) -> None:
     """Fire the installed liveness notification; a failure is logged, never raised.
 
     The durable fact (process identity or terminal outcome) is already on
@@ -577,19 +573,19 @@ class RunStore:
 
   # -- paths ---------------------------------------------------------------
 
-  def runs_root(self, session_id: str) -> Path:
+  def runs_root(self, session_id: str) -> pathlib.Path:
     return self._sessions_dir / session_id / DATA_DIR_NAME / RUNS_DIR_NAME
 
-  def run_dir(self, session_id: str, run_id: str) -> Path:
+  def run_dir(self, session_id: str, run_id: str) -> pathlib.Path:
     return self.runs_root(session_id) / run_id
 
-  def metadata_path(self, session_id: str, run_id: str) -> Path:
+  def metadata_path(self, session_id: str, run_id: str) -> pathlib.Path:
     return self.run_dir(session_id, run_id) / RUN_METADATA_NAME
 
-  def task_spec_path(self, session_id: str, run_id: str) -> Path:
+  def task_spec_path(self, session_id: str, run_id: str) -> pathlib.Path:
     return self.run_dir(session_id, run_id) / RUN_TASK_SPEC_NAME
 
-  async def write_record(self, session_id: str, run: RunRecord) -> None:
+  async def write_record(self, session_id: str, run: models.RunRecord) -> None:
     """The one record-mirror write funnel: the durable write, then the bump.
 
     Every mutation of a record observable through :meth:`read_run_sync` must
@@ -599,26 +595,27 @@ class RunStore:
     """
     import asyncio  # deferred: charliebot improve --help
 
-    await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run.id), run.model_dump_json(indent=2))
+    await asyncio.to_thread(
+        json_utils.atomic_write_text, self.metadata_path(session_id, run.id), run.model_dump_json(indent=2))
     self.records_generation += 1
 
   # -- reads ---------------------------------------------------------------
 
-  def read_run_sync(self, session_id: str, run_id: str) -> RunRecord | None:
+  def read_run_sync(self, session_id: str, run_id: str) -> models.RunRecord | None:
     path = self.metadata_path(session_id, run_id)
     if not path.is_file():
       return None
     try:
-      return RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
+      return models.RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
       raise RuntimeError(f"run metadata unreadable at {path}: {e}") from e
 
-  async def get_run(self, session_id: str, run_id: str) -> RunRecord | None:
+  async def get_run(self, session_id: str, run_id: str) -> models.RunRecord | None:
     import asyncio  # deferred
 
     return await asyncio.to_thread(self.read_run_sync, session_id, run_id)
 
-  def _require_run(self, session_id: str, run_id: str) -> RunRecord:
+  def _require_run(self, session_id: str, run_id: str) -> models.RunRecord:
     """The run's record, or RunNotFoundError when no run metadata exists.
 
     A plain read: no lock is taken here, so the under-lock write paths and
@@ -629,12 +626,12 @@ class RunStore:
       raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
     return run
 
-  def list_run_records_sync(self, session_id: str) -> list[RunRecord]:
+  def list_run_records_sync(self, session_id: str) -> list[models.RunRecord]:
     """Every run record of one session, chronological (queued first)."""
     root = self.runs_root(session_id)
     if not root.is_dir():
       return []
-    runs: list[RunRecord] = []
+    runs: list[models.RunRecord] = []
     for entry in root.iterdir():
       if not entry.is_dir():
         continue
@@ -644,7 +641,7 @@ class RunStore:
     runs.sort(key=_run_sort_key)
     return runs
 
-  def newest_run_record_sync(self, session_id: str) -> RunRecord | None:
+  def newest_run_record_sync(self, session_id: str) -> models.RunRecord | None:
     """The session's newest Run record by the canonical (started_at, id) order."""
     runs = self.list_run_records_sync(session_id)
     return runs[-1] if runs else None
@@ -659,11 +656,11 @@ class RunStore:
     breaks ties.
     """
     events = self.load_events_sync(session_id)
-    fact_times: dict[str, datetime] = {}
+    fact_times: dict[str, datetime.datetime] = {}
     for event in events:
       if event.get("type") == ET.RUN_FINISHED and isinstance(event.get("run_id"), str):
-        fact_times[event["run_id"]] = ensure_utc(datetime.fromisoformat(str(event["timestamp"])))
-    last_key: tuple[datetime, int] | None = None
+        fact_times[event["run_id"]] = models.ensure_utc(datetime.datetime.fromisoformat(str(event["timestamp"])))
+    last_key: tuple[datetime.datetime, int] | None = None
     last_id: str | None = None
     for position, run in enumerate(self.list_run_records_sync(session_id)):
       fact_time = fact_times.get(run.id)
@@ -720,9 +717,9 @@ class RunStore:
       return self._events.load_events(session_id)
     # Read-only store: the same live log the sink's session events read serves,
     # through the shared parse.
-    return parse_ndjson_file(chat_events_path(self._sessions_dir / session_id))
+    return ndjson.parse_ndjson_file(chat_events.chat_events_path(self._sessions_dir / session_id))
 
-  def run_display_state(self, run: RunRecord, events: list[dict], host_boot: datetime) -> str:
+  def run_display_state(self, run: models.RunRecord, events: list[dict], host_boot: datetime.datetime) -> str:
     """One run's UI-facing state, derived only from facts.
 
     queued: registered, never launched (a durable stop request marks it
@@ -776,14 +773,14 @@ class RunStore:
     """Whether a durable run_stop_requested fact exists (optionally one request_id's)."""
     return stop_requested_in_events(events, run_id, request_id)
 
-  def run_is_active(self, run: RunRecord, host_boot_time: datetime) -> bool:
+  def run_is_active(self, run: models.RunRecord, host_boot_time: datetime.datetime) -> bool:
     """Whether *run* holds a verified-live process (queued and dead are both false)."""
     return is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time)
 
-  def run_has_terminal_fact(self, run: RunRecord, events: list[dict]) -> bool:
+  def run_has_terminal_fact(self, run: models.RunRecord, events: list[dict]) -> bool:
     return self.terminal_outcome(events, run.id) is not None
 
-  def run_blocker(self, run: RunRecord, events: list[dict], host_boot_time: datetime) -> str | None:
+  def run_blocker(self, run: models.RunRecord, events: list[dict], host_boot_time: datetime.datetime) -> str | None:
     """The structural-mutation blocker one run poses, or None.
 
     Terminal runs block nothing; a live process is an active run; a launched
@@ -804,7 +801,7 @@ class RunStore:
 
   # -- registration --------------------------------------------------------
 
-  async def register_run(self, record: RunRecord, *, task_spec_text: str | None = None) -> RunRecord:
+  async def register_run(self, record: models.RunRecord, *, task_spec_text: str | None = None) -> models.RunRecord:
     """Publish one run record (idempotent by id).
 
     The pinned task-spec body lands before the metadata that references it, so
@@ -814,7 +811,7 @@ class RunStore:
     async with self._lock:
       return await self.register_run_locked(record, task_spec_text=task_spec_text)
 
-  async def register_run_locked(self, record: RunRecord, *, task_spec_text: str | None) -> RunRecord:
+  async def register_run_locked(self, record: models.RunRecord, *, task_spec_text: str | None) -> models.RunRecord:
     """register_run for a caller already holding the control lock (the lock is not reentrant)."""
     existing = self.read_run_sync(record.session_id, record.id)
     if existing is not None:
@@ -823,15 +820,15 @@ class RunStore:
     if task_spec_text is not None:
       run_dir.mkdir(parents=True, exist_ok=True)
       spec_path = self.task_spec_path(record.session_id, record.id)
-      atomic_write_text(spec_path, task_spec_text)
+      json_utils.atomic_write_text(spec_path, task_spec_text)
       record.task_spec_ref = str(spec_path)
-      record.task_spec_hash = sha256_hex(task_spec_text)
+      record.task_spec_hash = control_events.sha256_hex(task_spec_text)
     run_dir.mkdir(parents=True, exist_ok=True)
     await self.write_record(record.session_id, record)
     # A registered Run is a new fact transition (queued work exists where none
     # did): the node's sidebar state must re-probe on the next poll. No path
     # rides the mark: the sidebar probe's own signature walk covers the file.
-    mark_sidebar_dirty(record.session_id)
+    sidebar_state.mark_sidebar_dirty(record.session_id)
     return record
 
   async def create_retry_run_locked(
@@ -842,14 +839,14 @@ class RunStore:
       *,
       task_spec_text: str | None,
       **fields: object,
-  ) -> RunRecord:
+  ) -> models.RunRecord:
     """Bind (session, request_id) to one retry run; replays return the original product.
 
     The caller holds the control lock (the lock is not reentrant).
     """
-    run_id = stable_run_id(session_id, request_id)
+    run_id = control_events.stable_run_id(session_id, request_id)
     record_kwargs: dict = {"kind": "work", **fields}
-    record = RunRecord(
+    record = models.RunRecord(
         id=run_id,
         session_id=session_id,
         retry_of_run_id=original_run_id,
@@ -859,7 +856,7 @@ class RunStore:
 
   # -- launch and observation facts ----------------------------------------
 
-  async def record_launch(self, session_id: str, run_id: str, *, pid: int, pid_start: str) -> RunRecord:
+  async def record_launch(self, session_id: str, run_id: str, *, pid: int, pid_start: str) -> models.RunRecord:
     """Persist the identity of the Run's newest process on the registered Run.
 
     Called from the backend's on_spawn callback the moment (pid, pid_start) is
@@ -878,14 +875,14 @@ class RunStore:
         raise RuntimeError(f"run {run_id} has a stop request; refusing new process ({pid}, {pid_start!r})")
       first_launch = run.pid is None
       if run.started_at is None:
-        run.started_at = utc_now()
+        run.started_at = models.utc_now()
       run.pid = pid
       run.pid_start = pid_start
       await self.write_record(session_id, run)
       # The launch fact flipped the derived state (queued -> running): the next
       # poll must re-probe (same contract as the terminal fact below). No path
       # rides the mark: the sidebar probe's own signature walk covers the file.
-      mark_sidebar_dirty(session_id)
+      sidebar_state.mark_sidebar_dirty(session_id)
       if first_launch:
         # The durable identity flipped the node's derived work state (queued ->
         # running): tell connected trees now, or a queued row painted while the
@@ -912,7 +909,7 @@ class RunStore:
       base_branch: str | None = None,
       branch_name: str | None = None,
       worktree_path: str | None = None,
-  ) -> RunRecord:
+  ) -> models.RunRecord:
     """Persist the transport/result evidence the adapter observed on this Run.
 
     Called before the terminal fact lands, so the evidence exists when the
@@ -948,8 +945,8 @@ class RunStore:
       *,
       input_event_ids: list[str] | None = None,
       exit_code: int | None = None,
-      ended_at: datetime | None = None,
-  ) -> RunRecord:
+      ended_at: datetime.datetime | None = None,
+  ) -> models.RunRecord:
     """Write the one run_finished fact (idempotent: the first terminal fact wins).
 
     The durable event lands before the metadata mirror (ended_at/exit_code), so
@@ -962,7 +959,7 @@ class RunStore:
     await self.notify_liveness(session_id, run, launched=False)
     return run
 
-  def _finish_payload(self, run: RunRecord, input_event_ids: list[str] | None) -> list[str]:
+  def _finish_payload(self, run: models.RunRecord, input_event_ids: list[str] | None) -> list[str]:
     """The durable acknowledgement payload of one finish, validated against the record.
 
     A dispatched run's payload is exactly its registered batch: later arrivals
@@ -1021,8 +1018,8 @@ class RunStore:
       *,
       input_event_ids: list[str] | None = None,
       exit_code: int | None = None,
-      ended_at: datetime | None = None,
-  ) -> RunRecord:
+      ended_at: datetime.datetime | None = None,
+  ) -> models.RunRecord:
     """record_finish for a caller already holding the control lock.
 
     The record is validated before anything is appended, the acknowledgement
@@ -1045,29 +1042,29 @@ class RunStore:
       if run.input_event_ids != existing_payload or run.ended_at is None:
         run.input_event_ids = existing_payload
         if run.ended_at is None:
-          run.ended_at = ended_at or utc_now()
+          run.ended_at = ended_at or models.utc_now()
           if exit_code is not None:
             run.exit_code = exit_code
         await self.write_record(session_id, run)
       return run
     payload = self._finish_payload(run, input_event_ids)
-    event = build_control_event(
+    event = control_events.build_control_event(
         ET.RUN_FINISHED,
-        actor=ACTOR_SYSTEM,
+        actor=control_events.ACTOR_SYSTEM,
         source_session_id=session_id,
         run_id=run_id,
         input_event_ids=payload,
         outcome=outcome,
     )
     await self._events.append(session_id, event)
-    run.ended_at = ended_at or utc_now()
+    run.ended_at = ended_at or models.utc_now()
     run.exit_code = exit_code
     run.input_event_ids = payload
     await self.write_record(session_id, run)
     # The terminal fact flipped the derived state (running/waiting -> idle):
     # the next poll must re-probe. No path rides
     # the mark: the sidebar probe's own signature walk covers the file.
-    mark_sidebar_dirty(session_id)
+    sidebar_state.mark_sidebar_dirty(session_id)
     return run
 
   # -- stop ----------------------------------------------------------------
@@ -1088,9 +1085,9 @@ class RunStore:
         # A naturally completed run retains its outcome; no stop request is added.
         return RunStopResult(run_id=run_id, stop_requested=False, outcome=existing)
       if not self.stop_requested(events, run_id, request_id):
-        event = build_control_event(
+        event = control_events.build_control_event(
             ET.RUN_STOP_REQUESTED,
-            actor=ACTOR_SYSTEM,
+            actor=control_events.ACTOR_SYSTEM,
             source_session_id=session_id,
             request_id=request_id,
             run_id=run_id,
@@ -1098,7 +1095,7 @@ class RunStore:
         await self._events.append(session_id, event)
         # The durable stop request is a fact transition (a queued run leaves the
         # waiting verdict): the next poll must re-probe.
-        mark_sidebar_dirty(session_id)
+        sidebar_state.mark_sidebar_dirty(session_id)
 
     # A queued (never-launched) run has no process to signal and no exit to
     # observe; the durable request is the fact, and the dispatch stage honors
@@ -1120,7 +1117,7 @@ class RunStore:
       return RunStopResult(run_id=run_id, stop_requested=True, outcome=None)
     return await self._follow_through_stop(session_id, run)
 
-  async def _follow_through_stop(self, session_id: str, run: RunRecord) -> RunStopResult:
+  async def _follow_through_stop(self, session_id: str, run: models.RunRecord) -> RunStopResult:
     """Validate identity, signal the specific owned process, observe the exit.
 
     Called outside the control lock. A pid_start mismatch (pid reuse) raises
@@ -1139,7 +1136,7 @@ class RunStore:
             f"/proc/{pid} reports {current_start!r}")
       if run.started_at is None or run.started_at.tzinfo is None:
         raise RunIdentityConflictError(f"run {run.id} has no usable started_at for identity validation")
-      if run.started_at.astimezone(UTC) <= read_host_boot_time():
+      if run.started_at.astimezone(datetime.UTC) <= read_host_boot_time():
         raise RunIdentityConflictError(
             f"run {run.id} started_at predates the current host boot; recorded identity is stale")
       try:

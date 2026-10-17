@@ -52,7 +52,16 @@ from typing import TYPE_CHECKING
 from src.features.improve import improve_command
 from src.infra import config, git, log_once, models
 from src.infra import event_types as ET
-from src.runtime import control_events, runs, spawner_prompt, task_completion, task_errors, task_execution, task_prompts
+from src.runtime import (
+    backend_pool,
+    control_events,
+    runs,
+    spawner_prompt,
+    task_completion,
+    task_errors,
+    task_execution,
+    task_prompts,
+)
 
 if TYPE_CHECKING:
   from src.runtime import task_sessions
@@ -332,6 +341,14 @@ async def run_improve_sequence(
       description = _compose_iteration_description(goal, plan, previous_summaries)
       tip_before = await git._git_rev_parse(wt_path, "HEAD") or ""
 
+      iteration_backend, iteration_model = resolved_backend, resolved_model
+      if state.backend_from_pool:
+        member = backend_pool.select(cfg, caller="improve")
+        if member is None:
+          blocked = (i, f"no backends.pool member is available: {backend_pool.recovery_report(cfg)}", "")
+          break
+        iteration_backend = member.id
+        iteration_model = models.option_default_model(member, subject="pool member ")
       run = await register_iteration_run(
           tree,
           child_id,
@@ -339,8 +356,8 @@ async def run_improve_sequence(
           loop_id,
           i,
           cfg,
-          resolved_backend=resolved_backend,
-          resolved_model=resolved_model,
+          resolved_backend=iteration_backend,
+          resolved_model=iteration_model,
           repo_path=str(resolved_repo),
           base_branch=base_branch,
           work_branch=work_branch,
@@ -369,7 +386,12 @@ async def run_improve_sequence(
 
       if outcome != "success":
         blocker_reason, failed_summary = await _iteration_blocker(tree, child_id, run.id, i, outcome)
-        if blocker_reason:
+        _quota_failed, resets_at = adapter.take_quota_failure(child_id, run.id)
+        if blocker_reason and state.backend_from_pool:
+          # The iteration's member is spent: it cools, the iteration counts as failed, and the next
+          # iteration takes the next member. Only every member cooling ends the loop.
+          backend_pool.cool(iteration_backend, resets_at)
+        elif blocker_reason:
           log.warning(
               "improve_sequence_blocked", session=session_id, loop_id=loop_id, iteration=i, reason=blocker_reason)
           blocked = (i, blocker_reason, failed_summary)

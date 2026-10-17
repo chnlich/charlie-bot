@@ -38,7 +38,7 @@ def build_env(tmp_path: pathlib.Path, backend_type: str):
       charliebot_home=home,
       backends={
           "options": [option],
-          "preference": ["type-under-test"]
+          "pool": ["type-under-test"]
       },
       paths={"worktree_dir": str(home / "worktrees")})
   core_config._credentials_cache.seed(

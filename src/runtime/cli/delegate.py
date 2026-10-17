@@ -60,12 +60,13 @@ Task spec format (--task-spec-file):
 Backend selection (--backend):
 
   Pass --backend only when the user or the line's goal names a backend. Omitted:
-  implement / quick-edit / script-run run on backends.worker_default, or inherit the
-  session backend when that key is absent.
-  Verify is routed to the first backends.preference entry that differs from
-  the session backend. An explicit --backend replaces that routing for
-  every task type, verify included. The resolved backend runs every
-  work Run of the worker session.
+  implement / quick-edit / script-run take the next backends.pool member that is not
+  cooling, or inherit the session backend when the pool is empty. A worker whose
+  member runs out of quota continues on the next member in the same worktree.
+  Verify is routed to the next backends.pool member that differs from the session
+  backend. An explicit --backend replaces that routing for every task type, verify
+  included, and is never failed over. The resolved backend runs every work Run of
+  the worker session.
 """
 
 

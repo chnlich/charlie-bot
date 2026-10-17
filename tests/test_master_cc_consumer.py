@@ -359,7 +359,7 @@ async def test_consumer_names_a_default_session_after_master_done(
       charliebot_home=tmp_path / ".charliebot",
       backends={
           "options": [conftest.backend_option(id="fake", label="Fake", type="codex", model="fake-model")],
-          "preference": ["fake"],
+          "pool": ["fake"],
       })
   blocks = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(blocks, models.CreateSessionRequest(name="Session 7"))

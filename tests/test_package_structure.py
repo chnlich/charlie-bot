@@ -98,7 +98,7 @@ RUNTIME_LAYERS = (
             "master_cc_state", "session_events", "streaming", "worker")),
     Layer(
         3, "records and events", (
-            "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",
+            "backend_pool", "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",
             "message_projection", "review", "runs", "session_store", "session_usage", "spawner_prompt",
             "trigger_files")),
     Layer(2, "hooks", ("hooks", "templating")),

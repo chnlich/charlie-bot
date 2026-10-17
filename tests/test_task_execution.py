@@ -53,8 +53,8 @@ from src.backends.claude_code import claude_accounts, claude_relay, master_cc_re
 from src.features.voice.turn_contribution import VOICE_NOTE
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.infra.models import PatchSessionTaskRequest, RunRecord, SequenceRef, SessionMetadata, TaskSpec
-from src.runtime import message_events
+from src.infra.models import PatchSessionTaskRequest, RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
+from src.runtime import backend_pool, message_events
 from src.runtime import runs as runs_mod
 from src.runtime.api import message_utils
 from src.runtime.runs import RAW_LOG_NAME
@@ -83,15 +83,15 @@ def seed_signing_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def build_spawning_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, options: list, preference: list[str] | None = None):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, options: list, pool: list[str] | None = None):
   """(cfg, session blocks, TaskTreeManager) over one synthetic home under tmp_path:
     the given backend options, worktree_dir inside the home, and the seeded access
     key every child environment signs against (seed_signing_home)."""
   from src.infra.config import CharlieBotConfig
   home = tmp_path / "charliebot-home"
   backends: dict = {"options": options}
-  if preference is not None:
-    backends["preference"] = preference
+  if pool is not None:
+    backends["pool"] = pool
   cfg = CharlieBotConfig(charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
   seed_signing_home(home, monkeypatch)
   session_blocks = build_session_blocks(cfg)
@@ -109,7 +109,7 @@ def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_ids: list
       tmp_path,
       monkeypatch,
       options=[backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
-      preference=ids[:1])
+      pool=ids[:1])
 
 
 class SpawningScriptedBackend:
@@ -1513,7 +1513,7 @@ async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_ope
           conftest_module.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"),
           conftest_module.backend_option(id="fake3", label="Fake3", type="codex", model="fake3-model"),
       ])
-  cfg.backends.preference = ["fake2", "fake3"]
+  cfg.backends.pool = ["fake2", "fake3"]
   task_spec = {"goal": "say the phrase", "task_type": "implement"}
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
@@ -3429,3 +3429,120 @@ async def test_repeat_finish_fills_only_empty_end_metadata(tmp_path: Path, monke
   assert run.ended_at == run.ended_at and run.ended_at is not None
   assert abs(run.ended_at - ended) < timedelta(seconds=1)
   assert run.exit_code == -1
+
+
+REVIEW_FEEDBACK = "Review: the rename missed the call in foo.py"
+
+
+def _failover_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+  """A task tree whose pool is fake2 then fake3; the adapter's launches are recorded, not run."""
+  options = [backend_option(id=i, label=i, type="codex", model="fake-model") for i in ("fake", "fake2", "fake3")]
+  cfg, session_blocks, tree = build_spawning_env(tmp_path, monkeypatch, options=options, pool=["fake2", "fake3"])
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  launched: list[str] = []
+  monkeypatch.setattr(adapter, "launch", lambda session_id, run_id, **kwargs: launched.append(run_id))
+  return cfg, tree, adapter, launched
+
+
+async def _interrupted_worker_run(tree, manager, *, from_pool: bool, task_type: TaskType = TaskType.IMPLEMENT):
+  """A worker of *task_type* whose run on fake2 ended on quota exhaustion with its revision batch bound."""
+  worker = await tree.create_task(
+      request_id="worker",
+      task_parent_id=manager.id,
+      profile="worker",
+      task=TaskSpec(goal="do the work", task_type=task_type),
+      name=None,
+      backend="fake2",
+      caller=OPERATOR,
+  )
+  if from_pool:
+    await tree.update_slot_fields(worker.id, backend_pool.METADATA_OWNER, backend_from_pool=True)
+  feedback = await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content=REVIEW_FEEDBACK, actor="user")
+  run = RunRecord(
+      id="run-revision",
+      session_id=worker.id,
+      kind="work",
+      backend="fake2",
+      model="fake-model",
+      input_event_ids=[feedback["id"]],
+  )
+  await tree.runs.register_run(run)
+  await tree.dispatch.finish_run(worker.id, run.id, outcome="failed", exit_code=1)
+  return worker, await tree.runs.get_run(worker.id, run.id)
+
+
+def _record_parent_reports(adapter, monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+  summaries: list[str | None] = []
+
+  async def record(session_id, run, outcome, *, summary=None, deciding_run=None):
+    summaries.append(summary)
+
+  monkeypatch.setattr(adapter, "_report_failure_to_parent", record)
+  return summaries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN, TaskType.VERIFY])
+async def test_quota_failure_on_a_pool_node_fails_over_to_the_next_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: TaskType) -> None:
+  """A pool-chosen worker whose run ends on quota exhaustion cools that member, moves the node to the next
+  member, and registers a retry run on it that binds the interrupted run's input batch."""
+  cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  worker, run = await _interrupted_worker_run(tree, manager, from_pool=True, task_type=task_type)
+  summaries = _record_parent_reports(adapter, monkeypatch)
+  adapter._quota_failures[(worker.id, run.id)] = None
+
+  await adapter._after_worker_run(await tree.load_meta(worker.id), run, "failed")
+
+  retry = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.retry_of_run_id == run.id)
+  assert retry.backend == "fake3"
+  assert retry.model == "fake-model"
+  assert retry.input_event_ids == run.input_event_ids
+  # The retry's work description carries the same review feedback the interrupted run answered.
+  description = await adapter._work_description(await tree.load_meta(worker.id), retry)
+  assert REVIEW_FEEDBACK in description
+  assert launched == [retry.id]
+  assert summaries == []
+  assert (await tree.load_meta(worker.id)).backend == "fake3"
+  assert "fake2 cooling until" in backend_pool.recovery_report(cfg)
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A node whose delegation named its backend keeps today's quota behavior: the failure is reported, nothing
+  retries, and the pool is untouched."""
+  cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  worker, run = await _interrupted_worker_run(tree, manager, from_pool=False)
+  summaries = _record_parent_reports(adapter, monkeypatch)
+  adapter._quota_failures[(worker.id, run.id)] = None
+
+  await adapter._after_worker_run(await tree.load_meta(worker.id), run, "failed")
+
+  assert launched == []
+  assert len(summaries) == 1
+  assert [r for r in tree.runs.list_run_records_sync(worker.id) if r.retry_of_run_id == run.id] == []
+  assert "fake2 not cooling" in backend_pool.recovery_report(cfg)
+
+
+@pytest.mark.asyncio
+async def test_failover_with_every_member_cooling_reports_each_recovery_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """With the next member cooling too, the worker does not start a retry; the parent's report names each
+  member's recovery time."""
+  _cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  worker, run = await _interrupted_worker_run(tree, manager, from_pool=True)
+  backend_pool.cool("fake3", datetime(2030, 1, 2, 3, 4, tzinfo=UTC))
+  summaries = _record_parent_reports(adapter, monkeypatch)
+  adapter._quota_failures[(worker.id, run.id)] = datetime(2030, 1, 2, 2, 0, tzinfo=UTC)
+
+  await adapter._after_worker_run(await tree.load_meta(worker.id), run, "failed")
+
+  assert launched == []
+  assert len(summaries) == 1 and summaries[0] is not None
+  assert "fake2 cooling until 2030-01-02T02:00" in summaries[0]
+  assert "fake3 cooling until 2030-01-02T03:04" in summaries[0]

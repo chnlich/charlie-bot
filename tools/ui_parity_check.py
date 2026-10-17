@@ -212,7 +212,7 @@ def write_home(home: pathlib.Path, port: int, access_key: str, sessions: list[di
                           "model": "scripted-model",
                       }
                   ],
-              "preference": ["fake-scripted"]
+              "pool": ["fake-scripted"]
           },
       "paths": {
           "worktree_dir": str(home / "worktrees")

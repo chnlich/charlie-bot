@@ -187,7 +187,9 @@ async def place_turn(
   chosen, cold = choose_turn_account(cfg, session_meta, option.model, last_request_at, now, account_pool)
   if chosen is None:
     raise backend_lifecycle.LaunchRefused(
-        claude_relay.pool_exhausted_message(cfg, now, account_pool), quota_exhausted=True)
+        claude_relay.pool_exhausted_message(cfg, now, account_pool),
+        quota_exhausted=True,
+        resets_at=claude_accounts.earliest_reset(cfg, now, account_pool))
   previous = claude_accounts.account_by_label(cfg, claude_metadata.account_of(session_meta))
   if previous is None or previous.label != chosen.label:
     if resume_id and previous is not None:
@@ -293,7 +295,9 @@ async def prepare_relay(
   if move.account is None:
     assert move.error is not None
     if move.refused_holder is None or ctx.kind == "task":
-      raise backend_lifecycle.LaunchRefused(move.error, quota_exhausted=move.pool_exhausted)
+      resets_at = claude_accounts.earliest_reset(
+          cfg, None, claude_accounts.option_pool(option)) if move.pool_exhausted else None
+      raise backend_lifecycle.LaunchRefused(move.error, quota_exhausted=move.pool_exhausted, resets_at=resets_at)
     # The mid-turn move hit the newer-transcript guard: the destination holds
     # the newer copy (the kill between a previous relay's move and its
     # persist, or an unknown defect). Same predicate and reaction as the

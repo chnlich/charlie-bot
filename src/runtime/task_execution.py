@@ -52,6 +52,7 @@ from src.infra import (
     git,
     json_utils,
     log_once,
+    metadata_slots,
     models,
     ndjson,
 )
@@ -59,6 +60,7 @@ from src.infra import event_types as ET
 from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
 from src.infra.tasks import create_logged_task
 from src.runtime import (
+    backend_pool,
     cold_read,
     control_events,
     master_cc_queue,
@@ -429,6 +431,9 @@ class TaskExecutionAdapter:
     # sequence controllers await this barrier instead of polling forever
     # behind a withheld launch.
     self._launch_settlements: dict[tuple[str, str], asyncio.Future] = {}
+    # A worker run that ended on quota exhaustion: its reset moment (None when unnamed), until a
+    # failover, review or improve-loop caller takes it.
+    self._quota_failures: dict[tuple[str, str], datetime | None] = {}
     # Background-follow registry, same shape as _launch_inflight: the (session,
     # run) pairs whose resume follow THIS process currently drives. Maintained
     # by resume_run — a worker follow leaves when its resume_run finishes, a
@@ -1476,6 +1481,8 @@ class TaskExecutionAdapter:
       if worker is not None:
         await worker.terminate()
       error = str(exc)
+      if exc.quota_exhausted:
+        self._quota_failures[(session_id, run_id)] = exc.resets_at
       log.warning(
           "task_run_launch_refused",
           session_id=session_id,
@@ -1489,6 +1496,7 @@ class TaskExecutionAdapter:
       if worker is not None:
         await worker.terminate()
       error = str(exc)
+      self._quota_failures[(session_id, run_id)] = exc.resets_at
       log.warning("task_run_quota_exhausted", session_id=session_id, run_id=run_id, error=error)
     except Exception as exc:  # setup/transport failure: the run failed loudly
       log.error("task_run_failed", session_id=session_id, run_id=run_id, error=str(exc), exc_info=True)
@@ -2111,6 +2119,51 @@ class TaskExecutionAdapter:
   # Post-finish delivery chain
   # ------------------------------------------------------------------
 
+  def take_quota_failure(self, session_id: str, run_id: str) -> tuple[bool, datetime | None]:
+    """Pop the run's quota failure: (True, its reset moment or None) when it ended on quota exhaustion.
+
+        The record lives in this process only. A run that ended otherwise yields (False, None).
+        """
+    if (session_id, run_id) not in self._quota_failures:
+      return False, None
+    return True, self._quota_failures.pop((session_id, run_id))
+
+  def _pool_chose_backend(self, meta: SessionMetadata, run: RunRecord) -> bool:
+    """True when the backends.pool picked the run's backend: a review run, or a node whose delegation named none."""
+    if run.kind == "review":
+      return True
+    return metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).backend_from_pool
+
+  async def _fail_over_quota(self, meta: SessionMetadata, run: RunRecord) -> bool:
+    """Continue a quota-interrupted run on the next pool member, in the same worktree; False when none is available.
+
+        The member that ran out is already cooling. The node moves to the new member, so its later
+        revision rounds and messages run there too. The retry binds the interrupted run's input batch:
+        a revision round's retry carries the same review feedback.
+        """
+    session_id = meta.id
+    member = backend_pool.select(self._cfg, caller="failover", exclude={run.backend or ""})
+    if member is None:
+      return False
+    await self._tree.set_node_backend(session_id, member.id)
+    retry = await self._tree.create_retry(
+        session_id,
+        f"quota-failover:{run.id}",
+        run.id,
+        backend=member.id,
+        input_event_ids=list(run.input_event_ids),
+    )
+    log.warning(
+        "worker_quota_failover",
+        session_id=session_id,
+        run_id=run.id,
+        retry_run_id=retry["run_id"],
+        from_backend=run.backend,
+        to_backend=member.id,
+    )
+    self.launch(session_id, retry["run_id"])
+    return True
+
   async def _after_worker_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
     """The delivery chain one worker Run's durable outcome drives.
 
@@ -2136,6 +2189,9 @@ class TaskExecutionAdapter:
           return
         await controller.after_run(session_id, run, self._tree, self._cfg)
         return
+      quota_failed, resets_at = self.take_quota_failure(session_id, run.id)
+      if quota_failed and run.backend and self._pool_chose_backend(meta, run):
+        backend_pool.cool(run.backend, resets_at)
       if run.kind == "review":
         await self._after_review_run(meta, run, durable_outcome)
         return
@@ -2158,7 +2214,14 @@ class TaskExecutionAdapter:
           await self._cleanup_worktree_if_delivered(session_id, run)
         return
       if durable_outcome in ("failed", "interrupted"):
-        await self._report_failure_to_parent(session_id, run, durable_outcome)
+        summary = None
+        if quota_failed and durable_outcome == "failed" and self._fails_over(meta, run):
+          if await self._fail_over_quota(meta, run):
+            return
+          summary = (
+              f"{await self._worker_failure_summary(session_id, run)}\n\n"
+              f"No backends.pool member is available: {backend_pool.recovery_report(self._cfg)}")
+        await self._report_failure_to_parent(session_id, run, durable_outcome, summary=summary)
     finally:
       # Inputs admitted during this run waited for the serialized
       # consumer; the finish chain (review queued/landed, closure,
@@ -2166,6 +2229,14 @@ class TaskExecutionAdapter:
       # chain left pending. The review path reaches it too, so the
       # inputs admitted during a review Run dispatch here as well.
       await self._tree.dispatch.dispatch_pending(session_id)
+
+  def _fails_over(self, meta: SessionMetadata, run: RunRecord) -> bool:
+    """True when a run's quota failure moves to the next pool member: a work run of a pool-chosen node."""
+    if run.kind != "work" or meta.task is None:
+      return False
+    if meta.task.task_type not in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN, TaskType.VERIFY):
+      return False
+    return self._pool_chose_backend(meta, run)
 
   async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
     session_id = meta.id
@@ -2179,7 +2250,8 @@ class TaskExecutionAdapter:
             session_id,
             work_run,
             "blocked",
-            summary=f"review of work run {work_run.id} failed on every configured reviewer backend",
+            summary=f"review of work run {work_run.id} failed on every configured reviewer backend; "
+            f"backends.pool: {backend_pool.recovery_report(self._cfg)}",
             deciding_run=run)
       elif self._tree.runs.terminal_outcome(self._tree.runs.load_events_sync(session_id), retried) == "success":
         # The chain ends at the first successful review, so no retry exists for a failed run that follows
@@ -2277,7 +2349,7 @@ class TaskExecutionAdapter:
         follows the landing and blocked-report path; it is never re-reviewed).
         An existing non-terminal review means one is already queued or running
         (recovery and repeated finalize never spawn a second). A failed
-        reviewer retries down the existing preference policy with distinct Run
+        reviewer retries down the backends.pool rotation with distinct Run
         records; exhausted retries keep the worktree (a repo task's) and
         report blocked.
         """
@@ -2305,8 +2377,15 @@ class TaskExecutionAdapter:
       if any(not tree.runs.run_has_terminal_fact(r, events) for r in existing):
         return existing[0].id
       attempts = len(existing)
+      used = {r.backend for r in tree.runs.list_run_records_sync(session_id) if r.backend}
       selection = review.select_reviewer_backend(
-          self._cfg, work_run.backend or "", work_run.model, [r.backend for r in existing if r.backend])
+          self._cfg,
+          "reviewer",
+          work_run.backend or "",
+          work_run.model,
+          [r.backend for r in existing if r.backend],
+          used_backends=used,
+      )
       if selection is None:
         log.warning("reviewer_backends_exhausted", session_id=session_id, work_run=work_run.id)
         return None
@@ -2398,7 +2477,7 @@ class TaskExecutionAdapter:
     work_runs = [r for r in self._tree.runs.list_run_records_sync(session_id) if r.kind == "work"]
     tried = [r.backend for r in work_runs if r.backend]
     selection = await spawner_backends.select_verify_backend(
-        meta.task_parent_id or "", self._cfg, self._tree.session_store, tried)
+        meta.task_parent_id or "", self._cfg, self._tree.session_store, tried, caller="cold_read")
     if selection is not None:
       resolved_backend, resolved_model, _tried = selection
       async with self._tree.control_lock:

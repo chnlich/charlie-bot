@@ -7,20 +7,20 @@ from typing import Annotated, Any, TypeVar
 import pydantic
 
 from src.infra import backend_models, config_registry, constants, credentials, home, log_once, yaml_utils
-from src.infra.credentials import (  # noqa: F401  (re-export: the established src.infra.config import path)
-    CREDENTIALS_FILENAME,
-    Credentials,
-    _credentials_cache,
-    configured_access_key,
-    get_credentials,
-    load_credentials,
-)
-from src.infra.home import (  # noqa: F401  (re-export: the established src.infra.config import path)
-    CHARLIEBOT_HOME_ENV,
-    CLAUDE_CONFIG_DIR_ENV_VAR,
-    charliebot_home_dir,
-    default_charliebot_home,
-)
+
+# Re-export: ``config.<name>`` is the established read path for these
+# credentials and home names across the app and the tests; the aliases keep it
+# while the import above names modules only.
+CREDENTIALS_FILENAME = credentials.CREDENTIALS_FILENAME
+Credentials = credentials.Credentials
+_credentials_cache = credentials._credentials_cache
+configured_access_key = credentials.configured_access_key
+get_credentials = credentials.get_credentials
+load_credentials = credentials.load_credentials
+CHARLIEBOT_HOME_ENV = home.CHARLIEBOT_HOME_ENV
+CLAUDE_CONFIG_DIR_ENV_VAR = home.CLAUDE_CONFIG_DIR_ENV_VAR
+charliebot_home_dir = home.charliebot_home_dir
+default_charliebot_home = home.default_charliebot_home
 
 log = log_once.LazyStructlogLogger()
 
@@ -194,7 +194,7 @@ class CharlieBotConfig(pydantic.BaseModel):
   model_config = pydantic.ConfigDict(extra='allow')
 
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
-  charliebot_home: pathlib.Path = pydantic.Field(default_factory=charliebot_home_dir)
+  charliebot_home: pathlib.Path = pydantic.Field(default_factory=home.charliebot_home_dir)
 
   # Plan registration page-height gate — absolute path of a headless-chromium-compatible
   # binary on the host running the server. The value stays host-local in config.yaml;
@@ -300,7 +300,7 @@ class CharlieBotConfig(pydantic.BaseModel):
   @property
   def credentials_file(self) -> pathlib.Path:
     """The profile's credentials.yaml: the secrets split out of config.yaml."""
-    return self.charliebot_home / CREDENTIALS_FILENAME
+    return self.charliebot_home / credentials.CREDENTIALS_FILENAME
 
   @property
   def config_d_dir(self) -> pathlib.Path:
@@ -422,10 +422,10 @@ def load_config() -> CharlieBotConfig:
   with the config path and names each old key with its new location (a
   secret's location is its ``credentials.yaml`` key path).
   """
-  home = charliebot_home_dir()
-  config_path = home / CONFIG_FILENAME
+  home_dir = home.charliebot_home_dir()
+  config_path = home_dir / CONFIG_FILENAME
 
-  config_d = home / "config.d"
+  config_d = home_dir / "config.d"
   if config_d.is_dir():
     for entry in sorted(config_d.iterdir()):
       if entry.name.endswith(".yaml") and entry.is_file():
@@ -461,9 +461,9 @@ def load_config() -> CharlieBotConfig:
   if "charliebot_home" in yaml_data:
     raise ValueError(
         f"{config_path} sets 'charliebot_home'; that path is chosen by the "
-        f"{CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
+        f"{home.CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
   try:
-    return CharlieBotConfig(charliebot_home=home, **yaml_data)
+    return CharlieBotConfig(charliebot_home=home_dir, **yaml_data)
   except pydantic.ValidationError as e:
     # An unknown field inside a backend entry gets its own message: the raw
     # entry's id and type are what the operator greps the file for. The error

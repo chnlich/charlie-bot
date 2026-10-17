@@ -1143,7 +1143,12 @@
         };
       }
       this.view = view;
+      // The pagination sentinel is a page fixture the attach wipe drops; a
+      // same-session switch keeps it, and each projection places it again
+      // (the For-you list leads with it, Everything prepends it).
+      const sentinel = document.getElementById('load-more-sentinel');
       this.attach(view === VIEW_FOR_YOU ? {pinned: true} : (this.everythingPlace || {}));
+      if (sentinel) this.container.prepend(sentinel);
     }
 
     // reproject for the For-you view. A scroll only records the reader's

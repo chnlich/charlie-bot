@@ -557,8 +557,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   # user message, takeoff phrase or not.
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  from src.runtime.api import internal as internal_api
-  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     payload = {
         "session_id": manager.id,
@@ -664,14 +663,13 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 
 @pytest.mark.asyncio
 async def test_repo_review_context_carries_the_delegated_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.runtime.api import internal as internal_api
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   repo, _origin = init_repo_with_origin(tmp_path / "review-spec-work")
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
   install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   spec = "## Goal\n\nrename the config key\n\n## Reviewer Checklist\n- the legacy key still loads\n"
   # The delegated run launches on the API loop, which lives only inside this block.
   with make_api_client(cfg, session_blocks, tree) as client:
@@ -738,7 +736,6 @@ async def _claimed_work_run_after(
 async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import review as review_module
-  from src.runtime.api import internal as internal_api
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root", name="Root manager")
   repo, _origin = init_repo_with_origin(tmp_path / "review-later-message")
@@ -748,7 +745,7 @@ async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
           SpawningScriptedBackend([assistant_text_event("started")], exit_code=1),
           SpawningScriptedBackend([result_event("adjusted")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/delegate",
@@ -813,14 +810,13 @@ async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
 async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import review as review_module
-  from src.runtime.api import internal as internal_api
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   repo, _origin = init_repo_with_origin(tmp_path / "review-no-later-message")
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
   install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/delegate",
@@ -850,7 +846,6 @@ async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
 @pytest.mark.asyncio
 async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.runtime.api import internal as internal_api
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root", name="Root manager")
   repo, _origin = init_repo_with_origin(tmp_path / "review-claim-order")
@@ -861,7 +856,7 @@ async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
           SpawningScriptedBackend([assistant_text_event("retrying")], exit_code=1),
           SpawningScriptedBackend([result_event("done")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/delegate",
@@ -2405,8 +2400,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  from src.runtime.api import internal as internal_api
-  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   # The client context stays open across the waits: the launches are tasks on
   # the client's portal loop, alive exactly while the block stands.
   with make_api_client(cfg, session_blocks, tree) as client:

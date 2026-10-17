@@ -1,44 +1,26 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
-from pathlib import Path
+import pathlib
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.infra import constants, text_length
+from src.infra import buildinfo, config, constants, log_once, models, text_length
 from src.infra import event_types as ET
-from src.infra.buildinfo import build_info
-from src.infra.config import get_config
-from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import (
-    DelegateInvocationMetadata,
-    DelegateRequest,
-    RunRecord,
-    ScheduleTriggerRequest,
-    SessionMessageRequest,
-    TaskSpec,
-    TaskType,
+from src.runtime import (
+    backend_pool,
+    control_events,
+    session_store,
+    spawner_backends,
+    takeoff_gate,
+    task_errors,
+    task_execution,
+    task_sessions,
+    triggers,
 )
-from src.runtime import backend_pool, spawner_backends
-from src.runtime.api.deps import (
-    bad_request,
-    get_session_events,
-    get_session_store,
-    get_task_manager,
-    get_trigger_manager,
-    require_found,
-)
-from src.runtime.api.deps import require_caller as require_caller_dep
-from src.runtime.api.sessions import _task_http_error
-from src.runtime.control_events import derived_delegate_request_id, stable_run_id
+from src.runtime.api import deps, sessions
 from src.runtime.session_events import SessionEvents
-from src.runtime.session_store import SessionStore
-from src.runtime.takeoff_gate import DelegationBlockedError, is_read_only_exempt
-from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
-from src.runtime.task_execution import TaskExecutionAdapter
-from src.runtime.task_sessions import TaskTreeManager, canonical_task_spec_text
-from src.runtime.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 router = APIRouter()
 
@@ -50,14 +32,14 @@ async def get_version() -> dict:
   Read-only; used by the CLI to detect version skew when an internal-API call fails
   (server older than the checkout → hint to restart).
   """
-  return build_info()
+  return buildinfo.build_info()
 
 
-def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
+def _delegate_invocation_event_payload(req: models.DelegateRequest) -> dict:
   """Return typed delegate invocation metadata for chat event persistence."""
   invocation = req.delegate_invocation
   if invocation is None:
-    invocation = DelegateInvocationMetadata(
+    invocation = models.DelegateInvocationMetadata(
         task_type=req.task_type,
         repo_path=req.repo_path,
         base_branch=req.base_branch,
@@ -70,30 +52,30 @@ def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
 
 
 async def _authorize_spawn_request(
-    req: DelegateRequest,
-    store: SessionStore,
-    task_mgr: TaskTreeManager,
+    req: models.DelegateRequest,
+    store: session_store.SessionStore,
+    task_mgr: task_sessions.TaskTreeManager,
 ) -> tuple[str | None, str | None, bool]:
   """Validate session, enforce the runtime gate, and resolve backend/model for a delegation.
 
   The third value is True when the backends.pool chose the backend (the delegation named none).
 
   A task-tree node takes the one central authorization owner —
-  ``TaskTreeManager.check_task_authorization``, the runtime gate (judged where
+  ``task_sessions.TaskTreeManager.check_task_authorization``, the runtime gate (judged where
   the delegation request enters; the Run launch re-judges nothing): an open
   manager chain with a real user message on some node of it.
   """
-  require_found(await store.get_session(req.session_id))
+  deps.require_found(await store.get_session(req.session_id))
 
-  if not is_read_only_exempt(req.task_type):
+  if not takeoff_gate.is_read_only_exempt(req.task_type):
     try:
       await task_mgr.check_task_authorization(req.session_id)
-    except DelegationBlockedError as e:
+    except takeoff_gate.DelegationBlockedError as e:
       raise HTTPException(status_code=403, detail=str(e)) from e
 
-  cfg = get_config()
+  cfg = config.get_config()
   try:
-    if req.task_type in (TaskType.VERIFY, TaskType.COLD_READ) and req.backend is None:
+    if req.task_type in (models.TaskType.VERIFY, models.TaskType.COLD_READ) and req.backend is None:
       resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(
           req.session_id, cfg, store, [], caller=req.task_type.value)
       backend_from_pool = resolved_backend in cfg.backends.pool
@@ -102,12 +84,12 @@ async def _authorize_spawn_request(
           await spawner_backends.resolve_requested_subagent_backend_model(
               req.session_id, cfg, store, requested_backend=req.backend, role=req.task_type))
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
 
   return resolved_backend, resolved_model, backend_from_pool
 
 
-def delegate_request_id(req: DelegateRequest) -> str:
+def delegate_request_id(req: models.DelegateRequest) -> str:
   """The delegation's stable operation id.
 
   An explicit ``request_id`` names intentional same-spec siblings; the derived
@@ -117,12 +99,12 @@ def delegate_request_id(req: DelegateRequest) -> str:
   """
   if req.request_id:
     return req.request_id
-  return derived_delegate_request_id(req.session_id, req.task_type.value, req.description)
+  return control_events.derived_delegate_request_id(req.session_id, req.task_type.value, req.description)
 
 
 async def _delegate_task_tree(
-    req: DelegateRequest,
-    task_mgr: TaskTreeManager,
+    req: models.DelegateRequest,
+    task_mgr: task_sessions.TaskTreeManager,
     session_events: SessionEvents,
     caller: object,
     resolved_backend: str,
@@ -139,13 +121,13 @@ async def _delegate_task_tree(
   try:
     # The runtime gate judges here, where the delegation request enters; the
     # child run's launch re-judges nothing. The read-only exemption rides the
-    # one shared judgment (is_read_only_exempt) here, at the admission check
+    # one shared judgment (takeoff_gate.is_read_only_exempt) here, at the admission check
     # above, and at the agent-creation check; the structural create checks
     # still apply to a read-only child.
-    if not is_read_only_exempt(req.task_type):
+    if not takeoff_gate.is_read_only_exempt(req.task_type):
       await task_mgr.check_task_authorization(req.session_id)
     request_id = delegate_request_id(req)
-    task_spec = TaskSpec(
+    task_spec = models.TaskSpec(
         goal=req.description,
         repo_path=req.repo_path,
         base_branch=req.base_branch,
@@ -155,7 +137,7 @@ async def _delegate_task_tree(
     )
     # A cold-read child is named at creation (no automatic naming call); every
     # other child takes the default node name.
-    name = f"Cold read: {Path(req.cold_read.page_path).name}" if req.task_type == TaskType.COLD_READ else None
+    name = f"Cold read: {pathlib.Path(req.cold_read.page_path).name}" if req.task_type == models.TaskType.COLD_READ else None
     child = await task_mgr.create_task(
         request_id=request_id,
         task_parent_id=req.session_id,
@@ -171,7 +153,7 @@ async def _delegate_task_tree(
     if backend_from_pool:
       # Before the first launch: a quota failure on this node fails over only when the node says so.
       await task_mgr.update_slot_fields(child.id, backend_pool.METADATA_OWNER, backend_from_pool=True)
-    run_id = stable_run_id(child.id, f"{request_id}:work")
+    run_id = control_events.stable_run_id(child.id, f"{request_id}:work")
     existing = await task_mgr.runs.get_run(child.id, run_id)
     if existing is None:
       if task_mgr.task_state(child.id) != "open":
@@ -183,7 +165,7 @@ async def _delegate_task_tree(
             "thread_id": None,
             "description": req.description,
         }
-      record = RunRecord(
+      record = models.RunRecord(
           id=run_id,
           session_id=child.id,
           kind="work",
@@ -193,14 +175,16 @@ async def _delegate_task_tree(
           base_branch=req.base_branch,
       )
       async with task_mgr.control_lock:
-        await task_mgr.runs.register_run_locked(record, task_spec_text=canonical_task_spec_text(task_spec))
-  except (DelegationBlockedError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
-    raise _task_http_error(e) from e
+        await task_mgr.runs.register_run_locked(
+            record, task_spec_text=task_sessions.canonical_task_spec_text(task_spec))
+  except (takeoff_gate.DelegationBlockedError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
+          task_errors.TaskConflictError, task_errors.TaskInvalidError) as e:
+    raise sessions._task_http_error(e) from e
 
   # The same adapter the creating tree owns launches the run — never a
   # differently-configured singleton.
   adapter = task_mgr.dispatch.executor
-  if not isinstance(adapter, TaskExecutionAdapter):
+  if not isinstance(adapter, task_execution.TaskExecutionAdapter):
     raise HTTPException(status_code=503, detail="task execution adapter is not installed")
   adapter.launch(child.id, run_id)
 
@@ -229,11 +213,11 @@ async def _delegate_task_tree(
 
 @router.post("/delegate")
 async def delegate_task(
-    req: DelegateRequest,
-    session_events: SessionEvents = Depends(get_session_events),
-    store: SessionStore = Depends(get_session_store),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: object = Depends(require_caller_dep),
+    req: models.DelegateRequest,
+    session_events: SessionEvents = Depends(deps.get_session_events),
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
+    caller: object = Depends(deps.require_caller),
 ) -> dict:
   """Create a worker task under the calling manager and launch its first Run.
 
@@ -244,11 +228,11 @@ async def delegate_task(
   # the rejection must not depend on the caller's configured backends, and a
   # replayed request must fail identically. The cold_read field rides exactly
   # the cold-read task type.
-  if req.task_type == TaskType.COLD_READ and req.cold_read is None:
+  if req.task_type == models.TaskType.COLD_READ and req.cold_read is None:
     raise HTTPException(status_code=400, detail="cold-read delegations require cold_read")
-  if req.task_type != TaskType.COLD_READ and req.cold_read is not None:
+  if req.task_type != models.TaskType.COLD_READ and req.cold_read is not None:
     raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations reject cold_read")
-  if req.task_type in (TaskType.VERIFY, TaskType.COLD_READ):
+  if req.task_type in (models.TaskType.VERIFY, models.TaskType.COLD_READ):
     if req.repo_path is not None:
       raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations are repo-less; omit repo_path")
     if req.base_branch is not None:
@@ -262,7 +246,7 @@ async def delegate_task(
           status_code=400,
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
           "give both for a repo task, neither for a repo-less one")
-  require_found(await store.get_session(req.session_id))
+  deps.require_found(await store.get_session(req.session_id))
   resolved_backend, resolved_model, backend_from_pool = await _authorize_spawn_request(req, store, task_mgr)
   return await _delegate_task_tree(
       req, task_mgr, session_events, caller, resolved_backend, resolved_model, backend_from_pool)
@@ -270,12 +254,12 @@ async def delegate_task(
 
 @router.post("/schedule-trigger")
 async def schedule_trigger(
-    req: ScheduleTriggerRequest,
-    store: SessionStore = Depends(get_session_store),
-    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
+    req: models.ScheduleTriggerRequest,
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    trigger_mgr: triggers.TriggerManager = Depends(deps.get_trigger_manager),
 ) -> dict:
   """Schedule a delayed trigger that will wake the master CC after a delay."""
-  require_found(await store.get_session(req.session_id))
+  deps.require_found(await store.get_session(req.session_id))
 
   if req.watch_targets is not None:
     if len(req.watch_targets) == 0:
@@ -296,13 +280,13 @@ async def schedule_trigger(
         watch_targets=req.watch_targets,
         probe_out=watch_probe,
     )
-  except (RemoteVerifyError, ArchivedSessionError, PendingTriggerLimitError) as e:
+  except (triggers.RemoteVerifyError, triggers.ArchivedSessionError, triggers.PendingTriggerLimitError) as e:
     # Verify-on-create rejection, a target archived without a successor, or a
     # registration past the session's pending-trigger limit: surface as 422 so
     # the CLI exits with code 2.
     raise HTTPException(status_code=422, detail=str(e)) from e
   except RuntimeError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
   log.info(
       "trigger_scheduled",
       session=req.session_id,
@@ -320,7 +304,7 @@ async def schedule_trigger(
 async def cancel_trigger(
     session_id: str,
     trigger_id: str,
-    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
+    trigger_mgr: triggers.TriggerManager = Depends(deps.get_trigger_manager),
 ) -> dict:
   """Cancel a pending trigger."""
   try:
@@ -332,9 +316,9 @@ async def cancel_trigger(
 
 @router.post("/session-message")
 async def session_message(
-    req: SessionMessageRequest,
-    store: SessionStore = Depends(get_session_store),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    req: models.SessionMessageRequest,
+    store: session_store.SessionStore = Depends(deps.get_session_store),
+    task_mgr: task_sessions.TaskTreeManager = Depends(deps.get_task_manager),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
@@ -364,7 +348,7 @@ async def session_message(
             "CJK characters, CJK punctuation, and fullwidth characters count 2.\n"
             "Write the long content to a file. Send a short message with the conclusion,\n"
             "the request, and the file path."))
-  caller = require_found(await store.get_session(req.session_id))
+  caller = deps.require_found(await store.get_session(req.session_id))
   target = await store.get_session(req.target_session_id)
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
@@ -379,8 +363,9 @@ async def session_message(
         from_session_name=caller.name,
     )
     await task_mgr.dispatch.dispatch_pending(req.target_session_id)
-  except (TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
-    raise _task_http_error(e) from e
+  except (task_errors.TaskNotFoundError, task_errors.TaskForbiddenError, task_errors.TaskConflictError,
+          task_errors.TaskInvalidError) as e:
+    raise sessions._task_http_error(e) from e
   log.info(
       "session_message_dispatched",
       session=req.session_id,

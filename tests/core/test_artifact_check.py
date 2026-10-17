@@ -396,7 +396,7 @@ async def _cold_read_tree_env(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
   if not execute:
     monkeypatch.setattr(adapter, "_schedule_launch", lambda *args, **kwargs: None)
   tree.dispatch.executor = adapter
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   return cfg, session_blocks, tree, manager
 

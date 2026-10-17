@@ -35,6 +35,7 @@ package's script registers a handler with it at load time. The core registration
 
     Chat.registerDeliveryLink   web/static/js/chat/rendering.js (a link on the worker delivery banner)
     Chat.registerFileLinkFamily web/static/js/chat/file-links.js (a family of file links the package owns)
+    Chat.registerForYouRules    web/static/js/chat/turn-engine.js (the For-you projection's rules, from chat/for-you.js)
     Chat.registerInputMode      web/static/js/chat/attachments.js (an input mode and its user-bubble badge)
     Chat.registerMessagePostProcessor
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)

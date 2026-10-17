@@ -55,7 +55,18 @@ function pageRig() {
   // The stream element counts as on the page only while the messages container holds it, as in the browser.
   context.document.getElementById = (id) => {
     const el = elements.get(id) || null;
-    return el && (el !== stream || under(stream, root)) ? el : null;
+    if (el) return (el !== stream || under(stream, root)) ? el : null;
+    // An element no fixture entry names (the pagination sentinel) is on the page
+    // only while the messages container holds it.
+    const walk = (node) => {
+      for (const child of node.children) {
+        if (child.id === id) return child;
+        const found = walk(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    return walk(root);
   };
   context.document.querySelector = () => null;
   context.document.querySelectorAll = () => toggles;
@@ -152,6 +163,23 @@ test('a reload forgets the manual choice', () => {
   first.context.setChatView('everything');
   const reloaded = pageRig();
   assert.equal(openedView(reloaded, {}), 'foryou');
+});
+
+test('a view switch keeps the pagination sentinel on the page', () => {
+  const rig = pageRig();
+  const data = sessionPayload({});
+  data.has_more = true;
+  rig.context.renderSessionView(data);
+  const found = () => rig.context.document.getElementById('load-more-sentinel');
+  const sentinel = found();
+  assert.ok(sentinel, 'the sentinel is on the page while older pages remain');
+
+  rig.context.setChatView('everything');
+  assert.equal(found(), sentinel, 'the switch to Everything keeps the sentinel');
+
+  rig.context.setChatView('foryou');
+  assert.equal(found(), sentinel, 'the switch back to For you keeps the sentinel');
+  assert.equal(rig.root.children[0], sentinel, 'the For you list leads with the sentinel');
 });
 
 test('a second open of a For you session keeps the stream element on the page', () => {

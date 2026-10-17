@@ -17,9 +17,25 @@ const NAMESPACE_JS = readStatic('chat/namespace.js');
 const SHARED_JS = readStatic('chat/shared.js');
 const RENDERING_JS = readStatic('chat/rendering.js');
 
+// markdown-renderer.js's real wc2chIsWide: the renderer registers with marked
+// at load and reads nothing else there, so a scratch context with a stub marked
+// hands the real function over without the chat stubs taking on marked.
+function loadRealWc2chIsWide() {
+  const scratch = {
+    marked: {Renderer: function() { return {}; }, use() {}, parse: (s) => String(s || '')},
+  };
+  vm.createContext(scratch);
+  vm.runInContext(readStatic('markdown-renderer.js'), scratch, {filename: 'markdown-renderer.js'});
+  return scratch.wc2chIsWide;
+}
+const REAL_WC2CH_IS_WIDE = loadRealWc2chIsWide();
+
 function loadChatRenderingModules(context) {
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   vm.runInContext(SHARED_JS, context, {filename: 'chat/shared.js'});
+  // The page loads markdown-renderer.js ahead of rendering.js; a context that
+  // loaded its own renderer keeps that copy.
+  if (context.wc2chIsWide === undefined) context.wc2chIsWide = REAL_WC2CH_IS_WIDE;
   context.Chat.renderRoundRatingButtons = () => '';
   context.Chat.markFileLinks = () => {};
   vm.runInContext(RENDERING_JS, context, {filename: 'chat/rendering.js'});

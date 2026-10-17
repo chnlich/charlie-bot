@@ -13,7 +13,7 @@ import pydantic
 
 from src.infra import config, git, json_utils, log_once, models, ndjson, timeouts
 from src.infra import event_types as ET
-from src.runtime import message_aggregator
+from src.runtime import backend_pool, message_aggregator
 
 log = log_once.LazyStructlogLogger()
 
@@ -24,32 +24,6 @@ ITERATION_SUMMARIES_HEADING = "Previous iteration summaries:\n"
 RUNNER_FALLBACK_REPORT_MARKER = "<!-- runner fallback: worker wrote no report -->\n"
 WORKTREE_CREATE_ERROR_PREFIX = "Failed to create worktree: "
 LOOP_FAILURE_ERROR_PREFIX = "Improve loop failed: "
-
-# The first matching substring names the blocker, so an entry contained in an
-# earlier one can never be named: keep the shorter form ("out of token" covers
-# "out of tokens").
-_QUOTA_BLOCKER_TEXT_PATTERNS = (
-    "quota exhausted",
-    "quota exceeded",
-    "insufficient quota",
-    "over quota",
-    "rate limit exceeded",
-    "rate limit reached",
-    "rate limit rejected",
-    "rate-limit exceeded",
-    "rate-limit reached",
-    "rate-limit rejected",
-    "rate_limited",
-    "rate_limit_error",
-    "rate limited",
-    "too many requests",
-    "resource_exhausted",
-    "429",
-    "out of token",
-    "out-of-token",
-    "insufficient tokens",
-    "tokens exhausted",
-)
 
 # ---------------------------------------------------------------------------
 # State models
@@ -70,6 +44,8 @@ class ImproveState(pydantic.BaseModel):
   merge_back: bool = False
   backend: str | None = None
   model: str | None = None
+  # True when the loop named no backend: each iteration takes a member from backends.pool.
+  backend_from_pool: bool = False
   created_at: str
   # The server process that owns this loop's controller. A restart finds a
   # "running" state stamped with a dead pid and marks it interrupted instead
@@ -463,6 +439,7 @@ async def reserve_loop_state(
     merge_back: bool = False,
     resolved_backend: str = "",
     resolved_model: str = "",
+    backend_from_pool: bool = False,
 ) -> ImproveState:
   """Reserve a unique loop id and persist running state before background work begins."""
   loops_dir = _loops_dir(session_id, cfg)
@@ -492,6 +469,7 @@ async def reserve_loop_state(
         merge_back=merge_back,
         backend=resolved_backend or None,
         model=resolved_model or None,
+        backend_from_pool=backend_from_pool,
         created_at=models.utc_now_iso(),
         server_pid=os.getpid(),
     )
@@ -552,7 +530,7 @@ def _quota_blocker_match(ev: dict) -> str | None:
     return None
 
   text = _event_text(ev).lower()
-  for pattern in _QUOTA_BLOCKER_TEXT_PATTERNS:
+  for pattern in backend_pool.QUOTA_ERROR_PATTERNS:
     if pattern in text:
       return f"provider quota/token/rate-limit rejection ({pattern})"
   return None

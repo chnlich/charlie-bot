@@ -1,5 +1,6 @@
 """Tests for session/requested subagent backend resolution in src.runtime.spawner."""
 
+import datetime
 import pathlib
 from unittest import mock
 
@@ -7,7 +8,7 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import spawner, spawner_backends
+from src.runtime import backend_pool, spawner, spawner_backends
 
 
 def _build_cfg(options: list[models.BackendOption]) -> config.CharlieBotConfig:
@@ -32,7 +33,7 @@ async def test_session_default_returns_configured_backend() -> None:
   session = models.SessionMetadata(profile="manager", name="s", backend="claude-opus-4.7")
   store = _mock_store(session)
 
-  backend, model = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
+  backend, model, _from_pool = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
       session.id, cfg, store, requested_backend=None, role=models.TaskType.IMPLEMENT)
 
   assert backend == "claude-opus-4.7"
@@ -91,44 +92,45 @@ async def test_unresolvable_backend_resolution_raises(
         session.id, cfg, store, requested_backend=requested_backend, role=models.TaskType.IMPLEMENT)
 
 
-_SESSION_DEFAULT = (conftest.OPUS_BACKEND_ID, conftest.OPUS_BACKEND_OPTION.model)
-_WORKER_DEFAULT = ("codex-o3", "o3")
+_SESSION_DEFAULT = (conftest.OPUS_BACKEND_ID, conftest.OPUS_BACKEND_OPTION.model, False)
+_POOL_MEMBER = ("codex-o3", "o3", True)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("role", "worker_default", "requested_backend", "expected"),
+    ("role", "pool", "requested_backend", "expected"),
     [
         *(
-            pytest.param(role, "codex-o3", None, _WORKER_DEFAULT, id=f"{role}-runs-on-worker-default") for role in (
-                models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN,
-                spawner_backends.IMPROVE_ROLE)),
+            pytest.param(role, ["codex-o3"], None, _POOL_MEMBER, id=f"{role}-takes-the-pool-member")
+            for role in (models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN)),
         pytest.param(
             models.TaskType.IMPLEMENT,
-            "codex-o3",
+            ["codex-o3"],
             conftest.OPUS_BACKEND_ID,
-            _SESSION_DEFAULT,
-            id="named-backend-wins",
+            (conftest.OPUS_BACKEND_ID, conftest.OPUS_BACKEND_OPTION.model, False),
+            id="named-backend-is-never-pooled",
         ),
-        pytest.param(models.TaskType.VERIFY, "codex-o3", None, _SESSION_DEFAULT, id="verify-keeps-session-backend"),
+        pytest.param(models.TaskType.VERIFY, ["codex-o3"], None, _SESSION_DEFAULT, id="verify-keeps-session-backend"),
+        pytest.param(
+            spawner_backends.IMPROVE_ROLE, ["codex-o3"], None, _SESSION_DEFAULT, id="improve-picks-per-iteration"),
         *(
-            pytest.param(role, None, None, _SESSION_DEFAULT, id=f"{role}-inherits-without-the-key")
+            pytest.param(role, [], None, _SESSION_DEFAULT, id=f"{role}-inherits-with-an-empty-pool")
             for role in (models.TaskType.IMPLEMENT, spawner_backends.IMPROVE_ROLE)),
     ],
 )
-async def test_worker_default_resolution(
+async def test_pool_resolution_for_subagent_roles(
     role: spawner_backends.SubagentRole,
-    worker_default: str | None,
+    pool: list[str],
     requested_backend: str | None,
-    expected: tuple[str, str],
+    expected: tuple[str, str | None, bool],
 ) -> None:
-  """Implementation workers that name no backend run on backends.worker_default; a named backend
-  wins, other roles keep the session backend, and without the key every worker inherits it."""
+  """Worker roles that name no backend take the next backends.pool member; a named backend is never
+  pooled, other roles keep the session backend, and an empty pool leaves every worker on it."""
   cfg = config.CharlieBotConfig(
       charliebot_home=pathlib.Path("/tmp/charliebot-test"),
       backends={
           "options": [conftest.OPUS_BACKEND_OPTION, conftest.CODEX_BACKEND_OPTION],
-          "worker_default": worker_default
+          "pool": pool,
       },
   )
   session = models.SessionMetadata(profile="manager", name="s", backend=conftest.OPUS_BACKEND_ID)
@@ -137,3 +139,27 @@ async def test_worker_default_resolution(
       session.id, cfg, _mock_store(session), requested_backend=requested_backend, role=role)
 
   assert resolved == expected
+
+
+@pytest.mark.asyncio
+async def test_pool_with_every_member_cooling_reports_each_recovery_time() -> None:
+  """With every member cooling, an unpinned worker is refused and the refusal names each member's recovery time."""
+  cfg = config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
+      backends={
+          "options": [conftest.OPUS_BACKEND_OPTION, conftest.CODEX_BACKEND_OPTION],
+          "pool": [conftest.OPUS_BACKEND_ID, "codex-o3"],
+      },
+  )
+  session = models.SessionMetadata(profile="manager", name="s", backend=conftest.OPUS_BACKEND_ID)
+  reset = datetime.datetime(2030, 1, 2, 3, 4, tzinfo=datetime.UTC)
+  backend_pool.cool(conftest.OPUS_BACKEND_ID, reset)
+  backend_pool.cool("codex-o3", reset + datetime.timedelta(hours=1))
+
+  with pytest.raises(ValueError) as exc_info:
+    await spawner_backends.resolve_requested_subagent_backend_model(
+        session.id, cfg, _mock_store(session), requested_backend=None, role=models.TaskType.IMPLEMENT)
+
+  message = str(exc_info.value)
+  assert f"{conftest.OPUS_BACKEND_ID} cooling until 2030-01-02T03:04" in message
+  assert "codex-o3 cooling until 2030-01-02T04:04" in message

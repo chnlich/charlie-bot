@@ -50,5 +50,6 @@
   },
   "group": "Work",
   "archive_offset": 0,
+  "backend_from_pool": false,
   "web_status": null
 }

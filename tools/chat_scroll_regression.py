@@ -1338,7 +1338,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                           "model": "scripted-model",
                       }
                   ],
-              "preference": ["fake-scripted"],
+              "pool": ["fake-scripted"],
           },
       "paths": {
           "worktree_dir": str(home / "worktrees")

@@ -6,8 +6,8 @@ Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.):
   each MASTER_DONE; it assembles the prompt from the chat log and delegates to
   maybe_auto_name(...).
 - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
-- Picks resolved light backends from backends.preference in order
-  (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
+- Picks backends.pool members in rotation order (iter_light_backends) and asks them, via
+  one_shot_text, for {name, group}.
 - Group may reuse an existing group name from other sessions.
 
 The result goes through _apply_name_to_session(), which guards against overwriting
@@ -22,7 +22,15 @@ from typing import Any
 
 from src.infra import config, deferred, log_once, models, timeouts
 from src.infra import event_types as ET
-from src.runtime import message_aggregator, session_events, session_lifecycle, session_listing, session_store, streaming
+from src.runtime import (
+    backend_pool,
+    message_aggregator,
+    session_events,
+    session_lifecycle,
+    session_listing,
+    session_store,
+    streaming,
+)
 from src.runtime.agent_process import deferred_build
 
 log = log_once.LazyStructlogLogger()
@@ -119,13 +127,14 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
 
 
 def iter_light_backends(cfg: config.CharlieBotConfig) -> Iterator[models.BackendOption]:
-  """Yield each resolved light one-shot backend once, in preference order."""
-  yielded_ids: set[str] = set()
-  for entry_id in cfg.backends.preference:
-    option = cfg.get_backend_option(entry_id)
-    if option is None or option.id in yielded_ids:
-      continue
-    yielded_ids.add(option.id)
+  """Yield one backends.pool member per attempt, each member at most once.
+
+  A caller that fails on a member asks for the next one: the pool selects from its rotation position,
+  skipping the members already yielded and the cooling members.
+  """
+  tried: list[str] = []
+  while (option := backend_pool.select(cfg, caller="light_oneshot", exclude=tried)) is not None:
+    tried.append(option.id)
     yield option
 
 
@@ -245,22 +254,23 @@ async def maybe_auto_name(
         assistant_response=assistant_slice,
     )
 
-    options = list(iter_light_backends(cfg))
-    if not options:
+    if not cfg.backends.pool:
       log.warning(
           "autonamer_skipped",
-          reason="no_resolvable_preference",
+          reason="empty_backends_pool",
           session_id=session_meta.id,
       )
       return
 
-    for option in options:
+    for option in iter_light_backends(cfg):
       try:
         backend = deferred_build.load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
         raw = await backend.one_shot_text(
             f"{title_instruction}\n\n{prompt}", system_prompt, timeout=timeouts.LIGHT_ONESHOT_TIMEOUT)
       except Exception as e:
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
+        if backend_pool.is_quota_error(str(e)):
+          backend_pool.cool(option.id, None)
         continue
 
       name, group = _parse_name_and_group(raw)

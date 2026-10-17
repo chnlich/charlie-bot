@@ -2,10 +2,11 @@
 
 import asyncio
 import pathlib
+from collections.abc import Collection
 
 from src.infra import config, log_once, models, ndjson
 from src.infra import event_types as ET
-from src.runtime import message_aggregator, task_errors
+from src.runtime import backend_pool, message_aggregator, task_errors
 
 log = log_once.LazyStructlogLogger()
 
@@ -232,54 +233,30 @@ async def extract_review_context(session_id: str, thread_id: str, worker_log_pat
   return worker_summary
 
 
-def _resolve_preference_option(cfg: config.CharlieBotConfig, option_id: str) -> models.BackendOption:
-  """Resolve a backends.preference entry to its BackendOption with default model.
-
-  Raises ValueError if the option_id is not in backends.options or requires but lacks a model.
-  """
-  option = config.require_backend_option(cfg, option_id, subject="backends.preference entry ")
-  return option.model_copy(update={"model": models.option_default_model(option, subject="backends.preference entry ")})
-
-
 def select_reviewer_backend(
     cfg: config.CharlieBotConfig,
+    caller: str,
     worker_backend: str,
     worker_model: str | None,
     tried_backends: list[str],
+    *,
+    used_backends: Collection[str] = (),
 ) -> tuple[str, str | None, list[str]] | None:
-  """Select a checking-role backend (reviewer, verify default) via backends.preference, skipping already-tried backends.
+  """Select a checking-role backend (reviewer, verify, cold read) from backends.pool.
 
-  Returns (resolved_backend, resolved_model, updated_tried_backends) or None if exhausted.
+  The pool skips the worker's own backend, every *used_backends* member, the *tried_backends*
+  members and the cooling members. When it has no member left and the worker's backend is untried,
+  the worker's backend runs the check, as it always has. Returns (resolved_backend, resolved_model,
+  updated_tried_backends), or None when every route is spent.
   """
-  resolved_backend, resolved_model = worker_backend, worker_model
-
-  for pref_id in cfg.backends.preference:
-    if pref_id == worker_backend:
-      log.debug("reviewer_skip_same_backend", preference=pref_id)
-      continue
-    if pref_id in tried_backends:
-      log.debug("reviewer_skip_tried_backend", preference=pref_id)
-      continue
-    try:
-      pref_option = _resolve_preference_option(cfg, pref_id)
-      log.info(
-          "reviewer_backend_selected",
-          preference=pref_id,
-          worker_backend=worker_backend,
-          reviewer_model=pref_option.model,
-          retry_attempt=len(tried_backends),
-      )
-      resolved_backend = pref_option.id
-      resolved_model = pref_option.model
-      break
-    except Exception as e:
-      log.warning("reviewer_preference_failed", preference=pref_id, error=str(e))
-  else:
-    if cfg.backends.preference:
-      if worker_backend not in tried_backends:
-        log.info("reviewer_fallback_to_worker_backend", worker_backend=worker_backend, tried=tried_backends)
-      else:
-        log.warning("reviewer_all_backends_exhausted", tried=tried_backends)
-        return None
-
-  return resolved_backend, resolved_model, [*tried_backends, resolved_backend]
+  option = backend_pool.select(cfg, caller=caller, exclude={worker_backend, *used_backends, *tried_backends})
+  if option is not None:
+    model = models.option_default_model(option, subject="backends.pool entry ")
+    return option.id, model, [*tried_backends, option.id]
+  if not cfg.backends.pool:
+    return worker_backend, worker_model, [*tried_backends, worker_backend]
+  if worker_backend in tried_backends:
+    log.warning("reviewer_all_backends_exhausted", caller=caller, tried=tried_backends)
+    return None
+  log.info("reviewer_fallback_to_worker_backend", caller=caller, worker_backend=worker_backend, tried=tried_backends)
+  return worker_backend, worker_model, [*tried_backends, worker_backend]

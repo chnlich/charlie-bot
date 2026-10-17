@@ -1315,12 +1315,36 @@ class TaskTreeManager:
       self._invalidate_index()
       return meta
 
-  async def create_retry(self, session_id: str, request_id: str, original_run_id: str) -> dict:
+  async def set_node_backend(self, session_id: str, backend: str) -> None:
+    """Point a worker node at *backend*; its later Runs and messages resolve the backend from the node.
+
+    The write runs under the control lock and leaves the sidebar sort key alone, as update_slot_fields does.
+    """
+    async with self.control_lock:
+      meta = await self.load_meta(session_id)
+      if meta is None:
+        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta.backend = backend
+      await self.session_store.save_metadata(meta)
+      self._invalidate_index()
+
+  async def create_retry(
+      self,
+      session_id: str,
+      request_id: str,
+      original_run_id: str,
+      *,
+      backend: str | None = None,
+      input_event_ids: list[str] | None = None,
+  ) -> dict:
     """Create one retry run on the open task; a replayed request returns the same run.
 
     The retry pins the task's current spec text (later edits keep the old
     versions pinned to their own runs) and inherits the retried run's
     execution context; the previous run's evidence is preserved untouched.
+    *backend* moves the retry to that backends.options id (its default model);
+    *input_event_ids* binds the retry to that input batch, as a manager-round
+    retry binds its original's. Both are None for a manual worker retry.
     """
     async with self.control_lock:
       await self._get_index()
@@ -1339,14 +1363,20 @@ class TaskTreeManager:
         # payload is exactly that batch. Worker retries stay claimless — they
         # consume whatever is pending when they launch.
         retry_fields["input_event_ids"] = list(original.input_event_ids)
+      if input_event_ids is not None:
+        retry_fields["input_event_ids"] = list(input_event_ids)
+      backend_id, model = original.backend, original.model
+      if backend is not None:
+        option = config.require_backend_option(self._cfg, backend, subject="retry ")
+        backend_id, model = option.id, models.option_default_model(option, subject="retry ")
       run = await self.runs.create_retry_run_locked(
           session_id,
           request_id,
           original_run_id,
           task_spec_text=canonical_task_spec_text(meta.task),
           kind=original.kind,
-          backend=original.backend,
-          model=original.model,
+          backend=backend_id,
+          model=model,
           repo_path=original.repo_path,
           base_branch=original.base_branch,
           branch_name=original.branch_name,

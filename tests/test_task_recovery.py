@@ -531,7 +531,7 @@ async def test_recovery_open_task_landing_unchanged(tmp_path: Path, monkeypatch:
 async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed review is a used attempt: recovery registers the next review
-    on the next preference backend (the existing policy, unchanged)."""
+    on the next pool backend (the existing policy, unchanged)."""
 
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   # Two reviewer entries beyond the worker's own backend: a failed first
@@ -541,7 +541,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
           conftest.backend_option(id="fake2", label="Fake2", type="cc-claude", model="fake2-model"),
           conftest.backend_option(id="fake3", label="Fake3", type="cc-claude", model="fake3-model"),
       ])
-  cfg.backends.preference = ["fake2", "fake3"]
+  cfg.backends.pool = ["fake2", "fake3"]
   repo, _origin = init_repo_with_origin(tmp_path / "repo")
   await tree.patch_task(
       worker.id,
@@ -563,7 +563,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
           branch_name="task/work",
           worktree_path=str(repo)))
   await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
-  # The first review attempt ran on the first preference backend and failed.
+  # The first review attempt ran on the first pool backend and failed.
   failed_review = "review-failed"
   await tree.runs.register_run(
       RunRecord(
@@ -581,7 +581,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
   retried = next(r for r in reviews if r.id != failed_review)
   # The stable retry identity binds to the work run and its attempt number.
   assert retried.id == control_events.stable_run_id(worker.id, f"review:{run_id}:2")
-  assert retried.backend == "fake3", f"expected the next preference backend, got {retried.backend}"
+  assert retried.backend == "fake3", f"expected the next pool backend, got {retried.backend}"
   _run, outcome = await wait_for_terminal_run(tree, worker.id, retried.id)
   assert outcome == "success"
   # The retried review consumed the one scripted backend; nothing else launches.
@@ -642,11 +642,11 @@ async def test_recovery_replays_a_lost_cold_read_delivery(tmp_path: Path, monkey
 @pytest.mark.asyncio
 async def test_recovery_replays_a_lost_cold_read_failure_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed cold-read Run whose chain a crash cut with one backend left: the
-    replay records the attempt, starts the retry on the next preference
+    replay records the attempt, starts the retry on the next pool
     backend, and the retry's answer delivers the report."""
   cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
   cfg.backends.options.append(conftest.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"))
-  cfg.backends.preference = ["fake2"]
+  cfg.backends.pool = ["fake2"]
   page = tmp_path / "page.html"
   worker = await _cold_read_child(tmp_path, tree, manager, page=page)
   failed_run = "run-cold-1"
@@ -835,7 +835,7 @@ async def test_recovery_cold_read_failure_with_a_registered_retry_never_double_r
     attempt's chain — one retry Run, one report."""
   cfg, _session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
   cfg.backends.options.append(conftest.backend_option(id="fake2", label="Fake2", type="codex", model="fake2-model"))
-  cfg.backends.preference = ["fake2"]
+  cfg.backends.pool = ["fake2"]
   page = tmp_path / "page.html"
   worker = await _cold_read_child(tmp_path, tree, manager, page=page)
   failed_run = "run-cold-1"

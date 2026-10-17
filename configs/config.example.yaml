@@ -42,11 +42,12 @@ paths:
     - ~/workspace
   worktree_dir: ~/worktrees
 
-# Backends: reviewer preference order and the model-switch options.
+# Backends: the rotation pool of unpinned work and the model-switch options.
 backends:
-  # Reviewer/light-task preference: ordered option ids. Empty = the reviewer
-  # uses the worker's backend.
-  preference: []
+  # Pool members in rotation order: option ids. Unpinned work takes the next member that is
+  # not cooling; a member whose quota runs out cools until its reset. Empty = unpinned work
+  # runs on the delegating session's backend and the reviewer uses the worker's backend.
+  pool: []
   # Backends available for model switching. Editing the list REPLACES it — to
   # add a codex backend, append an entry such as:
   #   - id: codex-luna

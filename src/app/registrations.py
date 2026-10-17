@@ -16,6 +16,7 @@ from src.runtime.hooks import page_render
 PACKAGES = (
     "src.features.artifacts",
     "src.features.backup",
+    "src.features.backend_pool",
     "src.features.chat_threads",
     "src.features.code_server",
     "src.features.cron",

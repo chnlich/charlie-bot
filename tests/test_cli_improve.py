@@ -158,7 +158,7 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   task_mgr.check_task_authorization = mock.AsyncMock()
 
   with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
-       mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
+       mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3", False)), \
        mock.patch(
            _RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=improve_command.ImproveLoopAlreadyRunningError(7)), \

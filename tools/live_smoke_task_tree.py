@@ -157,7 +157,7 @@ def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tu
       },
       "backends": {
           "options": [entry],
-          "preference": [backend_id]
+          "pool": [backend_id]
       },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")

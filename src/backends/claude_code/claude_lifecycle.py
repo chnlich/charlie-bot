@@ -183,7 +183,9 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     account = claude_accounts.select(ctx.cfg, ctx.option.model, account_pool=account_pool)
     if account is None:
       raise backend_lifecycle.LaunchRefused(
-          claude_relay.pool_exhausted_message(ctx.cfg, account_pool=account_pool), quota_exhausted=True)
+          claude_relay.pool_exhausted_message(ctx.cfg, account_pool=account_pool),
+          quota_exhausted=True,
+          resets_at=claude_accounts.earliest_reset(ctx.cfg, None, account_pool))
     return self._pooled_launch(ctx, account, resume_id=None, prompt=None, relays=0)
 
   def _pooled_resume_id(self, ctx: backend_lifecycle.LaunchContext) -> str | None:

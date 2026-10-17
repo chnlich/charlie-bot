@@ -18,7 +18,7 @@ from src.infra.models import (
     TaskSpec,
     TaskType,
 )
-from src.runtime import spawner_backends
+from src.runtime import backend_pool, spawner_backends
 from src.runtime.api.deps import (
     bad_request,
     get_session_events,
@@ -73,8 +73,10 @@ async def _authorize_spawn_request(
     req: DelegateRequest,
     store: SessionStore,
     task_mgr: TaskTreeManager,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, bool]:
   """Validate session, enforce the runtime gate, and resolve backend/model for a delegation.
+
+  The third value is True when the backends.pool chose the backend (the delegation named none).
 
   A task-tree node takes the one central authorization owner —
   ``TaskTreeManager.check_task_authorization``, the runtime gate (judged where
@@ -92,14 +94,17 @@ async def _authorize_spawn_request(
   cfg = get_config()
   try:
     if req.task_type in (TaskType.VERIFY, TaskType.COLD_READ) and req.backend is None:
-      resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(req.session_id, cfg, store, [])
+      resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(
+          req.session_id, cfg, store, [], caller=req.task_type.value)
+      backend_from_pool = resolved_backend in cfg.backends.pool
     else:
-      resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
-          req.session_id, cfg, store, requested_backend=req.backend, role=req.task_type)
+      resolved_backend, resolved_model, backend_from_pool = (
+          await spawner_backends.resolve_requested_subagent_backend_model(
+              req.session_id, cfg, store, requested_backend=req.backend, role=req.task_type))
   except ValueError as e:
     raise bad_request(e) from e
 
-  return resolved_backend, resolved_model
+  return resolved_backend, resolved_model, backend_from_pool
 
 
 def delegate_request_id(req: DelegateRequest) -> str:
@@ -122,6 +127,7 @@ async def _delegate_task_tree(
     caller: object,
     resolved_backend: str,
     resolved_model: str | None,
+    backend_from_pool: bool,
 ) -> dict:
   """The v2 delegation: one worker child task with its first work Run.
 
@@ -162,6 +168,9 @@ async def _delegate_task_tree(
         backend=resolved_backend,
         caller=caller,
     )
+    if backend_from_pool:
+      # Before the first launch: a quota failure on this node fails over only when the node says so.
+      await task_mgr.update_slot_fields(child.id, backend_pool.METADATA_OWNER, backend_from_pool=True)
     run_id = stable_run_id(child.id, f"{request_id}:work")
     existing = await task_mgr.runs.get_run(child.id, run_id)
     if existing is None:
@@ -254,8 +263,9 @@ async def delegate_task(
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
           "give both for a repo task, neither for a repo-less one")
   require_found(await store.get_session(req.session_id))
-  resolved_backend, resolved_model = await _authorize_spawn_request(req, store, task_mgr)
-  return await _delegate_task_tree(req, task_mgr, session_events, caller, resolved_backend, resolved_model)
+  resolved_backend, resolved_model, backend_from_pool = await _authorize_spawn_request(req, store, task_mgr)
+  return await _delegate_task_tree(
+      req, task_mgr, session_events, caller, resolved_backend, resolved_model, backend_from_pool)
 
 
 @router.post("/schedule-trigger")

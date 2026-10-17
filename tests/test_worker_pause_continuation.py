@@ -109,13 +109,13 @@ async def _worker_child(
   """(cfg, tree, manager, worker, repo): a worker child under a manager root with its
     takeoff authorization, the silent-broadcast executor and the parent-turn build double.
 
-    ``backend_options`` configures several backends; the preference follows their
+    ``backend_options`` configures several backends; the pool follows their
     order, so the reviewer is the first option that is not the worker's."""
   if backend_options is None:
     cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   else:
     cfg, session_blocks, tree = test_task_execution.build_spawning_env(
-        tmp_path, monkeypatch, options=backend_options, preference=[option.id for option in backend_options])
+        tmp_path, monkeypatch, options=backend_options, pool=[option.id for option in backend_options])
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   _patch_parent_turn_build(monkeypatch)
   repo = None
@@ -749,7 +749,7 @@ async def test_native_session_id_reads_the_claude_system_init_event(
   """Claude's raw log opens with a system/init event carrying the conversation id; the finalize scan reads it there."""
   claude_option = conftest.backend_option(id="claude", label="Claude", type="cc-claude", model="claude-model")
   cfg, session_blocks, tree = test_task_execution.build_spawning_env(
-      tmp_path, monkeypatch, options=[claude_option], preference=["claude"])
+      tmp_path, monkeypatch, options=[claude_option], pool=["claude"])
   executor = test_task_execution.build_execution_adapter(cfg, session_blocks, tree)
   raw_path = tmp_path / "agent.raw.ndjson"
   init_event = {"type": "system", "subtype": "init", "session_id": "claude-session-1", "model": "claude-model"}

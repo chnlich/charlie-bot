@@ -34,7 +34,7 @@ SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks serve
 # Light one-shot backend calls (autonamer session naming)
 # ---------------------------------------------------------------------------
 
-# One one_shot_text call to a resolved light backend (config backends.preference):
+# One one_shot_text call to a backends.pool member (src/runtime/backend_pool.py):
 # the autonamer's {name, group} ask.
 LIGHT_ONESHOT_TIMEOUT = 30.0  # seconds
 

@@ -12,7 +12,7 @@ import orjson
 
 from src.infra import config, deferred, log_once, models, ndjson, process
 from src.infra import event_types as ET
-from src.runtime import launch_loop, runs, session_usage, streaming
+from src.runtime import backend_pool, launch_loop, runs, session_usage, streaming
 from src.runtime.agent_process import base, deferred_build
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
 
@@ -30,18 +30,12 @@ def __getattr__(name: str) -> Any:
   return deferred.deferred_module_getattr(name, __name__, globals(), "build_backend", deferred_build.load_build_backend)
 
 
-# Each entry is a substring catch-all for its family: bare "quota" also matches
-# every phrase form ("quota exceeded", ...), so phrase entries stay out.
-QUOTA_ERROR_PATTERNS = [
-    "rate limit",
-    "resource_exhausted",
-    "429",
-    "quota",
-]
-
-
 class QuotaExhaustedError(Exception):
-  pass
+  """The run's backend reported a spent quota. ``resets_at`` is when it comes back, None when unnamed."""
+
+  def __init__(self, message: str, *, resets_at: datetime.datetime | None = None) -> None:
+    super().__init__(message)
+    self.resets_at = resets_at
 
 
 def _clamp_ts(clamp_to: datetime.datetime | None) -> str:
@@ -472,7 +466,7 @@ class Worker:
       return
     # Detect quota exhaustion errors. The payload copies ride only the type the
     # pattern check reads: str() reprs the whole message dict and lower() copies
-    # it per streamed event, while QUOTA_ERROR_PATTERNS can only match on ERROR.
+    # it per streamed event, while backend_pool.QUOTA_ERROR_PATTERNS can only match on ERROR.
     event_type = event_data.get("type", "")
     event_message = event_content = ""
     if event_type == ET.ERROR:
@@ -493,16 +487,19 @@ class Worker:
       rli = event_data.get(ET.RATE_LIMIT_INFO, {})
       if rli.get("status") == "rejected":
         rate_type = rli.get("rateLimitType", "unknown")
-        resets_at = rli.get("resetsAt", "unknown")
+        resets_at_epoch = rli.get("resetsAt")
+        resets_at = (
+            datetime.datetime.fromtimestamp(resets_at_epoch, datetime.UTC)
+            if isinstance(resets_at_epoch, (int, float)) and not isinstance(resets_at_epoch, bool) else None)
         log.warning(
             "worker_rate_limited",
             thread=self._thread.id,
             rate_type=rate_type,
-            resets_at=resets_at,
+            resets_at=resets_at_epoch,
             account=self._launch.account_label if self._launch is not None else None)
         if self._watch is None:
           await _append_event_line(fd, _event_line(event_data))
-          raise QuotaExhaustedError(f"Rate limited ({rate_type}), resets at {resets_at}")
+          raise QuotaExhaustedError(f"Rate limited ({rate_type}), resets at {resets_at_epoch}", resets_at=resets_at)
 
     if event_type == ET.ASSISTANT:
       message = event_data.get("message")
@@ -510,7 +507,8 @@ class Worker:
       if isinstance(usage, dict) and session_usage._prompt_token_sum(usage) > 0:
         self._context_tokens = session_usage._prompt_token_sum(usage)
 
-    if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
+    if event_type == ET.ERROR and any(
+        p in event_message or p in event_content for p in backend_pool.QUOTA_ERROR_PATTERNS):
       await _append_event_line(fd, _event_line(event_data))
       raise QuotaExhaustedError(event_data.get("message", "Quota exhausted"))
 

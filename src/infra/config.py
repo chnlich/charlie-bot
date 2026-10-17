@@ -103,7 +103,7 @@ class PathsConfig(pydantic.BaseModel):
 
 
 class BackendsConfig(pydantic.BaseModel):
-  """``backends:`` section: model-switch options, the selector preference order and the worker default."""
+  """``backends:`` section: model-switch options and the rotation pool of unpinned work."""
 
   model_config = pydantic.ConfigDict(extra='forbid')
 
@@ -112,29 +112,22 @@ class BackendsConfig(pydantic.BaseModel):
   # prefix one of the id prefixes the type's usage source registers (each type's
   # src/backends/<package>/__init__.py). The id names the model family
   # and carries no version: the version lives only in the entry's `model` and
-  # `label`. Session, thread and Run metadata, package config files, `preference` and
-  # `worker_default` store the id, so a version bump edits exactly those two fields of one
+  # `label`. Session, thread and Run metadata, package config files and `pool`
+  # store the id, so a version bump edits exactly those two fields of one
   # entry and every stored reference stays valid. The usage tally classifies a retired id
   # (off config, still in old records) by its prefix. An option bound to an
   # account pool may end its id with `-<pool name>`. require_backends refuses a
-  # startup whose preference or worker_default names an id missing from `options`;
+  # startup whose pool names an id missing from `options`;
   # a package's startup check does the same for the ids in that package's config
   # files, and usage's check_backend_ids refuses an id outside its type's
   # registered prefixes.
 
-  # Ordered preference list of BackendOption ids, consumed by two selectors:
-  #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
-  #     checked party's backend and resolves — see review.select_reviewer_backend.
-  #   - light one-shot (autonamer, artifact probe): resolved entries in list order — see
-  #     autonamer.iter_light_backends.
-  # Empty list (default) skips the one-shot.
-  preference: list[str] = []
-
-  # BackendOption id the implementation workers (implement, quick-edit,
-  # script-run, improve loop) run on when their request names no backend — see
-  # spawner_backends.resolve_requested_subagent_backend_model. None (default):
-  # they inherit the delegating session's backend.
-  worker_default: str | None = None
+  # Pool members in rotation order (src/runtime/backend_pool.py). Unpinned work takes the
+  # next member that is not cooling; a member whose quota runs out cools until its reset.
+  # Each id must name a backends.options entry. Empty (default): unpinned work runs on the
+  # delegating session's backend, the reviewer runs on the worker's backend, and the session
+  # namer and page check skip their one-shot.
+  pool: list[str] = []
 
   # Backend options available for model switching. Each entry parses as the option model that
   # its ``type`` names in the config registry (src/infra/config_registry.py). Additional
@@ -380,6 +373,10 @@ _config_cache = credentials._HotReloadCache(
 # credentials.yaml (secrets live there, and the suffix is that file's key path);
 # a ``removed...`` value has no successor. A package's own retired keys register
 # through :mod:`src.infra.config_registry`; the loader reads both maps.
+# Retired keys under ``backends:``, replaced by ``backends.pool``. The loader refuses a file that still
+# carries one, so a stale config fails at startup instead of silently dropping its routing.
+RETIRED_BACKENDS_KEYS: tuple[str, ...] = ("preference", "worker_default")
+
 LEGACY_KEYS: dict[str, str] = {
     "server_host": "server.host",
     "server_port": "server.port",
@@ -388,7 +385,7 @@ LEGACY_KEYS: dict[str, str] = {
     "project_dirs": "paths.workspace_dirs",
     "worktree_dir": "paths.worktree_dir",
     "backend_options": "backends.options",
-    "model_preference": "backends.preference",
+    "model_preference": "backends.pool",
     "home_services": "ui.home_services",
     "telegram_chat_id": "telegram.chat_id",
     config_registry.CREDENTIALS_PREFIX + "telegram_bot_token": "telegram.bot_token",
@@ -448,6 +445,16 @@ def load_config() -> CharlieBotConfig:
             legacy_keys[config_registry.CREDENTIALS_PREFIX + key]) for key in legacy_hits)
     raise ValueError(f"{config_path} still uses retired top-level keys; move each one:\n{lines}")
 
+  backends_section = yaml_data.get("backends")
+  retired_backend_keys = [
+      key for key in RETIRED_BACKENDS_KEYS if isinstance(backends_section, dict) and key in backends_section
+  ]
+  if retired_backend_keys:
+    names = ", ".join(f"backends.{key}" for key in retired_backend_keys)
+    raise ValueError(
+        f"{config_path} still uses retired keys ({names}); list the rotation members under backends.pool "
+        "in rotation order instead (each id must name a backends.options entry)")
+
   # The home directory is chosen by the environment, never by a file that lives
   # inside it: honouring the key would leave the config loaded from one profile and
   # the state written to another, and dropping it silently would hide the mistake.
@@ -477,14 +484,13 @@ def load_config() -> CharlieBotConfig:
 
 
 def require_backends(cfg: CharlieBotConfig) -> None:
-  """Raise ValueError when ``backends.options``, ``preference`` or ``worker_default`` is broken.
+  """Raise ValueError when ``backends.options`` or ``backends.pool`` is broken.
 
   The server calls this once at start, because every session and every package-started
   run resolves a backend id against ``backends.options``; a broken catalog is a
-  deployment error worth stopping on. Refused: an empty list, an option id
-  listed twice, and a ``backends.preference`` entry or ``backends.worker_default``
-  naming no option id. One error lists every violation, each line naming the
-  file, the entry and the id.
+  deployment error worth stopping on. Refused: an empty options list, an option id
+  listed twice, and a ``backends.pool`` entry naming no option id. One error lists every
+  violation, each line naming the file, the entry and the id.
   Each package's startup check covers that package's own references into the
   catalog. ``load_config`` stays permissive for CLIs that never resolve a backend.
   """
@@ -498,12 +504,9 @@ def require_backends(cfg: CharlieBotConfig) -> None:
     if option.id in ids:
       problems.append(f"{cfg.config_file}: backends.options[{index}] repeats id '{option.id}'")
     ids.add(option.id)
-  for index, backend_id in enumerate(cfg.backends.preference):
+  for index, backend_id in enumerate(cfg.backends.pool):
     if backend_id not in ids:
-      problems.append(f"{cfg.config_file}: backends.preference[{index}] names unknown backend '{backend_id}'")
-  worker_default = cfg.backends.worker_default
-  if worker_default is not None and worker_default not in ids:
-    problems.append(f"{cfg.config_file}: backends.worker_default names unknown backend '{worker_default}'")
+      problems.append(f"{cfg.config_file}: backends.pool[{index}] names unknown backend '{backend_id}'")
   if problems:
     raise ValueError(
         "backend references must name a backends.options id (id rule: BackendsConfig in "

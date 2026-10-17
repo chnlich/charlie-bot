@@ -254,6 +254,7 @@ from src.runtime import (  # noqa: E402
     session_successor,
     task_execution,
 )
+from src.runtime import backend_pool  # noqa: E402
 from src.runtime import worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
 from src.backends.antigravity.antigravity_cli import AntigravityCliBackend  # noqa: E402
@@ -2453,6 +2454,14 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
   """
   token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), "op-secret")
   return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_backend_pool() -> Iterator[None]:
+  """The pool's rotation and cooldowns are process memory; each test starts from a fresh rotation."""
+  backend_pool.reset_for_tests()
+  yield
+  backend_pool.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

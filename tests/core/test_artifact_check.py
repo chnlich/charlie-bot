@@ -149,7 +149,7 @@ def _probe_cfg(tmp_path: pathlib.Path) -> tuple[types.SimpleNamespace, dict[str,
   options = {name: types.SimpleNamespace(id=name) for name in ("alpha", "beta")}
   cfg = types.SimpleNamespace(
       headless_chrome_bin=conftest.write_stub_chrome(tmp_path, 800),
-      backends=types.SimpleNamespace(preference=["alpha", "beta"]),
+      backends=types.SimpleNamespace(pool=["alpha", "beta"]),
       get_backend_option=options.get,
       sessions_dir=tmp_path,
       charlie_bot_repo=conftest.ROOT,
@@ -384,14 +384,14 @@ def test_cli_foreground_prints_every_model_failed_and_exits_1(
 async def _cold_read_tree_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *, execute: bool):
   """(cfg, session_blocks, tree, manager): a real task tree and delegate entry.
 
-  The manager is pinned to the "opus" backend (options[0]); backends.preference
+  The manager is pinned to the "opus" backend (options[0]); backends.pool
   is ["alpha", "beta"]. With execute=False the launch seam is stubbed so no run
   starts; with execute=True runs really execute on the scripted backends.
   """
   options = [conftest.backend_option(id="opus", label="opus", type="codex", model="opus-model")]
   options += [conftest.backend_option(id=b, label=b, type="codex", model=f"{b}-model") for b in ("alpha", "beta")]
   cfg, session_blocks, tree = test_task_execution.build_spawning_env(
-      tmp_path, monkeypatch, options=options, preference=["alpha", "beta"])
+      tmp_path, monkeypatch, options=options, pool=["alpha", "beta"])
   adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   if not execute:
     monkeypatch.setattr(adapter, "_schedule_launch", lambda *args, **kwargs: None)
@@ -598,7 +598,7 @@ async def test_cold_read_success_report_carries_attempts_backend_and_answers(
           "(2) confirmed.",
       ])
   assert tree.task_state(child_id) == "completed"
-  # The retry took the next preference backend past the tried one.
+  # The retry took the next pool backend past the tried one.
   assert [b["option"].id for b in builds] == ["alpha", "beta"]
 
 
@@ -629,9 +629,9 @@ async def test_cold_read_retry_selects_the_next_backend_with_the_tried_list(
   tried_lists: list[list[str]] = []
   real_select = spawner_backends.select_verify_backend
 
-  async def spy(session_id: str, cfg, store, tried: list[str]):
+  async def spy(session_id: str, cfg, store, tried: list[str], *, caller: str):
     tried_lists.append(list(tried))
-    return await real_select(session_id, cfg, store, tried)
+    return await real_select(session_id, cfg, store, tried, caller=caller)
 
   monkeypatch.setattr(spawner_backends, "select_verify_backend", spy)
   scripted = [

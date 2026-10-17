@@ -93,9 +93,15 @@ async def _start_improve_sequence(
   # Backend/model resolution comes BEFORE the reservation (the legacy path's
   # order): an unknown requested backend must fail the request, never leak a
   # "running" loop state or the active lock in this live process.
+  # A loop that names no backend takes a backends.pool member for each iteration, so it
+  # reserves no backend here.
+  backend_from_pool = req.backend is None and bool(cfg.backends.pool)
   try:
-    resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
-        req.session_id, cfg, store, requested_backend=req.backend, role=spawner_backends.IMPROVE_ROLE)
+    if backend_from_pool:
+      resolved_backend, resolved_model = None, None
+    else:
+      resolved_backend, resolved_model, _ = await spawner_backends.resolve_requested_subagent_backend_model(
+          req.session_id, cfg, store, requested_backend=req.backend, role=spawner_backends.IMPROVE_ROLE)
   except ValueError as e:
     raise deps.bad_request(e) from e
 
@@ -110,8 +116,9 @@ async def _start_improve_sequence(
         plan=req.plan,
         base_branch=req.base_branch,
         merge_back=req.merge_back,
-        resolved_backend=resolved_backend,
+        resolved_backend=resolved_backend or "",
         resolved_model=resolved_model or "",
+        backend_from_pool=backend_from_pool,
     )
   except improve_command.ImproveLoopAlreadyRunningError as e:
     raise fastapi.HTTPException(status_code=409, detail=str(e)) from e

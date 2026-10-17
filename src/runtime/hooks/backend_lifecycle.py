@@ -35,11 +35,13 @@ class LaunchRefused(Exception):  # noqa: N818  (a refusal is a run outcome, name
 
   ``quota_exhausted`` is True when the cause is a spent quota: the run could succeed after the
   quota resets. The runtime copies it onto the error event it writes for the refusal.
+  ``resets_at`` is the moment that quota comes back when the backend names one, else None.
   """
 
-  def __init__(self, message: str, *, quota_exhausted: bool) -> None:
+  def __init__(self, message: str, *, quota_exhausted: bool, resets_at: datetime.datetime | None = None) -> None:
     super().__init__(message)
     self.quota_exhausted = quota_exhausted
+    self.resets_at = resets_at
 
 
 @dataclasses.dataclass(frozen=True)

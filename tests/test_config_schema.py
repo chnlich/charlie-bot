@@ -228,47 +228,37 @@ def test_empty_claude_pools_keep_the_unpooled_schema() -> None:
   assert cfg.get_backend_option("claude-a").account_pool is None
 
 
-def _family_backends(
-    tmp_path: pathlib.Path,
-    preference: list[str],
-    *ids: str,
-    worker_default: str | None = None) -> config.CharlieBotConfig:
-  """A config at *tmp_path* whose options carry *ids* (cc-claude), the given preference and worker default."""
+def _family_backends(tmp_path: pathlib.Path, pool: list[str], *ids: str) -> config.CharlieBotConfig:
+  """A config at *tmp_path* whose options carry *ids* (cc-claude) and the given pool."""
   options = [
       conftest.backend_option(id=backend_id, label=backend_id, type="cc-claude", model="m") for backend_id in ids
   ]
-  return config.CharlieBotConfig(
-      charliebot_home=tmp_path,
-      backends={
-          "preference": preference,
-          "options": options,
-          "worker_default": worker_default
-      })
+  return config.CharlieBotConfig(charliebot_home=tmp_path, backends={"pool": pool, "options": options})
 
 
-def test_require_backends_accepts_known_preference_entries(tmp_path: pathlib.Path) -> None:
-  cfg = _family_backends(
-      tmp_path, ["claude-sonnet", "claude-opus"], "claude-opus", "claude-sonnet", worker_default="claude-sonnet")
+def test_require_backends_accepts_known_pool_members(tmp_path: pathlib.Path) -> None:
+  cfg = _family_backends(tmp_path, ["claude-sonnet", "claude-opus"], "claude-opus", "claude-sonnet")
   assert config.require_backends(cfg) is None
 
 
-def test_require_backends_rejects_unknown_worker_default(tmp_path: pathlib.Path) -> None:
-  """A worker_default naming no option id stops startup; the error names the file, the key and the id."""
-  cfg = _family_backends(tmp_path, ["claude-opus"], "claude-opus", worker_default="clc-glm5-flash")
-  with pytest.raises(ValueError) as exc_info:
-    config.require_backends(cfg)
-  assert f"{tmp_path / 'config.yaml'}: backends.worker_default names unknown backend 'clc-glm5-flash'" in str(
-      exc_info.value)
+@pytest.mark.parametrize("key", ["preference", "worker_default"])
+def test_load_config_refuses_a_retired_backends_key(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+  """A config still carrying a retired backends key stops at load; the error names the key and backends.pool."""
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(tmp_path))
+  (tmp_path / "config.yaml").write_text(f"backends:\n  {key}: []\n")
+  with pytest.raises(ValueError, match=f"backends\\.{key}.*backends\\.pool"):
+    config.load_config()
 
 
-def test_require_backends_rejects_unknown_preference_entry(tmp_path: pathlib.Path) -> None:
-  """A preference entry naming no option id stops startup; the error names the file, the entry
+def test_require_backends_rejects_unknown_pool_entry(tmp_path: pathlib.Path) -> None:
+  """A pool entry naming no option id stops startup; the error names the file, the entry
   and the id."""
   cfg = _family_backends(tmp_path, ["claude-opus", "codex-gpt-5.6-luna"], "claude-opus")
   with pytest.raises(ValueError) as exc_info:
     config.require_backends(cfg)
   message = str(exc_info.value)
-  assert f"{tmp_path / 'config.yaml'}: backends.preference[1] names unknown backend 'codex-gpt-5.6-luna'" in message
+  assert f"{tmp_path / 'config.yaml'}: backends.pool[1] names unknown backend 'codex-gpt-5.6-luna'" in message
   assert "claude-opus'" not in message
 
 

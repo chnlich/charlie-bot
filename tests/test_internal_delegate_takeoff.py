@@ -69,9 +69,9 @@ def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
   """
   cfg = object()
 
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
+  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str, bool]:
     del args, kwargs
-    return "codex-o3", "o3"
+    return "codex-o3", "o3", False
 
   monkeypatch.setattr(internal, "get_config", lambda: cfg)
   monkeypatch.setattr(spawner_backends, "resolve_requested_subagent_backend_model", fake_resolve)
@@ -164,7 +164,7 @@ async def test_delegate_task_repo_less_request_passes_the_schema_gate(
   task_mgr.check_task_authorization = mock.AsyncMock()
   captured: dict = {}
 
-  async def fake_delegate_task_tree(req, task_mgr, session_blocks, caller, backend, model):
+  async def fake_delegate_task_tree(req, task_mgr, session_blocks, caller, backend, model, backend_from_pool):
     captured["repo_path"] = req.repo_path
     captured["base_branch"] = req.base_branch
     return {
@@ -209,16 +209,16 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
   assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"
 
 
-# --- verify default backend via backends.preference ---
+# --- verify default backend via backends.pool ---
 
 
-def _build_verify_cfg(preference: list[str]) -> config.CharlieBotConfig:
+def _build_verify_cfg(pool: list[str]) -> config.CharlieBotConfig:
   return config.CharlieBotConfig(
       charliebot_home=pathlib.Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
       backends={
           "options": conftest.THREE_BACKEND_OPTIONS,
-          "preference": preference
+          "pool": pool
       },
   )
 
@@ -235,21 +235,22 @@ class BackendFakeSessionStore:
 async def _authorize_verify(
     monkeypatch: pytest.MonkeyPatch,
     session_backend: str,
-    preference: list[str],
+    pool: list[str],
     backend: str | None = None,
 ) -> tuple[str | None, str | None]:
   req = _build_request(task_type=models.TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
-  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
+  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(pool))
   store = BackendFakeSessionStore(session_backend)
-  resolved_backend, resolved_model = await internal._authorize_spawn_request(req, store, _stub_task_manager())
+  resolved_backend, resolved_model, _from_pool = await internal._authorize_spawn_request(
+      req, store, _stub_task_manager())
   return resolved_backend, resolved_model
 
 
 @pytest.mark.asyncio
 async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Session backend is the first preference entry -> the second (first differing) entry wins."""
+  """Session backend is the first pool entry -> the second (first differing) entry wins."""
   resolved = await _authorize_verify(
-      monkeypatch, session_backend=conftest.OPUS_BACKEND_ID, preference=[conftest.OPUS_BACKEND_ID, "codex-o3"])
+      monkeypatch, session_backend=conftest.OPUS_BACKEND_ID, pool=[conftest.OPUS_BACKEND_ID, "codex-o3"])
   assert resolved == ("codex-o3", "o3")
 
 
@@ -257,13 +258,13 @@ async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypa
 async def test_verify_no_backend_session_backend_not_in_preference_uses_first_entry(
     monkeypatch: pytest.MonkeyPatch) -> None:
   resolved = await _authorize_verify(
-      monkeypatch, session_backend="kimi-k2.5", preference=[conftest.OPUS_BACKEND_ID, "codex-o3"])
+      monkeypatch, session_backend="kimi-k2.5", pool=[conftest.OPUS_BACKEND_ID, "codex-o3"])
   assert resolved == (conftest.OPUS_BACKEND_ID, conftest.OPUS_BACKEND_OPTION.model)
 
 
 @pytest.mark.asyncio
 async def test_verify_no_backend_empty_preference_keeps_session_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  resolved = await _authorize_verify(monkeypatch, session_backend="codex-o3", preference=[])
+  resolved = await _authorize_verify(monkeypatch, session_backend="codex-o3", pool=[])
   assert resolved == ("codex-o3", "o3")
 
 
@@ -272,7 +273,7 @@ async def test_verify_explicit_backend_wins_over_preference(monkeypatch: pytest.
   resolved = await _authorize_verify(
       monkeypatch,
       session_backend=conftest.OPUS_BACKEND_ID,
-      preference=[conftest.OPUS_BACKEND_ID, "codex-o3"],
+      pool=[conftest.OPUS_BACKEND_ID, "codex-o3"],
       backend="kimi-k2.5",
   )
   assert resolved == ("kimi-k2.5", "kimi-k2.5")
@@ -284,7 +285,7 @@ async def test_verify_unknown_explicit_backend_returns_400(monkeypatch: pytest.M
     await _authorize_verify(
         monkeypatch,
         session_backend=conftest.OPUS_BACKEND_ID,
-        preference=[conftest.OPUS_BACKEND_ID, "codex-o3"],
+        pool=[conftest.OPUS_BACKEND_ID, "codex-o3"],
         backend="nonexistent",
     )
 
@@ -299,8 +300,7 @@ def _backend_tree_env(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    preference: list[str],
-    worker_default: str | None = None,
+    pool: list[str],
 ) -> tuple[config.CharlieBotConfig, conftest.SessionBlocks, task_sessions.TaskTreeManager,
            task_execution.TaskExecutionAdapter]:
   """A real task tree over a synthetic home, parent backend Y = conftest.OPUS_BACKEND_ID, launches disarmed.
@@ -314,8 +314,7 @@ def _backend_tree_env(
       paths={"worktree_dir": str(tmp_path / "worktrees")},
       backends={
           "options": conftest.THREE_BACKEND_OPTIONS,
-          "preference": preference,
-          "worker_default": worker_default
+          "pool": pool,
       },
   )
   session_blocks = conftest.build_session_blocks(cfg)
@@ -349,7 +348,7 @@ async def test_delegate_child_and_its_later_runs_keep_the_requested_backend(
   The first work Run already records X; the child record must keep X too, so
   the run the dispatcher reserves on the next message stays on X.
   """
-  _cfg, session_blocks, tree, adapter = _backend_tree_env(tmp_path, monkeypatch, preference=[conftest.OPUS_BACKEND_ID])
+  _cfg, session_blocks, tree, adapter = _backend_tree_env(tmp_path, monkeypatch, pool=[conftest.OPUS_BACKEND_ID])
   manager = await _backend_test_manager(tree)
 
   result = await internal.delegate_task(
@@ -377,7 +376,7 @@ async def test_delegate_child_and_its_later_runs_keep_the_requested_backend(
   assert follow_up is not None and follow_up.id != first.id
   assert follow_up.kind == "work" and follow_up.backend == "codex-o3"
 
-  # The review Run keeps its own rule: a backends.preference entry that
+  # The review Run keeps its own rule: a backends.pool entry that
   # differs from the reviewed work Run's backend.
   await tree.runs.record_finish(child_id, follow_up.id, "success")
   review_id = await adapter._maybe_spawn_review(child_id, follow_up)
@@ -391,9 +390,9 @@ async def test_delegate_child_and_its_later_runs_keep_the_requested_backend(
 async def test_verify_delegate_child_records_the_cross_model_backend(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A verify delegation without --backend: the child record keeps the
-  cross-model backend its first work Run got from backends.preference."""
+  cross-model backend its first work Run got from backends.pool."""
   _cfg, session_blocks, tree, _adapter = _backend_tree_env(
-      tmp_path, monkeypatch, preference=[conftest.OPUS_BACKEND_ID, "codex-o3"])
+      tmp_path, monkeypatch, pool=[conftest.OPUS_BACKEND_ID, "codex-o3"])
   manager = await _backend_test_manager(tree)
 
   result = await internal.delegate_task(
@@ -416,7 +415,7 @@ async def test_implement_delegate_without_backend_resolves_to_the_parent_backend
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An implement delegation without --backend resolves to the parent
   backend, and the child record keeps that value."""
-  _cfg, session_blocks, tree, _adapter = _backend_tree_env(tmp_path, monkeypatch, preference=[conftest.OPUS_BACKEND_ID])
+  _cfg, session_blocks, tree, _adapter = _backend_tree_env(tmp_path, monkeypatch, pool=[conftest.OPUS_BACKEND_ID])
   manager = await _backend_test_manager(tree)
 
   result = await internal.delegate_task(
@@ -434,12 +433,12 @@ async def test_implement_delegate_without_backend_resolves_to_the_parent_backend
 
 
 @pytest.mark.asyncio
-async def test_worker_default_runs_unnamed_workers_and_leaves_verify_routing(
+async def test_pool_runs_unnamed_workers_and_leaves_named_and_verify_routing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """With backends.worker_default set, an implement delegation that names no backend runs on it,
-  a named backend wins, and verify keeps its cross-model backends.preference routing."""
+  """An implement delegation that names no backend takes the first pool member, a named backend is
+  never pooled, and verify takes the next member other than the session's own."""
   _cfg, session_blocks, tree, _adapter = _backend_tree_env(
-      tmp_path, monkeypatch, preference=[conftest.OPUS_BACKEND_ID, "codex-o3"], worker_default="kimi-k2.5")
+      tmp_path, monkeypatch, pool=[conftest.OPUS_BACKEND_ID, "codex-o3", "kimi-k2.5"])
   manager = await _backend_test_manager(tree)
 
   async def delegated_backend(**overrides: Any) -> str | None:
@@ -455,27 +454,26 @@ async def test_worker_default_runs_unnamed_workers_and_leaves_verify_routing(
     assert child is not None and first is not None and child.backend == first.backend
     return first.backend
 
-  assert await delegated_backend(backend=None) == "kimi-k2.5"
-  assert await delegated_backend(task_type=models.TaskType.QUICK_EDIT, backend="codex-o3") == "codex-o3"
+  assert await delegated_backend(backend=None) == conftest.OPUS_BACKEND_ID
+  assert await delegated_backend(task_type=models.TaskType.QUICK_EDIT, backend="kimi-k2.5") == "kimi-k2.5"
   assert await delegated_backend(
       task_type=models.TaskType.VERIFY, repo_path=None, base_branch=None, backend=None) == "codex-o3"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("backend", "worker_default", "expected"),
+    ("backend", "pool", "expected"),
     [
-        pytest.param("codex-o3", None, "codex-o3", id="requested"),
-        pytest.param("codex-o3", "kimi-k2.5", "codex-o3", id="requested-over-worker-default"),
-        pytest.param(None, "kimi-k2.5", "kimi-k2.5", id="worker-default"),
+        pytest.param("codex-o3", [conftest.OPUS_BACKEND_ID], "codex-o3", id="requested-over-pool"),
+        pytest.param(None, [], conftest.OPUS_BACKEND_ID, id="unnamed-inherits-with-an-empty-pool"),
     ],
 )
 async def test_improve_child_records_the_resolved_backend(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend: str | None, worker_default: str | None,
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend: str | None, pool: list[str],
     expected: str) -> None:
-  """The loop's worker child record keeps the resolved backend: the requested one, else backends.worker_default."""
-  cfg, session_blocks, tree, _adapter = _backend_tree_env(
-      tmp_path, monkeypatch, preference=[conftest.OPUS_BACKEND_ID], worker_default=worker_default)
+  """The loop's worker child record keeps the requested backend; a loop that names none has no backend of its own
+  (each iteration takes a pool member) and its child inherits the session's."""
+  cfg, session_blocks, tree, _adapter = _backend_tree_env(tmp_path, monkeypatch, pool=pool)
   manager = await _backend_test_manager(tree)
   spawned: list[str] = []
 

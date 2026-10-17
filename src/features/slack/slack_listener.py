@@ -51,8 +51,15 @@ from typing import TYPE_CHECKING, Any
 from src.features.chat_threads import thread_entry
 from src.features.slack import event_types, metadata
 from src.infra import config, http, log_once, timeouts
-from src.runtime import session_lifecycle, session_listing, session_store, session_successor, task_execution, triggers
-from src.runtime.session_events import SessionEvents
+from src.runtime import (
+    session_events,
+    session_lifecycle,
+    session_listing,
+    session_store,
+    session_successor,
+    task_execution,
+    triggers,
+)
 
 if TYPE_CHECKING:
   import httpx
@@ -230,7 +237,7 @@ async def handle_app_mention(
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    events: SessionEvents,
+    events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor,
     client: SlackClient,
     trigger_mgr: triggers.TriggerManager | None = None,
@@ -316,7 +323,7 @@ async def handle_thread_message(
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     client: SlackClient,
     trigger_mgr: triggers.TriggerManager,
 ) -> str | None:
@@ -350,7 +357,7 @@ async def handle_thread_message(
       SlackThreadAdapter(client),
       store,
       lifecycle,
-      session_events,
+      events,
       trigger_mgr,
       sid,
       ts,
@@ -362,7 +369,7 @@ async def _backfill_followed_threads(
     cfg: config.CharlieBotConfig,
     listing: session_listing.SessionListing,
     lifecycle: session_lifecycle.SessionLifecycle,
-    session_events: SessionEvents,
+    events: session_events.SessionEvents,
     client: SlackClient,
     trigger_mgr: triggers.TriggerManager,
 ) -> int:
@@ -378,7 +385,7 @@ async def _backfill_followed_threads(
   (re)connection.
   """
   return await thread_entry.backfill_followed_threads(
-      SlackThreadAdapter(client), cfg, listing, lifecycle, session_events, trigger_mgr)
+      SlackThreadAdapter(client), cfg, listing, lifecycle, events, trigger_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -462,26 +469,26 @@ async def assert_thread_fresh(session_id: str, cfg: config.CharlieBotConfig, sto
 
 async def ack_messages(
     session_id: str, message_ids: list[str], cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    session_events: SessionEvents) -> dict:
+    events: session_events.SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
   One-line pass-through to the shared ack (``thread_entry.ack_messages``) on
   the Slack adapter; the refusal shapes, the ack event, and the readback keys
   live there.
   """
-  return await thread_entry.ack_messages(SlackThreadAdapter(), session_id, message_ids, cfg, store, session_events)
+  return await thread_entry.ack_messages(SlackThreadAdapter(), session_id, message_ids, cfg, store, events)
 
 
 async def post_reply(
     session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    session_events: SessionEvents) -> dict:
+    events: session_events.SessionEvents) -> dict:
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
   on the Slack adapter; the link check, chunking, refusals, reply event, and
   readback live there.
   """
-  return await thread_entry.post_reply(SlackThreadAdapter(), session_id, text, cfg, store, session_events)
+  return await thread_entry.post_reply(SlackThreadAdapter(), session_id, text, cfg, store, events)
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +498,7 @@ async def post_reply(
 
 async def deliver_done(
     session_id: str, done: dict, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
@@ -499,7 +506,7 @@ async def deliver_done(
   the Slack adapter; the audit gate, the nudge, and the notice live there.
   """
   return await thread_entry.deliver_done(
-      SlackThreadAdapter(), session_id, done, cfg, store, lifecycle, session_events, successor)
+      SlackThreadAdapter(), session_id, done, cfg, store, lifecycle, events, successor)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +516,7 @@ async def deliver_done(
 
 async def backfill_lost_summons(
     cfg: config.CharlieBotConfig, listing: session_listing.SessionListing, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, session_events: SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor) -> int:
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
@@ -518,7 +525,7 @@ async def backfill_lost_summons(
   lost-summon report and the per-round audit live there.
   """
   return await thread_entry.backfill_lost_summons(
-      SlackThreadAdapter(), cfg, listing, store, lifecycle, session_events, successor)
+      SlackThreadAdapter(), cfg, listing, store, lifecycle, events, successor)
 
 
 async def _expect_hello(ws: client.ClientConnection) -> None:
@@ -534,7 +541,7 @@ async def run_listener(
     listing: session_listing.SessionListing,
     store: session_store.SessionStore,
     lifecycle: session_lifecycle.SessionLifecycle,
-    events: SessionEvents,
+    events: session_events.SessionEvents,
     successor: session_successor.SessionSuccessor,
 ) -> None:
   """Socket Mode connect/receive/reconnect loop; never returns."""
@@ -582,8 +589,9 @@ async def run_listener(
 
 async def _serve_socket_mode(
     ws: client.ClientConnection, cfg: config.CharlieBotConfig, listing: session_listing.SessionListing,
-    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle, events: SessionEvents,
-    successor: session_successor.SessionSuccessor, client: SlackClient, trigger_mgr: triggers.TriggerManager) -> None:
+    store: session_store.SessionStore, lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents, successor: session_successor.SessionSuccessor, client: SlackClient,
+    trigger_mgr: triggers.TriggerManager) -> None:
   """One Socket Mode connection's serve: hello, thread backfill, envelope loop.
 
   Returns on the server-sent disconnect; every other exit raises and the

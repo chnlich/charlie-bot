@@ -35,7 +35,7 @@ import orjson
 
 from src.infra import event_types as ET
 from src.infra import json_utils, log_once, models, ndjson
-from src.runtime import chat_events, control_events, run_token, sidebar_state
+from src.runtime import chat_events, control_events, run_identity, run_token, sidebar_state
 
 log = log_once.LazyStructlogLogger()
 
@@ -73,7 +73,7 @@ EVENTS_LOG_NAME = "events.jsonl"
 # The per-session metadata filename (the task tree's node records; re-exported
 # here): defined in src.runtime.run_identity, whose run-scoped CLI path reads
 # session metadata without this module's model stack.
-from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
+METADATA_NAME = run_identity.SESSION_METADATA_NAME
 
 
 def backend_type(cfg: config.CharlieBotConfig, backend_id: str | None) -> str | None:
@@ -387,11 +387,9 @@ STOP_EXIT_WAIT_SECONDS = 10.0
 # The caller-identity refusal pieces: defined in src.runtime.run_identity (the
 # run-scoped CLI path reads them without this module's model stack); re-exported
 # here so the API dependency's and the tests' established import path holds.
-from src.runtime.run_identity import (  # noqa: E402, F401  (re-export)
-    RUN_IDENTITY_NOT_LAUNCHED_DETAIL,
-    RUN_IDENTITY_UNKNOWN_DETAIL,
-    run_identity_refusal,
-)
+RUN_IDENTITY_NOT_LAUNCHED_DETAIL = run_identity.RUN_IDENTITY_NOT_LAUNCHED_DETAIL
+RUN_IDENTITY_UNKNOWN_DETAIL = run_identity.RUN_IDENTITY_UNKNOWN_DETAIL
+run_identity_refusal = run_identity.run_identity_refusal
 
 
 def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:

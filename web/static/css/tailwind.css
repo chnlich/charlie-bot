@@ -1779,6 +1779,10 @@ video {
   padding-left: 1rem;
 }
 
+.pl-6 {
+  padding-left: 1.5rem;
+}
+
 .pr-3 {
   padding-right: 0.75rem;
 }
@@ -1899,6 +1903,11 @@ video {
 
 .tracking-wider {
   letter-spacing: 0.05em;
+}
+
+.text-amber-200 {
+  --tw-text-opacity: 1;
+  color: rgb(253 230 138 / var(--tw-text-opacity, 1));
 }
 
 .text-amber-300 {

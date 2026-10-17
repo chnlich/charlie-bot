@@ -35,6 +35,8 @@ function loadWebsocketContext(extraContext) {
     showStreaming: () => {},
     appendMessage: () => {},
     appendMessageObject: () => {},
+    observeWebStatusMessages: () => {},
+    refreshSessionStatusPanel: () => {},
     startThinking: () => {},
     stopThinking: () => {},
     pollActiveSessionView: () => {},

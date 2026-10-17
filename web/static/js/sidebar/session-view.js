@@ -742,6 +742,10 @@ function renderSessionView(data) {
   // the status poll drives refetches.
   globalThis.renderPendingTriggersTray(session.id);
 
+  // The status panel opens for this session: a web session's status, its history's
+  // web_status messages, and the descendant rows from one GET.
+  globalThis.openSessionStatusPanel(session, messages);
+
   // Restore whichever tab was active before the session switch
   switchTab(tabAfterSessionSwitch());
 
@@ -1122,6 +1126,7 @@ function renderNoActiveSessionView() {
 
   SESSION_ID = null;
   globalThis.renderPendingTriggersTray(null);
+  globalThis.clearSessionStatusPanel();
   document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
   DRAFT_KEY = null;
   THINKING_SINCE = null;

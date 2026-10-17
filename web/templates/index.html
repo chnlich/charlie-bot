@@ -186,6 +186,8 @@
           <button type="button" data-chat-view-option="everything" onclick="setChatView('everything')" aria-pressed="false"
                   class="px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Everything</button>
         </div>
+        <!-- Session status panel: Goal, Now and Waiting on you (chat/status-panel.js); web sessions only -->
+        <div id="chat-status-panel" class="hidden mx-4 mt-2 max-h-48 overflow-y-auto bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1"></div>
         <!-- Messages -->
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           <!-- Streaming target (initialized from pending_draft if present) -->
@@ -329,6 +331,7 @@
   <script src="/static/js/chat/turn-engine.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/for-you.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/triggers-tray.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat/status-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/row-menu.js?v={{ static_asset_version|urlencode }}"></script>

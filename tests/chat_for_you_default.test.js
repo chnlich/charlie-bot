@@ -38,11 +38,13 @@ function pageRig() {
   installScrollTopClamp(root);
   root.appendChild(new FakeElement('DIV', {id: 'streaming-msg'}));
   const stream = root.children[0];
+  const panel = new FakeElement('DIV', {id: 'chat-status-panel', className: 'hidden'});
   const elements = new Map([
     ['messages', root],
     ['streaming-msg', stream],
     ['thinking', new FakeElement('DIV', {id: 'thinking', className: 'hidden'})],
     ['thinking-time', new FakeElement('SPAN', {id: 'thinking-time'})],
+    ['chat-status-panel', panel],
   ]);
   const toggles = ['foryou', 'everything'].map((option) => {
     const btn = new FakeElement('BUTTON');
@@ -77,11 +79,11 @@ function pageRig() {
   context.fetch = async () => ({ok: false, status: 500, json: async () => ({})});
   context.marked = {parse: (text) => text, Renderer: function Renderer() {}, use() {}};
   createChatSidebarContext(context);
-  // The status-block rule the progress strip reads (loaded after the chat
-  // modules; a stub marked stands in for the CDN build, which the load never calls).
+  // markdown-renderer.js loads after the chat modules, as the page loads it; a stub
+  // marked stands in for the CDN build, which the load never calls.
   vm.runInContext(readStatic('markdown-renderer.js'), context, {filename: 'markdown-renderer.js'});
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
-  return {context, root, stream, timers, toggles};
+  return {context, root, stream, timers, toggles, panel};
 }
 
 function sessionPayload(session, messages = fixtureMessages()) {
@@ -89,6 +91,7 @@ function sessionPayload(session, messages = fixtureMessages()) {
     session: Object.assign({
       id: 'session-a',
       name: 'Session a',
+      profile: 'manager',
       backend: 'claude-opus-4.6',
       round_ratings: {},
       task_parent_id: null,
@@ -144,6 +147,24 @@ test('a Slack thread session opens in Everything', () => {
 test('a Discord thread session opens in Everything', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {discord_origin: DISCORD_ORIGIN}), 'everything');
+});
+
+test('a web session shows the status panel in both views', () => {
+  const rig = pageRig();
+  openedView(rig, {});
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'For you shows the panel');
+  rig.context.setChatView('everything');
+  assert.equal(rig.panel.classList.contains('hidden'), false, 'Everything shows the panel');
+});
+
+test('a thread session and a worker session show no status panel', () => {
+  const rig = pageRig();
+  openedView(rig, {slack_origin: SLACK_ORIGIN});
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'a Slack thread session has no panel');
+  openedView(rig, {discord_origin: DISCORD_ORIGIN});
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'a Discord thread session has no panel');
+  openedView(rig, {profile: 'worker'});
+  assert.equal(rig.panel.classList.contains('hidden'), true, 'a worker session has no panel');
 });
 
 test('a manual switch holds for its session across a re-open, and other sessions keep their default', () => {

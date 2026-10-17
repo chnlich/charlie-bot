@@ -9,32 +9,19 @@ subprocess, no HTTP; the cold-read runs execute on scripted backends.
 
 import hashlib
 import json
+import pathlib
 import re
 import sys
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+import types
+from unittest import mock
 
 import conftest
+import fastapi
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    OPERATOR,
-    ROOT,
-    make_plan_setup,
-    plan_page_html,
-    write_plan_artifact,
-    write_stub_chrome,
-)
-from fastapi import HTTPException
 
-from src.features.artifacts import artifact_check, artifact_shared
-from src.features.artifacts.artifact_check import run_assertions
-from src.features.artifacts.cli import main as artifact_main
+from src.features.artifacts import artifact_check, artifact_shared, cli
+from src.infra import config, models
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
-from src.infra.models import ColdReadSpec, DelegateRequest, TaskSpec, TaskType
 from src.runtime import cold_read, spawner_backends, task_errors
 from src.runtime.api import internal
 from tests import test_task_execution
@@ -42,12 +29,12 @@ from tests import test_task_execution
 
 def _genre_doc(genre: str, body: str) -> str:
   """Full HTML document for *genre*: its template's <style> block verbatim plus *body*."""
-  template = (ROOT / "prompts" / artifact_shared.GENRE_TEMPLATES[genre]).read_text(encoding="utf-8")
+  template = (conftest.ROOT / "prompts" / artifact_shared.GENRE_TEMPLATES[genre]).read_text(encoding="utf-8")
   style = re.search(r"<style>.*?</style>", template, re.DOTALL).group(0)
   return f"<html><head>{style}</head><body>{body}</body></html>"
 
 
-def _write(tmp_path: Path, content: str, name: str = "page.html") -> Path:
+def _write(tmp_path: pathlib.Path, content: str, name: str = "page.html") -> pathlib.Path:
   artifact = tmp_path / name
   artifact.write_text(content, encoding="utf-8")
   return artifact
@@ -62,14 +49,14 @@ def _by_name(outcomes: list[artifact_check.AssertionOutcome]) -> dict[str, list[
 
 def _run(
     genre: str,
-    artifact: Path,
-    cfg: CharlieBotConfig | None = None,
+    artifact: pathlib.Path,
+    cfg: config.CharlieBotConfig | None = None,
 ) -> dict[str, list[artifact_check.AssertionOutcome]]:
-  return _by_name(run_assertions(genre, artifact, cfg))
+  return _by_name(artifact_check.run_assertions(genre, artifact, cfg))
 
 
-def _chrome_cfg(tmp_path: Path) -> SimpleNamespace:
-  return SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 800))
+def _chrome_cfg(tmp_path: pathlib.Path) -> types.SimpleNamespace:
+  return types.SimpleNamespace(headless_chrome_bin=conftest.write_stub_chrome(tmp_path, 800))
 
 
 def _sitrep_ok_doc() -> str:
@@ -88,7 +75,7 @@ def _sitrep_ok_doc() -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_style_verbatim_fails_on_tampered_style(tmp_path: Path) -> None:
+def test_style_verbatim_fails_on_tampered_style(tmp_path: pathlib.Path) -> None:
   doc = _sitrep_ok_doc().replace("</style>", "body{color:red}\n</style>", 1)
   outcomes = _run("sitrep", _write(tmp_path, doc))
   (outcome,) = outcomes["style-verbatim"]
@@ -110,9 +97,9 @@ def test_style_verbatim_fails_on_tampered_style(tmp_path: Path) -> None:
         ("explain", "explain_template.html"),
     ],
 )
-def test_shipped_template_passes_its_own_genre(tmp_path: Path, genre: str, template: str) -> None:
+def test_shipped_template_passes_its_own_genre(tmp_path: pathlib.Path, genre: str, template: str) -> None:
   cfg = _chrome_cfg(tmp_path)
-  outcomes = run_assertions(genre, ROOT / "prompts" / template, cfg)
+  outcomes = artifact_check.run_assertions(genre, conftest.ROOT / "prompts" / template, cfg)
   assert [o for o in outcomes if not o.passed] == []
 
 
@@ -121,23 +108,23 @@ def test_shipped_template_passes_its_own_genre(tmp_path: Path, genre: str, templ
 # ---------------------------------------------------------------------------
 
 
-def test_page_height_over_the_target_passes_and_names_the_overage(tmp_path: Path) -> None:
-  cfg = SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 2600))
-  (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
+def test_page_height_over_the_target_passes_and_names_the_overage(tmp_path: pathlib.Path) -> None:
+  cfg = types.SimpleNamespace(headless_chrome_bin=conftest.write_stub_chrome(tmp_path, 2600))
+  (outcome,) = _run("plan", _write(tmp_path, conftest.plan_page_html()), cfg)["page-height"]
   assert outcome.passed
   assert outcome.detail == "2600 px: 600 px over the 2000 px target"
 
 
-def test_page_height_at_or_under_the_target_reports_the_target(tmp_path: Path) -> None:
-  cfg = SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 1967))
-  (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
+def test_page_height_at_or_under_the_target_reports_the_target(tmp_path: pathlib.Path) -> None:
+  cfg = types.SimpleNamespace(headless_chrome_bin=conftest.write_stub_chrome(tmp_path, 1967))
+  (outcome,) = _run("plan", _write(tmp_path, conftest.plan_page_html()), cfg)["page-height"]
   assert outcome.passed
   assert outcome.detail == "1967 px (target 2000)"
 
 
-def test_page_height_without_a_renderer_fails(tmp_path: Path) -> None:
-  cfg = SimpleNamespace(headless_chrome_bin=None)
-  (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
+def test_page_height_without_a_renderer_fails(tmp_path: pathlib.Path) -> None:
+  cfg = types.SimpleNamespace(headless_chrome_bin=None)
+  (outcome,) = _run("plan", _write(tmp_path, conftest.plan_page_html()), cfg)["page-height"]
   assert not outcome.passed
 
 
@@ -147,8 +134,8 @@ def test_page_height_without_a_renderer_fails(tmp_path: Path) -> None:
 
 
 def _invoke(argv_tail: list[str]) -> SystemExit:
-  with patch("sys.argv", ["artifact", "check", *argv_tail]), pytest.raises(SystemExit) as exc_info:
-    artifact_main()
+  with mock.patch("sys.argv", ["artifact", "check", *argv_tail]), pytest.raises(SystemExit) as exc_info:
+    cli.main()
   return exc_info.value
 
 
@@ -158,14 +145,14 @@ def _run_cli(argv_tail: list[str]) -> int:
   return exit_.code
 
 
-def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespace]]:
-  options = {name: SimpleNamespace(id=name) for name in ("alpha", "beta")}
-  cfg = SimpleNamespace(
-      headless_chrome_bin=write_stub_chrome(tmp_path, 800),
-      backends=SimpleNamespace(preference=["alpha", "beta"]),
+def _probe_cfg(tmp_path: pathlib.Path) -> tuple[types.SimpleNamespace, dict[str, types.SimpleNamespace]]:
+  options = {name: types.SimpleNamespace(id=name) for name in ("alpha", "beta")}
+  cfg = types.SimpleNamespace(
+      headless_chrome_bin=conftest.write_stub_chrome(tmp_path, 800),
+      backends=types.SimpleNamespace(preference=["alpha", "beta"]),
       get_backend_option=options.get,
       sessions_dir=tmp_path,
-      charlie_bot_repo=ROOT,
+      charlie_bot_repo=conftest.ROOT,
   )
   return cfg, options
 
@@ -186,11 +173,11 @@ class _FakeBackend:
 
 
 def _patch_backends(monkeypatch: pytest.MonkeyPatch, backends: dict[str, _FakeBackend]) -> None:
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg: backends[option.id])
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, lambda option, cfg: backends[option.id])
 
 
 def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   backends = {
@@ -198,7 +185,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
       "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(6) fine.")
   }
   _patch_backends(monkeypatch, backends)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   lines = capsys.readouterr().out.splitlines()
   digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -220,7 +207,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
 
 
 def test_probe_records_each_failed_attempt_with_its_exception_type(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An exception with an empty message still names its type in the attempt record."""
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
@@ -232,18 +219,19 @@ def test_probe_records_each_failed_attempt_with_its_exception_type(
 
 
 def test_cli_assertions_only_passes_a_page_over_the_height_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  artifact = _write(tmp_path, plan_page_html())
-  cfg = SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 2600))
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, conftest.plan_page_html())
+  cfg = types.SimpleNamespace(headless_chrome_bin=conftest.write_stub_chrome(tmp_path, 2600))
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
   assert "ok page-height 2600 px: 600 px over the 2000 px target" in capsys.readouterr().out
 
 
 def test_cli_assertions_only_fails_when_the_height_cannot_be_measured(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  artifact = _write(tmp_path, plan_page_html())
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: SimpleNamespace(headless_chrome_bin=None))
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, conftest.plan_page_html())
+  monkeypatch.setattr(
+      conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: types.SimpleNamespace(headless_chrome_bin=None))
   assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 1
   assert "FAIL page-height" in capsys.readouterr().out
 
@@ -257,12 +245,12 @@ def test_cli_unknown_genre_is_usage_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_background_flag_is_a_usage_error(tmp_path: Path) -> None:
+def test_background_flag_is_a_usage_error(tmp_path: pathlib.Path) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "t", "--background"]) == 2
 
 
-def _write_session_metadata(cfg: SimpleNamespace, session_id: str, profile: str) -> None:
+def _write_session_metadata(cfg: types.SimpleNamespace, session_id: str, profile: str) -> None:
   """Persist a session metadata.json holding just the profile the CLI's routing reads."""
   meta_dir = cfg.sessions_dir / session_id
   meta_dir.mkdir(parents=True)
@@ -270,14 +258,14 @@ def _write_session_metadata(cfg: SimpleNamespace, session_id: str, profile: str)
 
 
 def test_cli_in_a_manager_session_delegates_the_cold_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """The manager-session command POSTs the cold-read delegation and prints the started line."""
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   session_id = "sess-manager-1"
   _write_session_metadata(cfg, session_id, "manager")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session_id)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   calls: list[dict] = []
 
   def post(endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
@@ -305,12 +293,12 @@ def test_cli_in_a_manager_session_delegates_the_cold_read(
 
 
 def test_cli_in_a_manager_session_exits_1_when_the_server_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   _write_session_metadata(cfg, "sess-manager-2", "manager")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-manager-2")
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
   def refusing_post(
       endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
@@ -323,15 +311,15 @@ def test_cli_in_a_manager_session_exits_1_when_the_server_refuses(
 
 
 def test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   _write_session_metadata(cfg, "sess-worker-1", "worker")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "sess-worker-1")
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   backends = {"alpha": _FakeBackend(answer="(1) answered.")}
   _patch_backends(monkeypatch, backends)
-  post = MagicMock()
+  post = mock.MagicMock()
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
 
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
@@ -346,15 +334,15 @@ def test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground(
 
 
 def test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """No identity: CHARLIEBOT_SESSION_ID absent and the cwd not a session directory."""
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   backends = {"alpha": _FakeBackend(answer="(1) answered.")}
   _patch_backends(monkeypatch, backends)
-  post = MagicMock()
+  post = mock.MagicMock()
   monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
 
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
@@ -369,11 +357,11 @@ def test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground(
 
 
 def test_cli_foreground_prints_every_model_failed_and_exits_1(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(error="kaput")}
   _patch_backends(monkeypatch, backends)
 
@@ -393,7 +381,7 @@ def test_cli_foreground_prints_every_model_failed_and_exits_1(
 # ---------------------------------------------------------------------------
 
 
-async def _cold_read_tree_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, execute: bool):
+async def _cold_read_tree_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *, execute: bool):
   """(cfg, session_blocks, tree, manager): a real task tree and delegate entry.
 
   The manager is pinned to the "opus" backend (options[0]); backends.preference
@@ -413,20 +401,20 @@ async def _cold_read_tree_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *
   return cfg, session_blocks, tree, manager
 
 
-def _cold_read_request(manager_id: str, page: Path, **overrides) -> DelegateRequest:
+def _cold_read_request(manager_id: str, page: pathlib.Path, **overrides) -> models.DelegateRequest:
   payload: dict = {
       "session_id": manager_id,
       "description": f"cold read of {page}",
-      "task_type": TaskType.COLD_READ,
-      "cold_read": ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?"),
+      "task_type": models.TaskType.COLD_READ,
+      "cold_read": models.ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?"),
   }
   payload.update(overrides)
-  return DelegateRequest(**payload)
+  return models.DelegateRequest(**payload)
 
 
 @pytest.mark.asyncio
 async def test_cold_read_delegation_from_a_manager_succeeds_without_takeoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No take off in the manager's chat log: the read-only exemption covers cold-read, and the
   child lands under the requesting session named after the page file."""
   page = _write(tmp_path, _sitrep_ok_doc())
@@ -437,14 +425,14 @@ async def test_cold_read_delegation_from_a_manager_succeeds_without_takeoff(
       session_events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
 
   child = await tree.load_meta(result["session_id"])
   assert child is not None
   assert child.task_parent_id == manager.id and child.profile == "worker"
   assert child.name == f"Cold read: {page.name}"
-  assert child.task is not None and child.task.task_type == TaskType.COLD_READ
-  assert child.task.cold_read == ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?")
+  assert child.task is not None and child.task.task_type == models.TaskType.COLD_READ
+  assert child.task.cold_read == models.ColdReadSpec(page_path=str(page), genre="sitrep", trigger="where are we?")
   assert child.task.repo_path is None and child.task.base_branch is None
   first = await tree.runs.get_run(child.id, result["run_id"])
   assert first is not None and first.backend == "alpha"
@@ -453,52 +441,52 @@ async def test_cold_read_delegation_from_a_manager_succeeds_without_takeoff(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["repo_path", "base_branch"])
 async def test_cold_read_delegation_with_a_repo_field_gets_400(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, field: str) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
   overrides = {field: ("/tmp/repo" if field == "repo_path" else "main")}
 
-  with pytest.raises(HTTPException) as exc_info:
+  with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
         _cold_read_request(manager.id, page, **overrides),
         session_events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
-        caller=OPERATOR)
+        caller=conftest.OPERATOR)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == f"cold-read delegations are repo-less; omit {field}"
 
 
 @pytest.mark.asyncio
-async def test_cold_read_delegation_requires_cold_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cold_read_delegation_requires_cold_read(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
 
-  with pytest.raises(HTTPException) as exc_info:
+  with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
         _cold_read_request(manager.id, page, cold_read=None),
         session_events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
-        caller=OPERATOR)
+        caller=conftest.OPERATOR)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "cold-read delegations require cold_read"
 
 
 @pytest.mark.asyncio
-async def test_other_task_types_reject_cold_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_other_task_types_reject_cold_read(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
 
-  with pytest.raises(HTTPException) as exc_info:
+  with pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.delegate_task(
-        _cold_read_request(manager.id, page, task_type=TaskType.VERIFY),
+        _cold_read_request(manager.id, page, task_type=models.TaskType.VERIFY),
         session_events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
-        caller=OPERATOR)
+        caller=conftest.OPERATOR)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "verify delegations reject cold_read"
@@ -507,16 +495,16 @@ async def test_other_task_types_reject_cold_read(tmp_path: Path, monkeypatch: py
 @pytest.mark.asyncio
 @pytest.mark.parametrize("task_type", ["verify", "cold-read"])
 async def test_agent_message_to_a_read_only_child_passes_without_takeoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
   """An agent message to a cold-read child passes the same exemption a verify child passes."""
   _cfg, _session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=False)
-  cold = ColdReadSpec(page_path="/tmp/p.html", genre="plan", trigger="t") if task_type == "cold-read" else None
+  cold = models.ColdReadSpec(page_path="/tmp/p.html", genre="plan", trigger="t") if task_type == "cold-read" else None
   child = await conftest.create_task(
       tree,
       parent=manager.id,
       profile="worker",
       request_id=f"child-{task_type}",
-      task=TaskSpec(goal="check it", task_type=task_type, cold_read=cold))
+      task=models.TaskSpec(goal="check it", task_type=task_type, cold_read=cold))
 
   event = await tree.dispatch.admit_input(
       child.id, event_type=ET.AGENT_MESSAGE, content="a note from the parent", actor="agent", from_session=manager.id)
@@ -528,7 +516,7 @@ async def test_agent_message_to_a_read_only_child_passes_without_takeoff(
       parent=manager.id,
       profile="worker",
       request_id=f"child-implement-{task_type}",
-      task=TaskSpec(goal="build it", task_type="implement"))
+      task=models.TaskSpec(goal="build it", task_type="implement"))
   with pytest.raises(task_errors.TaskForbiddenError):
     await tree.dispatch.admit_input(
         implement.id, event_type=ET.AGENT_MESSAGE, content="x", actor="agent", from_session=manager.id)
@@ -551,20 +539,20 @@ async def _wait_child_report(tree, parent_id: str) -> dict:
   return test_task_execution.child_reports(tree, parent_id)[-1]
 
 
-async def _delegate_cold_read(tree, session_blocks, manager, page: Path) -> str:
+async def _delegate_cold_read(tree, session_blocks, manager, page: pathlib.Path) -> str:
   """Delegate one cold read through the real entry; return the child session id."""
   result = await internal.delegate_task(
       _cold_read_request(manager.id, page),
       session_events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   return result["session_id"]
 
 
 @pytest.mark.asyncio
 async def test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
   backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("(1) fine.")])
@@ -575,7 +563,7 @@ async def test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_in
   await test_task_execution.wait_for_terminal_run(tree, child_id, run.id)
   await _wait_child_report(tree, manager.id)
 
-  system_prompt, questions = cold_read.load_texts(ROOT)
+  system_prompt, questions = cold_read.load_texts(conftest.ROOT)
   stored = json.loads((tree.runs.run_dir(child_id, run.id) / "prompt_snapshot.json").read_text(encoding="utf-8"))
   assert [b["text"] for b in stored["blocks"]] == [system_prompt]
   launch_text = (tree.runs.run_dir(child_id, run.id) / "launch_prompt.md").read_text(encoding="utf-8")
@@ -585,7 +573,7 @@ async def test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_in
 
 @pytest.mark.asyncio
 async def test_cold_read_success_report_carries_attempts_backend_and_answers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
   scripted = [
@@ -615,7 +603,8 @@ async def test_cold_read_success_report_carries_attempts_backend_and_answers(
 
 
 @pytest.mark.asyncio
-async def test_cold_read_empty_answer_counts_as_a_failed_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cold_read_empty_answer_counts_as_a_failed_run(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
   scripted = [
@@ -634,7 +623,7 @@ async def test_cold_read_empty_answer_counts_as_a_failed_run(tmp_path: Path, mon
 
 @pytest.mark.asyncio
 async def test_cold_read_retry_selects_the_next_backend_with_the_tried_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
   tried_lists: list[list[str]] = []
@@ -661,7 +650,7 @@ async def test_cold_read_retry_selects_the_next_backend_with_the_tried_list(
 
 @pytest.mark.asyncio
 async def test_cold_read_every_backend_failed_reports_and_the_child_is_archived(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   page = _write(tmp_path, _sitrep_ok_doc())
   _cfg, session_blocks, tree, manager = await _cold_read_tree_env(tmp_path, monkeypatch, execute=True)
   scripted = [
@@ -700,13 +689,16 @@ async def test_cold_read_every_backend_failed_reports_and_the_child_is_archived(
 
 
 @pytest.mark.asyncio
-async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one_fixture(tmp_path: Path) -> None:
-  broken = plan_page_html().replace('<span class="n">4</span>', '<span class="n">9</span>').replace(
+async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one_fixture(
+    tmp_path: pathlib.Path) -> None:
+  broken = conftest.plan_page_html().replace('<span class="n">4</span>', '<span class="n">9</span>').replace(
       '<div class="foot"><p>How to respond.</p></div>', "")
-  cfg, _session_blocks, plan_mgr, meta = await make_plan_setup(tmp_path)
-  file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html", content=broken)
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  file_rel = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html", content=broken)
 
-  cli_failures = {o.name for o in run_assertions("plan", cfg.sessions_dir / meta.id / file_rel, cfg) if not o.passed}
+  cli_failures = {
+      o.name for o in artifact_check.run_assertions("plan", cfg.sessions_dir / meta.id / file_rel, cfg) if not o.passed
+  }
   assert cli_failures == {"sections-numbered", "foot-present"}
 
   with pytest.raises(ValueError) as exc_info:
@@ -719,10 +711,10 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
 
 
 @pytest.mark.asyncio
-async def test_plan_present_accepts_a_page_over_the_height_target(tmp_path: Path) -> None:
-  cfg, _session_blocks, plan_mgr, meta = await make_plan_setup(tmp_path)
-  cfg.headless_chrome_bin = write_stub_chrome(tmp_path, 2600)
-  file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html")
+async def test_plan_present_accepts_a_page_over_the_height_target(tmp_path: pathlib.Path) -> None:
+  cfg, _session_blocks, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  cfg.headless_chrome_bin = conftest.write_stub_chrome(tmp_path, 2600)
+  file_rel = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
 
   result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
 
@@ -737,7 +729,8 @@ _DAMAGED_BYTES = [(b"\t", "0x09"), (b"\x0c", "0x0c"), (b"\r", "0x0d")]
 
 
 @pytest.mark.parametrize("damaged_byte,hex_name", _DAMAGED_BYTES)
-def test_byte_integrity_fails_on_non_lf_control_byte(tmp_path: Path, damaged_byte: bytes, hex_name: str) -> None:
+def test_byte_integrity_fails_on_non_lf_control_byte(
+    tmp_path: pathlib.Path, damaged_byte: bytes, hex_name: str) -> None:
   """TAB / formfeed / CR in the raw source bytes fail the gate, each offset and value named."""
   doc = _sitrep_ok_doc().replace("Nothing.", f"Before{damaged_byte.decode('latin-1')}After")
   artifact = tmp_path / "damaged.html"

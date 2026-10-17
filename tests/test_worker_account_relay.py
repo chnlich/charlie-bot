@@ -6,9 +6,9 @@ most headroom, rejected-run relay onto another account, the safe-point terminati
 warning, the relay limit, login-failure marking, and the task relay's no-compaction behavior.
 """
 
+import datetime
 import json
 import pathlib
-from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import conftest
@@ -21,7 +21,7 @@ from src.runtime import worker
 from src.runtime.hooks import backend_lifecycle
 
 CC_ID = "11111111-2222-3333-4444-555555555555"
-NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
+NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 
 _fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
 
@@ -231,9 +231,9 @@ async def test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_ban
   # with the older reading: a min_headroom=0 select ties the two (0.015 apart) and would
   # land ext-2, re-arming at the next safe point.
   claude_accounts.observe_rate_limit(
-      "ext-1", conftest.rate_limit_event("allowed", 0.89)["rate_limit_info"], now=NOW - timedelta(minutes=5))
+      "ext-1", conftest.rate_limit_event("allowed", 0.89)["rate_limit_info"], now=NOW - datetime.timedelta(minutes=5))
   claude_accounts.observe_rate_limit(
-      "ext-2", conftest.rate_limit_event("allowed", 0.905)["rate_limit_info"], now=NOW - timedelta(minutes=30))
+      "ext-2", conftest.rate_limit_event("allowed", 0.905)["rate_limit_info"], now=NOW - datetime.timedelta(minutes=30))
   first = conftest.ScriptedRelayBackend(
       [conftest.rate_limit_event("allowed_warning", 0.92),
        conftest.user_tool_result_event()], exit_code=0)

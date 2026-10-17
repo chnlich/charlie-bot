@@ -88,9 +88,9 @@ charlie-bot/
 |------|------|------------------|
 | **Master Agent** | Claude Code session (`src/runtime/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/runtime/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
-| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
+| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.pool`). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/runtime/agent_process/base.py`). Each backend package registers its type string, its option model and its factory with `src/runtime/hooks/backend_type_registration.py` (`src/app/registrations.py` lists the packages), and `src/runtime/hooks/backend_types.py` dispatches each `BackendOption.type` to its implementation; config loading parses each `backends.options[]` entry through the option models that `src/infra/config_registry.py` holds. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/runtime/agent_process/base.py`). Each backend package registers its type string, its option model and its factory with `src/runtime/hooks/backend_type_registration.py` (`src/app/registrations.py` lists the packages), and `src/runtime/hooks/backend_types.py` dispatches each `BackendOption.type` to its implementation; config loading parses each `backends.options[]` entry through the option models that `src/infra/config_registry.py` holds. Backend selection is configured via `backends.options` and `backends.pool` in `config.yaml`.
 
 **Turn Contributions**: Feature packages add to a master turn through `src/runtime/hooks/turn_contributions.py`: a package registers a `TurnContribution` from its `register()`, and the turn path (instruction build, queue, run, session funnel, chat aggregator) asks every registered contribution at its own step and names no feature. The chat-threads, cron, Discord, memory, Slack and voice packages register one each.
 
@@ -132,14 +132,14 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 
 3. **Review** (Phase 2 — Automatic on Worker Success):
    - On successful work-run completion, `_maybe_spawn_review` (`src/runtime/task_execution.py`) registers a review Run on the same task and launches it, picking the reviewer backend with `select_reviewer_backend` (`src/runtime/review.py`)
-   - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `backends.preference` config
+   - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from the `backends.pool` rotation
    - Reviewer reads session conversation + worker log for context, then:
      - Reviews `git diff base_branch...branch_name`
      - Fixes any issues found, commits fixes
      - Rebases the branch onto the base branch
      - Pushes the rebased branch to the remote base (`git push origin HEAD:{base_branch}`); git rejects a non-fast-forward push
      - Cleans up the worktree
-   - If the reviewer **fails**, it retries with the next untried backend from `backends.preference`. Max retries = `len(backends.preference)`
+   - If the reviewer **fails**, it retries with the next untried member of `backends.pool` (cooling members and the members the worker used are skipped)
 
 4. **Master Trigger on Completion**:
    - After review completes (success or all retries exhausted), the master agent is triggered via `trigger_master()` with a combined summary of worker + reviewer results
@@ -221,7 +221,7 @@ A raw log that stops growing while the process is still alive is what the server
 
 ### 9.1 Model Fallback
 - Multiple backends configured via `backends.options` in `config.yaml` (see that file for the current list)
-- `backends.preference` controls reviewer backend selection order, enabling cross-backend code review
+- `backends.pool` is the rotation of unpinned work (the four worker task types, the improve loop, the reviewer, the cold read, the session namer and the page check); a member whose quota runs out cools until its reset, or 30 minutes when none is named, and a worker interrupted by quota continues on the next member (`src/runtime/backend_pool.py`)
 - Failed reviewers automatically retry with the next untried backend
 
 ### 9.2 Rebase Conflict Handling
@@ -283,7 +283,7 @@ for the other backends) and passes no flag.
 - Master Agent as Claude Code session (`src/runtime/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
 - Delegation CLI (`src/runtime/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`src/runtime/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
-- Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.preference`). Failed reviewers retry with the next untried backend
+- Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.pool`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - Session blocks (`src/runtime/session_*.py`), `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
@@ -313,4 +313,4 @@ decodes the opening clip as a recognition probe.
 **Configuration**
 - `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
 - `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: the `BackendsConfig` comment in `src/infra/config.py`; usage's startup check, `src/features/usage/backend_ids.py`, refuses an id outside them)
-- `backends.preference`: ordered list of backend IDs for cross-backend reviewer selection; server startup refuses a preference entry (`require_backends`) or a cron task or step backend (cron's startup check, `src/features/cron/backend_refs.py`) that names no option id
+- `backends.pool`: ordered list of backend IDs in rotation order (`src/runtime/backend_pool.py`); server startup refuses a pool entry (`require_backends`) or a cron task or step backend (cron's startup check, `src/features/cron/backend_refs.py`) that names no option id

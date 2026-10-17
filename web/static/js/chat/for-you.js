@@ -7,9 +7,10 @@
 // For you shows the user's messages, the agent's web replies (web_reply), the
 // web reply notices (web_reply_notice) and error rows, in place. Each run of
 // other messages folds into one line. Everything shows the whole record, as the
-// page always has. A root session that is not a Slack or Discord thread opens
-// in For you; a child session and a thread session open in Everything. A manual
-// switch holds for that session until the page reloads.
+// page always has. A web session (a manager session that is not a Slack or
+// Discord thread), root or child, opens in For you; a thread session and a worker
+// session open in Everything. A manual switch holds for that session until the
+// page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
 // (what shows and where a fold falls), the row builders and the toggle.
@@ -94,12 +95,16 @@ function buildWorkingLine() {
   return el;
 }
 
-// A root session that is not a thread opens in For you; a child session, and a
-// thread session (its Slack or Discord origin is set), open in Everything.
+// A web session: a manager session with no Slack or Discord origin. The status panel
+// reads the same test.
+function isWebSession(session) {
+  return session.profile === 'manager' && session.slack_origin == null && session.discord_origin == null;
+}
+
+// A web session, root or child, opens in For you; a thread session and a worker
+// session open in Everything.
 function defaultView(session) {
-  const isRoot = session.task_parent_id === null;
-  const isThread = session.slack_origin != null || session.discord_origin != null;
-  return isRoot && !isThread ? FOR_YOU : EVERYTHING;
+  return isWebSession(session) ? FOR_YOU : EVERYTHING;
 }
 
 function viewFor(session) {
@@ -138,6 +143,7 @@ const ForYou = {
   buildFoldLine,
   fillFoldLine,
   buildWorkingLine,
+  isWebSession,
   defaultView,
   viewFor,
   renderToggle,

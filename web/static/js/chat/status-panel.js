@@ -3,9 +3,8 @@
 // ---------------------------------------------------------------------------
 // The panel under the view toggle, above the message list, shows a web session's
 // Goal, Now and Waiting on you, and in a parent session the Waiting on you items
-// of its open descendant sessions. A web session is a manager session whose Slack
-// and Discord origins are both null (the thread test defaultView in for-you.js
-// uses). A thread session and a worker session show no panel.
+// of its open descendant sessions. A web session is one that Chat.ForYou.isWebSession
+// (for-you.js) accepts. A thread session and a worker session show no panel.
 //
 // The status is the session's web_status at open, then the web_status messages of
 // this session, live or in history: the newest updated_at wins, so an older page
@@ -27,10 +26,6 @@
   let panelDescendants = [];
   let panelChildrenOpen = false;
   let panelFetchGen = 0;
-
-  function isWebSession(session) {
-    return session.profile === 'manager' && session.slack_origin == null && session.discord_origin == null;
-  }
 
   function textSpan(className, text) {
     const span = document.createElement('span');
@@ -201,7 +196,7 @@
   // Session open (first load and SPA switch): the session's own status, then the
   // history's web_status messages, then the descendant rows.
   function openSessionStatusPanel(session, messages) {
-    if (!isWebSession(session)) {
+    if (!Chat.ForYou.isWebSession(session)) {
       clearSessionStatusPanel();
       return;
     }

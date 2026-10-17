@@ -26,7 +26,15 @@
   // window appear as estimated-height placeholder rows and are replaced when
   // ready. Queue order is nearer-to-viewport first; a manual fold-open jumps
   // the queue and renders that single turn synchronously.
+  //
+  // The For-you view is a second projection of the same store, chosen per
+  // engine: a flat list of the shown messages in place, each run of other
+  // messages as one fold line, and no window, spacers or measurements. The
+  // store and the turn registry carry across a view switch; only the DOM is
+  // rebuilt.
   // ---------------------------------------------------------------------------
+  const VIEW_EVERYTHING = 'everything';
+  const VIEW_FOR_YOU = 'foryou';
   const WINDOW_MARGIN_SCREENS = 2;
   // Safety bound, not the operative policy: the ±2-screen margins size the
   // window in pixels, and the cap only binds when rows are so thin that even
@@ -61,6 +69,15 @@
       && typeof document.createElement === 'function'
       && typeof container.addEventListener === 'function'
     );
+  }
+
+  // Replaces a container's children with `children`. A list that already is
+  // the container's children writes nothing.
+  function setChildren(container, children) {
+    const current = container.children;
+    if (current.length === children.length && children.every((el, i) => el === current[i])) return;
+    while (container.firstChild) container.removeChild(container.firstChild);
+    children.forEach((child) => container.appendChild(child));
   }
 
   function isStable(msg) {
@@ -134,10 +151,23 @@
   }
 
   class TurnEngine {
-    constructor(container, sessionId) {
+    constructor(container, sessionId, view) {
       this.container = container;
       this.sessionId = sessionId;
       this.alive = true;
+      // The projection the container shows: VIEW_EVERYTHING or VIEW_FOR_YOU.
+      this.view = view;
+      // The reader's place in Everything, kept while For you is shown, so a
+      // switch back restores it.
+      this.everythingPlace = null;
+      // For-you state: the fold lines the reader opened (keys from
+      // the registered rules' items), the fold line elements by key, and the persistent
+      // strip, working line and stream holder.
+      this.forYouExpanded = new Set();
+      this.forYouFolds = new Map();
+      this.forYouStrip = null;
+      this.forYouWorking = null;
+      this.forYouHolder = null;
       this.entries = [];
       this.knownIds = new Set();
       this.segments = [];
@@ -566,7 +596,9 @@
     }
 
     scheduleIdle() {
-      if (!this.alive || this.idleScheduled || this.quietTimer) return;
+      // The For-you list builds only the nodes it shows, so there is nothing
+      // to pre-render; a switch back to Everything schedules the queue again.
+      if (!this.alive || this.idleScheduled || this.quietTimer || this.view === VIEW_FOR_YOU) return;
       this.idleScheduled = true;
       const arm = () => {
         this.idleHandle = null;
@@ -589,7 +621,7 @@
     }
 
     runSlice() {
-      if (!this.alive) return;
+      if (!this.alive || this.view === VIEW_FOR_YOU) return;
       if (this.scrollRecentlyActive()) {
         this.stats.slicesDeferredForScroll++;
         if (!this.quietTimer) {
@@ -691,6 +723,10 @@
       // writes, no scrollTop writes. The first non-zero 'resize' projects
       // from scratch instead of repairing a degenerate window.
       if (this.container.clientHeight === 0) return;
+      if (this.view === VIEW_FOR_YOU) {
+        this.reprojectForYou(reason);
+        return;
+      }
       this.ensureOffsets();
       // A resize that finds the viewport away from the reading position has
       // lost its scroll state (the browser resets scrollTop across
@@ -952,16 +988,42 @@
     // offset is restored once its segment is real. Default mount stays
     // bottom-pinned.
     mount(messages, options = {}) {
+      messages.forEach((msg) => this.makeEntry(msg));
+      this.attach(options);
+    }
+
+    // Projects the store into the container under the current view. Mount and
+    // a view switch both land here: the store, the registry and the reader's
+    // place carry over, and every projection node is built again.
+    attach(options = {}) {
       const streamEl = document.getElementById('streaming-msg');
       while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
+      this.domBySeg.clear();
+      this.window = null;
 
-      messages.forEach((msg) => this.makeEntry(msg));
       const derived = this.deriveSegments(this.entries);
       this.segments = derived.segments;
       if (derived.tailSpan.length) {
         this.segments.push({kind: 'flat', entries: derived.tailSpan.slice(), pending: true});
       }
       this.offsetsDirty = true;
+
+      const pinned = options.pinned !== false;
+      const anchor = pinned ? null : (options.readingAnchor || null);
+      this.pinnedIntent = pinned;
+      this.followNextTurn = false;
+      this.readingAnchor = anchor;
+      this.pendingAnchor = anchor;
+
+      if (this.view === VIEW_FOR_YOU) {
+        // The stream output lives in the hidden holder, where hideStreaming and
+        // the stream paint find it by id. The wipe above detached it, so the
+        // element captured before the wipe is re-homed here.
+        if (streamEl) this.forYouHolderNode().appendChild(streamEl);
+        this.syncForYouChildren();
+        this.reproject('mount');
+        return;
+      }
 
       this.topSpacer = document.createElement('div');
       this.topSpacer.className = 'turn-spacer turn-spacer-top';
@@ -970,13 +1032,6 @@
       this.container.appendChild(this.topSpacer);
       this.container.appendChild(this.bottomSpacer);
       if (streamEl) this.container.appendChild(streamEl);
-
-      const pinned = options.pinned !== false;
-      const anchor = pinned ? null : (options.readingAnchor || null);
-      this.pinnedIntent = pinned;
-      this.followNextTurn = false;
-      this.readingAnchor = anchor;
-      this.pendingAnchor = anchor;
 
       this.ensureOffsets();
       // Seed the spacers so the browser exposes its full range, then pin
@@ -1052,6 +1107,9 @@
       this.pendingAnchor = null;
       this.lastUserScrollTop = null;
       this.registry.clear();
+      this.everythingPlace = null;
+      this.forYouExpanded.clear();
+      this.forYouFolds.clear();
       this.measuredFolded.clear();
       this.measuredOpen.clear();
       this.measuredFlat = new WeakMap();
@@ -1062,6 +1120,150 @@
       this.offsetsDirty = false;
       this.totalHeight = 0;
       activeEngines().delete(this.container);
+    }
+
+    // ---- For-you view -------------------------------------------------------
+    // The list reads the store flat: each shown message's own node in place,
+    // and each run of other messages as one fold line that opens in place. A
+    // node the store already built is the node the list shows, and the list's
+    // children are compared before the container changes, so a stream paint
+    // that moves nothing writes nothing.
+
+    // Leaving Everything keeps the reader's place; entering For you pins the
+    // bottom, where the newest message is. Returning restores the place.
+    setView(view) {
+      if (view !== VIEW_EVERYTHING && view !== VIEW_FOR_YOU) {
+        throw new Error('Unknown chat view: ' + view);
+      }
+      if (view === this.view) return;
+      if (this.view === VIEW_EVERYTHING) {
+        this.everythingPlace = {
+          pinned: this.pinnedIntent,
+          readingAnchor: this.pinnedIntent ? null : this.captureReadingAnchor(),
+        };
+      }
+      this.view = view;
+      this.attach(view === VIEW_FOR_YOU ? {pinned: true} : (this.everythingPlace || {}));
+    }
+
+    // reproject for the For-you view. A scroll only records the reader's
+    // place. Every other reason rebuilds the list and holds the place, or
+    // keeps the bottom when the reader is pinned; a prepend never pins.
+    reprojectForYou(reason) {
+      if (reason === 'scroll') {
+        this.readingAnchor = this.captureForYouAnchor();
+        return;
+      }
+      const pinned = reason === 'jump' || (reason !== 'prepend' && this.pinnedIntent);
+      let anchor = null;
+      if (!pinned) {
+        // A hidden container's scroll position was reset by the browser, so a
+        // resize holds the place the last scroll recorded.
+        if (this.pendingAnchor) anchor = this.pendingAnchor;
+        else if (reason === 'resize') anchor = this.readingAnchor;
+        else anchor = this.captureForYouAnchor();
+      }
+      this.pendingAnchor = null;
+      this.syncForYouChildren();
+      if (pinned) this.writeScrollTop(this.container.scrollHeight);
+      else if (anchor) this.restoreReadingAnchor(anchor);
+    }
+
+    // The list's children, in order: the pagination sentinel, the progress
+    // strip, the rows, the working line, and the stream holder (hidden: For
+    // you shows the working line in the streaming output's place).
+    syncForYouChildren() {
+      const children = [];
+      const sentinel = document.getElementById('load-more-sentinel');
+      if (sentinel) children.push(sentinel);
+      const entries = this.displayEntries();
+      const progress = forYouRules.progress(entries);
+      if (progress) children.push(this.forYouStripNode(progress));
+      for (const item of forYouRules.items(entries)) {
+        if (item.kind === 'message') {
+          children.push(this.forYouEntryNode(item.entry));
+          continue;
+        }
+        const expanded = this.forYouExpanded.has(item.key);
+        children.push(this.forYouFoldNode(item, expanded));
+        if (expanded) item.hidden.forEach((entry) => children.push(this.forYouEntryNode(entry)));
+      }
+      if (forYouRules.turnRunning()) children.push(this.forYouWorkingNode());
+      children.push(this.forYouHolderNode());
+      setChildren(this.container, children);
+    }
+
+    // Every entry in display order. `entries` is arrival order, and a prepended
+    // page lands at its end; the segments hold the display order.
+    displayEntries() {
+      const out = [];
+      this.segments.forEach((seg) => seg.entries.forEach((entry) => out.push(entry)));
+      return out;
+    }
+
+    forYouStripNode(progress) {
+      if (!this.forYouStrip) this.forYouStrip = forYouRules.buildStrip();
+      forYouRules.fillStrip(this.forYouStrip, progress);
+      return this.forYouStrip;
+    }
+
+    forYouFoldNode(item, expanded) {
+      let el = this.forYouFolds.get(item.key);
+      if (!el) {
+        const key = item.key;
+        el = forYouRules.buildFoldLine(() => this.toggleForYouFold(key));
+        this.forYouFolds.set(key, el);
+      }
+      forYouRules.fillFoldLine(el, item.count, expanded);
+      return el;
+    }
+
+    forYouEntryNode(entry) {
+      if (!entry.ready) this.renderAtom(entry, true);
+      return entry.node;
+    }
+
+    forYouWorkingNode() {
+      if (!this.forYouWorking) this.forYouWorking = forYouRules.buildWorkingLine();
+      return this.forYouWorking;
+    }
+
+    forYouHolderNode() {
+      if (!this.forYouHolder) {
+        this.forYouHolder = document.createElement('div');
+        this.forYouHolder.className = 'hidden';
+      }
+      return this.forYouHolder;
+    }
+
+    toggleForYouFold(key) {
+      if (this.forYouExpanded.has(key)) this.forYouExpanded.delete(key);
+      else this.forYouExpanded.add(key);
+      this.reproject('fold');
+    }
+
+    // The working line follows the turn's running state, which changes outside
+    // the store (the For-you module's refresh calls this when a turn starts or ends).
+    refreshForYou() {
+      if (this.view === VIEW_FOR_YOU) this.reproject('running');
+    }
+
+    // The reader's place in the For-you list: the message straddling the top
+    // edge, or the first message when the list starts below the edge.
+    captureForYouAnchor() {
+      const cTop = this.container.getBoundingClientRect().top;
+      const nodes = this.container.querySelectorAll('[data-message-id]');
+      let pick = nodes[0] || null;
+      for (const node of nodes) {
+        if (node.getBoundingClientRect().top <= cTop + 1) pick = node;
+        else break;
+      }
+      if (!pick) return null;
+      return {
+        kind: 'message',
+        id: pick.dataset.messageId,
+        offset: pick.getBoundingClientRect().top - cTop,
+      };
     }
 
     // ---- reading position -----------------------------------------------------
@@ -1087,6 +1289,7 @@
     }
 
     captureReadingAnchor() {
+      if (this.view === VIEW_FOR_YOU) return this.captureForYouAnchor();
       if (!this.segments.length) return null;
       const cTop = this.container.getBoundingClientRect().top;
       // The top-edge segment is read off the real boxes, in segment order:
@@ -1415,11 +1618,22 @@
   }
   Chat.registerSeparatorPanel = registerSeparatorPanel;
 
-  function mountIfAvailable(container, messages, sessionId, options) {
+  // The For-you rules (chat/for-you.js) register once when that script loads.
+  // The projection reads them from here, so this file names no later file.
+  let forYouRules = null;
+  function registerForYouRules(rules) {
+    if (forYouRules) throw new Error('For-you rules are already registered');
+    forYouRules = rules;
+  }
+  Chat.registerForYouRules = registerForYouRules;
+
+  // options.view picks the first projection (Everything when omitted, the page's
+  // unchanged view); pinned and readingAnchor place the reader as mount does.
+  function mountIfAvailable(container, messages, sessionId, options = {}) {
     if (!supportsTurnEngine(container)) return null;
     const prev = activeEngines().get(container);
     if (prev) prev.dispose();
-    const engine = new TurnEngine(container, sessionId);
+    const engine = new TurnEngine(container, sessionId, options.view || VIEW_EVERYTHING);
     activeEngines().set(container, engine);
     engine.mount(messages || [], options);
     return engine;
@@ -1433,6 +1647,7 @@
       if (!engine) return null;
       engine.ensureOffsets();
       return {
+        view: engine.view,
         entries: engine.entries.length,
         segments: engine.segments.length,
         window: engine.window,

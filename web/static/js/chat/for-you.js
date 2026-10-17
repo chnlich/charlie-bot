@@ -1,0 +1,218 @@
+(function() {
+  const Chat = globalThis.Chat;
+
+// ---------------------------------------------------------------------------
+// The For-you view: the session page's reading layer for a root web session.
+//
+// For you shows the user's messages, the agent's web replies (web_reply), the
+// web reply notices (web_reply_notice) and error rows, in place. Each run of
+// other messages folds into one line. Everything shows the whole record, as the
+// page always has. A root session that is not a Slack or Discord thread opens
+// in For you; a child session and a thread session open in Everything. A manual
+// switch holds for that session until the page reloads.
+//
+// turn-engine.js builds the list from the store. This file holds the rules
+// (what shows, where a fold falls, which status block leads the strip), the row
+// builders and the toggle.
+// ---------------------------------------------------------------------------
+const FOR_YOU = 'foryou';
+const EVERYTHING = 'everything';
+const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice'];
+// The aggregator writes a failed turn's event as a system row whose text starts
+// with this prefix (message_aggregator.py: ASSISTANT_ERROR and ERROR).
+const ERROR_PREFIX = 'Error: ';
+// The manual view choice of each session on this page: a reload empties it, as
+// the sidebar's expanded nodes reset.
+const manualViews = new Map();
+
+function isErrorMessage(msg) {
+  return msg.role === 'system' && String(msg.content || '').startsWith(ERROR_PREFIX);
+}
+
+function showsInForYou(msg) {
+  return SHOWN_ROLES.includes(msg.role) || isErrorMessage(msg);
+}
+
+// The For-you rows over the store's entries, in order: a shown message is one
+// row; each run of other entries is one fold row, keyed by its first entry. A
+// separator ends a turn and is not a message, so the fold's count leaves it out,
+// and a run of separators alone gets no fold row.
+function items(entries) {
+  const out = [];
+  let run = [];
+  const closeRun = () => {
+    const count = run.filter((entry) => entry.msg.role !== 'separator').length;
+    if (count > 0) out.push({kind: 'fold', key: 'fold:' + run[0].msg.id, count, hidden: run});
+    run = [];
+  };
+  for (const entry of entries) {
+    if (showsInForYou(entry.msg)) {
+      closeRun();
+      out.push({kind: 'message', entry});
+    } else {
+      run.push(entry);
+    }
+  }
+  closeRun();
+  return out;
+}
+
+// The progress strip's fields: the newest agent message whose status block
+// names a Now or Waiting on you line. Null when no message has one yet.
+function progress(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const msg = entries[i].msg;
+    if (msg.role !== 'assistant') continue;
+    const fields = statusFieldsOf(msg);
+    if (fields) return fields;
+  }
+  return null;
+}
+
+// A message's status fields are a pure function of its text, and every stream
+// paint re-reads the progress, so each message parses once.
+const statusCache = new WeakMap();
+function statusFieldsOf(msg) {
+  if (!statusCache.has(msg)) statusCache.set(msg, statusFields(msg.content));
+  return statusCache.get(msg);
+}
+
+// The first paragraph the renderer's status rule accepts (markdown-renderer.js),
+// read into its Now and Waiting on you values. Null when there is none.
+function statusFields(content) {
+  for (const paragraph of String(content || '').split(/\n\s*\n/)) {
+    const lines = statusBlockParagraphLines(paragraph.trim());
+    if (!lines) continue;
+    const fields = {now: null, waiting: null};
+    for (const line of lines) {
+      const label = STATUS_BLOCK_LABELS.find((known) => line.startsWith(known));
+      if (label === '**Now**') fields.now = labelValue(line, label);
+      else if (label === '**Waiting on you**') fields.waiting = labelValue(line, label);
+    }
+    return fields;
+  }
+  return null;
+}
+
+function labelValue(line, label) {
+  return line.slice(label.length).replace(/^\s*[:：]?\s*/, '').replace(/\*\*|`/g, '');
+}
+
+// The turn is running: the page's thinking state, set by startThinking and cleared
+// by stopThinking (session-view.js).
+function turnRunning() {
+  return masterThinking;
+}
+
+function textSpan(className, text) {
+  const span = document.createElement('span');
+  span.className = className;
+  span.textContent = text;
+  return span;
+}
+
+function clearChildren(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+}
+
+function buildStrip() {
+  const el = document.createElement('div');
+  el.className = 'for-you-strip sticky top-0 z-10 bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-xs space-y-1';
+  return el;
+}
+
+// One row per field the status block carries; a field the block lacks gets no row.
+function fillStrip(el, fields) {
+  clearChildren(el);
+  const rows = [['Now', fields.now], ['Waiting on you', fields.waiting]];
+  for (const [label, value] of rows) {
+    if (value === null) continue;
+    const row = document.createElement('div');
+    row.className = 'flex gap-3';
+    row.appendChild(textSpan('shrink-0 w-28 text-slate-500', label));
+    row.appendChild(textSpan('min-w-0 break-words text-slate-200', value));
+    el.appendChild(row);
+  }
+}
+
+function buildFoldLine(onToggle) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'for-you-fold flex items-center gap-2 w-full py-1 text-xs text-slate-500 hover:text-slate-300 transition-colors';
+  btn.onclick = onToggle;
+  btn.appendChild(textSpan('for-you-fold-chevron w-3 text-center', ''));
+  btn.appendChild(textSpan('for-you-fold-label', ''));
+  return btn;
+}
+
+function fillFoldLine(btn, count, expanded) {
+  btn.dataset.count = String(count);
+  btn.setAttribute('aria-expanded', String(expanded));
+  btn.querySelector('.for-you-fold-chevron').textContent = expanded ? '▾' : '▸';
+  btn.querySelector('.for-you-fold-label').textContent = count + ' hidden messages';
+}
+
+function buildWorkingLine() {
+  const el = document.createElement('div');
+  el.className = 'for-you-working flex items-center gap-2 px-4 py-2 text-sm text-slate-400';
+  el.appendChild(textSpan('w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot', ''));
+  el.appendChild(textSpan('', 'Working…'));
+  return el;
+}
+
+// A root session that is not a thread opens in For you; a child session, and a
+// thread session (its Slack or Discord origin is set), open in Everything.
+function defaultView(session) {
+  const isRoot = session.task_parent_id === null;
+  const isThread = session.slack_origin != null || session.discord_origin != null;
+  return isRoot && !isThread ? FOR_YOU : EVERYTHING;
+}
+
+function viewFor(session) {
+  return manualViews.get(session.id) || defaultView(session);
+}
+
+// The toggle's buttons carry aria-pressed, and their styles follow it.
+function renderToggle(view) {
+  document.querySelectorAll('[data-chat-view-option]').forEach((btn) => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.chatViewOption === view));
+  });
+}
+
+// The toggle's switch. The choice holds for this session until the page reloads.
+function setChatView(view) {
+  const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
+  if (!engine) throw new Error('No turn engine is mounted for the chat view');
+  engine.setView(view);
+  manualViews.set(SESSION_ID, view);
+  renderToggle(view);
+}
+
+// A turn started or ended: the For you working line follows the running state.
+function refresh() {
+  const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
+  if (engine) engine.refreshForYou();
+}
+
+// The turn engine projects these rules, so they register with it; the page reads the same object as
+// Chat.ForYou.
+const ForYou = {
+  FOR_YOU,
+  EVERYTHING,
+  items,
+  progress,
+  turnRunning,
+  buildStrip,
+  fillStrip,
+  buildFoldLine,
+  fillFoldLine,
+  buildWorkingLine,
+  defaultView,
+  viewFor,
+  renderToggle,
+  refresh,
+};
+Chat.registerForYouRules(ForYou);
+Chat.wire({setChatView}, {ForYou});
+
+})();

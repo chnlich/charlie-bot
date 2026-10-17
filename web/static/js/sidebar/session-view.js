@@ -251,7 +251,7 @@ function applyTranscriptUpdate(data) {
         // new messages instead of repainting under a live engine.
         Chat.TurnEngine.mountIfAvailable(
             container, data.messages || [], SESSION_ID,
-            {pinned: wasPinned, readingAnchor: wasPinned ? null : reading});
+            {pinned: wasPinned, readingAnchor: wasPinned ? null : reading, view: engine.view});
       } else {
         renderMessagesIntoContainer(container, data.messages || [], SESSION_ID);
         if (wasPinned) {
@@ -379,6 +379,7 @@ function startThinking(opts) {
   updateThinkingTime();
   startPageTimer('thinking-tick', updateThinkingTime, 1000);
   globalThis.ensureActiveSessionViewPolling();
+  Chat.ForYou.refresh();
 }
 
 // Resumes the indicator when a page load or SPA switch lands while the master
@@ -402,6 +403,7 @@ function stopThinking(opts) {
   // lock. Only refreshSendLock writes the button.
   stopActiveSessionViewPolling();
   if (!switching && !(opts && opts.preserveSessionIndicator)) Sidebar.updateSpinner();
+  Chat.ForYou.refresh();
 }
 
 function updateThinkingTime() {
@@ -705,11 +707,15 @@ function renderSessionView(data) {
   // supports it; every session switch tears the previous engine down with it.
   const container = document.getElementById('messages');
   if (!container) return;
-  const mountOptions = openMountOptions(session, data, messages);
+  // The For you view opens at the bottom, where its newest message is: the
+  // reply an idle open anchors on is one For you does not show.
+  const view = Chat.ForYou.viewFor(session);
+  const mountOptions = view === Chat.ForYou.FOR_YOU ? null : openMountOptions(session, data, messages);
   const turnEngine = globalThis.Chat && Chat.TurnEngine
-    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, mountOptions || undefined)
+    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, Object.assign({view}, mountOptions))
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
+  Chat.ForYou.renderToggle(turnEngine ? turnEngine.view : Chat.ForYou.EVERYTHING);
 
   if (sessionHasMore) ensureSentinel(container, 'idle');
 

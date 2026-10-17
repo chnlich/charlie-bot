@@ -25,7 +25,7 @@ import pytest
 import yaml
 
 from src.features.cron import config as cron_config
-from src.features.cron.scheduler import Scheduler
+from src.features.cron import scheduler as scheduler_module
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import task_sessions
@@ -300,12 +300,11 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
       crash.setattr(task_sessions.TaskTreeManager, "adopt_metadata_slot", _boom)
     elif fail_after == "copy":
       # Node + bookkeeping exist; the write-back never ran.
-      from src.features.cron import scheduler as scheduler_module
       crash.setattr(scheduler_module.cron_files, "write_cron_key", _boom)
     else:
       # The binding is on disk; the archive never ran (the next tick's sweep
       # covers exactly this).
-      crash.setattr(Scheduler, "_archive_active_cron_sessions", _boom)
+      crash.setattr(scheduler_module.Scheduler, "_archive_active_cron_sessions", _boom)
 
     # The tick reports the interrupted task's error and keeps going.
     await scheduler._tick()

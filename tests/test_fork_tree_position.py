@@ -25,13 +25,14 @@ from src.runtime import takeoff_gate, task_completion
 from tests import test_task_execution
 
 
-async def make_tree(tmp_path: pathlib.Path) -> tuple[object, conftest.SessionBlocks, conftest.TaskTreeManager]:
+async def make_tree(
+    tmp_path: pathlib.Path) -> tuple[object, conftest.SessionBlocks, conftest.task_sessions.TaskTreeManager]:
   """The real blocks and the real task tree over one synthetic home."""
   return conftest.build_env(tmp_path)
 
 
 async def manager_child(
-    tree: conftest.TaskTreeManager,
+    tree: conftest.task_sessions.TaskTreeManager,
     parent: str,
     request_id: str,
     *,
@@ -41,15 +42,15 @@ async def manager_child(
   return await conftest.create_task(tree, parent=parent, request_id=request_id, profile=profile, task=task, name=name)
 
 
-def close_facts(tree: conftest.TaskTreeManager, session_id: str) -> list[dict]:
+def close_facts(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.TASK_CLOSED]
 
 
-def report_facts(tree: conftest.TaskTreeManager, session_id: str) -> list[dict]:
+def report_facts(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
 
 
-def event_ids(tree: conftest.TaskTreeManager, session_id: str) -> list[str]:
+def event_ids(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[str]:
   return [str(e.get("id")) for e in tree.fact_history(session_id)]
 
 
@@ -388,7 +389,7 @@ async def test_clone_and_elone_write_nothing_into_the_parent_log(tmp_path: pathl
 
 
 async def deliver_locked(
-    tree: conftest.TaskTreeManager, child_id: str, recipient: str, outcome: str = "completed") -> dict:
+    tree: conftest.task_sessions.TaskTreeManager, child_id: str, recipient: str, outcome: str = "completed") -> dict:
   """One real child_report delivery without the wake, for a test that
   dispatches the parent's turn itself."""
   source_event = next(

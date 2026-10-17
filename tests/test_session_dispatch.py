@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-from pathlib import Path
+import datetime
+import pathlib
 
+import conftest
+import fastapi
 import pytest
-from conftest import (
-    OPERATOR,
-    OPUS_BACKEND_ID,
-    SessionBlocks,
-    build_env,
-    build_task_tree,
-    create_scheduled_node,
-    create_task,
-    stub_credentials,
-)
+from fastapi import testclient
 
 from src.infra import event_types as ET
 from src.infra import models
@@ -61,7 +54,7 @@ class ScriptedExecutor:
     return run.id
 
 
-def child_report_messages(session_blocks: SessionBlocks, session_id: str) -> list[dict]:
+def child_report_messages(session_blocks: conftest.SessionBlocks, session_id: str) -> list[dict]:
   events = session_blocks.events.load_chat_events_sync(session_id)
   view, _draft = message_utils.events_to_view(events)
   return [m for m in view if m.get("role") == ET.CHILD_REPORT]
@@ -77,11 +70,11 @@ def input_events(tree: task_sessions.TaskTreeManager, session_id: str) -> list[d
 
 
 @pytest.mark.asyncio
-async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_path: Path) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  parent = await create_task(tree, parent=None, request_id="parent")
-  child_a = await create_task(tree, parent=parent.id, request_id="a", profile="worker")
-  child_b = await create_task(tree, parent=parent.id, request_id="b", profile="worker")
+async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="parent")
+  child_a = await conftest.create_task(tree, parent=parent.id, request_id="a", profile="worker")
+  child_b = await conftest.create_task(tree, parent=parent.id, request_id="b", profile="worker")
 
   # Child A closes and reports; the parent's first consumer claims exactly that
   # report and finishes successfully, acknowledging only it.
@@ -110,7 +103,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
   assert pending_now == {child_b.id}
 
   # A fresh instance derives the same eligibility from disk facts alone.
-  fresh = build_task_tree(cfg, session_blocks)
+  fresh = conftest.build_task_tree(cfg, session_blocks)
   pending_fresh = {e["child_session_id"] for e in input_events(fresh, parent.id)}
   assert pending_fresh == {child_b.id}
 
@@ -126,14 +119,14 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: Path) -> None:
+async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: pathlib.Path) -> None:
   """The crash-window repair's freshly delivered report is the parent's new
   durable input: the delivery entry wakes the parent (its next serialized turn
   dispatches now, without waiting for the next message or restart). A replayed
   recovery pass re-derives the same report id, delivers nothing, wakes nobody."""
-  _, _, tree = build_env(tmp_path)
-  parent = await create_task(tree, parent=None, request_id="parent")
-  child = await create_task(tree, parent=parent.id, request_id="a", profile="worker")
+  _, _, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="parent")
+  child = await conftest.create_task(tree, parent=parent.id, request_id="a", profile="worker")
 
   # The close fact exists with an owed report, delivered by nobody: the crash
   # window recover_pending_reports repairs.
@@ -176,10 +169,10 @@ async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Path) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path)
-  parent = await create_task(tree, parent=None, request_id="parent")
-  child = await create_task(tree, parent=parent.id, request_id="child", profile="worker")
+async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="parent")
+  child = await conftest.create_task(tree, parent=parent.id, request_id="child", profile="worker")
 
   # Window (a): the child's close fact landed but the parent append was lost.
   close_event = {
@@ -196,7 +189,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
       "report_to": parent.id,
   }
   await tree.events.append(child.id, close_event)
-  fresh = build_task_tree(cfg, session_blocks)
+  fresh = conftest.build_task_tree(cfg, session_blocks)
 
   # While the report is undelivered, the moving-subtree reparent guard blocks.
   other_root = await fresh.create_task(
@@ -206,9 +199,10 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
       task=None,
       name=None,
       backend=None,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   with pytest.raises(task_errors.TaskConflictError, match="undelivered parent report"):
-    await fresh.patch_task(child.id, models.PatchSessionTaskRequest(task_parent_id=other_root.id), caller=OPERATOR)
+    await fresh.patch_task(
+        child.id, models.PatchSessionTaskRequest(task_parent_id=other_root.id), caller=conftest.OPERATOR)
 
   delivered = await fresh.dispatch.recover_pending_reports(child.id)
   assert len(delivered) == 1 and delivered[0]["child_session_id"] == child.id
@@ -228,7 +222,8 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   assert [str(e["id"]) for e in pending] == [delivered[0]["id"]]
 
   # With the report delivered, the same move passes its report guards.
-  await fresh.patch_task(child.id, models.PatchSessionTaskRequest(task_parent_id=other_root.id), caller=OPERATOR)
+  await fresh.patch_task(
+      child.id, models.PatchSessionTaskRequest(task_parent_id=other_root.id), caller=conftest.OPERATOR)
   moved = await fresh.load_meta(child.id)
   assert moved is not None and moved.task_parent_id == other_root.id
 
@@ -239,10 +234,10 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_closed_node_keeps_input_and_agent_content_never_mints_authorization(tmp_path: Path) -> None:
-  _, _, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
+async def test_closed_node_keeps_input_and_agent_content_never_mints_authorization(tmp_path: pathlib.Path) -> None:
+  _, _, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="worker", profile="worker")
 
   # Agent and cron input carry their own types even with takeoff in the text;
   # the runtime gate never counts them as user messages. The agent message is
@@ -285,9 +280,9 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
 
 
 @pytest.mark.asyncio
-async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_path: Path) -> None:
-  _, _, tree = build_env(tmp_path)
-  node = await create_task(tree, parent=None, request_id="node")
+async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_path: pathlib.Path) -> None:
+  _, _, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="node")
   await admit(tree, node.id, "work to do", input_id="job-1")
   queued = await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=node.id))
   async with tree.control_lock:
@@ -316,39 +311,39 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tmp_path: Path) -> None:
-  _cfg, session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
+async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tmp_path: pathlib.Path) -> None:
+  _cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  child = await conftest.create_task(tree, parent=root.id, request_id="child", profile="worker")
 
   # Child reference.
   with pytest.raises(task_errors.TaskConflictError, match="child task"):
-    await tree.delete_permanently(root.id, caller=OPERATOR)
+    await tree.delete_permanently(root.id, caller=conftest.OPERATOR)
   # Runs.
   await tree.runs.register_run(models.RunRecord(id="run-blk", session_id=child.id))
   with pytest.raises(task_errors.TaskConflictError, match="run record"):
-    await tree.delete_permanently(child.id, caller=OPERATOR)
+    await tree.delete_permanently(child.id, caller=conftest.OPERATOR)
   # Preserved conversation beyond the creation fact.
   await admit(tree, child.id, "history", input_id="hist-1")
   with pytest.raises(task_errors.TaskConflictError, match="preserved conversation"):
-    await tree.delete_permanently(child.id, caller=OPERATOR)
+    await tree.delete_permanently(child.id, caller=conftest.OPERATOR)
   # A child report held in another task's log.
-  other_root = await create_task(tree, parent=None, request_id="other-root")
+  other_root = await conftest.create_task(tree, parent=None, request_id="other-root")
   await tree.dispatch.deliver_child_report(
       child.id, source_event={"id": "src-1"}, outcome="failed", summary="s", result_refs=[], recipient=other_root.id)
   with pytest.raises(task_errors.TaskConflictError, match="child report"):
-    await tree.delete_permanently(child.id, caller=OPERATOR)
+    await tree.delete_permanently(child.id, caller=conftest.OPERATOR)
   # An origin reference from another task's saved metadata.
   fork_meta = await session_blocks.store.get_session(other_root.id)
   assert fork_meta is not None
   fork_meta.origin_ref = models.EventRef(session_id=child.id, event_id=None)
   await session_blocks.store.save_metadata(fork_meta)
   with pytest.raises(task_errors.TaskConflictError, match="origin_ref"):
-    await tree.delete_permanently(child.id, caller=OPERATOR)
+    await tree.delete_permanently(child.id, caller=conftest.OPERATOR)
 
   # A truly empty, unreferenced task is deletable under the same lock.
-  empty = await create_task(tree, parent=None, request_id="empty")
-  assert await tree.delete_permanently(empty.id, caller=OPERATOR) is True
+  empty = await conftest.create_task(tree, parent=None, request_id="empty")
+  assert await tree.delete_permanently(empty.id, caller=conftest.OPERATOR) is True
   assert await session_blocks.store.get_session(empty.id) is None
   # Agents cannot delete.
   with pytest.raises(task_errors.TaskForbiddenError):
@@ -364,25 +359,23 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
 
 
 @pytest.mark.asyncio
-async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> None:
-  from fastapi import FastAPI, testclient
-
+async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: pathlib.Path) -> None:
   import src.runtime.api.chat as chat_api
   import src.runtime.api.internal as internal_api
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
   from src.runtime.api import deps
 
-  cfg, session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root", name="Root")
-  worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="worker", profile="worker")
 
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
   app.include_router(chat_api.router, prefix="/api/sessions")
   app.include_router(internal_api.router, prefix="/api/internal")
   key = "op-secret"
-  stub_credentials({"charliebot": {"access_key": key}})
+  conftest.stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
@@ -462,16 +455,14 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_message_route_stores_input_mode_only_when_the_post_carries_it(tmp_path: Path) -> None:
-  from fastapi import FastAPI, testclient
-
+async def test_message_route_stores_input_mode_only_when_the_post_carries_it(tmp_path: pathlib.Path) -> None:
   import src.runtime.api.chat as chat_api
   from src.infra import config
   from src.runtime.api import deps
 
-  cfg, session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root", name="Root")
-  app = FastAPI()
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  app = fastapi.FastAPI()
   app.include_router(chat_api.router, prefix="/api/chat")
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
@@ -489,9 +480,9 @@ async def test_message_route_stores_input_mode_only_when_the_post_carries_it(tmp
 
 
 @pytest.mark.asyncio
-async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: Path) -> None:
-  _cfg, _blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root", name="Root")
+async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: pathlib.Path) -> None:
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
 
   with pytest.raises(task_errors.TaskInvalidError, match="input_mode"):
     await admit(
@@ -501,21 +492,19 @@ async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
-  from fastapi import FastAPI, testclient
-
+async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -> None:
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
   from src.runtime.api import deps
 
-  cfg, session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root")
-  worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="worker", profile="worker")
 
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
   key = "op-secret"
-  stub_credentials({"charliebot": {"access_key": key}})
+  conftest.stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
@@ -599,14 +588,14 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tmp_path: Path) -> None:
+async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tmp_path: pathlib.Path) -> None:
   """The locked finish layer itself rejects it: a batchless run's finisher
   cannot name ids another registered non-terminal run claimed (a claim that
   lands between the dispatcher's pre-check and the locked finish still fails)."""
   from src.runtime import runs
 
-  _cfg, _session_blocks, tree = build_env(tmp_path)
-  task = await create_task(tree, parent=None, request_id="root")
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  task = await conftest.create_task(tree, parent=None, request_id="root")
   await admit(tree, task.id, "work", input_id="in-1")
   await tree.runs.register_run(models.RunRecord(id="run-b", session_id=task.id, kind="work"))
   async with tree.control_lock:
@@ -630,7 +619,7 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
 # ---------------------------------------------------------------------------
 
 
-async def updated_at_of(session_blocks: SessionBlocks, session_id: str):
+async def updated_at_of(session_blocks: conftest.SessionBlocks, session_id: str):
   """One node's current sidebar sort key."""
   meta = await session_blocks.store.get_session(session_id)
   assert meta is not None
@@ -638,17 +627,17 @@ async def updated_at_of(session_blocks: SessionBlocks, session_id: str):
 
 
 @pytest.mark.asyncio
-async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor(tmp_path: Path) -> None:
+async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor(tmp_path: pathlib.Path) -> None:
   """A real user message lifts the target and its unarchived ancestors to the
   event's time; an archived ancestor and everything above it keep their
   updated_at; a replayed input_id lifts nothing; agent messages, child
   reports, and scheduled triggers never lift."""
-  _, session_blocks, tree = build_env(tmp_path)
-  root = await create_task(tree, parent=None, request_id="root", name="Root")
-  mid = await create_task(tree, parent=root.id, request_id="mid", name="Mid")
-  child = await create_task(tree, parent=mid.id, request_id="child", name="Child")
-  first = (await updated_at_of(session_blocks, child.id) + timedelta(hours=1)).isoformat()
-  second = (await updated_at_of(session_blocks, child.id) + timedelta(hours=2)).isoformat()
+  _, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  mid = await conftest.create_task(tree, parent=root.id, request_id="mid", name="Mid")
+  child = await conftest.create_task(tree, parent=mid.id, request_id="child", name="Child")
+  first = (await updated_at_of(session_blocks, child.id) + datetime.timedelta(hours=1)).isoformat()
+  second = (await updated_at_of(session_blocks, child.id) + datetime.timedelta(hours=2)).isoformat()
 
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=first)
   assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(first)
@@ -666,7 +655,7 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
 
   # Agent relays, scheduled triggers, and child reports are server/agent
   # traffic: none of them lifts, however fresh.
-  agent_at = (await updated_at_of(session_blocks, child.id) + timedelta(hours=3)).isoformat()
+  agent_at = (await updated_at_of(session_blocks, child.id) + datetime.timedelta(hours=3)).isoformat()
   await admit(tree, child.id, "relayed", event_type=ET.AGENT_MESSAGE, actor="agent", timestamp=agent_at)
   await admit(
       tree, child.id, "cron woke this node", event_type=ET.SCHEDULED_TRIGGER, actor="system", timestamp=agent_at)
@@ -677,13 +666,13 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
 
   # An archived ancestor stops the climb: the archived row and everything
   # above it keep their updated_at even though the message is fresher.
-  aroot = await create_task(tree, parent=None, request_id="aroot", name="ARoot")
-  amid = await create_task(tree, parent=aroot.id, request_id="amid", name="AMid")
-  achild = await create_task(tree, parent=amid.id, request_id="achild", name="AChild")
+  aroot = await conftest.create_task(tree, parent=None, request_id="aroot", name="ARoot")
+  amid = await conftest.create_task(tree, parent=aroot.id, request_id="amid", name="AMid")
+  achild = await conftest.create_task(tree, parent=amid.id, request_id="achild", name="AChild")
   await session_blocks.lifecycle.archive_session(amid.id)
   archived_at = await updated_at_of(session_blocks, amid.id)
   root_at = await updated_at_of(session_blocks, aroot.id)
-  later = (await updated_at_of(session_blocks, achild.id) + timedelta(hours=3)).isoformat()
+  later = (await updated_at_of(session_blocks, achild.id) + datetime.timedelta(hours=3)).isoformat()
   await admit(tree, achild.id, "to the archived branch", timestamp=later)
   assert await updated_at_of(session_blocks, achild.id) == models.ensure_utc(later)
   assert await updated_at_of(session_blocks, amid.id) == archived_at
@@ -691,19 +680,19 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
 
 
 @pytest.mark.asyncio
-async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: Path) -> None:
+async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: pathlib.Path) -> None:
   """Listing order follows the user's actions: a fire leaves the scheduled
   node's updated_at alone, so a node the user just messaged lists ahead of it
   even when it started out older."""
-  _, session_blocks, tree = build_env(tmp_path)
-  x = await create_task(tree, parent=None, request_id="x", name="X")
-  s = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
+  _, session_blocks, tree = conftest.build_env(tmp_path)
+  x = await conftest.create_task(tree, parent=None, request_id="x", name="X")
+  s = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
   # Pin both rows into the past, X two hours older than the scheduled node.
   s_meta = await session_blocks.store.get_session(s.id)
   assert s_meta is not None
   base = s_meta.updated_at
-  await session_blocks.anchors.update_thinking_state(x.id, base - timedelta(hours=2))
-  await session_blocks.anchors.update_thinking_state(s.id, base - timedelta(hours=1))
+  await session_blocks.anchors.update_thinking_state(x.id, base - datetime.timedelta(hours=2))
+  await session_blocks.anchors.update_thinking_state(s.id, base - datetime.timedelta(hours=1))
 
   await tree.update_slot_fields(
       s.id, "cron", last_scheduled_run=base.isoformat(), last_run_status=models.LastRunStatus.SKIPPED)
@@ -712,7 +701,7 @@ async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: P
   assert next(r for r in listing if r.id == s.id).last_run_status == models.LastRunStatus.SKIPPED
 
   # The user messages the older node; the fired node keeps its place.
-  messaged_at = (base - timedelta(minutes=30)).isoformat()
+  messaged_at = (base - datetime.timedelta(minutes=30)).isoformat()
   await admit(tree, x.id, "my turn", timestamp=messaged_at)
   listing = await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [x.id, s.id]

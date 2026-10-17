@@ -22,6 +22,7 @@ PACKAGES = (
     "src.features.diag",
     "src.features.slack",  # Its registered session keys precede Discord's in the saved metadata.
     "src.features.discord",
+    "src.features.web_reply",
     "src.features.host_auth",
     "src.features.diff_view",
     "src.features.explain",

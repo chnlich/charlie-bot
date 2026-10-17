@@ -1,6 +1,6 @@
 """Feature routes: each package serves its HTTP routes through the router its register() adds.
 
-The improve, Slack, Discord, plan and explain routes live in ``src/features/<package>/api.py``.
+The improve, Slack, Discord, web reply, plan and explain routes live in ``src/features/<package>/api.py``.
 The checks here pin what moving them out of the runtime routers must not change: the access key
 still gates every moved path, no earlier route answers a moved path, and deleting a package's line
 in PACKAGES removes exactly the routes its api module serves and its /static/<kind>/<name> mount.
@@ -45,6 +45,7 @@ def _session_body(**fields: Any) -> dict[str, Any]:
 IMPROVE = "src.features.improve"
 SLACK = "src.features.slack"
 DISCORD = "src.features.discord"
+WEB_REPLY = "src.features.web_reply"
 ARTIFACTS = "src.features.artifacts"
 EXPLAIN = "src.features.explain"
 
@@ -56,6 +57,8 @@ MOVED_ROUTES = [
     MovedRoute(SLACK, "POST", "/api/internal/slack/reply", _session_body(text="t"), 404, SESSION_NOT_FOUND),
     MovedRoute(SLACK, "POST", "/api/internal/slack/ack", _session_body(message_ids=["1.0"]), 404, SESSION_NOT_FOUND),
     MovedRoute(DISCORD, "POST", "/api/internal/discord/reply", _session_body(text="t"), 404, SESSION_NOT_FOUND),
+    MovedRoute(WEB_REPLY, "POST", "/api/internal/web/reply", _session_body(text="t"), 404, SESSION_NOT_FOUND),
+    MovedRoute(WEB_REPLY, "GET", "/api/internal/web/dialog?session_id={session_id}", {}, 404, SESSION_NOT_FOUND),
     MovedRoute(DISCORD, "POST", "/api/internal/discord/read", _session_body(), 404, SESSION_NOT_FOUND),
     MovedRoute(DISCORD, "POST", "/api/internal/discord/check", {}, 409, ""),
     MovedRoute(

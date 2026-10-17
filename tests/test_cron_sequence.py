@@ -13,25 +13,9 @@ import asyncio
 import uuid
 from pathlib import Path
 
+import conftest
 import pytest
 import yaml
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    CODEX_BACKEND_OPTION,
-    FABLE_MODEL,
-    OPERATOR,
-    OPUS_BACKEND_ID,
-    OPUS_BACKEND_OPTION,
-    POOLED_FABLE_ID,
-    SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
-    WORKER_BUILD_BACKEND_PATCH_TARGET,
-    _async_wait_for,
-    backend_option,
-    bind_deps_blocks,
-    build_scheduler,
-    init_repo_with_origin,
-    install_scripted_backends,
-)
 
 from src.backends.claude_code import claude_accounts
 from src.features.cron.config import ScheduledTaskConfig, StepConfig
@@ -55,9 +39,9 @@ def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       tmp_path,
       monkeypatch,
       options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-          backend_option(id="fake", label="Fake", type="codex", model="fake-model"),
+          conftest.OPUS_BACKEND_OPTION,
+          conftest.CODEX_BACKEND_OPTION,
+          conftest.backend_option(id="fake", label="Fake", type="codex", model="fake-model"),
       ])
 
 
@@ -68,7 +52,7 @@ def bound_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   The bound manager node is created per test (each test is async).
   """
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   return cfg, session_blocks, tree
 
@@ -143,8 +127,9 @@ def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> N
   """Script the parent node's report-consuming turn through the registry
   builder (the manager dispatch path), so no external process starts from
   these tests. One scripted backend per expected manager-turn build."""
-  install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event(note)]) for note in notes], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event(note)]) for note in notes],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
 
 
 def _child_reports(tree: TaskTreeManager, node_id: str) -> list[dict]:
@@ -154,7 +139,7 @@ def _child_reports(tree: TaskTreeManager, node_id: str) -> list[dict]:
 
 async def _wait_for_child_report(tree, node_id: str, what: str, timeout: float = 20.0) -> list[dict]:
   """Wait out the node's report turn and return its child reports."""
-  await _async_wait_for(lambda: bool(_child_reports(tree, node_id)), timeout, what)
+  await conftest._async_wait_for(lambda: bool(_child_reports(tree, node_id)), timeout, what)
   return _child_reports(tree, node_id)
 
 
@@ -217,12 +202,12 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
 async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("broke")], exit_code=1),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _persist_chained_cron_d(cfg, manager.id)
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   leaf_id = result["leaf_session_id"]
@@ -234,7 +219,7 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
   # archives the stopped leaf: exactly one report, then the end state.
   assert "stopped at step 'selector'" in str(reports[0].get("summary"))
   assert len(reports) == 1
-  await _async_wait_for(lambda: tree.task_state(leaf_id) == "archived", 15.0, "the failed leaf's archive")
+  await conftest._async_wait_for(lambda: tree.task_state(leaf_id) == "archived", 15.0, "the failed leaf's archive")
   closes = [e for e in tree.events.load_events(leaf_id) if e["type"] == ET.TASK_CLOSED]
   assert len(closes) == 1
   assert closes[0]["outcome"] == "archived"
@@ -255,7 +240,7 @@ async def test_missing_binding_fails_visibly_without_creating_a_session(
   cfg, session_blocks, tree = bound_env
   await make_manager(tree)
   task_cfg = _bound_task("ghost", str(uuid.uuid4()), prompt="Nobody home.")
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   with pytest.raises(ScheduledBindingError, match="does not exist"):
     await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
   # No session was created for the missing binding.
@@ -268,7 +253,8 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
   from src.features.cron.cron_sequence import ScheduledBindingError
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_scripted_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("x")])], conftest.BUILD_BACKEND_PATCH_TARGET)
   from src.runtime.task_completion import CompletionEvidence
   close_run = stable_run_id(manager.id, "close:evidence")
   await tree.runs.register_run(RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
@@ -277,10 +263,10 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
   await tree.completion.complete_task(
       manager.id,
       request_id="close-1",
-      caller=OPERATOR,
+      caller=conftest.OPERATOR,
       evidence=CompletionEvidence(summary="done", run_ids=[close_run], result_refs=[f"run:{close_run}"]))
   task_cfg = _bound_task("wake-manager", manager.id, prompt="Standup.")
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   with pytest.raises(ScheduledBindingError, match="no new cron execution"):
     await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
   # The configuration remains readable.
@@ -317,10 +303,10 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   # Step 1 rides a scripted worker process; the manager's report-consuming
   # turn rides the registry builder (scripted) — no external process starts
   # from this test, and no background launch outlives it.
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("reviewer wrote the report")]),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _persist_chained_cron_d(cfg, manager.id)
   # The durable mid-chain facts of a stopped process: the firing's leaf with
@@ -396,11 +382,13 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
 async def cancel_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
   """Close one run-less node with outcome cancelled: a closed task withholds
   every launch (a queued Run would block the cancel, so close first)."""
-  await tree.completion.cancel_task(session_id, request_id=request_id, reason="withhold the launch", caller=OPERATOR)
+  await tree.completion.cancel_task(
+      session_id, request_id=request_id, reason="withhold the launch", caller=conftest.OPERATOR)
 
 
 async def reopen_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
-  await tree.completion.restore_task(session_id, request_id=request_id, reason="precondition cleared", caller=OPERATOR)
+  await tree.completion.restore_task(
+      session_id, request_id=request_id, reason="precondition cleared", caller=conftest.OPERATOR)
 
 
 def blocked_reports(tree: TaskTreeManager, manager_id: str) -> list[dict]:
@@ -420,7 +408,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   handle ends with the controller instead of hanging."""
   _cfg, _session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  builds = install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "withheld-steps",
       manager.id,
@@ -459,8 +447,8 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   # the launch — no process, no terminal fact, no duplicate run.
   await reopen_task_node(tree, leaf.id, "clear-leaf")
   assert tree.task_state(leaf.id) == "open"
-  builds2 = install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("first done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds2 = conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("first done")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await asyncio.wait_for(cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id), 20)
   runs_after = tree.runs.list_run_records_sync(leaf.id)
   assert len(runs_after) == 1
@@ -474,9 +462,9 @@ async def test_steps_admission_failure_does_not_consume_the_occurrence(
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task("flaky-steps", manager.id, steps=[StepConfig(name="only", prompt="Do it.")])
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   from src.features.cron import scheduler as scheduler_module
   original = scheduler_module.cron_sequence.register_leaf_run
 
@@ -508,11 +496,11 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
   # The leaf's work runs re-judge the nearest-user gate at launch: authorize
   # the manager so the repair run below launches.
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("step zero done")]),
           SpawningScriptedBackend([result_event("step one done")])
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The boundary close dispatches the parent's report-consuming turn through
   # the registry builder: script it so no external process starts here.
   _script_manager_turn(monkeypatch, ["report noted"])
@@ -566,11 +554,11 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
 
   # The repaired close: consume the pending input with a successful run; the
   # normal completion owner closes and delivers the completed report.
-  builds = install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("answered")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("answered")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(leaf.id)
   assert decision["launch"] is True
-  await _async_wait_for(
+  await conftest._async_wait_for(
       lambda: tree.task_state(leaf.id) != "open" and len(_child_reports(tree, manager.id)) == 2,
       15.0,
       "the repaired close and its parent report never landed",
@@ -695,14 +683,14 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
   cfg, session_blocks, tree = bound_env
   # The unbound path binds through the scheduler's reloaded process config;
   # pin it to the synthetic home's cfg.
-  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
-  install_scripted_backends(
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("sweep done")]),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   _persist_unbound_cron_d(cfg, "nightly-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   task_cfg = ScheduledTaskConfig(name="nightly-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake")
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
 
@@ -739,18 +727,18 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   leaf must actually launch through it (auto-bind first, then the fire).
   """
   cfg, session_blocks, tree = bound_env
-  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
-  repo, _origin = init_repo_with_origin(tmp_path)
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  repo, _origin = conftest.init_repo_with_origin(tmp_path)
   _persist_unbound_cron_d(cfg, "repo-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   backend = SpawningScriptedBackend([result_event("sweep done")])
-  install_scripted_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The close report's wake dispatches the bound node's report-consuming turn;
   # script it through the registry builder so no external process starts.
   _script_manager_turn(monkeypatch, ["report noted"])
 
   task_cfg = ScheduledTaskConfig(
       name="repo-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake", repo=str(repo))
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
 
   leaf_id = result["leaf_session_id"]
@@ -775,7 +763,8 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   # The type-less delivery: no review Run, and the delivered worktree is gone.
   # The removal follows the close report (the finalize chain's cleanup step
   # runs after the report is durable), so poll it out instead of racing it.
-  await _async_wait_for(lambda: not Path(work.worktree_path).exists(), 10.0, "the delivered worktree was never removed")
+  await conftest._async_wait_for(
+      lambda: not Path(work.worktree_path).exists(), 10.0, "the delivered worktree was never removed")
 
 
 @pytest.mark.asyncio
@@ -784,7 +773,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
   leaf under the new node: step 0, then step 1 fed the previous result, then
   ONE boundary report to the node."""
   cfg, session_blocks, tree = bound_env
-  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   _persist_unbound_cron_d(
       cfg, "chained-legacy", {
           "cron":
@@ -804,11 +793,11 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
                   },
               ],
       })
-  builds = install_scripted_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("selector says pick three")]),
           SpawningScriptedBackend([result_event("reviewer wrote the report")]),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = ScheduledTaskConfig(
       name="chained-legacy",
       cron="0 3 * * *",
@@ -817,7 +806,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
           StepConfig(name="selector", prompt="Select candidates."),
           StepConfig(name="reviewer", prompt="Review the diff.", backend="codex-o3"),
       ])
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   node_id = task_cfg.session_id
@@ -857,8 +846,9 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
   backend, and no scripted process ever starts."""
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  builds = install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("should never run")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # No backend written anywhere: the config loads (the repo default's shape),
   # and both steps resolve to the first configured option.
   task_cfg = _bound_task(
@@ -869,7 +859,7 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
           StepConfig(name="selector", prompt="Select."),
           StepConfig(name="reviewer", prompt="Review.", distinct_backend_from="selector"),
       ])
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   leaf_id = result["leaf_session_id"]
@@ -888,7 +878,7 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
   summary = str(reports[0].get("summary"))
   assert "stopped before its first step" in summary
   assert "steps 'selector' and 'reviewer'" in summary
-  assert OPUS_BACKEND_ID in summary
+  assert conftest.OPUS_BACKEND_ID in summary
 
 
 @pytest.mark.asyncio
@@ -899,8 +889,9 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   from src.runtime.task_recovery import reconcile_task_tree
   cfg, _session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("should never run")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "distinct",
       manager.id,
@@ -955,12 +946,12 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0]
   # The stopped chain's report archived the leaf: step 0 ended last and no
   # run is queued.
-  await _async_wait_for(lambda: tree.task_state(leaf_id) == "archived", 15.0, "the stopped leaf's archive")
+  await conftest._async_wait_for(lambda: tree.task_state(leaf_id) == "archived", 15.0, "the stopped leaf's archive")
   assert len(reports) == 1
   summary = str(reports[0].get("summary"))
   assert "stopped before launching step 'reviewer'" in summary
   assert "steps 'selector' and 'reviewer'" in summary
-  assert OPUS_BACKEND_ID in summary
+  assert conftest.OPUS_BACKEND_ID in summary
 
 
 @pytest.mark.asyncio
@@ -968,11 +959,11 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
   """The completion report's per-step headings carry the backend each step ran."""
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("picked three")]),
           SpawningScriptedBackend([result_event("reviewed the picks")]),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The completed close's report wake dispatches the manager's turn (the test
   # drains it below); script it so no external CLI process starts — a real
   # spawn's process start spends the unit budget's headroom and flakes under
@@ -985,7 +976,7 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
           StepConfig(name="selector", prompt="Select."),
           StepConfig(name="reviewer", prompt="Review.", backend="codex-o3"),
       ])
-  scheduler = build_scheduler(cfg, session_blocks)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   firing = "2026-01-01T03:00:00+00:00"
   await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   reports = await _wait_for_child_report(tree, manager.id, "the completion report never arrived")
@@ -1008,12 +999,12 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
   build receives the selected account)."""
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
-  bind_deps_blocks(monkeypatch, tree, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await make_manager(tree, "Pooled Manager")
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
-  builds = install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("step done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("step done")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   # The boundary close's report wake dispatches the manager's turn; the launch
   # under test is the step's, so the wake records without launching one.
@@ -1025,7 +1016,7 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
   task_cfg = _bound_task(
       "pooled-steps",
       manager.id,
-      backend=POOLED_FABLE_ID,
+      backend=conftest.POOLED_FABLE_ID,
       steps=[StepConfig(name="only", prompt="Do the single thing.")])
   from src.features.cron import cron_sequence
   from src.infra.tasks import create_logged_task
@@ -1035,7 +1026,7 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
       cron_sequence.run_firing_steps(task_cfg, meta, tree, FIRING, leaf.id), name="pooled-steps-controller")
   await asyncio.wait_for(handle, 20)
 
-  expected = claude_accounts.select(cfg, FABLE_MODEL)
+  expected = claude_accounts.select(cfg, conftest.FABLE_MODEL)
   assert expected is not None and expected.label == "main"
   assert builds[0]["kwargs"]["claude_account"] == expected
   runs = tree.runs.list_run_records_sync(leaf.id)

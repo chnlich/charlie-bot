@@ -905,6 +905,10 @@ video {
   width: 6rem;
 }
 
+.w-28 {
+  width: 7rem;
+}
+
 .w-3 {
   width: 0.75rem;
 }
@@ -2390,6 +2394,15 @@ video {
 
 .group:hover .group-hover\:opacity-100 {
   opacity: 1;
+}
+
+.aria-pressed\:bg-blue-600\/20[aria-pressed="true"] {
+  background-color: rgb(37 99 235 / 0.2);
+}
+
+.aria-pressed\:text-blue-300[aria-pressed="true"] {
+  --tw-text-opacity: 1;
+  color: rgb(147 197 253 / var(--tw-text-opacity, 1));
 }
 
 @media (min-width: 640px) {

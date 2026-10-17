@@ -79,6 +79,15 @@ SESSION_ATTACHED = "session_attached"
 # never a real user message (the authorization gate excludes it by type).
 AGENT_MESSAGE = "agent_message"
 
+# -- Web reply ---------------------------------------------------------------
+# The reply a web session's agent posts to its user through ``charliebot web reply``. The
+# same-named payload key carries ``answers`` and ``chars``; a nudge is an AGENT_MESSAGE whose
+# same-named key carries ``nudge_of``. The runtime names both types in
+# session_events.RAW_EVENTS_REPLACED_BY_DELTAS, so the names live here, not in the feature package.
+WEB_REPLY = "web_reply"
+# The round-end notice that a user message got no reply; its payload key carries input_event_id.
+WEB_REPLY_NOTICE = "web_reply_notice"
+
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
 CONTEXT_COMPACT_FAILED = "context_compact_failed"

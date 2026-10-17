@@ -11,7 +11,7 @@ from src.infra import config, constants, log_once, models, ndjson, process
 from src.infra import event_types as ET
 from src.runtime import launch_loop, master_cc_state, runs, spawner_backends, streaming
 from src.runtime.agent_process import base
-from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
+from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
 
 log = log_once.LazyStructlogLogger()
 
@@ -340,6 +340,20 @@ async def _refuse_turn(item: master_cc_state._WorkItem, msg: str,
   await item.callbacks.persist_and_broadcast(item.session_meta.id, _agent_error_event(msg, quota_exhausted))
   await item.callbacks.mark_unread(item.session_meta.id)
   return None, 1, msg, {}
+
+
+async def _mark_turn_end_unread(
+    item: master_cc_state._WorkItem, error_msg: str | None, exit_code: int, finish_extras: dict) -> None:
+  """Mark the session unread at a turn's end, unless a turn contribution claims the marker for a clean turn.
+
+  A clean turn has no error message, a zero exit and no zero-output guard; the zero-output guard
+  persists its error event after this point, so it counts as an error here. A claiming contribution
+  marks the session itself when the turn needs the user. Every other turn marks.
+  """
+  clean = error_msg is None and exit_code == 0 and not finish_extras.get("zero_output")
+  if clean and turn_contributions.turn_end_unread_claimed(item.session_meta):
+    return
+  await item.callbacks.mark_unread(item.session_meta.id)
 
 
 def _resolve_turn_option(item: master_cc_state._WorkItem) -> models.BackendOption | None:
@@ -677,7 +691,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # any terminal state (unread marker, finished log) would lie
     # about it. The next boot's reconcile owns the outcome of this turn.
     if not let_go:
-      await item.callbacks.mark_unread(session_meta.id)
+      await _mark_turn_end_unread(item, error_msg, exit_code, finish_extras)
 
       log.info(
           "master_cc_finished",
@@ -824,7 +838,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
   finally:
     finish_extras = tracker.build_finish_extras()
     await _report_turn_error_and_salvage(tracker, item, error_msg, None)
-    await item.callbacks.mark_unread(session_meta.id)
+    await _mark_turn_end_unread(item, error_msg, exit_code, finish_extras)
     log.info(
         "master_cc_resume_finished",
         session=session_meta.id,

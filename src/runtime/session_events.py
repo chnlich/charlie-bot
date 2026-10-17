@@ -21,7 +21,16 @@ from src.runtime.hooks import sidebar_contributions, turn_contributions
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
 # do not broadcast them raw -- the deltas are the wire format.
 RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset(
-    {ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT, ET.TASK_CLOSED, ET.TASK_REOPENED})
+    {
+        ET.ASSISTANT,
+        ET.USER,
+        ET.SCHEDULED_TRIGGER,
+        ET.CHILD_REPORT,
+        ET.TASK_CLOSED,
+        ET.TASK_REOPENED,
+        ET.WEB_REPLY,
+        ET.WEB_REPLY_NOTICE,
+    })
 
 log = log_once.LazyStructlogLogger()
 

@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::bail;
+use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::metadata::SessionMetadata;
 use futures_util::future::BoxFuture;
@@ -38,12 +39,13 @@ pub type EventRenderer = fn(&Value) -> Value;
 /// One package's part in a master turn. Every step defaults to adding nothing.
 pub trait TurnContribution: Send + Sync {
   /// Segments for the managed instructions of a run of `kind`. They follow the model overlay segments and precede
-  /// the local rule segments, in registration order.
+  /// the local rule segments, in registration order. A contribution reads its prompt docs through `repo`.
   fn instruction_segments(
     &self,
     _meta: &SessionMetadata,
     _kind: &str,
     _cfg: &CharlieBotConfig,
+    _repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
     Ok(Vec::new())
   }
@@ -134,10 +136,11 @@ impl Registry {
     meta: &SessionMetadata,
     kind: &str,
     cfg: &CharlieBotConfig,
+    repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
     let mut segments = Vec::new();
     for contribution in self.turn_contributions.values() {
-      segments.extend(contribution.instruction_segments(meta, kind, cfg)?);
+      segments.extend(contribution.instruction_segments(meta, kind, cfg, repo)?);
     }
     Ok(segments)
   }

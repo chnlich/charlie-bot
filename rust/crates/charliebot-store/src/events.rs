@@ -30,7 +30,7 @@ impl Store {
     Ok(event)
   }
 
-  /// Append one control fact while the caller holds the tree-wide control lock.
+  /// Append one control fact while the caller holds the tree-wide control lock, then notify the sidebar of its type.
   pub async fn append_control_fact(
     &self,
     guard: &ControlGuard,
@@ -38,7 +38,10 @@ impl Store {
     event: Value,
   ) -> StoreResult<ChatEvent> {
     self.require_control_guard(guard)?;
-    self.append_chat_event(session_id, event).await
+    let event = self.append_chat_event(session_id, event).await?;
+    let fact_type = event.get("type").and_then(Value::as_str);
+    self.notify_task_tree_changed(session_id, fact_type).await;
+    Ok(event)
   }
 
   /// Read the live event log, using the in-memory parsed-event cache after the first read.

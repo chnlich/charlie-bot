@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use charliebot_core::fsutil;
+use charliebot_core::{event_types, fsutil};
 use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
@@ -352,7 +352,13 @@ impl Store {
     self.publish_task_node(&metadata, &created_event)?;
     self.invalidate_cache(&task_id);
     self.invalidate_tree_index();
-    self.read_metadata_fresh(&task_id)?.ok_or_else(|| StoreError::new(format!("created task {task_id} is missing")))
+    let fresh = self
+      .read_metadata_fresh(&task_id)?
+      .ok_or_else(|| StoreError::new(format!("created task {task_id} is missing")))?;
+    // The creation fact is published by the rename above, which appends no control fact. The signal follows the
+    // publication and the index invalidation, so a receiver can read the node at once (`task_sessions.create_task`).
+    self.notify_task_tree_changed(&task_id, Some(event_types::TASK_CREATED)).await;
+    Ok(fresh)
   }
 
   /// Change registered slot values while the caller holds the tree control lock.
@@ -1280,6 +1286,7 @@ mod tests {
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
     StoreHookFuture, StoreHooks,
   };
+  use crate::streaming::{SIDEBAR_CHANNEL, Subscription};
 
   struct TestAccountLabels;
 
@@ -2049,6 +2056,38 @@ mod tests {
 
     assert_eq!(error.to_string(), "task missing not found");
     assert_eq!(error.status_code(), Some(404));
+  }
+
+  async fn next_sidebar_frame(sidebar: &mut Subscription) -> Value {
+    let frame = tokio::time::timeout(Duration::from_secs(5), sidebar.recv())
+      .await
+      .expect("a sidebar frame arrives")
+      .expect("the sidebar channel stays open");
+    serde_json::from_str(&frame).unwrap()
+  }
+
+  #[tokio::test]
+  async fn control_facts_and_task_creation_notify_the_sidebar_with_the_fact_type() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let mut sidebar = store.subscribe(SIDEBAR_CHANNEL);
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "child", Some(&root.id), TaskProfile::Worker).await;
+    for node in [&root.id, &child.id] {
+      assert_eq!(
+        next_sidebar_frame(&mut sidebar).await,
+        json!({"type": "task_tree_changed", "session_id": node, "fact_type": "task_created"})
+      );
+    }
+
+    store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+
+    for node in [&root.id, &child.id] {
+      assert_eq!(
+        next_sidebar_frame(&mut sidebar).await,
+        json!({"type": "task_tree_changed", "session_id": node, "fact_type": "task_closed"})
+      );
+    }
   }
 
   #[tokio::test]

@@ -152,6 +152,7 @@ impl ClaudeCodeLifecycle {
     let Some(session_id) = session_id else {
       return Ok(None);
     };
+    let _pool_choice = self.state.pool_choice.lock().await;
     let meta = ctx.session_meta.lock().expect("launch metadata mutex is not poisoned").clone();
     let previous_label = claude_metadata::account_of(&meta);
     let current = claude_accounts::account_by_label(&ctx.cfg, previous_label.as_deref())
@@ -175,7 +176,10 @@ impl ClaudeCodeLifecycle {
         "master_cc_resume_transcript_found_in_pool"
       );
       if previous_label.as_deref() != Some(found.label.as_str()) {
-        (ctx.record_account)(found.label.clone()).await.map_err(|error| refused(error, false, None))?;
+        claude_metadata::set_account(
+          &mut ctx.session_meta.lock().expect("launch metadata mutex is not poisoned"),
+          Some(&found.label),
+        );
       }
       return Ok(Some(session_id.to_string()));
     }
@@ -435,7 +439,6 @@ mod tests {
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
   use charliebot_store::metadata::TaskProfile;
-  use futures_util::future::BoxFuture;
   use serde_json::json;
 
   use super::*;
@@ -479,14 +482,7 @@ mod tests {
     claude_metadata::set_account(&mut metadata, account_label);
     let emit: EmitFn = Arc::new(|_| Box::pin(async { Ok(()) }));
     let session_meta = Arc::new(Mutex::new(metadata));
-    let record_metadata = Arc::clone(&session_meta);
-    let record_account: RecordAccountFn = Arc::new(move |label| {
-      let metadata = Arc::clone(&record_metadata);
-      Box::pin(async move {
-        claude_metadata::set_account(&mut metadata.lock().unwrap(), Some(&label));
-        Ok(())
-      }) as BoxFuture<'static, anyhow::Result<()>>
-    });
+    let record_account: RecordAccountFn = Arc::new(|_| Box::pin(async { Ok(()) }));
     let context_state: ContextStateFn = Arc::new(|| Box::pin(async { Ok((None, None)) }));
     LaunchContext {
       cfg: Arc::new(cfg),

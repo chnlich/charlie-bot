@@ -1,6 +1,7 @@
 //! Account placement and transcript adoption for Claude manager turns.
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -91,6 +92,10 @@ pub async fn adopt_transcript_holder(
   reason: &str,
 ) -> anyhow::Result<()> {
   (ctx.record_account)(holder.label.clone()).await?;
+  claude_metadata::set_account(
+    &mut ctx.session_meta.lock().expect("launch metadata mutex is not poisoned"),
+    Some(&holder.label),
+  );
   tracing::warn!(
     target: "charliebot_agents",
     session = %session_metadata(ctx).id,
@@ -131,8 +136,25 @@ pub async fn place_turn(
   last_request_at: Option<UtcDateTime>,
   now: Option<UtcDateTime>,
 ) -> Result<claude_config::ClaudeAccount, LaunchRefused> {
+  place_turn_with_hook(state, ctx, resume_id, context_tokens, last_request_at, now, std::future::ready(())).await
+}
+
+async fn place_turn_with_hook<F>(
+  state: &ClaudeAccountStateRef,
+  ctx: &LaunchContext,
+  resume_id: Option<&str>,
+  context_tokens: Option<i64>,
+  last_request_at: Option<UtcDateTime>,
+  now: Option<UtcDateTime>,
+  after_running_turns: F,
+) -> Result<claude_config::ClaudeAccount, LaunchRefused>
+where
+  F: Future<Output = ()> + Send,
+{
+  let pool_choice = state.pool_choice.lock().await;
   probe_reconcile_label(ctx, resume_id).await.map_err(|error| refusal(error, false, None))?;
   let running_turns = read_running_turns(ctx.running_turns.as_ref()).map_err(|error| refusal(error, false, None))?;
+  after_running_turns.await;
   let meta = session_metadata(ctx);
   let account_pool = claude_accounts::option_pool(&ctx.option);
   let (chosen, cold) = choose_turn_account(
@@ -155,7 +177,8 @@ pub async fn place_turn(
   };
   let previous = claude_accounts::account_by_label(&ctx.cfg, claude_metadata::account_of(&meta).as_deref())
     .map_err(|error| refusal(error, false, None))?;
-  if previous.as_ref().is_none_or(|previous| previous.label != chosen.label) {
+  let account_changed = previous.as_ref().is_none_or(|previous| previous.label != chosen.label);
+  if account_changed {
     if let (Some(resume_id), Some(previous)) = (resume_id.filter(|id| !id.is_empty()), previous.as_ref())
       && let Err(error) =
         claude_accounts::move_transcript(resume_id, Path::new(&previous.config_dir), Path::new(&chosen.config_dir))
@@ -175,7 +198,6 @@ pub async fn place_turn(
       &mut ctx.session_meta.lock().expect("launch metadata mutex is not poisoned"),
       Some(&chosen.label),
     );
-    (ctx.record_account)(chosen.label.clone()).await.map_err(|error| refusal(error, false, None))?;
     tracing::info!(
       target: "charliebot_agents",
       session = %meta.id,
@@ -184,6 +206,10 @@ pub async fn place_turn(
       cold_cache = cold,
       "master_cc_account_chosen"
     );
+  }
+  drop(pool_choice);
+  if account_changed {
+    (ctx.record_account)(chosen.label.clone()).await.map_err(|error| refusal(error, false, None))?;
   }
   report_empty_credentials(state, ctx).await.map_err(|error| refusal(error, false, None))?;
   if resume_id.is_some_and(|id| !id.is_empty())
@@ -254,6 +280,7 @@ pub async fn prepare_relay(
   min_headroom: f64,
 ) -> Result<claude_config::ClaudeAccount, LaunchRefused> {
   let account_pool = claude_accounts::option_pool(&ctx.option);
+  let pool_choice = if ctx.kind == LaunchKind::Turn { Some(state.pool_choice.lock().await) } else { None };
   let movement = claude_relay::relay_move(
     state,
     &ctx.cfg,
@@ -281,6 +308,13 @@ pub async fn prepare_relay(
     };
     return Err(LaunchRefused { message, quota_exhausted: movement.pool_exhausted, resets_at });
   };
+  if ctx.kind == LaunchKind::Turn {
+    claude_metadata::set_account(
+      &mut ctx.session_meta.lock().expect("launch metadata mutex is not poisoned"),
+      Some(&next.label),
+    );
+  }
+  drop(pool_choice);
   let meta = session_metadata(ctx);
   match ctx.kind {
     LaunchKind::Turn => tracing::warn!(
@@ -322,7 +356,92 @@ pub type ClaudeAccountStateRef = Arc<claude_accounts::ClaudeAccountState>;
 
 #[cfg(test)]
 mod tests {
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::time::{Duration, UNIX_EPOCH};
+
+  use charliebot_registry::Registry;
+  use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
+  use charliebot_store::metadata::TaskProfile;
+  use tokio::sync::Notify;
+
+  use crate::backends::claude_code::login_dirs;
+
   use super::*;
+
+  fn config(home: &Path, accounts: &[(&str, &Path)]) -> charliebot_core::config::CharlieBotConfig {
+    std::fs::create_dir_all(home).unwrap();
+    let mut configured = String::new();
+    let mut labels = Vec::new();
+    for (label, path) in accounts {
+      configured.push_str(&format!("    - label: {label}\n      config_dir: '{}'\n", path.display()));
+      labels.push((*label).to_string());
+    }
+    std::fs::write(
+      home.join("config.yaml"),
+      format!(
+        "backends:\n  options:\n    - id: fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n      account_pool: alpha\naccounts:\n  claude:\n{configured}  claude_pools:\n    alpha: [{}]\n",
+        labels.join(", ")
+      ),
+    )
+    .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.claude_code", crate::backends::claude_code::register).unwrap();
+    registry.load_config(home).unwrap()
+  }
+
+  fn context(
+    cfg: charliebot_core::config::CharlieBotConfig,
+    session_id: &str,
+    account_label: Option<&str>,
+    held_native_id: Option<&str>,
+    running_turns: RunningTurnsFn,
+    record_account: RecordAccountFn,
+  ) -> LaunchContext {
+    let option = cfg.backends.options[0].clone();
+    let mut metadata = SessionMetadata::new(session_id, "Session", TaskProfile::Manager);
+    claude_metadata::set_account(&mut metadata, account_label);
+    let session_meta = Arc::new(std::sync::Mutex::new(metadata));
+    let emit: EmitFn = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let context_state: ContextStateFn = Arc::new(|| Box::pin(async { Ok((None, None)) }));
+    LaunchContext {
+      cfg: Arc::new(cfg),
+      option,
+      session_meta,
+      kind: LaunchKind::Turn,
+      cwd: std::path::PathBuf::from("/synthetic/cwd"),
+      held_native_id: held_native_id.map(str::to_string),
+      preassigned_native_id: None,
+      emit,
+      record_account,
+      context_state,
+      running_turns: Some(running_turns),
+    }
+  }
+
+  fn record_account() -> RecordAccountFn {
+    Arc::new(|_| Box::pin(async { Ok(()) }))
+  }
+
+  fn account_credentials(path: &Path) {
+    std::fs::create_dir_all(path).unwrap();
+    std::fs::write(path.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+      .unwrap();
+  }
+
+  async fn both_placements_reach_hook(
+    arrivals: Arc<AtomicUsize>,
+    notify: Arc<Notify>,
+    seen: Arc<std::sync::Mutex<Vec<usize>>>,
+  ) {
+    let notified = notify.notified();
+    if arrivals.fetch_add(1, Ordering::SeqCst) == 1 {
+      notify.notify_waiters();
+    }
+    if arrivals.load(Ordering::SeqCst) < 2 {
+      let _ = tokio::time::timeout(Duration::from_millis(200), notified).await;
+    }
+    seen.lock().unwrap().push(arrivals.load(Ordering::SeqCst));
+  }
 
   #[test]
   fn selection_rejects_a_turn_context_without_running_turns() {
@@ -340,5 +459,144 @@ mod tests {
     std::fs::write(&old, "old-line\n").unwrap();
     std::fs::write(&newest, "new-line\n").unwrap();
     assert!(claude_accounts::transcript_lineage_split(&old, &newest).unwrap());
+  }
+
+  #[test]
+  fn in_place_account_label_is_busy_without_recording_it_first() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let state = claude_accounts::ClaudeAccountState::new();
+    let mut running = SessionMetadata::new("running", "Running", TaskProfile::Manager);
+    claude_metadata::set_account(&mut running, Some("a"));
+    let running = Arc::new(std::sync::Mutex::new(running));
+    let running_turns = {
+      let running = Arc::clone(&running);
+      Arc::new(move || vec![running.lock().unwrap().clone()]) as RunningTurnsFn
+    };
+    let current = SessionMetadata::new("current", "Current", TaskProfile::Manager);
+
+    let (chosen, _) = choose_turn_account(
+      &state,
+      &cfg,
+      &current,
+      Some("claude-fable-5-1"),
+      None,
+      None,
+      Some("alpha"),
+      &running_turns(),
+    )
+    .unwrap();
+
+    assert_eq!(chosen.unwrap().label, "b");
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn concurrent_placements_choose_distinct_accounts() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let metadata_a = Arc::new(std::sync::Mutex::new(SessionMetadata::new("turn-a", "A", TaskProfile::Manager)));
+    let metadata_b = Arc::new(std::sync::Mutex::new(SessionMetadata::new("turn-b", "B", TaskProfile::Manager)));
+    let running_a: RunningTurnsFn = {
+      let metadata_b = Arc::clone(&metadata_b);
+      Arc::new(move || vec![metadata_b.lock().unwrap().clone()])
+    };
+    let running_b: RunningTurnsFn = {
+      let metadata_a = Arc::clone(&metadata_a);
+      Arc::new(move || vec![metadata_a.lock().unwrap().clone()])
+    };
+    let mut ctx_a = context(cfg.clone(), "turn-a", None, None, running_a, record_account());
+    let mut ctx_b = context(cfg, "turn-b", None, None, running_b, record_account());
+    ctx_a.session_meta = Arc::clone(&metadata_a);
+    ctx_b.session_meta = Arc::clone(&metadata_b);
+    let arrivals = Arc::new(AtomicUsize::new(0));
+    let notify = Arc::new(Notify::new());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let placement_a = {
+      let state = Arc::clone(&state);
+      let arrivals = Arc::clone(&arrivals);
+      let notify = Arc::clone(&notify);
+      let seen = Arc::clone(&seen);
+      tokio::spawn(async move {
+        place_turn_with_hook(&state, &ctx_a, None, None, None, None, both_placements_reach_hook(arrivals, notify, seen))
+          .await
+          .unwrap()
+      })
+    };
+    let placement_b = {
+      let state = Arc::clone(&state);
+      let arrivals = Arc::clone(&arrivals);
+      let notify = Arc::clone(&notify);
+      let seen = Arc::clone(&seen);
+      tokio::spawn(async move {
+        place_turn_with_hook(&state, &ctx_b, None, None, None, None, both_placements_reach_hook(arrivals, notify, seen))
+          .await
+          .unwrap()
+      })
+    };
+    let account_a = placement_a.await.unwrap();
+    let account_b = placement_b.await.unwrap();
+    assert_ne!(account_a.label, account_b.label);
+    let mut seen = seen.lock().unwrap().clone();
+    seen.sort_unstable();
+    assert_eq!(seen, [1, 2]);
+  }
+
+  #[tokio::test]
+  async fn newer_transcript_refusal_adopts_holder_under_pool_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    claude_accounts::record_auth_failure(&state, "a", None);
+    let source = account_a.join("projects/p/session-id.jsonl");
+    let destination = account_b.join("projects/p/session-id.jsonl");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    std::fs::write(&source, "same transcript\n").unwrap();
+    std::fs::write(&destination, "same transcript\n").unwrap();
+    std::fs::File::open(&source)
+      .unwrap()
+      .set_times(std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000)))
+      .unwrap();
+    std::fs::File::open(&destination)
+      .unwrap()
+      .set_times(std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000)))
+      .unwrap();
+    let account_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record_account: RecordAccountFn = {
+      let state = Arc::clone(&state);
+      let account_calls = Arc::clone(&account_calls);
+      Arc::new(move |_| {
+        let state = Arc::clone(&state);
+        let account_calls = Arc::clone(&account_calls);
+        Box::pin(async move {
+          account_calls.lock().unwrap().push(state.pool_choice.try_lock().is_err());
+          Ok(())
+        })
+      })
+    };
+    let running_turns: RunningTurnsFn = Arc::new(Vec::new);
+    let ctx = context(cfg, "turn", Some("a"), Some("session-id"), running_turns, record_account);
+    tokio::time::timeout(Duration::from_secs(5), place_turn(&state, &ctx, Some("session-id"), None, None, None))
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(claude_metadata::account_of(&session_metadata(&ctx)).as_deref(), Some("b"));
+    assert_eq!(*account_calls.lock().unwrap(), [true, false]);
   }
 }

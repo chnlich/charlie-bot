@@ -53,6 +53,7 @@ struct Readings {
 #[derive(Default)]
 pub struct ClaudeAccountState {
   readings: std::sync::Mutex<Readings>,
+  pub(super) pool_choice: tokio::sync::Mutex<()>,
 }
 
 impl ClaudeAccountState {

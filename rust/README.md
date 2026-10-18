@@ -103,6 +103,7 @@ rust/
     lifespan.rs                   the startup and shutdown steps around the crash-recovery task
     context.rs                    FeatureContext and the typed startup state
     store_hooks.rs                the store's hook traits, answered by the registered lifecycles and controllers
+    templating.rs                 the page engine: Jinja2-compatible rendering with minijinja and `render_page`
   crates/charliebot-server/src/
     main.rs                       startup, lifespan, bind, graceful shutdown
     app.rs                        the middleware stack and the feature routers

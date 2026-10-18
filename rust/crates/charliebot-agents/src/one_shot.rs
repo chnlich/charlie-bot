@@ -155,8 +155,8 @@ mod tests {
   struct IdentityTranslate;
 
   impl Translate for IdentityTranslate {
-    fn translate(&mut self, event: Value) -> Vec<Value> {
-      vec![event]
+    fn translate(&mut self, event: Value) -> anyhow::Result<Vec<Value>> {
+      Ok(vec![event])
     }
   }
 

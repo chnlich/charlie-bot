@@ -13,6 +13,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use charliebot_agents::backends::codex::CodexHost;
 use charliebot_agents::backends::codex::factory::CodexFactory;
@@ -23,7 +24,7 @@ use charliebot_agents::backends::codex::usage_quota::CodexQuotaAccount;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
-use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
+use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs, UsageResolver};
 use charliebot_registry::usage::{PANEL_FETCHED_AT, QuotaAccount, RecordKind, UsageRecord, UsageSourceImpl};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use serde_json::{Map, Value, json};
@@ -546,7 +547,7 @@ fn check_translate(fx: &Fixture, events: &[Value], python: &Value, failures: &mu
   let option = option_of(&json!({"id": "translate", "model": TRANSLATE_MODEL, "type_fields": {}}));
   let backend = build_backend(fx, &option, LaunchArgs::default());
   let mut translator = backend.translator();
-  let rust: Vec<Vec<Value>> = events.iter().map(|event| translator.translate(event.clone())).collect();
+  let rust: Vec<Vec<Value>> = events.iter().map(|event| translator.translate(event.clone()).unwrap()).collect();
   expect_eq(failures, "translate", &json!(rust), &python["translate"]);
 }
 
@@ -558,7 +559,7 @@ fn check_read(fx: &Fixture, python: &Value, failures: &mut Vec<String>) {
 
 fn check_resolve(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<String>) {
   let limits: BTreeMap<String, i64> = serde_json::from_value(json!({"codex-main": 150_000})).unwrap();
-  let host = FixedHost { limits, chat_root: fx.chat_root.clone() };
+  let host: Arc<dyn CodexSessionHost> = Arc::new(FixedHost { limits, chat_root: fx.chat_root.clone() });
   let expected = python["resolve"].as_array().expect("the resolve section");
   expect_eq(failures, "resolve case count", &json!(cases.len()), &json!(expected.len()));
   for (case, python_case) in cases.iter().zip(expected) {
@@ -566,8 +567,9 @@ fn check_resolve(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut V
     meta.backend = text(&case["backend"]).to_string();
     meta.cc_session_id = opt_text(&case["cc_session_id"]);
     let events = case["events"].as_array().unwrap();
-    let usage =
-      CodexUsageResolver::new(fx.codex_home()).resolve_with(&host, text(&case["session_id"]), &meta, events).unwrap();
+    let usage = CodexUsageResolver::new(fx.codex_home(), Arc::clone(&host))
+      .resolve(text(&case["session_id"]), &meta, events)
+      .unwrap();
     let rust = json!({"id": case["id"], "usage": usage.map(Value::Object)});
     expect_eq(failures, &format!("resolve {}", text(&case["id"])), &rust, python_case);
   }

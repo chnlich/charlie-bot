@@ -769,8 +769,8 @@ mod tests {
     fn translator(&self) -> Box<dyn charliebot_registry::backend::Translate> {
       struct Identity;
       impl charliebot_registry::backend::Translate for Identity {
-        fn translate(&mut self, raw: Value) -> Vec<Value> {
-          vec![raw]
+        fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+          Ok(vec![raw])
         }
       }
       Box::new(Identity)

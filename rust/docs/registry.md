@@ -209,9 +209,12 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 ### Usage resolvers
 
 - Python: `backend_lifecycle_registration.py:71` `register_usage_resolver`
-- Rust: `usage_resolver(backend_type: &'static str, resolver: Arc<dyn UsageResolver>)`. The resolver reads one session's
-  usage from its events.
-- Example: `registry.usage_resolver("codex", Arc::new(CodexUsage))?;`
+- Python: `src/runtime/session_usage.py:423-434` builds the registered resolver once per backend type with the config,
+  events cache and chat-events path.
+- Rust: `usage_resolver(backend_type: &'static str, constructor: fn(&UsageResolverHost) -> Arc<dyn UsageResolver>)`.
+  `UsageResolverHost` carries the hot-reloaded config and store; the store owns the events cache and chat-events path.
+  The registry stores constructors only. The usage owner builds each resolver once per backend type and retains it.
+- Example: `registry.usage_resolver("codex", codex_usage_resolver)?;`
 
 ### Usage sources
 

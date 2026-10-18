@@ -3,22 +3,20 @@
 //!
 //! The registry's resolver trait takes the session's metadata and events only. The two values the Python resolver
 //! also reads, the config that holds each codex option's compaction limit and the store that holds the chat-events
-//! file, come from [`UsageHost`]. The server binds it once at startup, in the codex package's pre-recovery step.
+//! file, come from [`UsageHost`], retained by the resolver constructed for the usage owner.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
-use charliebot_registry::FeatureContext;
-use charliebot_registry::backend::UsageResolver;
+use charliebot_registry::backend::{UsageResolver, UsageResolverHost};
 use charliebot_store::Store;
 use charliebot_store::metadata::SessionMetadata;
-use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
 use super::options;
@@ -33,13 +31,17 @@ pub trait CodexSessionHost: Send + Sync {
   fn chat_events_path(&self, session_id: &str) -> PathBuf;
 }
 
-/// The running server's config and store. Bound once by [`bind_usage_host`].
+/// The config and store retained by one usage resolver.
 pub struct UsageHost {
   config: Arc<HotReload<CharlieBotConfig>>,
   store: Arc<Store>,
 }
 
-static USAGE_HOST: OnceLock<UsageHost> = OnceLock::new();
+impl UsageHost {
+  fn new(host: &UsageResolverHost) -> Self {
+    Self { config: Arc::clone(&host.config), store: Arc::clone(&host.store) }
+  }
+}
 
 impl CodexSessionHost for UsageHost {
   fn auto_compact_limit(&self, backend_id: &str) -> anyhow::Result<Option<i64>> {
@@ -58,18 +60,16 @@ impl CodexSessionHost for UsageHost {
   }
 }
 
-/// Binds the server's config and store to the codex usage resolver. A lifespan step, run once before recovery.
-pub fn bind_usage_host(ctx: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
-  Box::pin(async move {
-    USAGE_HOST
-      .set(UsageHost { config: Arc::clone(&ctx.config), store: Arc::clone(&ctx.store) })
-      .map_err(|_| anyhow::anyhow!("the codex usage host is already bound"))
-  })
+/// Construct the resolver for one usage owner from the running server's values.
+pub fn usage_resolver(host: &UsageResolverHost) -> Arc<dyn UsageResolver> {
+  let codex_host = super::CodexHost::from_process().expect("Codex package registration validated its process host");
+  Arc::new(CodexUsageResolver::new(codex_host.codex_home(), Arc::new(UsageHost::new(host))))
 }
 
 /// Reads one session's context and cost from its codex rollout.
 pub struct CodexUsageResolver {
   codex_home: PathBuf,
+  host: Arc<dyn CodexSessionHost>,
   rollout_paths: Mutex<HashMap<String, PathBuf>>,
   usages: Mutex<HashMap<String, CachedUsage>>,
 }
@@ -83,30 +83,19 @@ struct CachedUsage {
 }
 
 impl CodexUsageResolver {
-  pub fn new(codex_home: PathBuf) -> Self {
-    Self { codex_home, rollout_paths: Mutex::new(HashMap::new()), usages: Mutex::new(HashMap::new()) }
-  }
-
-  /// The resolver over the bound host. Fails when the server has not bound its host.
-  pub fn resolve_bound(
-    &self,
-    session_id: &str,
-    meta: &SessionMetadata,
-    events: &[Value],
-  ) -> anyhow::Result<Option<Map<String, Value>>> {
-    let host = USAGE_HOST.get().context("the codex usage resolver ran before the server bound its usage host")?;
-    self.resolve_with(host, session_id, meta, events)
+  pub fn new(codex_home: PathBuf, host: Arc<dyn CodexSessionHost>) -> Self {
+    Self { codex_home, host, rollout_paths: Mutex::new(HashMap::new()), usages: Mutex::new(HashMap::new()) }
   }
 
   /// The context reading of one session. The merged usage carries the rollout's context tokens and window, the
   /// session backend's compaction limit, the cost of the cumulative totals, and the model.
-  pub fn resolve_with(
+  fn resolve_with_host(
     &self,
-    host: &dyn CodexSessionHost,
     session_id: &str,
     meta: &SessionMetadata,
     events: &[Value],
   ) -> anyhow::Result<Option<Map<String, Value>>> {
+    let host = self.host.as_ref();
     let Some(thread_id) = self.thread_id(host, session_id, meta.cc_session_id.as_deref(), events)? else {
       return Ok(None);
     };
@@ -210,7 +199,7 @@ impl UsageResolver for CodexUsageResolver {
     meta: &SessionMetadata,
     events: &[Value],
   ) -> anyhow::Result<Option<Map<String, Value>>> {
-    self.resolve_bound(session_id, meta, events)
+    self.resolve_with_host(session_id, meta, events)
   }
 }
 

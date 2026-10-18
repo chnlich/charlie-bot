@@ -22,7 +22,7 @@ use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError};
 
 pub use backend::CodexBackend;
-pub use resolver::{CodexSessionHost, CodexUsageResolver, UsageHost};
+pub use resolver::{CodexSessionHost, CodexUsageResolver};
 pub use translate::FILE_WRITE;
 pub use usage_logs::session_id;
 
@@ -86,7 +86,7 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.usage_resolver("codex", Arc::new(CodexUsageResolver::new(host.codex_home())))?;
+  registry.usage_resolver("codex", resolver::usage_resolver)?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["codex-"],
@@ -94,7 +94,7 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     implementation: Some(Arc::new(usage_logs::CodexLogs::new(host.codex_home()))),
   })?;
   registry.attribute_backend_type("codex", USAGE_SOURCE)?;
-  registry.pre_recovery_step("codex_usage_host", resolver::bind_usage_host)
+  Ok(())
 }
 
 #[cfg(test)]

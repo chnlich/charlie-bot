@@ -306,8 +306,8 @@ impl AgentBackend for ClaudeCodeBackend {
 struct IdentityTranslate;
 
 impl Translate for IdentityTranslate {
-  fn translate(&mut self, raw: Value) -> Vec<Value> {
-    vec![raw]
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![raw])
   }
 }
 

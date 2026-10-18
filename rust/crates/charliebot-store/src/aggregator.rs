@@ -418,7 +418,8 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
       event_types::DELEGATE_INVOCATION: event.get(event_types::DELEGATE_INVOCATION).cloned().unwrap_or(Value::Null),
       "backend": preferred_value(event, "backend", "resolved_backend"),
       "model": preferred_value(event, "model", "resolved_model"),
-      "timestamp": preferred_value(event, "timestamp", "created_at"),
+      // Python's `or` yields the fallback's own value, so both fields absent give null.
+      "timestamp": event.get("timestamp").filter(|value| is_truthy(value)).or_else(|| event.get("created_at")).cloned().unwrap_or(Value::Null),
     }),
     event_types::WORKER_SUMMARY => {
       let mut message = json!({
@@ -1201,6 +1202,20 @@ mod tests {
       serialized.push(serde_json::to_string(&draft).unwrap().len());
     }
     assert!(serialized.iter().all(|len| *len < 100_000));
+  }
+
+  #[test]
+  fn task_delegated_timestamp_falls_back_to_created_at_then_null() {
+    let cases = [
+      (json!({"type": "task_delegated", "thread_id": "t"}), Value::Null),
+      (json!({"type": "task_delegated", "timestamp": "", "created_at": ""}), json!("")),
+      (json!({"type": "task_delegated", "timestamp": "", "created_at": "c"}), json!("c")),
+      (json!({"type": "task_delegated", "timestamp": "t", "created_at": "c"}), json!("t")),
+    ];
+    for (event, expected) in cases {
+      let deltas = MessageAggregator::new(0, false).feed(&event).unwrap();
+      assert_eq!(deltas[0]["message"]["timestamp"], expected, "event {event}");
+    }
   }
 
   #[test]

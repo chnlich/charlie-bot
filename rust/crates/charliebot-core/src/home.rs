@@ -1,4 +1,8 @@
 //! The profile home: the one reader of `CHARLIEBOT_HOME` (`src/infra/home.py`).
+//!
+//! Every home fact a crate needs comes from this module: the profile home, the default home, and the explicit
+//! home the terminal passes to its panes. The environment is read only in [`raw_env_value`]. The rules are pure
+//! functions of the raw value, so tests pass that value in and set no environment variable.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -21,25 +25,54 @@ impl fmt::Display for HomeError {
 
 impl std::error::Error for HomeError {}
 
+/// The raw `CHARLIEBOT_HOME` value, or `""` when the variable is unset.
+fn raw_env_value() -> String {
+  // Unset reads as "", the same as Python's `os.environ.get(CHARLIEBOT_HOME_ENV, "")`.
+  std::env::var_os(CHARLIEBOT_HOME_ENV).map(|value| value.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// The state directory this process belongs to.
 ///
-/// `CHARLIEBOT_HOME` unset or blank selects `~/.charliebot`. A set value must be absolute or start
+/// `CHARLIEBOT_HOME` unset or blank selects [`default_charliebot_home`]. A set value must be absolute or start
 /// with `~`, and resolves through `expanduser` then `realpath`; a relative value is an error, since
 /// each process would resolve it against its own working directory.
 pub fn charliebot_home_dir() -> Result<PathBuf, HomeError> {
-  // Unset reads as "", the same as Python's `os.environ.get(CHARLIEBOT_HOME_ENV, "")`.
-  let raw = std::env::var_os(CHARLIEBOT_HOME_ENV).map(|value| value.to_string_lossy().into_owned());
-  resolve_home(raw.as_deref().unwrap_or("").trim())
+  resolve_home(&raw_env_value())
 }
 
-fn resolve_home(raw: &str) -> Result<PathBuf, HomeError> {
+/// The state directory used when `CHARLIEBOT_HOME` is unset: the user's home joined with `.charliebot`, not resolved.
+pub fn default_charliebot_home() -> PathBuf {
+  PathBuf::from(paths::expanduser("~")).join(".charliebot")
+}
+
+/// The profile home when `CHARLIEBOT_HOME` is set and not blank, or `None` when it is not.
+///
+/// This is the second read of the variable that the `charliebot_home_dir` docstring in `src/infra/home.py`
+/// names. The terminal passes the home to each new tmux pane only when a profile is set, because a pane
+/// inherits the tmux server's environment rather than this process's (`src/features/terminal/terminal.py:53-54`).
+/// A set value that names no usable home is an error, as in [`charliebot_home_dir`].
+pub fn explicit_charliebot_home() -> Result<Option<PathBuf>, HomeError> {
+  explicit_home(&raw_env_value())
+}
+
+/// The home a raw `CHARLIEBOT_HOME` value names; a blank value names the default home.
+pub(crate) fn resolve_home(raw: &str) -> Result<PathBuf, HomeError> {
+  let raw = raw.trim();
   if raw.is_empty() {
-    return Ok(PathBuf::from(paths::expanduser("~")).join(".charliebot"));
+    return Ok(default_charliebot_home());
   }
   if !raw.starts_with('~') && !raw.starts_with('/') {
     return Err(HomeError { raw: raw.to_string() });
   }
   Ok(paths::realpath(&PathBuf::from(paths::expanduser(raw))))
+}
+
+/// [`resolve_home`] for the explicit-home fact: a blank value gives `None` rather than the default home.
+fn explicit_home(raw: &str) -> Result<Option<PathBuf>, HomeError> {
+  if raw.trim().is_empty() {
+    return Ok(None);
+  }
+  resolve_home(raw).map(Some)
 }
 
 #[cfg(test)]
@@ -57,5 +90,40 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let home = resolve_home(dir.path().to_str().unwrap()).unwrap();
     assert_eq!(home, paths::realpath(dir.path()));
+  }
+
+  #[test]
+  fn a_trailing_slash_does_not_change_the_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("profile");
+    std::fs::create_dir(&profile).unwrap();
+    assert_eq!(resolve_home(&format!("{}/", profile.display())).unwrap(), paths::realpath(&profile));
+  }
+
+  #[test]
+  fn a_blank_home_selects_the_default_home() {
+    let default = PathBuf::from(paths::expanduser("~")).join(".charliebot");
+    assert_eq!(default_charliebot_home(), default);
+    assert_eq!(resolve_home("").unwrap(), default);
+    assert_eq!(resolve_home("   ").unwrap(), default);
+  }
+
+  #[test]
+  fn a_tilde_home_expands_under_the_user_home() {
+    let expected = paths::realpath(&PathBuf::from(paths::expanduser("~/dbg")));
+    assert_eq!(resolve_home("~/dbg").unwrap(), expected);
+  }
+
+  #[test]
+  fn an_explicit_home_is_none_when_unset_or_blank() {
+    assert_eq!(explicit_home("").unwrap(), None);
+    assert_eq!(explicit_home("   ").unwrap(), None);
+  }
+
+  #[test]
+  fn an_explicit_home_resolves_a_set_value_and_refuses_a_relative_one() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(explicit_home(dir.path().to_str().unwrap()).unwrap(), Some(paths::realpath(dir.path())));
+    assert_eq!(explicit_home("rel/home").unwrap_err(), HomeError { raw: "rel/home".to_string() });
   }
 }

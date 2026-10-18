@@ -715,4 +715,21 @@ mod tests {
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("stray.yaml is not a config location"), "{error}");
   }
+
+  #[test]
+  fn a_config_yaml_that_sets_the_home_is_refused() {
+    let home = home_with("charliebot_home: /tmp/elsewhere\n");
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.contains("sets 'charliebot_home'") && error.contains("CHARLIEBOT_HOME"), "{error}");
+  }
+
+  #[test]
+  fn a_config_loads_from_the_selected_home() {
+    let home = home_with("server:\n  port: 19999\n");
+    let selected = crate::home::resolve_home(home.path().to_str().unwrap()).unwrap();
+    let cfg = load_config(&selected, &test_schema()).unwrap();
+    assert_eq!(cfg.charliebot_home, selected);
+    assert_eq!(cfg.server.port, 19999);
+    assert_eq!(cfg.sessions_dir(), selected.join("sessions"));
+  }
 }

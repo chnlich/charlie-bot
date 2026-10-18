@@ -726,7 +726,7 @@
       if (this.container.clientHeight === 0) return;
       if (this.view === VIEW_FOR_YOU) {
         this.reprojectForYou(reason);
-        this.runProjectionCheck();
+        if (reason !== 'scroll') this.runProjectionCheck();
         return;
       }
       this.ensureOffsets();
@@ -912,8 +912,9 @@
 
     // Hands the container to the page's check (registerProjectionCheck) once a
     // projection ran: the list can now be taller or shorter than before. The
-    // zero-height return and a scroll frame the hysteresis band skips project
-    // nothing, so they never reach this call.
+    // zero-height return, For-you's scroll-only anchor capture and a scroll
+    // frame the hysteresis band skips project nothing, so they never reach
+    // this call.
     runProjectionCheck() {
       if (projectionCheck) projectionCheck(this.container);
     }

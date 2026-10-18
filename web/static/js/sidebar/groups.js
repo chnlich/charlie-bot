@@ -507,14 +507,14 @@ function renderTreeChevron(sessionId, childCount) {
          fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHEVRON_SVG_PATH}</svg>`;
 }
 
-// The at-a-glance child count for a tree row: how many child rows nest under
-// it in this paint, so the number needs no expand. The Workspace and Threads
-// lists hold every unarchived child, which makes this count the row's active
-// direct child sessions; the caller draws it in those two tabs alone.
-function renderTreeChildCount(sessionId, childCount) {
+// The count includes direct children whose profile is not 'worker'; worker
+// leaves stay nested but do not add to it. All and Threads hold every
+// unarchived child, so the count reflects active non-worker child sessions.
+function renderTreeChildCount(sessionId, nonWorkerChildCount) {
+  const title = `${nonWorkerChildCount} active child session${nonWorkerChildCount === 1 ? '' : 's'}`;
   return `<span data-tree-child-count="${sessionId}"
          class="text-[10px] leading-none text-slate-400 tabular-nums flex-shrink-0"
-         title="${childCount} active child session${childCount === 1 ? '' : 's'}">${childCount}</span>`;
+         title="${title}">${nonWorkerChildCount}</span>`;
 }
 
 // The worker glyph leads its row — the chevron's slot at the chevron's
@@ -540,7 +540,12 @@ function renderWorkerDeliveredIcon() {
 // flat one — the flat paints (search results) pass none.
 function renderSessionTree(s, filter, options, childrenOf) {
   const children = childrenOf.get(s.id) || [];
-  const row = renderSessionItem(s, filter, {...options, treeChildCount: children.length});
+  const treeNonWorkerChildCount = children.filter(child => child.profile !== 'worker').length;
+  const row = renderSessionItem(s, filter, {
+    ...options,
+    treeChildCount: children.length,
+    treeNonWorkerChildCount,
+  });
   if (!children.length) return row;
   const wrapClass = ['tree-subtree', options.extraClass || ''].filter(Boolean).join(' ');
   const wrapAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
@@ -634,17 +639,17 @@ function renderSessionItem(s, filter, options = {}) {
   // a worker row draws the worker glyph instead — never a chevron. A flat
   // row (search results, the Archived tab) draws neither. The indicators
   // follow the lead marker.
-  // The child count rides the chevron: a tree row with nested children shows
-  // how many, and only where the list holds every unarchived child (the
-  // Workspace and Threads paints); Later, Archive and search paint no count.
+  // The count beside the chevron uses direct children whose profile is not
+  // 'worker'; worker leaves still nest, and the chevron title still counts
+  // every child task. Only the all and threads paints draw the count.
   const showChildCount = 'treeChildCount' in options
-      && options.treeChildCount > 0
+      && options.treeNonWorkerChildCount > 0
       && (filter === 'all' || filter === 'threads');
   const lead = [
       isWorker
           ? (isArchivedRow ? renderWorkerDeliveredIcon() : renderWorkerLeafIcon())
           : ('treeChildCount' in options ? renderTreeChevron(s.id, options.treeChildCount) : ''),
-      showChildCount ? renderTreeChildCount(s.id, options.treeChildCount) : '',
+      showChildCount ? renderTreeChildCount(s.id, options.treeNonWorkerChildCount) : '',
       indicators,
   ].join('\n    ');
   // The first registered row line that answers replaces the time line.

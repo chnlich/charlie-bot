@@ -17,6 +17,7 @@ mod session_events;
 pub mod sidebar_state;
 mod store;
 pub mod streaming;
+mod task_tree;
 mod thinking;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
@@ -31,8 +32,12 @@ pub use run_records::{
   SequenceRef, StopRequest, StopResult,
 };
 pub use session_events::RAW_EVENTS_REPLACED_BY_DELTAS;
-pub use store::{AccountLabelKeeper, AnchorFieldReconciler, SequenceListingFields, Store, StoreHooks};
+pub use store::{
+  AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store,
+  StoreHookFuture, StoreHooks,
+};
 pub use streaming::{SIDEBAR_CHANNEL, STREAM_COALESCE_INTERVAL, StreamingManager, Subscription, session_channel};
+pub use task_tree::{CreateTask, PromptScope, TaskCaller, TaskFacts, TaskState, TaskTreeActivity};
 
 use std::fmt;
 

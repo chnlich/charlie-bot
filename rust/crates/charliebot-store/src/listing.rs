@@ -389,6 +389,8 @@ mod tests {
         anchor_reconciler: Some(Arc::new(Anchors)),
         sequence_listing: Some(Arc::new(Sequence)),
         runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
+        sequence_archive: Some(Arc::new(crate::store::test_support::SequenceArchive)),
+        sequence_binding_mover: Some(Arc::new(crate::store::test_support::BindingMover)),
       },
     )
     .unwrap()

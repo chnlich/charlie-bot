@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,9 +10,11 @@ use charliebot_core::run_token;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind, RunOrder,
-  RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
+  AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind,
+  RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook, SequenceBindingMover,
+  SequenceListingFields, StopResult, Store, StoreError, StoreHookFuture, StoreHooks, TaskCaller,
 };
+use regex::Regex;
 use serde_json::{Map, Value, json};
 
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
@@ -394,6 +396,203 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
 }
 
 #[tokio::test]
+async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_tasks", root.path(), &[]);
+
+  let python_home = root.path().join("python-task-home");
+  let rust_home = root.path().join("rust-task-home");
+  copy_tree(&root.path().join("task-base"), &python_home);
+  copy_tree(&root.path().join("task-base"), &rust_home);
+
+  let python_seed = make_store(&python_home);
+  let rust_seed = make_store(&rust_home);
+  for store in [&python_seed, &rust_seed] {
+    let task_root = store.read_metadata_fresh("synthetic-task-root").unwrap().unwrap();
+    assert_eq!(task_root.profile, charliebot_store::metadata::TaskProfile::Manager);
+    assert_eq!(store.child_ids(&task_root.id).unwrap().len(), 3);
+    assert_eq!(store.task_state("synthetic-task-worker").unwrap(), "open");
+    assert_eq!(store.last_ended_run_id("synthetic-task-worker").unwrap().as_deref(), Some("synthetic-failed-run"));
+  }
+
+  let reverse_home = root.path().join("rust-created-home");
+  let reverse_store = make_store(&reverse_home);
+  for (session_id, request_id, parent) in [
+    ("rust-created-root", "reverse-root-request", None),
+    ("rust-created-child", "reverse-child-request", Some("rust-created-root")),
+  ] {
+    reverse_store
+      .create_task(
+        CreateTask {
+          request_id: request_id.to_string(),
+          task_parent_id: parent.map(str::to_string),
+          profile: charliebot_store::metadata::TaskProfile::Manager,
+          task: None,
+          name: Some(request_id.to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: Some(session_id.to_string()),
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+  }
+  run_python_helper("verify_rust_created", root.path(), &[]);
+
+  run_python_helper("mutate_tasks", root.path(), &["python-task-home"]);
+  let child_request = CreateTask {
+    request_id: "replayed-child-request".to_string(),
+    task_parent_id: Some("synthetic-task-root".to_string()),
+    profile: charliebot_store::metadata::TaskProfile::Manager,
+    task: None,
+    name: Some("replayed child".to_string()),
+    backend: Some("synthetic".to_string()),
+    group: None,
+    session_id: None,
+  };
+  let child = rust_seed.create_task(child_request.clone(), TaskCaller::System, Map::new()).await.unwrap();
+  let child_event_count = rust_seed.load_chat_events_sync(&child.id).unwrap().len();
+  let replay = rust_seed
+    .create_task(
+      CreateTask { name: Some("ignored replay name".to_string()), ..child_request },
+      TaskCaller::System,
+      Map::new(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(replay.id, child.id);
+  assert_eq!(rust_seed.load_chat_events_sync(&child.id).unwrap().len(), child_event_count);
+  let guard = rust_seed.control_lock().await;
+  let mut slot_values = Map::new();
+  slot_values.insert("slack_watermark_ts".to_string(), json!("updated-watermark"));
+  rust_seed.update_task_slot_fields_locked(&guard, "synthetic-task-worker", "slack", slot_values).await.unwrap();
+  assert!(
+    rust_seed
+      .archive_unsuccessful_worker(&guard, "synthetic-task-worker", "synthetic-failed-run", "failed",)
+      .await
+      .unwrap()
+  );
+  assert!(
+    !rust_seed
+      .archive_unsuccessful_worker(&guard, "synthetic-task-worker", "synthetic-failed-run", "failed",)
+      .await
+      .unwrap()
+  );
+  assert!(
+    rust_seed.rebind_elone_bindings_locked(&guard, "synthetic-elone-source", "synthetic-elone-new").await.unwrap()
+  );
+  drop(guard);
+
+  run_python_helper("verify_tasks", root.path(), &["python-task-home"]);
+  run_python_helper("verify_tasks", root.path(), &["rust-task-home"]);
+  assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+  rust_seed.invalidate_cache("synthetic-task-worker");
+  rust_seed.invalidate_tree_index();
+  assert_eq!(rust_seed.task_state("synthetic-task-worker").unwrap(), "archived");
+  assert_eq!(
+    rust_seed.read_metadata_fresh("synthetic-task-worker").unwrap().unwrap().extra("slack_watermark_ts"),
+    Some(&json!("updated-watermark"))
+  );
+}
+
+#[tokio::test]
+async fn task_gate_matches_python_cases_and_the_parity_fixture_tree() {
+  let root = tempfile::tempdir().unwrap();
+  let cases = materialize_gate_cases();
+  fs::write(root.path().join("gate-cases.json"), serde_json::to_vec(&json!({"cases": cases})).unwrap()).unwrap();
+  run_python_helper("gate_parity", root.path(), &[]);
+  let expected: Value = serde_json::from_slice(&fs::read(root.path().join("gate-results.json")).unwrap()).unwrap();
+  let store = make_store(&root.path().join("gate-cases-home"));
+  for case in &cases {
+    let name = case["name"].as_str().unwrap();
+    let ids = &case["node_ids"];
+    let (root_id, child_id, grandchild_id) = (
+      ids["root"].as_str().unwrap().to_string(),
+      ids["child"].as_str().unwrap().to_string(),
+      ids["grandchild"].as_str().unwrap().to_string(),
+    );
+    let parents = &case["parents"];
+    let profiles = &case["profiles"];
+    let events = &case["events"];
+    let states = &case["states"];
+    let mut session_ids = HashMap::new();
+    session_ids.insert("root", root_id);
+    session_ids.insert("child", child_id);
+    session_ids.insert("grandchild", grandchild_id);
+    for node in ["root", "child", "grandchild"] {
+      let session_id = session_ids[node].clone();
+      let parent = parents[&session_id].as_str().map(str::to_string);
+      let profile = match profiles[&session_id].as_str().unwrap() {
+        "manager" => charliebot_store::metadata::TaskProfile::Manager,
+        "worker" => charliebot_store::metadata::TaskProfile::Worker,
+        profile => panic!("unknown gate profile {profile:?}"),
+      };
+      store
+        .create_task(
+          CreateTask {
+            request_id: format!("{name}-{node}-request"),
+            task_parent_id: parent,
+            profile,
+            task: None,
+            name: Some(format!("{name} {node}")),
+            backend: Some("synthetic".to_string()),
+            group: None,
+            session_id: Some(session_id.clone()),
+          },
+          TaskCaller::System,
+          Map::new(),
+        )
+        .await
+        .unwrap();
+    }
+    for node in ["root", "child", "grandchild"] {
+      let session_id = session_ids[node].clone();
+      for event in events[&session_id].as_array().unwrap() {
+        store.append_chat_event(&session_id, event.clone()).await.unwrap();
+      }
+      if let Some(outcome) = states[&session_id].as_str() {
+        let guard = store.control_lock().await;
+        let close = charliebot_store::control_events::build_control_event(
+          "task_closed",
+          charliebot_store::control_events::ACTOR_SYSTEM,
+          &session_id,
+          None,
+          None,
+          [("outcome".to_string(), json!(outcome))],
+        );
+        store.append_control_fact(&guard, &session_id, close).await.unwrap();
+      }
+    }
+    let start_id = case["start"].as_str().unwrap();
+    let actual = match store.check_task_authorization(start_id) {
+      Ok(user_node) => json!({"authorized": true, "user_node": user_node, "reason": null}),
+      Err(error) => json!({"authorized": false, "user_node": null, "reason": error.to_string()}),
+    };
+    assert_eq!(actual, expected[name], "gate case {name}");
+  }
+
+  run_python_helper("prepare_parity_gate", root.path(), &[]);
+  let fixture_home = root.path().join("parity-fixture").join("home");
+  let rust_fixture_home = root.path().join("parity-fixture-rust-home");
+  copy_tree(&fixture_home.join("sessions"), &rust_fixture_home.join("sessions"));
+  let fixture_store = make_store(&rust_fixture_home);
+  let fixture_sessions: Vec<String> =
+    fs::read_to_string(root.path().join("parity-fixture-sessions.txt")).unwrap().lines().map(str::to_string).collect();
+  let fixture_expected: Value =
+    serde_json::from_slice(&fs::read(root.path().join("parity-gate-results.json")).unwrap()).unwrap();
+  assert!(!fixture_sessions.is_empty());
+  for session_id in fixture_sessions {
+    let actual = match fixture_store.check_task_authorization(&session_id) {
+      Ok(user_node) => json!({"authorized": true, "user_node": user_node, "reason": null}),
+      Err(error) => json!({"authorized": false, "user_node": null, "reason": error.to_string()}),
+    };
+    assert_eq!(actual, fixture_expected[&session_id], "parity fixture task {session_id}");
+  }
+}
+
+#[tokio::test]
 async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -765,6 +964,8 @@ fn make_store(home: &Path) -> Store {
       anchor_reconciler: Some(anchor_reconciler),
       sequence_listing: Some(sequence_listing),
       runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
+      sequence_archive: Some(Arc::new(TestSequenceArchive)),
+      sequence_binding_mover: Some(Arc::new(TestSequenceBindingMover)),
     },
   )
   .unwrap()
@@ -862,6 +1063,22 @@ impl AnchorFieldReconciler for TestAnchorReconciler {
 }
 
 struct TestSequenceListing;
+
+struct TestSequenceArchive;
+
+impl SequenceArchiveHook for TestSequenceArchive {
+  fn on_archive<'a>(&'a self, _session_id: &'a str) -> StoreHookFuture<'a, ()> {
+    Box::pin(async { Ok(()) })
+  }
+}
+
+struct TestSequenceBindingMover;
+
+impl SequenceBindingMover for TestSequenceBindingMover {
+  fn move_bindings<'a>(&'a self, _source_session_id: &'a str, _new_session_id: &'a str) -> StoreHookFuture<'a, bool> {
+    Box::pin(async { Ok(true) })
+  }
+}
 
 impl SequenceListingFields for TestSequenceListing {
   fn owns_session(&self, _meta: &SessionMetadata) -> bool {
@@ -979,6 +1196,221 @@ fn read_blockers(store: &Store) -> Value {
   let reasons =
     store.run_blockers(RUN_SESSION_ID).unwrap().into_iter().map(|blocker| blocker.reason).collect::<Vec<_>>();
   json!({ "blockers": reasons })
+}
+
+fn normalized_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+  fn normalize(text: &str) -> Vec<u8> {
+    use std::sync::OnceLock;
+
+    static UUID: OnceLock<Regex> = OnceLock::new();
+    static TIMESTAMP: OnceLock<Regex> = OnceLock::new();
+    let uuid =
+      UUID.get_or_init(|| Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap());
+    let timestamp = TIMESTAMP
+      .get_or_init(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})").unwrap());
+    let mut ids = HashMap::<String, String>::new();
+    let with_ids = uuid.replace_all(text, |captures: &regex::Captures<'_>| {
+      let value = captures.get(0).unwrap().as_str();
+      let next = ids.len();
+      ids.entry(value.to_string()).or_insert_with(|| format!("generated-id-{next}")).clone()
+    });
+    timestamp.replace_all(&with_ids, "<wall-clock>").as_bytes().to_vec()
+  }
+
+  fn collect(root: &Path, directory: &Path, output: &mut BTreeMap<PathBuf, Vec<u8>>) {
+    for entry in fs::read_dir(directory).unwrap() {
+      let entry = entry.unwrap();
+      let path = entry.path();
+      if entry.file_type().unwrap().is_dir() {
+        collect(root, &path, output);
+      } else {
+        let bytes = fs::read(&path).unwrap();
+        let normalized = match std::str::from_utf8(&bytes) {
+          Ok(text) => normalize(text),
+          Err(_) => bytes,
+        };
+        output.insert(path.strip_prefix(root).unwrap().to_path_buf(), normalized);
+      }
+    }
+  }
+
+  let mut output = BTreeMap::new();
+  collect(root, root, &mut output);
+  output
+}
+
+fn gate_node_ids(name: &str) -> (String, String, String) {
+  (format!("gate-{name}-root"), format!("gate-{name}-child"), format!("gate-{name}-grandchild"))
+}
+
+fn materialize_gate_cases() -> Vec<Value> {
+  gate_cases()
+    .into_iter()
+    .map(|mut case| {
+      let name = case["name"].as_str().unwrap();
+      let (root, child, grandchild) = gate_node_ids(name);
+      let ids = HashMap::from([("root", root), ("child", child), ("grandchild", grandchild)]);
+      for key in ["parents", "profiles", "states", "events"] {
+        let source = case[key].as_object().unwrap().clone();
+        let mut mapped = Map::new();
+        for (node, value) in source {
+          let node_id = &ids[node.as_str()];
+          let value = if key == "parents" {
+            value.as_str().map_or(Value::Null, |parent| Value::String(ids[parent].clone()))
+          } else {
+            value.clone()
+          };
+          mapped.insert(node_id.clone(), value);
+        }
+        case[key] = Value::Object(mapped);
+      }
+      let start = case["start"].as_str().unwrap();
+      case["start"] = Value::String(ids[start].clone());
+      case["node_ids"] = json!({"root": ids["root"], "child": ids["child"], "grandchild": ids["grandchild"]});
+      case
+    })
+    .collect()
+}
+
+fn gate_cases() -> Vec<Value> {
+  let manager_profiles = json!({"root": "manager", "child": "manager", "grandchild": "manager"});
+  let empty_states = json!({});
+  let mut cases = Vec::new();
+  let mut add = |name: &str, start: &str, events: Value, states: Value, profiles: Value| {
+    cases.push(json!({
+      "name": name,
+      "start": start,
+      "parents": {"root": null, "child": "root", "grandchild": "child"},
+      "profiles": profiles,
+      "states": states,
+      "events": events,
+    }));
+  };
+  add(
+    "user-at-root",
+    "root",
+    json!({"root": [{"id": "root-user", "type": "user", "content": "Inspect the flaky test."}], "child": [], "grandchild": []}),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "user-at-child",
+    "child",
+    json!({"root": [], "child": [{"id": "child-user", "type": "user", "content": "Which file holds it?"}], "grandchild": []}),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "grandchild-inherits-root",
+    "grandchild",
+    json!({
+      "root": [{"id": "root-user", "type": "user", "content": "Check the test."}],
+      "child": [{"type": "agent_message", "content": "progress"}],
+      "grandchild": [{"type": "agent_message", "content": "progress"}]
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "nearest-user-on-chain",
+    "grandchild",
+    json!({
+      "root": [{"id": "root-user", "type": "user", "content": "Check the test."}],
+      "child": [{"id": "child-user", "type": "user", "content": "Which file holds it?"}],
+      "grandchild": [{"type": "agent_message", "content": "progress"}]
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  for state in ["completed", "cancelled", "archived"] {
+    add(
+      &format!("closed-root-{state}"),
+      "grandchild",
+      json!({
+        "root": [{"id": "root-user", "type": "user", "content": "Ship it?"}],
+        "child": [],
+        "grandchild": [{"id": "child-user", "type": "user", "content": "Go ahead."}]
+      }),
+      json!({"root": state}),
+      manager_profiles.clone(),
+    );
+    add(
+      &format!("closed-start-{state}"),
+      "grandchild",
+      json!({
+        "root": [{"id": "root-user", "type": "user", "content": "Ship it?"}],
+        "child": [],
+        "grandchild": [{"id": "child-user", "type": "user", "content": "Go ahead."}]
+      }),
+      json!({"grandchild": state}),
+      manager_profiles.clone(),
+    );
+  }
+  let machine = json!([
+    {"type": "agent_message", "content": "take off"},
+    {"type": "scheduled_trigger", "content": "take off"},
+    {"type": "child_report", "content": "take off"},
+    {"type": "user", "content": [{"type": "tool_result", "content": "take off"}]}
+  ]);
+  add(
+    "machine-input-only",
+    "grandchild",
+    json!({"root": machine.clone(), "child": machine.clone(), "grandchild": machine}),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "clone-marker-clears-copied-user",
+    "child",
+    json!({
+      "root": [],
+      "child": [
+        {"id": "source-user", "type": "user", "content": "the source request"},
+        {"type": "clone_start"}
+      ],
+      "grandchild": []
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "clone-marker-keeps-own-user",
+    "child",
+    json!({
+      "root": [],
+      "child": [
+        {"type": "clone_start"},
+        {"id": "own-user", "type": "user", "content": "the child's own request"}
+      ],
+      "grandchild": []
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "later-clone-marker-clears-own-user",
+    "child",
+    json!({
+      "root": [],
+      "child": [
+        {"type": "clone_start"},
+        {"id": "own-user", "type": "user", "content": "the child's own request"},
+        {"type": "clone_start"}
+      ],
+      "grandchild": []
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "worker-start-is-refused",
+    "grandchild",
+    json!({"root": [{"type": "user", "content": "An unrelated root request."}], "child": [], "grandchild": []}),
+    empty_states,
+    json!({"root": "manager", "child": "manager", "grandchild": "worker"}),
+  );
+  drop(add);
+  cases
 }
 
 fn empty_run(id: &str, kind: RunKind) -> RunRecord {

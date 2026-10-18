@@ -19,8 +19,8 @@ use charliebot_registry::backend::{
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, SequenceListingFields, Store, StoreHooks,
-  StoreResult,
+  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, SequenceArchiveHook, SequenceBindingMover,
+  SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
 };
 use charliebot_tasks::autonamer;
 use charliebot_tasks::master_queue::{
@@ -71,6 +71,18 @@ impl AnchorFieldReconciler for TestHooks {
     attempted.cc_session_started_at = disk.cc_session_started_at;
     attempted.native_backend = disk.native_backend.clone();
     Ok(())
+  }
+}
+
+impl SequenceArchiveHook for TestHooks {
+  fn on_archive<'a>(&'a self, _session_id: &'a str) -> StoreHookFuture<'a, ()> {
+    Box::pin(async { Ok(()) })
+  }
+}
+
+impl SequenceBindingMover for TestHooks {
+  fn move_bindings<'a>(&'a self, _source_session_id: &'a str, _new_session_id: &'a str) -> StoreHookFuture<'a, bool> {
+    Box::pin(async { Ok(false) })
   }
 }
 
@@ -283,7 +295,9 @@ fn config_with_features(
     StoreHooks {
       account_labels: Some(test_hooks.clone()),
       anchor_reconciler: Some(test_hooks.clone()),
-      sequence_listing: Some(test_hooks),
+      sequence_listing: Some(test_hooks.clone()),
+      sequence_archive: Some(test_hooks.clone()),
+      sequence_binding_mover: Some(test_hooks),
       runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
     },
   )?;

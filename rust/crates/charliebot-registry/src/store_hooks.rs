@@ -8,7 +8,10 @@ use std::sync::Arc;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::hooks::{AfterTurnWork, EventRenderer, RuntimeEventHooks};
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::{AccountLabelKeeper, AnchorFieldReconciler, SequenceListingFields, StoreHooks, StoreResult};
+use charliebot_store::{
+  AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
+  StoreError, StoreHookFuture, StoreHooks, StoreResult,
+};
 use serde_json::{Map, Value};
 
 use crate::registry::Registry;
@@ -21,11 +24,17 @@ pub fn store_hooks(registry: Arc<Registry>) -> StoreHooks {
     Arc::new(LifecycleAnchors { registry: Arc::clone(&registry) });
   let sequence_listing: Arc<dyn SequenceListingFields> =
     Arc::new(RegisteredSequences { registry: Arc::clone(&registry) });
+  let sequence_archive: Arc<dyn SequenceArchiveHook> =
+    Arc::new(RegisteredSequenceArchive { registry: Arc::clone(&registry) });
+  let sequence_binding_mover: Arc<dyn SequenceBindingMover> =
+    Arc::new(RegisteredSequenceBindingMover { registry: Arc::clone(&registry) });
   let runtime_events: Arc<dyn RuntimeEventHooks> = Arc::new(RegistryRuntimeEvents { registry });
   StoreHooks {
     account_labels: Some(account_labels),
     anchor_reconciler: Some(anchor_reconciler),
     sequence_listing: Some(sequence_listing),
+    sequence_archive: Some(sequence_archive),
+    sequence_binding_mover: Some(sequence_binding_mover),
     runtime_events: Some(runtime_events),
   }
 }
@@ -97,7 +106,7 @@ impl SequenceListingFields for RegisteredSequences {
     Ok(self.registry.sequence_listing_fields(session_ids, now))
   }
 
-  // No sequence controller answers these before the task tree (S3) lands, so the registered set is empty.
+  // No registered sequence controller answers these yet, so the registered set is empty.
   fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
     Ok(HashMap::new())
   }
@@ -108,6 +117,43 @@ impl SequenceListingFields for RegisteredSequences {
 
   fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
     Ok(Vec::new())
+  }
+}
+
+/// The sequence archive duty of a node's registered binding.
+struct RegisteredSequenceArchive {
+  registry: Arc<Registry>,
+}
+
+impl SequenceArchiveHook for RegisteredSequenceArchive {
+  fn on_archive<'a>(&'a self, session_id: &'a str) -> StoreHookFuture<'a, ()> {
+    Box::pin(async move {
+      let binding = self.registry.binding_for(session_id).map_err(|error| StoreError::new(error.to_string()))?;
+      if let Some(binding) = binding {
+        binding.on_archive().await.map_err(|error| StoreError::new(error.to_string()))?;
+      }
+      Ok(())
+    })
+  }
+}
+
+/// The bindings each registered sequence controller moves when an elone replaces a node.
+struct RegisteredSequenceBindingMover {
+  registry: Arc<Registry>,
+}
+
+impl SequenceBindingMover for RegisteredSequenceBindingMover {
+  fn move_bindings<'a>(&'a self, source_session_id: &'a str, new_session_id: &'a str) -> StoreHookFuture<'a, bool> {
+    Box::pin(async move {
+      let mut moved = false;
+      for controller in self.registry.sequence_controllers() {
+        moved |= controller
+          .move_bindings(source_session_id, new_session_id)
+          .await
+          .map_err(|error| StoreError::new(error.to_string()))?;
+      }
+      Ok(moved)
+    })
   }
 }
 

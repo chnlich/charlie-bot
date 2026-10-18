@@ -128,6 +128,9 @@ listed here:
 - WebSocket upgrades on `/ws/sessions/{id}`, `/ws/terminal` and `/ws/voice/{id}` run the `token`
   check, but the streams are not ported, so every upgrade answers 403. An authorized one also logs
   `websocket_route_not_ported`.
+- `GET /api/sessions/{session_id}/effective-prompt` leaves out the reply segments that the web, Slack and Discord
+  turn contributions add to a manager run, because those contributions do not yet render their segments. The
+  preview of a manager session with one of those origins differs from the Python server until they do.
 - Transport gzip uses zlib at level 1, and the Python server uses ISA-L at level 1. The headers and the
   decoded bytes match; the compressed bytes and their `content-length` differ.
 - Logs are JSON lines; the Python server renders structlog's console format. Event names and fields

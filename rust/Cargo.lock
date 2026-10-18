@@ -467,6 +467,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "charliebot-tasks",
  "flate2",
  "http",
  "percent-encoding",

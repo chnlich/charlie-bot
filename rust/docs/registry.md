@@ -168,8 +168,8 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   `instruction_segments(&self, meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig, repo: &RepoRoot)`,
   `workflow_rules_file`, `input_preamble`, `event_renderers` and `claims_turn_end_unread`, and the async `before_turn`
   and `after_turn` hooks. `repo` is the checkout the server serves (`RepoRoot`); a contribution reads its prompt docs
-  through it, and `Registry::instruction_segments` takes the same `repo` argument and passes it to each contribution. The registry's readers run them in registration order. Two
-  contributions that render the same event type fail.
+  through it, and `Registry::instruction_segments` takes the same `repo` argument and passes it to each contribution.
+  The registry's readers run them in registration order. Two contributions that render the same event type fail.
 - Example: `registry.turn_contribution("memory", Arc::new(MemoryTurn))?;`
 
 ### Sidebar contributions

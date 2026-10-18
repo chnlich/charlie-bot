@@ -230,6 +230,9 @@ Cron tasks live in `~/.charliebot/config.d/cron.d/` (one file per job; manage th
 `/api/cron` API; operational notes in the `charliebot` skill). To run a scheduled task once
 now, POST `/api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat
 event. To stop this session's improve loop, run `charliebot improve-stop`.
+To stop a running worker child, run `charliebot session cancel <worker id> --reason <text>`.
+The command stops the worker's runs and ends the delegation.
+A message from `charliebot session send` reaches a worker only after its current run ends.
 
 ### Diff comment batches
 

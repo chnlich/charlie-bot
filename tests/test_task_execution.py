@@ -3360,6 +3360,53 @@ async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_stops_a_launched_run_on_a_closed_worker(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Recovery stops a launched Run when cancellation closed before its stop fact landed."""
+  from src.runtime.task_recovery import reconcile_task_tree
+  monkeypatch.setattr(runs_mod, "STOP_EXIT_WAIT_SECONDS", 0.2)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  worker = await create_task(
+      tree, parent=None, request_id="closed-live-worker", profile="worker", task=models.TaskSpec(goal="long work"))
+  proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+  pair = runs_mod.read_pid_stat(proc.pid)
+  assert pair is not None
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="run-live-closed",
+          session_id=worker.id,
+          kind="work",
+          pid=proc.pid,
+          pid_start=pair[0],
+          started_at=datetime.datetime.now(datetime.UTC)))
+  append_stop = tree.runs.append_stop_request_locked
+
+  async def fail_after_close(session_id: str, run_id: str, request_id: str) -> bool:
+    raise OSError("simulated stop-fact write interruption")
+
+  monkeypatch.setattr(tree.runs, "append_stop_request_locked", fail_after_close)
+  try:
+    with pytest.raises(OSError, match="simulated stop-fact write interruption"):
+      await tree.completion.cancel_task(worker.id, request_id="cancel-before-crash", reason="stop", caller=OPERATOR)
+    assert tree.task_state(worker.id) == "cancelled"
+    assert proc.poll() is None
+    monkeypatch.setattr(tree.runs, "append_stop_request_locked", append_stop)
+
+    adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+    await reconcile_task_tree(cfg, tree, adapter)
+
+    events = tree.runs.load_events_sync(worker.id)
+    stops = [event for event in events if event.get("type") == ET.RUN_STOP_REQUESTED]
+    assert len(stops) == 1 and stops[0]["request_id"] == "closed-task:run-live-closed"
+    assert tree.runs.terminal_outcome(events, "run-live-closed") == "interrupted"
+    assert proc.poll() is not None
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+    proc.wait(timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(j) A non-out-of-space exception in the end path lands the run

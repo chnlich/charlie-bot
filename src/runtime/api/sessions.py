@@ -5,7 +5,7 @@ import datetime
 import json
 import pathlib
 import uuid
-from typing import get_args
+from typing import Literal, get_args
 
 import fastapi
 import pydantic
@@ -780,6 +780,19 @@ class SessionDetailResponse(models.SessionMetadata):
   # The scope/source/current-rule facts the later Task/Context UI reads; body
   # content stays in the immutable prompt_bodies store.
   prompt_rules: dict = {}
+
+
+class StoppedRunResponse(pydantic.BaseModel):
+  """One Run stopped by POST /api/sessions/{id}/cancel."""
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  run_id: str
+  outcome: Literal["interrupted", "never_launched"] | None
+
+
+class CancelSessionResponse(SessionDetailResponse):
+  """POST /api/sessions/{id}/cancel response."""
+  stopped_runs: list[StoppedRunResponse]
 
 
 class TreePageResponse(pydantic.BaseModel):
@@ -1819,27 +1832,28 @@ async def _completed_session_detail(task_mgr: task_sessions.TaskTreeManager, ses
     raise _task_http_error(e) from e
 
 
-@router.post("/{session_id}/cancel", response_model=SessionDetailResponse)
+@router.post("/{session_id}/cancel", response_model=CancelSessionResponse)
 async def cancel_session_task(
     session_id: str,
     req: models.CancelTaskRequest,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
     caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
-) -> SessionDetailResponse:
+) -> CancelSessionResponse:
   """Explicit cancellation with reason, preserving evidence.
 
   An operator cancels any open task; a run-token agent cancels only a direct
-  child of its own task (403 otherwise). Active/unresolved execution or open
-  children return 409; the subtree is not recursively stopped (Run cancel
-  stays the separate operation).
+  child of its own task (403 otherwise). A worker target stops its non-terminal
+  Runs and ends the delegation. A manager target keeps its current blockers.
   """
   try:
-    await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)
+    result = await task_mgr.completion.cancel_task(
+        session_id, request_id=req.request_id, reason=req.reason, caller=caller)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
-          task_errors.TaskConflictError) as e:
+          task_errors.TaskConflictError, runs.RunIdentityConflictError) as e:
     raise _task_http_error(e) from e
-  return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
+  detail = await _completed_session_detail(task_mgr, session_id)
+  return CancelSessionResponse.model_validate({**detail, "stopped_runs": result.get("stopped_runs", [])})
 
 
 def _require_own_run_scope(caller: run_token.CallerIdentity, session_id: str, run_id: str) -> None:

@@ -577,25 +577,62 @@ impl Store {
     }) {
       return Ok(false);
     }
-    let event = control_events::build_control_event(
-      "task_closed",
-      ACTOR_SYSTEM,
-      session_id,
-      Some(&control_events::stable_close_event_id(session_id, &request_id)),
-      None,
-      [
-        ("request_id".to_string(), Value::String(request_id)),
-        ("outcome".to_string(), Value::String("archived".to_string())),
-        ("summary".to_string(), Value::String(format!("run {run_id} ended {outcome}; archived by the server"))),
-        ("result_refs".to_string(), json!([])),
-        ("run_ids".to_string(), json!([run_id])),
-        ("report_to".to_string(), Value::Null),
-      ],
-    );
+    let summary = format!("run {run_id} ended {outcome}; archived by the server");
+    let event = archived_close_event(session_id, &request_id, ACTOR_SYSTEM, &summary, &[run_id], None);
     self.append_control_fact(guard, session_id, event).await?;
     self.invalidate_tree_index();
     self.sequence_archive.on_archive(session_id).await?;
     Ok(true)
+  }
+
+  /// Archive a task subtree as one end state: one archived close fact per open node, parent before child.
+  ///
+  /// Operator scope only. Under the control lock, every unfinished run in the subtree is collected before any
+  /// fact is written, so a refusal writes nothing. An already archived target returns an empty list. Each
+  /// archived node's sequence binding then runs its archive duty, in the same order.
+  pub async fn archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>> {
+    if caller != TaskCaller::Operator {
+      return Err(StoreError::new("archiving a task requires operator credentials"));
+    }
+    let guard = self.control_lock().await;
+    // Rebuild from disk under the lock: the cache can predate writes that another process made.
+    self.invalidate_tree_index();
+    let index = self.tree_index()?;
+    if !index.metas.contains_key(session_id) {
+      return Err(StoreError::new(format!("task {session_id} not found")));
+    }
+    if self.task_state(session_id)? != "open" {
+      return Ok(Vec::new());
+    }
+    let mut subtree = vec![session_id.to_string()];
+    subtree.extend(descendant_ids(&index, session_id)?);
+    let mut blocked = Vec::new();
+    for node in &subtree {
+      for blocker in self.run_blockers(node)? {
+        blocked.push(format!("{node}: {}", blocker.reason));
+      }
+    }
+    if !blocked.is_empty() {
+      blocked.sort();
+      return Err(StoreError::new(blocked.join("; ")));
+    }
+    let request_id = format!("archive-{}", uuid::Uuid::new_v4());
+    let mut archived = Vec::new();
+    for node in &subtree {
+      if self.task_state(node)? != "open" {
+        continue;
+      }
+      let (summary, archived_with) =
+        if node == session_id { ("archived by the user", None) } else { ("", Some(session_id)) };
+      let event = archived_close_event(node, &request_id, ACTOR_USER, summary, &[], archived_with);
+      self.append_control_fact(&guard, node, event).await?;
+      archived.push(node.clone());
+    }
+    self.invalidate_tree_index();
+    for node in &archived {
+      self.sequence_archive.on_archive(node).await?;
+    }
+    Ok(archived)
   }
 
   /// Move sequence bindings from an elone source and copy its scheduled-run bookkeeping.
@@ -1106,6 +1143,36 @@ fn task_spec_hash(task: &TaskSpec) -> StoreResult<String> {
   Ok(control_events::sha256_hex(&serialized))
 }
 
+/// One archive-format close fact: outcome `archived` and no report target, so an archive wakes nobody.
+fn archived_close_event(
+  session_id: &str,
+  request_id: &str,
+  actor: &str,
+  summary: &str,
+  run_ids: &[&str],
+  archived_with: Option<&str>,
+) -> Value {
+  let mut payload = vec![
+    ("request_id".to_string(), Value::String(request_id.to_string())),
+    ("outcome".to_string(), Value::String("archived".to_string())),
+    ("summary".to_string(), Value::String(summary.to_string())),
+    ("result_refs".to_string(), json!([])),
+    ("run_ids".to_string(), json!(run_ids)),
+    ("report_to".to_string(), Value::Null),
+  ];
+  if let Some(archived_with) = archived_with {
+    payload.push(("archived_with".to_string(), Value::String(archived_with.to_string())));
+  }
+  control_events::build_control_event(
+    "task_closed",
+    actor,
+    session_id,
+    Some(&control_events::stable_close_event_id(session_id, request_id)),
+    None,
+    payload,
+  )
+}
+
 fn caller_actor(caller: &TaskCaller) -> &'static str {
   match caller {
     TaskCaller::Operator => ACTOR_USER,
@@ -1199,7 +1266,7 @@ fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
-  use std::sync::Arc;
+  use std::sync::{Arc, Mutex};
 
   use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
   use serde_json::{Map, Value, json};
@@ -1208,7 +1275,8 @@ mod tests {
   use crate::metadata::{TaskProfile, TaskSpec};
   use crate::run_records::{RunKind, RunOutcome, RunRecord};
   use crate::store::{
-    AccountLabelKeeper, AnchorFieldReconciler, SequenceBindingMover, SequenceListingFields, StoreHookFuture, StoreHooks,
+    AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
+    StoreHookFuture, StoreHooks,
   };
 
   struct TestAccountLabels;
@@ -1292,6 +1360,10 @@ mod tests {
   }
 
   fn make_store(home: &Path) -> Store {
+    make_store_with_archive(home, Arc::new(crate::store::test_support::SequenceArchive))
+  }
+
+  fn make_store_with_archive(home: &Path, sequence_archive: Arc<dyn SequenceArchiveHook>) -> Store {
     fs::create_dir_all(home).unwrap();
     let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
     Store::new(
@@ -1302,7 +1374,7 @@ mod tests {
         anchor_reconciler: Some(Arc::new(TestAnchorReconciler)),
         sequence_listing: Some(Arc::new(TestSequenceListing)),
         runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
-        sequence_archive: Some(Arc::new(crate::store::test_support::SequenceArchive)),
+        sequence_archive: Some(sequence_archive),
         sequence_binding_mover: Some(Arc::new(TestSequenceBindingMover)),
       },
     )
@@ -1709,6 +1781,145 @@ mod tests {
     assert!(store.archive_unsuccessful_worker(&guard, &worker.id, "failed-run", "failed").await.unwrap());
     assert!(!store.archive_unsuccessful_worker(&guard, &worker.id, "failed-run", "failed").await.unwrap());
     assert_eq!(store.task_state(&worker.id).unwrap(), "archived");
+  }
+
+  #[derive(Default)]
+  struct RecordingArchive {
+    calls: Mutex<Vec<String>>,
+  }
+
+  impl SequenceArchiveHook for RecordingArchive {
+    fn on_archive<'a>(&'a self, session_id: &'a str) -> StoreHookFuture<'a, ()> {
+      self.calls.lock().unwrap().push(session_id.to_string());
+      Box::pin(async { Ok(()) })
+    }
+  }
+
+  fn queued_run(session_id: &str, run_id: &str) -> RunRecord {
+    RunRecord {
+      id: run_id.to_string(),
+      session_id: session_id.to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: Some("synthetic".to_string()),
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn archive_subtree_closes_each_open_node_once_and_calls_each_binding_parent_first() {
+    let home = tempfile::tempdir().unwrap();
+    let archive = Arc::new(RecordingArchive::default());
+    let store = make_store_with_archive(home.path(), archive.clone());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    let mid = create_node(&store, "mid", Some(&root.id), TaskProfile::Manager).await;
+    let leaf = create_node(&store, "leaf", Some(&mid.id), TaskProfile::Worker).await;
+    let completed = create_node(&store, "done", Some(&root.id), TaskProfile::Worker).await;
+    let guard = store.control_lock().await;
+    let close = control_events::build_control_event(
+      "task_closed",
+      ACTOR_SYSTEM,
+      &completed.id,
+      None,
+      None,
+      [("outcome".to_string(), json!("completed"))],
+    );
+    store.append_control_fact(&guard, &completed.id, close).await.unwrap();
+    drop(guard);
+
+    let archived = store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+
+    assert_eq!(archived, [root.id.clone(), mid.id.clone(), leaf.id.clone()]);
+    assert_eq!(archive.calls.lock().unwrap().clone(), archived);
+    let closes = |session_id: &str| -> Vec<Value> {
+      store
+        .load_chat_events_sync(session_id)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event["type"] == "task_closed")
+        .collect()
+    };
+    for node in [&root.id, &mid.id, &leaf.id] {
+      assert_eq!(store.task_state(node).unwrap(), "archived");
+    }
+    let root_closes = closes(&root.id);
+    assert_eq!(root_closes.len(), 1);
+    assert_eq!(root_closes[0]["outcome"], "archived");
+    assert_eq!(root_closes[0]["actor"], "user");
+    assert_eq!(root_closes[0]["summary"], "archived by the user");
+    assert_eq!(root_closes[0]["run_ids"], json!([]));
+    assert_eq!(root_closes[0]["report_to"], Value::Null);
+    assert!(root_closes[0].get("archived_with").is_none());
+    for descendant in [&mid.id, &leaf.id] {
+      let descendant_closes = closes(descendant);
+      assert_eq!(descendant_closes.len(), 1);
+      assert_eq!(descendant_closes[0]["outcome"], "archived");
+      assert_eq!(descendant_closes[0]["summary"], "");
+      assert_eq!(descendant_closes[0]["archived_with"], root.id);
+    }
+    assert_eq!(store.task_state(&completed.id).unwrap(), "completed");
+    assert!(closes(&completed.id).iter().all(|fact| fact["outcome"] != "archived"));
+
+    assert!(store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap().is_empty());
+    assert_eq!(closes(&root.id).len(), 1);
+    assert_eq!(archive.calls.lock().unwrap().len(), 3);
+    let error = store.archive_subtree("missing-task", TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), "task missing-task not found");
+  }
+
+  #[tokio::test]
+  async fn archive_subtree_refuses_an_unfinished_run_anywhere_in_the_subtree_and_writes_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let archive = Arc::new(RecordingArchive::default());
+    let store = make_store_with_archive(home.path(), archive.clone());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    let mid = create_node(&store, "mid", Some(&root.id), TaskProfile::Manager).await;
+    let leaf = create_node(&store, "leaf", Some(&mid.id), TaskProfile::Worker).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &leaf.id, queued_run(&leaf.id, "queued-run"), None).await.unwrap();
+    drop(guard);
+
+    let error = store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap_err();
+
+    assert_eq!(error.to_string(), format!("{}: run queued-run is queued (pending dispatch)", leaf.id));
+    for node in [&root.id, &mid.id, &leaf.id] {
+      assert_eq!(store.task_state(node).unwrap(), "open");
+      assert!(store.load_chat_events_sync(node).unwrap().iter().all(|event| event["type"] != "task_closed"));
+    }
+    assert!(archive.calls.lock().unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn archive_subtree_is_operator_only_and_writes_nothing_for_other_callers() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+
+    for caller in [TaskCaller::System, TaskCaller::Agent { session_id: root.id.clone() }] {
+      let error = store.archive_subtree(&root.id, caller).await.unwrap_err();
+      assert_eq!(error.to_string(), "archiving a task requires operator credentials");
+    }
+    assert_eq!(store.task_state(&root.id).unwrap(), "open");
+    assert!(store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"] != "task_closed"));
   }
 
   #[tokio::test]

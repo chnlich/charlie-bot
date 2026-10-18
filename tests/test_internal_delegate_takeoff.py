@@ -89,8 +89,7 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
       task_mgr, "check_task_authorization", mock.AsyncMock(side_effect=takeoff_gate.DelegationBlockedError("blocked")))
 
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.delegate_task(
-        req, session_events=session_blocks.events, store=session_blocks.store, task_mgr=task_mgr)
+    await internal.delegate_task(req, events=session_blocks.events, store=session_blocks.store, task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 403
   assert exc_info.value.detail == "blocked"
@@ -122,7 +121,7 @@ async def test_delegate_task_verify_rejects_repo_path() -> None:
   session_blocks = mock.AsyncMock()
 
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.delegate_task(req, session_events=session_blocks.events, store=session_blocks.store)
+    await internal.delegate_task(req, events=session_blocks.events, store=session_blocks.store)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "verify delegations are repo-less; omit repo_path"
@@ -142,7 +141,7 @@ async def test_delegate_task_repo_scoped_types_take_repo_and_base_together(
   session_blocks = mock.AsyncMock()
 
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.delegate_task(req, session_events=session_blocks.events, store=session_blocks.store)
+    await internal.delegate_task(req, events=session_blocks.events, store=session_blocks.store)
 
   assert exc_info.value.status_code == 400
   assert "together" in exc_info.value.detail
@@ -178,7 +177,7 @@ async def test_delegate_task_repo_less_request_passes_the_schema_gate(
   monkeypatch.setattr(internal, "_delegate_task_tree", fake_delegate_task_tree)
 
   result = await internal.delegate_task(
-      req, session_events=session_blocks.events, store=session_blocks.store, task_mgr=task_mgr, caller=None)
+      req, events=session_blocks.events, store=session_blocks.store, task_mgr=task_mgr, caller=None)
 
   assert result["session_id"] == "child"
   assert captured["repo_path"] is None
@@ -202,8 +201,7 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
   monkeypatch.setattr("src.infra.config.get_config", lambda: object())
 
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.delegate_task(
-        req, session_events=session_blocks.events, store=session_blocks.store, task_mgr=task_mgr)
+    await internal.delegate_task(req, events=session_blocks.events, store=session_blocks.store, task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"
@@ -353,7 +351,7 @@ async def test_delegate_child_and_its_later_runs_keep_the_requested_backend(
 
   result = await internal.delegate_task(
       _build_request(session_id=manager.id, backend="codex-o3"),
-      session_events=session_blocks.events,
+      events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
       caller=conftest.OPERATOR,
@@ -398,7 +396,7 @@ async def test_verify_delegate_child_records_the_cross_model_backend(
   result = await internal.delegate_task(
       _build_request(
           session_id=manager.id, task_type=models.TaskType.VERIFY, repo_path=None, base_branch=None, backend=None),
-      session_events=session_blocks.events,
+      events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
       caller=conftest.OPERATOR,
@@ -420,7 +418,7 @@ async def test_implement_delegate_without_backend_resolves_to_the_parent_backend
 
   result = await internal.delegate_task(
       _build_request(session_id=manager.id, backend=None),
-      session_events=session_blocks.events,
+      events=session_blocks.events,
       store=session_blocks.store,
       task_mgr=tree,
       caller=conftest.OPERATOR,
@@ -444,7 +442,7 @@ async def test_pool_runs_unnamed_workers_and_leaves_named_and_verify_routing(
   async def delegated_backend(**overrides: Any) -> str | None:
     result = await internal.delegate_task(
         _build_request(session_id=manager.id, **overrides),
-        session_events=session_blocks.events,
+        events=session_blocks.events,
         store=session_blocks.store,
         task_mgr=tree,
         caller=conftest.OPERATOR,

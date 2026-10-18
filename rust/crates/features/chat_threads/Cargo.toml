@@ -8,3 +8,6 @@ publish.workspace = true
 [dependencies]
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

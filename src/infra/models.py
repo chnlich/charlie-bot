@@ -19,7 +19,6 @@ if TYPE_CHECKING:
   # The static half of the _BACKEND_REEXPORTS re-export: the same names, bound
   # for type checkers; __getattr__ binds them at runtime.
   BackendOption = backend_models.BackendOption
-  backend_type_allows_missing_model = backend_models.backend_type_allows_missing_model
   option_default_model = backend_models.option_default_model
 
 # The backend-field models live in backend_models so the config chain (every
@@ -28,7 +27,6 @@ if TYPE_CHECKING:
 # read so this module's session/run-model consumers pay no backend stack.
 _BACKEND_REEXPORTS = frozenset({
     "BackendOption",
-    "backend_type_allows_missing_model",
     "option_default_model",
 })
 

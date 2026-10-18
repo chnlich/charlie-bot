@@ -1555,9 +1555,8 @@ OPUS_BACKEND_ID = "claude-opus-4.6"
 OPUS_BACKEND_OPTION = backend_option(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
 CODEX_BACKEND_OPTION = backend_option(id="codex-o3", label="Codex", type="codex", model="o3")
 
-# Antigravity option as the antigravity-routing tests register it: model-less, so the
-# model-is-required rejection and the resume-id routing keep their fixture shape.
-AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigravity")
+# Antigravity option used by routing tests.
+AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigravity", model="gemini-2.5-pro")
 
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
@@ -1786,7 +1785,9 @@ def build_cli_backend(
 CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend],
                        tuple[str, str, dict[str, Any]]] = {
                            antigravity_cli.AntigravityCliBackend:
-                               (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {}),
+                               (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {
+                                   "model": "agy-test-model"
+                               }),
                            charlie_code.CharlieCodeBackend:
                                (
                                    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,

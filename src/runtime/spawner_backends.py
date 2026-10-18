@@ -24,13 +24,9 @@ def resolve_backend_option(cfg: config.CharlieBotConfig, backend_id: str, model:
   if not backend_id:
     raise ValueError("resolved backend is required")
   option = config.require_backend_option(cfg, backend_id, subject="resolved ")
-  if models.backend_type_allows_missing_model(option.type):
-    resolved_model = None
-  elif not model:
+  if not model:
     raise ValueError("resolved model is required")
-  else:
-    resolved_model = model
-  return option.model_copy(update={"model": resolved_model})
+  return option.model_copy(update={"model": model})
 
 
 def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:

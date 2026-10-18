@@ -268,7 +268,7 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
       "kimi-k3": _Option("kimi-k3", "cc-kimi", "moonshotai/Kimi-K3"),
       "glm-air": _Option("glm-air", "cc-openai-compatible", "openai/GLM-Air"),
       "oc-qwen": _Option("oc-qwen", "opencode", "qwen/qwen3"),
-      "agy-antigravity": _Option("agy-antigravity", "antigravity", None),
+      "agy-antigravity": _Option("agy-antigravity", "antigravity", "gemini-2.5-pro"),
       # A registered id whose type disagrees with its prefix: the type wins.
       "claude-mislabeled": _Option("claude-mislabeled", "codex", "openai/gpt-5"),
   }

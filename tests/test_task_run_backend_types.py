@@ -17,7 +17,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.infra import backend_models, config_registry
+from src.infra import config_registry
 from src.infra import event_types as ET
 
 
@@ -26,9 +26,7 @@ def build_env(tmp_path: pathlib.Path, backend_type: str):
   import src.infra.config as core_config
 
   home = tmp_path / "home"
-  kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type}
-  if not backend_models.backend_type_allows_missing_model(backend_type):
-    kwargs["model"] = "fake-model"
+  kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type, "model": "fake-model"}
   if backend_type in ("cc-openai-compatible", "charlie-code"):
     kwargs["api_base"] = "http://127.0.0.1:9"
   if backend_type == "cc-kimi":
@@ -82,8 +80,7 @@ async def test_run_records_stream_identity_and_result_truth(
 
   # The Run records the configured model, the stream's native session id,
   # and its own transport refs.
-  if not backend_models.backend_type_allows_missing_model(backend_type):
-    assert run.model == "fake-model"
+  assert run.model == "fake-model"
   assert run.native_session_id == "native-xyz-1"
   run_dir = tree.runs.run_dir(root.id, run_id)
   assert run.raw_log_ref == str(run_dir / "agent.raw.ndjson")

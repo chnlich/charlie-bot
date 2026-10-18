@@ -222,8 +222,8 @@ impl CodexTranslator {
 }
 
 impl Translate for CodexTranslator {
-  fn translate(&mut self, raw: Value) -> Vec<Value> {
-    self.translate_event(&raw).unwrap_or_else(|error| panic!("codex event could not be translated: {error:#}"))
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    self.translate_event(&raw)
   }
 }
 
@@ -473,5 +473,28 @@ mod tests {
         "aggregated_output": null, "output": ["raw"]}}))
       .unwrap();
     assert_eq!(completed, [json!({"type": "tool_result", "tool_name": "Bash", "content": ["raw"]})]);
+  }
+
+  #[test]
+  fn trait_translation_returns_every_shape_error_without_panicking() {
+    let invalid_events = [
+      json!(null),
+      json!({"type": "turn.completed", "usage": []}),
+      json!({"type": "turn.completed", "usage": {"input_tokens": "many"}}),
+      json!({"type": "item.updated", "item": []}),
+      json!({"type": "item.updated", "item": {"type": "agent_message", "text": 5}}),
+      json!({"type": "item.updated", "item": {"type": "agent_message", "id": [], "text": "hello"}}),
+      json!({"type": "item.updated", "item": {"type": "agent_message", "content": [{"type": "text", "text": 5}]}}),
+      json!({"type": "item.updated", "item": {"type": "reasoning", "text": true}}),
+      json!({"type": "item.updated", "item": {"type": "reasoning", "id": {}, "text": "thinking"}}),
+      json!({"type": "item.completed", "item": {"type": "file_change"}}),
+      json!({"type": "item.completed", "item": {"type": "file_change", "changes": [null]}}),
+      json!({"type": "item.completed", "item": {"type": "file_change", "changes": [{"kind": "add"}]}}),
+      json!({"type": "item.updated", "item": {"type": "todo_list", "id": [1], "items": [{"text": "task"}]}}),
+    ];
+    for event in invalid_events {
+      let mut translator = CodexTranslator::new("gpt-5.5");
+      assert!(translator.translate(event).is_err());
+    }
   }
 }

@@ -9,7 +9,7 @@ use charliebot_core::metadata_slot::MetadataSlot;
 use charliebot_core::paths;
 
 use crate::backend::{
-  BackendLifecycle, BackendTypeRegistration, ChildEnvFn, DefaultLifecycle, ReadingLimitsFn, UsageResolver,
+  BackendLifecycle, BackendTypeRegistration, ChildEnvFn, DefaultLifecycle, ReadingLimitsFn, UsageResolverConstructor,
 };
 use crate::lifespan::StepFn;
 use crate::pages::{HomeCard, TemplateGlobalFn};
@@ -129,7 +129,7 @@ pub struct Registry {
   pub(crate) backend_types: Ledger<BackendTypeRegistration>,
   pub(crate) child_envs: Ledger<ChildEnvFn>,
   pub(crate) reading_limits: Ledger<ReadingLimitsFn>,
-  pub(crate) usage_resolvers: Ledger<Arc<dyn UsageResolver>>,
+  pub(crate) usage_resolvers: Ledger<UsageResolverConstructor>,
   pub(crate) sequence_controllers: Ledger<Arc<dyn SequenceController>>,
   /// The lifecycle of a backend type that registered none: one process per run.
   pub(crate) default_lifecycle: Arc<dyn BackendLifecycle>,

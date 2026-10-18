@@ -10,6 +10,7 @@ use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
+use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
@@ -123,13 +124,15 @@ impl BackendFactory for ScriptFactory {
       option.type_fields.get(&key).and_then(YamlValue::as_str).context("scripted option has no script")?.to_string();
     let response_key = YamlValue::String("one_shot_response".to_string());
     let one_shot_response = option.type_fields.get(&response_key).and_then(YamlValue::as_str).map(str::to_string);
-    Ok(Box::new(ScriptBackend { script, one_shot_response }))
+    let translation_error = option.backend_type == "translation_error_script";
+    Ok(Box::new(ScriptBackend { script, one_shot_response, translation_error }))
   }
 }
 
 struct ScriptBackend {
   script: String,
   one_shot_response: Option<String>,
+  translation_error: bool,
 }
 
 impl AgentBackend for ScriptBackend {
@@ -154,7 +157,7 @@ impl AgentBackend for ScriptBackend {
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    Box::new(IdentityTranslate)
+    if self.translation_error { Box::new(FailingTranslate) } else { Box::new(IdentityTranslate) }
   }
 
   fn transport(&self) -> TransportKind {
@@ -175,15 +178,30 @@ impl AgentBackend for ScriptBackend {
 struct IdentityTranslate;
 
 impl Translate for IdentityTranslate {
-  fn translate(&mut self, raw: Value) -> Vec<Value> {
-    vec![raw]
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![raw])
+  }
+}
+
+struct FailingTranslate;
+
+impl Translate for FailingTranslate {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    if raw.get("type").and_then(Value::as_str) == Some("translate_error") {
+      anyhow::bail!("synthetic translator failure");
+    }
+    Ok(vec![raw])
   }
 }
 
 fn register_scripted_backend(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
-  for (type_name, restart_reattach) in
-    [("codex", false), ("covered_script", true), ("uncovered_script", false), ("native_id_script", false)]
-  {
+  for (type_name, restart_reattach) in [
+    ("codex", false),
+    ("covered_script", true),
+    ("uncovered_script", false),
+    ("native_id_script", false),
+    ("translation_error_script", false),
+  ] {
     registry.backend_type(BackendTypeRegistration {
       type_name,
       traits: BackendTraits {
@@ -689,6 +707,98 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
   queue.shutdown().await?;
   assert!(features.store.busy_since(&meta.id).is_none());
   assert!(master_queue::queued_user_event_ids(&features, &meta.id)?.is_empty());
+  Ok(())
+}
+
+#[tokio::test]
+async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_alive() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let registry = registry();
+  let home = temp.path().join("translate-error-home");
+  let gate = home.join("release-translation-error");
+  let gate_text = gate.to_str().context("synthetic gate path is not UTF-8")?;
+  let thinking = json!({"type":"thinking","content":"private thought"});
+  let result = json!({"type":"result","usage":{"input_tokens":1,"output_tokens":1}});
+  let translation_error = json!({"type":"translate_error"});
+  let first_script = format!(
+    "cat <<'CB_EVENTS'\n{}\n{}\nCB_EVENTS\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\ncat <<'CB_FAILURE'\n{}\nCB_FAILURE\n",
+    serde_json::to_string(&thinking)?,
+    serde_json::to_string(&result)?,
+    gate_text,
+    serde_json::to_string(&translation_error)?,
+  );
+  let assistant = json!({"type":"assistant","message":{"content":[{"type":"text","text":"next turn answer"}]}});
+  let next_result = json!({"type":"result","subtype":"success"});
+  let second_script = scripted_process(&[assistant, next_result], 0, "")?;
+  let failing_option = backend_option_for("translation-error", "translation_error_script", first_script, None);
+  let next_option = backend_option_for("next-turn", "translation_error_script", second_script, None);
+  let (cfg, features) = config_with_features(&home, Some(failing_option.clone()), Arc::clone(&registry), true)?;
+  let mut meta = session_meta("translation-error-session", "web", "fresh");
+  meta.backend = failing_option.id.clone();
+  save_session_metadata(&features, &registry, &meta)?;
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  let unread = Arc::new(Mutex::new(Vec::new()));
+  let first = tokio::spawn(run_turn(
+    Arc::clone(&queue),
+    Arc::clone(&cfg),
+    meta.clone(),
+    callbacks(Arc::clone(&features), Arc::clone(&unread)),
+    "failing-input".to_string(),
+    failing_option,
+  ));
+  tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    loop {
+      if master_state::running_user_event_ids(&features, &meta.id)? == ["failing-input"] {
+        break anyhow::Ok(());
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  })
+  .await??;
+
+  let second = tokio::spawn(run_turn(
+    Arc::clone(&queue),
+    Arc::clone(&cfg),
+    meta.clone(),
+    callbacks(Arc::clone(&features), Arc::clone(&unread)),
+    "next-input".to_string(),
+    next_option,
+  ));
+  let expected = std::collections::HashSet::from(["failing-input".to_string(), "next-input".to_string()]);
+  tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    loop {
+      if master_queue::queued_user_event_ids(&features, &meta.id)? == expected {
+        break anyhow::Ok(());
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  })
+  .await??;
+  std::fs::write(gate, b"release")?;
+  tokio::time::timeout(std::time::Duration::from_secs(5), first)
+    .await
+    .context("translator failure left the first turn blocked")???;
+  tokio::time::timeout(std::time::Duration::from_secs(5), second)
+    .await
+    .context("the session consumer did not process the queued turn")???;
+  queue.shutdown().await?;
+
+  let events = features.store.load_chat_events_sync(&meta.id)?;
+  let error_events = events
+    .iter()
+    .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT_ERROR))
+    .collect::<Vec<_>>();
+  assert_eq!(error_events.len(), 1);
+  assert!(error_events[0]["content"].as_str().unwrap().contains("synthetic translator failure"));
+  assert_eq!(events.iter().filter(|event| event["type"] == "master_done").count(), 2);
+  assert!(events.iter().any(|event| event["type"] == "thinking"));
+  assert!(events.iter().any(|event| event["type"] == "result"));
+  let assistant_text = events
+    .iter()
+    .filter_map(|event| event.pointer("/message/content/0/text").and_then(Value::as_str))
+    .collect::<Vec<_>>();
+  assert_eq!(assistant_text, ["next turn answer"]);
+  assert_eq!(unread.lock().expect("golden unread mutex is not poisoned").as_slice(), [meta.id.as_str()]);
   Ok(())
 }
 

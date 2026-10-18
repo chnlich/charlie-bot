@@ -14,6 +14,8 @@ use std::time::Duration;
 
 use anyhow::bail;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::hot_reload::HotReload;
+use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
@@ -86,6 +88,15 @@ pub trait UsageResolver: Send + Sync {
   ) -> anyhow::Result<Option<Map<String, Value>>>;
 }
 
+/// The server values a backend usage-resolver constructor can retain.
+pub struct UsageResolverHost {
+  pub config: Arc<HotReload<CharlieBotConfig>>,
+  pub store: Arc<Store>,
+}
+
+/// Constructs a backend type's usage resolver for one usage owner.
+pub type UsageResolverConstructor = fn(&UsageResolverHost) -> Arc<dyn UsageResolver>;
+
 /// The keyword arguments the runtime passes to a backend factory (`base.py` launch arguments and the per-type
 /// launch arguments).
 #[derive(Clone, Debug, Default)]
@@ -123,7 +134,7 @@ pub enum TransportKind {
 
 /// Maps one raw event of a backend's output to the runtime's events.
 pub trait Translate: Send {
-  fn translate(&mut self, raw: Value) -> Vec<Value>;
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>>;
 }
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
@@ -328,10 +339,10 @@ impl Registry {
   pub fn usage_resolver(
     &mut self,
     backend_type: &'static str,
-    resolver: Arc<dyn UsageResolver>,
+    constructor: UsageResolverConstructor,
   ) -> Result<(), RegistryError> {
     let package = self.owner()?;
-    self.usage_resolvers.insert(package, backend_type, resolver)
+    self.usage_resolvers.insert(package, backend_type, constructor)
   }
 
   /// The registration of `backend_type`, or `None` when no package registered it.
@@ -402,8 +413,8 @@ impl Registry {
     self.reading_limits.get(kind).map(|limits| limits())
   }
 
-  /// The usage resolver of `backend_type`, or `None` when the type has none.
-  pub fn usage_resolver_for(&self, backend_type: &str) -> Option<Arc<dyn UsageResolver>> {
-    self.usage_resolvers.get(backend_type).cloned()
+  /// The usage-resolver constructor of `backend_type`, or `None` when the type has none.
+  pub fn usage_resolver_for(&self, backend_type: &str) -> Option<UsageResolverConstructor> {
+    self.usage_resolvers.get(backend_type).copied()
   }
 }

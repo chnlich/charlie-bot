@@ -722,7 +722,7 @@ fn project_fresh_raw(
   let built = backend_types::build_backend(Arc::clone(&features.registry), option, cfg, LaunchArgs::default())?;
   let mut translator = built.backend.translator();
   let filter = notices_only.then(|| recovery::TypeLineFilter::new([event_types::ASSISTANT]));
-  Ok(recovery::project_raw_file(raw_path, |raw| translator.translate(raw), filter.as_ref())?)
+  recovery::project_raw_file(raw_path, |raw| translator.translate(raw), filter.as_ref())
 }
 
 async fn emit_round_notices(
@@ -898,9 +898,9 @@ fn build_fresh_translate(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   option: Option<&BackendOption>,
-) -> Box<dyn FnMut(Value) -> Vec<Value> + Send> {
+) -> Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send> {
   let Some(option) = option else {
-    return Box::new(|event| vec![event]);
+    return Box::new(|event| Ok(vec![event]));
   };
   match backend_types::build_backend(Arc::clone(&features.registry), option, cfg, LaunchArgs::default()) {
     Ok(built) => {
@@ -909,7 +909,7 @@ fn build_fresh_translate(
     }
     Err(error) => {
       tracing::warn!(target: "charliebot_tasks", backend = %option.id, error = %error, "master_cc_resume_translate_unresolved");
-      Box::new(|event| vec![event])
+      Box::new(|event| Ok(vec![event]))
     }
   }
 }

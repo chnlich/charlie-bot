@@ -1,7 +1,6 @@
 //! Whole-file raw-log readers used after a producer exits.
 
 use std::fs;
-use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -75,11 +74,15 @@ fn parse_line(line: &[u8]) -> Option<Value> {
 }
 
 /// Apply a stateful raw-event translator to each accepted event in file order.
-pub fn project_raw_events<T>(events: impl IntoIterator<Item = Value>, mut translate: T) -> Vec<Value>
+pub fn project_raw_events<T>(events: impl IntoIterator<Item = Value>, mut translate: T) -> anyhow::Result<Vec<Value>>
 where
-  T: FnMut(Value) -> Vec<Value>,
+  T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
 {
-  events.into_iter().flat_map(&mut translate).collect()
+  let mut projected = Vec::new();
+  for event in events {
+    projected.extend(translate(event)?);
+  }
+  Ok(projected)
 }
 
 /// Read, parse, and project the raw file; a line filter skips only provable type mismatches.
@@ -87,16 +90,16 @@ pub fn project_raw_file<T>(
   raw_path: &Path,
   mut translate: T,
   line_filter: Option<&TypeLineFilter>,
-) -> io::Result<Vec<Value>>
+) -> anyhow::Result<Vec<Value>>
 where
-  T: FnMut(Value) -> Vec<Value>,
+  T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
 {
   let raw_bytes = fs::read(raw_path)?;
   let events = raw_bytes
     .split(|byte| *byte == b'\n')
     .filter(|line| !line_filter.is_some_and(|filter| filter.rejects(line)))
     .filter_map(parse_line);
-  Ok(project_raw_events(events, &mut translate))
+  project_raw_events(events, &mut translate)
 }
 
 /// Return the raw log's final modification time in UTC.
@@ -127,9 +130,9 @@ pub fn result_exit_code(events: &[Value]) -> i32 {
 }
 
 /// Scan a raw log that may be missing and return its events, last result, and Python-compatible exit code.
-pub fn scan_result_exit<T>(raw_path: &Path, translate: T) -> io::Result<(Vec<Value>, Option<Value>, i32)>
+pub fn scan_result_exit<T>(raw_path: &Path, translate: T) -> anyhow::Result<(Vec<Value>, Option<Value>, i32)>
 where
-  T: FnMut(Value) -> Vec<Value>,
+  T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
 {
   let events = if raw_path.is_file() { project_raw_file(raw_path, translate, None)? } else { Vec::new() };
   let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("result")).cloned();
@@ -152,7 +155,7 @@ mod tests {
     )
     .unwrap();
     let filter = TypeLineFilter::new(["assistant"]);
-    let events = project_raw_file(&raw, |event| vec![event], Some(&filter)).unwrap();
+    let events = project_raw_file(&raw, |event| Ok(vec![event]), Some(&filter)).unwrap();
     assert_eq!(events, [json!({"type":"assistant", "seq":1}), json!({"duration_api_ms":1,"type":"result"})]);
   }
 
@@ -173,14 +176,23 @@ mod tests {
     let raw = root.path().join("agent.raw.ndjson");
     fs::write(&raw, b"{\"type\":\"result\",\"subtype\":\"success\"}\n{\"type\":\"result\",\"subtype\":\"error\"}\n")
       .unwrap();
-    let (events, result, exit_code) = scan_result_exit(&raw, |event| vec![event]).unwrap();
+    let (events, result, exit_code) = scan_result_exit(&raw, |event| Ok(vec![event])).unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(result.unwrap()["subtype"], "error");
     assert_eq!(exit_code, -1);
-    let (events, result, exit_code) = scan_result_exit(&root.path().join("missing"), |event| vec![event]).unwrap();
+    let (events, result, exit_code) = scan_result_exit(&root.path().join("missing"), |event| Ok(vec![event])).unwrap();
     assert!(events.is_empty());
     assert!(result.is_none());
     assert_eq!(exit_code, -1);
+  }
+
+  #[test]
+  fn raw_projection_returns_translator_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(&raw, b"{\"type\":\"assistant\"}\n").unwrap();
+    let error = project_raw_file(&raw, |_| Err(anyhow::anyhow!("synthetic translator failure")), None).unwrap_err();
+    assert_eq!(error.to_string(), "synthetic translator failure");
   }
 
   #[test]

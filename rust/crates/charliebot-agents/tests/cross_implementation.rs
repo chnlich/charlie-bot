@@ -68,7 +68,7 @@ async fn rust_follow(raw: &Path, cursor: &Path, start_offset: u64, stop_after: u
   let events_for_liveness = Arc::clone(&events);
   tail_follow_events(
     raw,
-    |event| vec![event],
+    |event| Ok(vec![event]),
     |event| {
       events_for_handler.lock().unwrap().push(event);
       async { Ok(()) }

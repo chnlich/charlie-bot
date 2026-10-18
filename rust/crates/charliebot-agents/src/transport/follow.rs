@@ -45,9 +45,9 @@ pub async fn tail_follow_events<T, H, Fut, L>(
   poll_interval: Duration,
   mut on_silence: Option<SilenceCallback>,
   silence_threshold: Duration,
-) -> io::Result<FollowSummary>
+) -> anyhow::Result<FollowSummary>
 where
-  T: FnMut(Value) -> Vec<Value>,
+  T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
   H: FnMut(Value) -> Fut,
   Fut: Future<Output = io::Result<()>>,
   L: FnMut() -> bool,
@@ -112,7 +112,7 @@ where
             let parsed = spawn::parse_backend_line(&partial_line);
             if let Some(event) = parsed {
               let mtime = file.metadata().await?.modified().ok();
-              for mut translated in translate(event) {
+              for mut translated in translate(event)? {
                 track_pending_tool_calls(&translated, &mut pending_tool_calls);
                 clamp_event_timestamp(&mut translated, mtime);
                 let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
@@ -287,10 +287,10 @@ mod tests {
     events: &'a mut Vec<Value>,
     cursor: Option<&'a Path>,
     start_offset: u64,
-  ) -> impl Future<Output = io::Result<FollowSummary>> + 'a {
+  ) -> impl Future<Output = anyhow::Result<FollowSummary>> + 'a {
     tail_follow_events(
       raw_path,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |event| {
         events.push(event);
         async { Ok(()) }
@@ -332,7 +332,7 @@ mod tests {
     let task = tokio::spawn(async move {
       tail_follow_events(
         &raw_for_follow,
-        |event| vec![event],
+        |event| Ok(vec![event]),
         move |event| {
           events_for_handler.lock().unwrap().push(event);
           alive_for_handler.store(false, Ordering::SeqCst);
@@ -368,7 +368,7 @@ mod tests {
     let expected_offset = fs::metadata(&raw).unwrap().len();
     tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       move |_event| {
         let observed = Arc::clone(&observed_by_handler);
         let cursor = cursor_for_handler.clone();
@@ -405,7 +405,7 @@ mod tests {
     .unwrap();
     let wrapped_summary = tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |_| async { Ok(()) },
       || false,
       None,
@@ -425,7 +425,7 @@ mod tests {
     let checks = Arc::clone(&alive_checks);
     let summary = tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |_| async { Ok(()) },
       move || checks.fetch_add(1, Ordering::SeqCst) == 0,
       None,
@@ -451,7 +451,7 @@ mod tests {
     let mut events = Vec::new();
     tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |event| {
         events.push(event);
         async { Ok(()) }
@@ -480,7 +480,7 @@ mod tests {
     fs::write(&raw, b"not-json\n{\"pad\":\"this line is too large\"}\n").unwrap();
     let summary = tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |_| async { Ok(()) },
       || false,
       Some(&cursor),
@@ -504,7 +504,7 @@ mod tests {
     fs::write(&raw, b"{\"type\":\"result\"}\n").unwrap();
     let summary = tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |_| async { Ok(()) },
       || true,
       None,
@@ -539,7 +539,7 @@ mod tests {
     });
     tail_follow_events(
       &raw,
-      |event| vec![event],
+      |event| Ok(vec![event]),
       |_| async { Ok(()) },
       move || calls_for_liveness.load(Ordering::SeqCst) == 0,
       None,
@@ -553,5 +553,30 @@ mod tests {
     .await
     .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+  }
+
+  #[tokio::test]
+  async fn returns_translator_errors_before_advancing_the_cursor() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let cursor = root.path().join("agent.raw.cursor");
+    fs::write(&raw, b"{\"type\":\"assistant\"}\n").unwrap();
+    let error = tail_follow_events(
+      &raw,
+      |_| Err(anyhow::anyhow!("synthetic translator failure")),
+      |_| async { Ok(()) },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "synthetic translator failure");
+    assert!(!cursor.exists());
   }
 }

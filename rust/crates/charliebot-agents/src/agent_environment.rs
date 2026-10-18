@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
@@ -19,6 +19,7 @@ use crate::transport::cgroup;
 pub use charliebot_core::venv::VENV_BIN_ENV;
 pub const ENTRY_POINT_RELATIVE: &str = "src/runtime/agent_entry_points";
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
+static STARTUP_STATE: OnceLock<Arc<StartupState>> = OnceLock::new();
 
 /// The server environment after removing its virtualenv activation for agent children.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,18 +58,29 @@ pub fn agent_environment(inherited: &Env, venv_bin: &Path, repo_root: &Path) -> 
 /// Read the process environment and build its agent-safe snapshot using the startup venv path.
 pub fn from_process_environment(startup: &StartupState) -> anyhow::Result<AgentBaseEnvironment> {
   let values = process_environment()?;
-  agent_environment_from_startup(startup, &values)
+  rewrite_from_startup(startup, &values)
 }
 
-fn agent_environment_from_startup(startup: &StartupState, values: &Env) -> anyhow::Result<AgentBaseEnvironment> {
+fn rewrite_from_startup(startup: &StartupState, values: &Env) -> anyhow::Result<AgentBaseEnvironment> {
   let venv_bin = startup.require::<VenvBin>()?;
   let repo_root = startup.require::<RepoRoot>()?;
   agent_environment(values, venv_bin.path(), repo_root.path())
 }
 
 fn insert_agent_environment(startup: &StartupState, values: &Env) -> anyhow::Result<()> {
-  startup.insert(agent_environment_from_startup(startup, values)?)?;
+  startup.insert(rewrite_from_startup(startup, values)?)?;
   Ok(())
+}
+
+/// Require the agent environment owned by a startup state.
+pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<Arc<AgentBaseEnvironment>> {
+  Ok(startup.require::<AgentBaseEnvironment>()?)
+}
+
+/// Read the agent environment inserted into the server's startup state.
+pub fn startup_agent_environment() -> anyhow::Result<Arc<AgentBaseEnvironment>> {
+  let startup = STARTUP_STATE.get().context("agent startup state has not been installed")?;
+  require_agent_base_environment(startup)
 }
 
 /// Insert the one typed agent environment before recovery starts.
@@ -76,6 +88,9 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
   Box::pin(async move {
     let values = process_environment()?;
     insert_agent_environment(&features.startup, &values)?;
+    STARTUP_STATE
+      .set(Arc::clone(&features.startup))
+      .map_err(|_| anyhow::anyhow!("agent startup state has already been installed"))?;
     Ok(())
   })
 }

@@ -7,6 +7,15 @@ use futures_util::future::BoxFuture;
 
 pub const SESSION_ID_ENV: &str = "CHARLIEBOT_SESSION_ID";
 
+/// Whether launch-loop child edits apply to a process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildEnvPolicy {
+  /// Remove the inherited session id and apply the registered package edits.
+  RegisteredEdits,
+  /// Keep the startup agent environment unchanged before backend preparation.
+  Inherited,
+}
+
 /// One process result: the process exit code and captured stderr tail.
 pub type ProcessResult = (i32, String);
 
@@ -65,9 +74,35 @@ where
 
 /// Copy the agent base environment, remove its inherited session identity and apply registered edits.
 pub fn child_env(inherited: &Env, registry: &Registry) -> Env {
+  child_env_with_policy(inherited, registry, ChildEnvPolicy::RegisteredEdits)
+}
+
+/// Copy the startup environment and apply the selected launch-loop child edits.
+pub fn child_env_with_policy(inherited: &Env, registry: &Registry, policy: ChildEnvPolicy) -> Env {
   let mut values = inherited.clone();
-  values.remove(SESSION_ID_ENV);
-  registry.apply_child_env(&mut values);
+  match policy {
+    ChildEnvPolicy::RegisteredEdits => {
+      values.remove(SESSION_ID_ENV);
+      registry.apply_child_env(&mut values);
+    }
+    ChildEnvPolicy::Inherited => {}
+  }
+  values
+}
+
+/// Build one child environment in Python launch order: package edits, session id, then per-run additions.
+pub fn build_child_env(
+  inherited: &Env,
+  registry: &Registry,
+  policy: ChildEnvPolicy,
+  session_id: Option<&str>,
+  overlay: &Env,
+) -> Env {
+  let mut values = child_env_with_policy(inherited, registry, policy);
+  if let Some(session_id) = session_id {
+    values.insert(SESSION_ID_ENV.to_string(), session_id.to_string());
+  }
+  values.extend(overlay.clone());
   values
 }
 

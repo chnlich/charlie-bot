@@ -21,7 +21,7 @@ use tokio::process::Child;
 use tokio::sync::watch;
 
 use crate::agent_environment::AgentBaseEnvironment;
-use crate::launch_loop::{self, SESSION_ID_ENV};
+use crate::launch_loop::{self, ChildEnvPolicy};
 use crate::transport::cgroup::SessionCgroup;
 use crate::transport::follow::{self, FollowSummary};
 use crate::transport::identity::ProcessIdentity;
@@ -44,6 +44,7 @@ pub struct RunRequest {
   pub prompt: String,
   pub cwd: PathBuf,
   pub agent_environment: AgentBaseEnvironment,
+  pub child_env_policy: ChildEnvPolicy,
   pub environment_overlay: Env,
   pub registry: Arc<Registry>,
   pub session_id: Option<String>,
@@ -70,6 +71,7 @@ impl RunRequest {
       prompt,
       cwd,
       agent_environment,
+      child_env_policy: ChildEnvPolicy::RegisteredEdits,
       environment_overlay: Env::new(),
       registry,
       session_id: None,
@@ -91,7 +93,7 @@ impl RunRequest {
     features: &FeatureContext,
     cgroup_base: PathBuf,
   ) -> anyhow::Result<Self> {
-    let agent_environment = features.startup.require::<AgentBaseEnvironment>()?;
+    let agent_environment = crate::agent_environment::require_agent_base_environment(&features.startup)?;
     Ok(Self::new(prompt, cwd, agent_environment.as_ref().clone(), cgroup_base, Arc::clone(&features.registry)))
   }
 }
@@ -145,7 +147,7 @@ impl AgentRunner {
     let log_dir = match self.launch.log_dir.as_deref() {
       Some(path) => path.to_path_buf(),
       None => {
-        _temporary_log_dir = tempfile::Builder::new().prefix("charliebot-run-").tempdir()?;
+        _temporary_log_dir = charliebot_core::tempdir::mkdtemp("charliebot-run-")?;
         _temporary_log_dir.path().to_path_buf()
       }
     };
@@ -162,12 +164,13 @@ impl AgentRunner {
     backend.prepare_transport(&log_dir)?;
     let command = backend.build_command(&request.prompt)?;
     let stdin_prompt = backend.stdin_prompt(&request.prompt);
-    let mut inherited_env = request.agent_environment.values.clone();
-    inherited_env.extend(request.environment_overlay);
-    let mut child_environment = launch_loop::child_env(&inherited_env, &request.registry);
-    if let Some(session_id) = request.session_id {
-      child_environment.insert(SESSION_ID_ENV.to_string(), session_id);
-    }
+    let child_environment = launch_loop::build_child_env(
+      &request.agent_environment.values,
+      &request.registry,
+      request.child_env_policy,
+      request.session_id.as_deref(),
+      &request.environment_overlay,
+    );
     let final_env = backend.prepare_env(child_environment)?;
     let buffer_limit = self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT);
     let program = command.first().context("backend command is empty")?.clone();

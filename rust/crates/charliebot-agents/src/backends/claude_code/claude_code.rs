@@ -228,8 +228,14 @@ impl ClaudeCodeBackend {
     let model =
       self.model.as_deref().filter(|value| !value.is_empty()).context("cc-claude one-shot requires a model")?;
     let command = one_shot_command(model, system);
+    let environment = crate::agent_environment::startup_agent_environment()?.values.clone();
     let mut child = Command::new(&command[0]);
-    child.args(&command[1..]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+    child
+      .args(&command[1..])
+      .env_clear()
+      .envs(environment)
+      .stdin(std::process::Stdio::piped())
+      .stdout(std::process::Stdio::piped());
     child.stderr(std::process::Stdio::piped()).process_group(0);
     let mut child = child.spawn()?;
     let pid = child.id().context("claude CLI did not expose its process id")?;

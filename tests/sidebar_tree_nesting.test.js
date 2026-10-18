@@ -187,7 +187,8 @@ test('a Workspace row shows its nested child count after the chevron, before the
   context.renderSessionList(familyRows(), 'all');
 
   const row = rowHtml(nav.innerHTML, 'r1');
-  assert.match(row, /<span[^>]*data-tree-child-count="r1"[^>]*>4<\/span>/);
+  assert.match(row, /<span[^>]*data-tree-child-count="r1"[^>]*>2<\/span>/);
+  assert.match(row, /title="2 active child sessions"/);
   assert.match(row, /class="text-\[10px\] leading-none text-slate-400 tabular-nums flex-shrink-0"/);
   const chevronAt = row.indexOf('data-tree-toggle="r1"');
   const countAt = row.indexOf('data-tree-child-count="r1"');
@@ -196,36 +197,44 @@ test('a Workspace row shows its nested child count after the chevron, before the
   assert.ok(indicatorsAt !== -1 && countAt < indicatorsAt, 'the count precedes the indicators');
 });
 
-test('a childless logical row and a worker row draw no count element', () => {
+test('a manager with only worker children and a worker row draw no count element', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([manager('solo', null, 10), manager('r1', null, 9), worker('w1', 'r1', 11)], 'all');
 
   assert.doesNotMatch(rowHtml(nav.innerHTML, 'solo'), /data-tree-child-count/);
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count/);
+  assert.match(anchorOpenTag(nav.innerHTML, 'r1') + rowHtml(nav.innerHTML, 'r1'),
+      /data-tree-toggle="r1"[^>]*title="1 child task"/);
   assert.doesNotMatch(rowHtml(nav.innerHTML, 'w1'), /data-tree-child-count/);
 });
 
-test('a bound node counts its firing leaves', () => {
+test('a bound node with only firing worker leaves draws no child count', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [boundNode('cron1', 10)];
   for (let i = 1; i <= 5; i++) rows.push(worker(`t${i}`, 'cron1', i));
 
   context.renderSessionList(rows, 'all');
 
-  assert.match(rowHtml(nav.innerHTML, 'cron1'), /data-tree-child-count="cron1"[^>]*>5<\/span>/);
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'cron1'), /data-tree-child-count/);
+  assert.match(anchorOpenTag(nav.innerHTML, 'cron1') + rowHtml(nav.innerHTML, 'cron1'),
+      /data-tree-toggle="cron1"[^>]*title="5 child tasks"/);
 });
 
-test('the count follows the children out: one removed shows 3, all removed removes the element', () => {
+test('the count follows manager children out while worker children stay nested', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList(familyRows(), 'all');
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count="r1"[^>]*>4<\/span>/);
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count="r1"[^>]*>2<\/span>/);
 
-  context.renderSessionList(familyRows().filter(s => s.id !== 'w-new'), 'all');
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count="r1"[^>]*>3<\/span>/);
+  context.renderSessionList(familyRows().filter(s => s.id !== 'c-new'), 'all');
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count="r1"[^>]*>1<\/span>/);
 
-  context.renderSessionList([manager('r1', null, 10)], 'all');
-  assert.doesNotMatch(nav.innerHTML, /data-tree-child-count/);
+  const remainingRows = familyRows().filter(s => s.id !== 'c-new' && s.id !== 'c-old');
+  context.renderSessionList(remainingRows, 'all');
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count/);
+  assert.match(anchorOpenTag(nav.innerHTML, 'r1') + rowHtml(nav.innerHTML, 'r1'),
+      /data-tree-toggle="r1"[^>]*title="2 child tasks"/);
 });
 
 test('the Threads paint shows the count like the Workspace paint', () => {
@@ -233,7 +242,7 @@ test('the Threads paint shows the count like the Workspace paint', () => {
 
   context.renderSessionList(familyRows(), 'threads');
 
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count="r1"[^>]*>4<\/span>/);
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /data-tree-child-count="r1"[^>]*>2<\/span>/);
 });
 
 test('Later, Archive and the flat search paint draw no count element', () => {
@@ -250,14 +259,14 @@ test('Later, Archive and the flat search paint draw no count element', () => {
   assert.doesNotMatch(nav.innerHTML, /data-tree-child-count/);
 });
 
-test('the count title names one active child session, or N active child sessions', () => {
+test('the count title names a single direct manager child or multiple children', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 
-  context.renderSessionList([manager('r1', null, 10), worker('w1', 'r1', 11)], 'all');
+  context.renderSessionList([manager('r1', null, 10), manager('c1', 'r1', 11)], 'all');
   assert.match(rowHtml(nav.innerHTML, 'r1'), /title="1 active child session"/);
 
   context.renderSessionList(familyRows(), 'all');
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /title="4 active child sessions"/);
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /title="2 active child sessions"/);
 });
 
 test('the five-row preview counts root rows only and hides a capped root with its subtree', () => {

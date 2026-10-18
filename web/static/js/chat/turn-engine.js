@@ -164,7 +164,8 @@
       // streaming output off the list.
       this.forYouEmpty = null;
       this.forYouHolder = null;
-      this.workerPaginationSentinel = null;
+      // A worker page's pagination sentinel (holdWorkerSentinel), or null.
+      this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
       // the front, a live message at the back. attach derives the segments from
       // it, so every projection reads the same order.
@@ -997,10 +998,6 @@
     // place carry over, and every projection node is built again.
     attach(options = {}) {
       const streamEl = document.getElementById('streaming-msg');
-      if (forYouRules.isWorker()) {
-        const sentinel = document.getElementById('load-more-sentinel');
-        if (sentinel) this.workerPaginationSentinel = sentinel;
-      }
       while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
       this.domBySeg.clear();
       this.window = null;
@@ -1036,6 +1033,7 @@
       this.container.appendChild(this.topSpacer);
       this.container.appendChild(this.bottomSpacer);
       if (streamEl) this.container.appendChild(streamEl);
+      if (this.workerSentinel) this.container.prepend(this.workerSentinel);
 
       this.ensureOffsets();
       // Seed the spacers so the browser exposes its full range, then pin
@@ -1146,15 +1144,25 @@
       this.view = view;
       // The pagination sentinel is a page fixture the attach wipe drops; a
       // same-session switch keeps it, and each projection places it again
-      // (the For-you list leads with it, Everything prepends it).
-      const sentinel = document.getElementById('load-more-sentinel')
-        || (forYouRules.isWorker() ? this.workerPaginationSentinel : null);
+      // (the For-you list leads with it, Everything prepends it). A worker
+      // page's sentinel is the engine's own (holdWorkerSentinel), which
+      // attach places.
+      const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
       this.attach(view === VIEW_FOR_YOU ? {pinned: true} : (this.everythingPlace || {}));
-      if (sentinel && !(view === VIEW_FOR_YOU && forYouRules.isWorker())) this.container.prepend(sentinel);
+      if (sentinel) this.container.prepend(sentinel);
     }
 
-    clearWorkerPaginationSentinel(sentinel) {
-      if (this.workerPaginationSentinel === sentinel) this.workerPaginationSentinel = null;
+    // A worker's For you holds only its summary card, so a worker page's
+    // pagination sentinel shows at the head of Everything alone. The engine
+    // keeps it across view switches: session-view.js, which knows whether
+    // older messages remain, hands it over (a sentinel) and takes it back
+    // (null) once none do.
+    holdWorkerSentinel(sentinel) {
+      if (this.workerSentinel && this.workerSentinel !== sentinel) this.workerSentinel.remove();
+      this.workerSentinel = sentinel;
+      if (!sentinel) return;
+      if (this.view === VIEW_EVERYTHING) this.container.prepend(sentinel);
+      else sentinel.remove();
     }
 
     // reproject for the For-you view. A scroll only records the reader's

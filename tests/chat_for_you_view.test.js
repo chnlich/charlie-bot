@@ -68,6 +68,9 @@ function forYouRig(
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-fy', {view});
   assert.ok(engine && engine.alive, 'the engine mounts the chat container');
+  // A worker page hands its sentinel to the engine after the mount, as
+  // session-view.js renderSessionView does.
+  if (sentinel && profile === 'worker') engine.holdWorkerSentinel(sentinel);
   return {context, root, stream, sentinel, timers, engine};
 }
 

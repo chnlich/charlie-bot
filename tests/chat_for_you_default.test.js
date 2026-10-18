@@ -220,6 +220,39 @@ test('a view switch keeps the pagination sentinel on the page', () => {
   assert.equal(rig.root.children[0], sentinel, 'the For you list leads with the sentinel');
 });
 
+test('a worker page shows no sentinel in For you, and none in Everything once a reset loads the full history',
+    async () => {
+  const rig = pageRig();
+  // The transcript poll is module-private; the page drives it through the
+  // 'transcript-poll' interval, so the rig keeps the fn the open registers.
+  let poll = null;
+  rig.context.setInterval = (fn) => {
+    poll = fn;
+    return 0;
+  };
+  const data = sessionPayload({profile: 'worker'});
+  data.has_more = true;
+  rig.context.renderSessionView(data);
+  const found = () => rig.context.document.getElementById('load-more-sentinel');
+  assert.equal(found(), null, 'For you holds only the summary card');
+
+  rig.context.setChatView('everything');
+  assert.ok(found(), 'Everything shows the sentinel while older messages remain');
+  assert.equal(rig.root.children[0], found(), 'Everything leads with the sentinel');
+  rig.context.setChatView('foryou');
+  assert.equal(found(), null);
+
+  const messages = fixtureMessages();
+  rig.context.fetch = async () => ({
+    ok: true,
+    json: async () => ({reset: true, messages, total: messages.length, revision: 'r1', summary: data.worker_summary}),
+  });
+  await poll({force: true});
+  assert.equal(found(), null, 'For you stays without a sentinel after the reset');
+  rig.context.setChatView('everything');
+  assert.equal(found(), null, 'the reset loaded the full history, so Everything has no sentinel');
+});
+
 test('a second open of a For you session keeps the stream element on the page', () => {
   const rig = pageRig();
   openedView(rig, {});

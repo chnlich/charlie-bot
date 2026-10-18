@@ -9,7 +9,7 @@ use charliebot_core::proc_identity;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceListingFields,
-  Store, StoreError, StoreHooks,
+  StopResult, Store, StoreError, StoreHooks,
 };
 use serde_json::{Map, Value, json};
 
@@ -264,7 +264,6 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
       _ => "run-a".to_string(),
     };
     let python_run = python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap();
-    assert_eq!(python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap(), python_run);
     assert_eq!(
       python_store.list_run_records_sync(RUN_SESSION_ID).unwrap().len(),
       if operation == "retry" { 2 } else { 1 }
@@ -438,6 +437,32 @@ async fn launch_refuses_a_durable_stop_and_preserves_the_first_start_time() {
   assert!(error.to_string().contains("has a stop request"));
   let queued = store.read_run_sync(RUN_SESSION_ID, "run-queued-stop").unwrap().unwrap();
   assert_eq!((queued.pid, queued.pid_start), (None, None));
+}
+
+#[tokio::test]
+async fn a_late_stop_keeps_a_finished_runs_outcome_and_a_repeat_finish_keeps_its_exit_code() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let guard = store.control_lock().await;
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-done", RunKind::Work), "").await.unwrap();
+  store
+    .record_finish_locked(&guard, RUN_SESSION_ID, "run-done", RunOutcome::new(RunOutcomeKind::Success))
+    .await
+    .unwrap();
+  drop(guard);
+
+  let stop = store.request_stop(RUN_SESSION_ID, "run-done", "late-stop").await.unwrap();
+  assert_eq!(
+    stop,
+    StopResult { run_id: "run-done".to_string(), stop_requested: false, outcome: Some(RunOutcomeKind::Success) }
+  );
+  assert!(!store.load_all_facts(RUN_SESSION_ID).unwrap().iter().any(|event| event["type"] == "run_stop_requested"));
+
+  let guard = store.control_lock().await;
+  let mut repeat = RunOutcome::new(RunOutcomeKind::Failed);
+  repeat.exit_code = Some(3);
+  let repaired = store.record_finish_locked(&guard, RUN_SESSION_ID, "run-done", repeat).await.unwrap();
+  assert_eq!((repaired.exit_code, repaired.ended_at.is_some()), (None, true));
 }
 
 async fn register_process_run(store: &Store, run_id: &str, pid: u32, pid_start: &str) {

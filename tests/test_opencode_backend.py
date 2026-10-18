@@ -499,6 +499,34 @@ async def test_permission_request_fails_only_its_turn(fake_oc, monkeypatch, stop
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_manager_turn_reloads_locations_before_the_prompt(fake_oc, monkeypatch, stop_servers):
+  """A manager turn rewrites the session's AGENTS.md and reloads locations before the prompt; a
+  turn without instructions writes no AGENTS.md and sends no reload."""
+  _script(
+      fake_oc, monkeypatch,
+      {"prompts": {
+          "manage": {
+              "events": _text_events("managed")
+          },
+          "work": {
+              "events": _text_events("worked")
+          },
+      }})
+  manager = opencode.OpenCodeBackend(model=MODEL, instructions_content="# Fresh instructions")
+  events = await _run_turn(manager, "manage", fake_oc / "a")
+  assert events[-1]["type"] == "result"
+  assert (fake_oc / "a" / "AGENTS.md").read_text() == "# Fresh instructions"
+  worker_events = await _run_turn(opencode.OpenCodeBackend(model=MODEL), "work", fake_oc / "b")
+  assert worker_events[-1]["type"] == "result"
+  calls = [f"{r['method']} {r['path']}" for r in _read_log(fake_oc / "requests.jsonl") if r.get("method")]
+  assert calls.count("POST /api/location/reload") == 1
+  reload_at = calls.index("POST /api/location/reload")
+  prompt_at = calls.index(f"POST /api/session/{manager._session_id}/prompt")
+  assert reload_at < prompt_at
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_stream_loss_ends_running_turns_before_the_server_stops(fake_oc, monkeypatch, stop_servers):
   _script(fake_oc, monkeypatch, {"prompts": {"stuck": {"events": [], "hold": True, "shells": [{}]}}})
   backend = opencode.OpenCodeBackend(model=MODEL)

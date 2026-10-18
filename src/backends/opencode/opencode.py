@@ -181,6 +181,12 @@ class OpenCodeBackend(base.AgentBackend):
       await self._until_exit(shared.wait_interrupts_settled(self._session_id))
       self._turn.drop_earlier_interrupts()
       await self._until_exit(self._put_environment(shared, env))
+      if self._instructions_file is None and self._instructions_content:
+        # A manager turn's _prepare_cwd rewrote the session's AGENTS.md only moments ago, and
+        # the server's instruction watcher can miss such a fresh write when the prompt follows
+        # at once (measured on 2.0.32: the model request carries the old instructions). Reload
+        # the locations so the reread has settled before the prompt.
+        await self._until_exit(self._reload_locations(shared))
       await self._until_exit(
           self._send_prompt(shared, self._session_id, self._effective_prompt(prompt), uploaded_files))
       async for translated in self._consume_turn(self._turn):
@@ -297,6 +303,10 @@ class OpenCodeBackend(base.AgentBackend):
       variables["BASH_ENV"] = str(server.JOIN_SCRIPT)
       variables["CHARLIEBOT_SESSION_CGROUP"] = str(cgroup.path)
     response = await shared.client.put(f"/api/session/{self._session_id}/environment", json={"variables": variables})
+    response.raise_for_status()
+
+  async def _reload_locations(self, shared: server.OpenCodeServer) -> None:
+    response = await shared.client.post("/api/location/reload")
     response.raise_for_status()
 
   async def _send_prompt(

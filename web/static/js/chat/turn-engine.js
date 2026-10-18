@@ -163,6 +163,9 @@
       // streaming output off the list.
       this.forYouEmpty = null;
       this.forYouHolder = null;
+      // Every message entry in server (time) order: a prepended page lands at
+      // the front, a live message at the back. attach derives the segments from
+      // it, so every projection reads the same order.
       this.entries = [];
       this.knownIds = new Set();
       this.segments = [];
@@ -334,9 +337,9 @@
       return {segment, carried: turn.carried.slice()};
     }
 
+    // A new entry for one message. The caller places it in `this.entries`.
     makeEntry(msg) {
       const entry = {msg, node: null, ready: false};
-      this.entries.push(entry);
       if (isStable(msg)) this.knownIds.add(String(msg.id));
       return entry;
     }
@@ -983,7 +986,7 @@
     // offset is restored once its segment is real. Default mount stays
     // bottom-pinned.
     mount(messages, options = {}) {
-      messages.forEach((msg) => this.makeEntry(msg));
+      this.entries.push(...messages.map((msg) => this.makeEntry(msg)));
       this.attach(options);
     }
 
@@ -1180,8 +1183,8 @@
       setChildren(this.container, children);
     }
 
-    // Every entry in display order. `entries` is arrival order, and a prepended
-    // page lands at its end; the segments hold the display order.
+    // Every entry in the order the segments show it. `entries` is server order;
+    // the two differ only where a carried input moves to the next turn.
     displayEntries() {
       const out = [];
       this.segments.forEach((seg) => seg.entries.forEach((entry) => out.push(entry)));
@@ -1389,6 +1392,8 @@
         return !this.knownIds.has(id);
       }).map((msg) => this.makeEntry(msg));
       if (!fresh.length) return 0;
+      // The older page sits in front of every stored message.
+      this.entries.unshift(...fresh);
 
       // The reading anchor must be captured before the store moves: after the
       // prepend, the model offsets no longer describe the live DOM the reader

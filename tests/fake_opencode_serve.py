@@ -140,6 +140,8 @@ class FakeServer:
               })
           return 200, {"interrupted": True}
         return 200, {"interrupted": False}
+    if method == "POST" and path == "/api/location/reload":
+      return 204, None
     if method == "GET" and path == "/api/shell":
       directory = params.get("location[directory]", [""])[0]
       return 200, {

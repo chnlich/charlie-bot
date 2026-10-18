@@ -1,5 +1,6 @@
 stage: features
 name: features-voice-refusals
+voice_models: true
 steps:
   - kind: ws
     name: empty backend id

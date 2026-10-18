@@ -235,7 +235,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("sweep done")])],
-      test_task_execution.WORKER_BUILD_BACKEND_PATCH_TARGET)
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await scheduler._tick()
 
@@ -573,7 +573,7 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("reviewed: merged")])
-  conftest.install_scripted_backends(monkeypatch, [backend], test_task_execution.BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
 
   # sequence_controller qualifies through the datetime module, so the stand-in binds the
   # module attribute to a namespace carrying the fake class beside the real UTC and timedelta.
@@ -620,7 +620,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
       monkeypatch, [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("first")]),
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("second")])
-      ], test_task_execution.BUILD_BACKEND_PATCH_TARGET)
+      ], conftest.BUILD_BACKEND_PATCH_TARGET)
 
   # Turn 1: a firing report wakes the anchor-less node — a fresh native
   # conversation carrying the prefix; the launch records the native anchor.

@@ -115,6 +115,7 @@ def test_server_env_drops_the_run_identity_and_points_xdg_at_the_store(fake_oc, 
   assert "CHARLIEBOT_SESSION_ID" not in env
   assert env["XDG_DATA_HOME"] == str(fake_oc / "profile" / "opencode" / "data")
   assert env["OPENCODE_SERVER_PASSWORD"] == "pw"
+  assert env["OPENCODE_DISABLE_FFF"] == "1"
   assert "HTTP_PROXY" not in env
   proxied = server.OpenCodeServer("http://proxy.test:8080").server_env("pw")
   assert proxied["HTTPS_PROXY"] == "http://proxy.test:8080"

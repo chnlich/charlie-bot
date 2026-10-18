@@ -2,13 +2,15 @@
 
 import json
 import pathlib
+import re
 from typing import Any
 
 import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import session_fork
+from src.runtime import session_fork, thinking_state
+from src.runtime.api import sessions
 
 
 async def _seed_parent(session_blocks: conftest.SessionBlocks, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
@@ -129,3 +131,71 @@ async def test_create_route_defaults_to_first_backend_option_when_omitted(two_ba
 
   assert response.status_code == 200
   assert response.json()["backend"] == cfg.backends.options[0].id
+
+
+# ------------------------------------------- displayed backend: one rule for manager and worker sessions
+
+
+async def _manager_with_worker(
+    session_blocks: conftest.SessionBlocks) -> tuple[models.SessionMetadata, models.SessionMetadata]:
+  """A manager root and its worker child, both configured to Opus."""
+  tree = session_blocks.tree
+  root = await tree.create_task(
+      request_id="display-root",
+      task_parent_id=None,
+      profile="manager",
+      task=models.TaskSpec(goal="project"),
+      name="Project",
+      backend=conftest.OPUS_BACKEND_ID,
+      caller=conftest.OPERATOR)
+  worker = await tree.create_task(
+      request_id="display-worker",
+      task_parent_id=root.id,
+      profile="worker",
+      task=models.TaskSpec(goal="leaf"),
+      name="Leaf",
+      backend=conftest.OPUS_BACKEND_ID,
+      caller=conftest.OPERATOR)
+  return root, worker
+
+
+def _rendered_backend_badge(
+    cfg: config.CharlieBotConfig, session_blocks: conftest.SessionBlocks, session_id: str) -> str:
+  page_client = conftest.make_sessions_listing_page_client(cfg, session_blocks, session_blocks.tree)
+  resp = page_client.get("/", params={"session": session_id})
+  assert resp.status_code == 200
+  match = re.search(r'id="backend-badge"[^>]*>([^<]*)</span>', resp.text)
+  assert match is not None
+  return match.group(1)
+
+
+@pytest.mark.asyncio
+async def test_manager_session_displays_its_configured_backend_not_its_newest_run(two_backend_env: _RouteEnv) -> None:
+  cfg, session_blocks, _ = two_backend_env
+  root, _worker = await _manager_with_worker(session_blocks)
+  thinking_state.note_run_backend(root.id, conftest.CODEX_BACKEND_OPTION.id)
+
+  meta = await session_blocks.store.get_session(root.id)
+  assert sessions._active_backend_payload(meta, cfg)["active_backend"] == conftest.OPUS_BACKEND_ID
+  assert _rendered_backend_badge(cfg, session_blocks, root.id) == conftest.OPUS_BACKEND_OPTION.label
+
+
+@pytest.mark.asyncio
+async def test_worker_session_displays_its_newest_run_backend(two_backend_env: _RouteEnv) -> None:
+  cfg, session_blocks, _ = two_backend_env
+  _root, worker = await _manager_with_worker(session_blocks)
+  thinking_state.note_run_backend(worker.id, conftest.CODEX_BACKEND_OPTION.id)
+
+  meta = await session_blocks.store.get_session(worker.id)
+  assert sessions._active_backend_payload(meta, cfg)["active_backend"] == conftest.CODEX_BACKEND_OPTION.id
+  assert _rendered_backend_badge(cfg, session_blocks, worker.id) == conftest.CODEX_BACKEND_OPTION.label
+
+
+@pytest.mark.asyncio
+async def test_worker_session_without_a_run_displays_its_configured_backend(two_backend_env: _RouteEnv) -> None:
+  cfg, session_blocks, _ = two_backend_env
+  _root, worker = await _manager_with_worker(session_blocks)
+  assert thinking_state.run_backend(worker.id) is None
+
+  meta = await session_blocks.store.get_session(worker.id)
+  assert sessions._active_backend_payload(meta, cfg)["active_backend"] == conftest.OPUS_BACKEND_ID

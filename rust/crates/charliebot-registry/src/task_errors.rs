@@ -15,7 +15,6 @@ pub fn task_http_error(error: StoreError) -> Response {
     StoreError::NotFound(_) => responses::json(StatusCode::NOT_FOUND, &serde_json::json!({ "detail": message })),
     StoreError::Forbidden(_) => responses::json(StatusCode::FORBIDDEN, &serde_json::json!({ "detail": message })),
     StoreError::Conflict(blockers) => {
-      let blockers = if blockers.is_empty() { vec![message.clone()] } else { blockers };
       responses::json(
         StatusCode::CONFLICT,
         &serde_json::json!({ "detail": { "message": message, "blockers": blockers } }),
@@ -97,11 +96,11 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_conflict_without_blockers_uses_its_sentence_as_the_only_blocker() {
+  async fn an_empty_conflict_keeps_an_empty_blocker_list() {
     assert_json(
       task_http_error(StoreError::Conflict(Vec::new())),
       StatusCode::CONFLICT,
-      json!({ "detail": { "message": "", "blockers": [""] } }),
+      json!({ "detail": { "message": "", "blockers": [] } }),
     )
     .await;
   }

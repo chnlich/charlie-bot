@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncIterator
 from unittest import mock
 
+import httpx
 import pytest
 import pytest_asyncio
 

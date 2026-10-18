@@ -29,6 +29,13 @@ OPENCODE_STREAM_EXIT_GRACE = 0.2  # seconds
 # starts it again.
 OPENCODE_SERVER_IDLE_EXIT_SECONDS = 3600.0  # seconds
 
+# The heavy checkpoint: this long after the last turn ends (and no directory is
+# claimed), the shared server reads its own RSS. Above the RSS limit below it
+# stops, so the memory each directory release leaves behind is returned at once.
+# The rest of the idle limit still applies when it does not stop.
+OPENCODE_SERVER_HEAVY_CHECK_SECONDS = 60.0  # seconds
+OPENCODE_SERVER_HEAVY_RSS_MB = 400.0  # MiB
+
 # A turn waits this long for the earlier interrupts of its session to report
 # session.execution.interrupted before it sends its prompt. Past it the session
 # is stuck and the turn fails.

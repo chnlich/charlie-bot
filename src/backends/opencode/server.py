@@ -4,7 +4,9 @@ The server runs ``opencode serve --port 0`` with the profile's XDG store, the he
 a random password and the file index off. One global event stream feeds every turn: each event goes
 to the turn registered for its session, and an execution that no turn claims is interrupted. Each
 turn claims its directory while it runs; when a turn ends, the server releases every loaded
-directory no turn claims. The server stops after OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn.
+directory no turn claims. With no turn and no claim for OPENCODE_SERVER_HEAVY_CHECK_SECONDS, the server
+stops if its RSS is above OPENCODE_SERVER_HEAVY_RSS_MB; otherwise it stops after
+OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn and no claim.
 When its event stream or its process fails, every running turn ends first (the turn-end steps),
 then the process stops, then each turn gets a ServerLostError.
 """
@@ -36,6 +38,7 @@ OPENCODE_BIN = str(pathlib.Path.home() / ".opencode" / "bin" / "opencode")
 JOIN_SCRIPT = pathlib.Path(__file__).with_name("cgroup_join.sh")
 
 _LISTEN_RE = re.compile(r"server listening on (http://\S+)")
+_VMRSS_RE = re.compile(r"^VmRSS:\s+(\d+) kB$", re.MULTILINE)
 # The newest bytes the server wrote to stdout or stderr, quoted in the error that ends a turn.
 _OUTPUT_TAIL_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
@@ -43,6 +46,15 @@ _READ_CHUNK_BYTES = 64 * 1024
 
 class ServerLostError(RuntimeError):
   """The shared server ended while this turn was running; the message names why."""
+
+
+def process_rss_mb(pid: int) -> float:
+  """The resident memory of process *pid* alone, in MiB; its child processes are not counted."""
+  status = pathlib.Path(f"/proc/{pid}/status").read_text()
+  match = _VMRSS_RE.search(status)
+  if match is None:
+    raise RuntimeError(f"/proc/{pid}/status has no VmRSS line")
+  return int(match.group(1)) / 1024
 
 
 def headless_config() -> dict:
@@ -397,9 +409,19 @@ class OpenCodeServer:
       log.error("opencode_server_lost", reason=reason, turns=len(turns))
 
   async def _stop_when_idle(self) -> None:
-    await asyncio.sleep(opencode_limits.OPENCODE_SERVER_IDLE_EXIT_SECONDS)
+    await asyncio.sleep(opencode_limits.OPENCODE_SERVER_HEAVY_CHECK_SECONDS)
     async with self._lock:
-      if self._turns or self._proc is None:
+      if not self._turns and not self._claims and self.process_alive:
+        rss_mb = process_rss_mb(self._proc.pid)
+        if rss_mb > opencode_limits.OPENCODE_SERVER_HEAVY_RSS_MB:
+          log.info("opencode_server_heavy_exit", pid=self._proc.pid, rss_mb=round(rss_mb, 1))
+          self._stopping = True
+          await self._shutdown()
+          return
+    rest = opencode_limits.OPENCODE_SERVER_IDLE_EXIT_SECONDS - opencode_limits.OPENCODE_SERVER_HEAVY_CHECK_SECONDS
+    await asyncio.sleep(rest)
+    async with self._lock:
+      if self._turns or self._claims or self._proc is None:
         return
       log.info("opencode_server_idle_exit", pid=self._proc.pid)
       self._stopping = True

@@ -334,6 +334,57 @@ async def test_turn_end_steps_drop_the_claim_once_even_when_the_turn_steps_fail(
   shared.release_claim.assert_awaited_once_with("/w/a")
 
 
+def _idle_server() -> server.OpenCodeServer:
+  """A shared server whose process reads as running with no turn; its shutdown is recorded, not run."""
+  shared = server.OpenCodeServer(None)
+  shared._proc = mock.Mock(pid=4242, returncode=None)
+  shared._shutdown = mock.AsyncMock()
+  return shared
+
+
+def test_process_rss_reads_the_process_own_resident_memory():
+  assert server.process_rss_mb(os.getpid()) > 10
+
+
+@pytest.mark.asyncio
+async def test_heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit(monkeypatch):
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 3600.0)
+  rss = mock.Mock(return_value=401.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  # The idle limit is an hour away: a checkpoint that does not stop would time this out.
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=2)
+  rss.assert_called_once_with(4242)
+  shared._shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_server_with_rss_at_the_limit_runs_on_to_the_idle_exit(monkeypatch):
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
+  rss = mock.Mock(return_value=400.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=2)
+  rss.assert_called_once_with(4242)
+  # The one shutdown is the idle exit after the rest of the idle limit, not the checkpoint.
+  shared._shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_claimed_directory_keeps_the_server_past_the_checkpoint_and_the_idle_exit(monkeypatch):
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
+  rss = mock.Mock(return_value=900.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  await shared.claim("/w/a")
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=2)
+  rss.assert_not_called()
+  shared._shutdown.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_claim_is_held_before_the_server_starts_and_dropped_when_the_start_fails(fake_oc, monkeypatch):
   backend = opencode.OpenCodeBackend(model=MODEL)
@@ -782,6 +833,7 @@ async def test_server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_idle_server_exits_after_the_idle_limit(fake_oc, monkeypatch, stop_servers):
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.05)
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.2)
   _script(fake_oc, monkeypatch, {"prompts": {"idle": {"events": _text_events("ok")}}})
   await _run_turn(opencode.OpenCodeBackend(model=MODEL), "idle", fake_oc / "dir")

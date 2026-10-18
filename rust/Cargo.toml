@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/charliebot-core", "crates/charliebot-compat", "crates/charliebot-server"]
+members = [
+    "crates/charliebot-core",
+    "crates/charliebot-compat",
+    "crates/charliebot-server",
+    "crates/features/pyhtml",
+]
 
 [workspace.package]
 edition = "2024"

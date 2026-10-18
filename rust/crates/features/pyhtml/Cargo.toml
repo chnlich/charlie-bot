@@ -1,0 +1,22 @@
+[package]
+name = "charliebot-pyhtml"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "charliebot_pyhtml"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pyhtml-dump"
+path = "src/bin/pyhtml-dump.rs"
+
+[dependencies]
+fancy-regex = "0.16"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true

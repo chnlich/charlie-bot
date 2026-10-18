@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::ws::WebSocket;
 use axum::response::Response;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_registry::{Registry, RegistryError};
@@ -18,10 +19,21 @@ fn terminal_websocket(_features: Arc<FeatureContext>, request: WebSocketRequest)
   Box::pin(async move {
     request.upgrade.on_upgrade(|socket| async move {
       tracing::info!("terminal_ws_connected");
-      let _disconnected = DisconnectLog;
-      terminal::run_terminal_attachment(socket).await;
+      serve_attachment(socket).await;
     })
   })
+}
+
+/// Runs one attachment and logs its end in `api.py`'s order: `terminal_ws_disconnected` from the `finally`,
+/// then the exception that escaped the handler.
+async fn serve_attachment(socket: WebSocket) {
+  let outcome = {
+    let _disconnected = DisconnectLog;
+    terminal::run_terminal_attachment(socket).await
+  };
+  if let Err(error) = outcome {
+    tracing::error!(error = %error, "Exception in ASGI application");
+  }
 }
 
 struct DisconnectLog;

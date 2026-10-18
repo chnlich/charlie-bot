@@ -46,16 +46,18 @@ pub(super) async fn ensure_terminal_session() -> Result<(), String> {
   Ok(())
 }
 
-pub(super) async fn run_terminal_attachment(mut socket: WebSocket) {
+/// Attaches the socket to the profile's terminal. An `Err` is an exception that escaped the handler after accept;
+/// the caller logs it and drops the socket.
+pub(super) async fn run_terminal_attachment(mut socket: WebSocket) -> Result<(), String> {
   if let Err(error) = ensure_terminal_session().await {
     tracing::error!(error = %error, "terminal_ensure_session_failed");
     if let Err(send_error) = pty::send_json(&mut socket, &json!({"type": pty::PTY_EXIT, "error": error})).await {
       tracing::debug!(error = %send_error, "terminal_ensure_error_send_failed");
     }
-    return;
+    return Ok(());
   }
 
-  let session_id = terminal_session_id().expect("the profile home resolved while ensuring the terminal session");
+  let session_id = terminal_session_id()?;
   let attachment = match PtyAttachment::spawn(&session_id) {
     Ok(attachment) => attachment,
     Err(error) => {
@@ -63,11 +65,9 @@ pub(super) async fn run_terminal_attachment(mut socket: WebSocket) {
       if let Err(send_error) = pty::send_json(&mut socket, &json!({"type": pty::PTY_EXIT, "error": error})).await {
         tracing::debug!(error = %send_error, "terminal_spawn_error_send_failed");
       }
-      return;
+      return Ok(());
     }
   };
 
-  if let Err(error) = pty::run_pty_relay(socket, attachment).await {
-    tracing::error!(error = %error, "Exception in ASGI application");
-  }
+  pty::run_pty_relay(socket, attachment).await
 }

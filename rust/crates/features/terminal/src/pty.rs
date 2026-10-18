@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
@@ -371,6 +371,11 @@ pub(super) async fn send_json(socket: &mut WebSocket, value: &Value) -> Result<(
   socket.send(Message::Text(text.into())).await
 }
 
+/// Relays the PTY and the socket until either one ends.
+///
+/// An `Err` returns without a close frame. uvicorn 0.42.0's websockets implementation
+/// (`WebSocketProtocol.run_asgi` in `uvicorn/protocols/websockets/websockets_impl.py`) closes the transport
+/// after an exception raised past `accept`, and sends no close frame, so the client sees the connection end.
 pub(super) async fn run_pty_relay(mut socket: WebSocket, mut attachment: PtyAttachment) -> Result<(), String> {
   let (sender, mut receiver) = mpsc::unbounded_channel();
   let pump_fd = attachment.fd;
@@ -440,13 +445,7 @@ pub(super) async fn run_pty_relay(mut socket: WebSocket, mut attachment: PtyAtta
   }
   attachment.close().map_err(|error| error.to_string())?;
   match relay_error {
-    Some(error) => {
-      let close_frame = CloseFrame { code: 1011, reason: "".into() };
-      if let Err(close_error) = socket.send(Message::Close(Some(close_frame))).await {
-        tracing::debug!(session_id = %pump_session_id, error = %close_error, "tui_pty_close_send_failed");
-      }
-      Err(error)
-    }
+    Some(error) => Err(error),
     None => Ok(()),
   }
 }

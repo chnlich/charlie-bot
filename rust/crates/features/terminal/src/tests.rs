@@ -16,9 +16,10 @@ use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
+use tokio_tungstenite::tungstenite::{Error, Message};
 
-use crate::{pty, register, terminal};
+use crate::{pty, register, serve_attachment, terminal};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -242,8 +243,12 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   send_frame(&mut socket, json!({"type": "pty_input", "data": ""})).await;
   assert!(timeout(Duration::from_millis(100), socket.next()).await.is_err());
   send_frame(&mut socket, json!([])).await;
-  let message = timeout(Duration::from_secs(5), socket.next()).await.expect("non-object JSON closes the handler");
-  assert!(matches!(message, Some(Ok(Message::Close(Some(frame)))) if u16::from(frame.code) == 1011));
+  let message = timeout(Duration::from_secs(5), socket.next()).await.expect("non-object JSON ends the handler");
+  // uvicorn drops the transport without a close frame, so the client sees the reset rather than a Close message.
+  assert!(
+    matches!(message, Some(Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)))),
+    "uvicorn sends no close frame, observed {message:?}"
+  );
 
   cleanup.disarm();
 }
@@ -257,7 +262,7 @@ impl Drop for AbortOnDrop {
 }
 
 async fn test_socket(upgrade: WebSocketUpgrade) -> axum::response::Response {
-  upgrade.on_upgrade(terminal::run_terminal_attachment)
+  upgrade.on_upgrade(serve_attachment)
 }
 
 async fn send_frame(socket: &mut WebSocketStream<TcpStream>, value: Value) {

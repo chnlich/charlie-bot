@@ -275,7 +275,6 @@ from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code import claude_config  # noqa: E402
 from src.runtime import streaming  # noqa: E402
 from src.features.memory import memory  # noqa: E402
-from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra import constants  # noqa: E402
 from src.backends.claude_code import login_dirs  # noqa: E402
 from src.features.artifacts import plans  # noqa: E402
@@ -374,7 +373,7 @@ def manager_backed_callbacks(mgr: SessionBlocks) -> models.SessionCallbacks:
 
 
 def make_work_item(
-    cfg: CharlieBotConfig,
+    cfg: core_config.CharlieBotConfig,
     session_meta: models.SessionMetadata,
     backend_option: models.BackendOption | None,
     *,
@@ -404,7 +403,7 @@ def make_work_item(
   )
 
 
-def _test_transport_dir(cfg: CharlieBotConfig, session_id: str, run_id: str) -> pathlib.Path:
+def _test_transport_dir(cfg: core_config.CharlieBotConfig, session_id: str, run_id: str) -> pathlib.Path:
   sessions_dir = getattr(cfg, "sessions_dir", None)
   root = sessions_dir if isinstance(sessions_dir,
                                     pathlib.Path) else pathlib.Path(tempfile.gettempdir()) / "charliebot-test-runs"
@@ -420,7 +419,7 @@ async def _noop_task_finish(_cc_session_id: str | None, _exit_code: int, _finish
 
 
 async def run_task_manager_message(
-    cfg: CharlieBotConfig,
+    cfg: core_config.CharlieBotConfig,
     session_meta: models.SessionMetadata,
     user_content: str,
     callbacks: models.SessionCallbacks,
@@ -567,7 +566,7 @@ def patch_resume_seams(
 
 
 async def run_resume_round(
-    cfg: CharlieBotConfig,
+    cfg: core_config.CharlieBotConfig,
     meta: models.SessionMetadata,
     record: models.MasterRunRecord,
     callbacks: models.SessionCallbacks,
@@ -980,11 +979,12 @@ def assert_cli_reject_exit2(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
-def make_home_config(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def make_home_config(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
   registered so a root created without a backend resolves its default (backends.options[0])."""
-  return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
+  return core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
 @dataclasses.dataclass
@@ -1207,10 +1207,10 @@ def delegate_payload(session_id: str, repo: pathlib.Path, *, task_type: str = "q
   }
 
 
-def build_master_cc_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_master_cc_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/".charliebot" with one fake codex backend registered: the
   shape task-tree manager-turn tests drive through the queue and backend runner."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
   )
@@ -1228,18 +1228,18 @@ async def make_home_session(
     tmp_path: pathlib.Path,
     *,
     name: str,
-    backend: str | None = None) -> tuple[CharlieBotConfig, SessionBlocks, models.SessionMetadata]:
+    backend: str | None = None) -> tuple[core_config.CharlieBotConfig, SessionBlocks, models.SessionMetadata]:
   """(cfg, SessionBlocks, one created session) over a CharlieBotConfig rooted at tmp_path/"home";
   backend=None takes the default (the first registered backend). A test needing more
   sessions calls create_root_session directly; a test needing no session builds the cfg/mgr pair
   inline."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
+  cfg = core_config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
   mgr = build_session_blocks(cfg)
   session = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=backend)
   return cfg, mgr, session
 
 
-def apply_config_overrides(app: fastapi.FastAPI, cfg: CharlieBotConfig) -> None:
+def apply_config_overrides(app: fastapi.FastAPI, cfg: core_config.CharlieBotConfig) -> None:
   """Bind both config dependency keys to the one instance on *app*.
 
   A mounted route resolves cfg through either dependency (deps.get_config_on_loop
@@ -1247,7 +1247,7 @@ def apply_config_overrides(app: fastapi.FastAPI, cfg: CharlieBotConfig) -> None:
   override on both keys — one key alone leaves routes on the other resolving
   the real config.
   """
-  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[core_config.get_config] = lambda: cfg
   app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
 
 
@@ -1264,7 +1264,7 @@ def override_session_blocks(app: fastapi.FastAPI, session_blocks: Any) -> None:
 
 
 def make_router_client(
-    cfg: CharlieBotConfig,
+    cfg: core_config.CharlieBotConfig,
     session_blocks: SessionBlocks,
     router: fastapi.APIRouter,
     prefix: str,
@@ -1289,7 +1289,7 @@ def include_registered_routers(app: fastapi.FastAPI, prefix: str, *, before_runt
       app.include_router(getattr(importlib.import_module(module), attr), prefix=router_prefix, tags=list(tags))
 
 
-def make_sessions_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
+def make_sessions_client(cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
   """make_router_client over the sessions router, mounted at /api/sessions."""
   return make_router_client(cfg, session_blocks, sessions.router, "/api/sessions")
 
@@ -1306,13 +1306,14 @@ def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | N
   return client
 
 
-def make_cron_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
+def make_cron_client(cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
   """make_router_client over the cron router, mounted at /api/cron."""
   return make_router_client(cfg, session_blocks, cron_api.router, "/api/cron")
 
 
 def make_cron_sessions_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
+    cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks,
+    tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
   """TestClient mounting the cron router plus the sessions router (the scheduled listing and
   unarchive endpoints) with cfg/session_blocks/tree as dependency overrides."""
   app = fastapi.FastAPI()
@@ -1325,7 +1326,8 @@ def make_cron_sessions_client(
 
 
 def make_sessions_listing_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
+    cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks,
+    tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
   """TestClient mounting the sessions router with its config and manager overrides."""
   app = fastapi.FastAPI()
   include_registered_routers(app, "/api/sessions", before_runtime=True)
@@ -1337,7 +1339,8 @@ def make_sessions_listing_client(
 
 
 def make_sessions_listing_page_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
+    cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks,
+    tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
   """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
   same overrides make_sessions_listing_client carries."""
   app = fastapi.FastAPI()
@@ -1486,7 +1489,7 @@ def pool_cfg(
     worktree_dir: pathlib.Path,
     labels: tuple[str, ...],
     claude_pools: dict[str, list[str]] | None = None,
-) -> CharlieBotConfig:
+) -> core_config.CharlieBotConfig:
   """A pooled CharlieBotConfig: one ClaudeAccount per label, pool credentials planted in each config dir.
 
   ``claude_pools`` splits the labels into named pools; the caller's cc-claude options then name
@@ -1497,7 +1500,7 @@ def pool_cfg(
   ]
   for account in accounts:
     write_pool_credentials(pathlib.Path(account.config_dir))
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(worktree_dir)},
       accounts={
@@ -1520,7 +1523,7 @@ def fable_pool_cfg(
     tmp_path: pathlib.Path,
     labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
     claude_pools: dict[str, list[str]] | None = None,
-) -> CharlieBotConfig:
+) -> core_config.CharlieBotConfig:
   """A pooled config with one pooled Fable option and a second pinned Fable entry.
 
   ``claude_pools`` splits *labels* into named pools; both Fable options then draw from the
@@ -1540,7 +1543,7 @@ def fable_pool_cfg(
   )
 
 
-def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
+def session_dir_names(cfg: core_config.CharlieBotConfig) -> set[str]:
   """Snapshot the names of session directories on disk (existence, not content)."""
   if not cfg.sessions_dir.exists():
     return set()
@@ -1865,10 +1868,10 @@ def write_stub_chrome(tmp_path: pathlib.Path, height: int) -> str:
   return str(stub)
 
 
-def build_plan_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_plan_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for plan tests: the 800px stub chrome answers the page-height measurement, and the
   sessions/worktrees dirs live under tmp_path so each test owns its own tree."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
       backends={"options": PLAN_TEST_BACKEND_OPTIONS},
@@ -1876,31 +1879,31 @@ def build_plan_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   )
 
 
-def build_scheduler_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_scheduler_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for scheduler cron tests: the home and worktrees dirs live under tmp_path so each test
   owns its own tree, and both the opus and codex backends are registered for backend-override cases."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
       backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
   )
 
 
-def build_sessions_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_sessions_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for sessions tests: the .charliebot home lives under tmp_path so each test owns its own
   tree, and the backend list registers opus only."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [OPUS_BACKEND_OPTION]},
   )
 
 
-def build_slack_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_slack_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for slack tests: the home dir lives under tmp_path so each test owns its own tree, and the
   stubbed test tokens plus the single allowed user id wire the delivery and listener paths under
   src.features.slack.slack_listener."""
   stub_credentials({"slack": {"bot_token": "test-bot-token", "app_token": "test-app-token"}})
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       slack={"allowed_user_ids": ["U_ALLOWED"]},
       backends=fake_backends(),
@@ -2103,7 +2106,7 @@ class FakeSlackClient:
     return f"name-of-{channel_id}"
 
 
-def cfg_with_repo(repo_root: pathlib.Path) -> CharlieBotConfig:
+def cfg_with_repo(repo_root: pathlib.Path) -> core_config.CharlieBotConfig:
   """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
   charlie_bot_repo is a derived property tied to the installed package location, so a plain
   namespace stand-in is used to redirect it for these isolated fail-loud tests)."""
@@ -2115,22 +2118,22 @@ def cfg_with_repo(repo_root: pathlib.Path) -> CharlieBotConfig:
   return _Cfg()  # type: ignore[return-value]
 
 
-def build_two_backend_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_two_backend_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
   own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering
   cases exercise."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
   )
 
 
-def build_worktree_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_worktree_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
   worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
   touch real host worktrees. One cc-claude backend registered so a root created without a backend
   resolves its default (cfg.backends.options[0])."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
       backends=fake_backends(),
@@ -2149,10 +2152,10 @@ def deploy_publish_lane(tmp_path: pathlib.Path) -> pathlib.Path:
   return publish_dir
 
 
-def build_publish_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
+def build_publish_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig with the publish lane deployed under tmp_path (``deploy_publish_lane``) and
   ``PUBLISH_BASE_URL`` set."""
-  return CharlieBotConfig(
+  return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       publish={
           "dir": deploy_publish_lane(tmp_path),
@@ -2170,7 +2173,8 @@ def write_artifact(tmp_path: pathlib.Path, name: str = "page.html", body: str = 
   return path
 
 
-def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, content: str | None = None) -> str:
+def write_plan_artifact(
+    cfg: core_config.CharlieBotConfig, session_id: str, name: str, content: str | None = None) -> str:
   """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
   passes the plan assertion set so tests can present/approve directly."""
   if content is None:
@@ -2181,7 +2185,7 @@ def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, conte
   return f"artifacts/{name}"
 
 
-def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> pathlib.Path:
+def write_thread_meta(cfg: core_config.CharlieBotConfig, session_id: str, meta: dict) -> pathlib.Path:
   """Write meta as the session's threads/<meta["id"]>/metadata.json and return the file path."""
   thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
   thread_dir.mkdir(parents=True, exist_ok=True)
@@ -2190,7 +2194,7 @@ def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> pat
   return path
 
 
-def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> pathlib.Path:
+def write_plans(cfg: core_config.CharlieBotConfig, session_id: str, data: dict) -> pathlib.Path:
   """Write data as the session's plans.json and return the file path."""
   plans_path = cfg.sessions_dir / session_id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2234,7 +2238,8 @@ def build_scheduler(cfg: Any, blocks: SessionBlocks) -> scheduler.Scheduler:
   return scheduler.Scheduler(cfg, blocks.store, blocks.events, blocks.listing, blocks.lifecycle)
 
 
-def make_scheduler_setup(tmp_path: pathlib.Path) -> tuple[CharlieBotConfig, SessionBlocks, scheduler.Scheduler]:
+def make_scheduler_setup(
+    tmp_path: pathlib.Path) -> tuple[core_config.CharlieBotConfig, SessionBlocks, scheduler.Scheduler]:
   """Real cfg/blocks/scheduler trio for scheduler and cron-task tests; the scheduler holds the
   process-wide blocks because a private events block keeps its own chat-event cache and its
   rounds would never reach the HTTP/WS read paths."""
@@ -2245,7 +2250,7 @@ def make_scheduler_setup(tmp_path: pathlib.Path) -> tuple[CharlieBotConfig, Sess
 
 async def make_plan_setup(
     tmp_path: pathlib.Path,
-) -> tuple[CharlieBotConfig, SessionBlocks, plans.PlanRegistryManager, models.SessionMetadata]:
+) -> tuple[core_config.CharlieBotConfig, SessionBlocks, plans.PlanRegistryManager, models.SessionMetadata]:
   """Session blocks and the plan manager plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
   session_blocks = build_session_blocks(cfg)
@@ -2255,7 +2260,7 @@ async def make_plan_setup(
 
 
 async def make_trigger_setup(
-    tmp_path: pathlib.Path) -> tuple[CharlieBotConfig, SessionBlocks, triggers.TriggerManager, str]:
+    tmp_path: pathlib.Path) -> tuple[core_config.CharlieBotConfig, SessionBlocks, triggers.TriggerManager, str]:
   """Real cfg/blocks/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
   cfg = make_home_config(tmp_path)
   session_blocks = build_session_blocks(cfg)
@@ -2494,11 +2499,11 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
 
 
 def _guarded_get_config(
-    real: Callable[[], CharlieBotConfig], accessor: str, tmp_path: pathlib.Path,
-    violations: list[str]) -> Callable[[], CharlieBotConfig]:
+    real: Callable[[], core_config.CharlieBotConfig], accessor: str, tmp_path: pathlib.Path,
+    violations: list[str]) -> Callable[[], core_config.CharlieBotConfig]:
   """*real* wrapped to record and raise when the config it returns has its home outside *tmp_path*."""
 
-  def guarded() -> CharlieBotConfig:
+  def guarded() -> core_config.CharlieBotConfig:
     cfg = real()
     if not cfg.charliebot_home.resolve().is_relative_to(tmp_path.resolve()):
       message = (
@@ -2829,7 +2834,8 @@ def install_scripted_backends(
   builds: list[dict] = []
   queue = list(backends)
 
-  def fake_build_backend(option: models.BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -> ScriptedRelayBackend:
+  def fake_build_backend(
+      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: Any) -> ScriptedRelayBackend:
     backend = queue.pop(0)
     on_spawn = kwargs.get("on_spawn")
     if on_spawn is not None:
@@ -2848,7 +2854,7 @@ def make_worker(tmp_path: pathlib.Path, thread_id: str) -> worker_module.Worker:
       tmp_path,
       tmp_path / "events.jsonl",
       "",
-      CharlieBotConfig(charliebot_home=tmp_path / "home"),
+      core_config.CharlieBotConfig(charliebot_home=tmp_path / "home"),
   )
 
 
@@ -3092,8 +3098,8 @@ async def cancel_and_drain(task: asyncio.Task) -> None:
 
 # Shared test helpers, single-homed here: the waits and the settle/reader
 # spies, imported across the suite's test files.
-def _cfg(home: pathlib.Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
+def _cfg(home: pathlib.Path) -> core_config.CharlieBotConfig:
+  return core_config.CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},
       backends={"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]},

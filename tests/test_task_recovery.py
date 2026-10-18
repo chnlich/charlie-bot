@@ -24,29 +24,16 @@ import src.runtime.task_execution as task_execution_module
 from src.infra import event_types as ET
 from src.infra import models, ndjson
 from src.runtime import control_events, runs, task_recovery
-from tests.test_task_execution import (
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
-    build_env,
-    child_reports,
-    implement_marker_commit,
-    inject_chat_append_fault,
-    inject_run_record_write_fault,
-    install_worker_launch_and_resume_backends,
-    make_pm_build,
-    poll_until,
-    result_event,
-    wait_for_terminal_run,
-    write_raw_result,
-)
+from tests import test_task_execution
 
 
 async def _takeoff_manager(tmp_path, monkeypatch):
   """One manager with its take-off turn already consumed (scripted backend)."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], conftest.BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("taken off")])],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
   manager = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -58,7 +45,7 @@ async def _takeoff_manager(tmp_path, monkeypatch):
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Do the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
-  await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  await test_task_execution.wait_for_terminal_run(tree, manager.id, decision["run_id"])
   return cfg, session_blocks, tree, manager
 
 
@@ -82,8 +69,8 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
   """A run registered (reservation) but never launched: recovery dispatches it
     through the executor — one process, the exact registered provenance."""
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  backend = SpawningScriptedBackend([result_event("recovered work")])
-  builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
+  backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("recovered work")])
+  builds = test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, [backend])
   admitted = await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
   # Simulate the crash window: the reservation exists (batch claimed) but the
   # launch never happened — no pid, no terminal fact.
@@ -93,7 +80,7 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
   await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  run, outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, run_id)
   assert outcome == "success"
   assert run.pid == 424001
   assert run.input_event_ids == [str(admitted["id"])]
@@ -110,8 +97,9 @@ async def test_restart_after_launch_reattaches_live_process(
   """A recorded live (pid, pid_start) process is followed, never relaunched."""
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   gate = asyncio.Event()
-  backend = SpawningScriptedBackend([result_event("late result")], gate=gate.wait)
-  builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
+  backend = test_task_execution.SpawningScriptedBackend(
+      [test_task_execution.result_event("late result")], gate=gate.wait)
+  builds = test_task_execution.install_worker_launch_and_resume_backends(monkeypatch, [backend])
   run_id = "run-live"
   await tree.runs.register_run(
       models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -130,7 +118,7 @@ async def test_restart_after_launch_reattaches_live_process(
 
   asyncio.get_event_loop().create_task(_release_soon())
   await task_recovery.reconcile_task_tree(cfg, tree)
-  _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  _run, outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, run_id)
   # The follow observed the recorded process ENDING (true→false) and the run
   # converged to its durable result instead of staying falsely running. The
   # scripted double never wrote a raw stream (no launcher drove it), so the
@@ -145,7 +133,8 @@ async def test_stop_request_wins_over_launch_and_recovery(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   builds = conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("x")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("x")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-stopped"
   await tree.runs.register_run(
       models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -178,7 +167,8 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
           task=models.TaskSpec(goal="do the work", repo_path=str(repo), task_type=models.TaskType.IMPLEMENT)),
       caller=conftest.OPERATOR)
   conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-reviewed"
   await tree.runs.register_run(
       models.RunRecord(
@@ -229,11 +219,11 @@ async def _implement_worker_with_landed_branch(tmp_path, monkeypatch):
   conftest.run_git(repo, "push", "-q", "origin", "task/work:main")
   conftest.install_scripted_backends(
       monkeypatch, [
-          SpawningScriptedBackend([result_event("review ok")]),
-          SpawningScriptedBackend([result_event("review ok again")])
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")]),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok again")])
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The delivered report's parent turn: one fresh scripted double per build.
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report consumed"))
   return cfg, session_blocks, tree, manager, worker, repo
 
 
@@ -324,7 +314,7 @@ async def test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_t
   assert reviews[0].review_of_run_id == "run-work-late"
   # The spawned review runs to its own success and delivers; a repeated pass
   # registers nothing more.
-  _run, outcome = await wait_for_terminal_run(tree, worker.id, reviews[0].id)
+  _run, outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, reviews[0].id)
   assert outcome == "success"
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   await task_recovery.reconcile_task_tree(cfg, tree)
@@ -347,7 +337,8 @@ async def test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member(
   reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
   assert len(reports) == 1 and reports[0]["outcome"] == "blocked"
   assert "found no available reviewer backend" in reports[0]["summary"]
-  await poll_until(lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
+  await test_task_execution.poll_until(
+      lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
   assert [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT] == reports
@@ -376,7 +367,7 @@ async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
   assert reviews == [], f"recovery registered a review: {[r.id for r in reviews]}"
   # The queued run's dispatch was withheld for disk headroom: an open node's
   # withhold records no stop request, and the run stays queued.
-  await poll_until(
+  await test_task_execution.poll_until(
       lambda: any(
           e.get("type") == ET.RUN_LAUNCH_WITHHELD and e.get("run_id") == queued_id
           for e in tree.runs.load_events_sync(worker.id)),
@@ -395,7 +386,7 @@ async def test_reconcile_settles_a_queued_run_on_a_completed_node_once(
   """A completed node holding a queued run with no stop request: one startup
     pass records exactly one stop request (request id closed-task:<run id>),
     and a repeated pass records nothing more."""
-  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="g"))
   await tree.runs.register_run(models.RunRecord(id="run-done", session_id=worker.id, kind="work"))
@@ -461,9 +452,10 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
   conftest.run_git(repo, "commit", "-q", "-m", "implement marker")
   conftest.run_git(repo, "push", "-q", "origin", "task/work:main")
   conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The delivered report's parent turn: one fresh scripted double per build.
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report consumed"))
   work_run_id = "run-work"
   await tree.runs.register_run(
       models.RunRecord(
@@ -573,7 +565,8 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
           task=models.TaskSpec(goal="do the work", repo_path=str(repo), task_type=models.TaskType.IMPLEMENT)),
       caller=conftest.OPERATOR)
   conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-work"
   await tree.runs.register_run(
       models.RunRecord(
@@ -606,7 +599,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
   # The stable retry identity binds to the work run and its attempt number.
   assert retried.id == control_events.stable_run_id(worker.id, f"review:{run_id}:2")
   assert retried.backend == "fake3", f"expected the next pool backend, got {retried.backend}"
-  _run, outcome = await wait_for_terminal_run(tree, worker.id, retried.id)
+  _run, outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, retried.id)
   assert outcome == "success"
   # The retried review consumed the one scripted backend; nothing else launches.
   await task_recovery.reconcile_task_tree(cfg, tree)
@@ -641,11 +634,12 @@ async def test_recovery_replays_a_lost_cold_read_delivery(
   run_id = "run-cold"
   await tree.runs.register_run(
       models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
-  await ndjson.append_ndjson(tree.runs.run_dir(worker.id, run_id) / runs.RUN_EVENTS_NAME, result_event("(1) answered."))
+  await ndjson.append_ndjson(
+      tree.runs.run_dir(worker.id, run_id) / runs.RUN_EVENTS_NAME, test_task_execution.result_event("(1) answered."))
   await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = child_reports(tree, manager.id)
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[-1]["outcome"] == "completed"
   assert reports[-1]["summary"] == "\n".join(
@@ -659,7 +653,7 @@ async def test_recovery_replays_a_lost_cold_read_delivery(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(child_reports(tree, manager.id)) == 1
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
   assert tree.task_state(worker.id) == "completed"
 
@@ -679,11 +673,15 @@ async def test_recovery_replays_a_lost_cold_read_failure_chain(
   await tree.runs.register_run(
       models.RunRecord(id=failed_run, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, failed_run, outcome="failed", exit_code=1)
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("(1) answered.")])])
+  test_task_execution.install_worker_launch_and_resume_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("(1) answered.")])])
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  await poll_until(lambda: bool(child_reports(tree, manager.id)), timeout=15.0, what="the cold-read child report")
-  reports = child_reports(tree, manager.id)
+  await test_task_execution.poll_until(
+      lambda: bool(test_task_execution.child_reports(tree, manager.id)),
+      timeout=15.0,
+      what="the cold-read child report")
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert reports[-1]["outcome"] == "completed"
   assert reports[-1]["summary"] == "\n".join(
       [
@@ -697,7 +695,7 @@ async def test_recovery_replays_a_lost_cold_read_failure_chain(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(child_reports(tree, manager.id)) == 1
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 2
   assert tree.task_state(worker.id) == "completed"
 
@@ -718,7 +716,7 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
   await tree.dispatch.finish_run(worker.id, failed_run, outcome="failed", exit_code=1)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = child_reports(tree, manager.id)
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[-1]["outcome"] == "failed"
   assert reports[-1]["summary"] == "\n".join(
@@ -737,7 +735,7 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(child_reports(tree, manager.id)) == 1
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
   assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
   assert tree.task_state(worker.id) == "archived"
@@ -758,7 +756,7 @@ async def test_recovery_replays_a_lost_cold_read_interrupted_report(
   await tree.dispatch.finish_run(worker.id, run_id, outcome="interrupted", exit_code=-1)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = child_reports(tree, manager.id)
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert [r["outcome"] for r in reports] == ["interrupted"]
   # No retry run: an interrupted cold read never takes the next-backend chain.
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
@@ -771,7 +769,7 @@ async def test_recovery_replays_a_lost_cold_read_interrupted_report(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(child_reports(tree, manager.id)) == 1
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
 
 
@@ -783,7 +781,7 @@ async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a
     archived by it — run B ended last."""
   cfg, _session_blocks, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=models.TaskType.IMPLEMENT)
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("manager turn"))
   await tree.runs.register_run(
       models.RunRecord(id="run-a", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, "run-a", outcome="failed", exit_code=1)
@@ -792,7 +790,7 @@ async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a
   await tree.dispatch.finish_run(worker.id, "run-b", outcome="success", exit_code=0)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = child_reports(tree, manager.id)
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert [r["outcome"] for r in reports] == ["failed"]
   assert [r["result_refs"] for r in reports] == [["run:run-a"]]
   # Run B ended last and awaits its review: the node stays open, unarchived.
@@ -809,7 +807,7 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
     nothing (the stable report id dedups, no wake) and archives the worker; a
     second pass writes no second fact."""
   cfg, _session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("manager turn"))
   run_id = "run-failed"
   await tree.runs.register_run(
       models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -831,13 +829,14 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
   def report_turns() -> list:
     return [r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn"]
 
-  await poll_until(lambda: len(report_turns()) == 2, timeout=15.0, what="the setup delivery's parent turn")
+  await test_task_execution.poll_until(
+      lambda: len(report_turns()) == 2, timeout=15.0, what="the setup delivery's parent turn")
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
   # No second report and no second wake: the manager holds exactly the one
   # delivery and its takeoff + report turns.
-  assert len(child_reports(tree, manager.id)) == 1
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
   assert len(report_turns()) == 2
   assert tree.task_state(worker.id) == "archived"
   closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
@@ -848,7 +847,7 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
 
   # A second startup writes no second fact.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(child_reports(tree, manager.id)) == 1
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
   assert len(report_turns()) == 2
   assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
 
@@ -871,11 +870,15 @@ async def test_recovery_cold_read_failure_with_a_registered_retry_never_double_r
   retry_run = "run-cold-2"
   await tree.runs.register_run(
       models.RunRecord(id=retry_run, session_id=worker.id, kind="work", backend="fake2", model="fake2-model"))
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("(1) answered.")])])
+  test_task_execution.install_worker_launch_and_resume_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("(1) answered.")])])
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  await poll_until(lambda: bool(child_reports(tree, manager.id)), timeout=15.0, what="the cold-read child report")
-  reports = child_reports(tree, manager.id)
+  await test_task_execution.poll_until(
+      lambda: bool(test_task_execution.child_reports(tree, manager.id)),
+      timeout=15.0,
+      what="the cold-read child report")
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert reports[-1]["outcome"] == "completed"
   assert "backend fake2" in reports[-1]["summary"].splitlines()
   assert tree.task_state(worker.id) == "completed"
@@ -895,9 +898,10 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
     report already in the manager's log — must append nothing.
     """
 
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
+  cfg, session_blocks, tree = test_task_execution.build_env(
+      tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, _origin = conftest.init_repo_with_origin(tmp_path)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await conftest.create_root_session(
       session_blocks, models.CreateSessionRequest(name="Manager"), backend="fake")
   worker = await tree.create_task(
@@ -913,20 +917,21 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   # The reviewer never pushes, so the landing check fails on every pass.
   conftest.install_scripted_backends(
       monkeypatch, [
-          SpawningScriptedBackend(
-              [result_event("implemented")], pre_run=functools.partial(implement_marker_commit, tree, worker.id)),
-          SpawningScriptedBackend([result_event("review ok")])
+          test_task_execution.SpawningScriptedBackend(
+              [test_task_execution.result_event("implemented")],
+              pre_run=functools.partial(test_task_execution.implement_marker_commit, tree, worker.id)),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")])
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The blocked report below wakes the manager. Script that turn too: left
   # unstubbed it builds a real codex, whose failure timing decides whether
   # the turn is terminal when the startup pass runs (instant crash on CI,
   # a 20s+ 401-retry flail on a checkout with credentials), and that race
   # alone flips the followup count the pass reports.
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("manager turn"))
 
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
-  _work, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
+  _work, outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, decision["run_id"])
   assert outcome == "success"
 
   deadline = asyncio.get_event_loop().time() + 15
@@ -940,7 +945,8 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   assert [r["outcome"] for r in reports] == ["blocked"]
   # The blocked report's delivery archived the stopped worker; the archive
   # rides the review run's delivery chain, so it can land after the report.
-  await poll_until(lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
+  await test_task_execution.poll_until(
+      lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
 
   # The blocked report wakes the manager, and its turn runs in flight beside
   # the steps below. The startup pass below runs boot-style — no is_driven
@@ -950,12 +956,12 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   # checkout still sees it unlanded. Settle the turn first so the pass reads
   # the same terminal-run set everywhere; replaying it is idempotent (its
   # request-id replay dedups).
-  await poll_until(
+  await test_task_execution.poll_until(
       lambda: any(r.kind == "manager_turn" for r in tree.runs.list_run_records_sync(manager.id)),
       timeout=15.0,
       what="the blocked report's manager turn")
   turn = next(r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn")
-  await wait_for_terminal_run(tree, manager.id, turn.id)
+  await test_task_execution.wait_for_terminal_run(tree, manager.id, turn.id)
 
   # A second successful review run of the same work run replays alongside the first.
   work_run = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work")
@@ -993,10 +999,11 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
     boot reconcile fills them too — from the drain rule's values, once."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  test_task_execution.install_worker_launch_and_resume_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("work done")])])
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report consumed"))
 
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
@@ -1005,12 +1012,12 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   staged: list = []
 
   def _stage_raw_log() -> None:
-    staged.append(write_raw_result(run_dir, "drained work result"))
+    staged.append(test_task_execution.write_raw_result(run_dir, "drained work result"))
 
   # The finish's metadata write (the one carrying ended_at) fails out of
   # space after the fact landed; the fault stages the drain's raw log.
-  inject_run_record_write_fault(monkeypatch, only_finished=True, times=1, on_raise=_stage_raw_log)
-  run, _outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  test_task_execution.inject_run_record_write_fault(monkeypatch, only_finished=True, times=1, on_raise=_stage_raw_log)
+  run, _outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, run_id)
   assert len(staged) == 1
   raw_mtime = staged[0][1]
   # (The half-written state itself is transient — the retry repairs it within
@@ -1026,8 +1033,10 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   # A boot reconcile repairs the same shape too: a staged fact with empty
   # metadata and a past-stamped raw log.
   cfg2, session_blocks2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
-  tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_blocks2, tree2, monkeypatch)
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("staged work")])])
+  tree2.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(
+      cfg2, session_blocks2, tree2, monkeypatch)
+  test_task_execution.install_worker_launch_and_resume_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("staged work")])])
   boot_run_id = "run-half-written"
   await tree2.runs.register_run(
       models.RunRecord(id=boot_run_id, session_id=worker2.id, kind="work", backend="fake", model="fake-model"))
@@ -1037,7 +1046,8 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   record["ended_at"] = None
   record["exit_code"] = None
   meta_path.write_text(json.dumps(record), encoding="utf-8")
-  _raw, boot_mtime = write_raw_result(tree2.runs.run_dir(worker2.id, boot_run_id), "boot result", age_seconds=1800)
+  _raw, boot_mtime = test_task_execution.write_raw_result(
+      tree2.runs.run_dir(worker2.id, boot_run_id), "boot result", age_seconds=1800)
   await task_recovery.reconcile_task_tree(cfg2, tree2, tree2.dispatch.executor)
   boot_run = await tree2.runs.get_run(worker2.id, boot_run_id)
   assert boot_run is not None
@@ -1052,24 +1062,27 @@ async def test_boot_node_out_of_space_hands_node_to_retry(
     the retry entry; the retry's own round delivers the parent report."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report consumed"))
   await tree.runs.register_run(
       models.RunRecord(id="run-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, "run-failed", outcome="failed", exit_code=-1)
-  assert child_reports(tree, manager.id) == []
+  assert test_task_execution.child_reports(tree, manager.id) == []
 
   # The boot pass's delivery write fails out of space: the node pass raises,
   # the boot hands the node to the retry, and the retry's round delivers.
-  inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
+  test_task_execution.inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
   await task_recovery.reconcile_task_tree(cfg, tree, adapter)
-  await poll_until(
-      lambda: len(child_reports(tree, manager.id)) == 1, what="the retry's parent report delivery", timeout=10.0)
-  reports = child_reports(tree, manager.id)
+  await test_task_execution.poll_until(
+      lambda: len(test_task_execution.child_reports(tree, manager.id)) == 1,
+      what="the retry's parent report delivery",
+      timeout=10.0)
+  reports = test_task_execution.child_reports(tree, manager.id)
   assert [r.get("outcome") for r in reports] == ["failed"]
-  await poll_until(lambda: worker.id not in adapter._landing_retries, what="the clean round ending the retry task")
-  assert len(child_reports(tree, manager.id)) == 1  # exactly one report
+  await test_task_execution.poll_until(
+      lambda: worker.id not in adapter._landing_retries, what="the clean round ending the retry task")
+  assert len(test_task_execution.child_reports(tree, manager.id)) == 1  # exactly one report
 
 
 @pytest.mark.asyncio
@@ -1082,10 +1095,11 @@ async def test_retry_round_skips_runs_this_process_already_drives(
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_blocks, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=models.TaskType.IMPLEMENT)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  builds = install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  builds = test_task_execution.install_worker_launch_and_resume_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("late")])])
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report consumed"))
 
   # A run whose execute task is in flight, and a worker run a previous round
   # already follows: both stay this process's property.
@@ -1161,9 +1175,9 @@ async def test_retry_round_skips_runs_this_process_already_drives(
     # Releasing the future resolves the follow: the pair leaves the
     # registry only then, and the run lands exactly once.
     released.set()
-    await poll_until(
+    await test_task_execution.poll_until(
         lambda: (manager.id, "run-mturn") not in adapter._resume_follows, what="the manager-turn follow pair release")
-    await wait_for_terminal_run(tree, manager.id, "run-mturn")
+    await test_task_execution.wait_for_terminal_run(tree, manager.id, "run-mturn")
     assert len(resume_calls) == 1
 
     # Without the driver the retry follows the worker run itself: the
@@ -1176,4 +1190,4 @@ async def test_retry_round_skips_runs_this_process_already_drives(
             "drained": 0,
             "followups": 0
         }, cfg)
-    await wait_for_terminal_run(tree, worker.id, "run-inflight")
+    await test_task_execution.wait_for_terminal_run(tree, worker.id, "run-inflight")

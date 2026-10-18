@@ -39,6 +39,15 @@ impl CodexLogs {
     let quota: Arc<dyn QuotaAccount> = Arc::new(CodexQuotaAccount::new(&codex_home));
     Self { codex_home, quota }
   }
+
+  fn log_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
+    let sessions = self.codex_home.join("sessions");
+    if !sessions.is_dir() {
+      return Ok(Vec::new());
+    }
+    walk_files(&sessions, |name| name.ends_with(".jsonl"))
+      .with_context(|| format!("listing codex logs under {}", sessions.display()))
+  }
 }
 
 impl UsageSourceImpl for CodexLogs {
@@ -46,14 +55,8 @@ impl UsageSourceImpl for CodexLogs {
     UsageOps { logs: true, read: true, live_cli_sessions: true, quota_accounts: true, sweep: true }
   }
 
-  fn logs(&self) -> anyhow::Result<Vec<(PathBuf, String)>> {
-    let sessions = self.codex_home.join("sessions");
-    if !sessions.is_dir() {
-      return Ok(Vec::new());
-    }
-    let paths = walk_files(&sessions, |name| name.ends_with(".jsonl"))
-      .with_context(|| format!("listing codex logs under {}", sessions.display()))?;
-    Ok(paths.into_iter().map(|path| (path, ACCOUNT.to_string())).collect())
+  fn logs(&self, _cfg: &charliebot_core::config::CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    Ok(self.log_paths()?.into_iter().map(|path| (path, ACCOUNT.to_string())).collect())
   }
 
   fn read(&self, path: &Path, account: &str, _previous: Option<&str>) -> anyhow::Result<(String, Vec<UsageRecord>)> {
@@ -61,11 +64,14 @@ impl UsageSourceImpl for CodexLogs {
   }
 
   fn live_cli_sessions(&self) -> anyhow::Result<HashSet<String>> {
-    self.logs()?.iter().map(|(path, _)| session_id(path, &self.codex_home)).collect()
+    self.log_paths()?.iter().map(|path| session_id(path, &self.codex_home)).collect()
   }
 
-  fn quota_accounts(&self, _cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<Arc<dyn QuotaAccount>> {
-    vec![Arc::clone(&self.quota)]
+  fn quota_accounts(
+    &self,
+    _cfg: &charliebot_core::config::CharlieBotConfig,
+  ) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
+    Ok(vec![Arc::clone(&self.quota)])
   }
 
   fn sweep(&self, scope: &SweepScope) -> anyhow::Result<SourceSweep> {

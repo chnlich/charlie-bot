@@ -234,6 +234,14 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   operations it defines in `UsageOps { logs, read, live_cli_sessions, quota_accounts, sweep }`, and the usage code calls
   only those, as Python's `hasattr` checks did. A call to an undeclared operation panics. An attribution may name a source
   that registers later, and it fails at use if the source never registers.
+- `UsageSourceImpl::logs(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>>` receives the loaded
+  config. The source reads config through `cfg`.
+- `UsageSourceImpl::quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>>` derives
+  accounts from the loaded config. `Registry::quota_accounts` returns the first source error.
+- `QuotaAccount::fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>>` returns `Ok(Some(_))`
+  for a reading, `Ok(None)` for Python's `None`, and `Err` for Python's raise.
+- The poll loop logs each fetch error once as `ext_usage_poll_error`, with provider, account, and error, then skips that
+  account. A `quota_accounts` error skips the whole round.
 - Example: `registry.usage_source(UsageSource { name: "Codex", id_prefixes: &["codex"], run_logs_only: false, implementation: Some(Arc::new(CodexLogs)) })?;`
 
 ### Sequence controllers

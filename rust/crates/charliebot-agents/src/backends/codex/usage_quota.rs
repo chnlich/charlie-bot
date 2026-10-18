@@ -75,7 +75,7 @@ impl QuotaAccount for CodexQuotaAccount {
     self.inner.last_error.lock().expect("the codex quota error is not poisoned").clone()
   }
 
-  fn fetch<'a>(&'a self) -> BoxFuture<'a, Option<Map<String, Value>>> {
+  fn fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>> {
     let inner = Arc::clone(&self.inner);
     Box::pin(async move { inner.fetch().await })
   }
@@ -94,11 +94,32 @@ impl Inner {
   }
 
   /// One reading: the usage from the newest plan-pool event, and the spend, which is best effort.
-  async fn fetch(self: Arc<Self>) -> Option<Map<String, Value>> {
+  async fn fetch(self: Arc<Self>) -> anyhow::Result<Option<Map<String, Value>>> {
     let now = OffsetDateTime::now_utc();
     let sessions_dir = self.sessions_dir.clone();
-    let paths = match tokio::task::spawn_blocking(move || list_rollout_files(&sessions_dir)).await {
-      Ok(Ok(paths)) => paths,
+    let paths = tokio::task::spawn_blocking(move || list_rollout_files(&sessions_dir))
+      .await
+      .context("the codex rollout listing task failed")??;
+    let usage_side = Arc::clone(&self);
+    let usage_paths = paths.clone();
+    let spend_side = Arc::clone(&self);
+    let (usage, spend) = tokio::join!(
+      tokio::task::spawn_blocking(move || usage_side.fetch_usage(&usage_paths, now)),
+      tokio::task::spawn_blocking(move || spend_side.compute_spend(&paths, now)),
+    );
+    let mut usage = match usage {
+      Err(error) => {
+        tracing::error!(
+          target: "charliebot_agents",
+          account = LABEL,
+          error = %error,
+          "ext_usage_codex_usage_error"
+        );
+        self.set_last_error("usage read failed");
+        return Ok(None);
+      }
+      Ok(Ok(Some(usage))) => usage,
+      Ok(Ok(None)) => return Ok(None),
       Ok(Err(error)) => {
         tracing::error!(
           target: "charliebot_agents",
@@ -107,34 +128,12 @@ impl Inner {
           "ext_usage_codex_usage_error"
         );
         self.set_last_error("usage read failed");
-        return None;
-      }
-      Err(error) => panic!("the codex rollout listing task failed: {error}"),
-    };
-    let usage_side = Arc::clone(&self);
-    let usage_paths = paths.clone();
-    let spend_side = Arc::clone(&self);
-    let (usage, spend) = tokio::join!(
-      tokio::task::spawn_blocking(move || usage_side.fetch_usage(&usage_paths, now)),
-      tokio::task::spawn_blocking(move || spend_side.compute_spend(&paths, now)),
-    );
-    let mut usage = match usage.expect("the codex usage task does not panic") {
-      Ok(Some(usage)) => usage,
-      Ok(None) => return None,
-      Err(error) => {
-        tracing::error!(
-          target: "charliebot_agents",
-          account = LABEL,
-          error = %format!("{error:#}"),
-          "ext_usage_codex_usage_error"
-        );
-        self.set_last_error("usage read failed");
-        return None;
+        return Ok(None);
       }
     };
-    let spend = match spend.expect("the codex spend task does not panic") {
-      Ok(totals) => json!({"last_24h_usd": totals.last_24h_usd, "last_7d_usd": totals.last_7d_usd}),
-      Err(error) => {
+    let spend = match spend {
+      Ok(Ok(totals)) => json!({"last_24h_usd": totals.last_24h_usd, "last_7d_usd": totals.last_7d_usd}),
+      Ok(Err(error)) => {
         tracing::error!(
           target: "charliebot_agents",
           account = LABEL,
@@ -143,9 +142,18 @@ impl Inner {
         );
         Value::Null
       }
+      Err(error) => {
+        tracing::error!(
+          target: "charliebot_agents",
+          account = LABEL,
+          error = %error,
+          "ext_usage_codex_spend_failed"
+        );
+        Value::Null
+      }
     };
     usage.insert("spend".to_string(), spend);
-    Some(usage)
+    Ok(Some(usage))
   }
 
   /// The newest plan-pool quota reading across the recently written rollouts. The scan set is every rollout whose

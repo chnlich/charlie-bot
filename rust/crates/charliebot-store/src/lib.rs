@@ -27,8 +27,8 @@ pub use listing::{ArchivedPage, MetadataListing, RawMetadata};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
 pub use projection::MessageProjection;
 pub use run_records::{
-  RetryRunFields, RunBlocker, RunDisplayState, RunKind, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceRef,
-  StopRequest, StopResult,
+  RetryRunFields, RunBlocker, RunDisplayState, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord,
+  SequenceRef, StopRequest, StopResult,
 };
 pub use session_events::RAW_EVENTS_REPLACED_BY_DELTAS;
 pub use store::{AccountLabelKeeper, AnchorFieldReconciler, SequenceListingFields, Store, StoreHooks};

@@ -88,12 +88,14 @@ from 0 to that count, and archive files beyond that count stay unread.
 | `reconcile_stop_request(&self, session_id: &str, run_id: &str) -> StoreResult<StopResult>` | `src/runtime/runs.py::reconcile_stop_request` |
 | `claim_input_events(&self, session_id: &str, run_id: &str, event_ids: &[String]) -> StoreResult<RunRecord>` | `src/runtime/session_dispatch.py` run-record `input_event_ids` write |
 | `read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>>`; `list_run_records_sync(&self, session_id: &str) -> StoreResult<Vec<RunRecord>>` | `src/runtime/runs.py::read_run_sync`, `list_run_records_sync` |
-| `list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize) -> StoreResult<RunPage>` | `src/runtime/runs.py::list_runs_page_sync` |
+| `list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize, order: RunOrder) -> StoreResult<RunPage>` | `src/runtime/runs.py::list_runs_page_sync` |
 | `newest_run_record_sync(&self, session_id: &str) -> StoreResult<Option<RunRecord>>`; `last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>>` | `src/runtime/runs.py::newest_run_record_sync`, `last_ended_run_id` |
 | `run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState>`; `run_blocker(&self, session_id: &str) -> StoreResult<Option<RunBlocker>>` | `src/runtime/runs.py::run_display_state`, `run_blocker` |
 | `records_generation(&self) -> u64`; `mark_sidebar_dirty(&self, session_id: &str)` | `src/runtime/runs.py::records_generation`, `mark_sidebar_dirty` |
 
 Run records use Python's exact field order and reject unknown fields. Their JSON writes are atomic.
+`RunOrder::Descending` reads the `(started_at, id)` order backwards. A page cursor carries its order (`d` is set
+only when descending), and a cursor read under the other order is refused with Python's `ValueError` text.
 `register_run_locked`, retry creation, finish and `claim_input_events_locked` require `ControlGuard`.
 `claim_input_events` acquires the guard for callers that do not hold it. Control facts append through
 `append_control_fact` while the guard is held. A finish fact lands before its record mirror.

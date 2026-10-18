@@ -6,6 +6,7 @@ import os
 import pathlib
 import shutil
 import sys
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from src.app import registrations
@@ -463,8 +464,45 @@ def _parity_case(case: str, root: pathlib.Path, home: pathlib.Path, session_id: 
   CASES[case](root, home, session_id)
 
 
+def _page_json(page: runs.RunPageSlice) -> dict[str, object]:
+  return {"ids": [run.id for run in page.items], "next_cursor": page.next_cursor}
+
+
+def _refusal(read: Callable[[], object]) -> str:
+  try:
+    read()
+  except ValueError as error:
+    return str(error)
+  raise AssertionError("the cursor was accepted under the other order")
+
+
+def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
+  """Run the Python side of one read case on the case's Python copy and return its JSON-shaped result."""
+  registrations.register_all()
+  store = _python_run_store(root / case / "python-home")
+  if case == "pages":
+    ascending = store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=None)
+    descending = store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=None, descending=True)
+    descending_next = store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=descending.next_cursor, descending=True)
+    return {
+        "ascending":
+            _page_json(ascending),
+        "descending":
+            _page_json(descending),
+        "descending_next":
+            _page_json(descending_next),
+        "refused_ascending_cursor":
+            _refusal(
+                lambda: store.list_runs_page_sync(
+                    RUN_SESSION_ID, limit=2, cursor=ascending.next_cursor, descending=True)),
+        "refused_descending_cursor":
+            _refusal(lambda: store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=descending.next_cursor)),
+    }
+  raise ValueError(f"unknown read case {case}")
+
+
 if __name__ == "__main__":
-  mode, root_text, *rest = sys.argv[1:]
+  mode, root_text, *extra = sys.argv[1:]
   root = pathlib.Path(root_text)
   # Package registration reads the environment's home before any operation picks its own, so keep it off the live home.
   os.environ["CHARLIEBOT_HOME"] = str(root / "bootstrap-home")
@@ -480,6 +518,8 @@ if __name__ == "__main__":
     _verify_runs(root)
   elif mode.startswith("parity:"):
     _case, case = mode.split(":", 1)
-    _parity_case(case, root, root / "python-home", rest[0])
+    _parity_case(case, root, root / "python-home", extra[0])
+  elif mode == "read_runs":
+    print(json.dumps(_read_runs(root, *extra), ensure_ascii=False))
   else:
     raise ValueError(f"unknown mode {mode}")

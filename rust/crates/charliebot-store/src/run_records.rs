@@ -209,6 +209,22 @@ pub struct RunPage {
   pub next_cursor: Option<String>,
 }
 
+/// The order of a run page. A cursor records the order it was minted under and is refused under the other.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunOrder {
+  Ascending,
+  Descending,
+}
+
+impl RunOrder {
+  fn as_str(self) -> &'static str {
+    match self {
+      Self::Ascending => "ascending",
+      Self::Descending => "descending",
+    }
+  }
+}
+
 /// The result of recording or reconciling a stop request.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StopResult {
@@ -220,11 +236,14 @@ pub struct StopResult {
 /// The result of a new stop request.
 pub type StopRequest = StopResult;
 
+/// The boundary of a run page cursor. Python's cursor is `s`, `i`, and `d` (only when descending); unknown keys are
+/// ignored, as Python ignores them.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RunCursor {
   s: String,
   i: String,
+  #[serde(default)]
+  d: bool,
 }
 
 fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
@@ -234,22 +253,26 @@ fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
   (started_at, run.id.clone())
 }
 
-fn run_cursor(run: &RunRecord) -> String {
+fn run_cursor(run: &RunRecord, order: RunOrder) -> String {
   let started_at = run_sort_key(run).0.to_python_isoformat();
   let mut value = Map::new();
   value.insert("s".to_string(), Value::String(started_at));
   value.insert("i".to_string(), Value::String(run.id.clone()));
+  if order == RunOrder::Descending {
+    value.insert("d".to_string(), Value::Bool(true));
+  }
   run_token::b64url_encode(serde_json::to_string(&value).expect("a run cursor serializes").as_bytes())
 }
 
-fn decode_run_cursor(cursor: &str) -> StoreResult<(UtcDateTime, String)> {
-  let decoded = run_token::b64url_decode(cursor)
-    .map_err(|error| StoreError::new(format!("malformed run page cursor: {cursor:?}: {error}")))?;
-  let value: RunCursor = serde_json::from_slice(&decoded)
-    .map_err(|error| StoreError::new(format!("malformed run page cursor: {cursor:?}: {error}")))?;
-  let started_at = UtcDateTime::parse(&value.s)
-    .map_err(|error| StoreError::new(format!("malformed run page cursor: {cursor:?}: {error}")))?;
-  Ok((started_at, value.i))
+/// Decode a cursor into its boundary and the order it was minted under. The error text is Python's `ValueError`,
+/// which does not carry the decoding cause.
+fn decode_run_cursor(cursor: &str) -> StoreResult<((UtcDateTime, String), RunOrder)> {
+  let malformed = || StoreError::new(format!("malformed run page cursor: {}", pyfmt::str_repr(cursor)));
+  let decoded = run_token::b64url_decode(cursor).map_err(|_| malformed())?;
+  let value: RunCursor = serde_json::from_slice(&decoded).map_err(|_| malformed())?;
+  let started_at = UtcDateTime::parse(&value.s).map_err(|_| malformed())?;
+  let order = if value.d { RunOrder::Descending } else { RunOrder::Ascending };
+  Ok(((started_at, value.i), order))
 }
 
 impl Store {
@@ -419,16 +442,39 @@ impl Store {
     Ok(latest.map(|(_, _, run_id)| run_id))
   }
 
-  /// Return one chronological page of records, using a Python-compatible keyset cursor.
-  pub fn list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize) -> StoreResult<RunPage> {
+  /// Return one page of records in the canonical `(started_at, id)` order, read forwards or backwards.
+  /// A cursor minted under one order is refused under the other.
+  pub fn list_runs_page_sync(
+    &self,
+    session_id: &str,
+    cursor: Option<&str>,
+    limit: usize,
+    order: RunOrder,
+  ) -> StoreResult<RunPage> {
+    let descending = order == RunOrder::Descending;
     let mut records = self.list_run_records_sync(session_id)?;
-    if let Some(cursor) = cursor {
-      let boundary = decode_run_cursor(cursor)?;
-      records.retain(|run| run_sort_key(run) > boundary);
+    if descending {
+      records.reverse();
+    }
+    // An empty cursor reads as no cursor, as Python's `if cursor` does.
+    if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
+      let (boundary, cursor_order) = decode_run_cursor(cursor)?;
+      if cursor_order != order {
+        return Err(StoreError::new(format!(
+          "run page cursor was minted for {} order and cannot be replayed under {} order",
+          cursor_order.as_str(),
+          order.as_str()
+        )));
+      }
+      if descending {
+        records.retain(|run| run_sort_key(run) < boundary);
+      } else {
+        records.retain(|run| run_sort_key(run) > boundary);
+      }
     }
     let has_more = records.len() > limit;
     records.truncate(limit);
-    let next_cursor = has_more.then(|| records.last().map(run_cursor)).flatten();
+    let next_cursor = has_more.then(|| records.last().map(|run| run_cursor(run, order))).flatten();
     Ok(RunPage { items: records, next_cursor })
   }
 
@@ -1099,7 +1145,10 @@ mod tests {
       events_ref: None,
       result_ref: None,
     };
-    let cursor = run_cursor(&record);
-    assert_eq!(decode_run_cursor(&cursor).unwrap(), (record.started_at.unwrap(), "run-a".to_string()));
+    let boundary = (record.started_at.unwrap(), "run-a".to_string());
+    let ascending = run_cursor(&record, RunOrder::Ascending);
+    assert_eq!(decode_run_cursor(&ascending).unwrap(), (boundary.clone(), RunOrder::Ascending));
+    let descending = run_cursor(&record, RunOrder::Descending);
+    assert_eq!(decode_run_cursor(&descending).unwrap(), (boundary, RunOrder::Descending));
   }
 }

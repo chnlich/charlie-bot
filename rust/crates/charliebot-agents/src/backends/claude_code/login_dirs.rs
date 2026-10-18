@@ -4,6 +4,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 pub const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+pub const CREDENTIALS_FILE: &str = ".credentials.json";
 
 /// Return the default Claude login directory.
 pub fn default_claude_dir() -> anyhow::Result<PathBuf> {

@@ -185,6 +185,14 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   run.
 - Example: `registry.backend_type(BackendTypeRegistration { type_name: "codex", traits, option_model, factory, lifecycle: None, translate_fallback: false })?;`
 
+### Running turns
+
+- Python: `src/backends/claude_code/master_cc_relay.py:91-95` reads account labels from the other running manager turns.
+- Rust: `LaunchContext.running_turns: Option<RunningTurnsFn>`, where `RunningTurnsFn` returns metadata for every other running manager turn.
+- A manager turn receives `Some`; a task receives `None`. A task path that reads this field fails with an error naming `running_turns`.
+- The callback reads the queue when called because Python probes transcript lineage before it reads the busy set.
+- Example: `running_turns: Some(Arc::new(|| queue.running_turns_except(session_id)))`.
+
 ### Child environment
 
 - Python: `src/runtime/hooks/backend_lifecycle_registration.py:25` `register_child_env`
@@ -299,17 +307,15 @@ implements them over the registered lifecycles and sequence controllers, and the
 
 Packages whose port has not landed still register their data, so the server's behavior does not change:
 
+- The `claude_code` package is ported. It registers typed account configuration, its config check, metadata slots, pooled lifecycle and the login-notice renderer.
 - Data-carrying stubs: `artifacts` (`publish` section), `backend_pool`, `cron`, `slack`, `discord` and `web_reply` (session
   slots), `code_server` (`code_server` section), `voice` (`voice` section, its two template globals and the default-backend
-  check), `claude_code` (`accounts` section, session and thread slots, a lifecycle that keeps the account label and
-  refuses launches), `gemini` (two legacy keys), and the backend types `cc-openai-compatible`, `antigravity`,
-  `charlie-code`, `cc-claude` (the translate fallback), `codex`, `gemini`, `cc-kimi` and `opencode`. Each type's
-  factory refuses every launch with "not ported".
+  check), `gemini` (two legacy keys), and the backend types `cc-openai-compatible`, `antigravity`,
+  `charlie-code`, `codex`, `gemini`, `cc-kimi` and `opencode`. Their factories refuse every launch with "not ported".
 - Empty stubs: the other listed packages.
 
 Not registered yet:
 
-- `claude_code`'s `check_claude_pools` config check. It needs the `accounts` section typed.
 - `code_server`'s template global for the diff page, which the Rust page does not port yet.
 - Usage attributions and usage sources. The usage package is not ported.
 - `cc-openai-compatible` and `cc-kimi` lifecycles. They use the default lifecycle, not the Python `ClaudeCliLifecycle`.

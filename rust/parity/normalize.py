@@ -328,10 +328,16 @@ EXPLICIT_REQUEST_HEADERS: dict[str, tuple[str, ...]] = {
     "muse": (),
 }
 
+# Request headers compared by media type, lowercased and without parameters.
+MEDIA_TYPE_REQUEST_HEADERS: dict[str, str] = {
+    "content-type":
+        "the media type names the body encoding the feature code chose; parameters such as the charset "
+        "and the multipart boundary are library defaults and are dropped",
+}
+
 IGNORED_REQUEST_HEADERS: dict[str, str] = {
     "host": "transport routing: CONNECT already chooses the fake host; it carries no request behavior",
     "accept": "HTTP client default: the feature request does not set this header",
-    "content-type": "httpx sets it from a json= body; the parsed JSON body is compared structurally",
     "user-agent": "library default on Slack REST calls and on every WebSocket handshake; only Discord REST sets it",
     "accept-encoding": "HTTP client default: automatic response decoding is outside the feature request",
     "content-length": "framing: the parsed request body is compared structurally",
@@ -540,18 +546,28 @@ def normalize_headers(headers: list[tuple[str, str]], ctx: Context, route: str) 
   return compared
 
 
+def _media_type(value: str) -> str:
+  """A Content-Type value without its parameters, lowercased."""
+  return value.split(";", 1)[0].strip().lower()
+
+
 def request_headers(
     fake: str,
     headers: dict[str, list[str]],
     ctx: Context,
     websocket: bool,
 ) -> dict[str, list[str]]:
-  """The headers the feature code sets explicitly; every other header must be named in IGNORED_REQUEST_HEADERS."""
+  """The headers the feature code sets explicitly, and each media-type header's media type.
+
+  Every other header must be named in IGNORED_REQUEST_HEADERS.
+  """
   explicit = () if websocket else EXPLICIT_REQUEST_HEADERS[fake]
   compared: dict[str, list[str]] = {}
   for name, values in headers.items():
     if name in explicit:
       compared[name] = [normalize_text(value, ctx) for value in values]
+    elif name in MEDIA_TYPE_REQUEST_HEADERS:
+      compared[name] = [_media_type(value) for value in values]
     elif name not in IGNORED_REQUEST_HEADERS:
       raise ValueError(f"{fake} request header {name!r} is neither set explicitly nor named in IGNORED_REQUEST_HEADERS")
   return compared

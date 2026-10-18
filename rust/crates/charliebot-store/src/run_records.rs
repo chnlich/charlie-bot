@@ -731,10 +731,11 @@ impl Store {
     self.require_control_guard(guard)?;
     let events = self.load_all_facts(session_id)?;
     let mut run = require_run(self, session_id, run_id)?;
-    if let Some(existing) = first_finish_event(&events, run_id) {
-      // The first fact and its payload never move. An empty `ended_at` is the half-written end record: the caller's
-      // `ended_at` and `exit_code` fill it, and values already written stay.
-      let input_event_ids = event_input_ids(existing);
+    if terminal_outcome(&events, run_id)?.is_some() {
+      // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
+      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
+      // and `exit_code` fill it, and values already written stay.
+      let input_event_ids = finish_facts(&events, run_id).next().map(event_input_ids).unwrap_or_default();
       let mut changed = run.input_event_ids != input_event_ids;
       run.input_event_ids = input_event_ids;
       if run.ended_at.is_none() {
@@ -801,7 +802,7 @@ impl Store {
       foreign.extend(event_input_ids(event));
     }
     for other in self.list_run_records_sync(&run.session_id)? {
-      if other.id == run.id || first_finish_event(events, &other.id).is_some() {
+      if other.id == run.id || terminal_outcome(events, &other.id)?.is_some() {
         continue;
       }
       if other.pid.is_none() && stop_requested(events, &other.id, None) {
@@ -1003,8 +1004,9 @@ fn require_run(store: &Store, session_id: &str, run_id: &str) -> StoreResult<Run
     .ok_or_else(|| StoreError::new(format!("run {run_id} not found in session {session_id}")))
 }
 
-fn first_finish_event<'a>(events: &'a [Value], run_id: &str) -> Option<&'a Value> {
-  events.iter().find(|event| {
+/// The run's run_finished facts in log order.
+fn finish_facts<'a>(events: &'a [Value], run_id: &'a str) -> impl DoubleEndedIterator<Item = &'a Value> {
+  events.iter().filter(move |event| {
     event.get("type").and_then(Value::as_str) == Some("run_finished")
       && event.get("run_id").and_then(Value::as_str) == Some(run_id)
   })
@@ -1018,8 +1020,10 @@ fn event_input_ids(event: &Value) -> Vec<String> {
     .unwrap_or_default()
 }
 
-fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
-  let event = first_finish_event(events, run_id);
+/// The outcome of the run's last run_finished fact. None when the run has no finish fact or its last one carries no
+/// outcome; an outcome string outside the known set is an error.
+pub fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
+  let event = finish_facts(events, run_id).next_back();
   match event.and_then(|event| event.get("outcome")).and_then(Value::as_str) {
     None => Ok(None),
     Some("success") => Ok(Some(RunOutcomeKind::Success)),

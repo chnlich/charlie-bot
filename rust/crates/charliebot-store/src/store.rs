@@ -1,7 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::future::Future;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -19,6 +21,7 @@ use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
+use crate::task_tree::CachedTreeIndex;
 use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
@@ -56,6 +59,21 @@ pub trait SequenceListingFields: Send + Sync {
   fn derived_archived_ids(&self) -> StoreResult<Vec<String>>;
 }
 
+/// The sequence binding archive callback for one task-tree node.
+pub trait SequenceArchiveHook: Send + Sync {
+  /// Run the registered binding's archive duty when it exists.
+  fn on_archive<'a>(&'a self, session_id: &'a str) -> StoreHookFuture<'a, ()>;
+}
+
+/// Rebind sequence-owned state when an elone replaces a node.
+pub trait SequenceBindingMover: Send + Sync {
+  /// Move bindings from `source_session_id` to `new_session_id`.
+  fn move_bindings<'a>(&'a self, source_session_id: &'a str, new_session_id: &'a str) -> StoreHookFuture<'a, bool>;
+}
+
+/// A future returned by a store hook.
+pub type StoreHookFuture<'a, T> = Pin<Box<dyn Future<Output = StoreResult<T>> + Send + 'a>>;
+
 /// Required runtime hooks. Missing implementations fail store construction.
 #[derive(Default)]
 pub struct StoreHooks {
@@ -67,6 +85,10 @@ pub struct StoreHooks {
   pub sequence_listing: Option<Arc<dyn SequenceListingFields>>,
   /// Feature event renderers, after-turn contributions, and runtime-state callbacks.
   pub runtime_events: Option<Arc<dyn RuntimeEventHooks>>,
+  /// Sequence-binding archive callback.
+  pub sequence_archive: Option<Arc<dyn SequenceArchiveHook>>,
+  /// Sequence-binding elone rebind callback.
+  pub sequence_binding_mover: Option<Arc<dyn SequenceBindingMover>>,
 }
 
 #[derive(Clone)]
@@ -85,6 +107,8 @@ pub struct Store {
   pub(crate) sequence_listing: Arc<dyn SequenceListingFields>,
   pub(crate) runtime_hooks: Arc<dyn RuntimeEventHooks>,
   pub(crate) event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
+  pub(crate) sequence_archive: Arc<dyn SequenceArchiveHook>,
+  pub(crate) sequence_binding_mover: Arc<dyn SequenceBindingMover>,
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Vec<Value>>>,
@@ -94,6 +118,8 @@ pub struct Store {
   pub(crate) session_events: SessionEventState,
   pub(crate) streaming_manager: StreamingManager,
   pub(crate) thinking_state: ThinkingState,
+  pub(crate) task_tree_index: StdMutex<Option<CachedTreeIndex>>,
+  pub(crate) task_tree_generation: AtomicU64,
 }
 
 impl Store {
@@ -115,6 +141,10 @@ impl Store {
         return Err(StoreError::new(format!("event type {event_type:?} already has a renderer")));
       }
     }
+    let sequence_archive =
+      hooks.sequence_archive.ok_or_else(|| StoreError::new("store requires sequence archive hooks"))?;
+    let sequence_binding_mover =
+      hooks.sequence_binding_mover.ok_or_else(|| StoreError::new("store requires sequence binding mover"))?;
     validate_slots(&slots)?;
     let store_id = Uuid::new_v4();
     Ok(Self {
@@ -125,6 +155,8 @@ impl Store {
       sequence_listing,
       runtime_hooks,
       event_renderers,
+      sequence_archive,
+      sequence_binding_mover,
       metadata_cache: StdMutex::new(HashMap::new()),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
@@ -134,12 +166,19 @@ impl Store {
       session_events: SessionEventState::default(),
       streaming_manager: StreamingManager::new(),
       thinking_state: ThinkingState::default(),
+      task_tree_index: StdMutex::new(None),
+      task_tree_generation: AtomicU64::new(0),
     })
   }
 
   /// The session directory for `session_id`.
   pub fn session_dir(&self, session_id: &str) -> PathBuf {
     self.cfg.sessions_dir().join(session_id)
+  }
+
+  /// The typed configuration this store was built from.
+  pub fn config(&self) -> &CharlieBotConfig {
+    &self.cfg
   }
 
   /// The metadata file for `session_id`.
@@ -800,6 +839,22 @@ pub(crate) mod test_support {
     }
   }
 
+  pub(crate) struct SequenceArchive;
+
+  impl SequenceArchiveHook for SequenceArchive {
+    fn on_archive<'a>(&'a self, _session_id: &'a str) -> StoreHookFuture<'a, ()> {
+      Box::pin(async { Ok(()) })
+    }
+  }
+
+  pub(crate) struct BindingMover;
+
+  impl SequenceBindingMover for BindingMover {
+    fn move_bindings<'a>(&'a self, _source_session_id: &'a str, _new_session_id: &'a str) -> StoreHookFuture<'a, bool> {
+      Box::pin(async { Ok(false) })
+    }
+  }
+
   pub(crate) fn make_test_store() -> (tempfile::TempDir, Store) {
     make_test_store_with_runtime(Arc::new(EmptyRuntimeEventHooks))
   }
@@ -824,6 +879,8 @@ pub(crate) mod test_support {
         anchor_reconciler: Some(Arc::new(AnchorReconciler)),
         sequence_listing: Some(Arc::new(SequenceListing)),
         runtime_events: Some(runtime_events),
+        sequence_archive: Some(Arc::new(SequenceArchive)),
+        sequence_binding_mover: Some(Arc::new(BindingMover)),
       },
     )
   }
@@ -888,12 +945,30 @@ mod tests {
     }
   }
 
+  struct TestSequenceArchive;
+
+  impl SequenceArchiveHook for TestSequenceArchive {
+    fn on_archive<'a>(&'a self, _session_id: &'a str) -> StoreHookFuture<'a, ()> {
+      Box::pin(async { Ok(()) })
+    }
+  }
+
+  struct TestSequenceBindingMover;
+
+  impl SequenceBindingMover for TestSequenceBindingMover {
+    fn move_bindings<'a>(&'a self, _source_session_id: &'a str, _new_session_id: &'a str) -> StoreHookFuture<'a, bool> {
+      Box::pin(async { Ok(false) })
+    }
+  }
+
   fn explicit_test_hooks() -> StoreHooks {
     StoreHooks {
       account_labels: Some(Arc::new(TestAccountLabels)),
       anchor_reconciler: Some(Arc::new(TestAnchorReconciler)),
       sequence_listing: Some(Arc::new(TestSequenceListing)),
       runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
+      sequence_archive: Some(Arc::new(TestSequenceArchive)),
+      sequence_binding_mover: Some(Arc::new(TestSequenceBindingMover)),
     }
   }
 

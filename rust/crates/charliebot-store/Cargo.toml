@@ -17,5 +17,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+regex.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

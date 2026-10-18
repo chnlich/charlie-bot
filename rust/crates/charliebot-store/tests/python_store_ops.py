@@ -13,8 +13,10 @@ from src.app import registrations
 from src.features.usage import storage_cool
 from src.infra import config, json_utils, metadata_slots, models
 from src.infra import ndjson
-from src.runtime import chat_events, run_token, session_anchors, session_events, session_lifecycle, session_store
-from src.runtime import control_events, control_sink, runs, task_sessions
+from src.runtime import chat_events, control_events, control_sink, run_token, runs, session_anchors, session_events
+from src.runtime import session_fork, session_lifecycle, session_listing, session_sidebar, session_store
+from src.runtime import session_successor, takeoff_gate, task_sessions
+from src.runtime.hooks import sequence_controllers
 
 SESSION_ID = "00000000-0000-4000-8000-000000000001"
 THREAD_ID = "00000000-0000-4000-8000-000000000002"
@@ -42,6 +44,11 @@ RETRY_TASK_SPEC = "synthetic retry task spec"
 RUN_SESSION_ID = "00000000-0000-4000-8000-000000000101"
 RUN_EVENT_ID = "00000000-0000-4000-8000-000000000199"
 RUN_FIXED = datetime(2025, 2, 3, 4, 5, 6, 123456, tzinfo=timezone.utc)
+TASK_ROOT_ID = "synthetic-task-root"
+TASK_WORKER_ID = "synthetic-task-worker"
+TASK_SOURCE_ID = "synthetic-elone-source"
+TASK_NEW_ID = "synthetic-elone-new"
+TASK_RUN_ID = "synthetic-failed-run"
 
 
 def _registered() -> None:
@@ -538,6 +545,236 @@ def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
   raise ValueError(f"unknown read case {case}")
 
 
+def _task_tree(home: pathlib.Path) -> task_sessions.TaskTreeManager:
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  cfg = config.load_config()
+  store = session_store.SessionStore(cfg)
+  sidebar = session_sidebar.SessionSidebar(cfg, store)
+  events = session_events.SessionEvents(cfg, store)
+  listing = session_listing.SessionListing(cfg, store, sidebar)
+  lifecycle = session_lifecycle.SessionLifecycle(cfg, store, events)
+  fork = session_fork.SessionFork(cfg, store, events)
+  anchors = session_anchors.SessionAnchors(cfg, store, events)
+  successor = session_successor.SessionSuccessor(cfg, store, events)
+  return task_sessions.TaskTreeManager(cfg, store, events, sidebar, listing, lifecycle, fork, anchors, successor)
+
+
+class _TestSequenceController:
+  def binding(self, _session_id: str) -> None:
+    return None
+
+  async def move_bindings(self, _source_id: str, _target_id: str) -> bool:
+    return True
+
+
+def _install_test_sequence_controller() -> None:
+  sequence_controllers.sequence_controllers = lambda: (_TestSequenceController(),)
+
+
+async def _create_task_node(
+    tree: task_sessions.TaskTreeManager,
+    *,
+    session_id: str,
+    parent_id: str | None,
+    request_id: str,
+    profile: str = "manager",
+    slots: dict[str, object] | None = None,
+) -> models.SessionMetadata:
+  return await tree.create_task(
+      request_id=request_id,
+      task_parent_id=parent_id,
+      profile=profile,
+      task=None,
+      name=request_id,
+      backend="synthetic",
+      session_id=session_id,
+      slot_values=slots,
+      caller="system",
+  )
+
+
+async def _prepare_tasks(root: pathlib.Path) -> None:
+  _registered()
+  home = root / "task-base"
+  tree = _task_tree(home)
+  manager = await _create_task_node(
+      tree, session_id=TASK_ROOT_ID, parent_id=None, request_id="root-request")
+  worker = await _create_task_node(
+      tree, session_id=TASK_WORKER_ID, parent_id=manager.id, request_id="worker-request", profile="worker")
+  source = await _create_task_node(
+      tree,
+      session_id=TASK_SOURCE_ID,
+      parent_id=manager.id,
+      request_id="source-request",
+      slots={
+          "last_scheduled_run": FIXED.isoformat(),
+          "last_scheduled_cron": "0 0 * * *",
+          "last_run_status": "success",
+      },
+  )
+  await _create_task_node(
+      tree, session_id=TASK_NEW_ID, parent_id=manager.id, request_id="new-request")
+
+  record = models.RunRecord(
+      id=TASK_RUN_ID,
+      session_id=worker.id,
+      ended_at=FIXED,
+      exit_code=1,
+  )
+  run_path = home / "sessions" / worker.id / "data" / "runs" / TASK_RUN_ID / "metadata.json"
+  run_path.parent.mkdir(parents=True, exist_ok=True)
+  json_utils.atomic_write_text(run_path, record.model_dump_json(indent=2))
+  event = control_events.build_control_event(
+      "run_finished",
+      actor="system",
+      source_session_id=worker.id,
+      event_id="synthetic-failed-run-fact",
+      timestamp=FIXED.isoformat(),
+      run_id=TASK_RUN_ID,
+      input_event_ids=[],
+      outcome="failed",
+  )
+  async with tree.control_lock:
+    await tree.events.append(worker.id, event)
+
+
+async def _mutate_tasks(home: pathlib.Path) -> None:
+  tree = _task_tree(home)
+  _install_test_sequence_controller()
+  child = await tree.create_task(
+      request_id="replayed-child-request",
+      task_parent_id=TASK_ROOT_ID,
+      profile="manager",
+      task=None,
+      name="replayed child",
+      backend="synthetic",
+      caller="system",
+  )
+  replay = await tree.create_task(
+      request_id="replayed-child-request",
+      task_parent_id=TASK_ROOT_ID,
+      profile="manager",
+      task=None,
+      name="ignored replay name",
+      backend="synthetic",
+      caller="system",
+  )
+  assert replay.id == child.id
+  await tree.update_slot_fields(TASK_WORKER_ID, "slack", slack_watermark_ts="updated-watermark")
+  assert await tree.archive_unsuccessful_worker(TASK_WORKER_ID, run_id=TASK_RUN_ID, outcome="failed")
+  assert not await tree.archive_unsuccessful_worker(TASK_WORKER_ID, run_id=TASK_RUN_ID, outcome="failed")
+  source = await tree.load_task_meta(TASK_SOURCE_ID)
+  new = await tree.load_task_meta(TASK_NEW_ID)
+  await tree._rebind_scheduled_tasks(source, new)
+
+
+async def _verify_tasks(home: pathlib.Path) -> None:
+  tree = _task_tree(home)
+  meta = await tree.load_meta(TASK_ROOT_ID)
+  assert meta is not None and meta.profile == "manager"
+  index = await tree._get_index()
+  children = tree._children_of(index, TASK_ROOT_ID)
+  assert len(children) == 4
+  worker = await tree.load_task_meta(TASK_WORKER_ID)
+  assert metadata_slots.fields_of(worker, "slack").slack_watermark_ts == "updated-watermark"
+  assert tree.task_state(TASK_WORKER_ID) == "archived"
+  target = await tree.load_task_meta(TASK_NEW_ID)
+  assert metadata_slots.fields_of(target, "cron").last_scheduled_cron == "0 0 * * *"
+  assert metadata_slots.fields_of(target, "cron").last_run_status == "success"
+  matches = []
+  for session_id in children:
+    child = await tree.load_meta(session_id)
+    if child is not None and child.name == "replayed child":
+      matches.append(session_id)
+  assert len(matches) == 1
+
+
+async def _verify_rust_created_tree(home: pathlib.Path) -> None:
+  tree = _task_tree(home)
+  root = await tree.load_task_meta("rust-created-root")
+  child = await tree.load_task_meta("rust-created-child")
+  assert root.profile == "manager" and child.task_parent_id == root.id
+  assert tree._children_of(await tree._get_index(), root.id) == [child.id]
+
+
+def _prepare_tasks_mode(root: pathlib.Path) -> None:
+  asyncio.run(_prepare_tasks(root))
+
+
+def _mutate_tasks_mode(root: pathlib.Path, home_name: str) -> None:
+  _registered()
+  asyncio.run(_mutate_tasks(root / home_name))
+
+
+def _verify_tasks_mode(root: pathlib.Path, home_name: str) -> None:
+  _registered()
+  asyncio.run(_verify_tasks(root / home_name))
+
+
+def _verify_rust_created_mode(root: pathlib.Path) -> None:
+  _registered()
+  asyncio.run(_verify_rust_created_tree(root / "rust-created-home"))
+
+
+def _gate_parity(root: pathlib.Path) -> None:
+  cases = json.loads((root / "gate-cases.json").read_text(encoding="utf-8"))["cases"]
+  results = {}
+  for case in cases:
+    try:
+      user_node = takeoff_gate.check_takeoff_gate_for_task(
+          case["start"],
+          load_events=lambda session_id: case["events"].get(session_id, []),
+          task_meta_of=lambda session_id: (
+              case["parents"].get(session_id), case["profiles"].get(session_id)),
+          task_state_of=lambda session_id: case["states"].get(session_id, "open"),
+      )
+    except takeoff_gate.DelegationBlockedError as error:
+      results[case["name"]] = {"authorized": False, "user_node": None, "reason": str(error)}
+    else:
+      results[case["name"]] = {"authorized": True, "user_node": user_node, "reason": None}
+  (root / "gate-results.json").write_text(json.dumps(results, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _prepare_parity_gate(root: pathlib.Path) -> None:
+  from rust.parity import fixture
+  from rust.parity.servers import Tree, write_home_config
+  from src.runtime import task_execution
+
+  fixture_root = root / "parity-fixture"
+  home = fixture_root / "home"
+  workspace = fixture_root / "workspace"
+  worktrees = fixture_root / "worktrees"
+  for path in (home, workspace, worktrees, fixture_root / "tmp", fixture_root / "logs", fixture_root / "fake-agent"):
+    path.mkdir(parents=True, exist_ok=True)
+  tree = Tree("fixture", fixture_root)
+  write_home_config(tree, 18642)
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  manifest_path = root / "parity-fixture-manifest.json"
+  previous_argv = sys.argv
+  sys.argv = ["fixture.py", "--manifest", str(manifest_path)]
+  try:
+    fixture.main()
+  finally:
+    sys.argv = previous_argv
+  task_tree = task_execution.task_manager()
+  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+  async def collect() -> dict[str, dict[str, object]]:
+    results = {}
+    for session_id in sorted(manifest["sessions"].values()):
+      try:
+        user_node = await task_tree.check_task_authorization(session_id)
+      except takeoff_gate.DelegationBlockedError as error:
+        results[session_id] = {"authorized": False, "user_node": None, "reason": str(error)}
+      else:
+        results[session_id] = {"authorized": True, "user_node": user_node, "reason": None}
+    return results
+
+  results = asyncio.run(collect())
+  (root / "parity-gate-results.json").write_text(json.dumps(results, sort_keys=True) + "\n", encoding="utf-8")
+  (root / "parity-fixture-sessions.txt").write_text(
+      "\n".join(sorted(manifest["sessions"].values())) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
   mode, root_text, *extra = sys.argv[1:]
   root = pathlib.Path(root_text)
@@ -558,5 +795,17 @@ if __name__ == "__main__":
     _parity_case(case, root, root / "python-home", extra[0])
   elif mode == "read_runs":
     print(json.dumps(_read_runs(root, *extra), ensure_ascii=False))
+  elif mode == "prepare_tasks":
+    _prepare_tasks_mode(root)
+  elif mode == "mutate_tasks":
+    _mutate_tasks_mode(root, extra[0])
+  elif mode == "verify_tasks":
+    _verify_tasks_mode(root, extra[0])
+  elif mode == "verify_rust_created":
+    _verify_rust_created_mode(root)
+  elif mode == "gate_parity":
+    _gate_parity(root)
+  elif mode == "prepare_parity_gate":
+    _prepare_parity_gate(root)
   else:
     raise ValueError(f"unknown mode {mode}")

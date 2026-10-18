@@ -218,9 +218,15 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 - Python: `src/runtime/hooks/sequence_controllers.py:236` `register_sequence_controller`
 - Rust: `sequence_controller(name: &'static str, controller: Arc<dyn SequenceController>)`. The trait has
-  `sequence_kind`, `binding`, `owns_session`, `listing_fields` and the defaulted `move_bindings`. Two controllers that bind
-  one session fail at use. The run-record and task-tree methods are not in the trait yet (see below).
+  `sequence_kind`, `redrive`, `launch_context`, `after_run`, `recover_run`, `reconcile_interrupted`, `binding`,
+  `owns_session`, `listing_fields` and the defaulted `move_bindings`. Two controllers that bind one session fail at use.
 - Example: `registry.sequence_controller("scheduled", Arc::new(ScheduledSequences))?;`
+
+`SequenceTree` joins the store's run records, task metadata, control lock and successor delivery with the dispatcher,
+completion and session-event services. `StoreSequenceTree::new(store, runtime)` requires those runtime providers; the
+executor is optional because startup and recovery can run before the execution adapter is installed. No controller is
+registered by the registry crate. Its controllers receive the combined tree and implement the five run lifecycle
+methods above.
 
 ### Lifespan steps
 
@@ -241,20 +247,15 @@ fills a value makes it visible to a ready service, which reads it at start.
 
 ## Store hooks
 
-The store calls three traits (`AccountLabelKeeper`, `AnchorFieldReconciler`, `SequenceListingFields`) and does not name
-any package. `store_hooks::store_hooks(registry)` implements them over the registered lifecycles and sequence
-controllers, and the server passes the result to `Store::new` at startup.
+The store calls six traits (`AccountLabelKeeper`, `AnchorFieldReconciler`, `SequenceListingFields`,
+`SequenceArchiveHook`, `SequenceBindingMover` and `RuntimeEventHooks`) and does not name any package. `store_hooks::store_hooks(registry)`
+implements them over the registered lifecycles and sequence controllers, and the server passes the result to
+`Store::new` at startup.
 
 ## Excluded from the seam
 
 - CLI commands (`wiring.py:59` `register_command`) and setup steps (`wiring.py:104` `register_setup_step`). The CLI stays in
   Python (Trade-off 2), so the Rust server registers neither.
-
-## Deferred
-
-- The run-record methods of the Python sequence controller (`redrive`, `launch_context`, `after_run`, `recover_run`,
-  `reconcile_interrupted`) need the run store (S2). The task-tree members need the task tree (S3). They join
-  `SequenceController` with those parts. `SequenceTree` exposes only `load_meta` for now.
 
 ## What the stubs register
 

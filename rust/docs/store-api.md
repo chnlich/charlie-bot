@@ -1,8 +1,8 @@
 # `charliebot-store` API
 
-Baseline: Python tree at `d9fdcd7c9`. The store owns writes to session `metadata.json` and
-`data/chat_events.jsonl`. It receives the ordered `MetadataSlot` list and all four required runtime
-hooks at construction; absent hooks fail startup. Metadata mutation methods read from disk while
+Baseline: Python tree at `d9fdcd7c9`. The store owns writes to session `metadata.json`,
+`data/chat_events.jsonl`, task facts, and immutable prompt bodies. It receives the ordered `MetadataSlot` list and all
+six required runtime hooks at construction; absent hooks fail startup. Metadata mutation methods read from disk while
 holding the session lock, save atomically, then return a fresh read-back. No public whole-object save
 accepts a cached metadata value.
 
@@ -121,28 +121,40 @@ scan of all run records. `run_identity_refusal` reads the run record and full fa
 route accepts run-token identity. `records_generation` increments after each run-record write.
 `mark_sidebar_dirty` updates the process-local sidebar dirty set and its derived generation.
 
-## Planned task tree (S3)
+## Task tree (S3, implemented)
 
-| Rust API planned | Python source |
+| Rust API (implemented) | Python source |
 | --- | --- |
 | `create_task(&self, request: CreateTask, caller: TaskCaller, slot_values: Map<String, Value>) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::create_task` |
 | `runtime_gate(&self, request: &CreateTask, caller: &TaskCaller) -> StoreResult<()>` | `src/runtime/task_sessions.py` create-task runtime gate |
 | `set_node_backend_locked(&self, guard: &ControlGuard, session_id: &str, backend: &str) -> StoreResult<()>` | `src/runtime/task_sessions.py::set_node_backend` |
 | `adopt_metadata_slot_locked(&self, guard: &ControlGuard, session_id: &str, old: &SessionMetadata, owner: &str, fields: Option<&[&str]>) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::adopt_metadata_slot` |
-| `record_native_anchor(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>) -> StoreResult<()>` | `src/runtime/task_sessions.py::record_native_anchor` |
-| `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<()>` | `src/runtime/task_sessions.py::archive_unsuccessful_worker` |
+| `record_native_anchor(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>) -> StoreResult<()>`; `record_native_anchor_with_reset(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>, reset_anchor: bool) -> StoreResult<()>` | `src/runtime/task_sessions.py::record_native_anchor` |
+| `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool>` | `src/runtime/task_sessions.py::archive_unsuccessful_worker` |
 | `ensure_prompt_changed_fact(&self, session_id: &str, meta: &SessionMetadata, scope: PromptScope) -> StoreResult<()>` | `src/runtime/task_sessions.py::_ensure_prompt_changed_fact` |
-| `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<Option<TaskMetadata>>` | `src/runtime/task_sessions.py::load_meta`, `load_task_meta` |
-| `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>>` | `src/runtime/task_sessions.py::task_state`, `facts_of` |
-| `archived_of(&self, session_id: &str) -> StoreResult<bool>`; `check_task_authorization(&self, session_id: &str, actor: &TaskActor) -> StoreResult<()>` | `src/runtime/task_sessions.py::archived_of`, `check_task_authorization` |
+| `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::load_meta`, `load_task_meta` |
+| `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<TaskFacts>` | `src/runtime/task_sessions.py::task_state`, `facts_of` |
+| `archived_of(&self, session_id: &str) -> StoreResult<bool>`; `check_task_authorization(&self, session_id: &str) -> StoreResult<String>` | `src/runtime/task_sessions.py::archived_of`, `check_task_authorization` |
 | `ancestor_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`; `descendant_ids(&self, session_id: &str) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::ancestor_ids`, `descendant_ids` |
 | `resolve_successor_chain(&self, session_id: &str) -> StoreResult<Vec<SessionMetadata>>`; `deliver_to_successor(&self, session_id: &str, event: ChatEvent) -> StoreResult<Option<String>>` | `src/runtime/session_successor.py::resolve_successor_chain`, `deliver_to_successor` |
+| `invalidate_tree_index(&self)`; `require_open_ancestry(&self, session_id: &str) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::invalidate_tree_index`, `_require_open_ancestry` |
+| `child_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`; `derived_archived_ids(&self) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::_children_of`, `derived_archived_ids` |
 | `task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity>` | `src/runtime/task_sessions.py::task_tree_activity` |
-| `invalidate_tree_index(&self)`; `require_open_ancestry(&self, session_id: &str) -> StoreResult<()>` | `src/runtime/task_sessions.py::invalidate_tree_index`, `_require_open_ancestry` |
+| `store_prompt_body(&self, body: &str) -> StoreResult<String>`; `prompt_bodies_dir(&self) -> PathBuf` | `src/runtime/task_sessions.py::prompt_bodies_dir`, `_apply_prompt_change` |
+| `rebind_elone_bindings_locked(&self, guard: &ControlGuard, source_session_id: &str, new_session_id: &str) -> StoreResult<bool>` | `src/runtime/task_sessions.py::_rebind_scheduled_tasks` |
 
-The task-tree index helpers (`_get_index`, `_index_meta`, `_ancestors`, `_children_of`,
-`_descendants`) and `task_state` share a cached index owned by the task-tree stage. The S1
-`update_slot_fields` entry already requires a guard and performs its own fresh per-session RMW.
+`TaskFacts` is the durable event fold: task state, run outcomes and first finish positions, input boundaries and
+acknowledgements, close facts, delivered child reports, and the event-id index all come from `load_all_facts`.
+`check_task_authorization` returns the nearest user-message node that authorizes delegation; on refusal its
+`StoreError` text matches `takeoff_gate.py`. `archive_unsuccessful_worker` returns whether it appended the archive fact.
+These return shapes follow the Python methods; the earlier planned table used provisional types for those entries.
+
+Tree-node metadata writes and control-fact writes run under the shared control guard. The locked methods verify its
+store identity, and each metadata write re-reads its disk row before mutation. Tree reads use a generation-invalidated,
+two-second index. Prompt bodies are immutable files under `prompt_bodies/<sha256>.md`; prompt-change facts point to
+those hashes. The store calls required sequence archive and binding-mover hooks for archive and elone rebind.
+The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
+launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 
 ## Runtime event bus, message model, and busy state (S4, implemented)
 
@@ -176,7 +188,7 @@ renderers and after-turn work enter through `StoreHooks.runtime_events`; they ar
 
 The feature request's plan files, explain results, voice files, host-auth data, usage ledger, trace
 cache, models, backup, trigger files, worktrees, and transport files remain owned by their feature or
-runtime components. `charliebot-store` supplies metadata and chat-event access in S1 and the event,
+runtime components. `charliebot-store` supplies metadata and chat-event access in S1 through S3 and the event,
 message, projection, and busy-state model in S4. Usage storage's raw metadata scan is read-only and is
 exposed as `raw_metadata_scan`.
 

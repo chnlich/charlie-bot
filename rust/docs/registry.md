@@ -27,6 +27,12 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
 ];
 ```
 
+Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. Its first entry is
+`("runtime.agents", charliebot_agents::register_runtime)`. It installs `agent_environment` and then
+`session_cgroups` as pre-recovery steps. This order matches `server.py:262-273`: the environment snapshot is
+available before recovery, and cgroup startup logging and stale sweeping happen before recovery and early services.
+No Python package owns these steps, so they do not appear in `PACKAGES`.
+
 A package the port has not built calls a stub, and the entry carries a `// stub: <package>` marker. A stub that
 carries Python's `register` data makes those registrations (its config section, its metadata slots, its backend
 types). A stub with no data is `stub`, which registers nothing. `packages::registry()` calls `register_package` for

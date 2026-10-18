@@ -5,18 +5,11 @@
 use std::sync::Arc;
 
 use anyhow::bail;
-use charliebot_core::config::{BackendOption, CharlieBotConfig, ConfigSection};
-use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, Launch, LaunchArgs,
-  LaunchContext, LaunchRefused, ResumeStyle,
+  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
 };
 use charliebot_registry::{Registry, RegistryError};
-use charliebot_store::metadata::SessionMetadata;
-use futures_util::future::BoxFuture;
-use serde_json::Value;
-
-use super::raw_section;
 
 /// The traits of a type with no family, no manual compaction and no compact hint.
 const fn plain(resume: ResumeStyle, restart_reattach: bool) -> BackendTraits {
@@ -69,38 +62,6 @@ impl BackendFactory for NotPorted {
   }
 }
 
-/// The lifecycle of the claude backend's account label: the label lives on the session as `claude_account`.
-struct ClaudeAccountLifecycle;
-
-impl BackendLifecycle for ClaudeAccountLifecycle {
-  fn place<'a>(&'a self, _ctx: &'a LaunchContext) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
-    Box::pin(async {
-      Err(LaunchRefused {
-        message: "the claude_code backend is not ported".to_string(),
-        quota_exhausted: false,
-        resets_at: None,
-      })
-    })
-  }
-
-  fn account_source(&self) -> &'static str {
-    "claude_account"
-  }
-
-  fn account_label(&self, meta: &SessionMetadata) -> Option<String> {
-    meta.extra("claude_account").and_then(Value::as_str).map(str::to_string)
-  }
-
-  fn record_account_label(&self, meta: &mut SessionMetadata, label: Option<&str>) -> bool {
-    let value = label.map_or(Value::Null, |label| Value::String(label.to_string()));
-    if meta.extra("claude_account") == Some(&value) {
-      return false;
-    }
-    meta.set_extra("claude_account", value);
-    true
-  }
-}
-
 pub fn antigravity(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "antigravity", plain(ResumeStyle::NativeId, false), None, false)
 }
@@ -109,34 +70,9 @@ pub fn charlie_code(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "charlie-code", plain(ResumeStyle::NativeId, true), None, false)
 }
 
-/// `src/backends/claude_code`: the translate-fallback type, its `accounts:` section and its session and thread fields.
+/// `src/backends/claude_code`: the registered backend, `accounts:` section and metadata fields.
 pub fn claude_code(registry: &mut Registry) -> Result<(), RegistryError> {
-  let traits = BackendTraits {
-    resume: ResumeStyle::CliFlag,
-    restart_reattach: true,
-    preassigned_session_id: true,
-    family_prefix: None,
-    manual_compact: true,
-    compact_hint: None,
-  };
-  register_type(registry, "cc-claude", traits, Some(Arc::new(ClaudeAccountLifecycle)), true)?;
-  registry.config_section(ConfigSection {
-    key: "accounts",
-    legacy_keys: &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")],
-    parse: raw_section,
-  })?;
-  registry.metadata_slot(MetadataSlot {
-    owner: "claude_code",
-    on: MetadataFile::Session,
-    after: Some("cc_session_started_at"),
-    fields: vec![SlotField { name: "claude_account", default: Value::Null }],
-  })?;
-  registry.metadata_slot(MetadataSlot {
-    owner: "claude_code",
-    on: MetadataFile::Thread,
-    after: Some("exit_code"),
-    fields: vec![SlotField { name: "claude_session_id", default: Value::Null }],
-  })
+  charliebot_agents::backends::claude_code::register(registry)
 }
 
 pub fn codex(registry: &mut Registry) -> Result<(), RegistryError> {

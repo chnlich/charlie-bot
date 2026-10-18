@@ -1,4 +1,4 @@
-//! The composition root: the server's package list, in the order of `src/app/registrations.py:16-46`.
+//! The composition root: runtime registrations precede the package list from `src/app/registrations.py:16-46`.
 //!
 //! Each entry names a Python package and the `register` function that makes the package's contributions. A package
 //! the port has not built calls a stub. A stub that carries the Python `register`'s data (its config section, its
@@ -8,10 +8,10 @@
 mod backends;
 mod features;
 
-use std::sync::Arc;
-
-use charliebot_core::config::SectionValue;
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
+
+/// Runtime registrations run before the Python package list, matching the server's pre-recovery ordering.
+pub const RUNTIME: &[(&str, RegisterFn)] = &[("runtime.agents", charliebot_agents::register_runtime)];
 
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
@@ -49,6 +49,9 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
 /// The registry of every listed package, registered in list order. A failing registration fails the server's startup.
 pub fn registry() -> Result<Registry, RegistryError> {
   let mut registry = Registry::new();
+  for &(package, register) in RUNTIME {
+    registry.register_package(package, register)?;
+  }
   for &(package, register) in PACKAGES {
     registry.register_package(package, register)?;
   }
@@ -58,11 +61,6 @@ pub fn registry() -> Result<Registry, RegistryError> {
 /// The `register` of a stub that makes no registration.
 fn stub(_registry: &mut Registry) -> Result<(), RegistryError> {
   Ok(())
-}
-
-/// A config section kept as its YAML value until the owning package's port types it.
-fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
-  Ok(Arc::new(value.clone()))
 }
 
 #[cfg(test)]

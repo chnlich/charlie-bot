@@ -19,13 +19,13 @@ use crate::timefmt;
 /// Install the JSON line layer as the process's global subscriber: CharlieBot's own events from INFO,
 /// library events (axum, hyper, tower) from WARN.
 pub fn init() {
-  let filter = Targets::new()
-    .with_target("charliebot_core", Level::INFO)
-    .with_target("charliebot_agents", Level::INFO)
-    .with_target("charliebot_server", Level::INFO)
-    .with_default(Level::WARN);
+  let filter = targets_filter();
   let subscriber = Registry::default().with(JsonLines.with_filter(filter));
   tracing::subscriber::set_global_default(subscriber).expect("logging initializes once, before any event");
+}
+
+fn targets_filter() -> Targets {
+  Targets::new().with_target("charliebot", Level::INFO).with_default(Level::WARN)
 }
 
 /// Writes each event as one flushed JSON line on stdout.
@@ -103,5 +103,39 @@ impl Visit for FieldMap {
 
   fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
     self.put(field, Value::from(format!("{value:?}")));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::{Arc, Mutex};
+
+  use tracing::{Event, Subscriber};
+  use tracing_subscriber::layer::{Context, SubscriberExt};
+  use tracing_subscriber::{Layer, Registry};
+
+  use super::targets_filter;
+
+  struct Capture(Arc<Mutex<Vec<(String, String)>>>);
+
+  impl<S: Subscriber> Layer<S> for Capture {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+      self.0.lock().unwrap().push((event.metadata().target().to_string(), event.metadata().level().to_string()));
+    }
+  }
+
+  #[test]
+  fn target_filter_covers_charliebot_prefix_and_keeps_third_party_at_warn() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = Registry::default().with(Capture(Arc::clone(&events)).with_filter(targets_filter()));
+    tracing::subscriber::with_default(subscriber, || {
+      tracing::info!(target: "charliebot_tasks", "agent event");
+      tracing::info!(target: "third_party", "filtered library event");
+      tracing::warn!(target: "third_party", "visible library warning");
+    });
+    assert_eq!(
+      *events.lock().unwrap(),
+      [("charliebot_tasks".to_string(), "INFO".to_string()), ("third_party".to_string(), "WARN".to_string()),]
+    );
   }
 }

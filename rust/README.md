@@ -27,6 +27,8 @@ CHARLIEBOT_HOME=/tmp/charliebot-demo/home \
   (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The Python server
   derives the same root from its own location. The binary exits 1 when the variable is unset or the
   directory holds no `web/templates`.
+- `CHARLIEBOT_VENV_BIN` (required) names the server virtualenv's `bin` directory. The server exits 1
+  and names `CHARLIEBOT_VENV_BIN` when it is unset or empty.
 - `CHARLIEBOT_HOME` selects the profile home exactly as `src/infra/home.py` does: unset or blank is
   `~/.charliebot`, otherwise an absolute or `~` path.
 - `config.yaml` in the home sets `server.host` and `server.port`. `credentials.yaml` sets
@@ -47,9 +49,9 @@ with `method`, `path`, `status`, `duration_ms` and `client`. A failed request ad
 
 ```sh
 cd rust
-cargo build --release && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check
+/home/chaoli/scripts/20261018_rustport/cargo-slot.sh build --release && /home/chaoli/scripts/20261018_rustport/cargo-slot.sh test && /home/chaoli/scripts/20261018_rustport/cargo-slot.sh clippy --all-targets -- -D warnings && /home/chaoli/scripts/20261018_rustport/cargo-slot.sh fmt --check
 cd ..
-uv run python rust/scripts/compare_live.py   # Python and Rust side by side on copies of one temp home
+uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton
 uv run python rust/scripts/fence_interop.py  # the fence excludes in both directions
 uv run python rust/scripts/gen_compat_fixtures.py  # rewrites rust/fixtures/python/ from the Python baseline
 ```
@@ -57,10 +59,9 @@ uv run python rust/scripts/gen_compat_fixtures.py  # rewrites rust/fixtures/pyth
 The compat and ssh tests compare with the committed `rust/fixtures/python/` files. After the Python code
 they mirror changes, regenerate the fixtures and commit them with that change.
 
-`compare_live.py` starts both servers on a fresh home under `/tmp`, with ports in 18600-18699. It
-replaces the Python server's startup cgroup sweep with a no-op, because the sweep removes empty
-session cgroups host-wide. It compares status, headers and decoded bodies for each check, then the
-`http_request` log events. Both scripts exit 1 on any difference.
+The skeleton parity check runs both servers through `rust/parity/` with synthetic homes, temporary
+ports and a Landlock write fence. Run it with
+`uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton`.
 
 ## Layout
 
@@ -70,7 +71,7 @@ rust/
   PORT_BASELINE                   the Python commit the port reproduces
   docs/PORT_STATUS.md             every Python route: method, path, stage, ported or todo
   docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
-  scripts/compare_live.py         live response and log comparison against server.py
+  parity/parity.py                skeleton check: `uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton`
   scripts/fence_interop.py        cross-language fence exclusion check
   scripts/gen_mimetypes.py        regenerates mimetypes_table.rs from CPython's mimetypes
   scripts/gen_compat_fixtures.py  writes fixtures/python/ from the Python baseline

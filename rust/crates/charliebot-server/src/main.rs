@@ -205,6 +205,7 @@ struct StateParts {
 
 /// The repository root and the home's loaded files; any error names the input it concerns.
 fn load_inputs(registry: &Arc<Registry>) -> Result<(PathBuf, StateParts), String> {
+  charliebot_agents::agent_environment::require_venv_bin().map_err(|error| error.to_string())?;
   let repo_root = match std::env::var_os(REPO_ROOT_ENV) {
     Some(value) if !value.is_empty() => PathBuf::from(value),
     _ => {

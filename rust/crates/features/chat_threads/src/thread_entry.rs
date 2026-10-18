@@ -12,6 +12,12 @@ use charliebot_registry::turn::{PromptSource, RuleSegment};
 const SCOPE_BASE: &str = "base";
 /// The delivery of a full text segment (`task_prompts.DELIVERY_FULL`).
 const DELIVERY_FULL: &str = "full";
+/// The page-delivery sentence every platform's contract line carries: the reply path posts the text as written and
+/// refuses a file-server link (`LINKED_PAGES_LINE`).
+pub const LINKED_PAGES_LINE: &str = concat!(
+  "Linked pages: publish each page with `charliebot publish <path>` and write the URL it prints into the reply; ",
+  "a CharlieBot file-server link refuses the reply."
+);
 /// The red-line doc every platform's contract carries.
 const REDLINE_DOC: &str = "thread_reply_redline.md";
 /// The reply-format doc every platform's contract carries.

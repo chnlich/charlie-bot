@@ -191,6 +191,7 @@ implemented.
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
+| registration | turn contribution `slack`: instruction segments | features/slack | ported | Adds the thread reply contract to a manager run of a Slack thread session. The round-end audit and the rest of `thread_entry.py` are not ported yet. |
 
 ## State files
 

@@ -1219,6 +1219,28 @@ mod tests {
   }
 
   #[test]
+  fn a_system_event_without_a_message_leaves_the_draft_open() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    aggregator.feed(&assistant_text_event("draft")).unwrap();
+    let deltas = aggregator.feed(&json!({"type": "system", "subtype": "status"})).unwrap();
+    assert!(deltas.is_empty());
+    assert_eq!(aggregator.pending_draft_message().unwrap()["content"], "draft");
+  }
+
+  #[test]
+  fn a_feature_renderer_that_renders_nothing_still_commits_the_draft() {
+    let renderers: HashMap<String, Arc<dyn EventRenderer>> =
+      HashMap::from([("quiet_event".to_string(), Arc::new(|_: &Value| Ok(None)) as Arc<dyn EventRenderer>)]);
+    let mut aggregator = MessageAggregator::with_renderers(0, true, renderers);
+    aggregator.feed(&assistant_text_event("draft")).unwrap();
+    let deltas = aggregator.feed(&json!({"type": "quiet_event"})).unwrap();
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0]["type"], "message");
+    assert_eq!(deltas[0]["message"]["content"], "draft");
+    assert!(aggregator.pending_draft_message().is_none());
+  }
+
+  #[test]
   fn task_reopened_without_a_reason_drops_the_trailing_space() {
     let deltas = MessageAggregator::new(0, false).feed(&json!({"type": "task_reopened"})).unwrap();
     assert_eq!(deltas[0]["message"]["content"], "Task reopened:");

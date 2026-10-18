@@ -2,17 +2,17 @@
 
 Each server owns one temporary tree. The tree is the server's ``HOME``; ``home/`` inside it is its
 ``CHARLIEBOT_HOME`` and ``tmp/`` its ``TMPDIR``. A server runs with a sanitized ``PATH`` (the tree's
-``fake-bin`` plus ``/usr/bin:/bin``) whose agent CLI names are stand-ins that print one line and exit 1, and with
-every proxy variable pointed at a closed loopback port, so no request leaves the host. Every process under test
-(the fixture generator and each server) runs inside sandbox.py's Landlock ruleset, which refuses a write outside
-its own tree, and under ``strace``; guard.py reads the trace to list each file a process changed, or tried to
-change, outside the two trees.
+``fake-bin`` plus ``/usr/bin:/bin``) whose agent CLI names are scripted fakes, and with every proxy variable
+pointed at a closed loopback port, so no request leaves the host. Every process under test (the fixture generator
+and each server) runs inside sandbox.py's Landlock ruleset and under ``strace``; guard.py reads the trace for
+writes outside each tree.
 """
 
 import dataclasses
 import os
 import pathlib
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -28,10 +28,11 @@ PORT_RANGE = range(18600, 18700)
 HOST = "127.0.0.1"
 # The agent CLI names a server could launch. Each stand-in prints one line and exits 1.
 STAND_IN_NAMES = ("claude", "codex", "opencode", "charlie-code", "gemini", "agy")
+FAKE_AGENT = pathlib.Path(__file__).resolve().with_name("fake_agent.py")
 # A loopback port with no listener: every proxied request a server makes is refused at once.
 CLOSED_PROXY = "http://127.0.0.1:9"
 # The tree entries the harness itself writes; the file comparison skips them.
-HARNESS_ENTRIES = ("fake-bin", "fixture-manifest.json", "logs")
+HARNESS_ENTRIES = ("fake-agent", "fake-bin", "fixture-manifest.json", "logs")
 # Syscalls that change a file or directory. openat/open/creat count only with a write flag (guard.py checks).
 TRACED_SYSCALLS = (
     "open", "openat", "openat2", "creat", "mkdir", "mkdirat", "mknod", "mknodat", "rename", "renameat", "renameat2",
@@ -41,6 +42,7 @@ TRACED_SYSCALLS = (
     "clone3", "fork", "vfork")
 READY_TIMEOUT_SECONDS = 60.0
 STOP_TIMEOUT_SECONDS = 20.0
+POLL_INTERVAL_SECONDS = 0.02
 
 
 @dataclasses.dataclass(frozen=True)
@@ -74,12 +76,14 @@ class Tree:
 def make_tree(label: str, root: pathlib.Path) -> Tree:
   """Lay out one empty tree with its fake-bin stand-ins."""
   tree = Tree(label, root)
-  for path in (tree.home, tree.tmp, tree.fake_bin, tree.workspace, tree.worktrees, tree.root / "logs"):
+  for path in (tree.home, tree.tmp, tree.fake_bin, tree.workspace, tree.worktrees, tree.root / "logs",
+               tree.root / "fake-agent"):
     path.mkdir(parents=True)
   for name in STAND_IN_NAMES:
-    stand_in = tree.fake_bin / name
-    stand_in.write_text(f'#!/bin/sh\necho "{name}: parity stand-in, not an agent CLI" >&2\nexit 1\n', encoding="utf-8")
-    stand_in.chmod(0o755)
+    wrapper = tree.fake_bin / name
+    command = f"exec /usr/bin/python3 -I {shlex.quote(str(FAKE_AGENT))} {shlex.quote(name)} \"$@\""
+    wrapper.write_text("\n".join(("#!/bin/sh", command)) + "\n", encoding="utf-8")
+    wrapper.chmod(0o755)
   return tree
 
 
@@ -129,6 +133,7 @@ def server_env(tree: Tree, repo_root: pathlib.Path) -> dict[str, str]:
       "CHARLIEBOT_HOME": str(tree.home),
       "TMPDIR": str(tree.tmp),
       "PATH": f"{tree.fake_bin}:/usr/bin:/bin",
+      "CHARLIEBOT_VENV_BIN": str(repo_root / ".venv" / "bin"),
       "CHARLIEBOT_REPO_ROOT": str(repo_root),
       "LANG": "C.UTF-8",
       "LC_ALL": "C.UTF-8",
@@ -196,15 +201,16 @@ class ServerProcess:
   """One traced server process bound to one tree and port."""
 
   def __init__(
-      self, label: str, argv: list[str], tree: Tree, port: int, repo_root: pathlib.Path) -> None:
+      self, label: str, argv: list[str], tree: Tree, port: int, repo_root: pathlib.Path, process_number: int) -> None:
     self.label = label
     self.argv = argv
     self.tree = tree
     self.port = port
     self.repo_root = repo_root
-    self.trace_log = tree.root / "logs" / f"{tree.label}.server.strace"
-    self.log_path = tree.root / "logs" / f"{tree.label}.server.log"
+    self.trace_log = tree.root / "logs" / f"{tree.label}.server-{process_number}.strace"
+    self.log_path = tree.root / "logs" / f"{tree.label}.server-{process_number}.log"
     self._proc: subprocess.Popen | None = None
+    self._server_identity: tuple[int, str] | None = None
 
   @property
   def base_url(self) -> str:
@@ -236,6 +242,13 @@ class ServerProcess:
       try:
         with urllib.request.urlopen(url, timeout=2) as response:
           if response.status == 200:
+            server_pid = self._server_pid()
+            if server_pid is None:
+              raise RuntimeError(f"{self.label} server answered but its process identity is absent")
+            identity = process_identity(server_pid)
+            if identity is None:
+              raise RuntimeError(f"{self.label} server answered but pid {server_pid} exited")
+            self._server_identity = (server_pid, identity[1])
             return
       except (urllib.error.URLError, ConnectionError, TimeoutError):
         pass
@@ -253,22 +266,56 @@ class ServerProcess:
       return None
     return int(pids[0]) if pids else None
 
-  def stop(self) -> None:
-    """SIGTERM the server, wait for strace to exit with it, and SIGKILL the process group past the timeout."""
+  def stop_server(self) -> None:
+    """SIGTERM the server and wait for its pid to exit, without waiting for traced children."""
+    if self._proc is None or self._server_identity is None:
+      return
+    server_pid, pid_start = self._server_identity
+    identity = process_identity(server_pid)
+    if identity is not None and identity[1] == pid_start and identity[0] != "Z":
+      try:
+        os.kill(server_pid, signal.SIGTERM)
+      except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+      identity = process_identity(server_pid)
+      if identity is None or identity[0] == "Z" or identity[1] != pid_start:
+        return
+      time.sleep(POLL_INTERVAL_SECONDS)
+    if self._proc.poll() is None:
+      os.killpg(self._proc.pid, signal.SIGKILL)
+      self._proc.wait()
+    raise RuntimeError(f"{self.label} server ignored SIGTERM for {STOP_TIMEOUT_SECONDS}s and was killed")
+
+  def wait_trace(self) -> None:
+    """Wait for this server's strace process after its traced children have exited."""
     if self._proc is None or self._proc.poll() is not None:
       return
-    server_pid = self._server_pid()
-    if server_pid is not None:
-      os.kill(server_pid, signal.SIGTERM)
     try:
       self._proc.wait(timeout=STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
       os.killpg(self._proc.pid, signal.SIGKILL)
       self._proc.wait()
-      raise RuntimeError(f"{self.label} server ignored SIGTERM for {STOP_TIMEOUT_SECONDS}s and was killed") from None
+      raise RuntimeError(f"{self.label} strace did not exit within {STOP_TIMEOUT_SECONDS}s and was killed") from None
+
+  def stop(self) -> None:
+    """Stop the server and wait for strace after the server's children exit."""
+    self.stop_server()
+    self.wait_trace()
 
   def kill(self) -> None:
     """Kill the whole process group (the cleanup path after a harness error)."""
     if self._proc is not None and self._proc.poll() is None:
       os.killpg(self._proc.pid, signal.SIGKILL)
       self._proc.wait()
+
+
+def process_identity(pid: int) -> tuple[str, str] | None:
+  """Read process state and field 22 of ``/proc/<pid>/stat``; return None after the process exits."""
+  try:
+    stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+  except FileNotFoundError:
+    return None
+  fields = stat.rsplit(")", 1)[1].split()
+  return fields[0], fields[19]

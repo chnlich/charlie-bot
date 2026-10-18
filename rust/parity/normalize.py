@@ -1,12 +1,14 @@
 """Normalization rules: every value two correct servers cannot produce identically, and nothing else.
 
-Each rule names the field it masks and the reason the value cannot match. A rule replaces the value with a
-placeholder and never removes the field, so a field one server omits still shows as a difference. Three kinds
+Each field rule names the field it masks and the reason the value cannot match. A rule replaces the value with a
+placeholder and never removes the field, so a field one server omits still shows as a difference. Five kinds
 of rule live here:
 
 - the tree path rule rewrites each server's temporary tree root inside every string, header value and file
   path, because each server owns its own tree (the harness gives both roots one length, so sizes, offsets
   and the ETags and revisions derived from them still compare exactly);
+- the minted UUID rule leaves fixture UUIDs intact and maps each other UUID by first appearance in sorted paths
+  and document order, because requests and runs create different random ids in each tree;
 - field rules mask one JSON field of one route's response body or of one home file;
 - text rules mask one pattern in one route's non-JSON body (a page that embeds JSON in its HTML);
 - header rules name the response headers the comparison leaves out.
@@ -17,10 +19,14 @@ id, a pid, a duration, a per-server path). A field that differs because of behav
 
 import dataclasses
 import fnmatch
+import json
 import re
 from typing import Any
 
+import yaml
+
 TREE_PLACEHOLDER = "<tree>"
+_UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -67,6 +73,13 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         field="started_at",
         when=(),
         reason="wall-clock time: the moment each server process started",
+    ),
+    FieldRule(
+        name="trigger-fire-time",
+        target="POST /api/internal/schedule-trigger",
+        field="fire_at",
+        when=(),
+        reason="wall-clock time: the trigger's due time is computed from each request's clock",
     ),
     *(
         FieldRule(
@@ -128,6 +141,98 @@ FILE_RULES: tuple[FieldRule, ...] = (
         when=(),
         reason="the holder's own command line: each implementation is a different executable",
     ),
+    FieldRule(
+        name="run-pid",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="pid",
+        when=(),
+        reason="pid: each server launches its own agent process",
+    ),
+    FieldRule(
+        name="run-pid-start",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="pid_start",
+        when=(),
+        reason="pid: the agent's /proc start time in clock ticks differs between processes",
+    ),
+    FieldRule(
+        name="run-start-time",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="started_at",
+        when=(),
+        reason="wall-clock time: each server records its agent launch on its own clock",
+    ),
+    FieldRule(
+        name="run-end-time",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="ended_at",
+        when=(),
+        reason="wall-clock time: each server records its agent completion on its own clock",
+    ),
+    FieldRule(
+        name="chat-event-time",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="timestamp",
+        when=(),
+        reason="wall-clock time: each process stamps its own chat and run facts",
+    ),
+    FieldRule(
+        name="master-done-total-time",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="total_ms",
+        when=(("type", "master_done"),),
+        reason="duration: server scheduling and trace timing differ between independent runs",
+    ),
+    FieldRule(
+        name="master-done-first-event-time",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="spawn_to_first_event_ms",
+        when=(("type", "master_done"),),
+        reason="duration: process startup and event polling differ between independent runs",
+    ),
+    FieldRule(
+        name="master-done-first-assistant-time",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="first_assistant_ms",
+        when=(("type", "master_done"),),
+        reason="duration: process startup and event polling differ between independent runs",
+    ),
+    FieldRule(
+        name="session-updated-time",
+        target="home/sessions/*/metadata.json",
+        field="updated_at",
+        when=(),
+        reason="wall-clock time: the session records each server's latest event write",
+    ),
+    FieldRule(
+        name="session-claude-start-time",
+        target="home/sessions/*/metadata.json",
+        field="cc_session_started_at",
+        when=(),
+        reason="wall-clock time: the session records when each server created its Claude conversation",
+    ),
+    *(
+        FieldRule(
+            name=f"trigger-{field.replace('_', '-')}",
+            target="home/sessions/*/triggers/*.json",
+            field=field,
+            when=(),
+            reason=f"wall-clock time: the trigger store records {field} on each server's clock",
+        ) for field in ("created_at", "fire_at", "fired_at")),
+    FieldRule(
+        name="fake-agent-pid",
+        target="fake-agent/spawns.jsonl",
+        field="pid",
+        when=(),
+        reason="pid: each harness tree starts its fake agent as a different process",
+    ),
+    FieldRule(
+        name="fake-agent-pid-start",
+        target="fake-agent/spawns.jsonl",
+        field="pid_start",
+        when=(),
+        reason="pid: each fake agent has a different /proc start time in clock ticks",
+    ),
 )
 
 # Response headers outside the comparison, each with the reason it cannot match or carries nothing a client
@@ -144,16 +249,68 @@ IGNORED_HEADERS: dict[str, str] = {
 }
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class Context:
   """One server's per-run values the tree path rule rewrites."""
 
   tree_root: str
+  fixture_uuids: frozenset[str] = frozenset()
+  minted_uuids: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+def fixture_uuids(files: list[tuple[str, bytes]]) -> frozenset[str]:
+  """UUID strings already present in the fixture tree's paths and file contents."""
+  found: set[str] = set()
+  for path, data in files:
+    found.update(_UUID.findall(path))
+    found.update(_UUID.findall(data.decode("utf-8", errors="surrogateescape")))
+  return frozenset(found)
+
+
+def _observe(value: Any, ctx: Context) -> None:
+  if isinstance(value, str):
+    for match in _UUID.finditer(value):
+      identifier = match[0]
+      if identifier not in ctx.fixture_uuids:
+        ctx.minted_uuids.setdefault(identifier, f"<minted-{len(ctx.minted_uuids) + 1}>")
+  elif isinstance(value, list):
+    for item in value:
+      _observe(item, ctx)
+  elif isinstance(value, dict):
+    for key, item in value.items():
+      _observe(key, ctx)
+      _observe(item, ctx)
+
+
+def prepare_snapshot(entries: list[tuple[str, str, bytes]], ctx: Context) -> None:
+  """Assign minted UUID names by sorted tree path and each JSON document's stored order."""
+  for path, kind, data in sorted(entries, key=lambda entry: entry[0]):
+    _observe(path, ctx)
+    if kind != "file":
+      continue
+    if path.endswith(".json"):
+      _observe(json.loads(data), ctx)
+    elif path.endswith(".jsonl"):
+      for line in data.splitlines():
+        if line.strip():
+          _observe(json.loads(line), ctx)
+    elif path.endswith((".yaml", ".yml")):
+      _observe(yaml.safe_load(data), ctx)
+    else:
+      _observe(data.decode("utf-8", errors="surrogateescape"), ctx)
 
 
 def normalize_text(text: str, ctx: Context) -> str:
-  """The tree path rule: each server's tree root reads as the same placeholder."""
-  return text.replace(ctx.tree_root, TREE_PLACEHOLDER)
+  """The tree path and minted UUID rules: each server-specific value reads as a shared placeholder."""
+  normalized = text.replace(ctx.tree_root, TREE_PLACEHOLDER)
+
+  def replace_uuid(match: re.Match[str]) -> str:
+    identifier = match[0]
+    if identifier in ctx.fixture_uuids:
+      return identifier
+    return ctx.minted_uuids.setdefault(identifier, f"<minted-{len(ctx.minted_uuids) + 1}>")
+
+  return _UUID.sub(replace_uuid, normalized)
 
 
 def _normalize_strings(value: Any, ctx: Context) -> Any:
@@ -205,7 +362,7 @@ def normalize_json(value: Any, rules: tuple[FieldRule, ...], ctx: Context) -> An
 
 def normalize_body_bytes(body: bytes, route: str, ctx: Context) -> bytes:
   """A non-JSON body: the tree path rule, then every text rule of *route*."""
-  body = body.replace(ctx.tree_root.encode(), TREE_PLACEHOLDER.encode())
+  body = normalize_text(body.decode("utf-8", errors="surrogateescape"), ctx).encode("utf-8", errors="surrogateescape")
   for rule in RESPONSE_TEXT_RULES:
     if rule.target == route:
       placeholder = f'"{rule.placeholder}"'.encode()

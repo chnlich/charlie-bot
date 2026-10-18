@@ -1,0 +1,48 @@
+# The trigger fires through the server's delay task and dispatches one manager run.
+stage: triggers-cron-improve
+name: wait-trigger-delay
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-trigger-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The delayed trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 8, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 1
+steps:
+  - name: schedule a two-second trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Continue the synthetic Atlas plan after the delay.
+    capture: {trigger_id: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait until the trigger file is fired
+    timeout_seconds: 20
+    until:
+      file_field:
+        path: sessions/${sessions.atlas}/triggers/${capture.trigger_id}.json
+        field: status
+        equals: fired
+  - kind: wait
+    name: wait for the fired turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.trigger_id}"]}

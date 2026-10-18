@@ -4,6 +4,7 @@ HTTP and WebSocket steps drive both servers. Fake steps inject provider events, 
 steps coordinate the scripted agent. References name fixture values, side-local tree paths and prior captures.
 """
 
+import contextlib
 import dataclasses
 import importlib
 import math
@@ -46,6 +47,10 @@ _HANDOVER_STEP_KEYS = {"kind", "name", "agent_after_stop"}
 
 class ScenarioError(ValueError):
   """A scenario file that does not follow the format."""
+
+
+class UnresolvedReferenceError(ScenarioError):
+  """A manifest or capture value this run does not hold. It is a property of the step that names it, not of the file."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -603,7 +608,7 @@ def _lookup(ref: str, manifest: dict, captures: dict[str, Any], tree_root: str, 
   value: Any = captures if parts[0] == "capture" else manifest
   for part in parts[1:] if parts[0] == "capture" else parts:
     if not isinstance(value, dict) or part not in value:
-      raise ScenarioError(f"unresolved reference ${{{ref}}}")
+      raise UnresolvedReferenceError(f"unresolved reference ${{{ref}}}")
     value = value[part]
   if isinstance(value, (dict, list)) or value is None:
     raise ScenarioError(f"reference ${{{ref}}} names a {type(value).__name__}, not a scalar")
@@ -621,7 +626,11 @@ def _strings(value: Any) -> list[str]:
 
 
 def check_references(scenario: Scenario, manifest: dict) -> None:
-  """Every manifest reference resolves, and every capture reference names a capture of an earlier step."""
+  """Every capture reference names a capture of an earlier step, and every reference is well formed.
+
+  A manifest reference the manifest lacks is not an error of the file: unresolved_reference reports it on the step
+  that holds it, when that step runs.
+  """
   captured: set[str] = set()
   for step in scenario.steps:
     texts = _strings(
@@ -638,7 +647,8 @@ def check_references(scenario: Scenario, manifest: dict) -> None:
         if ref not in ("tree.root", "tree.home"):
           raise ScenarioError(f"{scenario.path.name} step {step.name!r}: unknown tree reference ${{{ref}}}")
       else:
-        _lookup(ref, manifest, {}, "", "")
+        with contextlib.suppress(UnresolvedReferenceError):  # the step that holds the reference fails when it runs
+          _lookup(ref, manifest, {}, "", "")
     captured.update(step.capture)
 
 
@@ -651,6 +661,20 @@ def substitute(value: Any, manifest: dict, captures: dict[str, Any], tree_root: 
   if isinstance(value, dict):
     return {key: substitute(item, manifest, captures, tree_root, tree_home) for key, item in value.items()}
   return value
+
+
+def unresolved_reference(
+    step: Step, manifest: dict, captures: dict[str, Any], tree_root: str, tree_home: str) -> str | None:
+  """The message of the first reference in *step*'s inputs that does not resolve here, or None when all of them do.
+
+  The inputs are the values a step's runner substitutes. Any other reference error still raises.
+  """
+  inputs = [step.path, step.query, step.headers, step.json_body, list(step.send), step.until, step.payload]
+  try:
+    substitute(inputs, manifest, captures, tree_root, tree_home)
+  except UnresolvedReferenceError as error:
+    return str(error)
+  return None
 
 
 def extract(document: Any, field: str) -> Any:

@@ -605,7 +605,7 @@ def test_invalid_scenario_overlay_keys_name_the_file(
     _load(tmp_path, [{"name": "http", "method": "GET", "path": "/api/auth/status"}], **fields)
 
 
-def test_websocket_send_references_are_checked(tmp_path: pathlib.Path) -> None:
+def test_websocket_send_reference_fails_only_its_step(tmp_path: pathlib.Path) -> None:
   scenario = _load(
       tmp_path, [
           {
@@ -623,5 +623,40 @@ def test_websocket_send_references_are_checked(tmp_path: pathlib.Path) -> None:
               "timeout_seconds": 1,
           }
       ])
-  with pytest.raises(scenario_file.ScenarioError, match=re.escape("unresolved reference ${sessions.missing}")):
-    scenario_file.check_references(scenario, {"sessions": {"atlas": "synthetic-session"}})
+  manifest = {"sessions": {"atlas": "synthetic-session"}}
+  scenario_file.check_references(scenario, manifest)
+  message = scenario_file.unresolved_reference(scenario.steps[0], manifest, {}, "/tree", "/tree/home")
+  assert message == "unresolved reference ${sessions.missing}"
+
+
+def test_unresolved_capture_fails_only_its_step(tmp_path: pathlib.Path) -> None:
+  # The send response lacked input_event_id, so the capture is absent on both sides when the wait step runs.
+  until = {
+      "event":
+          {
+              "session": "${sessions.atlas}",
+              "type": "run_finished",
+              "fields": {
+                  "input_event_ids": ["${capture.input_id}"]
+              },
+          }
+  }
+  send = {
+      "name": "send",
+      "method": "POST",
+      "path": "/api/chat/atlas/message",
+      "capture": {
+          "input_id": "input_event_id"
+      }
+  }
+  wait = {"kind": "wait", "name": "wait for the run", "timeout_seconds": 1, "until": until}
+  read = {"name": "read", "method": "GET", "path": "/api/auth/status"}
+  scenario = _load(tmp_path, [send, wait, read])
+  manifest = {"sessions": {"atlas": "synthetic-session"}}
+  scenario_file.check_references(scenario, manifest)
+  messages = [scenario_file.unresolved_reference(step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps]
+  assert messages == [None, "unresolved reference ${capture.input_id}", None]
+  # A reference that names a dict is a malformed file, not an unresolved one: it still stops the run.
+  malformed = _load(tmp_path, [{"name": "read", "method": "GET", "path": "/api/${sessions}"}])
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape("names a dict")):
+    scenario_file.check_references(malformed, manifest)

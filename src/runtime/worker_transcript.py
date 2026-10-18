@@ -162,7 +162,7 @@ def _delivery_event(task_state: str, facts_events: list[dict], run_records: list
     if kind == ET.TASK_CLOSED:
       summary = str(event.get("summary") or "")
       close_refs = [str(ref) for ref in (event.get("result_refs") or [])]
-      close_at = str(event.get("timestamp") or "")
+      close_at = str(event["timestamp"])
     elif kind == ET.RUN_FINISHED:
       outcomes[str(event.get("run_id"))] = str(event.get("outcome") or "")
   delivered = next((run for run in reversed(run_records) if outcomes.get(run.id) == "success"), run_records[-1])

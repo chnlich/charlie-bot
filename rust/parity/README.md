@@ -154,9 +154,10 @@ The harness checks for this after every step, before a handover stops a server, 
 Without `fake-agent/script.json`, the fake prints the stand-in line and exits 1. It reads stdin to EOF before
 the first scripted step unless stdin is a TTY. A `flock` on `fake-agent/lock` assigns each start the next script
 entry and appends one record to `fake-agent/spawns.jsonl`; every start writes `exit-<index>` before it exits.
-The record includes argv, cwd, pid and `/proc` start time, stdout target, stdin byte count and digest, nice value,
-session ownership, parent-death signal, selected environment, and decoded run-token claims with signature validity.
-The scenario end checks that no recorded process remains alive.
+The record includes argv, cwd, pid and `/proc` start time, stdout target, stdin byte count and its UTF-8 text, nice
+value, session ownership, parent-death signal, selected environment, and decoded run-token claims with signature
+validity. A stdin that is not UTF-8 raises before the start writes its record, so that start leaves no record and no
+exit marker. The scenario end checks that no recorded process remains alive.
 
 ### The outside-write guard
 

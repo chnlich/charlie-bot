@@ -131,12 +131,12 @@ where
                   }
                 }
               }
+              if let Some(writer) = cursor_writer.as_mut() {
+                writer.write(line_end + 1)?;
+              }
             }
           }
           offset = line_end + 1;
-          if let Some(writer) = cursor_writer.as_mut() {
-            writer.write(offset)?;
-          }
           line_length = 0;
           partial_line.clear();
           partial_has_content = false;
@@ -470,6 +470,31 @@ mod tests {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["type"], "result");
     assert_eq!(read_raw_cursor(&cursor), fs::metadata(raw).unwrap().len());
+  }
+
+  #[tokio::test]
+  async fn malformed_and_oversized_lines_move_only_the_in_memory_offset() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let cursor = root.path().join("agent.raw.cursor");
+    fs::write(&raw, b"not-json\n{\"pad\":\"this line is too large\"}\n").unwrap();
+    let summary = tail_follow_events(
+      &raw,
+      |event| vec![event],
+      |_| async { Ok(()) },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      8,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.final_offset, fs::metadata(&raw).unwrap().len());
+    assert!(!cursor.exists());
   }
 
   #[tokio::test]

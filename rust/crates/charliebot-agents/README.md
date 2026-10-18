@@ -35,6 +35,26 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `spawn::pin_identity_and_on_spawn` | `src/runtime/agent_process/base.py:919` |
 | `spawn::iter_ndjson_events` | `src/runtime/agent_process/base.py:347` |
 | `spawn::STDERR_TAIL_BYTES`, `tee_stream`, and `stream_stderr` | `src/runtime/agent_process/base.py:37`, `:60`, `:1064` |
+| `VENV_BIN_ENV`, `REPO_ROOT_ENV`, `ENTRY_POINT_RELATIVE`, `AgentBaseEnvironment` and its `values` field | `src/runtime/agent_environment.py:28-36`, `server.py:582` |
+| `required_venv_bin`, `require_venv_bin`, `agent_environment`, and `from_process_environment` | `src/runtime/agent_environment.py:36`, `:53`, `server.py:582` |
+| `pre_recovery_step`, `run_session_cgroup_startup`, `session_cgroup_step`, and `register_runtime` | `server.py:262-273`; `src/runtime/agent_environment.py:121-153` |
+| `BuiltBackend` and its `backend` and `launch` fields; `build_backend`, `build_translate_fallback` | `src/runtime/hooks/backend_types.py:33-60` |
+| `backends::claude_code` and `backends::claude_code::register` | `src/backends/claude_code/__init__.py:17-75` |
+| `ClaudeCodeBackend`, `ClaudeCodeBackend::build_command`, and its `AgentBackend` methods | `src/backends/claude_code/claude_code.py:240-292`; `src/runtime/agent_process/base.py:641-770` |
+| `HEADLESS_DISALLOWED_TOOLS`, `DISALLOWED_TOOLS_FLAG`, `SKIP_PERMISSIONS_FLAG`, `INSTRUCTIONS_FILE_NAME`, `INSTRUCTIONS_WRITTEN_EVENT` | `src/backends/claude_code/claude_code.py:24-37`, `:276-292` |
+| `claude_child_env`, `headless_claude_env`, `claude_reading_limits`, `claude_reading_limits_from`, and `out_of_family_served_models` | `src/backends/claude_code/claude_code.py:58-68`, `:103-167`, `:198-225`; `src/backends/claude_code/claude_launch.py:43-53` |
+| `claude_launch::{AUTO_COMPACT_WINDOW_ENV, AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV, SIMPLE_SYSTEM_PROMPT_ENV, AUTO_COMPACT_DEFAULT, COMPACT_OUTPUT_RESERVE, COMPACT_CONTEXT_RESERVE, DISABLE_CONNECTOR_SETTINGS_KEY, FAST_MODE_SETTINGS_KEY, HEADLESS_FORWARDED_ENV, headless_claude_env}` | `src/backends/claude_code/claude_launch.py:9-53` |
+| `claude_lifecycle::EXCLUDE_DYNAMIC_SECTIONS_FLAG`, `ClaudeCliLifecycle`, `ClaudeCodeLifecycle`, `ClaudeCodeLifecycle::new`, and `Default` | `src/backends/claude_code/claude_lifecycle.py:42`, `:75-125`, `:128-155`, `:321-334` |
+| `event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED` | `src/backends/claude_code/event_types.py:1-3` |
+| `ClaudeCodeFactory` and its `BackendFactory::build` implementation | `src/backends/claude_code/factory.py:10-35` |
+| `options::option_model` | `src/backends/claude_code/options.py:8-18` |
+| `login_dirs::{CLAUDE_CONFIG_DIR_ENV, default_claude_dir, claude_config_dir, expanduser}` | `src/backends/claude_code/login_dirs.py:18-39`; `pathlib.Path.expanduser` used in `claude_code.py:256` |
+| `claude_code::one_shot_text` implementation | `src/backends/claude_code/claude_code.py:294-320` |
+| `launch_loop::SESSION_ID_ENV`, `ProcessResult`, `RunProcess`, `run_launches`, `child_env`, and `has_round_notices` | `src/runtime/launch_loop.py:19-65` |
+| `runner::{RAW_LOG_NAME, STDERR_LOG_NAME, DEFAULT_POST_RESULT_TIMEOUT, DEFAULT_CLEANUP_TIMEOUT, OnSpawnFn, EventFn}` | `src/runtime/runs.py:49`, `src/runtime/agent_process/base.py:37`, `:660-661`, `:919`, `:936` |
+| `RunRequest`, its fields, `RunRequest::new`, and `RunRequest::from_features` | `src/runtime/agent_process/base.py:653-708`, `:936-1033` |
+| `RunOutcome` and its fields, including post-result hang diagnostics | `src/runtime/agent_process/base.py:98-120`, `:703`, `:1000-1050`, `:1110` |
+| `AgentRunner`, `AgentRunner::new`, `run`, `terminate`, and `detach` | `src/runtime/agent_process/base.py:936-1050`, `:1180-1205` |
 
 ## Tests
 

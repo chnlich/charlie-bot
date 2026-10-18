@@ -81,6 +81,7 @@ def environment(scratch: pathlib.Path, home: pathlib.Path) -> dict[str, str]:
       "HOME": str(scratch / "fakehome"),
       "CHARLIEBOT_HOME": str(home),
       "CHARLIEBOT_REPO_ROOT": str(REPO_ROOT),
+      "CHARLIEBOT_VENV_BIN": str(REPO_ROOT / ".venv" / "bin"),
       "HTTP_PROXY": "http://127.0.0.1:9",
       "HTTPS_PROXY": "http://127.0.0.1:9",
       "NO_PROXY": "127.0.0.1,localhost",
@@ -127,9 +128,12 @@ def rust_first(scratch: pathlib.Path, failures: list[str]) -> None:
   port = free_port()
   (home / "config.yaml").write_text(CONFIG_YAML.format(port=port), encoding="utf-8")
   env = environment(scratch, home)
+  sandbox = REPO_ROOT / "rust" / "parity" / "sandbox.py"
   log_path = scratch / "rust-first.log"
   with log_path.open("wb") as log:
-    server = subprocess.Popen([str(RUST_BINARY)], cwd=scratch, env=env, stdout=log, stderr=subprocess.STDOUT)
+    server = subprocess.Popen(
+        [sys.executable, str(sandbox), "--allow-write", str(scratch), "--", str(RUST_BINARY)],
+        cwd=scratch, env=env, stdout=log, stderr=subprocess.STDOUT)
   try:
     wait_listening(port, server)
     outcome = try_fence(home, env)
@@ -163,8 +167,10 @@ def python_first(scratch: pathlib.Path, failures: list[str]) -> None:
         raise SystemExit("the Python holder exited before taking the fence")
       line = text.split()
     holder_pid = int(line[1])
-    server = subprocess.run([str(RUST_BINARY)], cwd=scratch, env=env, capture_output=True, text=True,
-                            timeout=TIMEOUT_S)
+    sandbox = REPO_ROOT / "rust" / "parity" / "sandbox.py"
+    server = subprocess.run(
+        [sys.executable, str(sandbox), "--allow-write", str(scratch), "--", str(RUST_BINARY)],
+        cwd=scratch, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
     expect(server.returncode == 3, f"charliebot-server exits 3 while Python holds the fence (got {server.returncode})",
            failures)
     refusals = [json.loads(line) for line in server.stdout.splitlines() if line.startswith("{")]

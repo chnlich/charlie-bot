@@ -46,10 +46,8 @@ the run-context read. On this branch neither has a caller outside `tests/task_pr
 | `prompts::assemble_coherent_snapshot` | `async fn(store: &Store, env: &PromptEnv<'_>, meta: &SessionMetadata, kind: &str, option: &BackendOption) -> anyhow::Result<CoherentSnapshot>`, where `CoherentSnapshot { snapshot, overlay_error, declared }` |
 | `prompts::read_run_context` | `fn(store: &Store, session_id: &str, run_id: &str) -> Result<serde_json::Value, ContextReadError>`, where `ContextReadError { status: u16, detail: String }` carries 404 or 500 |
 
-`PromptEnv { cfg, registry, checkout }` gathers the inputs of one assembly. `checkout` is the `CheckoutRoot` trait,
-the charlie-bot checkout whose `prompts/` the rules read. The Rust config does not carry that root yet. The server reads
-the same path from `CHARLIEBOT_REPO_ROOT`, and this crate does not read the variable itself. `PathBuf` implements the
-trait for tests and for callers that already hold the path.
+`PromptEnv { cfg, registry, checkout }` gathers the inputs of one assembly. `checkout` is `charliebot_core::RepoRoot`,
+the validated checkout root held in typed startup state. Python reads this path from `cfg.charlie_bot_repo`.
 
 | Rust item | Python source |
 | --- | --- |
@@ -61,7 +59,7 @@ trait for tests and for callers that already hold the path.
 | `prompts::HOST_SUPPLEMENT_FILENAME` | `src/infra/config.py:287` (`claude_md_file`) |
 | `prompts::PROMPT_BODIES_DIR` | `src/runtime/task_prompts.py:462` (`charliebot_home / "prompt_bodies"`) |
 | `prompts::TaskPromptError` | `src/runtime/task_prompts.py:99` |
-| `prompts::CheckoutRoot` (new trait) | `src/infra/config.py:291-293` (`charlie_bot_repo`) |
+| `charliebot_core::RepoRoot` | `src/infra/config.py:291-293` (`charlie_bot_repo`) |
 | `prompts::PromptEnv` (new struct) | the `cfg` argument of `src/runtime/task_prompts.py:436` |
 | `prompts::PromptSource`, `prompts::RuleSegment` (re-exported, not redefined) | `src/runtime/task_prompts.py:109`, `:206` |
 | `prompts::PromptBlock` | `src/runtime/task_prompts.py:117` |

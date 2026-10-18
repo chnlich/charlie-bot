@@ -21,8 +21,7 @@ mod run_context;
 mod snapshot;
 mod sources;
 
-use std::path::{Path, PathBuf};
-
+use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::Registry;
 
@@ -88,22 +87,9 @@ impl std::fmt::Display for TaskPromptError {
 
 impl std::error::Error for TaskPromptError {}
 
-/// The charlie-bot checkout whose `prompts/` the managed rules read. Python reads `CharlieBotConfig.charlie_bot_repo`;
-/// the Rust config does not carry the checkout yet, so the caller passes it in through this trait. The server reads
-/// the same path from `CHARLIEBOT_REPO_ROOT`.
-pub trait CheckoutRoot: Sync {
-  fn charlie_bot_repo(&self) -> &Path;
-}
-
-impl CheckoutRoot for PathBuf {
-  fn charlie_bot_repo(&self) -> &Path {
-    self
-  }
-}
-
-/// What one assembly reads: the config for the home, the turn contributions of the registry, and the checkout.
+/// What one assembly reads: the config for the home, the registry contributions, and the validated checkout root.
 pub struct PromptEnv<'a> {
   pub cfg: &'a CharlieBotConfig,
   pub registry: &'a Registry,
-  pub checkout: &'a dyn CheckoutRoot,
+  pub checkout: &'a RepoRoot,
 }

@@ -23,7 +23,6 @@ mod request_path;
 mod routes;
 mod state;
 mod store_setup;
-mod templating;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
@@ -36,6 +35,7 @@ use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::venv::VenvBin;
 use charliebot_core::{config, home, logging, paths, v1_sessions};
 use charliebot_registry::lifespan::Lifespan;
+use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
 use nix::sys::signal::{SigHandler, Signal};
 use tokio::net::TcpListener;
@@ -45,7 +45,6 @@ use crate::app::ConnectionInfo;
 use crate::buildinfo::BuildInfo;
 use crate::routes::static_mounts::StaticMount;
 use crate::state::AppState;
-use crate::templating::Templating;
 
 /// `timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT`: how long in-flight requests get after a stop signal.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -119,6 +118,9 @@ async fn run() -> ExitCode {
   let startup = StartupState::default();
   startup.insert(venv_bin).expect("the startup state is empty before the lifespan begins");
   startup.insert(repo_root.clone()).expect("the startup state is empty before the lifespan begins");
+  startup
+    .insert(Templating::new(repo_root.path(), registry.page_packages()))
+    .expect("the startup state is empty before the lifespan begins");
   let features = Arc::new(FeatureContext {
     config: state_parts.config,
     credentials: state_parts.credentials,
@@ -137,7 +139,6 @@ async fn run() -> ExitCode {
   let state = Arc::new(AppState {
     features,
     build_info,
-    templating: Templating::new(repo_root.path(), registry.page_packages()),
     static_mounts: StaticMount::python_app_mounts(repo_root.path(), registry.page_packages()),
     mime_types: MimeTypes::load(),
   });

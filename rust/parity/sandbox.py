@@ -3,9 +3,12 @@
 Usage: python sandbox.py --allow-write DIR [--allow-write DIR ...] -- ARGV...
 
 A process under test can only change files beneath its own temporary tree (and write to a few device nodes): a
-write, create, remove or rename anywhere else fails with EACCES before it lands. Reads and execution stay
-unrestricted. Landlock does not cover metadata calls (chmod, chown, utimes, xattrs); guard.py's trace covers
-them. The ruleset holds across exec and is inherited by every child, so it binds the whole process tree.
+write, create, remove or rename anywhere else fails with EACCES before it lands. It can open a TCP connection only
+to the ports in CONNECT_PORTS, so a client that ignores the proxy variables cannot reach port 22, 80 or 443. Reads,
+execution and bind stay unrestricted. Landlock does not cover metadata calls (chmod, chown, utimes, xattrs; guard.py's
+trace covers them), UDP, Unix sockets, or the destination address of a connect: a connect to any host on a port of
+1024 or more is allowed. The ruleset holds across exec and is inherited by every child, so it binds the whole process
+tree.
 """
 
 import argparse
@@ -20,6 +23,9 @@ _SYS_LANDLOCK_ADD_RULE = 445
 _SYS_LANDLOCK_RESTRICT_SELF = 446
 _LANDLOCK_CREATE_RULESET_VERSION = 1
 _LANDLOCK_RULE_PATH_BENEATH = 1
+_LANDLOCK_RULE_NET_PORT = 2
+_LANDLOCK_NET_ABI = 4  # the first ABI with the TCP access rights (Linux 6.7)
+_LANDLOCK_ACCESS_NET_CONNECT_TCP = 1 << 1
 _PR_SET_NO_NEW_PRIVS = 38
 
 _WRITE_FILE = 1 << 1
@@ -40,6 +46,9 @@ _WRITABLE_DEVICES = ("/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev
 _WRITABLE_DEVICE_DIRS = ("/dev/pts",)
 # ProcessPoolExecutor's spawn context creates POSIX semaphores here; guard.py checks every other shared-memory path.
 _WRITABLE_PROCESS_POOL_DIRS = ("/dev/shm",)
+# The TCP ports a process under test may connect to: 9 is servers.CLOSED_PROXY, and 1024-65535 are the ports an
+# unprivileged process uses. Landlock cannot express a range, so each port gets its own rule.
+CONNECT_PORTS = (9, *range(1024, 65536))
 
 
 def _syscall(libc: ctypes.CDLL, number: int, *args: object) -> int:
@@ -60,22 +69,36 @@ def _add_rule(libc: ctypes.CDLL, ruleset_fd: int, path: str, access: int) -> Non
     os.close(fd)
 
 
+def _add_connect_ports(libc: ctypes.CDLL, ruleset_fd: int) -> None:
+  """Allow TCP connect to each port of CONNECT_PORTS; the kernel copies each attribute during its call."""
+  attr = ctypes.create_string_buffer(16)
+  for port in CONNECT_PORTS:
+    # struct landlock_net_port_attr: the allowed network access mask, then the port in host byte order.
+    struct.pack_into("=QQ", attr, 0, _LANDLOCK_ACCESS_NET_CONNECT_TCP, port)
+    _syscall(libc, _SYS_LANDLOCK_ADD_RULE, ruleset_fd, _LANDLOCK_RULE_NET_PORT, attr, 0)
+
+
 def restrict_writes(allowed_dirs: list[pathlib.Path]) -> None:
-  """Allow writes only beneath *allowed_dirs* (and to the device nodes above) for this process and its children."""
+  """Allow writes only beneath *allowed_dirs* (and to the device nodes above) and TCP connects only to CONNECT_PORTS.
+
+  The rules hold for this process and its children. Below Landlock ABI 4 the function exits instead, because an
+  unrestricted connect would defeat the rule.
+  """
   libc = ctypes.CDLL(None, use_errno=True)
   libc.syscall.restype = ctypes.c_long
   abi = _syscall(libc, _SYS_LANDLOCK_CREATE_RULESET, None, 0, _LANDLOCK_CREATE_RULESET_VERSION)
+  if abi < _LANDLOCK_NET_ABI:
+    sys.exit(
+        f"sandbox.py needs Landlock ABI {_LANDLOCK_NET_ABI} (Linux 6.7 or newer) for the TCP connect rule; "
+        f"this kernel reports ABI {abi}")
   dir_access = (
       _WRITE_FILE | _REMOVE_DIR | _REMOVE_FILE | _MAKE_CHAR | _MAKE_DIR | _MAKE_REG | _MAKE_SOCK | _MAKE_FIFO |
-      _MAKE_BLOCK | _MAKE_SYM)
-  file_access = _WRITE_FILE
-  if abi >= 2:
-    dir_access |= _REFER
-  if abi >= 3:
-    dir_access |= _TRUNCATE
-    file_access |= _TRUNCATE
-  handled = ctypes.c_uint64(dir_access)
-  ruleset_fd = _syscall(libc, _SYS_LANDLOCK_CREATE_RULESET, ctypes.byref(handled), ctypes.sizeof(handled), 0)
+      _MAKE_BLOCK | _MAKE_SYM | _REFER | _TRUNCATE)
+  file_access = _WRITE_FILE | _TRUNCATE
+  # struct landlock_ruleset_attr at ABI 4: the handled filesystem access mask, then the handled network access mask.
+  ruleset_attr = struct.pack("=QQ", dir_access, _LANDLOCK_ACCESS_NET_CONNECT_TCP)
+  ruleset_fd = _syscall(
+      libc, _SYS_LANDLOCK_CREATE_RULESET, ctypes.create_string_buffer(ruleset_attr), len(ruleset_attr), 0)
   try:
     for directory in allowed_dirs:
       _add_rule(libc, ruleset_fd, str(directory), dir_access)
@@ -88,6 +111,7 @@ def restrict_writes(allowed_dirs: list[pathlib.Path]) -> None:
     for process_pool_dir in _WRITABLE_PROCESS_POOL_DIRS:
       if os.path.isdir(process_pool_dir):
         _add_rule(libc, ruleset_fd, process_pool_dir, dir_access)
+    _add_connect_ports(libc, ruleset_fd)
     if libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
       errno = ctypes.get_errno()
       raise OSError(errno, f"prctl(PR_SET_NO_NEW_PRIVS) failed: {os.strerror(errno)}")

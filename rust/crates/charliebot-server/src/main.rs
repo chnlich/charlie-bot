@@ -15,7 +15,6 @@ mod app;
 mod auth;
 mod buildinfo;
 mod cookies;
-mod git;
 mod gzip;
 mod home_init;
 mod packages;

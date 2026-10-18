@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod event_types;
 pub mod fence;
 pub mod fsutil;
+pub mod git;
 pub mod home;
 pub mod hot_reload;
 pub mod logging;

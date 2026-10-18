@@ -113,7 +113,7 @@ rust/
     gzip.rs                       transport gzip
     request_log.rs, request_path.rs
     templating.rs                 Jinja2-compatible page rendering with minijinja
-    home_init.rs, buildinfo.rs, git.rs, state.rs
+    home_init.rs, buildinfo.rs, state.rs
 ```
 
 ## Differences from the Python server

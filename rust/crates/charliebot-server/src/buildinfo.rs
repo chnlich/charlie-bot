@@ -2,10 +2,8 @@
 
 use std::path::Path;
 
-use charliebot_core::timefmt;
+use charliebot_core::{git, timefmt};
 use serde_json::{Value, json};
-
-use crate::git;
 
 /// The git sha and UTC start time `GET /api/internal/version` reports.
 #[derive(Debug, Clone)]

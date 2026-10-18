@@ -71,7 +71,15 @@ mod tests {
   #[test]
   fn the_listed_packages_render_the_five_chat_lines() {
     let registry = registry().expect("the listed packages register");
-    for event_type in ["slack_reply", "discord_reply", "web_reply", "web_reply_notice", "web_status"] {
+    for event_type in [
+      "slack_reply",
+      "discord_reply",
+      "web_reply",
+      "web_reply_notice",
+      "web_status",
+      "scheduled_run_skipped",
+      "claude_account_login_required",
+    ] {
       assert!(registry.event_renderer(event_type).is_some(), "no renderer for {event_type}");
     }
     assert!(registry.event_renderer("assistant").is_none());

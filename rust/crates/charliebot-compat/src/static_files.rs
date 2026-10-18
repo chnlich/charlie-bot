@@ -78,7 +78,31 @@ pub fn serve(
   if !metadata.is_file() {
     return responses::http_exception(StatusCode::NOT_FOUND);
   }
-  file_response(&full_path, &metadata, mime_types, method, headers)
+  file_response(&full_path, &metadata, mime_types, None, method, headers)
+}
+
+/// Serve one known file with Starlette `FileResponse` validators and a caller-selected media type.
+pub fn serve_file(path: &Path, content_type: &str, method: &Method, headers: &HeaderMap) -> Response {
+  if method != Method::GET && method != Method::HEAD {
+    return responses::http_exception(StatusCode::METHOD_NOT_ALLOWED);
+  }
+  let metadata = match std::fs::metadata(path) {
+    Ok(metadata) => metadata,
+    Err(error) => {
+      return match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory | std::io::ErrorKind::InvalidFilename => {
+          responses::http_exception(StatusCode::NOT_FOUND)
+        }
+        std::io::ErrorKind::InvalidInput => responses::http_exception(StatusCode::NOT_FOUND),
+        std::io::ErrorKind::PermissionDenied => responses::http_exception(StatusCode::UNAUTHORIZED),
+        _ => responses::internal_error("OSError", format!("{}: {error}", path.display())),
+      };
+    }
+  };
+  if !metadata.is_file() {
+    return responses::http_exception(StatusCode::NOT_FOUND);
+  }
+  file_response(path, &metadata, &MimeTypes::builtin(), Some(content_type), method, headers)
 }
 
 /// `StaticFiles.check_config`: the 500 a mount answers while its directory is missing or not a directory.
@@ -121,10 +145,19 @@ struct FileHeaders {
 }
 
 impl FileHeaders {
-  fn of(path: &Path, metadata: &std::fs::Metadata, mime_types: &MimeTypes) -> FileHeaders {
-    let guessed = mime_types.guess_type(&paths::display(path)).unwrap_or("text/plain");
-    let content_type =
-      if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() };
+  fn of(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    mime_types: &MimeTypes,
+    override_content_type: Option<&str>,
+  ) -> FileHeaders {
+    let content_type = override_content_type.map_or_else(
+      || {
+        let guessed = mime_types.guess_type(&paths::display(path)).unwrap_or("text/plain");
+        if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() }
+      },
+      str::to_string,
+    );
     let mtime = timefmt::python_float_seconds(metadata.mtime(), metadata.mtime_nsec());
     let etag_base = format!("{}-{}", pyfmt::float_repr(mtime), metadata.size());
     FileHeaders {
@@ -149,10 +182,11 @@ fn file_response(
   path: &Path,
   metadata: &std::fs::Metadata,
   mime_types: &MimeTypes,
+  override_content_type: Option<&str>,
   method: &Method,
   headers: &HeaderMap,
 ) -> Response {
-  let file_headers = FileHeaders::of(path, metadata, mime_types);
+  let file_headers = FileHeaders::of(path, metadata, mime_types, override_content_type);
   if is_not_modified(&file_headers, headers) {
     return Response::builder()
       .status(StatusCode::NOT_MODIFIED)

@@ -1,11 +1,12 @@
 //! `charliebot-server`: the CharlieBot HTTP server (`server.py`).
 //!
-//! Startup follows `server.main` then the lifespan: load and check the config, take the home writer
-//! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture
-//! the build identity, initialize the home, log `charliebot_home_ready` and `server_ready`, then bind
-//! the configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests finish for
-//! up to five seconds, releases the fence, logs `charliebot_shutdown`, then raises the signal again under
-//! its default disposition, so the process ends killed by that signal as uvicorn's does.
+//! Startup follows `server.main` then the lifespan: build the registry from the composition root, load and check the
+//! config, take the home writer fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`),
+//! capture the build identity, initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log
+//! `server_ready`, then bind the configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests
+//! finish for up to five seconds, stops the lifespan's services and runs its let-go steps, releases the fence, logs
+//! `charliebot_shutdown`, then raises the signal again under its default disposition, so the process ends killed by that
+//! signal as uvicorn's does.
 //!
 //! `CHARLIEBOT_REPO_ROOT` names the charlie-bot checkout whose `web/`, page packages and `configs/`
 //! the server serves; the Python server derives the same root from its own file location.
@@ -17,6 +18,7 @@ mod cookies;
 mod git;
 mod gzip;
 mod home_init;
+mod packages;
 mod request_log;
 mod request_path;
 mod routes;
@@ -33,13 +35,14 @@ use std::time::{Duration, Instant};
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::{config, home, logging, paths, v1_sessions};
+use charliebot_registry::lifespan::Lifespan;
+use charliebot_registry::{FeatureContext, Registry, StartupState};
 use nix::sys::signal::{SigHandler, Signal};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::app::ConnectionInfo;
 use crate::buildinfo::BuildInfo;
-use crate::routes::pages::VoiceSettings;
 use crate::routes::static_mounts::StaticMount;
 use crate::state::AppState;
 use crate::templating::Templating;
@@ -68,7 +71,14 @@ async fn run() -> ExitCode {
     }
   };
   let boot = Instant::now();
-  let (repo_root, state_parts) = match load_inputs() {
+  let registry = match packages::registry() {
+    Ok(registry) => Arc::new(registry),
+    Err(error) => {
+      eprintln!("charliebot-server: {error}");
+      return ExitCode::from(EXIT_CONFIG);
+    }
+  };
+  let (repo_root, state_parts) = match load_inputs(&registry) {
     Ok(inputs) => inputs,
     Err(message) => {
       eprintln!("charliebot-server: {message}");
@@ -99,8 +109,8 @@ async fn run() -> ExitCode {
     eprintln!("charliebot-server: initializing {} failed: {error}", paths::display(&cfg.charliebot_home));
     return ExitCode::from(EXIT_STARTUP);
   }
-  let store = match store_setup::create((*cfg).clone()) {
-    Ok(store) => Arc::new(store),
+  let store = match store_setup::create((*cfg).clone(), Arc::clone(&registry)) {
+    Ok(store) => store,
     Err(error) => {
       writer_fence.release();
       eprintln!("charliebot-server: creating session store failed: {error}");
@@ -108,14 +118,27 @@ async fn run() -> ExitCode {
     }
   };
   tracing::info!(path = %paths::display(&cfg.charliebot_home), "charliebot_home_ready");
-  let state = Arc::new(AppState {
-    templating: Templating::new(&repo_root),
-    static_mounts: StaticMount::python_app_mounts(&repo_root),
-    mime_types: MimeTypes::load(),
-    _store: store,
+  let features = Arc::new(FeatureContext {
     config: state_parts.config,
     credentials: state_parts.credentials,
+    store: Arc::new(store),
+    registry: Arc::clone(&registry),
+    startup: Arc::new(StartupState::default()),
+  });
+  let lifespan = match Lifespan::start(Arc::clone(&features)).await {
+    Ok(lifespan) => lifespan,
+    Err(error) => {
+      writer_fence.release();
+      eprintln!("charliebot-server: lifespan startup failed: {error:#}");
+      return ExitCode::from(EXIT_STARTUP);
+    }
+  };
+  let state = Arc::new(AppState {
+    features,
     build_info,
+    templating: Templating::new(&repo_root, registry.page_packages()),
+    static_mounts: StaticMount::python_app_mounts(&repo_root, registry.page_packages()),
+    mime_types: MimeTypes::load(),
   });
   tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready");
 
@@ -124,6 +147,7 @@ async fn run() -> ExitCode {
     Err(message) => {
       eprintln!("charliebot-server: {message}");
       let shutdown_started = Instant::now();
+      stop_lifespan(lifespan).await;
       writer_fence.release();
       tracing::info!(shutdown_ms = round_ms(shutdown_started.elapsed()), "charliebot_shutdown");
       return ExitCode::from(EXIT_CONFIG);
@@ -152,9 +176,17 @@ async fn run() -> ExitCode {
     Err(_) => tracing::warn!(timeout_s = GRACEFUL_SHUTDOWN_TIMEOUT.as_secs(), "graceful_shutdown_timeout_exceeded"),
   }
   let shutdown_started = Instant::now();
+  stop_lifespan(lifespan).await;
   writer_fence.release();
   tracing::info!(shutdown_ms = round_ms(shutdown_started.elapsed()), "charliebot_shutdown");
   exit_by_signal(received)
+}
+
+/// The lifespan's shutdown. A failed stop is logged, and the caller still releases the home fence.
+async fn stop_lifespan(lifespan: Lifespan) {
+  if let Err(error) = lifespan.shutdown().await {
+    tracing::error!(error = format!("{error:#}"), "lifespan_shutdown_failed");
+  }
 }
 
 /// uvicorn's `capture_signals` exit: restore the default disposition and raise the stop signal again.
@@ -167,12 +199,12 @@ fn exit_by_signal(received: Signal) -> ExitCode {
 
 /// The two hot-reloaded files, loaded once at startup.
 struct StateParts {
-  config: charliebot_core::hot_reload::HotReload<config::CharlieBotConfig>,
-  credentials: charliebot_core::hot_reload::HotReload<charliebot_core::credentials::Credentials>,
+  config: Arc<charliebot_core::hot_reload::HotReload<config::CharlieBotConfig>>,
+  credentials: Arc<charliebot_core::hot_reload::HotReload<charliebot_core::credentials::Credentials>>,
 }
 
 /// The repository root and the home's loaded files; any error names the input it concerns.
-fn load_inputs() -> Result<(PathBuf, StateParts), String> {
+fn load_inputs(registry: &Arc<Registry>) -> Result<(PathBuf, StateParts), String> {
   let repo_root = match std::env::var_os(REPO_ROOT_ENV) {
     Some(value) if !value.is_empty() => PathBuf::from(value),
     _ => {
@@ -186,11 +218,16 @@ fn load_inputs() -> Result<(PathBuf, StateParts), String> {
     ));
   }
   let home = home::charliebot_home_dir().map_err(|error| error.to_string())?;
-  let parts = StateParts { config: state::config_cache(&home), credentials: state::credentials_cache(&home) };
+  let parts = StateParts {
+    config: state::config_cache(&home, Arc::clone(registry)),
+    credentials: state::credentials_cache(&home),
+  };
   let cfg = parts.config.get().map_err(|error| error.to_string())?;
   config::require_backends(&cfg).map_err(|error| error.to_string())?;
   v1_sessions::require_no_v1_sessions(&cfg)?;
-  VoiceSettings::from_config(&cfg)?;
+  for (_, check) in registry.startup_checks() {
+    check(&cfg)?;
+  }
   parts.credentials.get().map_err(|error| error.to_string())?;
   Ok((repo_root, parts))
 }

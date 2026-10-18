@@ -54,12 +54,14 @@ async fn get_method_not_allowed() -> Response {
 }
 
 /// starlette's router when no route matches: a 307 to the slash-toggled path when that path matches
-/// a route, else 404.
+/// a route, else 404. The routes are the route families and the registered routers.
 pub async fn not_found(State(state): State<Arc<AppState>>, request: Request) -> Response {
   let path = request_path::of(&request);
   if path != "/" {
     let toggled = if path.ends_with('/') { path.trim_end_matches('/').to_string() } else { format!("{path}/") };
-    if FAMILIES.iter().any(|family| (family.matches)(&state, &toggled)) {
+    let family_matches = FAMILIES.iter().any(|family| (family.matches)(&state, &toggled));
+    let router_matches = state.features.registry.routers().iter().any(|route| (route.matches)(&toggled));
+    if family_matches || router_matches {
       return responses::redirect(&redirect_url(&request, &toggled));
     }
   }

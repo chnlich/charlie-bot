@@ -6,6 +6,7 @@ members = [
     "crates/charliebot-server",
     "crates/features/pyhtml",
     "crates/charliebot-store",
+    "crates/charliebot-registry",
 ]
 
 [workspace.package]
@@ -14,6 +15,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 bytes = "1"
@@ -51,4 +53,5 @@ uuid = { version = "1", features = ["v4"] }
 
 charliebot-compat = { path = "crates/charliebot-compat" }
 charliebot-core = { path = "crates/charliebot-core" }
+charliebot-registry = { path = "crates/charliebot-registry" }
 charliebot-store = { path = "crates/charliebot-store" }

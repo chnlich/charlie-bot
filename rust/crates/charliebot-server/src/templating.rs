@@ -13,24 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use charliebot_compat::jinja;
-use charliebot_core::{pyfmt, registry};
+use charliebot_core::pyfmt;
+use charliebot_registry::pages::{self, package_directory};
 use minijinja::{Environment, Error, ErrorKind, Value};
 use sha1::{Digest, Sha1};
 
 use crate::git;
-
-/// `page_render.PAGE_SLOTS`: the places a page leaves for package parts.
-pub const PAGE_SLOTS: &[&str] = &[
-  "head",
-  "tab_buttons",
-  "below_header",
-  "tab_panels",
-  "input_buttons",
-  "modals",
-  "scripts",
-  "diff_toolbar",
-  "home_notes",
-];
 
 /// A zero-argument template global: the name and the value the call returns.
 pub type TemplateGlobal = (&'static str, Value);
@@ -38,6 +26,8 @@ pub type TemplateGlobal = (&'static str, Value);
 /// The template engine of one repository checkout.
 pub struct Templating {
   repo_root: PathBuf,
+  /// The registered page packages in registration order, whose `templates/` and `static/` the page uses.
+  packages: Vec<&'static str>,
   /// `web/templates`, then each page package's `templates/`.
   directories: Vec<PathBuf>,
   /// Whether the unique-name check has passed once (Python checks when it first builds the engine).
@@ -55,13 +45,13 @@ struct AssetDigestState {
 }
 
 impl Templating {
-  pub fn new(repo_root: &Path) -> Templating {
+  /// The engine of `repo_root` for the page packages `packages`, in registration order.
+  pub fn new(repo_root: &Path, packages: &[&'static str]) -> Templating {
     let mut directories = vec![repo_root.join("web").join("templates")];
-    directories.extend(
-      registry::PACKAGES.iter().map(|package| registry::package_directory(repo_root, package).join("templates")),
-    );
+    directories.extend(packages.iter().map(|package| package_directory(repo_root, package).join("templates")));
     Templating {
       repo_root: repo_root.to_path_buf(),
+      packages: packages.to_vec(),
       directories,
       names_checked: AtomicBool::new(false),
       git_version: OnceLock::new(),
@@ -100,8 +90,8 @@ impl Templating {
     let mut pairs: Vec<(String, i64, u64)> = Vec::new();
     let mut paths: HashMap<String, PathBuf> = HashMap::new();
     walk_static_tree(&static_root, "", &mut pairs, &mut paths)?;
-    for package in registry::PACKAGES {
-      let directory = registry::package_directory(&self.repo_root, package).join("static");
+    for package in &self.packages {
+      let directory = package_directory(&self.repo_root, package).join("static");
       if directory.is_dir() {
         let url_path = package.trim_start_matches("src.").replace('.', "/");
         walk_static_tree(&directory, &format!("{url_path}/"), &mut pairs, &mut paths)?;
@@ -152,8 +142,9 @@ impl Templating {
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
     let mut environment = jinja::environment(jinja::file_system_loader(self.directories.clone()));
     let repo_root = self.repo_root.clone();
+    let packages = self.packages.clone();
     environment.add_function("page_parts", move |slot: String| {
-      page_parts(&repo_root, &slot)
+      pages::page_parts(&repo_root, &packages, &slot)
         .map_err(|message| Error::new(ErrorKind::InvalidOperation, format!("ValueError: {message}")))
     });
     for (name, value) in globals {
@@ -161,24 +152,6 @@ impl Templating {
     }
     environment
   }
-}
-
-/// `templating.page_parts(slot)`: the slot's part template names that exist on disk now.
-pub fn page_parts(repo_root: &Path, slot: &str) -> Result<Vec<String>, String> {
-  if !PAGE_SLOTS.contains(&slot) {
-    let slots = PAGE_SLOTS.iter().map(|name| pyfmt::str_repr(name)).collect::<Vec<_>>().join(", ");
-    return Err(format!("page slot {} is not one of ({slots})", pyfmt::str_repr(slot)));
-  }
-  Ok(
-    registry::PACKAGES
-      .iter()
-      .filter_map(|package| {
-        let name =
-          format!("{}/page_{slot}.html", package.rsplit('.').next().expect("rsplit yields at least one piece"));
-        registry::package_directory(repo_root, package).join("templates").join(&name).is_file().then_some(name)
-      })
-      .collect(),
-  )
 }
 
 /// Why a render failed.

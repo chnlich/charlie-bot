@@ -733,7 +733,8 @@ mod tests {
   #[test]
   fn construction_fails_when_required_hooks_are_missing() {
     let home = tempfile::tempdir().unwrap();
-    let cfg = charliebot_core::config::load_config(home.path()).unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
     let error = Store::new(cfg, Vec::new(), StoreHooks::default()).err().unwrap();
     assert!(error.to_string().contains("account label keeper"));
   }
@@ -741,7 +742,8 @@ mod tests {
   #[tokio::test]
   async fn expired_cache_entries_revalidate_the_disk_signature() {
     let home = tempfile::tempdir().unwrap();
-    let cfg = charliebot_core::config::load_config(home.path()).unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
     let store = Store::new(cfg, Vec::new(), explicit_test_hooks()).unwrap();
     let mut meta = SessionMetadata::new("synthetic-id", "seed", crate::metadata::TaskProfile::Manager);
     let path = store.metadata_path(&meta.id);
@@ -770,7 +772,8 @@ mod tests {
     use serde_json::json;
 
     let home = tempfile::tempdir().unwrap();
-    let cfg = charliebot_core::config::load_config(home.path()).unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
     let store = Store::new(cfg, Vec::new(), explicit_test_hooks()).unwrap();
     let session_id = "synthetic-events-session";
     let path = store.chat_events_path(session_id);

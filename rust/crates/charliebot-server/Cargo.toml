@@ -10,10 +10,12 @@ name = "charliebot-server"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
+charliebot-registry.workspace = true
 charliebot-store.workspace = true
 flate2.workspace = true
 futures-util.workspace = true

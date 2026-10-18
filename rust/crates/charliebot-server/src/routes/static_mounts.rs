@@ -8,7 +8,7 @@ use axum::extract::{Request, State};
 use axum::response::Response;
 use axum::routing::any;
 use charliebot_compat::static_files::{self, StaticDirectory};
-use charliebot_core::registry;
+use charliebot_registry::pages::package_directory;
 
 use super::Family;
 use crate::request_path;
@@ -25,14 +25,14 @@ pub struct StaticMount {
 }
 
 impl StaticMount {
-  /// The Python app's `/static` mounts in its route order: one per page package, then `web/static` when it
-  /// exists at startup.
-  pub fn python_app_mounts(repo_root: &Path) -> Vec<StaticMount> {
-    let mut mounts: Vec<StaticMount> = registry::PACKAGES
+  /// The Python app's `/static` mounts in its route order: one per page package in registration order, then
+  /// `web/static` when it exists at startup.
+  pub fn python_app_mounts(repo_root: &Path, packages: &[&str]) -> Vec<StaticMount> {
+    let mut mounts: Vec<StaticMount> = packages
       .iter()
       .map(|package| StaticMount {
         prefix: format!("/static/{}", package.trim_start_matches("src.").replace('.', "/")),
-        directory: StaticDirectory::new(registry::package_directory(repo_root, package).join("static")),
+        directory: StaticDirectory::new(package_directory(repo_root, package).join("static")),
       })
       .collect();
     let web_static = repo_root.join("web").join("static");

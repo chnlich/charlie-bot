@@ -1,0 +1,22 @@
+//! The plug-in seam of the Rust server: the [`Registry`] that every feature and backend crate fills through
+//! its `register` function, the lifespan steps around the crash-recovery task, and the typed startup state that
+//! steps, services and route handlers share.
+//!
+//! The server builds one registry at startup, calling each listed package's `register` in the order of the
+//! composition root (`src/app/registrations.py:16-46`), then shares it read-only. Each Python hook kind has one
+//! typed registration method and one reader. `rust/docs/registry.md` lists them with their Python sources.
+
+pub mod backend;
+pub mod context;
+pub mod lifespan;
+pub mod pages;
+pub mod registry;
+pub mod sequence;
+pub mod sidebar;
+pub mod store_hooks;
+pub mod turn;
+pub mod usage;
+pub mod wiring;
+
+pub use context::{FeatureContext, StartupState, StateError};
+pub use registry::{RegisterFn, Registry, RegistryError};

@@ -13,7 +13,6 @@ pub mod metadata_slot;
 pub mod paths;
 pub mod proc_identity;
 pub mod pyfmt;
-pub mod registry;
 pub mod run_token;
 pub mod ssh;
 pub mod timefmt;

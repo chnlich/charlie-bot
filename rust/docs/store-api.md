@@ -131,6 +131,7 @@ route accepts run-token identity. `records_generation` increments after each run
 | `adopt_metadata_slot_locked(&self, guard: &ControlGuard, session_id: &str, old: &SessionMetadata, owner: &str, fields: Option<&[&str]>) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::adopt_metadata_slot` |
 | `record_native_anchor(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>) -> StoreResult<()>`; `record_native_anchor_with_reset(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>, reset_anchor: bool) -> StoreResult<()>` | `src/runtime/task_sessions.py::record_native_anchor` |
 | `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool>` | `src/runtime/task_sessions.py::archive_unsuccessful_worker` |
+| `archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::archive_subtree` |
 | `ensure_prompt_changed_fact(&self, session_id: &str, meta: &SessionMetadata, scope: PromptScope) -> StoreResult<()>` | `src/runtime/task_sessions.py::_ensure_prompt_changed_fact` |
 | `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::load_meta`, `load_task_meta` |
 | `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<TaskFacts>` | `src/runtime/task_sessions.py::task_state`, `facts_of` |
@@ -152,7 +153,8 @@ These return shapes follow the Python methods; the earlier planned table used pr
 Tree-node metadata writes and control-fact writes run under the shared control guard. The locked methods verify its
 store identity, and each metadata write re-reads its disk row before mutation. Tree reads use a generation-invalidated,
 two-second index. Prompt bodies are immutable files under `prompt_bodies/<sha256>.md`; prompt-change facts point to
-those hashes. The store calls required sequence archive and binding-mover hooks for archive and elone rebind.
+those hashes. The store calls required sequence archive and binding-mover hooks for archive, subtree archive, and
+elone rebind. `archive_subtree` accepts only `TaskCaller::Operator`, and it takes the control lock itself.
 The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
 launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 

@@ -50,6 +50,9 @@ TASK_SOURCE_ID = "synthetic-elone-source"
 TASK_NEW_ID = "synthetic-elone-new"
 TASK_RUN_ID = "synthetic-failed-run"
 TASK_COUNTER_ROOT_ID = "synthetic-counter-root"
+TASK_ARCHIVE_ROOT_ID = "synthetic-archive-root"
+TASK_ARCHIVE_MID_ID = "synthetic-archive-mid"
+TASK_ARCHIVE_LEAF_ID = "synthetic-archive-leaf"
 
 
 def _registered() -> None:
@@ -750,6 +753,37 @@ def _create_unnamed_node_mode(root: pathlib.Path, home_name: str) -> None:
   asyncio.run(_create_unnamed_node(root / home_name))
 
 
+async def _prepare_archive(root: pathlib.Path) -> None:
+  _registered()
+  tree = _task_tree(root / "archive-base")
+  await _create_task_node(tree, session_id=TASK_ARCHIVE_ROOT_ID, parent_id=None, request_id="archive-root")
+  await _create_task_node(
+      tree, session_id=TASK_ARCHIVE_MID_ID, parent_id=TASK_ARCHIVE_ROOT_ID, request_id="archive-mid")
+  await _create_task_node(
+      tree,
+      session_id=TASK_ARCHIVE_LEAF_ID,
+      parent_id=TASK_ARCHIVE_MID_ID,
+      request_id="archive-leaf",
+      profile="worker",
+  )
+
+
+async def _archive_subtree(home: pathlib.Path) -> None:
+  _registered()
+  tree = _task_tree(home)
+  _install_test_sequence_controller()
+  archived = await tree.archive_subtree(TASK_ARCHIVE_ROOT_ID, caller=run_token.CallerIdentity(kind="operator"))
+  assert archived == [TASK_ARCHIVE_ROOT_ID, TASK_ARCHIVE_MID_ID, TASK_ARCHIVE_LEAF_ID], archived
+
+
+def _prepare_archive_mode(root: pathlib.Path) -> None:
+  asyncio.run(_prepare_archive(root))
+
+
+def _archive_subtree_mode(root: pathlib.Path, home_name: str) -> None:
+  asyncio.run(_archive_subtree(root / home_name))
+
+
 def _gate_parity(root: pathlib.Path) -> None:
   cases = json.loads((root / "gate-cases.json").read_text(encoding="utf-8"))["cases"]
   results = {}
@@ -841,6 +875,10 @@ if __name__ == "__main__":
     _prepare_counter_mode(root)
   elif mode == "create_unnamed_node":
     _create_unnamed_node_mode(root, extra[0])
+  elif mode == "prepare_archive":
+    _prepare_archive_mode(root)
+  elif mode == "archive_subtree":
+    _archive_subtree_mode(root, extra[0])
   elif mode == "gate_parity":
     _gate_parity(root)
   elif mode == "prepare_parity_gate":

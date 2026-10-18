@@ -530,6 +530,25 @@ async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_wa
 }
 
 #[tokio::test]
+async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_archive", root.path(), &[]);
+
+  let python_home = root.path().join("python-archive-home");
+  let rust_home = root.path().join("rust-archive-home");
+  copy_tree(&root.path().join("archive-base"), &python_home);
+  copy_tree(&root.path().join("archive-base"), &rust_home);
+
+  run_python_helper("archive_subtree", root.path(), &["python-archive-home"]);
+  let archived = make_store(&rust_home).archive_subtree("synthetic-archive-root", TaskCaller::Operator).await.unwrap();
+  assert_eq!(archived, ["synthetic-archive-root", "synthetic-archive-mid", "synthetic-archive-leaf"]);
+  let leaf_facts =
+    fs::read_to_string(rust_home.join("sessions/synthetic-archive-leaf/data/chat_events.jsonl")).unwrap();
+  assert!(leaf_facts.contains("\"archived_with\": \"synthetic-archive-root\""));
+  assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+}
+
+#[tokio::test]
 async fn task_gate_matches_python_cases_and_the_parity_fixture_tree() {
   let root = tempfile::tempdir().unwrap();
   let cases = materialize_gate_cases();

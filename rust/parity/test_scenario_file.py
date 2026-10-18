@@ -85,6 +85,24 @@ def _fake_agent() -> dict[str, Any]:
         }),
         (
             {
+                "kind": "ws",
+                "name": "wait for provider",
+                "path": "/ws/voice/synthetic-session",
+                "send": [{
+                    "text": "{bad"
+                }],
+                "until": {
+                    "frames": 1
+                },
+                "timeout_seconds": 1,
+                "wait_for_fake_handshake": "gemini",
+            }, {
+                "fakes": {
+                    "gemini": {}
+                }
+            }),
+        (
+            {
                 "kind": "handover",
                 "name": "handover step",
                 "agent_after_stop": "alive"
@@ -97,6 +115,26 @@ def _fake_agent() -> dict[str, Any]:
 def test_new_step_kinds_and_keys_load(tmp_path: pathlib.Path, step: dict[str, Any], fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [step], **fields)
   assert scenario.steps[0].name == step["name"]
+  if step.get("wait_for_fake_handshake"):
+    assert scenario.steps[0].wait_for_fake_handshake == step["wait_for_fake_handshake"]
+
+
+def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> None:
+  step = {
+      "kind": "ws",
+      "name": "wait for provider",
+      "path": "/ws/voice/synthetic-session",
+      "send": [{
+          "text": "{bad"
+      }],
+      "until": {
+          "frames": 1
+      },
+      "timeout_seconds": 1,
+      "wait_for_fake_handshake": "gemini",
+  }
+  with pytest.raises(scenario_file.ScenarioError, match="not declared in fakes"):
+    _load(tmp_path, [step])
 
 
 @pytest.mark.parametrize(

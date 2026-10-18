@@ -411,6 +411,17 @@ def _normalize_ws_frame(frame: dict, route: str, ctx: normalize.Context) -> dict
   return {"binary_base64": base64.b64encode(frame["binary"]).decode("ascii")}
 
 
+def _wait_for_fake_handshake(side: Side, fake: str, mark: int, deadline: float) -> bool:
+  if side.fake_set is None:
+    raise RuntimeError(f"{side.label} has no fake services")
+  while time.monotonic() < deadline:
+    if any(record.get("kind") == "ws_handshake" and record.get("fake") == fake
+           for record in side.fake_set.records_since(mark)):
+      return True
+    time.sleep(0.02)
+  return False
+
+
 def _websocket_request(
     side: Side,
     step: scenario_file.Step,
@@ -426,6 +437,11 @@ def _websocket_request(
   if query:
     uri += "?" + urllib.parse.urlencode(query)
   deadline = time.monotonic() + step.timeout_seconds
+  fake_mark = None
+  if step.wait_for_fake_handshake is not None:
+    if side.fake_set is None:
+      raise RuntimeError(f"{side.label} has no fake services")
+    fake_mark = side.fake_set.mark()
   lines: list[str] = []
   frames: list[dict] = []
   collected = ""
@@ -450,6 +466,12 @@ def _websocket_request(
     socket.close()
     return 101, frames, collected, [f"{side.label} WebSocket connected, expected HTTP {step.expect_reject} rejection"]
   with socket:
+    if step.wait_for_fake_handshake is not None:
+      if fake_mark is None:
+        raise RuntimeError(f"{side.label} did not mark fake traffic before the WebSocket handshake")
+      if not _wait_for_fake_handshake(side, step.wait_for_fake_handshake, fake_mark, deadline):
+        lines.append(f"{side.label} did not reach the {step.wait_for_fake_handshake} WebSocket handshake")
+        return 101, frames, collected, lines
     for outgoing in step.send:
       resolved = _substitute(side, outgoing, manifest)
       if "json" in resolved:

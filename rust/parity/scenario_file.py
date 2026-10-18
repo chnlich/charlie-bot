@@ -37,7 +37,8 @@ _HTTP_STEP_KEYS = {
     "capture", "defer_files"
 }
 _WS_STEP_KEYS = {
-    "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare", "expect_reject"
+    "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare", "expect_reject",
+    "wait_for_fake_handshake"
 }
 _FAKE_STEP_KEYS = {"kind", "name", "fake", "action", "payload"}
 _WAIT_STEP_KEYS = {"kind", "name", "timeout_seconds", "until"}
@@ -77,6 +78,7 @@ class Step:
   collect: dict | None
   compare: str | dict
   expect_reject: int | None
+  wait_for_fake_handshake: str | None
   fake: str | None
   action: str | None
   payload: Any
@@ -327,6 +329,7 @@ def _step(raw: Any, where: str) -> Step:
   collect = None
   compare_mode: str | dict = "frames"
   expect_reject = None
+  wait_for_fake_handshake = None
   fake_name = None
   action = None
   payload = None
@@ -373,6 +376,10 @@ def _step(raw: Any, where: str) -> Step:
     collect = _collect(raw["collect"], where) if "collect" in raw else None
     until = _ws_until(raw.get("until"), where)
     timeout_seconds = _positive_timeout(raw.get("timeout_seconds"), f"{where}.timeout_seconds")
+    wait_for_fake_handshake = raw.get("wait_for_fake_handshake")
+    if wait_for_fake_handshake is not None and (not isinstance(wait_for_fake_handshake, str) or
+                                                wait_for_fake_handshake not in FAKE_NAMES):
+      raise ScenarioError(f"{where}.wait_for_fake_handshake must name a supported fake")
     compare_mode = raw.get("compare", "frames")
     if isinstance(compare_mode, dict):
       if set(compare_mode) != {"collected_contains"} or not isinstance(compare_mode["collected_contains"], list) or any(
@@ -390,6 +397,8 @@ def _step(raw: Any, where: str) -> Step:
         raise ScenarioError(f"{where}.expect_reject must be an HTTP error status")
       if send:
         raise ScenarioError(f"{where}: expect_reject cannot send frames")
+      if wait_for_fake_handshake is not None:
+        raise ScenarioError(f"{where}: expect_reject cannot wait for a fake handshake")
   elif kind == "fake":
     fake_name = raw.get("fake")
     action = raw.get("action")
@@ -439,6 +448,7 @@ def _step(raw: Any, where: str) -> Step:
       collect=collect,
       compare=compare_mode,
       expect_reject=expect_reject,
+      wait_for_fake_handshake=wait_for_fake_handshake,
       fake=fake_name,
       action=action,
       payload=payload,
@@ -570,6 +580,9 @@ def load(path: pathlib.Path) -> Scenario:
   for step in parsed_steps:
     if step.kind == "fake" and step.fake not in fakes:
       raise ScenarioError(f"{path.name} step {step.name!r}: fake {step.fake!r} is not declared in fakes")
+    if step.wait_for_fake_handshake is not None and step.wait_for_fake_handshake not in fakes:
+      raise ScenarioError(
+          f"{path.name} step {step.name!r}: fake {step.wait_for_fake_handshake!r} is not declared in fakes")
   return Scenario(
       path=path,
       stage=raw["stage"],

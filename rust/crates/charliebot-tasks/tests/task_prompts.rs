@@ -80,10 +80,6 @@ impl SequenceListingFields for NoHooks {
   fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
     Ok(HashMap::new())
   }
-
-  fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-    Ok(Vec::new())
-  }
 }
 
 fn config(home: &Path) -> CharlieBotConfig {

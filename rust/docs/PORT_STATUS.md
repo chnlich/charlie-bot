@@ -177,6 +177,8 @@ implemented.
 | service | `usage_tally` | features/usage | todo | |
 | service | `ext_usage` | features/usage | todo | |
 | service | `speech` | features/voice | todo | |
+| registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
+| registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 
 ## State files
 
@@ -197,8 +199,13 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `host_auth.json` | features/host_auth | todo | |
 | `usage/ledger.sqlite3` | features/usage | todo | |
 | `prompt_bodies/<sha256>.md` | agent-runtime | todo | |
-| `memory/` | features/memory | todo | |
-| `memory-proposal/` | features/memory | todo | |
+| `memory/` | features/memory | ported | Git repository created by `ensure_store` on first use. |
+| `memory/topics` | features/memory | ported | Seeded when missing; read by the selection. |
+| `memory/.gitignore` | features/memory | ported | Seeded when missing. |
+| `memory/entries/<topic>/<slug>.md` | features/memory | ported | Read only: format v2 grammar and selection. |
+| `memory/staging/` | features/memory | ported | Created by `ensure_store`; never read by a selection. |
+| `memory/staging/<stamp>-<sess8>-<slug>.md` | features/memory | not applicable | Written by `charliebot memory add`: the Python CLI stays (Trade-off 2). |
+| `memory-proposal/` | features/memory | not applicable | Created by `charliebot memory proposal open`: the Python CLI stays (Trade-off 2). |
 | `models/` speech assets | features/voice | todo | |
 | `vendor/katex/katex.min.js` | foundation | todo | |
 | `voice_eval/<ts>/results.json` | features/voice | todo | |
@@ -257,7 +264,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | explain temporary directories | features/explain | todo | Outside the home. |
 | headless-render temporary directories | features/artifacts | todo | Outside the home. |
 | trace-merge temporary directories | features/trace | todo | Outside the home. |
-| memory proposal temporary extraction | features/memory | todo | Outside the home. |
+| memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |
 | SSH ControlMaster sockets | foundation | todo | Outside the home. |
 | artifact page-height probe files | features/artifacts | todo | Beside an artifact. |
 | tmux `charliebot-<id>` sockets | features/terminal | todo | Outside the home. |

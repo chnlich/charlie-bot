@@ -1073,7 +1073,7 @@ test('an error frame mid-recording stops visibly and one click transcribes local
   await tick();
   await tick();
   assert.equal(state.input.value, 'after error');
-  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
+  assert.deepEqual(state.chatNotes, ['Transcribed by the local engine (lower quality)']); // the local decode's note is set
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1106,7 +1106,7 @@ test('a lost socket mid-recording stops visibly and one click transcribes locall
   await tick();
   await tick();
   assert.equal(state.input.value, 'after close');
-  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
+  assert.deepEqual(state.chatNotes, ['Transcribed by the local engine (lower quality)']); // the local decode's note is set
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1140,7 +1140,7 @@ test('a spent budget stops visibly and one click transcribes locally', async () 
   await tick();
   await tick();
   assert.equal(state.input.value, 'local words');
-  assert.deepEqual(state.chatNotes, ['本地引擎转写（质量较低）']); // the local decode's note is set
+  assert.deepEqual(state.chatNotes, ['Transcribed by the local engine (lower quality)']); // the local decode's note is set
   assert.equal(state.beforeunloadCount, 0);
 });
 

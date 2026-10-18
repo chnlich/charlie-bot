@@ -279,7 +279,7 @@ def load(path: pathlib.Path) -> Scenario:
   if not isinstance(steps, list) or not steps:
     raise ScenarioError(f"{path}: 'steps' must be a non-empty list")
   parsed_steps = tuple(_step(step, f"{path.name} step {index + 1}") for index, step in enumerate(steps))
-  has_handover = any(step.kind == "handover" for step in parsed_steps)
+  handovers = [step for step in parsed_steps if step.kind == "handover"]
   has_script = "fake_agent" in raw
   has_expectation = "expect_starts" in raw
   if has_script != has_expectation:
@@ -299,13 +299,15 @@ def load(path: pathlib.Path) -> Scenario:
     if len(set(directions_raw)) != len(directions_raw):
       raise ScenarioError(f"{path}: directions must not contain duplicates")
     directions = tuple(directions_raw)
-  if has_handover and directions is None:
-    raise ScenarioError(f"{path}: directions are required when a handover step is present")
-  if not has_handover and has_directions:
+  if handovers and directions is None:
+    raise ScenarioError(f"{path}: step {handovers[0].name!r} is a handover, so directions are required")
+  if not handovers and has_directions:
     raise ScenarioError(f"{path}: directions are refused when no handover step is present")
-  if (has_handover or
-      any(step.kind == "gate" or (step.until and "at_gate" in step.until) for step in parsed_steps)) and not has_script:
-    raise ScenarioError(f"{path}: fake_agent is required for gate and handover steps")
+  needs_script = [
+      step for step in parsed_steps if step.kind in ("gate", "handover") or (step.until and "at_gate" in step.until)
+  ]
+  if needs_script and not has_script:
+    raise ScenarioError(f"{path}: step {needs_script[0].name!r} needs a fake_agent script")
   return Scenario(
       path=path,
       stage=raw["stage"],

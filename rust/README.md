@@ -66,9 +66,10 @@ session cgroups host-wide. It compares status, headers and decoded bodies for ea
 
 ```
 rust/
-  Cargo.toml                      workspace: charliebot-core, charliebot-compat, charliebot-server
+  Cargo.toml                      workspace: charliebot-core, charliebot-compat, charliebot-registry, charliebot-server
   PORT_BASELINE                   the Python commit the port reproduces
   docs/PORT_STATUS.md             every Python route: method, path, stage, ported or todo
+  docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
   scripts/compare_live.py         live response and log comparison against server.py
   scripts/fence_interop.py        cross-language fence exclusion check
   scripts/gen_mimetypes.py        regenerates mimetypes_table.rs from CPython's mimetypes
@@ -81,7 +82,6 @@ rust/
     home.rs, paths.rs             CHARLIEBOT_HOME, expanduser, realpath
     fence.rs, fsutil.rs           the home writer fence and its identity record
     run_token.rs                  signed run tokens
-    registry.rs                   package, backend type and config section registrations
     logging.rs, timefmt.rs        JSON log lines, Python time formats
     pyfmt.rs                      CPython repr, str and json.dumps renderings
     ssh.rs                        the batch-mode ssh argv and its 0700 control directory
@@ -93,9 +93,18 @@ rust/
     static_files.rs               StaticFiles answers: ranges, conditional requests, content types
     responses.rs, headers.rs      response builders and the latin-1 header text
     http_client.rs                outbound client: HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE over rustls
+  crates/charliebot-registry/src/
+    registry.rs                   the Registry: one ledger per hook kind, duplicate refusals, package order
+    wiring.rs, pages.rs, turn.rs, sidebar.rs, usage.rs, sequence.rs
+                                  the typed registration methods of each hook kind
+    backend.rs                    backend types, traits, lifecycles, child env, reading limits, usage resolvers
+    lifespan.rs                   the startup and shutdown steps around the crash-recovery task
+    context.rs                    FeatureContext and the typed startup state
+    store_hooks.rs                the store's hook traits, answered by the registered lifecycles and controllers
   crates/charliebot-server/src/
-    main.rs                       startup, bind, graceful shutdown
-    app.rs                        the middleware stack
+    main.rs                       startup, lifespan, bind, graceful shutdown
+    app.rs                        the middleware stack and the feature routers
+    packages/                     the composition root: the package list, with a stub for each unported package
     routes/mod.rs                 the one list of route families, 405 and 404/307 answers
     routes/{pages,system,static_mounts,websockets}.rs
     auth.rs, cookies.rs           the access-key gate

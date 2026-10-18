@@ -95,7 +95,7 @@ pub struct UsageResolverHost {
 }
 
 /// Constructs a backend type's usage resolver for one usage owner.
-pub type UsageResolverConstructor = fn(&UsageResolverHost) -> Arc<dyn UsageResolver>;
+pub type UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn UsageResolver> + Send + Sync>;
 
 /// The keyword arguments the runtime passes to a backend factory (`base.py` launch arguments and the per-type
 /// launch arguments).
@@ -415,6 +415,6 @@ impl Registry {
 
   /// The usage-resolver constructor of `backend_type`, or `None` when the type has none.
   pub fn usage_resolver_for(&self, backend_type: &str) -> Option<UsageResolverConstructor> {
-    self.usage_resolvers.get(backend_type).copied()
+    self.usage_resolvers.get(backend_type).cloned()
   }
 }

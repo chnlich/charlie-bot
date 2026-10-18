@@ -86,7 +86,9 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.usage_resolver("codex", resolver::usage_resolver)?;
+  let codex_home = host.codex_home();
+  registry
+    .usage_resolver("codex", Arc::new(move |usage_host| resolver::usage_resolver(codex_home.clone(), usage_host)))?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["codex-"],
@@ -100,8 +102,19 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_registry::backend::{BackendTraits, ResumeStyle};
+  use std::sync::OnceLock;
+
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::backend::{BackendTraits, ResumeStyle, UsageResolverHost};
   use charliebot_registry::usage::UsageOps;
+  use charliebot_store::Store;
+  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use serde_json::json;
+
+  fn synthetic_home() -> &'static std::path::Path {
+    static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().unwrap()).path()
+  }
 
   #[test]
   fn host_paths_follow_the_home_directory() {
@@ -113,8 +126,23 @@ mod tests {
   fn register_synthetic_host(registry: &mut Registry) -> Result<(), RegistryError> {
     register_with_host(
       registry,
-      &CodexHost { path: "/synthetic/bin".to_string(), home: PathBuf::from("/synthetic/home") },
+      &CodexHost { path: "/synthetic/bin".to_string(), home: synthetic_home().to_path_buf() },
     )
+  }
+
+  fn usage_resolver_host(registry: Arc<Registry>, home: &std::path::Path) -> UsageResolverHost {
+    let config_value = registry.load_config(home).unwrap();
+    let config_file = config_value.config_file();
+    let reload_value = config_value.clone();
+    let config = Arc::new(HotReload::new(
+      config_file,
+      "codex_usage_resolver_test_config_reload_failed",
+      Box::new(move || Ok(reload_value.clone())),
+    ));
+    let slots = registry.metadata_slots();
+    let hooks = charliebot_registry::store_hooks::store_hooks(Arc::clone(&registry));
+    let store = Store::new(config_value, slots, hooks).unwrap();
+    UsageResolverHost { config, store: Arc::new(store) }
   }
 
   #[test]
@@ -148,5 +176,35 @@ mod tests {
       source.implementation.as_ref().unwrap().ops(),
       UsageOps { logs: true, read: true, live_cli_sessions: true, quota_accounts: true, sweep: true }
     );
+  }
+
+  #[test]
+  fn registered_usage_resolver_reads_the_synthetic_host_codex_home() {
+    let home = synthetic_home();
+    let thread_id = uuid::Uuid::new_v4().to_string();
+    let rollout =
+      home.join(".codex/sessions/2026/10/18").join(format!("rollout-2026-10-18T10-00-00-{thread_id}.jsonl"));
+    std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    let records = [
+      json!({"type": "turn_context", "payload": {"model": "gpt-5.5"}}),
+      json!({"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "last_token_usage": {"input_tokens": 321}, "model_context_window": 12345
+      }}}),
+    ];
+    let contents: String = records.iter().map(|record| format!("{record}\n")).collect();
+    std::fs::write(rollout, contents).unwrap();
+
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.codex", register_synthetic_host).unwrap();
+    let registry = Arc::new(registry);
+    let host = usage_resolver_host(Arc::clone(&registry), home);
+    let constructor = registry.usage_resolver_for("codex").unwrap();
+    let resolver = constructor(&host);
+    let mut meta = SessionMetadata::new("synthetic-session", "Synthetic", TaskProfile::Manager);
+    meta.cc_session_id = Some(thread_id);
+
+    let usage = resolver.resolve("synthetic-session", &meta, &[]).unwrap().unwrap();
+    assert_eq!(usage["context_tokens"], json!(321));
+    assert_eq!(usage["context_full"], json!(12345));
   }
 }

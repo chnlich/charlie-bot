@@ -1,9 +1,9 @@
 //! The codex usage resolver (`CodexUsageResolver`, `src/backends/codex/codex_usage.py`): one session's context reading
 //! from its rollout.
 //!
-//! The registry's resolver trait takes the session's metadata and events only. The two values the Python resolver
-//! also reads, the config that holds each codex option's compaction limit and the store that holds the chat-events
-//! file, come from [`UsageHost`], retained by the resolver constructed for the usage owner.
+//! The registry's resolver trait takes the session's metadata and events only. The rollout home comes from the
+//! codex package's registered host. The config and store values the Python resolver reads come from [`UsageHost`],
+//! retained by the resolver constructed for the usage owner.
 
 use std::collections::HashMap;
 use std::fs;
@@ -60,10 +60,9 @@ impl CodexSessionHost for UsageHost {
   }
 }
 
-/// Construct the resolver for one usage owner from the running server's values.
-pub fn usage_resolver(host: &UsageResolverHost) -> Arc<dyn UsageResolver> {
-  let codex_host = super::CodexHost::from_process().expect("Codex package registration validated its process host");
-  Arc::new(CodexUsageResolver::new(codex_host.codex_home(), Arc::new(UsageHost::new(host))))
+/// Construct the resolver for one usage owner from the registered codex home and server values.
+pub fn usage_resolver(codex_home: PathBuf, host: &UsageResolverHost) -> Arc<dyn UsageResolver> {
+  Arc::new(CodexUsageResolver::new(codex_home, Arc::new(UsageHost::new(host))))
 }
 
 /// Reads one session's context and cost from its codex rollout.

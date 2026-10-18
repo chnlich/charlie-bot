@@ -10,8 +10,9 @@ use crate::{StoreError, StoreResult};
 const APPEND_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
-/// Parse one NDJSON line. Blank, malformed, and invalid-UTF-8 lines are skipped; a final partial
-/// line is parsed just like any other line.
+/// Parse one NDJSON line. Blank and malformed lines are skipped. Invalid UTF-8 is replaced with U+FFFD before
+/// the parse, as `src/infra/ndjson.py::parse_ndjson_line` repairs it, so such a line can still parse. A final
+/// partial line is parsed just like any other line.
 pub(crate) fn parse_line(raw: &[u8]) -> Option<Value> {
   if raw.iter().all(u8::is_ascii_whitespace) {
     return None;

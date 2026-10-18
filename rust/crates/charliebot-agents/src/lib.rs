@@ -9,6 +9,8 @@ pub mod transport;
 
 use charliebot_registry::{Registry, RegistryError};
 
+pub use backend_types::build_backend;
+
 /// Register agent environment and session cgroup startup steps before package registration.
 pub fn register_runtime(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.pre_recovery_step("agent_environment", agent_environment::pre_recovery_step)?;

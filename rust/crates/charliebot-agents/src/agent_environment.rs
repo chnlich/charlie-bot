@@ -8,13 +8,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
+use charliebot_core::venv::VenvBin;
 use charliebot_registry::backend::Env;
-use charliebot_registry::context::FeatureContext;
+use charliebot_registry::context::{FeatureContext, StartupState};
 use futures_util::future::BoxFuture;
 
 use crate::transport::cgroup;
 
-pub const VENV_BIN_ENV: &str = "CHARLIEBOT_VENV_BIN";
+pub use charliebot_core::venv::VENV_BIN_ENV;
 pub const REPO_ROOT_ENV: &str = "CHARLIEBOT_REPO_ROOT";
 pub const ENTRY_POINT_RELATIVE: &str = "src/runtime/agent_entry_points";
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
@@ -23,25 +24,6 @@ const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentBaseEnvironment {
   pub values: Env,
-}
-
-/// Return a required venv bin path from an environment mapping.
-pub fn required_venv_bin(values: &Env) -> anyhow::Result<PathBuf> {
-  let raw = values.get(VENV_BIN_ENV).filter(|value| !value.is_empty());
-  let Some(raw) = raw else {
-    bail!("{VENV_BIN_ENV} is required and must name the server venv bin directory");
-  };
-  Ok(PathBuf::from(raw))
-}
-
-/// Require a non-empty CHARLIEBOT_VENV_BIN before the server takes its home fence.
-pub fn require_venv_bin() -> anyhow::Result<PathBuf> {
-  let mut values = Env::new();
-  if let Some(value) = env::var_os(VENV_BIN_ENV) {
-    let value = value.into_string().map_err(|_| anyhow::anyhow!("{VENV_BIN_ENV} must be valid Unicode"))?;
-    values.insert(VENV_BIN_ENV.to_string(), value);
-  }
-  required_venv_bin(&values)
 }
 
 /// Rewrite a supplied server environment for agent launches.
@@ -72,22 +54,32 @@ pub fn agent_environment(inherited: &Env, venv_bin: &Path, repo_root: &Path) -> 
   Ok(AgentBaseEnvironment { values })
 }
 
-/// Read the process environment and build its agent-safe snapshot.
-pub fn from_process_environment() -> anyhow::Result<AgentBaseEnvironment> {
+/// Read the process environment and build its agent-safe snapshot using the startup venv path.
+pub fn from_process_environment(startup: &StartupState) -> anyhow::Result<AgentBaseEnvironment> {
   let values = process_environment()?;
-  let venv_bin = required_venv_bin(&values)?;
+  agent_environment_from_startup(startup, &values)
+}
+
+fn agent_environment_from_startup(startup: &StartupState, values: &Env) -> anyhow::Result<AgentBaseEnvironment> {
+  let venv_bin = startup.require::<VenvBin>()?;
   let repo_root = values
     .get(REPO_ROOT_ENV)
     .filter(|value| !value.is_empty())
     .map(PathBuf::from)
     .context("CHARLIEBOT_REPO_ROOT is required to build the agent environment")?;
-  agent_environment(&values, &venv_bin, &repo_root)
+  agent_environment(values, venv_bin.path(), &repo_root)
+}
+
+fn insert_agent_environment(startup: &StartupState, values: &Env) -> anyhow::Result<()> {
+  startup.insert(agent_environment_from_startup(startup, values)?)?;
+  Ok(())
 }
 
 /// Insert the one typed agent environment before recovery starts.
 pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
-    features.startup.insert(from_process_environment()?)?;
+    let values = process_environment()?;
+    insert_agent_environment(&features.startup, &values)?;
     Ok(())
   })
 }
@@ -114,6 +106,9 @@ fn process_environment() -> anyhow::Result<Env> {
   let mut values = BTreeMap::new();
   for (name, value) in env::vars_os() {
     let name = name.into_string().map_err(|_| anyhow::anyhow!("the server environment has a non-Unicode name"))?;
+    if name == VENV_BIN_ENV {
+      continue;
+    }
     let value =
       value.into_string().map_err(|_| anyhow::anyhow!("the server environment variable {name} is not Unicode"))?;
     values.insert(name, value);
@@ -170,6 +165,7 @@ fn realpath(path: &Path) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_core::venv::VenvBin;
 
   #[test]
   fn removes_venv_activation_and_symlinked_path_entries() {
@@ -227,10 +223,30 @@ mod tests {
   }
 
   #[test]
-  fn missing_or_empty_venv_variable_names_the_variable() {
-    for values in [Env::new(), Env::from([(VENV_BIN_ENV.to_string(), String::new())])] {
-      assert!(required_venv_bin(&values).unwrap_err().to_string().contains(VENV_BIN_ENV));
-    }
+  fn pre_recovery_environment_uses_the_startup_venv_bin() {
+    let root = tempfile::tempdir().unwrap();
+    let venv_bin = root.path().join("venv/bin");
+    fs::create_dir_all(&venv_bin).unwrap();
+    let startup = StartupState::default();
+    startup.insert(VenvBin::new(Some(venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
+    let inherited = Env::from([
+      (REPO_ROOT_ENV.to_string(), root.path().display().to_string()),
+      (VENV_BIN_ENV.to_string(), "/inherited/venv/bin".to_string()),
+      ("PATH".to_string(), venv_bin.display().to_string()),
+    ]);
+
+    insert_agent_environment(&startup, &inherited).unwrap();
+
+    let rewritten = startup.require::<AgentBaseEnvironment>().unwrap();
+    assert_eq!(rewritten.values[VENV_BIN_ENV], venv_bin.display().to_string());
+    assert!(rewritten.values["PATH"].starts_with(&root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
+  }
+
+  #[test]
+  fn pre_recovery_environment_requires_a_startup_venv_bin() {
+    let startup = StartupState::default();
+    let error = insert_agent_environment(&startup, &Env::new()).unwrap_err();
+    assert!(error.to_string().contains("VenvBin"));
   }
 
   #[test]

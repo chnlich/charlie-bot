@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
+use charliebot_core::venv::VenvBin;
 use charliebot_core::{config, home, logging, paths, v1_sessions};
 use charliebot_registry::lifespan::Lifespan;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
@@ -78,7 +79,7 @@ async fn run() -> ExitCode {
       return ExitCode::from(EXIT_CONFIG);
     }
   };
-  let (repo_root, state_parts) = match load_inputs(&registry) {
+  let (repo_root, state_parts, venv_bin) = match load_inputs(&registry) {
     Ok(inputs) => inputs,
     Err(message) => {
       eprintln!("charliebot-server: {message}");
@@ -118,12 +119,14 @@ async fn run() -> ExitCode {
     }
   };
   tracing::info!(path = %paths::display(&cfg.charliebot_home), "charliebot_home_ready");
+  let startup = StartupState::default();
+  startup.insert(venv_bin).expect("the startup state is empty before the lifespan begins");
   let features = Arc::new(FeatureContext {
     config: state_parts.config,
     credentials: state_parts.credentials,
     store: Arc::new(store),
     registry: Arc::clone(&registry),
-    startup: Arc::new(StartupState::default()),
+    startup: Arc::new(startup),
   });
   let lifespan = match Lifespan::start(Arc::clone(&features)).await {
     Ok(lifespan) => lifespan,
@@ -204,8 +207,8 @@ struct StateParts {
 }
 
 /// The repository root and the home's loaded files; any error names the input it concerns.
-fn load_inputs(registry: &Arc<Registry>) -> Result<(PathBuf, StateParts), String> {
-  charliebot_agents::agent_environment::require_venv_bin().map_err(|error| error.to_string())?;
+fn load_inputs(registry: &Arc<Registry>) -> Result<(PathBuf, StateParts, VenvBin), String> {
+  let venv_bin = VenvBin::new(std::env::var_os("CHARLIEBOT_VENV_BIN")).map_err(|error| error.to_string())?;
   let repo_root = match std::env::var_os(REPO_ROOT_ENV) {
     Some(value) if !value.is_empty() => PathBuf::from(value),
     _ => {
@@ -230,7 +233,7 @@ fn load_inputs(registry: &Arc<Registry>) -> Result<(PathBuf, StateParts), String
     check(&cfg)?;
   }
   parts.credentials.get().map_err(|error| error.to_string())?;
-  Ok((repo_root, parts))
+  Ok((repo_root, parts, venv_bin))
 }
 
 /// uvicorn's `bind_socket`: an IPv6 socket when the host holds a `:`, IPv4 otherwise.

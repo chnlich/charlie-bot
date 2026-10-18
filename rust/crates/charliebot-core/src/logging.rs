@@ -21,6 +21,7 @@ use crate::timefmt;
 pub fn init() {
   let filter = Targets::new()
     .with_target("charliebot_core", Level::INFO)
+    .with_target("charliebot_agents", Level::INFO)
     .with_target("charliebot_server", Level::INFO)
     .with_default(Level::WARN);
   let subscriber = Registry::default().with(JsonLines.with_filter(filter));

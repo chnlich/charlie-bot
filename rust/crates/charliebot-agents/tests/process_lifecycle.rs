@@ -1,0 +1,92 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
+
+use charliebot_agents::transport::identity::{is_run_alive, read_host_boot_time};
+use charliebot_agents::transport::kill::{detach, kill_process_group};
+use charliebot_agents::transport::spawn::{RawStdin, SpawnSpec, spawn_piped, spawn_raw_log};
+use nix::sys::signal::Signal;
+use time::OffsetDateTime;
+
+#[tokio::test]
+async fn child_survival_matches_parent_death_policy() {
+  let root = tempfile::tempdir().unwrap();
+  let base = root.path().join("app.slice");
+  fs::create_dir(&base).unwrap();
+  for mode in ["raw", "piped"] {
+    let raw_path = root.path().join(format!("{mode}.raw"));
+    let stderr_path = root.path().join(format!("{mode}.stderr"));
+    let identity_path = root.path().join(format!("{mode}.identity"));
+    let output = Command::new(std::env::current_exe().unwrap())
+      .args(["--exact", "spawn_and_exit_helper", "--nocapture"])
+      .env("CHARLIEBOT_SPAWN_HELPER_MODE", mode)
+      .env("CHARLIEBOT_SPAWN_HELPER_BASE", &base)
+      .env("CHARLIEBOT_SPAWN_HELPER_RAW", &raw_path)
+      .env("CHARLIEBOT_SPAWN_HELPER_STDERR", &stderr_path)
+      .env("CHARLIEBOT_SPAWN_HELPER_IDENTITY", &identity_path)
+      .output()
+      .unwrap();
+    assert!(output.status.success(), "spawn helper failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    let identity = fs::read_to_string(identity_path).unwrap();
+    let mut fields = identity.split_whitespace();
+    let pid = fields.next().unwrap().parse::<u32>().unwrap();
+    let pid_start = fields.next().unwrap().to_string();
+    let boot = read_host_boot_time().unwrap();
+    let started_at = OffsetDateTime::now_utc();
+    let expected_alive = mode == "raw";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while is_run_alive(Some(pid), Some(&pid_start), Some(started_at), boot) != expected_alive
+      && tokio::time::Instant::now() < deadline
+    {
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let actually_alive = is_run_alive(Some(pid), Some(&pid_start), Some(started_at), boot);
+    if actually_alive != expected_alive {
+      kill_process_group(pid, Signal::SIGKILL);
+    }
+    assert_eq!(actually_alive, expected_alive, "{mode}");
+    if expected_alive {
+      kill_process_group(pid, Signal::SIGTERM);
+      let cleanup_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+      while is_run_alive(Some(pid), Some(&pid_start), Some(started_at), boot)
+        && tokio::time::Instant::now() < cleanup_deadline
+      {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+      }
+      assert!(!is_run_alive(Some(pid), Some(&pid_start), Some(started_at), boot));
+    }
+  }
+}
+
+#[tokio::test]
+async fn spawn_and_exit_helper() {
+  let Ok(mode) = std::env::var("CHARLIEBOT_SPAWN_HELPER_MODE") else {
+    return;
+  };
+  let base = PathBuf::from(std::env::var_os("CHARLIEBOT_SPAWN_HELPER_BASE").unwrap());
+  let raw_path = PathBuf::from(std::env::var_os("CHARLIEBOT_SPAWN_HELPER_RAW").unwrap());
+  let stderr_path = PathBuf::from(std::env::var_os("CHARLIEBOT_SPAWN_HELPER_STDERR").unwrap());
+  let identity_path = PathBuf::from(std::env::var_os("CHARLIEBOT_SPAWN_HELPER_IDENTITY").unwrap());
+  let program = if mode == "raw" { "/bin/sh" } else { "/bin/sleep" };
+  let args = if mode == "raw" {
+    vec!["-c".into(), "printf '%s\\n' \"$$\"; exec /bin/sleep 30".into()]
+  } else {
+    vec!["30".into()]
+  };
+  let spec = SpawnSpec::new(program, args, None, HashMap::new(), None, base, 0, 0, 0);
+  let pid = if mode == "raw" {
+    let child = spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null).await.unwrap().child;
+    let pid = child.id().unwrap();
+    detach(child);
+    pid
+  } else {
+    let child = spawn_piped(&spec).await.unwrap().child;
+    let pid = child.id().unwrap();
+    detach(child);
+    pid
+  };
+  let identity = charliebot_agents::transport::identity::pin_process_identity(pid);
+  fs::write(identity_path, format!("{} {}", identity.pid, identity.pid_start.unwrap())).unwrap();
+}

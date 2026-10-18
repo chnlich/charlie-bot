@@ -58,6 +58,40 @@ pub fn active_listing_corpus(
   Ok((listed.rows, derived))
 }
 
+/// Build the chat page sidebar rows from active, unscheduled sessions outside every owned subtree.
+pub fn active_page_values(store: &Store, registry: &Registry) -> StoreResult<Vec<Value>> {
+  let (mut rows, derived) = active_listing_corpus(store, registry)?;
+  let sequence = store.sequence_subtree_roots()?;
+  let views = store.view_subtree_roots()?;
+  rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
+  let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+  let listing_fields = registry.sequence_listing_fields(&ids, UtcDateTime::now());
+  rows
+    .iter()
+    .map(|row| {
+      let mut value = serde_json::to_value(row).map_err(|error| StoreError::new(error.to_string()))?;
+      apply_sidebar_fields(
+        &mut value,
+        row,
+        derived.get(&row.id),
+        store,
+        SidebarProjection {
+          include_running: true,
+          include_trigger: true,
+          include_plan: false,
+          display_backend: true,
+          include_run_backend: true,
+        },
+      )?;
+      apply_listing_fields(
+        &mut value,
+        listing_fields.get(&row.id).cloned().expect("every sidebar row has sequence listing fields"),
+      );
+      Ok(value)
+    })
+    .collect()
+}
+
 /// Render sidebar rows with sequence fields and route-local body and gzip memos.
 pub fn sessions_list_response(
   request: &Request<Body>,

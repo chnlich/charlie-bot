@@ -27,7 +27,13 @@ pub fn environment(
   environment.set_loader(loader);
   environment.set_auto_escape_callback(|_| AutoEscape::Html);
   environment.set_formatter(markupsafe_formatter);
-  environment.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+  environment.set_unknown_method_callback(|state, value, method, args| {
+    // Page contexts keep Python's datetime.isoformat() call after serializing datetimes as ISO strings.
+    if method == "isoformat" && value.kind() == ValueKind::String && args.is_empty() {
+      return Ok(value.clone());
+    }
+    minijinja_contrib::pycompat::unknown_method_callback(state, value, method, args)
+  });
   environment.add_filter("tojson", tojson);
   environment.add_filter("urlencode", urlencode);
   environment
@@ -201,5 +207,11 @@ mod tests {
     assert_eq!(urlencode(Value::from_serialize(json!([["a", 1], ["b c", "x/y"]]))).unwrap(), "a=1&b+c=x%2Fy");
     assert_eq!(urlencode(Value::from_serialize(json!({"k": "v w", "n": null}))).unwrap(), "k=v+w&n=None");
     assert_eq!(urlencode(Value::UNDEFINED).unwrap(), "");
+  }
+
+  #[test]
+  fn datetime_isoformat_returns_the_serialized_timestamp() {
+    let timestamp = "2026-10-18T12:30:00+00:00";
+    assert_eq!(render_str("{{ timestamp.isoformat() }}", json!({"timestamp": timestamp})), timestamp);
   }
 }

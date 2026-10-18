@@ -1,6 +1,12 @@
 # The server skeleton: the public routes, the access-key gate, the page entry and the static files.
 stage: server-skeleton
 name: skeleton
+config:
+  ui:
+    home_services:
+      - name: Synthetic local service
+        description: Checks a local closed port.
+        url: http://127.0.0.1:9/
 steps:
   - name: auth status, no key (public route)
     method: GET
@@ -68,6 +74,12 @@ steps:
     path: /
     query:
       session: ${missing_session}
+    expect_status: 200
+  - name: page with an empty session
+    method: GET
+    path: /
+    query:
+      session: ""
     expect_status: 200
   - name: browser navigation without a key (login page)
     method: GET

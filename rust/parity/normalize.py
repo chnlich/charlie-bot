@@ -29,7 +29,7 @@ TREE_PLACEHOLDER = "<tree>"
 _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
-_TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[A-Za-z0-9_]{6,8})(?![A-Za-z0-9_])")
+_TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -45,12 +45,11 @@ VOICE_STEM_RULE = TextPatternRule(
     "wall-clock milliseconds and uuid4 hex: the voice archive names each recording at upload time",
 )
 
-# The random suffix of a scratch directory: Python's mkdtemp draws eight characters of [a-z0-9_], the Rust tempfile
-# crate six of [A-Za-z0-9]. The prefix names the directory's role, so it stays in the normalized text.
+# The prefix names the directory's role; tempfile.mkdtemp draws eight random characters from [a-z0-9_].
 TEMP_DIR_SUFFIX_RULE = TextPatternRule(
     "temp-dir-suffix",
     _TEMP_DIR_SUFFIX,
-    "tempfile random suffix: each run's scratch directory draws its own name; the prefix names its role",
+    "tempfile.mkdtemp random suffix; the directory's role is fixed by its prefix",
 )
 
 

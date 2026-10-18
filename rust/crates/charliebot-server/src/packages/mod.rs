@@ -27,11 +27,11 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.discord", charliebot_discord::register),           // stub: src.features.discord
   ("src.features.web_reply", charliebot_web_reply::register),       // stub: src.features.web_reply
   ("src.features.host_auth", charliebot_host_auth::register),
-  ("src.features.diff_view", charliebot_diff_view::register),       // stub: src.features.diff_view
-  ("src.features.explain", charliebot_explain::register),           // stub: src.features.explain
-  ("src.features.improve", stub),                                   // stub: src.features.improve
-  ("src.features.memory", charliebot_memory::register),             // stub: src.features.memory
-  ("src.features.ncu", charliebot_ncu::register),                   // stub: src.features.ncu
+  ("src.features.diff_view", charliebot_diff_view::register), // stub: src.features.diff_view
+  ("src.features.explain", charliebot_explain::register),     // stub: src.features.explain
+  ("src.features.improve", stub),                             // stub: src.features.improve
+  ("src.features.memory", charliebot_memory::register),       // stub: src.features.memory
+  ("src.features.ncu", charliebot_ncu::register),             // stub: src.features.ncu
   ("src.features.terminal", charliebot_terminal::register),
   ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage::register), // stub: src.features.usage

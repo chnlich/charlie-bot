@@ -80,7 +80,7 @@ class OpenCodeSseSilenceError(RuntimeError):
   """The turn's session produced no event within opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT."""
 
 
-class _TurnProcessExited(Exception):
+class _TurnProcessExitedError(Exception):
   """The turn's own process ended (a chat cancel signals it), so the turn ends as cancelled."""
 
 
@@ -191,9 +191,9 @@ class OpenCodeBackend(base.AgentBackend):
           self._send_prompt(shared, self._session_id, self._effective_prompt(prompt), uploaded_files))
       async for translated in self._consume_turn(self._turn):
         yield translated
-    except _TurnProcessExited:
+    except _TurnProcessExitedError:
       log.info("opencode_turn_cancelled", session_id=self._session_id)
-    except server.ServerLost as e:
+    except server.ServerLostError as e:
       self._failed = True
       yield base.make_error_event(f"OpenCode backend failed: {e}")
     except Exception as e:
@@ -230,7 +230,7 @@ class OpenCodeBackend(base.AgentBackend):
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
       await task
-    raise _TurnProcessExited()
+    raise _TurnProcessExitedError()
 
   async def _open_session(self, shared: server.OpenCodeServer, cwd: str) -> str:
     """Resume the recorded session, or create one at the turn's directory.
@@ -330,7 +330,7 @@ class OpenCodeBackend(base.AgentBackend):
         raise OpenCodeSseSilenceError(
             f"OpenCode session {turn.session_id} produced no event for "
             f"{opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT:g} s") from e
-      if isinstance(item, server.ServerLost):
+      if isinstance(item, server.ServerLostError):
         raise item
       event_type = item["type"]
       data = item.get("data", {})

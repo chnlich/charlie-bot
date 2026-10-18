@@ -5,7 +5,7 @@ and a random password. One global event stream feeds every turn: each event goes
 registered for its session, and an execution that no turn claims is interrupted. The server
 stops after OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn. When its event stream or its process
 fails, every running turn ends first (the turn-end steps), then the process stops, then each turn
-gets a ServerLost.
+gets a ServerLostError.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ _OUTPUT_TAIL_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 
 
-class ServerLost(RuntimeError):
+class ServerLostError(RuntimeError):
   """The shared server ended while this turn was running; the message names why."""
 
 
@@ -74,14 +74,14 @@ class Turn:
   def __init__(self, server: OpenCodeServer, session_id: str, directory: str) -> None:
     self.session_id = session_id
     self.directory = directory
-    # Event dicts from the global stream, and at most one ServerLost.
-    self.events: asyncio.Queue[dict | ServerLost] = asyncio.Queue()
+    # Event dicts from the global stream, and at most one ServerLostError.
+    self.events: asyncio.Queue[dict | ServerLostError] = asyncio.Queue()
     self._server = server
     self._finished = False
 
   def drop_earlier_interrupts(self) -> None:
     """Drop the queued session.execution.interrupted events of interrupts sent before this turn's prompt."""
-    kept: list[dict | ServerLost] = []
+    kept: list[dict | ServerLostError] = []
     while not self.events.empty():
       item = self.events.get_nowait()
       if isinstance(item, dict) and item["type"] == "session.execution.interrupted":
@@ -349,7 +349,7 @@ class OpenCodeServer:
       self._track(self.interrupt(session_id))
 
   async def _lose(self, reason: str) -> None:
-    """End the server after a failure: the running turns' steps, then the process, then ServerLost."""
+    """End the server after a failure: the running turns' steps, then the process, then ServerLostError."""
     async with self._lock:
       if self._proc is None or self._stopping:
         return
@@ -362,7 +362,7 @@ class OpenCodeServer:
           log.exception("opencode_turn_end_failed", session_id=turn.session_id)
       await self._shutdown()
       for turn in turns:
-        turn.events.put_nowait(ServerLost(reason))
+        turn.events.put_nowait(ServerLostError(reason))
       log.error("opencode_server_lost", reason=reason, turns=len(turns))
 
   async def _stop_when_idle(self) -> None:

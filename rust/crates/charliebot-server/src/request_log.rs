@@ -15,11 +15,11 @@ use axum::extract::{ConnectInfo, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_compat::responses::Failure;
 use http_body::{Frame, SizeHint};
 
 use crate::app::ConnectionInfo;
 use crate::request_path;
-use crate::responses::Failure;
 
 /// The fields of one request's event, logged when dropped.
 struct PendingEvent {

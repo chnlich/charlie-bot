@@ -19,8 +19,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{Family, get_only};
-use crate::responses::{self, Failure};
 use crate::state::AppState;
+use charliebot_compat::responses::{self, Failure};
 
 pub const FAMILY: Family = Family { routes, matches: |_, path| path == "/" };
 

@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 axum.workspace = true
 bytes.workspace = true
+charliebot-compat.workspace = true
 charliebot-core.workspace = true
 flate2.workspace = true
 futures-util.workspace = true

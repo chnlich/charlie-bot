@@ -10,8 +10,8 @@ use serde_json::json;
 
 use super::{Family, get_only};
 use crate::auth::AUTH_STATUS_PATH;
-use crate::responses;
 use crate::state::AppState;
+use charliebot_compat::responses;
 
 /// `internal.get_version`'s path: the CLI's version-skew probe.
 pub const VERSION_PATH: &str = "/api/internal/version";

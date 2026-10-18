@@ -4,9 +4,10 @@
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::pyfmt;
 use http::{HeaderValue, StatusCode, header};
 use serde_json::{Value, json};
+
+use crate::json;
 
 /// The failure behind a 500: the name the `http_request` log line carries in `error` (the Python
 /// exception class the same failure raises there) and the detail logged beside it.
@@ -18,7 +19,12 @@ pub struct Failure {
 
 /// starlette `JSONResponse(content, status_code)`: compact separators, raw UTF-8.
 pub fn json(status: StatusCode, content: &Value) -> Response {
-  bytes_response(status, "application/json", Bytes::from(pyfmt::json_dumps(content, &pyfmt::STARLETTE_JSON)))
+  bytes_response(status, "application/json", Bytes::from(json::starlette_bytes(content)))
+}
+
+/// `FastJsonResponse(content, status_code)` (src/infra/responses.py): the same media type, orjson's bytes.
+pub fn fast_json(status: StatusCode, content: &Value) -> Response {
+  bytes_response(status, "application/json", Bytes::from(json::fast_json_bytes(content)))
 }
 
 /// FastAPI's rendering of `HTTPException(status_code)`: `{"detail": <reason phrase>}`.

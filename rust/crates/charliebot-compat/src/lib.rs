@@ -4,3 +4,4 @@
 //! the same routes takes them from here rather than writing its own.
 
 pub mod json;
+pub mod responses;

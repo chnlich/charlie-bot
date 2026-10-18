@@ -13,6 +13,7 @@ use axum::extract::connect_info::Connected;
 use axum::middleware;
 use axum::response::Response;
 use axum::serve::IncomingStream;
+use charliebot_compat::responses;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower::util::BoxCloneSyncService;
@@ -20,7 +21,7 @@ use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::routes::{self, websockets};
 use crate::state::AppState;
-use crate::{auth, gzip, request_log, request_path, responses};
+use crate::{auth, gzip, request_log, request_path};
 
 /// Both ends of a connection: `scope["client"]` and `scope["server"]`.
 #[derive(Debug, Clone, Copy)]

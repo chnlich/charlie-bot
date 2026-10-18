@@ -13,12 +13,13 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
+use charliebot_compat::responses;
 use charliebot_core::run_token;
 use http::{HeaderMap, HeaderName, Method, StatusCode, header};
 use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
-use crate::{cookies, request_path, responses};
+use crate::{cookies, request_path};
 
 /// The cookie the login page sets; its served JavaScript spells the same name.
 pub const ACCESS_KEY_COOKIE: &str = "charliebot_access_key";

@@ -31,7 +31,7 @@ The modules:
 | `fixture.py` | the deterministic synthetic home and its manifest |
 | `servers.py` | the trees, the synthetic config, the process environment, starting and stopping servers |
 | `fake_agent.py` | scripted fake agents, spawn records and gate markers |
-| `sandbox.py` | the Landlock launcher that confines every process under test to its own tree |
+| `sandbox.py` | the Landlock launcher: confines each process under test to its tree and to its TCP connect ports |
 | `guard.py` | the outside-write guard: parses the strace logs |
 | `compare.py` | tree snapshots and deltas, response and file comparison, the structural JSON diff |
 | `normalize.py` | every normalization rule, each with the field it masks and why the value cannot match |
@@ -76,7 +76,7 @@ uv run python rust/parity/parity.py --python-vs-python --stage features
   extracted model directory, then links those entries into each synthetic home.
 - `--keep` keeps the trees and logs. A run that fails keeps them anyway and prints their path.
 
-Needs `/usr/bin/strace` and a kernel with Landlock (Linux 5.13 or newer, enabled in the LSM list).
+Needs `/usr/bin/strace` and a kernel with Landlock ABI 4 or newer (Linux 6.7 or newer, enabled in the LSM list).
 
 ### Reading the report
 
@@ -113,6 +113,23 @@ Each process under test (the fixture generator and each server) runs with:
   inside the tree.
 - `TMUX_TMPDIR` is the tree's `tmp/` directory, and the harness kills the `charliebot` tmux server when a server
   stops or is handed over. Tree creation checks that the resulting socket path is at most 107 bytes.
+
+### The TCP connect rule
+
+`sandbox.py` also limits the TCP connects of every process under test to port 9 (the closed proxy,
+`servers.CLOSED_PROXY`) and to ports 1024-65535. A connect to any other port fails with EACCES, which Python raises
+as `PermissionError`. Port 22, 80 and 443 are refused, so a client that ignores the proxy variables (an ssh child, for
+example) cannot reach a real service on its standard port. Bind stays unrestricted. The rule needs Landlock ABI 4; on
+an older kernel `sandbox.py` exits with an error naming the ABI, with no fallback. Landlock has no port ranges, so the
+ruleset holds 64,513 port rules. Building it took 0.18-0.24 s per launch in five isolated runs on this host. Across
+twelve runs under a load average of 4-7, the median was 0.27 s (kernel 7.0, Landlock ABI 8).
+
+What stays open:
+
+- The destination address. Landlock matches the port only, so a connect to any host on a port of 1024 or more (8443,
+  for example) still succeeds. Closing that takes another mechanism, such as a network namespace.
+- UDP, so DNS lookups still reach the resolver.
+- Unix sockets, which carry the tmux server and other local sockets.
 
 The Python server starts as `<worktree>/.venv/bin/python server.py` from the worktree root. Every server receives
 `CHARLIEBOT_VENV_BIN=<worktree>/.venv/bin`.

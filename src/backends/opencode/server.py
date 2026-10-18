@@ -1,11 +1,12 @@
 """The opencode 2.0 server CharlieBot starts and shares across its turns: one per proxy_url.
 
-The server runs ``opencode serve --port 0`` with the profile's XDG store, the headless config
-and a random password. One global event stream feeds every turn: each event goes to the turn
-registered for its session, and an execution that no turn claims is interrupted. The server
-stops after OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn. When its event stream or its process
-fails, every running turn ends first (the turn-end steps), then the process stops, then each turn
-gets a ServerLostError.
+The server runs ``opencode serve --port 0`` with the profile's XDG store, the headless config,
+a random password and the file index off. One global event stream feeds every turn: each event goes
+to the turn registered for its session, and an execution that no turn claims is interrupted. Each
+turn claims its directory while it runs; when a turn ends, the server releases every loaded
+directory no turn claims. The server stops after OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn.
+When its event stream or its process fails, every running turn ends first (the turn-end steps),
+then the process stops, then each turn gets a ServerLostError.
 """
 
 from __future__ import annotations
@@ -112,6 +113,10 @@ class OpenCodeServer:
   def __init__(self, proxy_url: str | None) -> None:
     self._proxy_url = proxy_url
     self._lock = asyncio.Lock()
+    # Guards the claim counts and the release: a claim taken during a release waits for it.
+    self._release_lock = asyncio.Lock()
+    # Turns running in each directory; a directory with a claim is never released.
+    self._claims: collections.Counter[str] = collections.Counter()
     self._proc: spawn.SpawnedProcess | None = None
     self._client: httpx.AsyncClient | None = None
     self._connected = asyncio.Event()
@@ -215,6 +220,30 @@ class OpenCodeServer:
         continue
       removed = await self.client.delete(f"/api/shell/{shell['id']}", params={"location[directory]": directory})
       removed.raise_for_status()
+
+  async def claim(self, directory: str) -> None:
+    """Hold *directory* for a turn: no release unloads it until the turn's claim is dropped."""
+    async with self._release_lock:
+      self._claims[directory] += 1
+
+  async def release_claim(self, directory: str) -> None:
+    """Drop a turn's claim on *directory*, then unload every loaded directory no turn claims."""
+    async with self._release_lock:
+      self._claims[directory] -= 1
+      if self._claims[directory] == 0:
+        del self._claims[directory]
+      # A stopping, exited or still starting server has no loaded directories to release.
+      if self._stopping or self._client is None or not self.process_alive:
+        return
+      response = await self.client.get("/api/debug/location")
+      response.raise_for_status()
+      for location in response.json():
+        loaded = location["directory"]
+        if loaded in self._claims:
+          continue
+        released = await self.client.delete("/api/debug/location", params={"location[directory]": loaded})
+        if not released.is_success:
+          raise RuntimeError(f"opencode release of directory {loaded} returned HTTP {released.status_code}")
 
   @property
   def client(self) -> httpx.AsyncClient:

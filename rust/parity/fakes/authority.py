@@ -33,18 +33,24 @@ def generate(scratch: pathlib.Path) -> Certificates:
       "[server]\nsubjectAltName=" + ",".join(f"DNS:{name}" for name in names) + "\nextendedKeyUsage=serverAuth\n",
       encoding="utf-8")
   _run(["genrsa", "-out", str(ca_key), RSA_BITS])
-  _run([
-      "req", "-x509", "-new", "-key", str(ca_key), "-sha256", "-days", CERTIFICATE_DAYS, "-subj",
-      "/CN=CharlieBot parity fake CA", "-out", str(ca_certificate), "-addext",
-      f"basicConstraints={CA_BASIC_CONSTRAINTS}", "-addext", f"keyUsage={CA_KEY_USAGE}"
-  ])
+  _run(
+      [
+          "req", "-x509", "-new", "-key",
+          str(ca_key), "-sha256", "-days", CERTIFICATE_DAYS, "-subj", "/CN=CharlieBot parity fake CA", "-out",
+          str(ca_certificate), "-addext", f"basicConstraints={CA_BASIC_CONSTRAINTS}", "-addext",
+          f"keyUsage={CA_KEY_USAGE}"
+      ])
   _run(["genrsa", "-out", str(leaf_key), RSA_BITS])
   _run(["req", "-new", "-key", str(leaf_key), "-subj", "/CN=parity-fake-services", "-out", str(leaf_request)])
-  _run([
-      "x509", "-req", "-in", str(leaf_request), "-CA", str(ca_certificate), "-CAkey", str(ca_key), "-CAcreateserial",
-      "-out", str(leaf_certificate), "-days", CERTIFICATE_DAYS, "-sha256", "-extfile", str(extensions),
-      "-extensions", "server"
-  ])
+  _run(
+      [
+          "x509", "-req", "-in",
+          str(leaf_request), "-CA",
+          str(ca_certificate), "-CAkey",
+          str(ca_key), "-CAcreateserial", "-out",
+          str(leaf_certificate), "-days", CERTIFICATE_DAYS, "-sha256", "-extfile",
+          str(extensions), "-extensions", "server"
+      ])
   return Certificates(ca_certificate, leaf_certificate, leaf_key)
 
 

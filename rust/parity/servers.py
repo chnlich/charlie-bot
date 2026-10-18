@@ -92,7 +92,8 @@ def make_tree(label: str, root: pathlib.Path) -> Tree:
   return tree
 
 
-def write_home_config(tree: Tree, port: int, config_overlay: dict | None = None, credentials_overlay: dict | None = None) -> None:
+def write_home_config(
+    tree: Tree, port: int, config_overlay: dict | None = None, credentials_overlay: dict | None = None) -> None:
   """Write the synthetic config.yaml and credentials.yaml into the tree's home.
 
   One backend option, no integration, the session cgroups and the worker disk-headroom check off, and both

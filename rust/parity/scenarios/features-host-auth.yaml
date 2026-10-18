@@ -1,0 +1,25 @@
+stage: features
+name: features-host-auth
+fixture_extras: [host_auth_state]
+steps:
+  - name: host-auth page
+    method: GET
+    path: /host-auth
+    expect_status: 200
+  - name: host-auth page, head is not allowed
+    method: HEAD
+    path: /host-auth
+    expect_status: 405
+  - name: host-auth page with a trailing slash redirects
+    method: GET
+    path: /host-auth/
+    headers: {host: parity.invalid}
+    expect_status: 307
+  - name: host-auth status
+    method: GET
+    path: /api/host-auth/status
+    expect_status: 200
+  - name: host-auth probe is POST only
+    method: GET
+    path: /api/host-auth/probe
+    expect_status: 405

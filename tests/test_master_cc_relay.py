@@ -266,23 +266,7 @@ async def test_run_cc_falls_back_to_the_regular_select_when_the_below_line_targe
   # ext-1 is the gate's below-line destination; ext-2 already sits at the line.
   claude_accounts.observe_rate_limit("ext-1", conftest.rate_limit_event("allowed", 0.85)["rate_limit_info"], now=NOW)
   claude_accounts.observe_rate_limit("ext-2", conftest.rate_limit_event("allowed", 0.92)["rate_limit_info"], now=NOW)
-  real_select = claude_accounts.select
-
-  def select_with_transient(cfg, model, exclude=(), busy_accounts=None, now=None, account_pool=None, min_headroom=0.0):
-    if min_headroom > 0 and exclude:
-      # The move's below-line select: the target's reading crosses the line first.
-      claude_accounts.observe_rate_limit(
-          "ext-1", conftest.rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
-    return real_select(
-        cfg,
-        model,
-        exclude=exclude,
-        busy_accounts=busy_accounts,
-        now=now,
-        account_pool=account_pool,
-        min_headroom=min_headroom)
-
-  monkeypatch.setattr(claude_accounts, "select", select_with_transient)
+  conftest.patch_select_with_transient_reading(monkeypatch, NOW)
   first = conftest.ScriptedRelayBackend(
       [
           conftest.rate_limit_event("allowed_warning", 0.92),

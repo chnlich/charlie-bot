@@ -12,6 +12,7 @@ pub mod hot_reload;
 pub mod logging;
 pub mod metadata_slot;
 pub mod paths;
+mod printable_table;
 pub mod proc_identity;
 pub mod pyfmt;
 pub mod repo_root;

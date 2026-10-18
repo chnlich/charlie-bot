@@ -1,0 +1,132 @@
+method	path	family	auth	handler	stage
+GET,HEAD	/openapi.json	framework	access key	fastapi/applications.py:1104	server-skeleton
+GET,HEAD	/docs	framework	access key	fastapi/applications.py:1119	server-skeleton
+GET,HEAD	/docs/oauth2-redirect	framework	access key	fastapi/applications.py:1137	server-skeleton
+GET,HEAD	/redoc	framework	access key	fastapi/applications.py:1147	server-skeleton
+GET	/api/sessions/chat-threads	sessions	access key	src/features/chat_threads/api.py:15	session-read-api
+GET	/api/auth/status	auth	public	src/app/pages.py:53	server-skeleton
+GET	/sessions/{session_id}/events	pages	access key	src/app/pages.py:59	session-read-api
+GET	/home	pages	access key	src/app/pages.py:89	server-skeleton
+GET	/	pages	public	src/app/pages.py:128	session-read-api
+GET	/api/sessions/	sessions	access key	src/runtime/api/sessions.py:372	session-read-api
+POST	/api/sessions/	sessions	access key + caller	src/runtime/api/sessions.py:392	session-write-streaming
+GET	/api/sessions/archived	sessions	access key	src/runtime/api/sessions.py:456	session-read-api
+GET	/api/sessions/starred	sessions	access key	src/runtime/api/sessions.py:498	session-read-api
+GET	/api/sessions/groups	sessions	access key	src/runtime/api/sessions.py:520	session-read-api
+POST	/api/sessions/groups/rename	sessions	access key	src/runtime/api/sessions.py:526	session-write-streaming
+POST	/api/sessions/groups/delete	sessions	access key	src/runtime/api/sessions.py:536	session-write-streaming
+GET	/api/sessions/status	sessions	access key	src/runtime/api/sessions.py:571	session-read-api
+GET	/api/sessions/tree	sessions	access key	src/runtime/api/sessions.py:813	session-read-api
+GET	/api/sessions/search	sessions	access key	src/runtime/api/sessions.py:833	session-read-api
+GET	/api/sessions/{session_id}/pending-triggers	sessions	access key	src/runtime/api/sessions.py:964	session-read-api
+GET	/api/sessions/{session_id}/bootstrap	sessions	access key	src/runtime/api/sessions.py:986	session-read-api
+POST	/api/sessions/{session_id}/read	sessions	access key	src/runtime/api/sessions.py:1002	session-write-streaming
+GET	/api/sessions/{session_id}/usage	sessions	access key	src/runtime/api/sessions.py:1019	session-read-api
+GET	/api/sessions/{session_id}/events	sessions	access key	src/runtime/api/sessions.py:1043	session-read-api
+GET	/api/sessions/{session_id}/transcript	sessions	access key	src/runtime/api/sessions.py:1105	session-read-api
+POST	/api/sessions/{session_id}/fork	sessions	access key + caller	src/runtime/api/sessions.py:1181	agent-orchestration
+POST	/api/sessions/{session_id}/elone	sessions	access key + caller	src/runtime/api/sessions.py:1222	agent-orchestration
+POST	/api/sessions/{session_id}/backend	sessions	access key	src/runtime/api/sessions.py:1257	session-write-streaming
+GET	/api/sessions/{session_id}	sessions	access key	src/runtime/api/sessions.py:1323	session-read-api
+DELETE	/api/sessions/{session_id}	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1336	session-write-streaming
+DELETE	/api/sessions/{session_id}/permanent	sessions	access key + caller	src/runtime/api/sessions.py:1360	session-write-streaming
+POST	/api/sessions/{session_id}/unarchive	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1377	session-write-streaming
+POST	/api/sessions/{session_id}/star	sessions	access key	src/runtime/api/sessions.py:1402	session-write-streaming
+POST	/api/sessions/{session_id}/unstar	sessions	access key	src/runtime/api/sessions.py:1409	session-write-streaming
+POST	/api/sessions/{session_id}/rounds/{round_id}/rate	sessions	access key	src/runtime/api/sessions.py:1416	session-write-streaming
+PATCH	/api/sessions/{session_id}	sessions	access key + caller	src/runtime/api/sessions.py:1434	session-write-streaming
+POST	/api/sessions/{session_id}/group	sessions	access key	src/runtime/api/sessions.py:1462	session-write-streaming
+GET	/api/sessions/{session_id}/events.jsonl	sessions	access key	src/runtime/api/sessions.py:1479	session-read-api
+GET	/api/sessions/{session_id}/runs	sessions	access key	src/runtime/api/sessions.py:1501	session-read-api
+GET	/api/sessions/{session_id}/effective-prompt	sessions	access key	src/runtime/api/sessions.py:1544	session-read-api
+GET	/api/sessions/{session_id}/runs/{run_id}/context	sessions	access key	src/runtime/api/sessions.py:1619	session-read-api
+POST	/api/sessions/{session_id}/retry	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1689	agent-orchestration
+GET	/api/sessions/{session_id}/task-inputs/pending	sessions	access key	src/runtime/api/sessions.py:1717	session-read-api
+POST	/api/sessions/{session_id}/task-inputs/acknowledge	sessions	access key + caller	src/runtime/api/sessions.py:1747	session-write-streaming
+POST	/api/sessions/{session_id}/complete	sessions	access key + caller	src/runtime/api/sessions.py:1771	session-write-streaming
+POST	/api/sessions/{session_id}/cancel	sessions	access key + caller	src/runtime/api/sessions.py:1806	session-write-streaming
+POST	/api/sessions/{session_id}/runs/{run_id}/cancel	sessions	access key + caller, own run	src/runtime/api/sessions.py:1842	agent-orchestration
+POST	/api/chat/{session_id}/upload	chat	access key	src/runtime/api/chat.py:19	session-write-streaming
+POST	/api/chat/{session_id}/message	chat	access key + caller	src/runtime/api/chat.py:48	agent-orchestration
+POST	/api/chat/{session_id}/cancel	chat	access key	src/runtime/api/chat.py:112	agent-orchestration
+GET	/api/internal/version	internal	access key	src/runtime/api/internal.py:28	server-skeleton
+POST	/api/internal/delegate	internal	access key + caller	src/runtime/api/internal.py:216	agent-orchestration
+POST	/api/internal/schedule-trigger	internal	access key	src/runtime/api/internal.py:258	triggers-cron-improve
+POST	/api/internal/triggers/{session_id}/{trigger_id}/cancel	internal	access key	src/runtime/api/internal.py:306	triggers-cron-improve
+POST	/api/internal/session-message	internal	access key	src/runtime/api/internal.py:320	agent-orchestration
+WS	/ws/sessions/{session_id}	websocket	ws token	server.py:358	session-write-streaming
+POST	/api/internal/plan/present	plans	access key	src/features/artifacts/api.py:110	features
+POST	/api/internal/plan/amend	plans	access key	src/features/artifacts/api.py:129	features
+POST	/api/internal/plan/approve	plans	access key	src/features/artifacts/api.py:150	features
+POST	/api/internal/plan/close	plans	access key	src/features/artifacts/api.py:164	features
+GET	/api/sessions/{session_id}/plans	plans	access key	src/features/artifacts/api.py:85	session-read-api
+GET	/api/code-server/open	tools	access key	src/features/code_server/api.py:76	features
+GET	/api/cron/tasks	cron	access key	src/features/cron/api.py:163	triggers-cron-improve
+PUT	/api/cron/tasks/{name}	cron	access key	src/features/cron/api.py:257	triggers-cron-improve
+POST	/api/cron/tasks	cron	access key	src/features/cron/api.py:270	triggers-cron-improve
+POST	/api/cron/tasks/{name}/run	cron	access key	src/features/cron/api.py:301	triggers-cron-improve
+DELETE	/api/cron/tasks/{name}	cron	access key	src/features/cron/api.py:329	triggers-cron-improve
+POST	/api/diag/switch-events	tools	access key	src/features/diag/api.py:32	features
+POST	/api/internal/slack/reply	replies	access key	src/features/slack/api.py:30	features
+POST	/api/internal/slack/ack	replies	access key	src/features/slack/api.py:55	features
+POST	/api/internal/discord/reply	replies	access key	src/features/discord/api.py:37	features
+POST	/api/internal/discord/read	replies	access key	src/features/discord/api.py:62	features
+POST	/api/internal/discord/check	replies	access key	src/features/discord/api.py:88	features
+POST	/api/internal/web/reply	replies	access key	src/features/web_reply/api.py:31	features
+GET	/api/internal/web/dialog	replies	access key	src/features/web_reply/api.py:49	features
+POST	/api/internal/web/status	replies	access key	src/features/web_reply/api.py:64	features
+GET	/api/internal/web/status	replies	access key	src/features/web_reply/api.py:82	features
+GET	/host-auth	pages	access key	src/features/host_auth/api.py:123	features
+GET	/api/host-auth/status	tools	access key	src/features/host_auth/api.py:143	features
+POST	/api/host-auth/probe	tools	access key	src/features/host_auth/api.py:152	features
+GET	/api/git/branches	git	access key	src/features/diff_view/api.py:318	features
+GET	/api/git/repos	git	access key	src/features/diff_view/api.py:346	features
+GET	/api/git/diff/files	git	access key	src/features/diff_view/api.py:353	features
+GET	/api/git/diff/file	git	access key	src/features/diff_view/api.py:414	features
+GET	/diff	pages	access key	src/features/diff_view/page.py:13	features
+POST	/api/sessions/{session_id}/explain	explain	access key	src/features/explain/api.py:20	agent-orchestration
+GET	/api/sessions/{session_id}/explain	explain	access key	src/features/explain/api.py:41	features
+GET	/api/sessions/{session_id}/explain/status	explain	access key	src/features/explain/api.py:55	features
+POST	/api/internal/improve/stop	improve	access key	src/features/improve/api.py:40	triggers-cron-improve
+POST	/api/internal/improve	improve	access key	src/features/improve/api.py:59	triggers-cron-improve
+GET	/ncu	pages	access key	src/features/ncu/api.py:32	features
+WS	/ws/terminal	websocket	ws token	src/features/terminal/api.py:13	features
+GET	/perfetto	pages	access key	src/features/trace/api.py:78	features
+GET	/perfetto/merged	files	access key	src/features/trace/api.py:340	features
+GET	/api/ext-usage	tools	access key	src/features/usage/ext_usage.py:141	features
+GET	/token-usage	pages	access key	src/features/usage/api.py:304	features
+POST	/api/voice/{session_id}/confirm	voice	access key	src/features/voice/api.py:79	features
+POST	/api/voice/{session_id}	voice	access key	src/features/voice/api.py:90	features
+WS	/ws/voice/{session_id}	websocket	ws token	src/features/voice/api.py:401	features
+POST	/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages	proxy	access key	src/backends/openai_compatible/anthropic_proxy.py:493	other-backends
+GET,HEAD	/absolute_filepath/{path:path}	files	access key	src/features/files/api.py:116	features
+GET,HEAD	/static/features/artifacts	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/backup	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/backend_pool	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/chat_threads	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/code_server	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/cron	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/diag	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/slack	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/discord	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/web_reply	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/host_auth	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/diff_view	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/explain	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/improve	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/memory	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/ncu	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/terminal	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/trace	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/usage	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/voice	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/openai_compatible	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/antigravity	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/charlie_code	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/claude_code	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/codex	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/gemini	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/kimi	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/backends/opencode	static	public	server.py:565	server-skeleton
+GET,HEAD	/static/features/files	static	public	server.py:565	server-skeleton
+GET,HEAD	/static	static	public	server.py:570	server-skeleton

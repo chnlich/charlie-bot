@@ -1,0 +1,1097 @@
+//! Persisted run records and their chat-log facts.
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use charliebot_core::fsutil;
+use charliebot_core::proc_identity;
+use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::run_token;
+use nix::errno::Errno;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+use crate::control_events::{self, ACTOR_SYSTEM};
+use crate::metadata::UtcDateTime;
+use crate::{ControlGuard, Store, StoreError, StoreResult};
+
+pub const DATA_DIR_NAME: &str = "data";
+pub const MASTER_RUNS_DIR_NAME: &str = "master_runs";
+pub const THREADS_DIR_NAME: &str = "threads";
+pub const RUNS_DIR_NAME: &str = "runs";
+pub const RUN_METADATA_NAME: &str = "metadata.json";
+pub const METADATA_NAME: &str = "metadata.json";
+pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
+pub const EVENTS_LOG_NAME: &str = "events.jsonl";
+pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
+pub const CURSOR_NAME: &str = "agent.raw.cursor";
+pub const RUN_EVENTS_NAME: &str = "events.jsonl";
+pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
+pub const STOP_EXIT_POLL: Duration = Duration::from_millis(50);
+pub const STOP_EXIT_WAIT: Duration = Duration::from_secs(10);
+
+const RUN_MODEL_JSON: JsonStyle =
+  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
+
+/// The execution category in a persisted run record.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+  ManagerTurn,
+  #[default]
+  Work,
+  Review,
+  Iteration,
+  ScheduledStep,
+}
+
+/// The sequence that owns a scheduled run.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceRef {
+  pub kind: String,
+  pub owner_ref: String,
+  pub position: i64,
+}
+
+/// One run's persisted identity and evidence, in Python model field order.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunRecord {
+  pub id: String,
+  pub session_id: String,
+  #[serde(default)]
+  pub kind: RunKind,
+  #[serde(default)]
+  pub input_event_ids: Vec<String>,
+  #[serde(default)]
+  pub task_spec_hash: Option<String>,
+  #[serde(default)]
+  pub task_spec_ref: Option<String>,
+  #[serde(default)]
+  pub prompt_snapshot_ref: Option<String>,
+  #[serde(default)]
+  pub retry_of_run_id: Option<String>,
+  #[serde(default)]
+  pub review_of_run_id: Option<String>,
+  #[serde(default)]
+  pub backend: Option<String>,
+  #[serde(default)]
+  pub model: Option<String>,
+  #[serde(default)]
+  pub native_session_id: Option<String>,
+  #[serde(default)]
+  pub pid: Option<u32>,
+  #[serde(default)]
+  pub pid_start: Option<String>,
+  #[serde(default)]
+  pub started_at: Option<UtcDateTime>,
+  #[serde(default)]
+  pub ended_at: Option<UtcDateTime>,
+  #[serde(default)]
+  pub exit_code: Option<i32>,
+  #[serde(default)]
+  pub repo_path: Option<String>,
+  #[serde(default)]
+  pub base_branch: Option<String>,
+  #[serde(default)]
+  pub branch_name: Option<String>,
+  #[serde(default)]
+  pub worktree_path: Option<String>,
+  #[serde(default)]
+  pub sequence_ref: Option<SequenceRef>,
+  #[serde(default)]
+  pub raw_log_ref: Option<String>,
+  #[serde(default)]
+  pub events_ref: Option<String>,
+  #[serde(default)]
+  pub result_ref: Option<String>,
+}
+
+/// The terminal outcome values written to `run_finished`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcomeKind {
+  Success,
+  Failed,
+  Interrupted,
+}
+
+impl RunOutcomeKind {
+  fn as_str(self) -> &'static str {
+    match self {
+      Self::Success => "success",
+      Self::Failed => "failed",
+      Self::Interrupted => "interrupted",
+    }
+  }
+}
+
+/// The terminal result and optional mirror values for one run finish.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunOutcome {
+  pub outcome: RunOutcomeKind,
+  pub input_event_ids: Vec<String>,
+  pub exit_code: Option<i32>,
+  pub ended_at: Option<UtcDateTime>,
+}
+
+impl RunOutcome {
+  /// Build a terminal result with an empty input list and no supplied exit details.
+  pub fn new(outcome: RunOutcomeKind) -> Self {
+    Self { outcome, input_event_ids: Vec::new(), exit_code: None, ended_at: None }
+  }
+}
+
+/// A fact-derived run display value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunDisplayState {
+  Queued,
+  Running,
+  Attention,
+  Stopped,
+  Withheld,
+  Success,
+  Failed,
+  Interrupted,
+}
+
+impl RunDisplayState {
+  /// The persisted UI spelling for this state.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Queued => "queued",
+      Self::Running => "running",
+      Self::Attention => "attention",
+      Self::Stopped => "stopped",
+      Self::Withheld => "withheld",
+      Self::Success => "success",
+      Self::Failed => "failed",
+      Self::Interrupted => "interrupted",
+    }
+  }
+}
+
+/// A run that blocks a structural task change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunBlocker {
+  pub run_id: String,
+  pub reason: String,
+}
+
+/// One keyset page of run records.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunPage {
+  pub items: Vec<RunRecord>,
+  pub next_cursor: Option<String>,
+}
+
+/// The result of recording or reconciling a stop request.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StopResult {
+  pub run_id: String,
+  pub stop_requested: bool,
+  pub outcome: Option<RunOutcomeKind>,
+}
+
+/// The result of a new stop request.
+pub type StopRequest = StopResult;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunCursor {
+  s: String,
+  i: String,
+}
+
+fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
+  let started_at = run
+    .started_at
+    .unwrap_or_else(|| UtcDateTime::parse("0001-01-01T00:00:00Z").expect("the minimum datetime is valid"));
+  (started_at, run.id.clone())
+}
+
+fn run_cursor(run: &RunRecord) -> String {
+  let started_at = run_sort_key(run).0.to_python_isoformat();
+  let mut value = Map::new();
+  value.insert("s".to_string(), Value::String(started_at));
+  value.insert("i".to_string(), Value::String(run.id.clone()));
+  run_token::b64url_encode(serde_json::to_string(&value).expect("a run cursor serializes").as_bytes())
+}
+
+fn decode_run_cursor(cursor: &str) -> StoreResult<(UtcDateTime, String)> {
+  let decoded = run_token::b64url_decode(cursor)
+    .map_err(|error| StoreError::new(format!("malformed run page cursor: {cursor:?}: {error}")))?;
+  let value: RunCursor = serde_json::from_slice(&decoded)
+    .map_err(|error| StoreError::new(format!("malformed run page cursor: {cursor:?}: {error}")))?;
+  let started_at = UtcDateTime::parse(&value.s)
+    .map_err(|error| StoreError::new(format!("malformed run page cursor: {cursor:?}: {error}")))?;
+  Ok((started_at, value.i))
+}
+
+impl Store {
+  /// Return the per-session run directory root.
+  pub fn runs_root(&self, session_id: &str) -> PathBuf {
+    self.session_dir(session_id).join(DATA_DIR_NAME).join(RUNS_DIR_NAME)
+  }
+
+  /// Return one run's directory.
+  pub fn run_dir(&self, session_id: &str, run_id: &str) -> PathBuf {
+    self.runs_root(session_id).join(run_id)
+  }
+
+  /// Return one run's metadata path.
+  pub fn run_metadata_path(&self, session_id: &str, run_id: &str) -> PathBuf {
+    self.run_dir(session_id, run_id).join(RUN_METADATA_NAME)
+  }
+
+  /// Return one run's pinned task-spec path.
+  pub fn run_task_spec_path(&self, session_id: &str, run_id: &str) -> PathBuf {
+    self.run_dir(session_id, run_id).join(RUN_TASK_SPEC_NAME)
+  }
+
+  /// Read one run record from disk, or return `None` when its metadata file is absent.
+  pub fn read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>> {
+    read_run_path(&self.run_metadata_path(session_id, run_id))
+  }
+
+  /// Read all run records for one session in chronological `(started_at, id)` order.
+  pub fn list_run_records_sync(&self, session_id: &str) -> StoreResult<Vec<RunRecord>> {
+    let root = self.runs_root(session_id);
+    let mut records = Vec::new();
+    for entry in read_directory(&root, true)? {
+      if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_dir() {
+        continue;
+      }
+      if let Some(record) = self.read_run_sync(session_id, &entry.file_name().to_string_lossy())? {
+        records.push(record);
+      }
+    }
+    records.sort_by_key(run_sort_key);
+    Ok(records)
+  }
+
+  /// Read every run record under the sessions directory, paired with its owner session id.
+  pub fn list_all_run_records_sync(&self) -> StoreResult<Vec<(String, RunRecord)>> {
+    let mut records = Vec::new();
+    for session in read_directory(&self.cfg.sessions_dir(), true)? {
+      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
+        continue;
+      }
+      let session_id = session.file_name().to_string_lossy().into_owned();
+      for record in self.list_run_records_sync(&session_id)? {
+        records.push((session_id.clone(), record));
+      }
+    }
+    Ok(records)
+  }
+
+  /// Return every existing v2 run raw log path under the sessions directory.
+  pub fn run_raw_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for session in read_directory(&self.cfg.sessions_dir(), true)? {
+      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
+        continue;
+      }
+      let run_root = session.path().join(DATA_DIR_NAME).join(RUNS_DIR_NAME);
+      for run in read_directory(&run_root, true)? {
+        if !run.file_type().map_err(|error| path_error(&run.path(), error))?.is_dir() {
+          continue;
+        }
+        let path = run.path().join(RAW_LOG_NAME);
+        if path.is_file() {
+          paths.push(path);
+        }
+      }
+    }
+    paths.sort();
+    Ok(paths)
+  }
+
+  /// Return every existing legacy master-run raw log path.
+  pub fn master_run_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
+    self.legacy_log_paths(MASTER_RUNS_DIR_NAME, RAW_LOG_NAME)
+  }
+
+  /// Return every existing legacy thread event log path.
+  pub fn thread_event_log_paths_sync(&self) -> StoreResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for session in read_directory(&self.cfg.sessions_dir(), true)? {
+      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
+        continue;
+      }
+      let threads = session.path().join(THREADS_DIR_NAME);
+      for thread in read_directory(&threads, true)? {
+        if !thread.file_type().map_err(|error| path_error(&thread.path(), error))?.is_dir() {
+          continue;
+        }
+        let path = thread.path().join(DATA_DIR_NAME).join(EVENTS_LOG_NAME);
+        if path.is_file() {
+          paths.push(path);
+        }
+      }
+    }
+    paths.sort();
+    Ok(paths)
+  }
+
+  fn legacy_log_paths(&self, container: &str, name: &str) -> StoreResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for session in read_directory(&self.cfg.sessions_dir(), true)? {
+      if !session.file_type().map_err(|error| path_error(&session.path(), error))?.is_dir() {
+        continue;
+      }
+      let parent = if container == MASTER_RUNS_DIR_NAME {
+        session.path().join(DATA_DIR_NAME).join(container)
+      } else {
+        session.path().join(container)
+      };
+      for run in read_directory(&parent, true)? {
+        if !run.file_type().map_err(|error| path_error(&run.path(), error))?.is_dir() {
+          continue;
+        }
+        let path = run.path().join(name);
+        if path.is_file() {
+          paths.push(path);
+        }
+      }
+    }
+    paths.sort();
+    Ok(paths)
+  }
+
+  /// Return the newest run by the canonical `(started_at, id)` order.
+  pub fn newest_run_record_sync(&self, session_id: &str) -> StoreResult<Option<RunRecord>> {
+    Ok(self.list_run_records_sync(session_id)?.pop())
+  }
+
+  /// Return the run whose terminal fact has the latest timestamp, or `None` before any finish.
+  pub fn last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>> {
+    let events = self.load_all_facts(session_id)?;
+    let mut fact_times = HashMap::<String, UtcDateTime>::new();
+    for event in &events {
+      if event.get("type").and_then(Value::as_str) != Some("run_finished") {
+        continue;
+      }
+      let Some(run_id) = event.get("run_id").and_then(Value::as_str) else {
+        continue;
+      };
+      let timestamp = event
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::new("run_finished fact has no string timestamp"))?;
+      let parsed = UtcDateTime::parse(timestamp)
+        .map_err(|error| StoreError::new(format!("run_finished fact timestamp is invalid: {error}")))?;
+      fact_times.entry(run_id.to_string()).or_insert(parsed);
+    }
+    let runs = self.list_run_records_sync(session_id)?;
+    let mut latest: Option<(UtcDateTime, usize, String)> = None;
+    for (position, run) in runs.iter().enumerate() {
+      let Some(fact_at) = fact_times.get(&run.id) else { continue };
+      let key = (run.ended_at.unwrap_or(*fact_at), position, run.id.clone());
+      if latest.as_ref().is_none_or(|current| key.0 > current.0 || (key.0 == current.0 && key.1 > current.1)) {
+        latest = Some(key);
+      }
+    }
+    Ok(latest.map(|(_, _, run_id)| run_id))
+  }
+
+  /// Return one chronological page of records, using a Python-compatible keyset cursor.
+  pub fn list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize) -> StoreResult<RunPage> {
+    let mut records = self.list_run_records_sync(session_id)?;
+    if let Some(cursor) = cursor {
+      let boundary = decode_run_cursor(cursor)?;
+      records.retain(|run| run_sort_key(run) > boundary);
+    }
+    let has_more = records.len() > limit;
+    records.truncate(limit);
+    let next_cursor = has_more.then(|| records.last().map(run_cursor)).flatten();
+    Ok(RunPage { items: records, next_cursor })
+  }
+
+  /// Derive one run's display state from its record, facts and current process identity.
+  pub fn run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState> {
+    let run = require_run(self, session_id, run_id)?;
+    let events = self.load_all_facts(session_id)?;
+    if let Some(outcome) = terminal_outcome(&events, run_id)? {
+      return Ok(match outcome {
+        RunOutcomeKind::Success => RunDisplayState::Success,
+        RunOutcomeKind::Failed => RunDisplayState::Failed,
+        RunOutcomeKind::Interrupted => RunDisplayState::Interrupted,
+      });
+    }
+    if run.pid.is_none() {
+      if stop_requested(&events, run_id, None) {
+        return Ok(RunDisplayState::Stopped);
+      }
+      if withheld_reason(&events, run_id).is_some() {
+        return Ok(RunDisplayState::Withheld);
+      }
+      return Ok(RunDisplayState::Queued);
+    }
+    let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
+    if proc_identity::is_run_alive(run.pid, run.pid_start.as_deref(), run.started_at.map(UtcDateTime::into_inner), boot)
+    {
+      Ok(RunDisplayState::Running)
+    } else {
+      Ok(RunDisplayState::Attention)
+    }
+  }
+
+  /// Return the first structural-change blocker in chronological run order.
+  pub fn run_blocker(&self, session_id: &str) -> StoreResult<Option<RunBlocker>> {
+    let events = self.load_all_facts(session_id)?;
+    let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
+    for run in self.list_run_records_sync(session_id)? {
+      if terminal_outcome(&events, &run.id)?.is_some() {
+        continue;
+      }
+      if run.pid.is_none() {
+        if stop_requested(&events, &run.id, None) {
+          continue;
+        }
+        return Ok(Some(RunBlocker { reason: format!("run {} is queued (pending dispatch)", run.id), run_id: run.id }));
+      }
+      if proc_identity::is_run_alive(
+        run.pid,
+        run.pid_start.as_deref(),
+        run.started_at.map(UtcDateTime::into_inner),
+        boot,
+      ) {
+        return Ok(Some(RunBlocker { reason: format!("run {} is active", run.id), run_id: run.id }));
+      }
+      return Ok(Some(RunBlocker {
+        reason: format!("run {} has an unresolved process identity (needs recovery)", run.id),
+        run_id: run.id,
+      }));
+    }
+    Ok(None)
+  }
+
+  /// Return the generation after every committed run-record write.
+  pub fn records_generation(&self) -> u64 {
+    self.records_generation.load(Ordering::Relaxed)
+  }
+
+  /// Mark one session's sidebar snapshot dirty.
+  pub fn mark_sidebar_dirty(&self, session_id: &str) {
+    crate::sidebar_state::mark_sidebar_dirty(session_id);
+  }
+
+  /// Set event ids for deterministic cross-language replay tests.
+  pub fn set_control_event_ids_for_replay(&self, event_ids: &[&str]) {
+    *self.control_event_ids.lock().expect("control event id mutex is not poisoned") =
+      Some(event_ids.iter().map(|id| (*id).to_string()).collect());
+  }
+
+  fn next_control_event_id(&self) -> StoreResult<String> {
+    let mut ids = self.control_event_ids.lock().expect("control event id mutex is not poisoned");
+    match ids.as_mut() {
+      Some(ids) => ids.pop_front().ok_or_else(|| StoreError::new("control event id replay source is exhausted")),
+      None => Ok(Uuid::new_v4().to_string()),
+    }
+  }
+
+  /// Register a run under the control lock and pin its task spec before its record.
+  pub async fn register_run_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    mut run: RunRecord,
+    task_spec: &str,
+  ) -> StoreResult<RunRecord> {
+    self.require_control_guard(guard)?;
+    require_session_match(session_id, &run)?;
+    if let Some(existing) = self.read_run_sync(session_id, &run.id)? {
+      return Ok(existing);
+    }
+    let run_dir = self.run_dir(session_id, &run.id);
+    fs::create_dir_all(&run_dir).map_err(|error| path_error(&run_dir, error))?;
+    let spec_path = self.run_task_spec_path(session_id, &run.id);
+    fsutil::atomic_write_text(&spec_path, task_spec).map_err(|error| path_error(&spec_path, error))?;
+    run.task_spec_ref = Some(spec_path.to_string_lossy().into_owned());
+    run.task_spec_hash = Some(format!("{:x}", Sha256::digest(task_spec.as_bytes())));
+    self.write_run_record(session_id, &run)?;
+    self.mark_sidebar_dirty(session_id);
+    Ok(run)
+  }
+
+  /// Create or return the stable retry record for one request.
+  pub async fn create_retry_run_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    request_id: &str,
+    previous: &RunRecord,
+  ) -> StoreResult<RunRecord> {
+    self.require_control_guard(guard)?;
+    require_session_match(session_id, previous)?;
+    let run = RunRecord {
+      id: control_events::stable_run_id(session_id, request_id),
+      session_id: session_id.to_string(),
+      kind: previous.kind,
+      input_event_ids: if previous.kind == RunKind::ManagerTurn {
+        previous.input_event_ids.clone()
+      } else {
+        Vec::new()
+      },
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: Some(previous.id.clone()),
+      review_of_run_id: previous.review_of_run_id.clone(),
+      backend: previous.backend.clone(),
+      model: previous.model.clone(),
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: previous.repo_path.clone(),
+      base_branch: previous.base_branch.clone(),
+      branch_name: previous.branch_name.clone(),
+      worktree_path: previous.worktree_path.clone(),
+      sequence_ref: previous.sequence_ref.clone(),
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    if let Some(existing) = self.read_run_sync(session_id, &run.id)? {
+      return Ok(existing);
+    }
+    let run_dir = self.run_dir(session_id, &run.id);
+    fs::create_dir_all(&run_dir).map_err(|error| path_error(&run_dir, error))?;
+    self.write_run_record(session_id, &run)?;
+    self.mark_sidebar_dirty(session_id);
+    Ok(run)
+  }
+
+  /// Persist the newest process identity unless this run already has a stop fact.
+  pub async fn record_launch(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    pid: u32,
+    pid_start: &str,
+  ) -> StoreResult<RunRecord> {
+    let guard = self.control_lock().await;
+    let mut run = require_run(self, session_id, run_id)?;
+    let events = self.load_all_facts(session_id)?;
+    if stop_requested(&events, run_id, None) {
+      return Err(StoreError::new(format!("run {run_id} has a stop request; refusing new process")));
+    }
+    if run.started_at.is_none() {
+      run.started_at = Some(UtcDateTime::now());
+    }
+    run.pid = Some(pid);
+    run.pid_start = Some(pid_start.to_string());
+    self.write_run_record(session_id, &run)?;
+    self.mark_sidebar_dirty(session_id);
+    drop(guard);
+    Ok(run)
+  }
+
+  /// Persist only the named observation fields on a run record.
+  pub async fn record_observation(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    fields: Map<String, Value>,
+  ) -> StoreResult<RunRecord> {
+    let _guard = self.control_lock().await;
+    let mut run = require_run(self, session_id, run_id)?;
+    for (field, value) in fields {
+      if !matches!(
+        field.as_str(),
+        "native_session_id"
+          | "model"
+          | "raw_log_ref"
+          | "events_ref"
+          | "result_ref"
+          | "prompt_snapshot_ref"
+          | "repo_path"
+          | "base_branch"
+          | "branch_name"
+          | "worktree_path"
+      ) {
+        return Err(StoreError::new(format!("unknown run observation field {field}")));
+      }
+      if value.is_null() {
+        continue;
+      }
+      let text = value
+        .as_str()
+        .ok_or_else(|| StoreError::new(format!("run observation field {field} must be a string or null")))?
+        .to_string();
+      match field.as_str() {
+        "native_session_id" => run.native_session_id = Some(text),
+        "model" => run.model = Some(text),
+        "raw_log_ref" => run.raw_log_ref = Some(text),
+        "events_ref" => run.events_ref = Some(text),
+        "result_ref" => run.result_ref = Some(text),
+        "prompt_snapshot_ref" => run.prompt_snapshot_ref = Some(text),
+        "repo_path" => run.repo_path = Some(text),
+        "base_branch" => run.base_branch = Some(text),
+        "branch_name" => run.branch_name = Some(text),
+        "worktree_path" => run.worktree_path = Some(text),
+        _ => return Err(StoreError::new(format!("unknown run observation field {field}"))),
+      }
+    }
+    self.write_run_record(session_id, &run)?;
+    Ok(run)
+  }
+
+  /// Record the first terminal fact and mirror it on the run record.
+  pub async fn record_finish_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    run_id: &str,
+    outcome: RunOutcome,
+  ) -> StoreResult<RunRecord> {
+    self.require_control_guard(guard)?;
+    let events = self.load_all_facts(session_id)?;
+    let mut run = require_run(self, session_id, run_id)?;
+    if let Some(existing) = first_finish_event(&events, run_id) {
+      let input_event_ids = event_input_ids(existing);
+      let mut changed = run.input_event_ids != input_event_ids;
+      run.input_event_ids = input_event_ids;
+      if run.ended_at.is_none() {
+        run.ended_at = Some(outcome.ended_at.unwrap_or_else(UtcDateTime::now));
+        changed = true;
+      }
+      if run.exit_code.is_none() && outcome.exit_code.is_some() {
+        run.exit_code = outcome.exit_code;
+        changed = true;
+      }
+      if changed {
+        self.write_run_record(session_id, &run)?;
+      }
+      return Ok(run);
+    }
+
+    let input_event_ids = self.finish_payload(&run, &events, &outcome.input_event_ids)?;
+    let event_id = self.next_control_event_id()?;
+    let event = control_events::build_control_event(
+      "run_finished",
+      ACTOR_SYSTEM,
+      session_id,
+      Some(&event_id),
+      None,
+      [
+        ("run_id".to_string(), Value::String(run_id.to_string())),
+        ("input_event_ids".to_string(), json!(input_event_ids)),
+        ("outcome".to_string(), Value::String(outcome.outcome.as_str().to_string())),
+      ],
+    );
+    self.append_control_fact(guard, session_id, event).await?;
+    run.ended_at = Some(outcome.ended_at.unwrap_or_else(UtcDateTime::now));
+    run.exit_code = outcome.exit_code;
+    run.input_event_ids = input_event_ids;
+    self.write_run_record(session_id, &run)?;
+    self.mark_sidebar_dirty(session_id);
+    Ok(run)
+  }
+
+  fn finish_payload(&self, run: &RunRecord, events: &[Value], supplied: &[String]) -> StoreResult<Vec<String>> {
+    if !run.input_event_ids.is_empty() {
+      if !supplied.is_empty() && supplied != run.input_event_ids {
+        return Err(StoreError::new(format!(
+          "run {} finish payload {:?} does not match its registered input batch {:?}",
+          run.id, supplied, run.input_event_ids
+        )));
+      }
+      return Ok(run.input_event_ids.clone());
+    }
+    let known = events.iter().filter_map(|event| event.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
+    let unknown = supplied.iter().filter(|event_id| !known.contains(event_id.as_str())).cloned().collect::<Vec<_>>();
+    if !unknown.is_empty() {
+      return Err(StoreError::new(format!(
+        "run {} acknowledges unknown input id(s) {:?}: not events of session {} and not its registered batch",
+        run.id, unknown, run.session_id
+      )));
+    }
+    let mut foreign = HashSet::new();
+    for event in events {
+      if event.get("type").and_then(Value::as_str) != Some("run_finished")
+        || event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
+      {
+        continue;
+      }
+      foreign.extend(event_input_ids(event));
+    }
+    for other in self.list_run_records_sync(&run.session_id)? {
+      if other.id == run.id || first_finish_event(events, &other.id).is_some() {
+        continue;
+      }
+      if other.pid.is_none() && stop_requested(events, &other.id, None) {
+        continue;
+      }
+      foreign.extend(other.input_event_ids);
+    }
+    let stolen = supplied.iter().filter(|event_id| foreign.contains(event_id.as_str())).cloned().collect::<Vec<_>>();
+    if !stolen.is_empty() {
+      return Err(StoreError::new(format!(
+        "run {} cannot acknowledge input(s) {:?}: already the acknowledged payload or claimed batch of another run",
+        run.id, stolen
+      )));
+    }
+    Ok(supplied.to_vec())
+  }
+
+  /// Append input ids to a run record while holding the control lock.
+  pub async fn claim_input_events(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    event_ids: &[String],
+  ) -> StoreResult<RunRecord> {
+    let guard = self.control_lock().await;
+    let run = self.claim_input_events_locked(&guard, session_id, run_id, event_ids)?;
+    drop(guard);
+    Ok(run)
+  }
+
+  /// Append input ids for a caller that already holds the control lock.
+  pub fn claim_input_events_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    run_id: &str,
+    event_ids: &[String],
+  ) -> StoreResult<RunRecord> {
+    self.require_control_guard(guard)?;
+    let mut run = require_run(self, session_id, run_id)?;
+    run.input_event_ids.extend(event_ids.iter().cloned());
+    self.write_run_record(session_id, &run)?;
+    Ok(run)
+  }
+
+  /// Append one durable stop request before checking or signalling the process.
+  pub async fn request_stop(&self, session_id: &str, run_id: &str, reason: &str) -> StoreResult<StopRequest> {
+    let run;
+    {
+      let guard = self.control_lock().await;
+      run = require_run(self, session_id, run_id)?;
+      let events = self.load_all_facts(session_id)?;
+      if let Some(outcome) = terminal_outcome(&events, run_id)? {
+        return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
+      }
+      if !stop_requested(&events, run_id, Some(reason)) {
+        let event_id = self.next_control_event_id()?;
+        let event = control_events::build_control_event(
+          "run_stop_requested",
+          ACTOR_SYSTEM,
+          session_id,
+          Some(&event_id),
+          None,
+          [
+            ("request_id".to_string(), Value::String(reason.to_string())),
+            ("run_id".to_string(), Value::String(run_id.to_string())),
+          ],
+        );
+        self.append_control_fact(&guard, session_id, event).await?;
+        self.mark_sidebar_dirty(session_id);
+      }
+    }
+    if run.pid.is_none() {
+      return Ok(StopResult { run_id: run_id.to_string(), stop_requested: true, outcome: None });
+    }
+    self.follow_through_stop(session_id, &run).await
+  }
+
+  /// Reconcile a durable stop request after a restart.
+  pub async fn reconcile_stop_request(&self, session_id: &str, run_id: &str) -> StoreResult<StopResult> {
+    let run = require_run(self, session_id, run_id)?;
+    let events = self.load_all_facts(session_id)?;
+    if let Some(outcome) = terminal_outcome(&events, run_id)? {
+      return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
+    }
+    if !stop_requested(&events, run_id, None) {
+      return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: None });
+    }
+    if run.pid.is_none() {
+      return Ok(StopResult { run_id: run_id.to_string(), stop_requested: true, outcome: None });
+    }
+    self.follow_through_stop(session_id, &run).await
+  }
+
+  async fn follow_through_stop(&self, session_id: &str, run: &RunRecord) -> StoreResult<StopResult> {
+    let pid = run.pid.expect("a launched run has a pid");
+    let first_stat = proc_identity::read_pid_stat(pid);
+    let mut exited = first_stat.as_ref().is_none_or(|stat| stat.state == "Z");
+    if !exited {
+      let stat = first_stat.as_ref().expect("the process stat was read");
+      if run.pid_start.as_deref() != Some(stat.pid_start.as_str()) {
+        return Err(StoreError::new(format!(
+          "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
+          run.id, run.pid_start, stat.pid_start
+        )));
+      }
+      let started_at = run
+        .started_at
+        .ok_or_else(|| StoreError::new(format!("run {} has no usable started_at for identity validation", run.id)))?;
+      let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
+      if started_at.into_inner() <= boot {
+        return Err(StoreError::new(format!(
+          "run {} started_at predates the current host boot; recorded identity is stale",
+          run.id
+        )));
+      }
+      if !proc_identity::is_run_alive(Some(pid), run.pid_start.as_deref(), Some(started_at.into_inner()), boot) {
+        match proc_identity::read_pid_stat(pid) {
+          None => exited = true,
+          Some(current) if current.state == "Z" => exited = true,
+          Some(current) if run.pid_start.as_deref() != Some(current.pid_start.as_str()) => {
+            return Err(StoreError::new(format!(
+              "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
+              run.id, run.pid_start, current.pid_start
+            )));
+          }
+          Some(_) => return Err(StoreError::new(format!("run {} process identity is not live", run.id))),
+        }
+      }
+      if !exited {
+        let raw_pid = i32::try_from(pid).map_err(|error| StoreError::new(error.to_string()))?;
+        match kill(Pid::from_raw(raw_pid), Signal::SIGTERM) {
+          Ok(()) => exited = wait_for_exit(pid).await,
+          Err(Errno::ESRCH) => exited = true,
+          Err(error) => return Err(StoreError::new(format!("signalling run {} with SIGTERM failed: {error}", run.id))),
+        }
+      }
+    }
+    if exited {
+      let guard = self.control_lock().await;
+      self.record_finish_locked(&guard, session_id, &run.id, RunOutcome::new(RunOutcomeKind::Interrupted)).await?;
+      let events = self.load_all_facts(session_id)?;
+      let outcome = terminal_outcome(&events, &run.id)?;
+      return Ok(StopResult { run_id: run.id.clone(), stop_requested: true, outcome });
+    }
+    Ok(StopResult { run_id: run.id.clone(), stop_requested: true, outcome: None })
+  }
+
+  fn write_run_record(&self, session_id: &str, run: &RunRecord) -> StoreResult<()> {
+    require_session_match(session_id, run)?;
+    let path = self.run_metadata_path(session_id, &run.id);
+    let parent = path.parent().expect("run metadata path has a parent");
+    fs::create_dir_all(parent).map_err(|error| path_error(parent, error))?;
+    let value = serde_json::to_value(run).map_err(|error| StoreError::new(error.to_string()))?;
+    let text = pyfmt::model_json_dumps(&value, &RUN_MODEL_JSON);
+    fsutil::atomic_write_text(&path, &text).map_err(|error| path_error(&path, error))?;
+    self.records_generation.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+  }
+}
+
+fn read_run_path(path: &Path) -> StoreResult<Option<RunRecord>> {
+  let raw = match fs::read_to_string(path) {
+    Ok(raw) => raw,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(path_error(path, error)),
+  };
+  serde_json::from_str(&raw)
+    .map(Some)
+    .map_err(|error| StoreError::new(format!("run metadata unreadable at {}: {error}", path.display())))
+}
+
+fn read_directory(path: &Path, missing_is_empty: bool) -> StoreResult<Vec<fs::DirEntry>> {
+  let entries = match fs::read_dir(path) {
+    Ok(entries) => entries,
+    Err(error) if missing_is_empty && error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(path_error(path, error)),
+  };
+  entries.map(|entry| entry.map_err(|error| path_error(path, error))).collect()
+}
+
+fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
+  StoreError::new(format!("{}: {error}", path.display()))
+}
+
+fn require_session_match(session_id: &str, run: &RunRecord) -> StoreResult<()> {
+  if run.session_id != session_id {
+    return Err(StoreError::new(format!(
+      "run record session_id {:?} does not match requested session {:?}",
+      run.session_id, session_id
+    )));
+  }
+  Ok(())
+}
+
+fn require_run(store: &Store, session_id: &str, run_id: &str) -> StoreResult<RunRecord> {
+  store
+    .read_run_sync(session_id, run_id)?
+    .ok_or_else(|| StoreError::new(format!("run {run_id} not found in session {session_id}")))
+}
+
+fn first_finish_event<'a>(events: &'a [Value], run_id: &str) -> Option<&'a Value> {
+  events.iter().find(|event| {
+    event.get("type").and_then(Value::as_str) == Some("run_finished")
+      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+  })
+}
+
+fn event_input_ids(event: &Value) -> Vec<String> {
+  event
+    .get("input_event_ids")
+    .and_then(Value::as_array)
+    .map(|values| values.iter().filter_map(Value::as_str).map(str::to_string).collect())
+    .unwrap_or_default()
+}
+
+fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
+  let event = first_finish_event(events, run_id);
+  match event.and_then(|event| event.get("outcome")).and_then(Value::as_str) {
+    None => Ok(None),
+    Some("success") => Ok(Some(RunOutcomeKind::Success)),
+    Some("failed") => Ok(Some(RunOutcomeKind::Failed)),
+    Some("interrupted") => Ok(Some(RunOutcomeKind::Interrupted)),
+    Some(value) => Err(StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
+  }
+}
+
+fn stop_requested(events: &[Value], run_id: &str, request_id: Option<&str>) -> bool {
+  events.iter().any(|event| {
+    event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
+      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+      && request_id.is_none_or(|request_id| event.get("request_id").and_then(Value::as_str) == Some(request_id))
+  })
+}
+
+fn withheld_reason<'a>(events: &'a [Value], run_id: &str) -> Option<&'a str> {
+  events.iter().rev().find_map(|event| {
+    if event.get("type").and_then(Value::as_str) != Some("run_launch_withheld")
+      || event.get("run_id").and_then(Value::as_str) != Some(run_id)
+    {
+      return None;
+    }
+    event.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty())
+  })
+}
+
+async fn wait_for_exit(pid: u32) -> bool {
+  let deadline = Instant::now() + STOP_EXIT_WAIT;
+  while Instant::now() < deadline {
+    if proc_identity::read_pid_stat(pid).is_none_or(|stat| stat.state == "Z") {
+      return true;
+    }
+    tokio::time::sleep(STOP_EXIT_POLL).await;
+  }
+  false
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn run_record_rejects_extra_fields_and_keeps_python_field_order() {
+    let record = RunRecord {
+      id: "run-a".to_string(),
+      session_id: "session-a".to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let value = serde_json::to_value(&record).unwrap();
+    let rendered = pyfmt::model_json_dumps(&value, &RUN_MODEL_JSON);
+    let keys = value.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>();
+    assert_eq!(
+      keys,
+      [
+        "id",
+        "session_id",
+        "kind",
+        "input_event_ids",
+        "task_spec_hash",
+        "task_spec_ref",
+        "prompt_snapshot_ref",
+        "retry_of_run_id",
+        "review_of_run_id",
+        "backend",
+        "model",
+        "native_session_id",
+        "pid",
+        "pid_start",
+        "started_at",
+        "ended_at",
+        "exit_code",
+        "repo_path",
+        "base_branch",
+        "branch_name",
+        "worktree_path",
+        "sequence_ref",
+        "raw_log_ref",
+        "events_ref",
+        "result_ref",
+      ]
+    );
+    assert!(rendered.starts_with("{\n  \"id\": \"run-a\",\n  \"session_id\": \"session-a\",\n  \"kind\": \"work\""));
+    assert!(
+      serde_json::from_str::<RunRecord>(
+        &rendered.replace("\"result_ref\": null", "\"result_ref\": null,\n  \"extra\": true")
+      )
+      .is_err()
+    );
+  }
+
+  #[test]
+  fn stable_run_cursor_round_trips_the_python_boundary() {
+    let record = RunRecord {
+      id: "run-a".to_string(),
+      session_id: "session-a".to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: Some(UtcDateTime::parse("2025-02-03T04:05:06.123456Z").unwrap()),
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let cursor = run_cursor(&record);
+    assert_eq!(decode_run_cursor(&cursor).unwrap(), (record.started_at.unwrap(), "run-a".to_string()));
+  }
+}

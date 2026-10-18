@@ -12,6 +12,7 @@ from src.app import registrations
 from src.infra import config, json_utils, metadata_slots, models
 from src.infra import ndjson
 from src.runtime import chat_events, session_anchors, session_events, session_lifecycle, session_store
+from src.runtime import control_events, control_sink, runs
 
 SESSION_ID = "00000000-0000-4000-8000-000000000001"
 THREAD_ID = "00000000-0000-4000-8000-000000000002"
@@ -31,6 +32,11 @@ OPS = (
     "unarchive_session",
     "update_slot_fields",
 )
+
+RUN_OPS = ("register", "retry", "launch", "observation", "finish", "repeat_finish", "stop")
+RUN_SESSION_ID = "00000000-0000-4000-8000-000000000101"
+RUN_EVENT_ID = "00000000-0000-4000-8000-000000000199"
+RUN_FIXED = datetime(2025, 2, 3, 4, 5, 6, 123456, tzinfo=timezone.utc)
 
 
 def _registered() -> None:
@@ -174,6 +180,216 @@ def _verify(root: pathlib.Path) -> None:
       assert thread.left_by_deleted_package == {"kept": True}
 
 
+def _run_record(run_id: str, **fields: object) -> models.RunRecord:
+  return models.RunRecord(id=run_id, session_id=RUN_SESSION_ID, **fields)
+
+
+def _run_seed(root: pathlib.Path, operation: str) -> None:
+  home = root / operation / "seed-home"
+  session_dir = home / "sessions" / RUN_SESSION_ID
+  run_dir = session_dir / "data" / "runs"
+  run_dir.mkdir(parents=True, exist_ok=True)
+  (home / "config.yaml").write_text("{}\n", encoding="utf-8")
+  if operation == "retry":
+    previous = _run_record(
+        "run-previous",
+        kind="work",
+        backend="backend-a",
+        model="model-a",
+        repo_path="/repo",
+        base_branch="main",
+        branch_name="branch-a",
+        worktree_path="/repo/worktree",
+        sequence_ref={"kind": "cron", "owner_ref": "sequence-a", "position": 2},
+    )
+    (run_dir / previous.id).mkdir()
+    (run_dir / previous.id / "metadata.json").write_text(previous.model_dump_json(indent=2), encoding="utf-8")
+  elif operation != "register":
+    record = _run_record("run-a", input_event_ids=["wrong"] if operation == "repeat_finish" else [])
+    (run_dir / record.id).mkdir()
+    (run_dir / record.id / "metadata.json").write_text(record.model_dump_json(indent=2), encoding="utf-8")
+  if operation in ("finish", "repeat_finish"):
+    data_dir = session_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    chat_path = data_dir / "chat_events.jsonl"
+    input_event = {
+        "id": "input-a",
+        "type": "user",
+        "timestamp": "2025-02-03T04:05:06.123456+00:00",
+        "content": "synthetic input",
+    }
+    lines = [json.dumps(input_event, ensure_ascii=False)]
+    if operation == "repeat_finish":
+      lines.append(json.dumps({
+          "id": "00000000-0000-4000-8000-000000000198",
+          "type": "run_finished",
+          "timestamp": "2025-02-03T04:05:06.123456+00:00",
+          "actor": "system",
+          "source_session_id": RUN_SESSION_ID,
+          "run_id": "run-a",
+          "input_event_ids": ["input-a"],
+          "outcome": "failed",
+      }, ensure_ascii=False))
+    chat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class _RunSink:
+  def __init__(self, event_store: chat_events.ChatEventStore) -> None:
+    self._event_store = event_store
+
+  async def append(self, session_id: str, event: dict) -> None:
+    await self._event_store.save_chat_event(session_id, event)
+
+  async def notify_tree_changed(self, session_id: str, event_type: str | None) -> None:
+    return None
+
+  def load_events(self, session_id: str) -> list[dict]:
+    return self._event_store.load_chat_events_sync(session_id)
+
+
+def _python_run_store(home: pathlib.Path) -> runs.RunStore:
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  cfg = config.load_config()
+  sessions = session_store.SessionStore(cfg)
+  event_store = chat_events.ChatEventStore(sessions.session_dir, sessions.metadata_path, sessions.metadata_cache)
+  return runs.RunStore(cfg.sessions_dir, asyncio.Lock(), _RunSink(event_store))
+
+
+def _patch_control_event_ids() -> None:
+  original = control_events.build_control_event
+
+  def build(event_type: str, *, actor: str, source_session_id: str, event_id: str | None = None,
+            **payload: object) -> dict:
+    if event_type in ("run_finished", "run_stop_requested"):
+      event_id = RUN_EVENT_ID
+    return original(event_type, actor=actor, source_session_id=source_session_id, event_id=event_id, **payload)
+
+  control_events.build_control_event = build
+
+
+def _prepare_runs(root: pathlib.Path) -> None:
+  registrations.register_all()
+  for operation in RUN_OPS:
+    _run_seed(root, operation)
+
+
+async def _apply_python_run(home: pathlib.Path, operation: str) -> None:
+  store = _python_run_store(home)
+  if operation == "register":
+    record = _run_record("run-register")
+    await store.register_run(record, task_spec_text="synthetic task spec")
+    await store.register_run(_run_record("run-register", kind="review"), task_spec_text="ignored replacement")
+  elif operation == "retry":
+    previous = store.read_run_sync(RUN_SESSION_ID, "run-previous")
+    assert previous is not None
+    async with store._lock:
+      await store.create_retry_run_locked(
+          RUN_SESSION_ID,
+          "retry-request",
+          previous.id,
+          task_spec_text=None,
+          kind=previous.kind,
+          backend=previous.backend,
+          model=previous.model,
+          repo_path=previous.repo_path,
+          base_branch=previous.base_branch,
+          branch_name=previous.branch_name,
+          worktree_path=previous.worktree_path,
+          sequence_ref=previous.sequence_ref,
+      )
+      await store.create_retry_run_locked(
+          RUN_SESSION_ID,
+          "retry-request",
+          previous.id,
+          task_spec_text=None,
+          kind=previous.kind,
+          backend=previous.backend,
+          model=previous.model,
+          repo_path=previous.repo_path,
+          base_branch=previous.base_branch,
+          branch_name=previous.branch_name,
+          worktree_path=previous.worktree_path,
+          sequence_ref=previous.sequence_ref,
+      )
+  elif operation == "launch":
+    await store.record_launch(RUN_SESSION_ID, "run-a", pid=424242, pid_start="12345")
+  elif operation == "observation":
+    await store.record_observation(
+        RUN_SESSION_ID,
+        "run-a",
+        native_session_id="native-a",
+        model="model-b",
+        raw_log_ref="/tmp/run.raw",
+    )
+  elif operation == "finish":
+    await store.record_finish(
+        RUN_SESSION_ID,
+        "run-a",
+        "success",
+        input_event_ids=["input-a"],
+        exit_code=0,
+        ended_at=RUN_FIXED,
+    )
+  elif operation == "repeat_finish":
+    await store.record_finish(
+        RUN_SESSION_ID,
+        "run-a",
+        "success",
+        input_event_ids=["ignored-input"],
+        exit_code=0,
+        ended_at=RUN_FIXED,
+    )
+  elif operation == "stop":
+    await store.request_stop(RUN_SESSION_ID, "run-a", "stop-request")
+  else:
+    raise ValueError(f"unknown run operation {operation}")
+
+
+def _apply_runs(root: pathlib.Path) -> None:
+  registrations.register_all()
+  _patch_control_event_ids()
+  for operation in RUN_OPS:
+    operation_root = root / operation
+    shared_home = operation_root / "shared-home"
+    if shared_home.exists():
+      shutil.rmtree(shared_home)
+    shutil.copytree(operation_root / "seed-home", shared_home)
+    asyncio.run(_apply_python_run(shared_home, operation))
+    shutil.copytree(shared_home, operation_root / "python-result")
+
+
+def _verify_runs(root: pathlib.Path) -> None:
+  registrations.register_all()
+  for operation in RUN_OPS:
+    home = root / operation / "shared-home"
+    if operation == "register":
+      run_id = "run-register"
+    elif operation == "retry":
+      run_id = control_events.stable_run_id(RUN_SESSION_ID, "retry-request")
+    else:
+      run_id = "run-a"
+    record = _python_run_store(home).read_run_sync(RUN_SESSION_ID, run_id)
+    assert record is not None
+    assert record.id == run_id
+    if operation == "register":
+      assert pathlib.Path(record.task_spec_ref).read_text(encoding="utf-8") == "synthetic task spec"
+    if operation == "retry":
+      assert record.retry_of_run_id == "run-previous"
+      assert record.backend == "backend-a"
+    if operation == "launch":
+      assert record.pid == 424242 and record.pid_start == "12345"
+    if operation == "observation":
+      assert record.native_session_id == "native-a" and record.model == "model-b"
+      assert record.raw_log_ref == "/tmp/run.raw"
+    if operation == "finish":
+      assert record.input_event_ids == ["input-a"] and record.exit_code == 0
+    if operation == "repeat_finish":
+      assert record.input_event_ids == ["input-a"] and record.exit_code == 0 and record.ended_at == RUN_FIXED
+    if operation == "stop":
+      facts = ndjson.parse_ndjson_file(home / "sessions" / RUN_SESSION_ID / "data" / "chat_events.jsonl")
+      assert len(facts) == 1 and facts[0]["request_id"] == "stop-request"
+
+
 if __name__ == "__main__":
   mode, root_text = sys.argv[1:]
   root = pathlib.Path(root_text)
@@ -183,5 +399,11 @@ if __name__ == "__main__":
     _prepare(root)
   elif mode == "verify":
     _verify(root)
+  elif mode == "prepare_runs":
+    _prepare_runs(root)
+  elif mode == "apply_runs":
+    _apply_runs(root)
+  elif mode == "verify_runs":
+    _verify_runs(root)
   else:
     raise ValueError(f"unknown mode {mode}")

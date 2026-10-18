@@ -1,15 +1,23 @@
 //! The single writer for session metadata and chat event logs.
 
 mod control;
+pub mod control_events;
 mod events;
 mod listing;
 pub mod metadata;
 mod ndjson;
+pub mod run_identity;
+pub mod run_records;
+pub mod sidebar_state;
 mod store;
 
 pub use control::ControlGuard;
 pub use events::ChatEvent;
 pub use listing::{ArchivedPage, MetadataListing, RawMetadata};
+pub use run_records::{
+  RunBlocker, RunDisplayState, RunKind, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceRef, StopRequest,
+  StopResult,
+};
 pub use store::{AccountLabelKeeper, AnchorFieldReconciler, SequenceListingFields, Store, StoreHooks};
 
 use std::fmt;

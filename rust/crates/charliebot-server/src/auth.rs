@@ -15,7 +15,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
-use charliebot_core::run_token;
+use charliebot_core::run_token::{self, RunTokenClaims};
+use charliebot_store::Store;
 use http::{HeaderMap, Method, StatusCode, header};
 use subtle::ConstantTimeEq;
 
@@ -48,6 +49,38 @@ pub enum Decision {
 /// characters raises `TypeError`, which fails the request with a 500.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonAsciiCredential;
+
+/// The agent caller identity resolved after a route verifies its bearer token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCallerIdentity {
+  pub session_id: String,
+  pub run_id: String,
+  pub agent: String,
+}
+
+/// Validate a verified run token against the durable run record and finish facts.
+pub fn require_active_run(store: &Store, claims: &RunTokenClaims) -> Result<RunCallerIdentity, String> {
+  if let Some(refusal) =
+    store.run_identity_refusal(&claims.session_id, &claims.run_id).map_err(|error| error.to_string())?
+  {
+    return Err(refusal.to_string());
+  }
+  Ok(RunCallerIdentity {
+    session_id: claims.session_id.clone(),
+    run_id: claims.run_id.clone(),
+    agent: claims.agent.clone(),
+  })
+}
+
+fn resolve_run_caller(headers: &HeaderMap, key: &str, store: &Store) -> Result<Option<RunCallerIdentity>, String> {
+  let authorization = header_text(headers, &header::AUTHORIZATION);
+  let bearer = run_token::bearer_from_authorization(Some(&authorization));
+  if bearer.is_empty() || credential_matches(bearer, key).map_err(|_| "non-ASCII credential".to_string())? {
+    return Ok(None);
+  }
+  let claims = run_token::verify_run_token(bearer, key).map_err(|error| format!("invalid run token: {error}"))?;
+  require_active_run(store, &claims).map(Some)
+}
 
 /// `hmac.compare_digest(candidate, key)` for two `str` values: constant-time equality, refusing non-ASCII text.
 pub fn credential_matches(candidate: &str, key: &str) -> Result<bool, NonAsciiCredential> {
@@ -135,13 +168,26 @@ fn url_pairs(query: &str) -> Vec<(String, String)> {
 }
 
 /// The gate as an axum layer. It sits inside the request log, so its refusals are logged.
-pub async fn layer(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
+pub async fn layer(State(state): State<Arc<AppState>>, mut request: Request, next: Next) -> Response {
   let key = match state.access_key() {
     Ok(key) => key,
     Err(error) => return responses::internal_error("ValueError", error.to_string()),
   };
-  match decide(request.method(), request_path::of(&request), request.headers(), key.as_deref()) {
-    Ok(Decision::Pass) => next.run(request).await,
+  let path = request_path::of(&request);
+  let public_path = PUBLIC_PATHS.contains(&path) || PUBLIC_PREFIXES.iter().any(|prefix| path.starts_with(prefix));
+  match decide(request.method(), path, request.headers(), key.as_deref()) {
+    Ok(Decision::Pass) => {
+      if !public_path && let Some(key) = key.as_deref() {
+        match resolve_run_caller(request.headers(), key, &state._store) {
+          Ok(Some(identity)) => {
+            request.extensions_mut().insert(identity);
+          }
+          Ok(None) => {}
+          Err(detail) => return unauthorized_detail(&detail),
+        }
+      }
+      next.run(request).await
+    }
     Ok(Decision::LoginPage) => unauthorized("text/html; charset=utf-8", LOGIN_PAGE),
     Ok(Decision::JsonUnauthorized) => unauthorized("application/json", UNAUTHORIZED_JSON),
     Err(NonAsciiCredential) => {
@@ -157,6 +203,10 @@ fn unauthorized(content_type: &'static str, body: &'static str) -> Response {
     .header(header::CONTENT_LENGTH, body.len())
     .body(Body::from(body))
     .expect("a fixed 401 response builds")
+}
+
+fn unauthorized_detail(detail: &str) -> Response {
+  responses::json(StatusCode::UNAUTHORIZED, &serde_json::json!({ "detail": detail }))
 }
 
 #[cfg(test)]
@@ -232,5 +282,77 @@ mod tests {
   #[test]
   fn non_ascii_credentials_fail_like_compare_digest() {
     assert_eq!(credential_matches("k\u{e9}", KEY), Err(NonAsciiCredential));
+  }
+
+  #[tokio::test]
+  async fn the_route_caller_extractor_refuses_unlaunched_and_finished_runs() {
+    use charliebot_store::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+
+    let home = tempfile::tempdir().unwrap();
+    let cfg = charliebot_core::config::load_config(home.path()).unwrap();
+    let store = crate::store_setup::create(cfg).unwrap();
+    let claims = RunTokenClaims { session_id: "session-a".into(), run_id: "run-a".into(), agent: "worker".into() };
+    let guard = store.control_lock().await;
+    store
+      .register_run_locked(
+        &guard,
+        "session-a",
+        RunRecord {
+          id: "run-a".into(),
+          session_id: "session-a".into(),
+          kind: RunKind::Work,
+          input_event_ids: Vec::new(),
+          task_spec_hash: None,
+          task_spec_ref: None,
+          prompt_snapshot_ref: None,
+          retry_of_run_id: None,
+          review_of_run_id: None,
+          backend: None,
+          model: None,
+          native_session_id: None,
+          pid: None,
+          pid_start: None,
+          started_at: None,
+          ended_at: None,
+          exit_code: None,
+          repo_path: None,
+          base_branch: None,
+          branch_name: None,
+          worktree_path: None,
+          sequence_ref: None,
+          raw_log_ref: None,
+          events_ref: None,
+          result_ref: None,
+        },
+        "synthetic task",
+      )
+      .await
+      .unwrap();
+    drop(guard);
+    let token = run_token::sign_run_token(&claims, KEY).unwrap();
+    let bearer = format!("Bearer {token}");
+    let token_headers = headers(&[(&header::AUTHORIZATION, &bearer)]);
+    assert_eq!(
+      require_active_run(&store, &claims).unwrap_err(),
+      charliebot_store::run_identity::RUN_IDENTITY_NOT_LAUNCHED_DETAIL
+    );
+    assert_eq!(
+      resolve_run_caller(&token_headers, KEY, &store).unwrap_err(),
+      charliebot_store::run_identity::RUN_IDENTITY_NOT_LAUNCHED_DETAIL
+    );
+    store.record_launch("session-a", "run-a", 424242, "12345").await.unwrap();
+    assert_eq!(require_active_run(&store, &claims).unwrap().run_id, "run-a");
+    assert_eq!(resolve_run_caller(&token_headers, KEY, &store).unwrap().unwrap().run_id, "run-a");
+    let outcome = RunOutcome::new(RunOutcomeKind::Success);
+    let guard = store.control_lock().await;
+    store.record_finish_locked(&guard, "session-a", "run-a", outcome).await.unwrap();
+    assert_eq!(
+      require_active_run(&store, &claims).unwrap_err(),
+      charliebot_store::run_identity::RUN_IDENTITY_UNKNOWN_DETAIL
+    );
+    assert_eq!(
+      resolve_run_caller(&token_headers, KEY, &store).unwrap_err(),
+      charliebot_store::run_identity::RUN_IDENTITY_UNKNOWN_DETAIL
+    );
   }
 }

@@ -74,9 +74,9 @@ Python's `resolve_session_usage` asks the backend's own usage resolver first (co
 that tier is not ported in S1. `load_all_facts` reads every `chat_events.*.jsonl` archive file; Python's
 `fact_history` reads the first `archive_offset` archived events.
 
-## Planned run records (S2)
+## Run records (S2, implemented)
 
-| Rust API planned | Python source |
+| Rust API (implemented) | Python source |
 | --- | --- |
 | `register_run_locked(&self, guard: &ControlGuard, session_id: &str, run: RunRecord, task_spec: &str) -> StoreResult<RunRecord>` | `src/runtime/runs.py::register_run_locked` |
 | `create_retry_run_locked(&self, guard: &ControlGuard, session_id: &str, request_id: &str, previous: &RunRecord) -> StoreResult<RunRecord>` | `src/runtime/runs.py::create_retry_run_locked` |
@@ -92,8 +92,21 @@ that tier is not ported in S1. `load_all_facts` reads every `chat_events.*.jsonl
 | `run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState>`; `run_blocker(&self, session_id: &str) -> StoreResult<Option<RunBlocker>>` | `src/runtime/runs.py::run_display_state`, `run_blocker` |
 | `records_generation(&self) -> u64`; `mark_sidebar_dirty(&self, session_id: &str)` | `src/runtime/runs.py::records_generation`, `mark_sidebar_dirty` |
 
-Run writes are atomic model writes. `register_run_locked`, retry creation, finish, and input claims
-will require `ControlGuard`; the run record and chat fact ordering follows `src/runtime/runs.py`.
+Run records use Python's exact field order and reject unknown fields. Their JSON writes are atomic.
+`register_run_locked`, retry creation, finish and `claim_input_events_locked` require `ControlGuard`.
+`claim_input_events` acquires the guard for callers that do not hold it. Control facts append through
+`append_control_fact` while the guard is held. A finish fact lands before its record mirror.
+
+`RunOutcome` carries the terminal outcome, an optional input list, an optional exit code and an
+optional end time. Repeated finish calls keep the first fact and repair a missing record mirror.
+Stop requests append their fact under the guard. The process identity check, SIGTERM and bounded
+exit wait run after the guard is released.
+
+The store exports the legacy and v2 run-layout names from `src/runtime/runs.py`. It provides
+read-only path scans for legacy master logs, legacy thread event logs and v2 run raw logs, plus a
+scan of all run records. `run_identity_refusal` reads the run record and full fact history before a
+route accepts run-token identity. `records_generation` increments after each run-record write.
+`mark_sidebar_dirty` updates the process-local sidebar dirty set and its derived generation.
 
 ## Planned task tree (S3)
 

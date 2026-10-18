@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -79,6 +80,8 @@ pub struct Store {
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Vec<Value>>>,
   pub(crate) control: ControlLock,
+  pub(crate) records_generation: AtomicU64,
+  pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
 }
 
 impl Store {
@@ -102,6 +105,8 @@ impl Store {
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       control: ControlLock::new(store_id),
+      records_generation: AtomicU64::new(0),
+      control_event_ids: StdMutex::new(None),
     })
   }
 

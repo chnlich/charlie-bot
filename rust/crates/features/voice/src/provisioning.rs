@@ -181,12 +181,12 @@ fn ensure_artifact(path: &Path, url: &str, expected_sha256: &str, settings: &Set
     let client = http_client::client(settings).context("build model download HTTP client")?;
     runtime.block_on(async {
       // Python's src/features/voice/transcriber.py::_ensure_artifact passes
-      // src/infra/timeouts.py::HTTP_MODEL_DOWNLOAD_TIMEOUT to urlopen here.
-      let mut response = client
-        .get(url)
-        .timeout(Duration::from_secs(HTTP_MODEL_DOWNLOAD_TIMEOUT_SECS))
-        .send()
+      // src/infra/timeouts.py::HTTP_MODEL_DOWNLOAD_TIMEOUT to urlopen here, which bounds each socket wait.
+      // reqwest's request timeout would bound the whole body instead, so each wait is bounded here.
+      let timeout = Duration::from_secs(HTTP_MODEL_DOWNLOAD_TIMEOUT_SECS);
+      let mut response = tokio::time::timeout(timeout, client.get(url).send())
         .await
+        .with_context(|| format!("model download timed out for {url}"))?
         .with_context(|| format!("model download failed for {url}"))?;
       let status = response.status().as_u16();
       if status != 200 {
@@ -194,7 +194,11 @@ fn ensure_artifact(path: &Path, url: &str, expected_sha256: &str, settings: &Set
       }
 
       let mut digest = Sha256::new();
-      while let Some(chunk) = response.chunk().await.context("read model download response")? {
+      while let Some(chunk) = tokio::time::timeout(timeout, response.chunk())
+        .await
+        .with_context(|| format!("model download timed out for {url}"))?
+        .context("read model download response")?
+      {
         digest.update(&chunk);
         stream.write_all(&chunk).context("write model download chunk")?;
       }

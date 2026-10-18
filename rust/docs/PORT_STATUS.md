@@ -95,9 +95,9 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET | `/api/git/diff/files` | features/diff_view | todo |  |
 | GET | `/api/git/diff/file` | features/diff_view | todo |  |
 | GET | `/diff` | features/diff_view | todo |  |
-| POST | `/api/sessions/{session_id}/explain` | features/explain | todo |  |
-| GET | `/api/sessions/{session_id}/explain` | features/explain | todo |  |
-| GET | `/api/sessions/{session_id}/explain/status` | features/explain | todo |  |
+| POST | `/api/sessions/{session_id}/explain` | features/explain | ported | The one-shot agent's environment differs from Python's (shared one-shot path, `features-explain` shutdown). |
+| GET | `/api/sessions/{session_id}/explain` | features/explain | ported |  |
+| GET | `/api/sessions/{session_id}/explain/status` | features/explain | ported |  |
 | POST | `/api/internal/improve/stop` | features/improve | todo |  |
 | POST | `/api/internal/improve` | features/improve | todo |  |
 | GET | `/ncu` | features/ncu | todo |  |
@@ -235,7 +235,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/threads/<tid>/metadata.json` | S1 | ported | Typed thread model and registered slots. |
 | `sessions/<sid>/data/chat_events.jsonl` | S1 | ported | Append, sync, tolerant NDJSON reads, cache and ranges. |
 | `sessions/<sid>/data/archives/chat_events.<year>-W<week>.jsonl` | S1 | ported | Archive rotation and global `archive_offset`. |
-| `sessions/<sid>/data/explain_results.json` | features/explain | todo | |
+| `sessions/<sid>/data/explain_results.json` | features/explain | ported | Written atomically as Python writes it; stale pending entries are reaped on read. |
 | `sessions/<sid>/data/runs/<run>/task_spec.md` | S2 | planned | |
 | `sessions/<sid>/data/runs/<run>/metadata.json` | S2 | planned | |
 | `sessions/<sid>/data/runs/<run>/events.jsonl` | S2 | planned | |
@@ -278,7 +278,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | sibling backup archives | features/backup | todo | Outside the home. |
 | `<publish.dir>/<token>/<basename>` | CLI publish | todo | Outside the home. |
 | one-shot backend temporary directories | backends | todo | Outside the home. |
-| explain temporary directories | features/explain | todo | Outside the home. |
+| explain temporary directories | features/explain | ported | Outside the home. A read-only history copy per run, removed when the run ends. |
 | headless-render temporary directories | features/artifacts | todo | Outside the home. |
 | trace-merge temporary directories | features/trace | todo | Outside the home. |
 | memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |

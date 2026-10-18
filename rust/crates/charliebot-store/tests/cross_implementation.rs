@@ -8,9 +8,8 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunKind, RunOutcome, RunOutcomeKind,
-  RunRecord,
-  SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
+  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind, RunOutcome,
+  RunOutcomeKind, RunRecord, SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
 };
 use serde_json::{Map, Value, json};
 
@@ -495,6 +494,133 @@ async fn a_late_stop_keeps_a_finished_runs_outcome_and_a_repeat_finish_keeps_its
   repeat.exit_code = Some(3);
   let repaired = store.record_finish_locked(&guard, RUN_SESSION_ID, "run-done", repeat).await.unwrap();
   assert_eq!((repaired.exit_code, repaired.ended_at.is_some()), (None, true));
+}
+
+#[tokio::test]
+async fn run_pages_walk_the_launch_order_and_refuse_a_malformed_cursor() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let mut runs = vec![empty_run("queued-0", RunKind::Work), empty_run("queued-1", RunKind::Work)];
+  runs.extend((0..5).map(|minute| launched_run(&format!("run-{minute}"), minute)));
+  register_runs(&store, runs).await;
+
+  let mut cursor: Option<String> = None;
+  let mut pages = Vec::new();
+  loop {
+    let page = store.list_runs_page_sync(RUN_SESSION_ID, cursor.as_deref(), 2).unwrap();
+    pages.push(page.items.into_iter().map(|run| run.id).collect::<Vec<_>>());
+    match page.next_cursor {
+      Some(next) => cursor = Some(next),
+      None => break,
+    }
+  }
+  let expected: Vec<Vec<&str>> =
+    vec![vec!["queued-0", "queued-1"], vec!["run-0", "run-1"], vec!["run-2", "run-3"], vec!["run-4"]];
+  assert_eq!(pages, expected);
+  assert!(store.list_runs_page_sync(RUN_SESSION_ID, Some("not-a-cursor"), 2).is_err());
+}
+
+#[tokio::test]
+async fn newest_run_is_the_latest_launch_and_a_queued_reservation_never_leads() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  assert_eq!(store.newest_run_record_sync(RUN_SESSION_ID).unwrap(), None);
+
+  register_runs(&store, vec![launched_run("run-a", 1), launched_run("run-b", 1)]).await;
+  assert_eq!(newest_run_id(&store), Some("run-b".to_string()), "equal launch times order by id");
+
+  register_runs(&store, vec![empty_run("queued-0", RunKind::Work)]).await;
+  assert_eq!(newest_run_id(&store), Some("run-b".to_string()));
+
+  register_runs(&store, vec![launched_run("run-c", 2)]).await;
+  assert_eq!(newest_run_id(&store), Some("run-c".to_string()));
+}
+
+#[tokio::test]
+async fn run_blocker_names_the_first_run_that_blocks_a_structural_change() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  assert_eq!(store.run_blocker(RUN_SESSION_ID).unwrap(), None);
+
+  register_runs(&store, vec![empty_run("run-queued", RunKind::Work)]).await;
+  assert_eq!(
+    store.run_blocker(RUN_SESSION_ID).unwrap(),
+    Some(RunBlocker {
+      run_id: "run-queued".to_string(),
+      reason: "run run-queued is queued (pending dispatch)".to_string(),
+    })
+  );
+  // A durable stop settles a run that never launched, so it blocks nothing.
+  store.request_stop(RUN_SESSION_ID, "run-queued", "stop-queued").await.unwrap();
+  assert_eq!(store.run_blocker(RUN_SESSION_ID).unwrap(), None);
+
+  let mut live = Command::new("sleep").arg("30").spawn().unwrap();
+  let pid_start = proc_identity::read_pid_stat(live.id()).unwrap().pid_start;
+  register_process_run(&store, "run-active", live.id(), &pid_start).await;
+  let active = store.run_blocker(RUN_SESSION_ID).unwrap();
+  finish_run(&store, "run-active", None).await;
+  register_process_run(&store, "run-unresolved", live.id(), "forged-start").await;
+  let unresolved = store.run_blocker(RUN_SESSION_ID).unwrap();
+  live.kill().unwrap();
+  live.wait().unwrap();
+  assert_eq!(
+    active,
+    Some(RunBlocker { run_id: "run-active".to_string(), reason: "run run-active is active".to_string() })
+  );
+  assert_eq!(
+    unresolved,
+    Some(RunBlocker {
+      run_id: "run-unresolved".to_string(),
+      reason: "run run-unresolved has an unresolved process identity (needs recovery)".to_string(),
+    })
+  );
+}
+
+#[tokio::test]
+async fn last_ended_run_follows_the_end_time_and_falls_back_to_the_finish_fact() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  register_runs(&store, vec![launched_run("run-early", 1), launched_run("run-late", 2)]).await;
+  assert_eq!(store.last_ended_run_id(RUN_SESSION_ID).unwrap(), None);
+
+  finish_run(&store, "run-late", Some("2026-01-01T00:03:00Z")).await;
+  finish_run(&store, "run-early", Some("2026-01-01T00:05:00Z")).await;
+  assert_eq!(store.last_ended_run_id(RUN_SESSION_ID).unwrap(), Some("run-early".to_string()));
+
+  // A terminal run whose mirror lost its end time ranks by its finish fact, which is newer than both mirrors.
+  clear_ended_at(&store, "run-late");
+  assert_eq!(store.last_ended_run_id(RUN_SESSION_ID).unwrap(), Some("run-late".to_string()));
+}
+
+async fn register_runs(store: &Store, runs: Vec<RunRecord>) {
+  let guard = store.control_lock().await;
+  for run in runs {
+    store.register_run_locked(&guard, RUN_SESSION_ID, run, None).await.unwrap();
+  }
+}
+
+async fn finish_run(store: &Store, run_id: &str, ended_at: Option<&str>) {
+  let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
+  outcome.ended_at = ended_at.map(|value| UtcDateTime::parse(value).unwrap());
+  let guard = store.control_lock().await;
+  store.record_finish_locked(&guard, RUN_SESSION_ID, run_id, outcome).await.unwrap();
+}
+
+fn launched_run(id: &str, minute: u32) -> RunRecord {
+  let mut run = empty_run(id, RunKind::Work);
+  run.started_at = Some(UtcDateTime::parse(&format!("2026-01-01T00:{minute:02}:00Z")).unwrap());
+  run
+}
+
+fn newest_run_id(store: &Store) -> Option<String> {
+  store.newest_run_record_sync(RUN_SESSION_ID).unwrap().map(|run| run.id)
+}
+
+fn clear_ended_at(store: &Store, run_id: &str) {
+  let path = store.run_metadata_path(RUN_SESSION_ID, run_id);
+  let mut record: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+  record["ended_at"] = Value::Null;
+  fs::write(&path, record.to_string()).unwrap();
 }
 
 fn retry_fields(previous: &RunRecord, input_event_ids: Vec<String>) -> RetryRunFields {

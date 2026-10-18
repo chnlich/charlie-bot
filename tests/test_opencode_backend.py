@@ -342,12 +342,13 @@ def _idle_server() -> server.OpenCodeServer:
   return shared
 
 
-def test_process_rss_reads_the_process_own_resident_memory():
+def test_process_rss_reads_the_process_own_resident_memory() -> None:
   assert server.process_rss_mb(os.getpid()) > 10
 
 
 @pytest.mark.asyncio
-async def test_heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit(monkeypatch):
+async def test_heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit(
+    monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 3600.0)
   rss = mock.Mock(return_value=401.0)
@@ -360,7 +361,7 @@ async def test_heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_li
 
 
 @pytest.mark.asyncio
-async def test_server_with_rss_at_the_limit_runs_on_to_the_idle_exit(monkeypatch):
+async def test_server_with_rss_at_the_limit_runs_on_to_the_idle_exit(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
   rss = mock.Mock(return_value=400.0)
@@ -373,7 +374,8 @@ async def test_server_with_rss_at_the_limit_runs_on_to_the_idle_exit(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_claimed_directory_keeps_the_server_past_the_checkpoint_and_the_idle_exit(monkeypatch):
+async def test_a_claimed_directory_keeps_the_server_past_the_checkpoint_and_the_idle_exit(
+    monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
   rss = mock.Mock(return_value=900.0)
@@ -386,7 +388,79 @@ async def test_a_claimed_directory_keeps_the_server_past_the_checkpoint_and_the_
 
 
 @pytest.mark.asyncio
-async def test_claim_is_held_before_the_server_starts_and_dropped_when_the_start_fails(fake_oc, monkeypatch):
+async def test_turn_claimed_during_heavy_shutdown_waits_for_the_new_server(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 3600.0)
+  rss = mock.Mock(return_value=401.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  previous_proc = shared._proc
+  shutdown_started = asyncio.Event()
+  finish_shutdown = asyncio.Event()
+  claimed = asyncio.Event()
+  completed = asyncio.Event()
+  started_pids: list[int] = []
+
+  async def shutdown() -> None:
+    shutdown_started.set()
+    await finish_shutdown.wait()
+    previous_proc.returncode = 0
+    shared._proc = None
+
+  async def start() -> None:
+    shared._stopping = False
+    shared._proc = mock.Mock(pid=4343, returncode=None)
+    started_pids.append(shared._proc.pid)
+
+  async def arriving_turn() -> None:
+    await shared.claim("/w/next")
+    claimed.set()
+    await shared.ensure_running()
+    completed.set()
+    await shared.release_claim("/w/next")
+
+  shared._shutdown = shutdown
+  shared._start = start
+  checkpoint = asyncio.create_task(shared._stop_when_idle())
+  await asyncio.wait_for(shutdown_started.wait(), timeout=1)
+  turn = asyncio.create_task(arriving_turn())
+  await asyncio.wait_for(claimed.wait(), timeout=1)
+  started_before_shutdown_finished = list(started_pids)
+  finish_shutdown.set()
+  await asyncio.wait_for(asyncio.gather(checkpoint, turn), timeout=1)
+
+  assert started_before_shutdown_finished == []
+  assert started_pids == [4343]
+  assert completed.is_set()
+  rss.assert_called_once_with(4242)
+
+
+@pytest.mark.asyncio
+async def test_idle_exit_does_not_stop_an_exited_process(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
+  rss = mock.Mock(return_value=401.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  shared._proc.returncode = 0
+
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=1)
+
+  rss.assert_not_called()
+  shared._shutdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start_error",
+    [
+        "opencode 2.0 binary not found",
+        "opencode serve did not print its listening address",
+        "opencode reports 1.18.18",
+    ],
+)
+async def test_claim_is_held_before_the_server_starts_and_dropped_when_start_fails(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, start_error: str) -> None:
   backend = opencode.OpenCodeBackend(model=MODEL)
   shared = server.OpenCodeServer(None)
   directory = str(fake_oc / "dir")
@@ -394,9 +468,9 @@ async def test_claim_is_held_before_the_server_starts_and_dropped_when_the_start
 
   async def failing_start() -> None:
     claims_at_start.append(shared._claims[directory])
-    raise RuntimeError("opencode 2.0 binary not found")
+    raise RuntimeError(start_error)
 
-  shared.ensure_running = failing_start
+  shared._start = failing_start
   monkeypatch.setattr(server, "server_for", lambda _proxy_url: shared)
   monkeypatch.setattr(backend, "_prepare_cwd", mock.Mock())
   monkeypatch.setattr(backend, "_end_turn_process", mock.AsyncMock())
@@ -409,8 +483,21 @@ async def test_claim_is_held_before_the_server_starts_and_dropped_when_the_start
   events = await _run_turn(backend, "x", fake_oc / "dir")
 
   assert claims_at_start == [1]
-  assert events[-1]["type"] == ET.ERROR and "binary not found" in events[-1]["message"]
+  assert events[-1]["type"] == ET.ERROR and start_error in events[-1]["message"]
   assert shared._claims[directory] == 0
+
+
+@pytest.mark.asyncio
+async def test_dropping_the_last_claim_rearms_the_idle_exit() -> None:
+  locations = _Locations(["/w/a"])
+  shared = _release_server(locations)
+  shared._idle = mock.Mock(done=mock.Mock(return_value=True))
+  await shared.claim("/w/a")
+
+  with mock.patch.object(shared, "_arm_idle") as arm_idle:
+    await shared.release_claim("/w/a")
+
+  arm_idle.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -832,7 +919,8 @@ async def test_server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_idle_server_exits_after_the_idle_limit(fake_oc, monkeypatch, stop_servers):
+async def test_idle_server_exits_after_the_idle_limit(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, stop_servers: None) -> None:
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.05)
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.2)
   _script(fake_oc, monkeypatch, {"prompts": {"idle": {"events": _text_events("ok")}}})
@@ -846,7 +934,8 @@ async def test_idle_server_exits_after_the_idle_limit(fake_oc, monkeypatch, stop
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_wrong_major_version_fails_the_turn_naming_the_binary(fake_oc, monkeypatch, stop_servers):
+async def test_wrong_major_version_fails_the_turn_naming_the_binary(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, stop_servers: None) -> None:
   monkeypatch.setenv("FAKE_OC_VERSION", "1.18.18")
   _script(fake_oc, monkeypatch, {"prompts": {}})
   events = await _run_turn(opencode.OpenCodeBackend(model=MODEL), "x", fake_oc / "dir")

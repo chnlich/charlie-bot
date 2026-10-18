@@ -78,8 +78,8 @@ that tier is not ported in S1. `load_all_facts` reads every `chat_events.*.jsonl
 
 | Rust API (implemented) | Python source |
 | --- | --- |
-| `register_run_locked(&self, guard: &ControlGuard, session_id: &str, run: RunRecord, task_spec: &str) -> StoreResult<RunRecord>` | `src/runtime/runs.py::register_run_locked` |
-| `create_retry_run_locked(&self, guard: &ControlGuard, session_id: &str, request_id: &str, previous: &RunRecord) -> StoreResult<RunRecord>` | `src/runtime/runs.py::create_retry_run_locked` |
+| `register_run_locked(&self, guard: &ControlGuard, session_id: &str, run: RunRecord, task_spec: Option<&str>) -> StoreResult<RunRecord>` | `src/runtime/runs.py::register_run_locked` |
+| `create_retry_run_locked(&self, guard: &ControlGuard, session_id: &str, request_id: &str, original_run_id: &str, task_spec_text: Option<&str>, fields: RetryRunFields) -> StoreResult<RunRecord>` | `src/runtime/runs.py::create_retry_run_locked`; caller `src/runtime/task_sessions.py::TaskTreeManager.create_retry` |
 | `record_launch(&self, session_id: &str, run_id: &str, pid: u32, pid_start: &str) -> StoreResult<RunRecord>` | `src/runtime/runs.py::record_launch` |
 | `record_observation(&self, session_id: &str, run_id: &str, fields: Map<String, Value>) -> StoreResult<RunRecord>` | `src/runtime/runs.py::record_observation` |
 | `record_finish_locked(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: RunOutcome) -> StoreResult<RunRecord>` | `src/runtime/runs.py::record_finish_locked` |
@@ -96,6 +96,12 @@ Run records use Python's exact field order and reject unknown fields. Their JSON
 `register_run_locked`, retry creation, finish and `claim_input_events_locked` require `ControlGuard`.
 `claim_input_events` acquires the guard for callers that do not hold it. Control facts append through
 `append_control_fact` while the guard is held. A finish fact lands before its record mirror.
+
+Registration pins `task_spec` only when it is `Some`: the body lands in `task_spec.md` before the record,
+which then carries `task_spec_ref` and `task_spec_hash`. A `None` spec writes neither field. Retry creation
+takes `RetryRunFields` (`kind`, `backend`, `model`, `repo_path`, `base_branch`, `branch_name`,
+`worktree_path`, `sequence_ref`, `review_of_run_id`, `input_event_ids`) and goes through the same registration,
+so a replay of one request returns the first record unchanged.
 
 `RunOutcome` carries the terminal outcome, an optional input list, an optional exit code and an
 optional end time. Repeated finish calls keep the first fact and repair a missing record mirror.

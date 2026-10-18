@@ -33,7 +33,10 @@ OPS = (
     "update_slot_fields",
 )
 
-RUN_OPS = ("register", "retry", "launch", "observation", "finish", "repeat_finish", "stop")
+RUN_OPS = (
+    "register", "retry", "retry_spec", "retry_manager_turn", "launch", "observation", "finish", "repeat_finish", "stop")
+RUN_RETRY_OPS = ("retry", "retry_spec", "retry_manager_turn")
+RETRY_TASK_SPEC = "synthetic retry task spec"
 RUN_SESSION_ID = "00000000-0000-4000-8000-000000000101"
 RUN_EVENT_ID = "00000000-0000-4000-8000-000000000199"
 RUN_FIXED = datetime(2025, 2, 3, 4, 5, 6, 123456, tzinfo=timezone.utc)
@@ -190,17 +193,23 @@ def _run_seed(root: pathlib.Path, operation: str) -> None:
   run_dir = session_dir / "data" / "runs"
   run_dir.mkdir(parents=True, exist_ok=True)
   (home / "config.yaml").write_text("{}\n", encoding="utf-8")
-  if operation == "retry":
+  if operation in RUN_RETRY_OPS:
+    manager_turn = operation == "retry_manager_turn"
     previous = _run_record(
         "run-previous",
-        kind="work",
+        kind="manager_turn" if manager_turn else "work",
+        input_event_ids=["input-a"] if manager_turn else [],
         backend="backend-a",
         model="model-a",
         repo_path="/repo",
         base_branch="main",
         branch_name="branch-a",
         worktree_path="/repo/worktree",
-        sequence_ref={"kind": "cron", "owner_ref": "sequence-a", "position": 2},
+        sequence_ref={
+            "kind": "cron",
+            "owner_ref": "sequence-a",
+            "position": 2
+        },
     )
     (run_dir / previous.id).mkdir()
     (run_dir / previous.id / "metadata.json").write_text(previous.model_dump_json(indent=2), encoding="utf-8")
@@ -220,20 +229,24 @@ def _run_seed(root: pathlib.Path, operation: str) -> None:
     }
     lines = [json.dumps(input_event, ensure_ascii=False)]
     if operation == "repeat_finish":
-      lines.append(json.dumps({
-          "id": "00000000-0000-4000-8000-000000000198",
-          "type": "run_finished",
-          "timestamp": "2025-02-03T04:05:06.123456+00:00",
-          "actor": "system",
-          "source_session_id": RUN_SESSION_ID,
-          "run_id": "run-a",
-          "input_event_ids": ["input-a"],
-          "outcome": "failed",
-      }, ensure_ascii=False))
+      lines.append(
+          json.dumps(
+              {
+                  "id": "00000000-0000-4000-8000-000000000198",
+                  "type": "run_finished",
+                  "timestamp": "2025-02-03T04:05:06.123456+00:00",
+                  "actor": "system",
+                  "source_session_id": RUN_SESSION_ID,
+                  "run_id": "run-a",
+                  "input_event_ids": ["input-a"],
+                  "outcome": "failed",
+              },
+              ensure_ascii=False))
     chat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 class _RunSink:
+
   def __init__(self, event_store: chat_events.ChatEventStore) -> None:
     self._event_store = event_store
 
@@ -258,8 +271,8 @@ def _python_run_store(home: pathlib.Path) -> runs.RunStore:
 def _patch_control_event_ids() -> None:
   original = control_events.build_control_event
 
-  def build(event_type: str, *, actor: str, source_session_id: str, event_id: str | None = None,
-            **payload: object) -> dict:
+  def build(
+      event_type: str, *, actor: str, source_session_id: str, event_id: str | None = None, **payload: object) -> dict:
     if event_type in ("run_finished", "run_stop_requested"):
       event_id = RUN_EVENT_ID
     return original(event_type, actor=actor, source_session_id=source_session_id, event_id=event_id, **payload)
@@ -279,38 +292,29 @@ async def _apply_python_run(home: pathlib.Path, operation: str) -> None:
     record = _run_record("run-register")
     await store.register_run(record, task_spec_text="synthetic task spec")
     await store.register_run(_run_record("run-register", kind="review"), task_spec_text="ignored replacement")
-  elif operation == "retry":
+  elif operation in RUN_RETRY_OPS:
     previous = store.read_run_sync(RUN_SESSION_ID, "run-previous")
     assert previous is not None
+    # The same keyword set as TaskTreeManager.create_retry: a manager-round retry binds the original's batch.
+    fields = dict(
+        kind=previous.kind,
+        backend=previous.backend,
+        model=previous.model,
+        repo_path=previous.repo_path,
+        base_branch=previous.base_branch,
+        branch_name=previous.branch_name,
+        worktree_path=previous.worktree_path,
+        sequence_ref=previous.sequence_ref,
+        review_of_run_id=previous.review_of_run_id,
+    )
+    if operation == "retry_manager_turn":
+      fields["input_event_ids"] = list(previous.input_event_ids)
+    task_spec_text = None if operation == "retry" else RETRY_TASK_SPEC
     async with store._lock:
-      await store.create_retry_run_locked(
-          RUN_SESSION_ID,
-          "retry-request",
-          previous.id,
-          task_spec_text=None,
-          kind=previous.kind,
-          backend=previous.backend,
-          model=previous.model,
-          repo_path=previous.repo_path,
-          base_branch=previous.base_branch,
-          branch_name=previous.branch_name,
-          worktree_path=previous.worktree_path,
-          sequence_ref=previous.sequence_ref,
-      )
-      await store.create_retry_run_locked(
-          RUN_SESSION_ID,
-          "retry-request",
-          previous.id,
-          task_spec_text=None,
-          kind=previous.kind,
-          backend=previous.backend,
-          model=previous.model,
-          repo_path=previous.repo_path,
-          base_branch=previous.base_branch,
-          branch_name=previous.branch_name,
-          worktree_path=previous.worktree_path,
-          sequence_ref=previous.sequence_ref,
-      )
+      # The second call replays the first request and must return the same record.
+      for _ in range(2):
+        await store.create_retry_run_locked(
+            RUN_SESSION_ID, "retry-request", previous.id, task_spec_text=task_spec_text, **fields)
   elif operation == "launch":
     await store.record_launch(RUN_SESSION_ID, "run-a", pid=424242, pid_start="12345")
   elif operation == "observation":
@@ -364,7 +368,7 @@ def _verify_runs(root: pathlib.Path) -> None:
     home = root / operation / "shared-home"
     if operation == "register":
       run_id = "run-register"
-    elif operation == "retry":
+    elif operation in RUN_RETRY_OPS:
       run_id = control_events.stable_run_id(RUN_SESSION_ID, "retry-request")
     else:
       run_id = "run-a"
@@ -373,9 +377,13 @@ def _verify_runs(root: pathlib.Path) -> None:
     assert record.id == run_id
     if operation == "register":
       assert pathlib.Path(record.task_spec_ref).read_text(encoding="utf-8") == "synthetic task spec"
-    if operation == "retry":
+    if operation in RUN_RETRY_OPS:
       assert record.retry_of_run_id == "run-previous"
       assert record.backend == "backend-a"
+    if operation == "retry_spec":
+      assert pathlib.Path(record.task_spec_ref).read_text(encoding="utf-8") == RETRY_TASK_SPEC
+    if operation == "retry_manager_turn":
+      assert record.kind == "manager_turn" and record.input_event_ids == ["input-a"]
     if operation == "launch":
       assert record.pid == 424242 and record.pid_start == "12345"
     if operation == "observation":

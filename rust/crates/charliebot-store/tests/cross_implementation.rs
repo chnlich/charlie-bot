@@ -8,7 +8,8 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RunKind, RunOutcome, RunOutcomeKind, RunRecord,
+  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunKind, RunOutcome, RunOutcomeKind,
+  RunRecord,
   SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
 };
 use serde_json::{Map, Value, json};
@@ -17,6 +18,19 @@ const SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
 const THREAD_ID: &str = "00000000-0000-4000-8000-000000000002";
 const RUN_SESSION_ID: &str = "00000000-0000-4000-8000-000000000101";
 const FIXED_TIME: &str = "2025-02-03T04:05:06.123456Z";
+const RUN_OPS: &[&str] = &[
+  "register",
+  "retry",
+  "retry_spec",
+  "retry_manager_turn",
+  "launch",
+  "observation",
+  "finish",
+  "repeat_finish",
+  "stop",
+];
+const RUN_RETRY_OPS: &[&str] = &["retry", "retry_spec", "retry_manager_turn"];
+const RETRY_TASK_SPEC: &str = "synthetic retry task spec";
 const OPS: &[&str] = &[
   "persist_cc_session_id",
   "persist_native_backend",
@@ -254,20 +268,18 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
   run_python_helper("apply_runs", root.path());
   let fixed = UtcDateTime::parse(FIXED_TIME).unwrap();
 
-  for operation in ["register", "retry", "launch", "observation", "finish", "repeat_finish", "stop"] {
+  for operation in RUN_OPS.iter().copied() {
+    let is_retry = RUN_RETRY_OPS.contains(&operation);
     let operation_root = root.path().join(operation);
     let python_home = operation_root.join("python-result");
     let python_store = make_store(&python_home);
     let run_id = match operation {
       "register" => "run-register".to_string(),
-      "retry" => charliebot_store::control_events::stable_run_id(RUN_SESSION_ID, "retry-request"),
+      _ if is_retry => charliebot_store::control_events::stable_run_id(RUN_SESSION_ID, "retry-request"),
       _ => "run-a".to_string(),
     };
     let python_run = python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap();
-    assert_eq!(
-      python_store.list_run_records_sync(RUN_SESSION_ID).unwrap().len(),
-      if operation == "retry" { 2 } else { 1 }
-    );
+    assert_eq!(python_store.list_run_records_sync(RUN_SESSION_ID).unwrap().len(), if is_retry { 2 } else { 1 });
 
     let shared_home = operation_root.join("shared-home");
     if shared_home.exists() {
@@ -283,7 +295,12 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
       "register" => {
         let guard = store.control_lock().await;
         let registered = store
-          .register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-register", RunKind::Work), "synthetic task spec")
+          .register_run_locked(
+            &guard,
+            RUN_SESSION_ID,
+            empty_run("run-register", RunKind::Work),
+            Some("synthetic task spec"),
+          )
           .await
           .unwrap();
         assert_eq!(registered.task_spec_hash, python_run.task_spec_hash);
@@ -292,20 +309,35 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
             &guard,
             RUN_SESSION_ID,
             empty_run("run-register", RunKind::Review),
-            "ignored replacement",
+            Some("ignored replacement"),
           )
           .await
           .unwrap();
         assert_eq!(duplicate.kind, RunKind::Work);
       }
-      "retry" => {
+      "retry" | "retry_spec" | "retry_manager_turn" => {
         let previous = store.read_run_sync(RUN_SESSION_ID, "run-previous").unwrap().unwrap();
+        let task_spec = match operation {
+          "retry" => None,
+          _ => Some(RETRY_TASK_SPEC),
+        };
+        let input_event_ids = match operation {
+          "retry_manager_turn" => previous.input_event_ids.clone(),
+          _ => Vec::new(),
+        };
+        let fields = retry_fields(&previous, input_event_ids);
         let guard = store.control_lock().await;
-        let retried = store.create_retry_run_locked(&guard, RUN_SESSION_ID, "retry-request", &previous).await.unwrap();
+        let retried = store
+          .create_retry_run_locked(&guard, RUN_SESSION_ID, "retry-request", &previous.id, task_spec, fields.clone())
+          .await
+          .unwrap();
         assert_eq!(retried.id, run_id);
         assert_eq!(retried.retry_of_run_id.as_deref(), Some("run-previous"));
         assert_eq!(
-          store.create_retry_run_locked(&guard, RUN_SESSION_ID, "retry-request", &previous).await.unwrap(),
+          store
+            .create_retry_run_locked(&guard, RUN_SESSION_ID, "retry-request", &previous.id, task_spec, fields)
+            .await
+            .unwrap(),
           retried
         );
       }
@@ -343,7 +375,7 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
 
     assert_eq!(
       store.records_generation(),
-      if matches!(operation, "register" | "retry" | "launch" | "observation" | "finish" | "repeat_finish") {
+      if is_retry || matches!(operation, "register" | "launch" | "observation" | "finish" | "repeat_finish") {
         1
       } else {
         0
@@ -421,7 +453,7 @@ async fn launch_refuses_a_durable_stop_and_preserves_the_first_start_time() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
   let guard = store.control_lock().await;
-  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-launch", RunKind::Work), "").await.unwrap();
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-launch", RunKind::Work), None).await.unwrap();
   drop(guard);
 
   let first = store.record_launch(RUN_SESSION_ID, "run-launch", 111111, "first-start").await.unwrap();
@@ -430,7 +462,7 @@ async fn launch_refuses_a_durable_stop_and_preserves_the_first_start_time() {
   assert_eq!((replacement.pid, replacement.pid_start.as_deref()), (Some(222222), Some("second-start")));
 
   let guard = store.control_lock().await;
-  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-queued-stop", RunKind::Work), "").await.unwrap();
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-queued-stop", RunKind::Work), None).await.unwrap();
   drop(guard);
   store.request_stop(RUN_SESSION_ID, "run-queued-stop", "queued-stop").await.unwrap();
   let error = store.record_launch(RUN_SESSION_ID, "run-queued-stop", 333333, "third-start").await.unwrap_err();
@@ -444,7 +476,7 @@ async fn a_late_stop_keeps_a_finished_runs_outcome_and_a_repeat_finish_keeps_its
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
   let guard = store.control_lock().await;
-  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-done", RunKind::Work), "").await.unwrap();
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-done", RunKind::Work), None).await.unwrap();
   store
     .record_finish_locked(&guard, RUN_SESSION_ID, "run-done", RunOutcome::new(RunOutcomeKind::Success))
     .await
@@ -465,13 +497,28 @@ async fn a_late_stop_keeps_a_finished_runs_outcome_and_a_repeat_finish_keeps_its
   assert_eq!((repaired.exit_code, repaired.ended_at.is_some()), (None, true));
 }
 
+fn retry_fields(previous: &RunRecord, input_event_ids: Vec<String>) -> RetryRunFields {
+  RetryRunFields {
+    kind: previous.kind,
+    backend: previous.backend.clone(),
+    model: previous.model.clone(),
+    repo_path: previous.repo_path.clone(),
+    base_branch: previous.base_branch.clone(),
+    branch_name: previous.branch_name.clone(),
+    worktree_path: previous.worktree_path.clone(),
+    sequence_ref: previous.sequence_ref.clone(),
+    review_of_run_id: previous.review_of_run_id.clone(),
+    input_event_ids,
+  }
+}
+
 async fn register_process_run(store: &Store, run_id: &str, pid: u32, pid_start: &str) {
   let mut run = empty_run(run_id, RunKind::Work);
   run.pid = Some(pid);
   run.pid_start = Some(pid_start.to_string());
   run.started_at = Some(UtcDateTime::now());
   let guard = store.control_lock().await;
-  store.register_run_locked(&guard, RUN_SESSION_ID, run, "").await.unwrap();
+  store.register_run_locked(&guard, RUN_SESSION_ID, run, None).await.unwrap();
 }
 
 fn make_store(home: &Path) -> Store {

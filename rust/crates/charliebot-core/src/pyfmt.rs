@@ -5,6 +5,7 @@
 //! JSON responses, the fence identity record, the static-file ETag), so each one follows the CPython
 //! 3.14 algorithm it names rather than serde_json's own formatting.
 
+use crate::printable_table::NON_PRINTABLE;
 use serde_json::Value;
 
 /// One `json.dumps` option set.
@@ -128,9 +129,9 @@ pub fn pydantic_float_repr(x: f64) -> String {
 
 /// CPython `repr(str)` for the strings this server reports (purposes, paths, config keys).
 ///
-/// The quote is `'` unless the text holds `'` and no `"`. Backslash, the quote, `\t`, `\n`, `\r` and the
-/// other C0 controls and DEL are escaped; every other character prints as itself. CPython also escapes
-/// non-printable non-ASCII characters (`str.isprintable`), which this rendering leaves as they are.
+/// The quote is `'` unless the text holds `'` and no `"`. Backslash, the quote, `\t`, `\n` and `\r` are escaped,
+/// and so is every character that `str.isprintable()` rejects, as `\xNN`, `\uNNNN` or `\UNNNNNNNN`. Every other
+/// character prints as itself.
 pub fn str_repr(text: &str) -> String {
   let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
   let mut out = String::with_capacity(text.len() + 2);
@@ -145,12 +146,31 @@ pub fn str_repr(text: &str) -> String {
         out.push('\\');
         out.push(c);
       }
-      c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+      c if !is_printable(c) => out.push_str(&repr_escape(c)),
       c => out.push(c),
     }
   }
   out.push(quote);
   out
+}
+
+/// `str.isprintable()` for one character: false exactly for the code points of `NON_PRINTABLE`.
+fn is_printable(c: char) -> bool {
+  let code = c as u32;
+  let index = NON_PRINTABLE.partition_point(|&(_, high)| high < code);
+  !NON_PRINTABLE.get(index).is_some_and(|&(low, _)| low <= code)
+}
+
+/// CPython's escape for one non-printable character: `\xNN` up to U+00FF, `\uNNNN` up to U+FFFF, else `\UNNNNNNNN`.
+fn repr_escape(c: char) -> String {
+  let code = c as u32;
+  if code <= 0xff {
+    format!("\\x{code:02x}")
+  } else if code <= 0xffff {
+    format!("\\u{code:04x}")
+  } else {
+    format!("\\U{code:08x}")
+  }
 }
 
 /// CPython `str(value)` of a value `json.loads` produced: strings print bare, the rest as their repr.
@@ -306,6 +326,9 @@ pub fn write_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
 
 #[cfg(test)]
 mod tests {
+  use std::path::Path;
+  use std::process::Command;
+
   use super::*;
   use serde_json::json;
 
@@ -368,5 +391,40 @@ mod tests {
     assert_eq!(str_repr("server startup"), "'server startup'");
     assert_eq!(str_repr("it's"), "\"it's\"");
     assert_eq!(str_repr("a'b\"c"), "'a\\'b\"c'");
+  }
+
+  /// Prints `repr` of every code point that `char` holds, one per line. The surrogates are not `char`s, so
+  /// both sides skip them.
+  const CPYTHON_REPRS: &str = r#"
+import sys
+for code_point in range(0x110000):
+    if 0xD800 <= code_point <= 0xDFFF:
+        continue
+    sys.stdout.buffer.write((repr(chr(code_point)) + "\n").encode("utf-8"))
+"#;
+
+  #[test]
+  fn str_repr_matches_cpython_for_every_code_point() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).expect("the crate lies under the repo");
+    let output = Command::new("uv")
+      .args(["run", "python", "-c", CPYTHON_REPRS])
+      .current_dir(repo_root)
+      .output()
+      .expect("uv runs the worktree Python");
+    assert!(output.status.success(), "CPython repr failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    let reprs = String::from_utf8(output.stdout).expect("CPython prints UTF-8");
+    let reprs: Vec<&str> = reprs.split_terminator('\n').collect();
+    let code_points: Vec<char> = (0..=0x10_ffff_u32).filter_map(char::from_u32).collect();
+    assert_eq!(reprs.len(), code_points.len(), "CPython prints one repr per code point");
+    let mismatches: Vec<String> = code_points
+      .iter()
+      .zip(&reprs)
+      .filter_map(|(c, cpython)| {
+        let ours = str_repr(&c.to_string());
+        (ours != *cpython).then(|| format!("U+{:04X}: CPython {cpython}, str_repr {ours}", *c as u32))
+      })
+      .collect();
+    let first = &mismatches[..mismatches.len().min(8)];
+    assert!(mismatches.is_empty(), "{} code points differ, first {first:?}", mismatches.len());
   }
 }

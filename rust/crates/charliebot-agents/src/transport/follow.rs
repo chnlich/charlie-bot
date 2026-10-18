@@ -1,0 +1,532 @@
+//! Tail-follow reads complete raw NDJSON lines and checkpoints after handling their events.
+
+use std::collections::HashSet;
+use std::future::Future;
+use std::io;
+use std::path::Path;
+use std::pin::Pin;
+use std::time::{Duration, SystemTime};
+
+use serde_json::Value;
+use time::OffsetDateTime;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::time::Instant;
+
+use super::cursor::RawCursorWriter;
+use super::spawn;
+
+pub const DEFAULT_BUFFER_LIMIT: usize = 1024 * 1024 * 1024;
+pub const TAIL_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const READ_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Async callback invoked once when the raw log exceeds its silence threshold.
+pub type SilenceCallback = Box<dyn FnMut() -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send>;
+
+/// Counters returned after a follow loop drains or reaches its post-result timeout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FollowSummary {
+  /// Last complete-line boundary seen in the raw log.
+  pub final_offset: u64,
+  /// Whether a result event started the post-result clock.
+  pub saw_result: bool,
+}
+
+/// Follow a raw log from `start_offset`, processing each event before its line cursor advances.
+#[allow(clippy::too_many_arguments)]
+pub async fn tail_follow_events<T, H, Fut, L>(
+  raw_path: &Path,
+  mut translate: T,
+  mut handle_event: H,
+  mut is_alive: L,
+  cursor_path: Option<&Path>,
+  start_offset: u64,
+  post_result_timeout: Duration,
+  buffer_limit: usize,
+  poll_interval: Duration,
+  mut on_silence: Option<SilenceCallback>,
+  silence_threshold: Duration,
+) -> io::Result<FollowSummary>
+where
+  T: FnMut(Value) -> Vec<Value>,
+  H: FnMut(Value) -> Fut,
+  Fut: Future<Output = io::Result<()>>,
+  L: FnMut() -> bool,
+{
+  while !raw_path.exists() {
+    if !is_alive() {
+      return Ok(FollowSummary { final_offset: start_offset, saw_result: false });
+    }
+    tokio::time::sleep(poll_interval).await;
+  }
+
+  let mut file = tokio::fs::File::open(raw_path).await?;
+  file.seek(std::io::SeekFrom::Start(start_offset)).await?;
+  let mut read_to = start_offset;
+  let mut offset = start_offset;
+  let mut line_length = 0u64;
+  let mut partial_line = Vec::new();
+  let mut partial_has_content = false;
+  let mut oversized_line = false;
+  let mut saw_result = false;
+  let mut last_growth = Instant::now();
+  let initial_mtime = file.metadata().await?.modified().ok();
+  let mut last_output_at = subtract_age(Instant::now(), initial_mtime);
+  let mut silence_reported = false;
+  let mut pending_tool_calls = HashSet::new();
+  let mut cursor_writer = cursor_path.map(RawCursorWriter::new);
+  let mut bytes = vec![0; READ_CHUNK_BYTES];
+
+  loop {
+    let size = file.metadata().await?.len();
+    if size > read_to {
+      let now = Instant::now();
+      last_growth = now;
+      last_output_at = subtract_age(now, file.metadata().await?.modified().ok());
+      while read_to < size {
+        let limit = usize::try_from((size - read_to).min(READ_CHUNK_BYTES as u64)).expect("bounded read length");
+        let count = file.read(&mut bytes[..limit]).await?;
+        if count == 0 {
+          break;
+        }
+        let chunk_offset = read_to;
+        read_to += count as u64;
+        let mut start = 0;
+        for (index, byte) in bytes[..count].iter().enumerate() {
+          if *byte != b'\n' {
+            continue;
+          }
+          let segment = &bytes[start..index];
+          line_length = line_length.saturating_add(segment.len() as u64);
+          if !oversized_line {
+            partial_line.extend_from_slice(segment);
+          }
+          let line_end = chunk_offset + index as u64;
+          if line_length > buffer_limit as u64 {
+            tracing::debug!(
+              target: "charliebot_agents",
+              bytes = line_length,
+              limit = buffer_limit,
+              "backend_line_over_limit"
+            );
+          } else if !oversized_line {
+            let parsed = spawn::parse_backend_line(&partial_line);
+            if let Some(event) = parsed {
+              let mtime = file.metadata().await?.modified().ok();
+              for mut translated in translate(event) {
+                track_pending_tool_calls(&translated, &mut pending_tool_calls);
+                clamp_event_timestamp(&mut translated, mtime);
+                let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
+                handle_event(translated).await?;
+                if !saw_result && is_result {
+                  if pending_tool_calls.is_empty() {
+                    saw_result = true;
+                    last_growth = Instant::now();
+                  } else {
+                    tracing::debug!(
+                      target: "charliebot_agents",
+                      pending = pending_tool_calls.len(),
+                      tool_ids = ?pending_tool_calls,
+                      "backend_result_suppressed_pending_tools"
+                    );
+                  }
+                }
+              }
+            }
+          }
+          offset = line_end + 1;
+          if let Some(writer) = cursor_writer.as_mut() {
+            writer.write(offset)?;
+          }
+          line_length = 0;
+          partial_line.clear();
+          partial_has_content = false;
+          oversized_line = false;
+          start = index + 1;
+        }
+        let trailing = &bytes[start..count];
+        line_length = line_length.saturating_add(trailing.len() as u64);
+        partial_has_content |= trailing.iter().any(|byte| !byte.is_ascii_whitespace());
+        if line_length > buffer_limit as u64 {
+          oversized_line = true;
+          partial_line.clear();
+        } else if !oversized_line {
+          partial_line.extend_from_slice(trailing);
+        }
+      }
+      continue;
+    }
+
+    if saw_result && Instant::now().duration_since(last_growth) > post_result_timeout {
+      tracing::warn!(target: "charliebot_agents", timeout = post_result_timeout.as_secs_f64(), "backend_post_result_timeout");
+      break;
+    }
+    if !is_alive() {
+      break;
+    }
+    if let Some(callback) = on_silence.as_mut()
+      && !silence_reported
+      && Instant::now().duration_since(last_output_at) > silence_threshold
+    {
+      silence_reported = true;
+      callback().await?;
+    }
+    tokio::time::sleep(poll_interval).await;
+  }
+
+  if line_length > 0 && partial_has_content {
+    tracing::warn!(target: "charliebot_agents", bytes = line_length, "raw_trailing_torn_line_dropped");
+  }
+  if let Some(writer) = cursor_writer.as_mut() {
+    writer.close()?;
+  }
+  Ok(FollowSummary { final_offset: offset, saw_result })
+}
+
+fn subtract_age(now: Instant, mtime: Option<SystemTime>) -> Instant {
+  let age = mtime.and_then(|time| SystemTime::now().duration_since(time).ok()).unwrap_or(Duration::ZERO);
+  now.checked_sub(age).unwrap_or(now)
+}
+
+fn track_pending_tool_calls(event: &Value, pending: &mut HashSet<String>) {
+  match event.get("type").and_then(Value::as_str) {
+    Some("assistant") => {
+      if let Some(items) = event.pointer("/message/content").and_then(Value::as_array) {
+        for item in items {
+          if item.get("type").and_then(Value::as_str) == Some("tool_use") {
+            insert_id(item.get("id"), pending);
+          }
+        }
+      }
+    }
+    Some("tool_use") => insert_id(event.get("id"), pending),
+    Some("tool_result") => remove_id(event.get("tool_use_id"), pending),
+    Some("user") => {
+      if let Some(items) = event.pointer("/message/content").and_then(Value::as_array) {
+        for item in items {
+          if item.get("type").and_then(Value::as_str) == Some("tool_result") {
+            remove_id(item.get("tool_use_id"), pending);
+          }
+        }
+      }
+    }
+    _ => {}
+  }
+}
+
+fn insert_id(value: Option<&Value>, pending: &mut HashSet<String>) {
+  if let Some(id) = value.and_then(Value::as_str).filter(|id| !id.is_empty()) {
+    pending.insert(id.to_string());
+  }
+}
+
+fn remove_id(value: Option<&Value>, pending: &mut HashSet<String>) {
+  if let Some(id) = value.and_then(Value::as_str).filter(|id| !id.is_empty()) {
+    pending.remove(id);
+  }
+}
+
+fn clamp_event_timestamp(event: &mut Value, mtime: Option<SystemTime>) {
+  if event.get("timestamp").is_some_and(is_truthy) {
+    return;
+  }
+  let now = OffsetDateTime::now_utc();
+  let mtime = mtime.and_then(system_time_to_datetime).unwrap_or(now);
+  let clamped = if now < mtime { now } else { mtime };
+  let value = python_isoformat(clamped);
+  event
+    .as_object_mut()
+    .expect("translated backend event is an object")
+    .insert("timestamp".to_string(), Value::String(value));
+}
+
+fn is_truthy(value: &Value) -> bool {
+  match value {
+    Value::Null => false,
+    Value::Bool(value) => *value,
+    Value::Number(value) => value.as_f64().is_none_or(|number| number != 0.0),
+    Value::String(value) => !value.is_empty(),
+    Value::Array(value) => !value.is_empty(),
+    Value::Object(value) => !value.is_empty(),
+  }
+}
+
+fn system_time_to_datetime(value: SystemTime) -> Option<OffsetDateTime> {
+  let nanos = match value.duration_since(SystemTime::UNIX_EPOCH) {
+    Ok(duration) => duration.as_nanos() as i128,
+    Err(error) => -(error.duration().as_nanos() as i128),
+  };
+  OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()
+}
+
+fn python_isoformat(value: OffsetDateTime) -> String {
+  let base = format!(
+    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+    value.year(),
+    u8::from(value.month()),
+    value.day(),
+    value.hour(),
+    value.minute(),
+    value.second(),
+  );
+  let micros = value.nanosecond() / 1000;
+  if micros == 0 { format!("{base}+00:00") } else { format!("{base}.{micros:06}+00:00") }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::transport::cursor::read_raw_cursor;
+  use std::fs;
+  use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+  };
+
+  fn default_follow<'a>(
+    raw_path: &'a Path,
+    events: &'a mut Vec<Value>,
+    cursor: Option<&'a Path>,
+    start_offset: u64,
+  ) -> impl Future<Output = io::Result<FollowSummary>> + 'a {
+    tail_follow_events(
+      raw_path,
+      |event| vec![event],
+      |event| {
+        events.push(event);
+        async { Ok(()) }
+      },
+      || false,
+      cursor,
+      start_offset,
+      Duration::from_secs(30),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(3600),
+    )
+  }
+
+  #[tokio::test]
+  async fn keeps_partial_lines_and_drops_a_torn_final_line() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":1}\n{\"type\":\"assistant\",\"seq\":2").unwrap();
+    let mut events = Vec::new();
+    default_follow(&raw, &mut events, None, 0).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["seq"], 1);
+    assert!(events[0]["timestamp"].is_string());
+  }
+
+  #[tokio::test]
+  async fn completes_a_partial_line_after_a_later_append() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":9").unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_for_handler = Arc::clone(&events);
+    let alive = Arc::new(AtomicBool::new(true));
+    let alive_for_handler = Arc::clone(&alive);
+    let alive_for_probe = Arc::clone(&alive);
+    let raw_for_follow = raw.clone();
+    let task = tokio::spawn(async move {
+      tail_follow_events(
+        &raw_for_follow,
+        |event| vec![event],
+        move |event| {
+          events_for_handler.lock().unwrap().push(event);
+          alive_for_handler.store(false, Ordering::SeqCst);
+          async { Ok(()) }
+        },
+        move || alive_for_probe.load(Ordering::SeqCst),
+        None,
+        0,
+        Duration::from_secs(1),
+        DEFAULT_BUFFER_LIMIT,
+        Duration::from_millis(2),
+        None,
+        Duration::from_secs(1),
+      )
+      .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    use std::io::Write;
+    fs::OpenOptions::new().append(true).open(&raw).unwrap().write_all(b"}\n").unwrap();
+    tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap().unwrap();
+    assert_eq!(events.lock().unwrap()[0]["seq"], 9);
+  }
+
+  #[tokio::test]
+  async fn cursor_advances_after_the_event_handler_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let cursor = root.path().join("agent.raw.cursor");
+    fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":1}\n").unwrap();
+    let observed = Arc::new(AtomicBool::new(false));
+    let observed_by_handler = Arc::clone(&observed);
+    let cursor_for_handler = cursor.clone();
+    let expected_offset = fs::metadata(&raw).unwrap().len();
+    tail_follow_events(
+      &raw,
+      |event| vec![event],
+      move |_event| {
+        let observed = Arc::clone(&observed_by_handler);
+        let cursor = cursor_for_handler.clone();
+        async move {
+          assert_eq!(read_raw_cursor(&cursor), 0);
+          tokio::time::sleep(Duration::from_millis(10)).await;
+          observed.store(true, Ordering::SeqCst);
+          Ok(())
+        }
+      },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert!(observed.load(Ordering::SeqCst));
+    assert_eq!(read_raw_cursor(&cursor), expected_offset);
+  }
+
+  #[tokio::test]
+  async fn result_waits_for_wrapped_and_flat_tool_results() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(
+      &raw,
+      b"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"wrapped\"}]}}\n{\"type\":\"result\"}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"wrapped\"}]}}\n{\"type\":\"result\"}\n",
+    )
+    .unwrap();
+    let wrapped_summary = tail_follow_events(
+      &raw,
+      |event| vec![event],
+      |_| async { Ok(()) },
+      || false,
+      None,
+      0,
+      Duration::ZERO,
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert!(wrapped_summary.saw_result);
+
+    fs::write(&raw, b"{\"type\":\"tool_use\",\"id\":\"flat\"}\n{\"type\":\"result\"}\n").unwrap();
+    let alive_checks = Arc::new(AtomicUsize::new(0));
+    let checks = Arc::clone(&alive_checks);
+    let summary = tail_follow_events(
+      &raw,
+      |event| vec![event],
+      |_| async { Ok(()) },
+      move || checks.fetch_add(1, Ordering::SeqCst) == 0,
+      None,
+      0,
+      Duration::ZERO,
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert!(!summary.saw_result);
+    assert_eq!(alive_checks.load(Ordering::SeqCst), 2);
+  }
+
+  #[tokio::test]
+  async fn an_oversized_complete_line_is_skipped() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(&raw, b"{\"type\":\"assistant\",\"pad\":\"123456789\"}\n{\"type\":\"result\"}\n").unwrap();
+    let cursor = root.path().join("agent.raw.cursor");
+    let mut events = Vec::new();
+    tail_follow_events(
+      &raw,
+      |event| vec![event],
+      |event| {
+        events.push(event);
+        async { Ok(()) }
+      },
+      || false,
+      Some(&cursor),
+      0,
+      Duration::from_secs(1),
+      20,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "result");
+    assert_eq!(read_raw_cursor(&cursor), fs::metadata(raw).unwrap().len());
+  }
+
+  #[tokio::test]
+  async fn first_result_ends_a_live_follow_after_the_timeout() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(&raw, b"{\"type\":\"result\"}\n").unwrap();
+    let summary = tail_follow_events(
+      &raw,
+      |event| vec![event],
+      |_| async { Ok(()) },
+      || true,
+      None,
+      0,
+      Duration::from_millis(5),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert!(summary.saw_result);
+  }
+
+  #[tokio::test]
+  async fn silence_callback_uses_initial_mtime_and_runs_once() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    fs::write(&raw, b"{\"type\":\"assistant\"}\n").unwrap();
+    let old = std::time::UNIX_EPOCH + Duration::from_secs(1);
+    fs::File::open(&raw).unwrap().set_times(std::fs::FileTimes::new().set_modified(old)).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_callback = Arc::clone(&calls);
+    let calls_for_liveness = Arc::clone(&calls);
+    let callback: SilenceCallback = Box::new(move || {
+      let calls = Arc::clone(&calls_for_callback);
+      Box::pin(async move {
+        calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+      })
+    });
+    tail_follow_events(
+      &raw,
+      |event| vec![event],
+      |_| async { Ok(()) },
+      move || calls_for_liveness.load(Ordering::SeqCst) == 0,
+      None,
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      Some(callback),
+      Duration::from_millis(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+  }
+}

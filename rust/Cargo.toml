@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/charliebot-agents",
     "crates/charliebot-core",
     "crates/charliebot-compat",
     "crates/charliebot-server",
@@ -19,6 +20,7 @@ anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 bytes = "1"
+libc = "0.2"
 flate2 = "1"
 futures-util = "0.3"
 hmac = "0.12"

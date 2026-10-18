@@ -752,7 +752,7 @@ async def test_native_session_id_reads_the_claude_system_init_event(
   claude_option = conftest.backend_option(id="claude", label="Claude", type="cc-claude", model="claude-model")
   cfg, session_blocks, tree = test_task_execution.build_spawning_env(
       tmp_path, monkeypatch, options=[claude_option], pool=["claude"])
-  executor = test_task_execution.build_execution_adapter(cfg, session_blocks, tree)
+  executor = conftest.build_execution_adapter(cfg, session_blocks, tree)
   raw_path = tmp_path / "agent.raw.ndjson"
   init_event = {"type": "system", "subtype": "init", "session_id": "claude-session-1", "model": "claude-model"}
   raw_path.write_text(json.dumps(init_event) + "\n", encoding="utf-8")

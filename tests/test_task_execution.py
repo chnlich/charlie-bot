@@ -23,16 +23,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import conftest
 import fastapi
 import pytest
-from conftest import (
-    build_execution_adapter,
-    build_session_blocks,
-    build_task_tree,
-    make_transcript,
-    override_session_blocks,
-    pool_cfg,
-    stub_credentials,
-    user_tool_result_event,
-)
 from fastapi import testclient
 
 import src.runtime.task_execution as task_execution_module
@@ -76,8 +66,8 @@ def build_spawning_env(
   cfg = config.CharlieBotConfig(
       charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
   seed_signing_home(home, monkeypatch)
-  session_blocks = build_session_blocks(cfg)
-  return cfg, session_blocks, build_task_tree(cfg, session_blocks)
+  session_blocks = conftest.build_session_blocks(cfg)
+  return cfg, session_blocks, conftest.build_task_tree(cfg, session_blocks)
 
 
 def build_env(
@@ -202,7 +192,7 @@ def make_api_client(cfg, session_blocks, task_mgr) -> testclient.TestClient:
   app.include_router(improve_api.router, prefix="/api/internal")
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
-  override_session_blocks(app, session_blocks)
+  conftest.override_session_blocks(app, session_blocks)
   app.dependency_overrides[deps.get_task_manager] = lambda: task_mgr
   app.dependency_overrides[deps.get_run_store] = lambda: task_mgr.runs
   return testclient.TestClient(app)
@@ -357,7 +347,7 @@ def _bearer(claims):
 def _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch):
   from src.runtime import streaming
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", _async_noop)
-  return build_execution_adapter(cfg, session_blocks, tree)
+  return conftest.build_execution_adapter(cfg, session_blocks, tree)
 
 
 async def _async_noop(*args, **kwargs) -> None:
@@ -376,7 +366,7 @@ async def _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, 
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   pm_builds = []
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   # The work-run launch re-judges the nearest-user authorization gate; the
   # manager carries the real user takeoff message the delegation rode in on.
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content=content, actor="user")
@@ -523,7 +513,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   pm_builds = []
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
   backend = SpawningScriptedBackend([result_event("phrase")])
@@ -1380,7 +1370,7 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and fix it.", actor="user")
 
   work_backend = SpawningScriptedBackend([result_event("done; modified /tmp/x.sh")])
@@ -1422,7 +1412,7 @@ async def test_a_failed_worker_run_reports_once_and_archives_the_worker(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   pm_builds: list = []
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted", pm_builds))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and say it.", actor="user")
   conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([conftest.assistant_text_event("started")], exit_code=1)],
@@ -1464,7 +1454,7 @@ async def test_an_interrupted_worker_run_reports_once_and_archives_the_worker(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   pm_builds: list = []
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("stop noted", pm_builds))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
   record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -2388,7 +2378,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted"))
   conftest.install_scripted_backends(
@@ -2601,11 +2591,11 @@ def build_pooled_env(
   extra = {} if not claude_pools else {"account_pool": next(iter(claude_pools))}
   option = conftest.backend_option(
       id=conftest.POOLED_FABLE_ID, label="Fable", type="cc-claude", model=conftest.FABLE_MODEL, **extra)
-  cfg = pool_cfg(
+  cfg = conftest.pool_cfg(
       tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels, claude_pools=claude_pools)
   seed_signing_home(home, monkeypatch)
-  session_blocks = build_session_blocks(cfg)
-  return cfg, session_blocks, build_task_tree(cfg, session_blocks)
+  session_blocks = conftest.build_session_blocks(cfg)
+  return cfg, session_blocks, conftest.build_task_tree(cfg, session_blocks)
 
 
 async def _register_work_run(
@@ -2766,7 +2756,7 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
   # The fresh launch binds a new Claude session id; pin it so the transcript
   # the relay moves exists before the first process is rejected.
   monkeypatch.setattr(task_execution_module.uuid, "uuid4", lambda: uuid.UUID(cc_id))
-  make_transcript(tmp_path / "claude-main", cc_id)
+  conftest.make_transcript(tmp_path / "claude-main", cc_id)
   first = conftest.ScriptedRelayBackend(
       [conftest.assistant_text_event("halfway"),
        conftest.rate_limit_event("rejected", 1.0)], exit_code=1)
@@ -2806,7 +2796,7 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "8b6fd8ac-6f0e-4af2-9d0e-1c2f47ab5311"
-  make_transcript(tmp_path / "claude-main", cc_id)
+  conftest.make_transcript(tmp_path / "claude-main", cc_id)
   first = conftest.ScriptedRelayBackend(
       [
           # The id-carrying event pins the native session id the relay moves the
@@ -2815,7 +2805,7 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
               **conftest.assistant_text_event("scouting"), "session_id": cc_id
           },
           conftest.rate_limit_event("allowed_warning", 0.93),
-          user_tool_result_event(),
+          conftest.user_tool_result_event(),
       ],
       exit_code=0)
   second = conftest.ScriptedRelayBackend([result_event("reply after relay")], exit_code=0)
@@ -2874,7 +2864,7 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "9c7fe9bd-7f1e-5f3a-be1f-2d3f58bc6422"
-  make_transcript(tmp_path / "claude-main", cc_id)
+  conftest.make_transcript(tmp_path / "claude-main", cc_id)
   first = conftest.ScriptedRelayBackend(
       [
           {
@@ -3169,7 +3159,7 @@ async def test_manager_turn_master_done_enospc_retries_through_master_queue(
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("turn reply"))
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   run_id = decision["run_id"]

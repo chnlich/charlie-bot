@@ -69,6 +69,13 @@ def _environment() -> dict[str, str]:
   return {name: os.environ[name] for name in sorted(names) if name in os.environ}
 
 
+def _stdin_text(index: int, stdin_bytes: bytes) -> str:
+  try:
+    return stdin_bytes.decode("utf-8")
+  except UnicodeDecodeError as error:
+    raise ValueError(f"fake-agent spawn record {index}: stdin is not valid UTF-8: {error}") from error
+
+
 def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> dict:
   pid = os.getpid()
   _, pid_start = _proc_identity(pid)
@@ -89,7 +96,7 @@ def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> 
       "pid_start": pid_start,
       "stdout_path": os.readlink("/proc/self/fd/1"),
       "stdin_bytes": len(stdin_bytes),
-      "stdin_sha256": hashlib.sha256(stdin_bytes).hexdigest(),
+      "stdin": _stdin_text(index, stdin_bytes),
       "nice": os.getpriority(os.PRIO_PROCESS, 0),
       "own_session": os.getsid(0) == pid,
       "pdeathsig": pdeathsig.value,
@@ -117,7 +124,8 @@ def _start_index(agent_dir: pathlib.Path, name: str, stdin_bytes: bytes) -> tupl
     scripted = entry is not None and entry["name"] == name
     record = _spawn_record(starts_count, name, scripted, stdin_bytes)
     with spawns_path.open("a", encoding="utf-8") as spawns_file:
-      spawns_file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+      # Readers split on str.splitlines, which also breaks at U+2028 and U+0085; ASCII escapes keep one record per line.
+      spawns_file.write(json.dumps(record, separators=(",", ":")) + "\n")
       spawns_file.flush()
     return starts_count, scripted, entry
 

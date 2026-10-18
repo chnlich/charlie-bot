@@ -1,8 +1,13 @@
-"""Header normalization tests: a fake's recording compares only the headers its feature code sets explicitly."""
+"""Normalization tests: a fake's recording compares only the headers its feature code sets explicitly, and the
+stdin of each fake-agent start normalizes like any other recorded text.
+"""
+
+import json
+import pathlib
 
 import pytest
 
-from rust.parity import normalize
+from rust.parity import fake_agent, normalize, parity
 
 
 def _context() -> normalize.Context:
@@ -37,3 +42,30 @@ def test_discord_user_agent_is_compared_on_rest_only() -> None:
 def test_unnamed_request_header_fails_fast() -> None:
   with pytest.raises(ValueError, match="'x-unexpected' is neither set explicitly"):
     normalize.request_headers("gemini", {"x-unexpected": ["1"]}, _context(), websocket=True)
+
+
+def _spawn_side(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, label: str, stdin: bytes) -> parity.Side:
+  """A side whose only fake-agent start is the spawn record the fake writes for *stdin*."""
+  # The record reads the run token from the environment; a test run inside an agent session must not carry one.
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  root = tmp_path / label
+  (root / "fake-agent").mkdir(parents=True)
+  record = fake_agent._spawn_record(0, "claude", scripted=True, stdin_bytes=stdin)
+  (root / "fake-agent" / "spawns.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+  return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+
+
+def test_stdin_naming_only_the_tree_root_compares_equal(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # Both tree roots have one length, as the harness gives them, so the stdin_bytes counts agree.
+  baseline = _spawn_side(tmp_path, monkeypatch, "base", f"Read {tmp_path / 'base'}/home/notes.md".encode())
+  candidate = _spawn_side(tmp_path, monkeypatch, "cand", f"Read {tmp_path / 'cand'}/home/notes.md".encode())
+  assert parity._spawns_diff([baseline, candidate], expect_starts=1) == []
+
+
+def test_stdin_text_difference_names_the_stdin_field(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  baseline = _spawn_side(tmp_path, monkeypatch, "base", b"Summarize the notes.")
+  candidate = _spawn_side(tmp_path, monkeypatch, "cand", b"Summarize the draft.")
+  lines = parity._spawns_diff([baseline, candidate], expect_starts=1)
+  assert len(lines) == 1
+  assert lines[0].startswith("fake-agent spawns $[0].stdin:")

@@ -36,9 +36,9 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `spawn::iter_ndjson_events` | `src/runtime/agent_process/base.py:347` |
 | `spawn::STDERR_TAIL_BYTES`, `tee_stream`, and `stream_stderr` | `src/runtime/agent_process/base.py:37`, `:60`, `:1064` |
 | `VENV_BIN_ENV`, `REPO_ROOT_ENV`, `ENTRY_POINT_RELATIVE`, `AgentBaseEnvironment` and its `values` field | `src/runtime/agent_environment.py:28-36`, `server.py:582` |
-| `required_venv_bin`, `require_venv_bin`, `agent_environment`, and `from_process_environment` | `src/runtime/agent_environment.py:36`, `:53`, `server.py:582` |
+| `agent_environment`, `from_process_environment`, and the root `build_backend` export | `src/runtime/agent_environment.py:53`, `server.py:582`, `src/runtime/hooks/backend_types.py:33-60` |
 | `pre_recovery_step`, `run_session_cgroup_startup`, `session_cgroup_step`, and `register_runtime` | `server.py:262-273`; `src/runtime/agent_environment.py:121-153` |
-| `BuiltBackend` and its `backend` and `launch` fields; `build_backend`, `build_translate_fallback` | `src/runtime/hooks/backend_types.py:33-60` |
+| `BuiltBackend` and its `backend` and `launch` fields; `backend_types::build_backend`, root `build_backend`, `build_translate_fallback` | `src/runtime/hooks/backend_types.py:33-60` |
 | `backends::claude_code` and `backends::claude_code::register` | `src/backends/claude_code/__init__.py:17-75` |
 | `ClaudeCodeBackend`, `ClaudeCodeBackend::build_command`, and its `AgentBackend` methods | `src/backends/claude_code/claude_code.py:240-292`; `src/runtime/agent_process/base.py:641-770` |
 | `HEADLESS_DISALLOWED_TOOLS`, `DISALLOWED_TOOLS_FLAG`, `SKIP_PERMISSIONS_FLAG`, `INSTRUCTIONS_FILE_NAME`, `INSTRUCTIONS_WRITTEN_EVENT` | `src/backends/claude_code/claude_code.py:24-37`, `:276-292` |

@@ -27,8 +27,9 @@ CHARLIEBOT_HOME=/tmp/charliebot-demo/home \
   (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The Python server
   derives the same root from its own location. The binary exits 1 when the variable is unset or the
   directory holds no `web/templates`.
-- `CHARLIEBOT_VENV_BIN` (required) names the server virtualenv's `bin` directory. The server exits 1
-  and names `CHARLIEBOT_VENV_BIN` when it is unset or empty.
+- `CHARLIEBOT_VENV_BIN` (required) names the server virtualenv's `bin` directory. Startup reads it
+  once before the home writer fence. The server exits 1 and names `CHARLIEBOT_VENV_BIN` when it is
+  unset, empty, or not valid Unicode.
 - `CHARLIEBOT_HOME` selects the profile home exactly as `src/infra/home.py` does: unset or blank is
   `~/.charliebot`, otherwise an absolute or `~` path.
 - `config.yaml` in the home sets `server.host` and `server.port`. `credentials.yaml` sets

@@ -264,33 +264,47 @@ where
     Some(path) => Some(tokio::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path).await?),
     None => None,
   };
-  let mut tail = Vec::with_capacity(STDERR_TAIL_BYTES);
-  let mut buffer = Vec::with_capacity(LOG_FLUSH_BYTES);
-  let mut chunk = vec![0; PUMP_CHUNK_BYTES];
-  loop {
-    let count = reader.read(&mut chunk).await?;
-    if count == 0 {
-      break;
-    }
-    let data = &chunk[..count];
-    on_chunk(data);
-    if let Some(output_file) = output.as_mut() {
-      buffer.extend_from_slice(data);
-      if buffer.len() >= LOG_FLUSH_BYTES || count < PUMP_CHUNK_BYTES {
-        output_file.write_all(&buffer).await?;
-        buffer.clear();
+  let result: io::Result<Vec<u8>> = async {
+    let mut tail = Vec::with_capacity(STDERR_TAIL_BYTES);
+    let mut buffer = Vec::with_capacity(LOG_FLUSH_BYTES);
+    let mut chunk = vec![0; PUMP_CHUNK_BYTES];
+    loop {
+      let count = reader.read(&mut chunk).await?;
+      if count == 0 {
+        break;
+      }
+      let data = &chunk[..count];
+      on_chunk(data);
+      if let Some(output_file) = output.as_mut() {
+        buffer.extend_from_slice(data);
+        if buffer.len() >= LOG_FLUSH_BYTES || count < PUMP_CHUNK_BYTES {
+          output_file.write_all(&buffer).await?;
+          buffer.clear();
+        }
+      }
+      tail.extend_from_slice(data);
+      if tail.len() > STDERR_TAIL_BYTES {
+        let excess = tail.len() - STDERR_TAIL_BYTES;
+        tail.drain(..excess);
       }
     }
-    tail.extend_from_slice(data);
-    if tail.len() > STDERR_TAIL_BYTES {
-      let excess = tail.len() - STDERR_TAIL_BYTES;
-      tail.drain(..excess);
+    if !buffer.is_empty() {
+      output.as_mut().expect("log file exists when buffer is nonempty").write_all(&buffer).await?;
+    }
+    Ok(tail)
+  }
+  .await;
+  let flush_result = match output.as_mut() {
+    Some(output_file) => output_file.flush().await,
+    None => Ok(()),
+  };
+  match (result, flush_result) {
+    (Ok(tail), Ok(())) => Ok(tail),
+    (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+    (Err(error), Err(flush_error)) => {
+      Err(io::Error::new(error.kind(), format!("{error}; flushing the log also failed: {flush_error}")))
     }
   }
-  if !buffer.is_empty() {
-    output.as_mut().expect("log file exists when buffer is nonempty").write_all(&buffer).await?;
-  }
-  Ok(tail)
 }
 
 #[cfg(test)]
@@ -470,9 +484,16 @@ mod tests {
   async fn stderr_tee_keeps_only_the_last_64_kb() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("stderr.log");
-    let input = vec![b'x'; STDERR_TAIL_BYTES + 32];
-    let tail = stream_stderr(&input[..], Some(&path)).await.unwrap();
-    assert_eq!(tail.len(), STDERR_TAIL_BYTES);
-    assert_eq!(fs::metadata(path).unwrap().len(), (STDERR_TAIL_BYTES + 32) as u64);
+    for pass in 0..200 {
+      let tail_byte = !(pass as u8);
+      let mut input = vec![pass as u8; 32];
+      input.extend(vec![tail_byte; STDERR_TAIL_BYTES]);
+
+      let tail = stream_stderr(&input[..], Some(&path)).await.unwrap();
+      assert_eq!(tail, input[32..]);
+      assert_eq!(fs::metadata(&path).unwrap().len(), input.len() as u64);
+      let logged = fs::read(&path).unwrap();
+      assert_eq!(&logged[logged.len() - STDERR_TAIL_BYTES..], &input[32..]);
+    }
   }
 }

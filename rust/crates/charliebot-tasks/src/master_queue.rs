@@ -478,16 +478,14 @@ impl MasterQueue {
         persist_mismatch(item, "resume_anchor", "Resume anchor", cc_session_id, read_back.as_deref()).await?;
       }
     }
-    let metadata = item.session_metadata();
-    if let Some(backend_id) = metadata.native_backend.as_deref()
-      && let Some(lifecycle) = account_lifecycle(item, backend_id)
-      && let Some(account_label) = persist_shared_account_label(
-        &item.session_meta,
-        lifecycle.as_ref(),
-        session_id,
-        item.callbacks.persist_account_label.as_ref(),
-      )
-      .await?
+    let lifecycles = item.callbacks.features.registry.lifecycles();
+    if let Some(account_label) = persist_shared_account_label(
+      &item.session_meta,
+      &lifecycles,
+      session_id,
+      item.callbacks.persist_account_label.as_ref(),
+    )
+    .await?
     {
       *last_account_label = Some(account_label.label.clone());
       if let Some(read_back) = account_label.read_back
@@ -605,12 +603,14 @@ fn account_lifecycle(item: &WorkItem, backend_id: &str) -> Option<Arc<dyn Backen
 
 async fn persist_shared_account_label(
   session_meta: &Arc<Mutex<SessionMetadata>>,
-  lifecycle: &dyn BackendLifecycle,
+  lifecycles: &[Arc<dyn BackendLifecycle>],
   session_id: &str,
   persist: Option<&PersistAccountLabelFn>,
 ) -> anyhow::Result<Option<PersistedAccountLabel>> {
   let metadata = session_meta.lock().expect("work item metadata mutex is not poisoned").clone();
-  let Some(label) = lifecycle.account_label(&metadata).filter(|label| !label.is_empty()) else {
+  // The label's keeper is the first lifecycle that reads one, as in Python's account_keeper.
+  let label = lifecycles.iter().find_map(|lifecycle| lifecycle.account_label(&metadata));
+  let Some(label) = label.filter(|label| !label.is_empty()) else {
     return Ok(None);
   };
   let read_back =
@@ -685,7 +685,8 @@ mod tests {
 
   #[tokio::test]
   async fn post_turn_persists_the_lifecycle_label_from_shared_metadata() {
-    let lifecycle = ClaudeCodeLifecycle::new();
+    let lifecycle = Arc::new(ClaudeCodeLifecycle::new());
+    let lifecycles: Vec<Arc<dyn BackendLifecycle>> = vec![lifecycle.clone()];
     let session_meta = Arc::new(Mutex::new(SessionMetadata::new("running", "Running", TaskProfile::Manager)));
     lifecycle.record_account_label(&mut session_meta.lock().unwrap(), Some("synthetic-a"));
     let persisted = Arc::new(Mutex::new(Vec::new()));
@@ -701,7 +702,7 @@ mod tests {
     };
 
     let account_label =
-      persist_shared_account_label(&session_meta, &lifecycle, "running", Some(&persist)).await.unwrap().unwrap();
+      persist_shared_account_label(&session_meta, &lifecycles, "running", Some(&persist)).await.unwrap().unwrap();
 
     assert_eq!(account_label.label, "synthetic-a");
     assert_eq!(account_label.read_back, Some(Some("synthetic-a".to_string())));

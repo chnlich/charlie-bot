@@ -1,0 +1,71 @@
+//! What a registered hook receives: the handles of the running server and the typed startup state.
+
+use std::any::{Any, TypeId, type_name};
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, RwLock};
+
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::credentials::Credentials;
+use charliebot_core::hot_reload::HotReload;
+use charliebot_store::Store;
+
+use crate::registry::Registry;
+
+/// The handles a feature uses at request time and in its services.
+pub struct FeatureContext {
+  /// `config.yaml`, reloaded when the file moves. A reload that fails keeps the previous config.
+  pub config: Arc<HotReload<CharlieBotConfig>>,
+  /// `credentials.yaml`, reloaded when the file moves.
+  pub credentials: Arc<HotReload<Credentials>>,
+  /// The sole owner of session metadata and chat-event writes.
+  pub store: Arc<Store>,
+  /// The finished registry, read-only.
+  pub registry: Arc<Registry>,
+  /// The typed startup state that lifespan steps and services fill and route handlers read.
+  pub startup: Arc<StartupState>,
+}
+
+/// The typed startup state: one value per Rust type. Lifespan steps and services insert the values they own, and
+/// route handlers read them. A second value of one type is an error.
+#[derive(Default)]
+pub struct StartupState {
+  values: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+}
+
+/// A state value inserted twice, or required before any step inserted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateError(pub String);
+
+impl fmt::Display for StateError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(&self.0)
+  }
+}
+
+impl std::error::Error for StateError {}
+
+impl StartupState {
+  /// Store `value` as the one value of its type.
+  pub fn insert<T: Any + Send + Sync>(&self, value: T) -> Result<(), StateError> {
+    let mut values = self.values.write().expect("the startup state lock is never poisoned");
+    if values.contains_key(&TypeId::of::<T>()) {
+      return Err(StateError(format!("the startup state already holds {}", type_name::<T>())));
+    }
+    values.insert(TypeId::of::<T>(), Arc::new(value));
+    Ok(())
+  }
+
+  /// The value of type `T`, or `None` when no step inserted one.
+  pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
+    let values = self.values.read().expect("the startup state lock is never poisoned");
+    values.get(&TypeId::of::<T>()).map(|value| {
+      Arc::clone(value).downcast::<T>().unwrap_or_else(|_| unreachable!("the entry is keyed by its own type"))
+    })
+  }
+
+  /// The value of type `T`; a missing value fails with the type's name.
+  pub fn require<T: Any + Send + Sync>(&self) -> Result<Arc<T>, StateError> {
+    self.get::<T>().ok_or_else(|| StateError(format!("the startup state holds no {}", type_name::<T>())))
+  }
+}

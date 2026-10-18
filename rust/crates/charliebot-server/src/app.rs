@@ -39,14 +39,19 @@ impl Connected<IncomingStream<'_, TcpListener>> for ConnectionInfo {
   }
 }
 
-/// The application service.
+/// The application service: the route families, then each registered router in registration order, under the
+/// middleware stack.
 pub fn build(state: Arc<AppState>) -> BoxCloneSyncService<Request, Response, std::convert::Infallible> {
-  let router = routes::router()
+  let features = Arc::clone(&state.features);
+  let router = features
+    .registry
+    .routers()
+    .iter()
+    .fold(routes::router().with_state(state.clone()), |router, route| router.merge((route.build)(&features)))
     .layer(middleware::from_fn(gzip::layer))
     .layer(middleware::from_fn_with_state(state.clone(), auth::layer))
     .layer(CatchPanicLayer::custom(panic_response))
-    .layer(middleware::from_fn(request_log::layer))
-    .with_state(state.clone());
+    .layer(middleware::from_fn(request_log::layer));
   let service = ServiceBuilder::new()
     .layer(middleware::from_fn(request_path::layer))
     .layer(middleware::from_fn_with_state(state, websockets::gate))

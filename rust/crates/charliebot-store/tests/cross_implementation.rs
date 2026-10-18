@@ -246,7 +246,7 @@ fn listing_filters_status_and_builds_stable_archived_pages() {
 
 fn make_store(home: &Path) -> Store {
   fs::create_dir_all(home).unwrap();
-  let cfg = charliebot_core::config::load_config(home).unwrap();
+  let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
   let account_labels: Arc<dyn AccountLabelKeeper> = Arc::new(TestAccountLabelKeeper);
   let anchor_reconciler: Arc<dyn AnchorFieldReconciler> =
     Arc::new(TestAnchorReconciler { account_labels: Arc::clone(&account_labels) });

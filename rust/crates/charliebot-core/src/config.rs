@@ -2,22 +2,28 @@
 //!
 //! The file is a mapping of sections. The core sections (`server`, `paths`, `backends`, `ui`,
 //! `telegram`) and `headless_chrome_bin` parse into the structs below, each refusing unknown keys.
-//! A section a package registered ([`registry::CONFIG_SECTIONS`]) stays a raw YAML value until that
-//! package's port stage types it, and so do the type-specific fields of a backend option. The checks
+//! A section a package registered ([`ConfigSchema::sections`]) parses with the package's own parser, and
+//! the type-specific fields of a backend option stay raw until their backend type's port stage types
+//! them. The schema comes from the registered packages (`charliebot-registry` builds it). The checks
 //! that run before validation (stray `config.d/*.yaml` files, retired keys, a `charliebot_home` key)
 //! and their messages follow `load_config`.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_yaml::{Mapping, Value};
 
-use crate::{paths, pyfmt, registry};
+use crate::{paths, pyfmt};
 
 pub const CONFIG_FILENAME: &str = "config.yaml";
 pub const CREDENTIALS_FILENAME: &str = "credentials.yaml";
+
+/// A legacy-key value under this prefix names a `credentials.yaml` key path (`config_registry.CREDENTIALS_PREFIX`).
+pub const CREDENTIALS_PREFIX: &str = "credentials: ";
 
 /// Retired keys under `backends:`, replaced by `backends.pool`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
@@ -25,6 +31,74 @@ const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 /// The top-level names `CharlieBotConfig` declares as fields.
 const FIELD_NAMES: &[&str] =
   &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram"];
+
+/// `config.LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
+const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
+  ("server_host", "server.host"),
+  ("server_port", "server.port"),
+  ("subprocess_buffer_limit_mb", "server.subprocess_buffer_limit_mb"),
+  ("workspace_dirs", "paths.workspace_dirs"),
+  ("project_dirs", "paths.workspace_dirs"),
+  ("worktree_dir", "paths.worktree_dir"),
+  ("backend_options", "backends.options"),
+  ("model_preference", "backends.pool"),
+  ("home_services", "ui.home_services"),
+  ("telegram_chat_id", "telegram.chat_id"),
+  ("credentials: telegram_bot_token", "telegram.bot_token"),
+  ("credentials: charliebot_access_key", "charliebot.access_key"),
+  ("credentials: moonshot_api_key", "moonshot.api_key"),
+  ("credentials: aigw_api_key", "aigw.api_key"),
+  ("credentials: linear_api_key", "linear.api_key"),
+  ("credentials: feishu_app_id", "feishu.app_id"),
+  ("credentials: feishu_app_secret", "feishu.app_secret"),
+  ("credentials: feishu_refresh_token", "feishu.refresh_token"),
+  ("credentials: feishu_user_access_token", "feishu.user_access_token"),
+  ("credentials: google_client_id", "google.client_id"),
+  ("credentials: google_client_secret", "google.client_secret"),
+  ("credentials: google_refresh_token", "google.refresh_token"),
+  ("credentials: google_docs_client_id", "google.client_id"),
+  ("credentials: google_docs_client_secret", "google.client_secret"),
+  ("credentials: google_docs_refresh_token", "google.refresh_token"),
+  ("credentials: google_docs_default_folder_id", "google.docs_default_folder_id"),
+  ("credentials: twitter_api_key", "twitter.api_key"),
+  ("credentials: twitter_api_secret", "twitter.api_secret"),
+  ("credentials: twitter_access_token", "twitter.access_token"),
+  ("credentials: twitter_access_token_secret", "twitter.access_token_secret"),
+];
+
+/// A parsed package section: the value its parser returned. [`CharlieBotConfig::section`] downcasts it.
+pub type SectionValue = Arc<dyn Any + Send + Sync>;
+
+/// A top-level config key a package owns (`config_registry.register_config_section`). The loader keeps the
+/// key's raw YAML and calls `parse` on it; an omitted key arrives as an empty mapping, which yields the
+/// model's defaults. A parse error fails the load.
+#[derive(Clone, Copy)]
+pub struct ConfigSection {
+  pub key: &'static str,
+  /// The retired top-level keys this section replaced, each with its new location.
+  pub legacy_keys: &'static [(&'static str, &'static str)],
+  pub parse: fn(&Value) -> Result<SectionValue, String>,
+}
+
+/// What the registered packages add to the config schema. `charliebot-registry` builds it at startup.
+#[derive(Clone, Default)]
+pub struct ConfigSchema {
+  pub sections: Vec<ConfigSection>,
+  /// Retired top-level keys that no section owns (`config_registry.register_legacy_keys`).
+  pub legacy_keys: Vec<(&'static str, &'static str)>,
+  /// The registered backend type names (`backend_type_registration.register_backend_type`).
+  pub backend_types: Vec<&'static str>,
+}
+
+/// The parsed package sections of one loaded config, by key.
+#[derive(Clone, Default)]
+pub struct Sections(BTreeMap<&'static str, SectionValue>);
+
+impl fmt::Debug for Sections {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_list().entries(self.0.keys()).finish()
+  }
+}
 
 /// A config file the loader refuses; the message names the file and the offending key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +176,7 @@ pub struct BackendOption {
   pub label: String,
   pub model: String,
   pub prompt_overlay: Option<String>,
-  /// The registered backend type ([`registry::BACKEND_TYPES`]).
+  /// The registered backend type, one of [`ConfigSchema::backend_types`].
   pub backend_type: String,
   /// The type-specific keys, raw until the backend package's port stage types them.
   pub type_fields: Mapping,
@@ -141,7 +215,7 @@ pub struct TelegramConfig {
 }
 
 /// One profile's parsed `config.yaml`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CharlieBotConfig {
   /// The profile home the file was read from (chosen by `CHARLIEBOT_HOME`, never by the file).
   pub charliebot_home: PathBuf,
@@ -151,9 +225,9 @@ pub struct CharlieBotConfig {
   pub backends: BackendsConfig,
   pub ui: UiConfig,
   pub telegram: TelegramConfig,
-  /// The registered package sections the file sets, raw, keyed by section name. A section the file
-  /// omits is absent; its package's model defaults apply where the section is read.
-  pub sections: BTreeMap<String, Value>,
+  /// Every registered package section, parsed by its package's parser. An omitted section holds the
+  /// parser's result for an empty mapping, which is the package's defaults.
+  pub sections: Sections,
 }
 
 impl CharlieBotConfig {
@@ -178,18 +252,36 @@ impl CharlieBotConfig {
     self.backends.options.iter().find(|option| option.id == backend_id)
   }
 
-  /// The raw value of a registered package section the file sets, or `None` when the file omits it.
-  pub fn section(&self, key: &str) -> Option<&Value> {
-    self.sections.get(key)
+  /// The parsed value of the registered section `key`, as its package's parser returned it.
+  ///
+  /// Panics when no package registered `key` or `T` is not the parser's type: both are programming
+  /// errors, so the failure names the key.
+  pub fn section<T: Any + Send + Sync>(&self, key: &str) -> &T {
+    let value = self.sections.0.get(key).unwrap_or_else(|| panic!("config section {key:?} is not registered"));
+    value.downcast_ref::<T>().unwrap_or_else(|| panic!("config section {key:?} does not hold the requested type"))
   }
 }
 
-/// Load `<home>/config.yaml`.
+/// The retired top-level key `key` moved to, as the Python loader prints it, or `None` for a live key.
+///
+/// A structure key maps to its dotted location; a secret maps to `credentials.yaml <key path>`. The schema's
+/// legacy keys include every package section's keys.
+fn legacy_destination(key: &str, schema: &ConfigSchema) -> Option<String> {
+  let legacy: Vec<(&str, &str)> = CORE_LEGACY_KEYS.iter().copied().chain(schema.legacy_keys.iter().copied()).collect();
+  let lookup = |name: &str| legacy.iter().find(|(old, _)| *old == name).map(|(_, new)| new.to_string());
+  if let Some(new) = lookup(key) {
+    return Some(new);
+  }
+  lookup(&format!("{CREDENTIALS_PREFIX}{key}")).map(|new| format!("credentials.yaml {new}"))
+}
+
+/// Load `<home>/config.yaml` against the registered packages' `schema`.
 ///
 /// Before validation: any `*.yaml` file directly under `config.d/`, any retired top-level key (core or
 /// package-registered), a retired `backends:` key, and a `charliebot_home` key each refuse the file. A
-/// missing or empty file loads as the schema defaults.
-pub fn load_config(home: &Path) -> Result<CharlieBotConfig, ConfigError> {
+/// missing or empty file loads as the schema defaults. Each registered section is parsed; a parse error
+/// fails the load.
+pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfig, ConfigError> {
   let config_path = home.join(CONFIG_FILENAME);
   let config_path_text = paths::display(&config_path);
 
@@ -217,7 +309,7 @@ pub fn load_config(home: &Path) -> Result<CharlieBotConfig, ConfigError> {
   let legacy_hits: Vec<(String, String)> = data
     .keys()
     .filter_map(Value::as_str)
-    .filter_map(|key| registry::legacy_destination(key).map(|new| (key.to_string(), new)))
+    .filter_map(|key| legacy_destination(key, schema).map(|new| (key.to_string(), new)))
     .collect();
   if !legacy_hits.is_empty() {
     let lines: Vec<String> = legacy_hits.iter().map(|(key, new)| format!("  {key} -> {new}")).collect();
@@ -252,7 +344,9 @@ pub fn load_config(home: &Path) -> Result<CharlieBotConfig, ConfigError> {
   let unknown: Vec<String> = data
     .keys()
     .filter(|key| {
-      !key.as_str().is_some_and(|name| FIELD_NAMES.contains(&name) || registry::CONFIG_SECTIONS.contains(&name))
+      !key
+        .as_str()
+        .is_some_and(|name| FIELD_NAMES.contains(&name) || schema.sections.iter().any(|section| section.key == name))
     })
     .map(yaml_key_repr)
     .collect();
@@ -280,20 +374,24 @@ pub fn load_config(home: &Path) -> Result<CharlieBotConfig, ConfigError> {
     }
   };
 
-  let sections = registry::CONFIG_SECTIONS
-    .iter()
-    .filter_map(|name| data.get(*name).map(|value| (name.to_string(), value.clone())))
-    .collect();
+  let mut sections = BTreeMap::new();
+  for package_section in &schema.sections {
+    let raw = data.get(package_section.key).cloned().unwrap_or_else(|| Value::Mapping(Mapping::new()));
+    let parsed = (package_section.parse)(&raw).map_err(|message| {
+      ConfigError(format!("{config_path_text}: invalid config key {}: {message}", package_section.key))
+    })?;
+    sections.insert(package_section.key, parsed);
+  }
 
   Ok(CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
     headless_chrome_bin,
     server: typed_section(&config_path_text, "server", section("server"), default_server)?,
     paths: paths_config,
-    backends: parse_backends(&config_path_text, section("backends"))?,
+    backends: parse_backends(&config_path_text, section("backends"), &schema.backend_types)?,
     ui: typed_section(&config_path_text, "ui", section("ui"), || UiConfig { home_services: Vec::new() })?,
     telegram: typed_section(&config_path_text, "telegram", section("telegram"), || TelegramConfig { chat_id: None })?,
-    sections,
+    sections: Sections(sections),
   })
 }
 
@@ -388,7 +486,11 @@ fn typed_section<T: serde::de::DeserializeOwned>(
   }
 }
 
-fn parse_backends(config_path: &str, value: Option<Value>) -> Result<BackendsConfig, ConfigError> {
+fn parse_backends(
+  config_path: &str,
+  value: Option<Value>,
+  backend_types: &[&str],
+) -> Result<BackendsConfig, ConfigError> {
   let mapping = match value {
     None => {
       return Ok(BackendsConfig { pool: Vec::new(), options: Vec::new() });
@@ -413,7 +515,7 @@ fn parse_backends(config_path: &str, value: Option<Value>) -> Result<BackendsCon
     Some(Value::Sequence(entries)) => entries
       .iter()
       .enumerate()
-      .map(|(index, entry)| parse_option(config_path, index, entry))
+      .map(|(index, entry)| parse_option(config_path, index, entry, backend_types))
       .collect::<Result<_, _>>()?,
     Some(other) => {
       return Err(ConfigError(format!(
@@ -426,23 +528,27 @@ fn parse_backends(config_path: &str, value: Option<Value>) -> Result<BackendsCon
 }
 
 /// One backend entry, validated as the option model its `type` names would (`backend_models.parse_option`).
-fn parse_option(config_path: &str, index: usize, entry: &Value) -> Result<BackendOption, ConfigError> {
+fn parse_option(
+  config_path: &str,
+  index: usize,
+  entry: &Value,
+  backend_types: &[&str],
+) -> Result<BackendOption, ConfigError> {
   let location = format!("{config_path}: backends.options[{index}]");
   let Value::Mapping(entry) = entry else {
     return Err(ConfigError(format!("{location}: a backend entry must be a mapping, got {}", yaml_value_kind(entry))));
   };
   let backend_type = match entry.get("type") {
-    Some(Value::String(name)) if registry::backend_type(name).is_some() => name.clone(),
+    Some(Value::String(name)) if backend_types.contains(&name.as_str()) => name.clone(),
     other => {
       let shown = match other {
         Some(Value::String(name)) => pyfmt::str_repr(name),
         Some(value) => yaml_key_repr(value),
         None => "None".to_string(),
       };
-      let registered: Vec<&str> = registry::BACKEND_TYPES.iter().map(|backend| backend.name).collect();
       return Err(ConfigError(format!(
         "{location}: backend type {shown} is not registered; registered types: {}",
-        registered.join(", ")
+        backend_types.join(", ")
       )));
     }
   };
@@ -508,6 +614,22 @@ mod tests {
     home
   }
 
+  /// The schema the tests load against: a `voice` section that keeps its raw YAML, and two backend types.
+  fn test_schema() -> ConfigSchema {
+    fn raw(value: &Value) -> Result<SectionValue, String> {
+      Ok(Arc::new(value.clone()))
+    }
+    ConfigSchema {
+      sections: vec![ConfigSection { key: "voice", legacy_keys: &[("voice_engine", "voice.engine")], parse: raw }],
+      legacy_keys: Vec::new(),
+      backend_types: vec!["cc-claude", "codex"],
+    }
+  }
+
+  fn load(home: &tempfile::TempDir) -> Result<CharlieBotConfig, ConfigError> {
+    load_config(home.path(), &test_schema())
+  }
+
   const VALID: &str = "server:\n  host: 127.0.0.1\n  port: 18650\nbackends:\n  pool: [claude-fable]\n  options:\n    - id: \
                        claude-fable\n      label: \"CC · Fable\"\n      type: cc-claude\n      model: claude-fable-5-1\n      \
                        effort: xhigh\nvoice:\n  engine: sherpa\n";
@@ -515,7 +637,7 @@ mod tests {
   #[test]
   fn a_valid_file_parses_into_typed_sections() {
     let home = home_with(VALID);
-    let cfg = load_config(home.path()).unwrap();
+    let cfg = load(&home).unwrap();
     assert_eq!(cfg.server.port, 18650);
     assert_eq!(cfg.server.session_memory_max_mb, 12288);
     assert_eq!(cfg.backends.pool, vec!["claude-fable".to_string()]);
@@ -525,8 +647,7 @@ mod tests {
       ("CC · Fable", "cc-claude", "claude-fable-5-1")
     );
     assert_eq!(option.type_fields.get("effort"), Some(&Value::String("xhigh".to_string())));
-    assert!(cfg.section("voice").is_some());
-    assert!(cfg.section("slack").is_none());
+    assert!(cfg.section::<Value>("voice").is_mapping());
     assert_eq!(cfg.paths.worktree_dir, paths::expanduser("~/worktrees"));
     require_backends(&cfg).unwrap();
   }
@@ -534,24 +655,24 @@ mod tests {
   #[test]
   fn an_unknown_top_level_key_is_named() {
     let home = home_with("bogus: 1\nserver: {}\nother_key: x\n");
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(error.starts_with("unknown config key(s) 'bogus', 'other_key';"), "{error}");
   }
 
   #[test]
   fn an_unknown_nested_key_and_a_wrong_type_name_the_key() {
     let home = home_with("server:\n  bogus: 1\n");
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("invalid config key server") && error.contains("bogus"), "{error}");
     let home = home_with("server:\n  port: not-a-port\n");
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("invalid config key server.port"), "{error}");
   }
 
   #[test]
   fn retired_keys_name_their_new_location() {
     let home = home_with("server_port: 1\ncharliebot_access_key: k\n");
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(
       error.ends_with("still uses retired top-level keys; move each one:\n  server_port -> server.port\n  charliebot_access_key -> credentials.yaml charliebot.access_key"),
       "{error}"
@@ -561,10 +682,10 @@ mod tests {
   #[test]
   fn backend_entries_need_a_registered_type_and_a_model() {
     let home = home_with("backends:\n  options:\n    - {id: x, label: X, type: nope, model: m}\n");
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("backend type 'nope' is not registered"), "{error}");
     let home = home_with("backends:\n  options:\n    - {id: x, label: X, type: codex}\n");
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(error.ends_with("backend 'x' (type 'codex') requires 'model'"), "{error}");
   }
 
@@ -573,14 +694,14 @@ mod tests {
     let home = home_with(
       "backends:\n  pool: [ghost]\n  options:\n    - {id: a, label: A, type: codex, model: m}\n    - {id: a, label: A, type: codex, model: m}\n",
     );
-    let cfg = load_config(home.path()).unwrap();
+    let cfg = load(&home).unwrap();
     let error = require_backends(&cfg).unwrap_err().to_string();
     assert!(
       error.contains("backends.options[1] repeats id 'a'")
         && error.contains("backends.pool[0] names unknown backend 'ghost'"),
       "{error}"
     );
-    let empty = load_config(home_with("").path()).unwrap();
+    let empty = load(&home_with("")).unwrap();
     assert!(
       require_backends(&empty).unwrap_err().to_string().starts_with("config.yaml: backends.options lists no backend")
     );
@@ -591,7 +712,7 @@ mod tests {
     let home = home_with(VALID);
     std::fs::create_dir(home.path().join("config.d")).unwrap();
     std::fs::write(home.path().join("config.d/stray.yaml"), "a: 1").unwrap();
-    let error = load_config(home.path()).unwrap_err().to_string();
+    let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("stray.yaml is not a config location"), "{error}");
   }
 }

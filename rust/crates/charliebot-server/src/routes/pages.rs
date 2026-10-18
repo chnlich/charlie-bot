@@ -1,10 +1,10 @@
 //! `GET /`: the chat page (`src/app/pages.py` `index`).
 //!
-//! The page renders `index.html` with the config's backend facts, the auth flag, the host name, the
-//! version stamps and the voice dropdown's globals. The session half of the context (the sidebar
-//! listing, the redirect to the first session, the `?session=` bootstrap) ports with the session
-//! routes; until then the page renders the empty-sessions context, and a home whose sessions
-//! directory holds anything fails the request rather than render a sidebar that omits its sessions.
+//! The page renders `index.html` with the config's backend facts, the auth flag, the host name, the version stamps and
+//! the template globals the registered packages add. The session half of the context (the sidebar listing, the redirect
+//! to the first session, the `?session=` bootstrap) ports with the session routes; until then the page renders the
+//! empty-sessions context, and a home whose sessions directory holds anything fails the request rather than render a
+//! sidebar that omits its sessions.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,9 +13,8 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::credentials::Credentials;
-use charliebot_core::{paths, registry};
-use serde::Deserialize;
+use charliebot_core::paths;
+use charliebot_registry::Registry;
 use serde_json::{Map, Value, json};
 
 use super::{Family, get_only};
@@ -45,7 +44,6 @@ fn render_index(state: &AppState) -> Result<String, Failure> {
   let cfg = state.config().map_err(|error| failure("ValueError", error))?;
   let credentials = state.credentials().map_err(|error| failure("ValueError", error))?;
   require_no_sessions(&cfg.sessions_dir())?;
-  let voice = VoiceSettings::from_config(&cfg).map_err(|error| failure("ValidationError", error))?;
   let options = &cfg.backends.options;
   let default_backend_id = options.first().map_or("claude", |option| option.id.as_str());
   let active_option = cfg.get_backend_option(default_backend_id);
@@ -63,7 +61,7 @@ fn render_index(state: &AppState) -> Result<String, Failure> {
       .iter()
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
       .collect::<Vec<_>>(),
-    "backend_compact": compact_facts(&cfg)?,
+    "backend_compact": compact_facts(&cfg, &state.features.registry)?,
     "default_backend_id": default_backend_id,
     "active_backend": default_backend_id,
     "active_backend_label": active_option.map_or(default_backend_id, |option| option.label.as_str()),
@@ -75,10 +73,14 @@ fn render_index(state: &AppState) -> Result<String, Failure> {
     "version": state.templating.git_version(),
     "static_asset_version": state.templating.static_asset_version().map_err(|error| failure("OSError", error))?,
   });
-  let globals = vec![
-    ("voice_backends", minijinja::Value::from_serialize(voice.backends(&credentials))),
-    ("voice_default_backend", minijinja::Value::from(voice.default_backend.clone())),
-  ];
+  let globals = state
+    .features
+    .registry
+    .template_globals()
+    .map(|(name, global)| {
+      global(&state.features).map(|value| (name, value)).map_err(|message| failure("ValueError", message))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
   state.templating.render("index.html", &context, globals).map_err(|error| failure(error.kind(), &error))
 }
 
@@ -99,83 +101,14 @@ fn require_no_sessions(sessions_dir: &Path) -> Result<(), Failure> {
 }
 
 /// `_compact_facts`: per configured backend type, whether manual compaction runs and the hint.
-fn compact_facts(cfg: &CharlieBotConfig) -> Result<Map<String, Value>, Failure> {
+fn compact_facts(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Map<String, Value>, Failure> {
   let mut facts = Map::new();
   for option in &cfg.backends.options {
-    let traits = registry::backend_type(&option.backend_type)
+    let registration = registry
+      .backend_type_of(&option.backend_type)
       .ok_or_else(|| failure("KeyError", format!("backend type {:?} is not registered", option.backend_type)))?;
+    let traits = registration.traits;
     facts.insert(option.backend_type.clone(), json!({"manual": traits.manual_compact, "hint": traits.compact_hint}));
   }
   Ok(facts)
-}
-
-/// `voice.engine`: the local transcription engine.
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum VoiceEngine {
-  Sherpa,
-  Qwen3Hf,
-}
-
-impl VoiceEngine {
-  fn name(self) -> &'static str {
-    match self {
-      VoiceEngine::Sherpa => "sherpa",
-      VoiceEngine::Qwen3Hf => "qwen3_hf",
-    }
-  }
-}
-
-/// The transcription registry's backend ids, in dropdown order.
-const TRANSCRIPTION_BACKENDS: &[&str] = &["local", "gemini", "muse"];
-
-/// The two `voice:` keys the page reads, with `VoiceConfig`'s defaults. The voice package's port
-/// types the whole section; this reads only what the dropdown shows.
-#[derive(Debug, Clone, Deserialize)]
-pub struct VoiceSettings {
-  #[serde(default = "default_engine")]
-  engine: VoiceEngine,
-  #[serde(default = "default_transcription_backend")]
-  default_backend: String,
-}
-
-fn default_engine() -> VoiceEngine {
-  VoiceEngine::Sherpa
-}
-
-fn default_transcription_backend() -> String {
-  "local".to_string()
-}
-
-impl VoiceSettings {
-  /// The settings of `cfg`'s `voice:` section; an absent section takes every default.
-  pub fn from_config(cfg: &CharlieBotConfig) -> Result<VoiceSettings, String> {
-    let settings: VoiceSettings = match cfg.section("voice") {
-      None | Some(serde_yaml::Value::Null) => {
-        VoiceSettings { engine: default_engine(), default_backend: default_transcription_backend() }
-      }
-      Some(section) => serde_yaml::from_value(section.clone()).map_err(|error| format!("voice: {error}"))?,
-    };
-    if !TRANSCRIPTION_BACKENDS.contains(&settings.default_backend.as_str()) {
-      return Err(format!(
-        "voice.default_backend '{}' is not a transcription backend; known: {}",
-        settings.default_backend,
-        TRANSCRIPTION_BACKENDS.join(", ")
-      ));
-    }
-    Ok(settings)
-  }
-
-  /// `page_globals.voice_backends()`: id, label, live partials and why the backend cannot run now.
-  fn backends(&self, credentials: &Credentials) -> Value {
-    let needs = |section: &str, key: &str| {
-      let present = credentials.get(section, key).is_some_and(|value| value.is_truthy());
-      if present { Value::Null } else { Value::from(format!("needs {section}.{key}")) }
-    };
-    json!([
-      {"id": "local", "label": format!("Local ({})", self.engine.name()), "live_partials": false, "unavailable_reason": null},
-      {"id": "gemini", "label": "Gemini 3.5 Transcribe Live", "live_partials": true, "unavailable_reason": needs("gemini", "api_key")},
-      {"id": "muse", "label": "Muse Voice Transcribe", "live_partials": true, "unavailable_reason": needs("meta", "model_api_key")},
-    ])
-  }
 }

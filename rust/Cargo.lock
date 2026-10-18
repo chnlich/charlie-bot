@@ -341,7 +341,21 @@ dependencies = [
 name = "charliebot-explain"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-agents",
+ "charliebot-compat",
+ "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "http",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

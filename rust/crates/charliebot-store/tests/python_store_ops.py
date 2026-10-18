@@ -49,6 +49,7 @@ TASK_WORKER_ID = "synthetic-task-worker"
 TASK_SOURCE_ID = "synthetic-elone-source"
 TASK_NEW_ID = "synthetic-elone-new"
 TASK_RUN_ID = "synthetic-failed-run"
+TASK_COUNTER_ROOT_ID = "synthetic-counter-root"
 
 
 def _registered() -> None:
@@ -716,6 +717,39 @@ def _verify_rust_created_mode(root: pathlib.Path) -> None:
   asyncio.run(_verify_rust_created_tree(root / "rust-created-home"))
 
 
+async def _prepare_counter(root: pathlib.Path) -> None:
+  _registered()
+  home = root / "counter-base"
+  tree = _task_tree(home)
+  await _create_task_node(tree, session_id=TASK_COUNTER_ROOT_ID, parent_id=None, request_id="counter-root")
+  await _create_task_node(
+      tree, session_id="synthetic-counter-child", parent_id=TASK_COUNTER_ROOT_ID, request_id="counter-child")
+  (home / "sessions" / ".counter").write_text("not-a-number", encoding="utf-8")
+
+
+def _prepare_counter_mode(root: pathlib.Path) -> None:
+  asyncio.run(_prepare_counter(root))
+
+
+async def _create_unnamed_node(home: pathlib.Path) -> None:
+  _registered()
+  tree = _task_tree(home)
+  node = await tree.create_task(
+      request_id="counter-request",
+      task_parent_id=TASK_COUNTER_ROOT_ID,
+      profile="manager",
+      task=None,
+      name=None,
+      backend="synthetic",
+      caller="system",
+  )
+  assert node.name == "Session 2", node.name
+
+
+def _create_unnamed_node_mode(root: pathlib.Path, home_name: str) -> None:
+  asyncio.run(_create_unnamed_node(root / home_name))
+
+
 def _gate_parity(root: pathlib.Path) -> None:
   cases = json.loads((root / "gate-cases.json").read_text(encoding="utf-8"))["cases"]
   results = {}
@@ -803,6 +837,10 @@ if __name__ == "__main__":
     _verify_tasks_mode(root, extra[0])
   elif mode == "verify_rust_created":
     _verify_rust_created_mode(root)
+  elif mode == "prepare_counter":
+    _prepare_counter_mode(root)
+  elif mode == "create_unnamed_node":
+    _create_unnamed_node_mode(root, extra[0])
   elif mode == "gate_parity":
     _gate_parity(root)
   elif mode == "prepare_parity_gate":

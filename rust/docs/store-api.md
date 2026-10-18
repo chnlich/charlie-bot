@@ -156,6 +156,9 @@ those hashes. The store calls required sequence archive and binding-mover hooks 
 The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
 launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 
+`create_task` without a name takes `Session N` from `sessions/.counter`. An unreadable or unparsable counter takes
+the session-directory count and is then rewritten with the next number, as Python's `_next_session_name` does.
+
 ## Runtime event bus, message model, and busy state (S4, implemented)
 
 | Rust API | Python source |
@@ -201,3 +204,5 @@ exposed as `raw_metadata_scan`.
 - Archive rotation has no lock against a concurrent append, so an append racing
   `archive_events_before` can land in either the old or the new live file. Python has the same
   window.
+- The session counter parses a signed 64-bit integer. Python's `int()` also accepts digit underscores and larger
+  values; here such a counter takes the session-directory count.

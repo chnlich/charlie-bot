@@ -781,14 +781,25 @@ impl Store {
     operation
   }
 
+  /// Name the next session from `sessions/.counter`. An unreadable or unparsable counter takes the
+  /// session-directory count, as Python's `_next_session_name` does, and the counter is rewritten after it.
   fn next_session_name(&self) -> StoreResult<String> {
     let sessions_dir = self.cfg.sessions_dir();
     fs::create_dir_all(&sessions_dir).map_err(|error| path_error(&sessions_dir, error))?;
     let counter = sessions_dir.join(".counter");
     let number = match fs::read_to_string(&counter) {
-      Ok(value) => value.trim().parse::<usize>().map_err(|error| path_error(&counter, error))?,
+      Ok(value) => match value.trim().parse::<i64>() {
+        Ok(number) => number,
+        Err(error) => {
+          tracing::warn!(path = %counter.display(), %error, "session_counter_unparsable");
+          count_session_dirs(&sessions_dir)?
+        }
+      },
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => count_session_dirs(&sessions_dir)?,
-      Err(error) => return Err(path_error(&counter, error)),
+      Err(error) => {
+        tracing::warn!(path = %counter.display(), %error, "session_counter_unreadable");
+        count_session_dirs(&sessions_dir)?
+      }
     };
     fs::write(&counter, (number + 1).to_string()).map_err(|error| path_error(&counter, error))?;
     Ok(format!("Session {number}"))
@@ -1159,7 +1170,7 @@ fn profile_name(profile: TaskProfile) -> &'static str {
   }
 }
 
-fn count_session_dirs(sessions_dir: &Path) -> StoreResult<usize> {
+fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
   let mut count = 0;
   for entry in fs::read_dir(sessions_dir).map_err(|error| path_error(sessions_dir, error))? {
     if entry
@@ -1307,6 +1318,26 @@ mod tests {
           profile,
           task: None,
           name: Some(request_id.to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap()
+  }
+
+  async fn create_unnamed_node(store: &Store, request_id: &str) -> SessionMetadata {
+    store
+      .create_task(
+        CreateTask {
+          request_id: request_id.to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: None,
           backend: Some("synthetic".to_string()),
           group: None,
           session_id: None,
@@ -1678,6 +1709,23 @@ mod tests {
     assert!(store.archive_unsuccessful_worker(&guard, &worker.id, "failed-run", "failed").await.unwrap());
     assert!(!store.archive_unsuccessful_worker(&guard, &worker.id, "failed-run", "failed").await.unwrap());
     assert_eq!(store.task_state(&worker.id).unwrap(), "archived");
+  }
+
+  #[tokio::test]
+  async fn unnamed_sessions_follow_the_counter_and_recover_from_the_directory_count() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    create_node(&store, "named-a", None, TaskProfile::Manager).await;
+    create_node(&store, "named-b", None, TaskProfile::Manager).await;
+    let counter = home.path().join("sessions").join(".counter");
+
+    fs::write(&counter, "not-a-number").unwrap();
+    assert_eq!(create_unnamed_node(&store, "unnamed-a").await.name, "Session 2");
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "3");
+
+    fs::write(&counter, " 7\n").unwrap();
+    assert_eq!(create_unnamed_node(&store, "unnamed-b").await.name, "Session 7");
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "8");
   }
 
   #[test]

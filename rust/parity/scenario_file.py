@@ -32,12 +32,11 @@ _SCENARIO_KEYS = {
     "fakes", "fixture_extras", "voice_models"
 }
 _HTTP_STEP_KEYS = {
-    "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth",
-    "expect_status", "capture", "defer_files"
+    "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "expect_status",
+    "capture", "defer_files"
 }
 _WS_STEP_KEYS = {
-    "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare",
-    "expect_reject"
+    "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare", "expect_reject"
 }
 _FAKE_STEP_KEYS = {"kind", "name", "fake", "action", "payload"}
 _WAIT_STEP_KEYS = {"kind", "name", "timeout_seconds", "until"}
@@ -110,7 +109,7 @@ def _placeholder(ref: str) -> str:
   if parts[0] == "tree":
     if len(parts) != 2 or parts[1] not in ("root", "home"):
       raise ScenarioError(f"unknown tree reference ${{{ref}}}")
-    return "{" + parts[1] + "}"
+    return "{tree}" if parts[1] == "root" else "{home}"
   if parts[0] == "extras":
     return "{" + ".".join(parts[1:]) + "}"
   if parts[0] in ("sessions", "missing_session") or parts[-1] == "session":
@@ -235,7 +234,8 @@ def _multipart(raw: Any, where: str) -> dict:
     if not isinstance(name, str) or not name:
       raise ScenarioError(f"{where}.multipart field names must be non-empty strings")
     if isinstance(value, dict):
-      if set(value) != {"file", "content_type"} or not isinstance(value["content_type"], str) or not value["content_type"]:
+      content_type = value.get("content_type")
+      if set(value) != {"file", "content_type"} or not isinstance(content_type, str) or not content_type:
         raise ScenarioError(f"{field_where} file value requires file and content_type")
       fields[name] = {"file": _data_file(value["file"], field_where), "content_type": value["content_type"]}
     elif value is None or isinstance(value, (str, int, float, bool)):
@@ -613,7 +613,7 @@ def _lookup(ref: str, manifest: dict, captures: dict[str, Any], tree_root: str, 
 def _strings(value: Any) -> list[str]:
   if isinstance(value, str):
     return [value]
-  if isinstance(value, list):
+  if isinstance(value, (list, tuple)):
     return [text for item in value for text in _strings(item)]
   if isinstance(value, dict):
     return [text for item in value.values() for text in _strings(item)]
@@ -624,10 +624,11 @@ def check_references(scenario: Scenario, manifest: dict) -> None:
   """Every manifest reference resolves, and every capture reference names a capture of an earlier step."""
   captured: set[str] = set()
   for step in scenario.steps:
-    texts = _strings([
-        step.path, step.query, step.headers, step.json_body, step.multipart, step.send, step.collect, step.until,
-        step.payload
-    ])
+    texts = _strings(
+        [
+            step.path, step.query, step.headers, step.json_body, step.multipart, step.send, step.collect, step.until,
+            step.payload
+        ])
     for match in (match for text in texts for match in _REFERENCE.finditer(text)):
       ref = match["ref"]
       if ref.startswith("capture."):

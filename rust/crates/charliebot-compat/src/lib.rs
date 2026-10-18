@@ -4,6 +4,7 @@
 //! the same routes takes them from here rather than writing its own.
 
 pub mod headers;
+pub mod jinja;
 pub mod json;
 pub mod mimetypes;
 mod mimetypes_table;

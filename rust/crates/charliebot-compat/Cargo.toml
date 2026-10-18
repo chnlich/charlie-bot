@@ -12,6 +12,8 @@ charliebot-core.workspace = true
 futures-util.workspace = true
 http.workspace = true
 md-5.workspace = true
+minijinja.workspace = true
+minijinja-contrib.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 

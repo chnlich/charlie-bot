@@ -17,12 +17,14 @@ import pathlib
 import random
 import struct
 import sys
+import tempfile
 from typing import Annotated, Literal
 
 import pydantic
 from fastapi import FastAPI, Query
 from fastapi.testclient import TestClient
 from starlette import responses as starlette_responses
+from starlette.templating import Jinja2Templates
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO_ROOT / "rust" / "fixtures" / "python"
@@ -380,6 +382,76 @@ def mimetype_cases() -> dict:
   return {"cases": [{"path": path, "type": database.guess_type(path)[0]} for path in paths]}
 
 
+TOJSON_VALUES = [
+    None,
+    True,
+    0,
+    1.5,
+    1e-05,
+    1e16,
+    -0.0,
+    2**64 - 1,
+    "a<b>&'c\"d\\e",
+    "\U0001f600 é \u2028",
+    [],
+    {},
+    {
+        "b": [1, {
+            "d": None
+        }],
+        "a": "é"
+    },
+    {
+        "<script>": "</script>",
+        "k&": ["'q'"]
+    },
+    [1.25, "x", False],
+    {
+        "z": {
+            "y": {
+                "x": 1
+            }
+        },
+        "a": None
+    },
+]
+
+URLENCODE_VALUES = [
+    "a b/c?d=e&f#g",
+    "é/中 ~_.-",
+    "",
+    "100%",
+    42,
+    1.5,
+    1e-05,
+    True,
+    None,
+    [["a", 1], ["b c", "x/y&z"]],
+    {
+        "k": "v w",
+        "n": None
+    },
+    {},
+    [],
+]
+
+
+def render_case(env, template: str, context: dict) -> dict:
+  return {"template": template, "context": context, "output": env.from_string(template).render(context)}
+
+
+def jinja_filter_cases() -> dict:
+  """Each template rendered by the environment Starlette's Jinja2Templates builds for the page templates."""
+  with tempfile.TemporaryDirectory() as directory:
+    env = Jinja2Templates(directory=directory).env
+    assert env.autoescape("page.html") is True and env.autoescape(None) is True, "the pages autoescape"
+    cases = [render_case(env, "{{ value|tojson }}", {"value": value}) for value in TOJSON_VALUES]
+    cases += [render_case(env, "{{ value|urlencode }}", {"value": value}) for value in URLENCODE_VALUES]
+    cases.append(render_case(env, "{{ value|urlencode }}", {}))
+    cases.append(render_case(env, "v={{ v|urlencode }}&n={{ n|tojson }}", {"v": "1.0-abc~", "n": {"b": 2, "a": 1}}))
+  return {"cases": cases}
+
+
 def write_fixture(name: str, payload: dict) -> None:
   """Write one fixture file: ASCII-only JSON, so the committed bytes stay printable."""
   FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -395,6 +467,7 @@ def main() -> None:
   write_fixture("json_renders", json_renders())
   write_fixture("validation_422", validation_cases())
   write_fixture("mimetypes", mimetype_cases())
+  write_fixture("jinja_filters", jinja_filter_cases())
 
 
 if __name__ == "__main__":

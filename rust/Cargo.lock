@@ -517,7 +517,19 @@ dependencies = [
 name = "charliebot-terminal"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "charliebot-compat",
+ "charliebot-core",
  "charliebot-registry",
+ "futures-util",
+ "libc",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]

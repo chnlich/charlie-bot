@@ -110,7 +110,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | POST | `/api/voice/{session_id}` | features/voice | todo |  |
 | WS | `/ws/voice/{session_id}` | features/voice | todo | the token check is ported; every upgrade answers 403 |
 | POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | todo |  |
-| GET, HEAD | `/absolute_filepath/{path:path}` | features/files | todo |  |
+| GET, HEAD | `/absolute_filepath/{path:path}` | features/files | ported |  |
 | GET, HEAD | `/static/features/artifacts/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/features/backup/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/features/backend_pool/{path:path}` | foundation | ported |  |

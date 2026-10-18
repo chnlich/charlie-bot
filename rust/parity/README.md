@@ -108,14 +108,29 @@ Each process under test (the fixture generator and each server) runs with:
   run-local CA only in that scenario;
 - an environment built from scratch, with nothing inherited from the harness;
 - `PYTHONDONTWRITEBYTECODE=1`, because bytecode caches would land in the worktree;
-- the synthetic config: `127.0.0.1`, a free port in 18600-18699, the fixed test access key, one backend option,
-  no integration, the session cgroup limits and the disk-headroom check off, and both path settings inside the
-  tree.
+- the synthetic config: `127.0.0.1`, a port in 18600-18699 that the run reserves, the fixed test access key, one
+  backend option, no integration, the session cgroup limits and the disk-headroom check off, and both path settings
+  inside the tree.
 - `TMUX_TMPDIR` is the tree's `tmp/` directory, and the harness kills the `charliebot` tmux server when a server
   stops or is handed over. Tree creation checks that the resulting socket path is at most 107 bytes.
 
 The Python server starts as `<worktree>/.venv/bin/python server.py` from the worktree root. Every server receives
 `CHARLIEBOT_VENV_BIN=<worktree>/.venv/bin`.
+
+### Ports
+
+Concurrent runs share the 18600-18699 range, so each run reserves its ports before it starts a server. `pick_ports`
+takes a non-blocking exclusive `flock` on `/tmp/charliebot-parity-ports/<port>.lock` for each port, from a random
+start in the range, and skips a port whose lock is held or that does not bind. The run holds both locks until both
+servers have stopped. A kill of the harness releases them, because the kernel drops a process's flocks at exit.
+
+Readiness needs more than an answer on the port. `wait_ready` accepts a server only when the listening socket on its
+port belongs to the server's process tree (strace, the sandbox launcher, the server and its children). A listener from
+any other process fails the step at once, naming the port and the owner pid. The `server startup` step lists each
+server's verified owner pid, and a handover step lists the new ones.
+
+A server that exits before the harness stops it fails the step that was running, with its exit status and log path.
+The harness checks for this after every step, before a handover stops a server, and before the shutdown step.
 
 Without `fake-agent/script.json`, the fake prints the stand-in line and exits 1. It reads stdin to EOF before
 the first scripted step unless stdin is a TTY. A `flock` on `fake-agent/lock` assigns each start the next script

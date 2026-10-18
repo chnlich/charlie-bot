@@ -8,8 +8,8 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind, RunOutcome,
-  RunOutcomeKind, RunRecord, SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
+  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind, RunOrder,
+  RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
 };
 use serde_json::{Map, Value, json};
 
@@ -507,7 +507,7 @@ async fn run_pages_walk_the_launch_order_and_refuse_a_malformed_cursor() {
   let mut cursor: Option<String> = None;
   let mut pages = Vec::new();
   loop {
-    let page = store.list_runs_page_sync(RUN_SESSION_ID, cursor.as_deref(), 2).unwrap();
+    let page = store.list_runs_page_sync(RUN_SESSION_ID, cursor.as_deref(), 2, RunOrder::Ascending).unwrap();
     pages.push(page.items.into_iter().map(|run| run.id).collect::<Vec<_>>());
     match page.next_cursor {
       Some(next) => cursor = Some(next),
@@ -517,7 +517,23 @@ async fn run_pages_walk_the_launch_order_and_refuse_a_malformed_cursor() {
   let expected: Vec<Vec<&str>> =
     vec![vec!["queued-0", "queued-1"], vec!["run-0", "run-1"], vec!["run-2", "run-3"], vec!["run-4"]];
   assert_eq!(pages, expected);
-  assert!(store.list_runs_page_sync(RUN_SESSION_ID, Some("not-a-cursor"), 2).is_err());
+  assert!(store.list_runs_page_sync(RUN_SESSION_ID, Some("not-a-cursor"), 2, RunOrder::Ascending).is_err());
+}
+
+#[tokio::test]
+async fn descending_run_pages_and_cross_order_cursor_refusals_match_python() {
+  let root = tempfile::tempdir().unwrap();
+  let seed_home = root.path().join("pages").join("seed-home");
+  let store = make_store(&seed_home);
+  let mut runs = vec![empty_run("queued-0", RunKind::Work), empty_run("queued-1", RunKind::Work)];
+  runs.extend((0..5).map(|minute| launched_run(&format!("run-{minute}"), minute)));
+  register_runs(&store, runs).await;
+
+  let (python, rust) = read_on_copies(root.path(), &seed_home, "pages", read_pages);
+  assert_eq!(python, rust);
+  assert_eq!(rust["descending"]["ids"], json!(["run-4", "run-3"]));
+  assert_eq!(rust["descending_next"]["ids"], json!(["run-2", "run-1"]));
+  assert!(rust["refused_ascending_cursor"].as_str().unwrap().contains("minted for ascending order"));
 }
 
 #[tokio::test]
@@ -790,20 +806,65 @@ impl SequenceListingFields for TestSequenceListing {
 }
 
 fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {
+  let root = root.to_string_lossy();
+  let mut args = vec![mode, root.as_ref()];
+  args.extend_from_slice(extra);
+  let _ = run_python_helper_args(&args);
+}
+
+fn run_python_helper_args(args: &[&str]) -> String {
   let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf();
   let helper = "rust/crates/charliebot-store/tests/python_store_ops.py";
-  let output = Command::new("uv")
-    .args(["run", "python", helper, mode, &root.to_string_lossy()])
-    .args(extra)
-    .current_dir(repo_root)
-    .output()
-    .unwrap();
+  let output = Command::new("uv").args(["run", "python", helper]).args(args).current_dir(repo_root).output().unwrap();
   assert!(
     output.status.success(),
-    "uv helper {mode} failed:\nstdout:\n{}\nstderr:\n{}",
+    "uv helper {} failed:\nstdout:\n{}\nstderr:\n{}",
+    args[0],
     String::from_utf8_lossy(&output.stdout),
     String::from_utf8_lossy(&output.stderr),
   );
+  String::from_utf8(output.stdout).unwrap()
+}
+
+/// Copy one seeded home to a Python copy and a Rust copy, then read each copy through its own implementation.
+fn read_on_copies(root: &Path, seed_home: &Path, case: &str, rust_read: fn(&Store) -> Value) -> (Value, Value) {
+  let case_root = root.join(case);
+  copy_tree(seed_home, &case_root.join("python-home"));
+  copy_tree(seed_home, &case_root.join("rust-home"));
+  let python = serde_json::from_str(&run_python_helper_args(&["read_runs", &root.to_string_lossy(), case])).unwrap();
+  (python, rust_read(&make_store(&case_root.join("rust-home"))))
+}
+
+fn read_pages(store: &Store) -> Value {
+  let ascending = store.list_runs_page_sync(RUN_SESSION_ID, None, 2, RunOrder::Ascending).unwrap();
+  let descending = store.list_runs_page_sync(RUN_SESSION_ID, None, 2, RunOrder::Descending).unwrap();
+  let descending_next =
+    store.list_runs_page_sync(RUN_SESSION_ID, descending.next_cursor.as_deref(), 2, RunOrder::Descending).unwrap();
+  json!({
+    "ascending": page_json(&ascending),
+    "descending": page_json(&descending),
+    "descending_next": page_json(&descending_next),
+    "refused_ascending_cursor": refusal(store.list_runs_page_sync(
+      RUN_SESSION_ID,
+      ascending.next_cursor.as_deref(),
+      2,
+      RunOrder::Descending,
+    )),
+    "refused_descending_cursor": refusal(store.list_runs_page_sync(
+      RUN_SESSION_ID,
+      descending.next_cursor.as_deref(),
+      2,
+      RunOrder::Ascending,
+    )),
+  })
+}
+
+fn page_json(page: &RunPage) -> Value {
+  json!({ "ids": page.items.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(), "next_cursor": page.next_cursor })
+}
+
+fn refusal<T>(result: Result<T, StoreError>) -> String {
+  result.err().expect("the cursor is refused under the other order").to_string()
 }
 
 fn empty_run(id: &str, kind: RunKind) -> RunRecord {

@@ -20,3 +20,4 @@ pub mod wiring;
 
 pub use context::{FeatureContext, StartupState, StateError};
 pub use registry::{RegisterFn, Registry, RegistryError};
+pub use wiring::{WebSocketHandler, WebSocketMatch, WebSocketRequest};

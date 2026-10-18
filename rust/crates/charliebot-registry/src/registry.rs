@@ -17,7 +17,7 @@ use crate::sequence::SequenceController;
 use crate::sidebar::SidebarContribution;
 use crate::turn::TurnContribution;
 use crate::usage::UsageSource;
-use crate::wiring::{CheckFn, DiffRootFn, FileView, RouterRegistration, ScheduledHandlerFn, Service};
+use crate::wiring::{CheckFn, DiffRootFn, FileView, RouterRegistration, ScheduledHandlerFn, Service, WebSocketHandler};
 
 /// A package's `register` function: the package's contributions, made through the registry's typed methods.
 pub type RegisterFn = fn(&mut Registry) -> Result<(), RegistryError>;
@@ -107,6 +107,7 @@ pub struct Registry {
   /// Every registered package in registration order. Each package's static files and templates join the pages.
   pub(crate) page_packages: Vec<&'static str>,
   pub(crate) routers: Vec<RouterRegistration>,
+  pub(crate) websocket_routes: Ledger<WebSocketHandler>,
   pub(crate) services: Ledger<Arc<dyn Service>>,
   pub(crate) file_views: Ledger<Arc<dyn FileView>>,
   pub(crate) startup_checks: Ledger<CheckFn>,
@@ -151,6 +152,7 @@ impl Registry {
       current: None,
       page_packages: Vec::new(),
       routers: Vec::new(),
+      websocket_routes: Ledger::new("websocket route"),
       services: Ledger::new("service"),
       file_views: Ledger::new("file view"),
       startup_checks: Ledger::new("startup check"),
@@ -294,6 +296,9 @@ mod tests {
   use super::*;
   use crate::context::FeatureContext;
   use crate::pages;
+  use axum::body::Body;
+  use axum::response::Response;
+  use futures_util::future::BoxFuture;
 
   fn no_routes(_features: &Arc<FeatureContext>) -> axum::Router {
     axum::Router::new()
@@ -334,6 +339,21 @@ mod tests {
     registry.template_global("shared", global)
   }
 
+  fn websocket_handler(
+    _features: Arc<FeatureContext>,
+    _request: crate::wiring::WebSocketRequest,
+  ) -> BoxFuture<'static, Response> {
+    Box::pin(async { Response::new(Body::empty()) })
+  }
+
+  fn websocket_alpha(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.websocket("/ws/test/*", websocket_handler)
+  }
+
+  fn websocket_zeta(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.websocket("/ws/test/*", websocket_handler)
+  }
+
   #[test]
   fn registration_order_drives_routes_page_parts_and_metadata_keys() {
     let root = tempfile::tempdir().unwrap();
@@ -364,6 +384,16 @@ mod tests {
     let error = registry.register_package("src.features.zeta", shared_global).unwrap_err();
     assert_eq!(error.package, "src.features.zeta");
     assert!(error.message.contains("src.features.alpha"), "{error}");
+  }
+
+  #[test]
+  fn duplicate_websocket_pattern_fails_and_names_both_packages() {
+    let mut registry = Registry::new();
+    registry.register_package("src.features.alpha", websocket_alpha).unwrap();
+    let error = registry.register_package("src.features.zeta", websocket_zeta).unwrap_err();
+    assert_eq!(error.package, "src.features.zeta");
+    assert!(error.to_string().contains("src.features.alpha"), "{error}");
+    assert!(error.to_string().contains("src.features.zeta"), "{error}");
   }
 
   #[test]

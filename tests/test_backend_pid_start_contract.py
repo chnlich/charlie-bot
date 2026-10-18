@@ -40,9 +40,9 @@ from src.backends.claude_code import claude_code
 from src.backends.codex import codex
 from src.backends.gemini import gemini_cli
 from src.backends.kimi import kimi
-from src.backends.opencode import server as opencode_server
 from src.backends.openai_compatible import openai_compatible_claude
 from src.backends.opencode import opencode
+from src.backends.opencode import server as opencode_server
 from src.runtime.agent_process import base
 
 # (start_time_field, state) 2-tuple in read_pid_stat's shape; [0] must land on

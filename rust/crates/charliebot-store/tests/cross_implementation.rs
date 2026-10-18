@@ -8,6 +8,7 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
+use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind, RunOrder,
   RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
@@ -538,6 +539,20 @@ async fn last_ended_run_ranks_a_run_by_its_last_finish_fact_like_python() {
 }
 
 #[tokio::test]
+async fn terminal_outcome_is_the_last_finish_fact_like_python() {
+  let root = tempfile::tempdir().unwrap();
+  let seed_home = root.path().join("terminal_outcome").join("seed-home");
+  let store = make_store(&seed_home);
+  register_runs(&store, vec![launched_run("run-two-finishes", 1)]).await;
+  finish_run(&store, "run-two-finishes", None).await;
+  append_finish_fact(&store, "run-two-finishes", "2026-01-01T00:05:00Z", "failed").await;
+
+  let (python, rust) = read_on_copies(root.path(), &seed_home, "terminal_outcome", read_terminal_outcome);
+  assert_eq!(python, rust);
+  assert_eq!(rust["terminal_outcome"], "failed");
+}
+
+#[tokio::test]
 async fn descending_run_pages_and_cross_order_cursor_refusals_match_python() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("pages").join("seed-home");
@@ -953,6 +968,11 @@ fn refusal<T>(result: Result<T, StoreError>) -> String {
 
 fn read_last_ended(store: &Store) -> Value {
   json!({ "last_ended_run_id": store.last_ended_run_id(RUN_SESSION_ID).unwrap() })
+}
+
+fn read_terminal_outcome(store: &Store) -> Value {
+  let events = store.load_all_facts(RUN_SESSION_ID).unwrap();
+  json!({ "terminal_outcome": terminal_outcome(&events, "run-two-finishes").unwrap() })
 }
 
 fn read_blockers(store: &Store) -> Value {

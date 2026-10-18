@@ -532,6 +532,9 @@ def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
     return {"blockers": blockers}
   if case == "last_ended":
     return {"last_ended_run_id": store.last_ended_run_id(RUN_SESSION_ID)}
+  if case == "terminal_outcome":
+    events = store.load_events_sync(RUN_SESSION_ID)
+    return {"terminal_outcome": store.terminal_outcome(events, "run-two-finishes")}
   raise ValueError(f"unknown read case {case}")
 
 

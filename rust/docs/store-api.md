@@ -90,6 +90,7 @@ from 0 to that count, and archive files beyond that count stay unread.
 | `read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>>`; `list_run_records_sync(&self, session_id: &str) -> StoreResult<Vec<RunRecord>>` | `src/runtime/runs.py::read_run_sync`, `list_run_records_sync` |
 | `list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize, order: RunOrder) -> StoreResult<RunPage>` | `src/runtime/runs.py::list_runs_page_sync` |
 | `newest_run_record_sync(&self, session_id: &str) -> StoreResult<Option<RunRecord>>`; `last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>>` | `src/runtime/runs.py::newest_run_record_sync`, `last_ended_run_id` |
+| `run_records::terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<RunOutcomeKind>>` | `src/runtime/runs.py::terminal_outcome_in_events`, `RunStore.terminal_outcome` |
 | `run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState>`; `run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>>` | `src/runtime/runs.py::run_display_state`, `run_blocker`; collected by `src/runtime/task_sessions.py::_structural_blockers` and `_elone_blockers` |
 | `records_generation(&self) -> u64`; `mark_sidebar_dirty(&self, session_id: &str)` | `src/runtime/runs.py::records_generation`, `mark_sidebar_dirty` |
 
@@ -107,7 +108,10 @@ takes `RetryRunFields` (`kind`, `backend`, `model`, `repo_path`, `base_branch`, 
 so a replay of one request returns the first record unchanged.
 
 `RunOutcome` carries the terminal outcome, an optional input list, an optional exit code and an
-optional end time. Repeated finish calls keep the first fact and repair a missing record mirror.
+optional end time. Repeated finish calls keep the first fact's payload and repair a missing record mirror.
+A run's terminal outcome is its last `run_finished` fact's outcome, as Python's `terminal_outcome_in_events`
+reads it. The display state, the blockers, the stop requests and the finish path read it through
+`terminal_outcome`; the run-identity refusal asks only whether any finish fact exists, as Python's does.
 Stop requests append their fact under the guard. The process identity check, SIGTERM and bounded
 exit wait run after the guard is released.
 

@@ -28,6 +28,7 @@ members = [
     "crates/charliebot-store",
     "crates/charliebot-registry",
     "crates/charliebot-session-api",
+    "crates/charliebot-usage",
 ]
 
 [workspace.package]
@@ -98,6 +99,7 @@ charliebot-session-api = { path = "crates/charliebot-session-api" }
 charliebot-tasks = { path = "crates/charliebot-tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }
-charliebot-usage = { path = "crates/features/usage" }
+charliebot-usage = { path = "crates/charliebot-usage" }
+charliebot-usage-page = { path = "crates/features/usage" }
 charliebot-voice = { path = "crates/features/voice" }
 charliebot-web-reply = { path = "crates/features/web_reply" }

@@ -7,7 +7,6 @@ mod routes;
 mod search;
 mod sidebar;
 mod tree;
-mod usage;
 mod worker_transcript;
 
 use std::sync::Arc;

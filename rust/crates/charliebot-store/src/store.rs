@@ -4,7 +4,7 @@ use std::future::Future;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -96,6 +96,11 @@ pub(crate) struct CachedMetadata {
   pub(crate) signature: Option<(i64, i64)>,
 }
 
+pub(crate) struct CachedChatEvents {
+  pub(crate) generation: u64,
+  pub(crate) events: Vec<Value>,
+}
+
 /// Session metadata and event-log persistence for one configured CharlieBot home.
 pub struct Store {
   pub(crate) cfg: CharlieBotConfig,
@@ -109,7 +114,8 @@ pub struct Store {
   pub(crate) sequence_binding_mover: Arc<dyn SequenceBindingMover>,
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
-  pub(crate) events_cache: StdMutex<HashMap<String, Vec<Value>>>,
+  pub(crate) events_cache: StdMutex<HashMap<String, CachedChatEvents>>,
+  pub(crate) next_events_cache_generation: AtomicU64,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
@@ -158,6 +164,7 @@ impl Store {
       metadata_cache: StdMutex::new(HashMap::new()),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
+      next_events_cache_generation: AtomicU64::new(1),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),
@@ -177,6 +184,10 @@ impl Store {
   /// The typed configuration this store was built from.
   pub fn config(&self) -> &CharlieBotConfig {
     &self.cfg
+  }
+
+  pub(crate) fn next_events_cache_generation(&self) -> u64 {
+    self.next_events_cache_generation.fetch_add(1, Ordering::Relaxed)
   }
 
   /// The metadata file for `session_id`.

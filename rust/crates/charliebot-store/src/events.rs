@@ -7,10 +7,19 @@ use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
+use crate::store::CachedChatEvents;
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 /// One parsed chat-log event.
 pub type ChatEvent = Value;
+
+/// A stable cache identity plus either the full event list or its newly appended suffix.
+pub struct ChatEventsDelta {
+  pub generation: u64,
+  pub start_index: usize,
+  pub event_count: usize,
+  pub events: Vec<ChatEvent>,
+}
 
 impl Store {
   /// Append one event, injecting its id and Python `datetime.isoformat()` timestamp when absent.
@@ -22,10 +31,10 @@ impl Store {
     if !object.contains_key("timestamp") {
       object.insert("timestamp".to_string(), Value::String(python_event_timestamp(UtcDateTime::now())));
     }
-    ndjson::append(&self.chat_events_path(session_id), &event)?;
     let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
-    if let Some(events) = cache.get_mut(session_id) {
-      events.push(event.clone());
+    ndjson::append(&self.chat_events_path(session_id), &event)?;
+    if let Some(cached) = cache.get_mut(session_id) {
+      cached.events.push(event.clone());
     }
     Ok(event)
   }
@@ -46,12 +55,40 @@ impl Store {
 
   /// Read the live event log, using the in-memory parsed-event cache after the first read.
   pub fn load_chat_events_sync(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
-    if let Some(events) = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id) {
-      return Ok(events.clone());
+    let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
+    if let Some(cached) = cache.get(session_id) {
+      return Ok(cached.events.clone());
     }
     let events = ndjson::read_file(&self.chat_events_path(session_id))?;
-    self.events_cache.lock().expect("event cache mutex is not poisoned").insert(session_id.to_string(), events.clone());
+    cache.insert(
+      session_id.to_string(),
+      CachedChatEvents { generation: self.next_events_cache_generation(), events: events.clone() },
+    );
     Ok(events)
+  }
+
+  /// Read the live event cache from `covered` when its identity still matches, otherwise from the beginning.
+  pub fn load_chat_events_delta_sync(
+    &self,
+    session_id: &str,
+    known_generation: Option<u64>,
+    covered: usize,
+  ) -> StoreResult<ChatEventsDelta> {
+    let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
+    if !cache.contains_key(session_id) {
+      let events = ndjson::read_file(&self.chat_events_path(session_id))?;
+      let generation = self.next_events_cache_generation();
+      cache.insert(session_id.to_string(), CachedChatEvents { generation, events });
+    }
+    let cached = cache.get(session_id).expect("event cache entry was inserted above");
+    let start_index =
+      if known_generation == Some(cached.generation) && covered <= cached.events.len() { covered } else { 0 };
+    Ok(ChatEventsDelta {
+      generation: cached.generation,
+      start_index,
+      event_count: cached.events.len(),
+      events: cached.events[start_index..].to_vec(),
+    })
   }
 
   /// Read the latest live-log events without priming the event cache.
@@ -124,7 +161,9 @@ impl Store {
         slice_live_lines(&lines, rel_start, rel_end)
       } else {
         match self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id) {
-          Some(cached) => cached.iter().skip(rel_start).take(rel_end.saturating_sub(rel_start)).cloned().collect(),
+          Some(cached) => {
+            cached.events.iter().skip(rel_start).take(rel_end.saturating_sub(rel_start)).cloned().collect()
+          }
           None => {
             let lines = self.live_lines_newline_split(session_id)?;
             slice_live_lines(&lines, rel_start, rel_end)
@@ -233,8 +272,8 @@ impl Store {
   /// Return the total event-index extent, using parsed cache length or physical live lines.
   pub fn get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize> {
     let offset = self.read_archive_offset(session_id)?;
-    if let Some(events) = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id) {
-      return Ok(offset + events.len());
+    if let Some(cached) = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id) {
+      return Ok(offset + cached.events.len());
     }
     Ok(offset + ndjson::count_lines(&self.chat_events_path(session_id))?)
   }

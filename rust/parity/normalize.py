@@ -29,6 +29,7 @@ TREE_PLACEHOLDER = "<tree>"
 _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
+_TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[A-Za-z0-9_]{6,8})(?![A-Za-z0-9_])")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,6 +43,14 @@ VOICE_STEM_RULE = TextPatternRule(
     "voice-archive-stem",
     _VOICE_STEM,
     "wall-clock milliseconds and uuid4 hex: the voice archive names each recording at upload time",
+)
+
+# The random suffix of a scratch directory: Python's mkdtemp draws eight characters of [a-z0-9_], the Rust tempfile
+# crate six of [A-Za-z0-9]. The prefix names the directory's role, so it stays in the normalized text.
+TEMP_DIR_SUFFIX_RULE = TextPatternRule(
+    "temp-dir-suffix",
+    _TEMP_DIR_SUFFIX,
+    "tempfile random suffix: each run's scratch directory draws its own name; the prefix names its role",
 )
 
 
@@ -99,6 +108,9 @@ class TextRule:
 
 
 _DELIVERY_STAMP = "the worker transcript stamps its closing run_delivery row with the time of the read"
+_EXPLAIN_STAMP = (
+    "wall-clock time: each server stamps an explanation's request and its finish on its own clock; "
+    "a finish time is null until the generation ends")
 
 RESPONSE_RULES: tuple[FieldRule, ...] = (
     FieldRule(
@@ -127,6 +139,24 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
             "GET /api/sessions/{session_id}/events",
             "GET /api/sessions/{session_id}/transcript",
         )),
+    *(
+        FieldRule(
+            name=f"explain-{field.replace('_', '-')}",
+            target=route,
+            field=field,
+            when=(),
+            reason=_EXPLAIN_STAMP,
+        ) for route in (
+            "POST /api/sessions/{session_id}/explain",
+            "GET /api/sessions/{session_id}/explain",
+        ) for field in ("requested_at", "generated_at")),
+    FieldRule(
+        name="explain-status-generated-time",
+        target="GET /api/sessions/{session_id}/explain/status",
+        field="*.generated_at",
+        when=(),
+        reason=_EXPLAIN_STAMP,
+    ),
 )
 
 WS_FRAME_RULES: dict[str, tuple[FieldRule, ...]] = {}
@@ -262,6 +292,20 @@ FILE_RULES: tuple[FieldRule, ...] = (
             when=(),
             reason=f"wall-clock time: the trigger store records {field} on each server's clock",
         ) for field in ("created_at", "fire_at", "fired_at")),
+    FieldRule(
+        name="explain-result-requested-time",
+        target="home/sessions/*/data/explain_results.json",
+        field="*.requested_at",
+        when=(),
+        reason=_EXPLAIN_STAMP,
+    ),
+    FieldRule(
+        name="explain-result-generated-time",
+        target="home/sessions/*/data/explain_results.json",
+        field="*.generated_at",
+        when=(),
+        reason=_EXPLAIN_STAMP,
+    ),
     FieldRule(
         name="fake-agent-pid",
         target="fake-agent/spawns.jsonl",
@@ -435,8 +479,13 @@ def prepare_snapshot(entries: list[tuple[str, str, bytes]], ctx: Context) -> Non
       _observe(data.decode("utf-8", errors="surrogateescape"), ctx)
 
 
+def _mask_temp_dir_suffix(match: re.Match[str]) -> str:
+  """The match up to its suffix, then the placeholder: the prefix still names the directory's role."""
+  return match[0][:match.start("value") - match.start()] + f"<{TEMP_DIR_SUFFIX_RULE.name}>"
+
+
 def normalize_text(text: str, ctx: Context) -> str:
-  """The tree path and minted UUID rules: each server-specific value reads as a shared placeholder."""
+  """The tree path, minted UUID and scratch directory rules: each server-specific value reads as a placeholder."""
   normalized = text.replace(ctx.tree_root, TREE_PLACEHOLDER)
 
   def replace_uuid(match: re.Match[str]) -> str:
@@ -446,6 +495,7 @@ def normalize_text(text: str, ctx: Context) -> str:
     return ctx.minted_uuids.setdefault(identifier, f"<minted-{len(ctx.minted_uuids) + 1}>")
 
   normalized = VOICE_STEM_RULE.pattern.sub(f"<{VOICE_STEM_RULE.name}>", normalized)
+  normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
   return _UUID.sub(replace_uuid, normalized)
 
 

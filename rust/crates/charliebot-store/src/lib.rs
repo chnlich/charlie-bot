@@ -19,6 +19,7 @@ mod store;
 pub mod streaming;
 mod task_tree;
 mod thinking;
+pub mod trigger_files;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use control::ControlGuard;
@@ -93,6 +94,16 @@ impl StoreError {
   /// Construct a conflict with its blockers; its detail joins them with `; `.
   pub fn conflict(blockers: Vec<String>) -> Self {
     Self::Conflict(blockers)
+  }
+
+  /// Construct a client-visible bad-request error.
+  pub fn bad_request(detail: impl Into<String>) -> Self {
+    Self { message: detail.into(), status_code: Some(400) }
+  }
+
+  /// Construct a client-visible conflict error.
+  pub fn conflict(detail: impl Into<String>) -> Self {
+    Self { message: detail.into(), status_code: Some(409) }
   }
 
   /// Return the HTTP status associated with this error, when one exists.

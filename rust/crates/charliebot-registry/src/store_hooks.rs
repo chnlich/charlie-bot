@@ -2,7 +2,7 @@
 //! package: it asks these adapters, which read the registered backend lifecycles and sequence controllers. The server
 //! injects them at startup, when it constructs the store.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use charliebot_core::config::CharlieBotConfig;
@@ -106,18 +106,71 @@ impl SequenceListingFields for RegisteredSequences {
     Ok(self.registry.sequence_listing_fields(session_ids, now))
   }
 
-  // No registered sequence controller answers these yet, so the registered set is empty.
-  fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
-    Ok(HashMap::new())
+  fn sequence_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+    Ok(subtree_roots(metas, |meta| self.registry.sequence_owns_session(meta), false))
   }
 
-  fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
-    Ok(HashMap::new())
+  fn view_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+    let mut view_roots: HashMap<&'static str, HashSet<String>> = HashMap::new();
+    for meta in metas {
+      for contribution in self.registry.sidebar_contributions() {
+        if let Some(view) = contribution.view_member(meta) {
+          view_roots.entry(view).or_default().insert(meta.id.clone());
+        }
+      }
+    }
+    Ok(
+      view_roots
+        .into_iter()
+        .map(|(view, roots)| {
+          let members = subtree_roots(metas, |meta| roots.contains(&meta.id), true);
+          (view.to_string(), members)
+        })
+        .collect(),
+    )
   }
+}
 
-  fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-    Ok(Vec::new())
+fn subtree_roots(
+  metas: &[SessionMetadata],
+  is_root: impl Fn(&SessionMetadata) -> bool,
+  include_root: bool,
+) -> HashMap<String, String> {
+  let by_id: HashMap<&str, &SessionMetadata> = metas.iter().map(|meta| (meta.id.as_str(), meta)).collect();
+  let mut roots: HashMap<String, String> = HashMap::new();
+  for start in metas {
+    let mut chain = Vec::new();
+    let mut seen = HashSet::from([start.id.as_str()]);
+    let mut root = if include_root && is_root(start) { Some(start.id.as_str()) } else { None };
+    let mut parent_id = start.task_parent_id.as_deref();
+    while root.is_none() {
+      let Some(parent) = parent_id else { break };
+      if let Some(root_id) = roots.get(parent) {
+        root = Some(root_id.as_str());
+        break;
+      }
+      let Some(parent_meta) = by_id.get(parent).copied() else { break };
+      if !seen.insert(parent_meta.id.as_str()) {
+        break;
+      }
+      if is_root(parent_meta) {
+        root = Some(parent_meta.id.as_str());
+        break;
+      }
+      chain.push(parent_meta.id.as_str());
+      parent_id = parent_meta.task_parent_id.as_deref();
+    }
+    if let Some(root_id) = root {
+      let root_owned = root_id.to_string();
+      for member in chain.into_iter().chain(std::iter::once(start.id.as_str())) {
+        roots.insert(member.to_string(), root_owned.clone());
+      }
+      if include_root {
+        roots.insert(root_owned.clone(), root_owned);
+      }
+    }
   }
+  roots
 }
 
 /// The sequence archive duty of a node's registered binding.
@@ -181,7 +234,9 @@ impl RuntimeEventHooks for RegistryRuntimeEvents {
     Vec::new()
   }
 
-  fn mark_sidebar_dirty(&self, _session_id: &str) {}
+  fn mark_sidebar_dirty(&self, session_id: &str) {
+    charliebot_store::sidebar_state::mark_sidebar_dirty(session_id);
+  }
 
   fn drop_session_runtime_state(&self, _session_id: &str) {}
 }

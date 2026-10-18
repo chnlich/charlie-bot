@@ -1,0 +1,546 @@
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+
+use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{Request, StatusCode, header};
+use axum::response::Response;
+use axum::routing::get;
+use charliebot_compat::{responses, validation};
+use charliebot_registry::FeatureContext;
+use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::sidebar_state;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use http::header::HeaderValue;
+use serde_json::{Map, Value, json};
+
+use crate::listing::{self, SessionsListMemos};
+use crate::{search, sidebar, tree};
+
+static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
+type StatusBodyCache = Mutex<Vec<(StatusKey, Vec<u8>)>>;
+type GzipBodyCache = Mutex<Vec<(Vec<u8>, Vec<u8>)>>;
+
+static STATUS_BODY_MEMO: OnceLock<StatusBodyCache> = OnceLock::new();
+static STATUS_GZIP_MEMO: OnceLock<GzipBodyCache> = OnceLock::new();
+static SEARCH_GZIP_MEMO: OnceLock<GzipBodyCache> = OnceLock::new();
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StatusKey {
+  ids: Vec<String>,
+  generation: u64,
+}
+
+/// Register every supported listing route below `/api/sessions`.
+pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
+  Router::new()
+    .route("/api/sessions/", get(list_active).fallback(method_not_allowed))
+    .route("/api/sessions/archived", get(list_archived).fallback(method_not_allowed))
+    .route("/api/sessions/starred", get(list_starred).fallback(method_not_allowed))
+    .route("/api/sessions/groups", get(list_groups).fallback(method_not_allowed))
+    .route("/api/sessions/status", get(session_status).fallback(method_not_allowed))
+    .route("/api/sessions/tree", get(session_tree).fallback(method_not_allowed))
+    .route("/api/sessions/search", get(session_search).fallback(method_not_allowed))
+    .with_state(Arc::clone(features))
+}
+
+/// Match the route family for the server's bare-path slash redirect.
+pub(crate) fn matches(path: &str) -> bool {
+  path == "/api/sessions" || path.strip_prefix("/api/sessions/").is_some()
+}
+
+async fn method_not_allowed() -> Response {
+  responses::method_not_allowed("GET")
+}
+
+async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let result = (|| {
+    let (mut rows, derived) = listing::active_listing_corpus(&features.store, &features.registry)?;
+    let sequence = features.store.sequence_subtree_roots()?;
+    let views = features.store.view_subtree_roots()?;
+    rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
+    Ok::<_, charliebot_store::StoreError>((rows, derived))
+  })();
+  let (rows, derived) = match result {
+    Ok(result) => result,
+    Err(error) => return store_error(error),
+  };
+  listing::sessions_list_response(&request, &features.store, &features.registry, &rows, &derived, &ACTIVE_MEMOS)
+}
+
+async fn list_archived(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let query = match Query::new(&request) {
+    Ok(query) => query,
+    Err(response) => return *response,
+  };
+  let group = query.get("group").map(str::to_string);
+  let limit = match query.parse_int("limit", Some(100), None, None) {
+    Ok(limit) => limit.clamp(1, 500) as usize,
+    Err(response) => return *response,
+  };
+  let before = query.get("before");
+  let before_id = query.get("before_id");
+  match archived_page(&features, group.as_deref(), limit, before, before_id).await {
+    Ok(response) => response,
+    Err(error) => store_error(error),
+  }
+}
+
+async fn archived_page(
+  features: &FeatureContext,
+  group: Option<&str>,
+  limit: usize,
+  before: Option<&str>,
+  before_id: Option<&str>,
+) -> Result<Response, charliebot_store::StoreError> {
+  let page = features.store.list_archived_page(group, limit, before, before_id)?;
+  let mut rows = page.sessions;
+  let context = features.store.archived_context_rows(&rows).await?;
+  let page_ids: std::collections::HashSet<String> = rows.iter().map(|row| row.id.clone()).collect();
+  let mut merged: Vec<(bool, SessionMetadata)> =
+    rows.drain(..).map(|row| (false, row)).chain(context.into_iter().map(|row| (true, row))).collect();
+  merged.sort_by(|left, right| right.1.updated_at.cmp(&left.1.updated_at).then_with(|| right.1.id.cmp(&left.1.id)));
+  let ids: Vec<String> = merged.iter().map(|(_, row)| row.id.clone()).collect();
+  let listing_fields = features.registry.sequence_listing_fields(&ids, UtcDateTime::now());
+  let page_rows: Vec<SessionMetadata> = merged
+    .iter()
+    .filter(|(context_only, row)| !context_only && page_ids.contains(&row.id))
+    .map(|(_, row)| row.clone())
+    .collect();
+  let status =
+    sidebar::resolve_sidebar_state(&features.store, &features.registry, &page_rows, true, true, false, false)?;
+  let mut session_values = Vec::with_capacity(merged.len());
+  for (context_only, row) in merged {
+    let mut value = listing::metadata_value(&row)?;
+    let object = value.as_object_mut().expect("session metadata serializes to an object");
+    object.insert(
+      "thinking_since".to_string(),
+      features.store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
+    );
+    object.insert(
+      "run_backend".to_string(),
+      listing::run_backend(&features.store, &row.id)?.map_or(Value::Null, Value::String),
+    );
+    if !context_only {
+      apply_derived_fields(&mut value, &row, status.get(&row.id), &features.store, true, true, false);
+    }
+    listing::apply_listing_fields(&mut value, listing_fields.get(&row.id).cloned().unwrap_or_default());
+    if context_only {
+      value
+        .as_object_mut()
+        .expect("metadata serializes to an object")
+        .insert("context_only".to_string(), Value::Bool(true));
+    }
+    session_values.push(value);
+  }
+  let groups =
+    page.groups.into_iter().map(|(group, total)| json!({"group": group, "total": total})).collect::<Vec<Value>>();
+  let body = json!({
+    "sessions": session_values,
+    "has_more": page.has_more,
+    "next_before": page.next_before,
+    "next_before_id": page.next_before_id,
+    "groups": groups,
+  });
+  Ok(responses::fast_json(StatusCode::OK, &body))
+}
+
+async fn list_starred(State(features): State<Arc<FeatureContext>>) -> Response {
+  let listed = match features.store.list_sessions(None, Some(true), None) {
+    Ok(listed) => listed,
+    Err(error) => return store_error(error),
+  };
+  let derived =
+    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &listed.rows, true, true, false, false) {
+      Ok(derived) => derived,
+      Err(error) => return store_error(error),
+    };
+  let rows = match listing::listed_values(
+    &features.store,
+    &features.registry,
+    &listed.rows,
+    &derived,
+    listing::SidebarProjection {
+      include_running: true,
+      include_trigger: true,
+      include_plan: false,
+      display_backend: false,
+      include_run_backend: true,
+    },
+  ) {
+    Ok(rows) => rows,
+    Err(error) => return store_error(error),
+  };
+  responses::fast_json(StatusCode::OK, &Value::Array(rows))
+}
+
+async fn list_groups(State(features): State<Arc<FeatureContext>>) -> Response {
+  match features.store.list_group_names() {
+    Ok(groups) => responses::fast_json(StatusCode::OK, &json!(groups)),
+    Err(error) => store_error(error),
+  }
+}
+
+async fn session_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let query = match Query::new(&request) {
+    Ok(query) => query,
+    Err(response) => return *response,
+  };
+  let Some(raw_ids) = query.get("ids") else {
+    return validation::response(&[validation::missing(validation::Source::Query, "ids")]);
+  };
+  let ids = parse_session_ids(raw_ids);
+  if ids.is_empty() {
+    return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "ids must name at least one session"}));
+  }
+  let force = match query.parse_bool("force", false) {
+    Ok(force) => force,
+    Err(response) => return *response,
+  };
+  let generation = sidebar_state::derived_generation();
+  let key = StatusKey { ids: ids.clone(), generation };
+  if !force && let Some(body) = get_status_body(&key) {
+    let full_poll = sidebar_state::register_poll(false);
+    let _sessions = if full_poll {
+      match fresh_sessions(&features, &ids) {
+        Ok(sessions) => sessions,
+        Err(error) => return store_error(error),
+      }
+    } else {
+      Vec::new()
+    };
+    return gzip_response(&request, body, &STATUS_GZIP_MEMO, 16);
+  }
+  let sessions = match fresh_sessions(&features, &ids) {
+    Ok(sessions) => sessions,
+    Err(error) => return store_error(error),
+  };
+  if sessions.is_empty() {
+    return gzip_response(&request, b"{}".to_vec(), &STATUS_GZIP_MEMO, 16);
+  }
+  let derived =
+    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
+      Ok(derived) => derived,
+      Err(error) => return store_error(error),
+    };
+  let mut result = Map::new();
+  for meta in &sessions {
+    let entry = derived.get(&meta.id);
+    let mut payload = Map::new();
+    payload.insert("has_unread".to_string(), Value::Bool(meta.has_unread));
+    payload.insert(
+      "has_running_tasks".to_string(),
+      entry.and_then(|row| row.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
+    );
+    payload.insert(
+      "thinking_since".to_string(),
+      features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_python_isoformat())),
+    );
+    payload.insert(
+      "has_pending_trigger".to_string(),
+      entry.and_then(|row| row.get("has_pending_trigger")).cloned().unwrap_or(Value::Bool(false)),
+    );
+    payload.insert(
+      "pending_trigger_count".to_string(),
+      entry.and_then(|row| row.get("pending_trigger_count")).cloned().unwrap_or(Value::from(0)),
+    );
+    let next = entry.and_then(|row| row.get("next_trigger_at")).cloned().unwrap_or(Value::Null);
+    payload.insert(
+      "next_trigger_at".to_string(),
+      next.as_str().map_or(next.clone(), |value| {
+        UtcDateTime::parse(value).map_or(next.clone(), |at| json!(at.to_python_isoformat()))
+      }),
+    );
+    payload.insert(
+      "has_pending_plan_approval".to_string(),
+      entry.and_then(|row| row.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
+    );
+    if let Some(work_state) = entry.and_then(|row| row.get("work_state")) {
+      payload.insert("work_state".to_string(), work_state.clone());
+    }
+    result.insert(meta.id.clone(), Value::Object(payload));
+  }
+  let body = charliebot_compat::json::fast_json_bytes(&Value::Object(result));
+  store_status_body(key, body.clone());
+  gzip_response(&request, body, &STATUS_GZIP_MEMO, 16)
+}
+
+async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let query = match Query::new(&request) {
+    Ok(query) => query,
+    Err(response) => return *response,
+  };
+  let parent_id = query.get("parent_id").filter(|value| !value.is_empty());
+  let include_archived = match query.parse_bool("include_archived", false) {
+    Ok(value) => value,
+    Err(response) => return *response,
+  };
+  let limit = match query.parse_int("limit", Some(100), Some(1), Some(500)) {
+    Ok(value) => value as usize,
+    Err(response) => return *response,
+  };
+  match tree::tree_page(&features.store, parent_id, include_archived, limit, query.get("cursor")) {
+    Ok(value) => responses::fast_json(StatusCode::OK, &value),
+    Err(error) if error.status_code() == Some(404) => {
+      responses::json(StatusCode::NOT_FOUND, &json!({"detail": error.to_string()}))
+    }
+    Err(error) if error.status_code() == Some(409) => responses::json(
+      StatusCode::CONFLICT,
+      &json!({
+        "detail": {
+          "message": error.to_string(),
+          "blockers": [error.to_string()],
+        }
+      }),
+    ),
+    Err(error) if error.status_code() == Some(400) => {
+      responses::json(StatusCode::BAD_REQUEST, &json!({"detail": error.to_string()}))
+    }
+    Err(error) => store_error(error),
+  }
+}
+
+async fn session_search(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let query = match Query::new(&request) {
+    Ok(query) => query,
+    Err(response) => return *response,
+  };
+  let q = query.get("q").unwrap_or_default().trim().to_string();
+  let rows = match search::search_sessions(&features.store, &q) {
+    Ok(rows) => rows,
+    Err(error) => return store_error(error),
+  };
+  let derived =
+    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &rows, true, true, false, false) {
+      Ok(derived) => derived,
+      Err(error) => return store_error(error),
+    };
+  let mut values = Vec::with_capacity(rows.len());
+  for row in &rows {
+    let mut value = match listing::metadata_value(row) {
+      Ok(value) => value,
+      Err(error) => return store_error(error),
+    };
+    apply_derived_fields(&mut value, row, derived.get(&row.id), &features.store, true, true, false);
+    values.push(value);
+  }
+  let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+  gzip_response(&request, body, &SEARCH_GZIP_MEMO, 2)
+}
+
+fn apply_derived_fields(
+  value: &mut Value,
+  meta: &SessionMetadata,
+  derived: Option<&Map<String, Value>>,
+  store: &charliebot_store::Store,
+  include_running: bool,
+  include_trigger: bool,
+  include_plan: bool,
+) {
+  let object = value.as_object_mut().expect("session metadata serializes to an object");
+  if include_running {
+    object.insert(
+      "has_running_tasks".to_string(),
+      derived.and_then(|row| row.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
+    );
+    if let Some(work_state) = derived.and_then(|row| row.get("work_state")) {
+      object.insert("work_state".to_string(), work_state.clone());
+    }
+  }
+  if include_trigger {
+    object.insert(
+      "has_pending_trigger".to_string(),
+      derived.and_then(|row| row.get("has_pending_trigger")).cloned().unwrap_or(Value::Bool(false)),
+    );
+    object.insert(
+      "pending_trigger_count".to_string(),
+      derived.and_then(|row| row.get("pending_trigger_count")).cloned().unwrap_or(Value::from(0)),
+    );
+    object.insert(
+      "next_trigger_at".to_string(),
+      derived.and_then(|row| row.get("next_trigger_at")).cloned().unwrap_or(Value::Null),
+    );
+  }
+  if include_plan {
+    object.insert(
+      "has_pending_plan_approval".to_string(),
+      derived.and_then(|row| row.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
+    );
+  }
+  object.insert(
+    "thinking_since".to_string(),
+    store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_python_string())),
+  );
+}
+
+fn fresh_sessions(
+  features: &FeatureContext,
+  ids: &[String],
+) -> Result<Vec<SessionMetadata>, charliebot_store::StoreError> {
+  let mut rows = Vec::new();
+  for id in ids {
+    if let Some(meta) = features.store.read_metadata_fresh(id)? {
+      rows.push(meta);
+    }
+  }
+  Ok(rows)
+}
+
+fn parse_session_ids(ids: &str) -> Vec<String> {
+  let mut seen = std::collections::HashSet::new();
+  ids
+    .split(',')
+    .map(str::trim)
+    .filter(|id| !id.is_empty())
+    .filter(|id| seen.insert((*id).to_string()))
+    .map(str::to_string)
+    .collect()
+}
+
+fn store_error(error: charliebot_store::StoreError) -> Response {
+  if let Some(status) = error.status_code().and_then(|code| StatusCode::from_u16(code).ok()) {
+    return responses::json(status, &json!({"detail": error.to_string()}));
+  }
+  responses::internal_error("RuntimeError", error.to_string())
+}
+
+fn get_status_body(key: &StatusKey) -> Option<Vec<u8>> {
+  let memo = STATUS_BODY_MEMO.get_or_init(|| Mutex::new(Vec::new()));
+  let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
+  let index = memo.iter().position(|(stored, _)| stored == key)?;
+  let entry = memo.remove(index);
+  let body = entry.1.clone();
+  memo.push(entry);
+  Some(body)
+}
+
+fn store_status_body(key: StatusKey, body: Vec<u8>) {
+  let memo = STATUS_BODY_MEMO.get_or_init(|| Mutex::new(Vec::new()));
+  let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
+  memo.retain(|(stored, _)| *stored != key);
+  memo.push((key, body));
+  while memo.len() > 4 {
+    memo.remove(0);
+  }
+}
+
+fn gzip_response(
+  request: &Request<Body>,
+  body: Vec<u8>,
+  memo: &'static OnceLock<GzipBodyCache>,
+  limit: usize,
+) -> Response {
+  let wants_gzip = request
+    .headers()
+    .get(header::ACCEPT_ENCODING)
+    .and_then(|value| value.to_str().ok())
+    .is_some_and(|value| value.contains("gzip"));
+  if !wants_gzip {
+    return json_bytes_response(body, None);
+  }
+  let cache = memo.get_or_init(|| Mutex::new(Vec::new()));
+  let compressed = {
+    let mut cache = cache.lock().expect("gzip body memo mutex is not poisoned");
+    if let Some(index) = cache.iter().position(|(plain, _)| *plain == body) {
+      let entry = cache.remove(index);
+      let compressed = entry.1.clone();
+      cache.push(entry);
+      compressed
+    } else {
+      let mut encoder = GzEncoder::new(Vec::new(), Compression::new(1));
+      use std::io::Write;
+      encoder.write_all(&body).expect("writing to a Vec cannot fail");
+      let compressed = encoder.finish().expect("finishing into a Vec cannot fail");
+      cache.push((body, compressed.clone()));
+      while cache.len() > limit {
+        cache.remove(0);
+      }
+      compressed
+    }
+  };
+  json_bytes_response(compressed, Some("gzip"))
+}
+
+fn json_bytes_response(body: Vec<u8>, encoding: Option<&'static str>) -> Response {
+  let mut builder = Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_LENGTH, body.len());
+  if let Some(encoding) = encoding {
+    builder = builder
+      .header(header::CONTENT_ENCODING, HeaderValue::from_static(encoding))
+      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+  }
+  builder.body(Body::from(body)).expect("a JSON response builds")
+}
+
+struct Query {
+  values: Vec<(String, String)>,
+}
+
+impl Query {
+  fn new(request: &Request<Body>) -> Result<Self, Box<Response>> {
+    let mut values = Vec::new();
+    for part in request.uri().query().unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
+      let (key, value) = part.split_once('=').unwrap_or((part, ""));
+      let key = decode_query_component(key);
+      let value = decode_query_component(value);
+      match (key, value) {
+        (Ok(key), Ok(value)) => values.push((key, value)),
+        _ => {
+          return Err(Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": "Invalid query string"}))));
+        }
+      }
+    }
+    Ok(Query { values })
+  }
+
+  fn get(&self, key: &str) -> Option<&str> {
+    self.values.iter().find(|(name, _)| name == key).map(|(_, value)| value.as_str())
+  }
+
+  fn parse_int(
+    &self,
+    name: &str,
+    default: Option<i64>,
+    ge: Option<i64>,
+    le: Option<i64>,
+  ) -> Result<i64, Box<Response>> {
+    match self.get(name) {
+      Some(value) => validation::parse_int(validation::Source::Query, name, value, ge, le)
+        .map_err(|error| Box::new(validation::response(&[*error]))),
+      None => {
+        default.ok_or_else(|| Box::new(validation::response(&[validation::missing(validation::Source::Query, name)])))
+      }
+    }
+  }
+
+  fn parse_bool(&self, name: &str, default: bool) -> Result<bool, Box<Response>> {
+    match self.get(name) {
+      Some(value) => validation::parse_bool(validation::Source::Query, name, value)
+        .map_err(|error| Box::new(validation::response(&[*error]))),
+      None => Ok(default),
+    }
+  }
+}
+
+fn decode_query_component(value: &str) -> Result<String, ()> {
+  let value = value.replace('+', " ");
+  percent_encoding::percent_decode_str(&value).decode_utf8().map(|value| value.into_owned()).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn session_ids_trim_drop_empty_and_keep_first_occurrence() {
+    assert_eq!(parse_session_ids(" alpha, ,beta,alpha, beta "), ["alpha", "beta"]);
+  }
+
+  #[test]
+  fn query_components_decode_plus_and_percent_escapes() {
+    assert_eq!(decode_query_component("Atlas+%C3%A9").unwrap(), "Atlas é");
+  }
+}

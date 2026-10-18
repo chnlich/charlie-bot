@@ -1217,10 +1217,6 @@ impl SequenceListingFields for TestSequenceListing {
   ) -> Result<HashMap<String, HashMap<String, String>>, StoreError> {
     Ok(HashMap::new())
   }
-
-  fn derived_archived_ids(&self) -> Result<Vec<String>, StoreError> {
-    Ok(Vec::new())
-  }
 }
 
 fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {

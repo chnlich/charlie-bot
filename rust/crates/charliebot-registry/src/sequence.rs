@@ -526,10 +526,6 @@ mod tests {
     fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
     }
-
-    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-      Ok(Vec::new())
-    }
   }
 
   impl SequenceArchiveHook for TestSequenceHooks {

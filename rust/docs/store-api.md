@@ -37,7 +37,10 @@ accepts a cached metadata value.
 | `Store::view_subtree_roots(&self) -> StoreResult<HashMap<String, HashMap<String, String>>>` | `src/runtime/session_listing.py::view_subtree_roots`; `src/runtime/scheduled_sessions.py::view_subtree_roots` |
 | `Store::list_archived_page(&self, group: Option<&str>, limit: usize, before: Option<&str>, before_id: Option<&str>) -> StoreResult<ArchivedPage>` | `src/runtime/session_listing.py::list_archived_page` |
 | `Store::archived_context_rows(&self, rows: &[SessionMetadata]) -> StoreResult<Vec<SessionMetadata>>` | `src/runtime/session_listing.py::archived_context_rows` |
+| `trigger_files::iter_trigger_file_stats(triggers_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBuf, Metadata)>>` | `src/runtime/trigger_files.py::iter_trigger_file_stats` |
 | `Store::raw_metadata_scan(&self) -> StoreResult<Vec<RawMetadata>>` | `src/features/usage/storage_cool.py` raw metadata scan |
+
+Session listings apply `Store::derived_archived_ids` after stored-status reads. This overlay reads task-tree facts and leaves metadata unchanged. `SequenceListingFields` supplies controller fields and subtree ownership.
 
 The `*_at` variants of rename, group, backend switch, archive, unarchive, and native-id persistence
 take an explicit `UtcDateTime`. Production wrappers supply the current time; the explicit forms make

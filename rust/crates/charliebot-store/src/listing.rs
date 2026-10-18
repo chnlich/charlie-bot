@@ -249,7 +249,7 @@ impl Store {
   /// Collect unarchived task ancestors needed to render an archived page as a tree.
   pub async fn archived_context_rows(&self, rows: &[SessionMetadata]) -> StoreResult<Vec<SessionMetadata>> {
     let present: HashSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
-    let derived: HashSet<String> = self.sequence_listing.derived_archived_ids()?.into_iter().collect();
+    let derived: HashSet<String> = self.derived_archived_ids()?.into_iter().collect();
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for row in rows {
@@ -273,7 +273,7 @@ impl Store {
     mut metas: Vec<SessionMetadata>,
     status: Option<SessionStatus>,
   ) -> StoreResult<Vec<SessionMetadata>> {
-    let derived: HashSet<String> = self.sequence_listing.derived_archived_ids()?.into_iter().collect();
+    let derived: HashSet<String> = self.derived_archived_ids()?.into_iter().collect();
     if derived.is_empty() {
       return Ok(metas);
     }
@@ -361,9 +361,6 @@ mod tests {
     }
     fn view_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
-    }
-    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-      Ok(Vec::new())
     }
   }
 

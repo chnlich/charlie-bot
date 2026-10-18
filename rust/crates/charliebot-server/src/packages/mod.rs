@@ -11,7 +11,8 @@ mod features;
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 
 /// Runtime registrations run before the Python package list, matching the server's pre-recovery ordering.
-pub const RUNTIME: &[(&str, RegisterFn)] = &[("runtime.agents", charliebot_agents::register_runtime)];
+pub const RUNTIME: &[(&str, RegisterFn)] =
+  &[("runtime.agents", charliebot_agents::register_runtime), ("runtime.session_api", charliebot_session_api::register)];
 
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[

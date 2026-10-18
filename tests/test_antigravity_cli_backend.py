@@ -35,6 +35,11 @@ async def _consume(backend: antigravity_cli.AntigravityCliBackend, cwd: pathlib.
   return [event async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"})]
 
 
+def _assert_only_error_event(events: list[dict]) -> dict:
+  assert [event.get("type") for event in events] == [ET.ERROR]
+  return events[0]
+
+
 def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.MonkeyPatch) -> None:
   model = "Gemini Pro (test)"
   backend = _build_backend(monkeypatch, model=model, extra_flags=["--sandbox"])
@@ -127,6 +132,81 @@ JSON
   assert backend.exit_code == 0
   assert (log_dir / "stdout.log").read_text(encoding="utf-8") != ""
   assert (log_dir / "stderr.log").exists()
+
+
+@pytest.mark.asyncio
+async def test_print_timeout_marks_success_envelope_as_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+cat <<'JSON'
+{"status":"SUCCESS","conversation_id":"conv-abc","response":"partial answer","usage":{}}
+JSON
+printf '%s\\n' '[agy] print timeout after 2s with turn in progress; returning partial output' >&2
+exit 0
+""",
+  )
+  backend = antigravity_cli.AntigravityCliBackend(model="agy-test-model")
+
+  events = await _consume(backend, tmp_path)
+
+  error_event = _assert_only_error_event(events)
+  assert "2s" in error_event["message"]
+  assert "agy returned partial output" in error_event["message"]
+  assert backend.exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_error_envelope_with_zero_exit_is_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+printf '%s' '{"status":"ERROR","error":"RESOURCE_EXHAUSTED (code 429): exhausted capacity"}'
+exit 0
+""",
+  )
+  backend = antigravity_cli.AntigravityCliBackend(model="agy-test-model")
+
+  events = await _consume(backend, tmp_path)
+
+  error_event = _assert_only_error_event(events)
+  assert error_event["message"] == "RESOURCE_EXHAUSTED (code 429): exhausted capacity"
+  assert backend.exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_nonzero_exit_includes_envelope_error(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+printf '%s' '{"status":"ERROR","error":"invalid model selection (model no-such-model-xyz is not recognized)"}'
+exit 1
+""",
+  )
+  backend = antigravity_cli.AntigravityCliBackend(model="agy-test-model")
+
+  events = await _consume(backend, tmp_path)
+
+  error_event = _assert_only_error_event(events)
+  assert error_event["message"].startswith("agy exited 1: invalid model selection")
+  assert backend.exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_nonzero_exit_with_empty_stdout_uses_exit_code_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+  _install_fake_agy(monkeypatch, tmp_path, "exit 137")
+  backend = antigravity_cli.AntigravityCliBackend(model="agy-test-model")
+
+  events = await _consume(backend, tmp_path)
+
+  error_event = _assert_only_error_event(events)
+  assert error_event["message"] == "Antigravity CLI exited with code 137"
+  assert backend.exit_code == 137
 
 
 def test_prepare_env_strips_api_keys_for_oauth(monkeypatch: pytest.MonkeyPatch) -> None:

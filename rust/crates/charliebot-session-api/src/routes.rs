@@ -50,7 +50,7 @@ pub(crate) fn matches(path: &str) -> bool {
   path == "/api/sessions" || path.strip_prefix("/api/sessions/").is_some()
 }
 
-async fn method_not_allowed() -> Response {
+pub(crate) async fn method_not_allowed() -> Response {
   responses::method_not_allowed("GET")
 }
 
@@ -398,7 +398,7 @@ fn parse_session_ids(ids: &str) -> Vec<String> {
     .collect()
 }
 
-fn store_error(error: charliebot_store::StoreError) -> Response {
+pub(crate) fn store_error(error: charliebot_store::StoreError) -> Response {
   if let Some(status) = error.status_code().and_then(|code| StatusCode::from_u16(code).ok()) {
     return responses::json(status, &json!({"detail": error.to_string()}));
   }

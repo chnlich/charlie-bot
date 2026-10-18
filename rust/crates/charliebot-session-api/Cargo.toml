@@ -12,6 +12,7 @@ charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
+charliebot-tasks.workspace = true
 flate2.workspace = true
 http.workspace = true
 percent-encoding.workspace = true

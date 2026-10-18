@@ -108,13 +108,10 @@ trait for tests and for callers that already hold the path.
 
 Known divergences from Python:
 
-- A stored snapshot that is not valid JSON reports serde_json's parse message in the run-context `unreadable` detail,
-  where Python reports `JSONDecodeError`'s.
+- Other malformed snapshot JSON errors beyond invalid values and literals report serde_json's parse message in the
+  run-context `unreadable` detail, where Python reports `JSONDecodeError`'s.
 - A snapshot field with the wrong type reports the Rust message, not Python's `TypeError` text.
-- Decode errors of some multi-byte invalid UTF-8 sequences cover a different byte range from CPython's. Overlay and
-  template read errors reproduce the common `OSError` and `UnicodeDecodeError` texts.
-- `canonical_template_path` fails when `prompts/plan_template.html` is missing, where Python's `resolve()` returns the
-  unresolved path.
+- Overlay and template read errors reproduce the common `OSError` and `UnicodeDecodeError` texts.
 - Assembly reads its files on the calling thread, where Python uses `asyncio.to_thread`.
 - The Rust `Store` replaces Python's `TaskTreeManager`.
 - The memory contribution (`src/features/memory/turn_contribution.py`) is not ported, so no rule source here emits

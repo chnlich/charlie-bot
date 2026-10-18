@@ -78,13 +78,38 @@ pub fn read_text(path: &Path) -> Result<String, TextReadError> {
 fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
   let start = error.valid_up_to();
   let (end, reason) = match error.error_len() {
-    Some(length) => {
+    Some(_) => {
       let lead = bytes[start];
-      let reason = if (0xC2..=0xF4).contains(&lead) { "invalid continuation byte" } else { "invalid start byte" };
-      (start + length, reason)
+      let expected_len = match lead {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return decode_error(bytes, start, start + 1, "invalid start byte"),
+      };
+      let invalid_offset = (1..expected_len)
+        .find(|offset| bytes.get(start + offset).is_none_or(|byte| !valid_continuation(lead, *offset, *byte)));
+      let Some(offset) = invalid_offset else {
+        unreachable!("a complete valid UTF-8 sequence cannot produce a decode error")
+      };
+      (start + offset, "invalid continuation byte")
     }
     None => (bytes.len(), "unexpected end of data"),
   };
+  decode_error(bytes, start, end, reason)
+}
+
+/// Whether this byte is a permitted continuation at this position in the UTF-8 sequence.
+fn valid_continuation(lead: u8, offset: usize, byte: u8) -> bool {
+  match (lead, offset) {
+    (0xE0, 1) => (0xA0..=0xBF).contains(&byte),
+    (0xED, 1) => (0x80..=0x9F).contains(&byte),
+    (0xF0, 1) => (0x90..=0xBF).contains(&byte),
+    (0xF4, 1) => (0x80..=0x8F).contains(&byte),
+    _ => (0x80..=0xBF).contains(&byte),
+  }
+}
+
+fn decode_error(bytes: &[u8], start: usize, end: usize, reason: &str) -> String {
   if end - start == 1 {
     format!("'utf-8' codec can't decode byte 0x{:02x} in position {start}: {reason}", bytes[start])
   } else {
@@ -246,11 +271,27 @@ pub fn substitute_tokens(template: &str, tokens: &Tokens) -> String {
 
 /// The tokens of `verify.md`: the expected result trailer and the canonical plan template's path (`verify_contract_tokens`).
 pub fn verify_contract_tokens(repo: &Path) -> anyhow::Result<Tokens> {
-  let template = fs::canonicalize(repo.join("prompts/plan_template.html"))?;
+  let template = resolve_path(&repo.join("prompts/plan_template.html"))?;
   Ok(vec![
     ("{{result_trailer_expected}}", verify_trailer::verify_result_trailer_expected()),
     ("{{canonical_template_path}}", template.display().to_string()),
   ])
+}
+
+/// The `Path.resolve()` behavior used by Python: canonicalize existing path components, while retaining a missing
+/// leaf as an absolute path.
+fn resolve_path(path: &Path) -> io::Result<std::path::PathBuf> {
+  match fs::canonicalize(path) {
+    Ok(path) => Ok(path),
+    Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
+      let Some(name) = path.file_name() else {
+        return Err(error);
+      };
+      let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+      Ok(resolve_path(parent)?.join(name))
+    }
+    Err(error) => Err(error),
+  }
 }
 
 /// The tokens of the bindings section: the intro line plus the branch, worktree and repo (`worktree_binding_tokens`).
@@ -281,5 +322,35 @@ mod tests {
     let message = error.to_string();
     assert!(message.contains("predates the worker-prompt extraction commit"), "{message}");
     assert!(message.contains(&repo.path().join("prompts/worker.md").display().to_string()), "{message}");
+  }
+
+  #[test]
+  fn missing_plan_template_resolves_to_its_absolute_path() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    fs::create_dir(repo.path().join("prompts")).expect("prompts dir");
+    let tokens = verify_contract_tokens(repo.path()).expect("a missing template still has a resolved path");
+    let actual = tokens
+      .iter()
+      .find(|(name, _)| *name == "{{canonical_template_path}}")
+      .expect("canonical template path token")
+      .1
+      .as_str();
+    assert_eq!(actual, repo.path().join("prompts/plan_template.html").display().to_string());
+    assert!(Path::new(actual).is_absolute());
+  }
+
+  #[test]
+  fn utf8_errors_match_python_ranges_for_invalid_sequences() {
+    let cases: &[(&[u8], &str)] = &[
+      (&[0xE2, 0x28, 0xA1], "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte"),
+      (&[0xE2, 0x82, 0x28], "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"),
+      (&[0xED, 0xA0, 0x80], "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte"),
+      (&[0xF4, 0x90, 0x80, 0x80], "'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte"),
+      (&[0xF0, 0x90, 0x80], "'utf-8' codec can't decode bytes in position 0-2: unexpected end of data"),
+    ];
+    for (bytes, expected) in cases {
+      let error = std::str::from_utf8(bytes).expect_err("the test bytes are not valid UTF-8");
+      assert_eq!(utf8_decode_error_text(bytes, &error), *expected);
+    }
   }
 }

@@ -483,7 +483,10 @@ async fn corrupt_new_snapshot_is_an_error() {
   let error =
     read_run_context(&harness.store, &tree.worker1, "corrupt-snapshot").expect_err("a corrupt snapshot fails");
   assert_eq!(error.status, 500);
-  assert!(error.detail.contains("unreadable"), "{}", error.detail);
+  assert_eq!(
+    error.detail,
+    format!("stored prompt snapshot unreadable at {}: Expecting value: line 1 column 1 (char 0)", path.display())
+  );
 }
 
 #[tokio::test]

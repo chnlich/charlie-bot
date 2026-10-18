@@ -175,7 +175,18 @@ impl HistoryCopy {
   /// `_make_ro_copy`: copy the session's events into a fresh temporary directory, then chmod the copy 0444.
   fn make(store: &Store, session_id: &str) -> anyhow::Result<Self> {
     let source = store.chat_events_path(session_id);
-    let dir = tempfile::Builder::new().prefix("charliebot-explain-").tempdir()?;
+    let mut random = uuid::Uuid::new_v4().as_u128();
+    let alphabet = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    let suffix: String = (0..8)
+      .rev()
+      .map(|_| {
+        let character = alphabet[(random % alphabet.len() as u128) as usize] as char;
+        random /= alphabet.len() as u128;
+        character
+      })
+      .collect();
+    let prefix = format!("charliebot-explain-{suffix}");
+    let dir = tempfile::Builder::new().prefix(&prefix).rand_bytes(0).tempdir()?;
     let path = dir.path().join(source.file_name().context("the chat events path names no file")?);
     fs::copy(&source, &path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
@@ -571,7 +582,10 @@ mod tests {
     let copy = HistoryCopy::make(&home.features.store, "s1").unwrap();
     let dir = copy.path.parent().unwrap().to_path_buf();
 
-    assert!(dir.file_name().unwrap().to_string_lossy().starts_with("charliebot-explain-"));
+    let dir_name = dir.file_name().unwrap().to_string_lossy();
+    let suffix = dir_name.strip_prefix("charliebot-explain-").unwrap();
+    assert_eq!(suffix.len(), 8);
+    assert!(suffix.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
     assert_eq!(fs::metadata(&copy.path).unwrap().permissions().mode() & 0o777, 0o444);
     assert_eq!(fs::read(&copy.path).unwrap(), fs::read(home.features.store.chat_events_path("s1")).unwrap());
     drop(copy);

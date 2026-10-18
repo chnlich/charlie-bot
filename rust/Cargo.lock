@@ -213,7 +213,10 @@ version = "0.1.0"
 dependencies = [
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
+ "serde_json",
  "serde_yaml",
+ "tracing",
 ]
 
 [[package]]
@@ -228,6 +231,7 @@ name = "charliebot-chat-threads"
 version = "0.1.0"
 dependencies = [
  "charliebot-registry",
+ "charliebot-store",
 ]
 
 [[package]]
@@ -414,6 +418,7 @@ dependencies = [
  "charliebot-memory",
  "charliebot-ncu",
  "charliebot-registry",
+ "charliebot-session-api",
  "charliebot-slack",
  "charliebot-store",
  "charliebot-terminal",
@@ -437,6 +442,26 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "charliebot-session-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "flate2",
+ "http",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
  "tracing",
 ]
 

@@ -1333,10 +1333,6 @@ mod tests {
     fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
     }
-
-    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-      Ok(Vec::new())
-    }
   }
 
   struct TestSequenceBindingMover;
@@ -1682,6 +1678,20 @@ mod tests {
     let mut expected_archived = vec![root.id.clone(), child.id.clone(), leaf.id.clone()];
     expected_archived.sort();
     assert_eq!(archived, expected_archived);
+    let active: Vec<String> = store
+      .list_sessions(Some(SessionStatus::Active), None, None)
+      .unwrap()
+      .rows
+      .into_iter()
+      .map(|meta| meta.id)
+      .collect();
+    assert!(!active.contains(&leaf.id));
+    let archived_page = store.list_archived_page(None, 10, None, None).unwrap();
+    let archived_page_ids: Vec<String> = archived_page.sessions.into_iter().map(|meta| meta.id).collect();
+    assert!(archived_page_ids.contains(&root.id));
+    assert!(archived_page_ids.contains(&child.id));
+    assert!(archived_page_ids.contains(&leaf.id));
+    assert_eq!(store.read_metadata_fresh(&leaf.id).unwrap().unwrap().status, SessionStatus::Active);
     assert_eq!(store.task_tree_activity(&leaf.id).unwrap().work_state, "idle");
 
     let successor = create_node(&store, "successor", None, TaskProfile::Manager).await;

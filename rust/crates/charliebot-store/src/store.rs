@@ -55,8 +55,6 @@ pub trait SequenceListingFields: Send + Sync {
   fn sequence_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>>;
   /// Return view subtree roots over a metadata snapshot.
   fn view_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>>;
-  /// Task-tree ids whose effective archive state is derived from durable facts.
-  fn derived_archived_ids(&self) -> StoreResult<Vec<String>>;
 }
 
 /// The sequence binding archive callback for one task-tree node.
@@ -329,6 +327,7 @@ impl Store {
       .lock()
       .expect("metadata cache mutex is not poisoned")
       .insert(meta.id.clone(), CachedMetadata { value: parsed, at: Instant::now(), signature });
+    crate::sidebar_state::mark_sidebar_dirty(&meta.id);
     Ok(())
   }
 
@@ -833,10 +832,6 @@ pub(crate) mod test_support {
     fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
     }
-
-    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-      Ok(Vec::new())
-    }
   }
 
   pub(crate) struct SequenceArchive;
@@ -938,10 +933,6 @@ mod tests {
 
     fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
-    }
-
-    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-      Ok(Vec::new())
     }
   }
 

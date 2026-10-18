@@ -115,6 +115,22 @@ pub struct RunRecord {
   pub result_ref: Option<String>,
 }
 
+/// The record fields a retry caller passes, in Python's keyword order. `input_event_ids` is empty for a worker
+/// retry, which consumes whatever input is pending when it launches.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetryRunFields {
+  pub kind: RunKind,
+  pub backend: Option<String>,
+  pub model: Option<String>,
+  pub repo_path: Option<String>,
+  pub base_branch: Option<String>,
+  pub branch_name: Option<String>,
+  pub worktree_path: Option<String>,
+  pub sequence_ref: Option<SequenceRef>,
+  pub review_of_run_id: Option<String>,
+  pub input_event_ids: Vec<String>,
+}
+
 /// The terminal outcome values written to `run_finished`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -499,13 +515,13 @@ impl Store {
     }
   }
 
-  /// Register a run under the control lock and pin its task spec before its record.
+  /// Register a run under the control lock. A `Some` task spec is pinned to `task_spec.md` before the record names it.
   pub async fn register_run_locked(
     &self,
     guard: &ControlGuard,
     session_id: &str,
     mut run: RunRecord,
-    task_spec: &str,
+    task_spec: Option<&str>,
   ) -> StoreResult<RunRecord> {
     self.require_control_guard(guard)?;
     require_session_match(session_id, &run)?;
@@ -514,64 +530,55 @@ impl Store {
     }
     let run_dir = self.run_dir(session_id, &run.id);
     fs::create_dir_all(&run_dir).map_err(|error| path_error(&run_dir, error))?;
-    let spec_path = self.run_task_spec_path(session_id, &run.id);
-    fsutil::atomic_write_text(&spec_path, task_spec).map_err(|error| path_error(&spec_path, error))?;
-    run.task_spec_ref = Some(spec_path.to_string_lossy().into_owned());
-    run.task_spec_hash = Some(format!("{:x}", Sha256::digest(task_spec.as_bytes())));
+    if let Some(task_spec) = task_spec {
+      let spec_path = self.run_task_spec_path(session_id, &run.id);
+      fsutil::atomic_write_text(&spec_path, task_spec).map_err(|error| path_error(&spec_path, error))?;
+      run.task_spec_ref = Some(spec_path.to_string_lossy().into_owned());
+      run.task_spec_hash = Some(format!("{:x}", Sha256::digest(task_spec.as_bytes())));
+    }
     self.write_run_record(session_id, &run)?;
     self.mark_sidebar_dirty(session_id);
     Ok(run)
   }
 
-  /// Create or return the stable retry record for one request.
+  /// Create or return the stable retry record for one request, bound to the run it retries.
   pub async fn create_retry_run_locked(
     &self,
     guard: &ControlGuard,
     session_id: &str,
     request_id: &str,
-    previous: &RunRecord,
+    original_run_id: &str,
+    task_spec_text: Option<&str>,
+    fields: RetryRunFields,
   ) -> StoreResult<RunRecord> {
-    self.require_control_guard(guard)?;
-    require_session_match(session_id, previous)?;
     let run = RunRecord {
       id: control_events::stable_run_id(session_id, request_id),
       session_id: session_id.to_string(),
-      kind: previous.kind,
-      input_event_ids: if previous.kind == RunKind::ManagerTurn {
-        previous.input_event_ids.clone()
-      } else {
-        Vec::new()
-      },
+      kind: fields.kind,
+      input_event_ids: fields.input_event_ids,
       task_spec_hash: None,
       task_spec_ref: None,
       prompt_snapshot_ref: None,
-      retry_of_run_id: Some(previous.id.clone()),
-      review_of_run_id: previous.review_of_run_id.clone(),
-      backend: previous.backend.clone(),
-      model: previous.model.clone(),
+      retry_of_run_id: Some(original_run_id.to_string()),
+      review_of_run_id: fields.review_of_run_id,
+      backend: fields.backend,
+      model: fields.model,
       native_session_id: None,
       pid: None,
       pid_start: None,
       started_at: None,
       ended_at: None,
       exit_code: None,
-      repo_path: previous.repo_path.clone(),
-      base_branch: previous.base_branch.clone(),
-      branch_name: previous.branch_name.clone(),
-      worktree_path: previous.worktree_path.clone(),
-      sequence_ref: previous.sequence_ref.clone(),
+      repo_path: fields.repo_path,
+      base_branch: fields.base_branch,
+      branch_name: fields.branch_name,
+      worktree_path: fields.worktree_path,
+      sequence_ref: fields.sequence_ref,
       raw_log_ref: None,
       events_ref: None,
       result_ref: None,
     };
-    if let Some(existing) = self.read_run_sync(session_id, &run.id)? {
-      return Ok(existing);
-    }
-    let run_dir = self.run_dir(session_id, &run.id);
-    fs::create_dir_all(&run_dir).map_err(|error| path_error(&run_dir, error))?;
-    self.write_run_record(session_id, &run)?;
-    self.mark_sidebar_dirty(session_id);
-    Ok(run)
+    self.register_run_locked(guard, session_id, run, task_spec_text).await
   }
 
   /// Persist the newest process identity unless this run already has a stop fact.

@@ -358,7 +358,7 @@ mod tests {
           events_ref: None,
           result_ref: None,
         },
-        "synthetic task",
+        Some("synthetic task"),
       )
       .await
       .unwrap();

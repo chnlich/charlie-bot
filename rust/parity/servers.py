@@ -242,13 +242,7 @@ class ServerProcess:
       try:
         with urllib.request.urlopen(url, timeout=2) as response:
           if response.status == 200:
-            server_pid = self._server_pid()
-            if server_pid is None:
-              raise RuntimeError(f"{self.label} server answered but its process identity is absent")
-            identity = process_identity(server_pid)
-            if identity is None:
-              raise RuntimeError(f"{self.label} server answered but pid {server_pid} exited")
-            self._server_identity = (server_pid, identity[1])
+            self._server_identity = self._capture_identity()
             return
       except (urllib.error.URLError, ConnectionError, TimeoutError):
         pass
@@ -266,10 +260,22 @@ class ServerProcess:
       return None
     return int(pids[0]) if pids else None
 
+  def _capture_identity(self) -> tuple[int, str]:
+    """The traced server's pid and process start time, so a later stop cannot signal a reused pid."""
+    server_pid = self._server_pid()
+    if server_pid is None:
+      raise RuntimeError(f"{self.label} server has no pid under its strace")
+    identity = process_identity(server_pid)
+    if identity is None:
+      raise RuntimeError(f"{self.label} server pid {server_pid} exited")
+    return server_pid, identity[1]
+
   def stop_server(self) -> None:
     """SIGTERM the server and wait for its pid to exit, without waiting for traced children."""
-    if self._proc is None or self._server_identity is None:
+    if self._proc is None or self._proc.poll() is not None:
       return
+    if self._server_identity is None:
+      self._server_identity = self._capture_identity()
     server_pid, pid_start = self._server_identity
     identity = process_identity(server_pid)
     if identity is not None and identity[1] == pid_start and identity[0] != "Z":

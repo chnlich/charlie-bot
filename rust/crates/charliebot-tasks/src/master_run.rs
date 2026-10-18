@@ -14,7 +14,9 @@ use charliebot_agents::runner::{AgentRunner, EventFn, RunRequest};
 use charliebot_agents::transport::{cursor, follow, identity, recovery};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
-use charliebot_registry::backend::{Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle};
+use charliebot_registry::backend::{
+  BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle,
+};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -380,22 +382,35 @@ fn resolve_turn_option(item: &WorkItem) -> Option<BackendOption> {
 }
 
 fn turn_launch_context(
+  queue: Arc<crate::master_queue::MasterQueue>,
   item: &WorkItem,
   option: BackendOption,
   cwd: PathBuf,
   held_native_id: Option<String>,
   account_label: Arc<Mutex<Option<String>>>,
+  lifecycle: Arc<dyn BackendLifecycle>,
 ) -> LaunchContext {
   let callbacks = item.callbacks.clone();
   let session_id = item.session_meta.id.clone();
+  let running_session_id = session_id.clone();
+  let shared_metadata = Arc::new(Mutex::new(item.session_meta.clone()));
+  let record_metadata = Arc::clone(&shared_metadata);
+  let record_queue = Arc::clone(&queue);
+  let running_queue = Arc::clone(&queue);
   let record_account = Arc::new(move |label: String| {
     let callbacks = callbacks.clone();
     let session_id = session_id.clone();
     let account_label = Arc::clone(&account_label);
+    let metadata = Arc::clone(&record_metadata);
+    let queue = Arc::clone(&record_queue);
+    let lifecycle = Arc::clone(&lifecycle);
     Box::pin(async move {
       if let Some(persist) = &callbacks.persist_account_label {
-        persist(session_id, label.clone()).await?;
+        persist(session_id.clone(), label.clone()).await?;
       }
+      lifecycle
+        .record_account_label(&mut metadata.lock().expect("launch metadata mutex is not poisoned"), Some(&label));
+      queue.record_running_account_label(&session_id, lifecycle.as_ref(), &label)?;
       *account_label.lock().expect("account label mutex is not poisoned") = Some(label);
       Ok(())
     }) as BoxFuture<'static, anyhow::Result<()>>
@@ -415,7 +430,7 @@ fn turn_launch_context(
   LaunchContext {
     cfg: Arc::clone(&item.cfg),
     option,
-    session_meta: item.session_meta.clone(),
+    session_meta: shared_metadata,
     kind: LaunchKind::Turn,
     cwd,
     held_native_id,
@@ -431,6 +446,7 @@ fn turn_launch_context(
     }),
     record_account,
     context_state,
+    running_turns: Some(Arc::new(move || running_queue.running_turns_except(&running_session_id))),
   }
 }
 
@@ -723,7 +739,7 @@ async fn emit_round_notices(
 }
 
 pub(crate) async fn run_cc(
-  queue: &crate::master_queue::MasterQueue,
+  queue: Arc<crate::master_queue::MasterQueue>,
   item: &mut WorkItem,
 ) -> anyhow::Result<MasterRunOutcome> {
   tokio::fs::create_dir_all(item.cfg.sessions_dir().join(&item.session_meta.id)).await?;
@@ -763,8 +779,15 @@ pub(crate) async fn run_cc(
   let held_native_id = (!fresh_native).then(|| item.session_meta.cc_session_id.clone()).flatten();
   let cwd = item.cfg.sessions_dir().join(&item.session_meta.id);
   let account_label = Arc::new(Mutex::new(None));
-  let context =
-    turn_launch_context(item, option.clone(), cwd.clone(), held_native_id.clone(), Arc::clone(&account_label));
+  let context = turn_launch_context(
+    Arc::clone(&queue),
+    item,
+    option.clone(),
+    cwd.clone(),
+    held_native_id.clone(),
+    Arc::clone(&account_label),
+    Arc::clone(&lifecycle),
+  );
   let env = build_master_env(item, &features)?;
   let tracker =
     Arc::new(Mutex::new(RunTimingTracker::new(&item.session_meta.id, &option.backend_type, Some(&option.model))));
@@ -775,7 +798,7 @@ pub(crate) async fn run_cc(
   let relay_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
   let session_id = item.session_meta.id.clone();
   let mut process = TurnProcess {
-    queue,
+    queue: &queue,
     item,
     features: Arc::clone(&features),
     option: option.clone(),

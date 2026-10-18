@@ -9,7 +9,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -173,6 +173,8 @@ pub enum LaunchKind {
 pub type EmitFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 /// Persists the account label on the session.
 pub type RecordAccountFn = Arc<dyn Fn(String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+/// Reads the metadata of every other session with a running manager turn.
+pub type RunningTurnsFn = Arc<dyn Fn() -> Vec<SessionMetadata> + Send + Sync>;
 /// The session's context tokens and the time of its last request.
 pub type ContextStateFn =
   Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>> + Send + Sync>;
@@ -181,7 +183,8 @@ pub type ContextStateFn =
 pub struct LaunchContext {
   pub cfg: Arc<CharlieBotConfig>,
   pub option: BackendOption,
-  pub session_meta: SessionMetadata,
+  /// Shared turn metadata, updated when the run records a new Claude account label.
+  pub session_meta: Arc<Mutex<SessionMetadata>>,
   pub kind: LaunchKind,
   pub cwd: PathBuf,
   /// The conversation this run may resume. `None` starts fresh.
@@ -191,6 +194,8 @@ pub struct LaunchContext {
   pub emit: EmitFn,
   pub record_account: RecordAccountFn,
   pub context_state: ContextStateFn,
+  /// Present for manager turns; task launches carry `None`.
+  pub running_turns: Option<RunningTurnsFn>,
 }
 
 /// The plan for one process of a run: the factory arguments, the conversation to resume, and after a relay the

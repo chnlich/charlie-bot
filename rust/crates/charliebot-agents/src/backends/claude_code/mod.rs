@@ -1,11 +1,18 @@
 //! The cc-claude option, factory, lifecycle, environment, and event translation.
 
+pub mod claude_accounts;
+pub mod claude_compaction;
+pub mod claude_config;
 pub mod claude_launch;
 pub mod claude_lifecycle;
+pub mod claude_metadata;
+pub mod claude_relay;
 pub mod event_types;
 pub mod factory;
 pub mod login_dirs;
+pub mod master_cc_relay;
 pub mod options;
+pub mod turn_contribution;
 
 #[path = "claude_code.rs"]
 mod backend;
@@ -39,13 +46,14 @@ pub fn register(registry: &mut Registry) -> Result<(), charliebot_registry::Regi
     },
     option_model,
     factory: Arc::new(ClaudeCodeFactory),
-    lifecycle: Some(Arc::new(ClaudeCodeLifecycle::new()) as Arc<dyn BackendLifecycle>),
+    lifecycle: Some(Arc::new(ClaudeCodeLifecycle::with_state(Arc::new(claude_accounts::ClaudeAccountState::new())))
+      as Arc<dyn BackendLifecycle>),
     translate_fallback: true,
   })?;
   registry.config_section(charliebot_core::config::ConfigSection {
     key: "accounts",
     legacy_keys: &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")],
-    parse: raw_section,
+    parse: claude_config::parse_accounts,
   })?;
   registry.metadata_slot(charliebot_core::metadata_slot::MetadataSlot {
     owner: "claude_code",
@@ -66,9 +74,7 @@ pub fn register(registry: &mut Registry) -> Result<(), charliebot_registry::Regi
     }],
   })?;
   registry.child_env("claude_child_env", claude_child_env)?;
-  registry.reading_limits("claude", claude_reading_limits)
-}
-
-fn raw_section(value: &serde_yaml::Value) -> Result<charliebot_core::config::SectionValue, String> {
-  Ok(Arc::new(value.clone()))
+  registry.reading_limits("claude", claude_reading_limits)?;
+  registry.config_check("check_claude_pools", claude_config::check_claude_pools)?;
+  registry.turn_contribution("claude_code", Arc::new(turn_contribution::ClaudeCodeTurnContribution))
 }

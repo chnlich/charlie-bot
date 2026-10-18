@@ -1,0 +1,611 @@
+//! Cold-cache Sonnet compaction of an account's Claude transcript.
+
+use std::io::BufRead;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration as StdDuration;
+
+use anyhow::Context;
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_registry::backend::{EmitFn, Env};
+use charliebot_store::metadata::UtcDateTime;
+use serde_json::{Map, Value, json};
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+use tokio::time::timeout;
+
+use crate::transport::{cgroup, kill};
+
+use super::{
+  DISALLOWED_TOOLS_FLAG, HEADLESS_DISALLOWED_TOOLS, claude_accounts, claude_config, claude_launch, login_dirs,
+};
+
+pub const CACHE_TTL: StdDuration = StdDuration::from_secs(60 * 60);
+pub const CLAUDE_COMPACTION_TIMEOUT: StdDuration = StdDuration::from_secs(900);
+pub const COMPACTION_MODEL: &str = "claude-sonnet-5";
+pub const FABLE_FAMILY: &str = "fable";
+const COMPACTION_FAMILY: &str = "sonnet";
+const COMPACT_PROMPT: &[u8] = b"/compact\n";
+const BOUNDARY_MARKER: &str = "\"compact_boundary\"";
+const COST_STATE_MARKER: &str = "\"cost-state\"";
+const USAGE_COUNTERS: [&str; 4] = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"];
+const EXTRA_COMPACTION_TOOLS: &str = concat!(
+  "Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,TodoWrite,Skill,ToolSearch,",
+  "KillShell,BashOutput,AskUserQuestion,ExitPlanMode,Task"
+);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactionOutcome {
+  pub ok: bool,
+  pub error: Option<String>,
+  pub models: Vec<String>,
+}
+
+pub fn is_fable(model: Option<&str>) -> bool {
+  model_family(model) == FABLE_FAMILY
+}
+
+pub fn cache_expired(last_request_at: Option<UtcDateTime>, now: Option<UtcDateTime>) -> bool {
+  let Some(last_request_at) = last_request_at else {
+    return false;
+  };
+  let now = claude_accounts::now_or(now);
+  now.into_inner() - last_request_at.into_inner() > time::Duration::seconds(CACHE_TTL.as_secs() as i64)
+}
+
+pub fn expired_cache_compaction_wanted(
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  context_tokens: Option<i64>,
+  last_request_at: Option<UtcDateTime>,
+  now: Option<UtcDateTime>,
+) -> bool {
+  is_fable(model)
+    && context_tokens.is_some_and(|tokens| {
+      u64::try_from(tokens).is_ok_and(|tokens| {
+        tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.expired_cache_tokens
+      })
+    })
+    && cache_expired(last_request_at, now)
+}
+
+pub fn relay_compaction_wanted(cfg: &CharlieBotConfig, model: Option<&str>, context_tokens: Option<i64>) -> bool {
+  is_fable(model)
+    && context_tokens.is_some_and(|tokens| {
+      u64::try_from(tokens).is_ok_and(|tokens| {
+        tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.relay_tokens
+      })
+    })
+}
+
+fn model_family(model: Option<&str>) -> String {
+  let Some(model) = model.filter(|value| !value.is_empty()) else {
+    return String::new();
+  };
+  let parts = model.to_lowercase().split('-').map(str::to_string).collect::<Vec<_>>();
+  if parts.first().is_some_and(|part| part == "claude") && parts.len() > 1 {
+    parts[1].clone()
+  } else {
+    parts[0].clone()
+  }
+}
+
+fn read_transcript_rows(path: &Path, marker: &str) -> anyhow::Result<Vec<Value>> {
+  let file = std::fs::File::open(path).with_context(|| format!("opening transcript {}", path.display()))?;
+  let mut file = std::io::BufReader::new(file);
+  let mut rows = Vec::new();
+  let mut bytes = Vec::new();
+  loop {
+    bytes.clear();
+    if file.read_until(b'\n', &mut bytes)? == 0 {
+      break;
+    }
+    let line = String::from_utf8_lossy(&bytes);
+    if !line.contains(marker) {
+      continue;
+    }
+    if let Ok(row) = serde_json::from_str::<Value>(&line)
+      && row.is_object()
+    {
+      rows.push(row);
+    }
+  }
+  Ok(rows)
+}
+
+pub fn count_compact_boundaries(path: &Path) -> anyhow::Result<usize> {
+  Ok(
+    read_transcript_rows(path, BOUNDARY_MARKER)?
+      .into_iter()
+      .filter(|row| row.get("subtype").and_then(Value::as_str) == Some("compact_boundary"))
+      .count(),
+  )
+}
+
+fn newest_cost_state_model_usage(path: &Path) -> anyhow::Result<Map<String, Value>> {
+  let mut newest = Map::new();
+  for row in read_transcript_rows(path, COST_STATE_MARKER)? {
+    if row.get("type").and_then(Value::as_str) == Some("cost-state") {
+      newest = row.get("modelUsage").and_then(Value::as_object).cloned().unwrap_or_default();
+    }
+  }
+  Ok(newest)
+}
+
+fn snake_case_keys(meta: &Map<String, Value>) -> Map<String, Value> {
+  meta
+    .iter()
+    .map(|(key, value)| {
+      let mut converted = String::new();
+      let characters = key.chars().collect::<Vec<_>>();
+      for (index, character) in characters.iter().enumerate() {
+        if character.is_ascii_uppercase()
+          && index > 0
+          && (characters[index - 1].is_ascii_lowercase() || characters[index - 1].is_ascii_digit())
+        {
+          converted.push('_');
+        }
+        converted.push(character.to_ascii_lowercase());
+      }
+      (converted, value.clone())
+    })
+    .collect()
+}
+
+fn newest_boundary_compact_metadata(path: &Path) -> anyhow::Result<Option<Value>> {
+  let rows = read_transcript_rows(path, BOUNDARY_MARKER)?;
+  let Some(row) = rows.into_iter().rfind(|row| row.get("subtype").and_then(Value::as_str) == Some("compact_boundary"))
+  else {
+    return Ok(None);
+  };
+  Ok(row.get("compactMetadata").and_then(Value::as_object).map(|meta| Value::Object(snake_case_keys(meta))))
+}
+
+pub fn compaction_command(session_id: &str) -> Vec<String> {
+  vec![
+    "claude".to_string(),
+    "-p".to_string(),
+    "--resume".to_string(),
+    session_id.to_string(),
+    "--model".to_string(),
+    COMPACTION_MODEL.to_string(),
+    "--output-format".to_string(),
+    "json".to_string(),
+    DISALLOWED_TOOLS_FLAG.to_string(),
+    format!("{},{}", HEADLESS_DISALLOWED_TOOLS, EXTRA_COMPACTION_TOOLS),
+    "--settings".to_string(),
+    json!({claude_launch::DISABLE_CONNECTOR_SETTINGS_KEY: true}).to_string(),
+  ]
+}
+
+pub fn compaction_env(config_dir: &Path) -> anyhow::Result<Env> {
+  let inherited = std::env::vars().collect::<Env>();
+  compaction_env_from(config_dir, &inherited)
+}
+
+fn compaction_env_from(config_dir: &Path, inherited: &Env) -> anyhow::Result<Env> {
+  let mut env = inherited.clone();
+  env.remove(crate::launch_loop::SESSION_ID_ENV);
+  super::claude_child_env(&mut env);
+  let headless = claude_launch::headless_claude_env(&env);
+  env.extend(headless);
+  env.remove(login_dirs::CLAUDE_CONFIG_DIR_ENV);
+  let path = login_dirs::expanduser(&config_dir.to_string_lossy(), inherited.get("HOME").map(String::as_str))?;
+  env.insert(login_dirs::CLAUDE_CONFIG_DIR_ENV.to_string(), path.to_string_lossy().into_owned());
+  Ok(env)
+}
+
+fn models_that_grew(result: &Value, baseline: &Map<String, Value>) -> Vec<String> {
+  result
+    .get("modelUsage")
+    .and_then(Value::as_object)
+    .into_iter()
+    .flat_map(|usage| usage.iter())
+    .filter_map(|(name, counters)| {
+      let restored = baseline.get(name).and_then(Value::as_object);
+      USAGE_COUNTERS
+        .iter()
+        .any(|counter| {
+          let current = counters.get(*counter).and_then(Value::as_f64).unwrap_or(0.0);
+          let previous = restored.and_then(|values| values.get(*counter)).and_then(Value::as_f64).unwrap_or(0.0);
+          current > previous
+        })
+        .then(|| name.clone())
+    })
+    .collect()
+}
+
+pub fn judge(
+  returncode: i32,
+  stdout: &[u8],
+  baseline: &Map<String, Value>,
+  before: usize,
+  after: usize,
+) -> CompactionOutcome {
+  let parsed = serde_json::from_slice::<Value>(stdout).ok();
+  let Some(result) = parsed.filter(Value::is_object) else {
+    return CompactionOutcome {
+      ok: false,
+      error: Some(format!("exit {returncode}, no JSON result on stdout")),
+      models: vec![],
+    };
+  };
+  let models = models_that_grew(&result, baseline);
+  if returncode != 0 || result.get("is_error").and_then(Value::as_bool) == Some(true) {
+    let detail = result
+      .get("result")
+      .filter(|value| json_truthy(value))
+      .map_or_else(
+        || "run reported an error".to_string(),
+        |value| value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()),
+      )
+      .trim()
+      .chars()
+      .take(200)
+      .collect::<String>();
+    return CompactionOutcome { ok: false, error: Some(format!("exit {returncode}: {detail}")), models };
+  }
+  if after <= before {
+    return CompactionOutcome {
+      ok: false,
+      error: Some("transcript gained no compact_boundary row".to_string()),
+      models,
+    };
+  }
+  if models.is_empty() || models.iter().any(|model| model_family(Some(model)) != COMPACTION_FAMILY) {
+    return CompactionOutcome {
+      ok: false,
+      error: Some(format!(
+        "compaction served by {}",
+        if models.is_empty() { "no model".to_string() } else { models.join(", ") }
+      )),
+      models,
+    };
+  }
+  CompactionOutcome { ok: true, error: None, models }
+}
+
+fn json_truthy(value: &Value) -> bool {
+  match value {
+    Value::Null => false,
+    Value::Bool(value) => *value,
+    Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+    Value::String(value) => !value.is_empty(),
+    Value::Array(value) => !value.is_empty(),
+    Value::Object(value) => !value.is_empty(),
+  }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn compact_with_sonnet(
+  session_id: &str,
+  cwd: &Path,
+  config_dir: &Path,
+  pre_tokens: Option<i64>,
+  emit: &EmitFn,
+  cfg: &CharlieBotConfig,
+  session_cgroup_id: Option<&str>,
+  account_label: &str,
+  trigger: &str,
+  timeout_duration: StdDuration,
+) -> anyhow::Result<bool> {
+  compact_with_sonnet_inner(
+    CompactionInput {
+      session_id,
+      cwd,
+      config_dir,
+      pre_tokens,
+      emit,
+      cfg,
+      session_cgroup_id,
+      account_label,
+      trigger,
+      timeout_duration,
+    },
+    compaction_env,
+  )
+  .await
+}
+
+struct CompactionInput<'a> {
+  session_id: &'a str,
+  cwd: &'a Path,
+  config_dir: &'a Path,
+  pre_tokens: Option<i64>,
+  emit: &'a EmitFn,
+  cfg: &'a CharlieBotConfig,
+  session_cgroup_id: Option<&'a str>,
+  account_label: &'a str,
+  trigger: &'a str,
+  timeout_duration: StdDuration,
+}
+
+async fn compact_with_sonnet_inner(
+  input: CompactionInput<'_>,
+  make_env: impl FnOnce(&Path) -> anyhow::Result<Env>,
+) -> anyhow::Result<bool> {
+  let CompactionInput {
+    session_id,
+    cwd,
+    config_dir,
+    pre_tokens,
+    emit,
+    cfg,
+    session_cgroup_id,
+    account_label,
+    trigger,
+    timeout_duration,
+  } = input;
+  let Some(transcript) = claude_accounts::transcript_path(config_dir, session_id)? else {
+    return fail(
+      emit,
+      &format!("no transcript for {session_id} under {}", config_dir.display()),
+      session_id,
+      account_label,
+      trigger,
+    )
+    .await;
+  };
+  let before = count_compact_boundaries(&transcript)?;
+  let baseline = newest_cost_state_model_usage(&transcript)?;
+  let command = compaction_command(session_id);
+  tracing::info!(target: "charliebot_agents", cc_session_id = session_id, pre_tokens, session = %session_id, account = account_label, trigger, "claude_compaction_starting");
+  let env = make_env(config_dir)?;
+  let memory = u64::try_from(cfg.server.session_memory_max_mb).context("server.session_memory_max_mb is negative")?;
+  let swap = u64::try_from(cfg.server.session_swap_max_mb).context("server.session_swap_max_mb is negative")?;
+  let tasks = u64::try_from(cfg.server.session_tasks_max).context("server.session_tasks_max is negative")?;
+  let group = cgroup::prepare_session_cgroup(&cgroup::system_cgroup_base_dir(), session_cgroup_id, memory, swap, tasks);
+  let mut process = Command::new(&command[0]);
+  process
+    .args(&command[1..])
+    .current_dir(cwd)
+    .env_clear()
+    .envs(env.iter())
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(false);
+  unsafe {
+    process.as_std_mut().pre_exec(|| {
+      if libc::setsid() == -1 {
+        return Err(std::io::Error::last_os_error());
+      }
+      if libc::nice(10) == -1 {
+        return Err(std::io::Error::last_os_error());
+      }
+      Ok(())
+    });
+  }
+  let mut child = match process.spawn() {
+    Ok(child) => child,
+    Err(error) => {
+      return fail(emit, &format!("could not start {}: {error}", command[0]), session_id, account_label, trigger).await;
+    }
+  };
+  let pid = child.id().expect("spawned compaction process has a pid");
+  if let Some(group) = &group {
+    cgroup::move_process_to_cgroup(pid, group);
+  }
+  let mut stdin = child.stdin.take().expect("compaction stdin is piped");
+  stdin.write_all(COMPACT_PROMPT).await?;
+  drop(stdin);
+  let mut stdout = child.stdout.take().expect("compaction stdout is piped");
+  let mut stderr = child.stderr.take().expect("compaction stderr is piped");
+  let stdout_reader = tokio::spawn(async move {
+    let mut output = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut output).await?;
+    Ok::<_, std::io::Error>(output)
+  });
+  let stderr_reader = tokio::spawn(async move {
+    let mut output = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut output).await?;
+    Ok::<_, std::io::Error>(output)
+  });
+  let status = match timeout(timeout_duration, child.wait()).await {
+    Ok(result) => result?,
+    Err(_) => {
+      kill::kill_process_group(pid, nix::sys::signal::Signal::SIGKILL);
+      child.wait().await?;
+      let _ = stdout_reader.await;
+      let _ = stderr_reader.await;
+      return fail(
+        emit,
+        &format!("timed out after {} s", timeout_duration.as_secs()),
+        session_id,
+        account_label,
+        trigger,
+      )
+      .await;
+    }
+  };
+  let stdout = stdout_reader.await.context("joining compaction stdout reader")??;
+  let stderr = stderr_reader.await.context("joining compaction stderr reader")??;
+  let after = count_compact_boundaries(&transcript)?;
+  let outcome = judge(kill::python_exit_code(status), &stdout, &baseline, before, after);
+  if !outcome.ok {
+    let stderr = String::from_utf8_lossy(&stderr);
+    let stderr = stderr.trim();
+    let stderr_tail = stderr.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>();
+    let error = outcome.error.as_deref().expect("failed compaction has an error");
+    tracing::warn!(
+      target: "charliebot_agents",
+      cc_session_id = session_id,
+      error,
+      models = ?outcome.models,
+      stderr = %stderr_tail,
+      session = %session_id,
+      account = account_label,
+      trigger,
+      "claude_compaction_failed"
+    );
+    emit(crate::event_builders::make_context_compact_failed_event(Some(error), Some(COMPACTION_MODEL))).await?;
+    return Ok(false);
+  }
+  let mut metadata = newest_boundary_compact_metadata(&transcript)?;
+  if let Some(pre_tokens) = pre_tokens {
+    let object =
+      metadata.get_or_insert_with(|| Value::Object(Map::new())).as_object_mut().expect("compact metadata is an object");
+    object.insert("pre_tokens".to_string(), json!(pre_tokens));
+  }
+  tracing::info!(
+    target: "charliebot_agents",
+    cc_session_id = session_id,
+    pre_tokens = ?metadata.as_ref().and_then(|value| value.get("pre_tokens")),
+    post_tokens = ?metadata.as_ref().and_then(|value| value.get("post_tokens")),
+    models = ?outcome.models,
+    session = %session_id,
+    account = account_label,
+    trigger,
+    "claude_compaction_done"
+  );
+  emit(crate::event_builders::make_context_compacted_event("manual", metadata, Some(COMPACTION_MODEL))).await?;
+  Ok(true)
+}
+
+async fn fail(
+  emit: &EmitFn,
+  error: &str,
+  session_id: &str,
+  account_label: &str,
+  trigger: &str,
+) -> anyhow::Result<bool> {
+  tracing::warn!(target: "charliebot_agents", error, session = %session_id, account = account_label, trigger, "claude_compaction_failed");
+  emit(crate::event_builders::make_context_compact_failed_event(Some(error), Some(COMPACTION_MODEL))).await?;
+  Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fs;
+  use std::os::unix::fs::PermissionsExt;
+  use std::sync::{Arc, Mutex};
+
+  use charliebot_registry::Registry;
+
+  use super::*;
+
+  fn config(home: &Path) -> CharlieBotConfig {
+    fs::create_dir_all(home).unwrap();
+    fs::write(home.join("config.yaml"), "server:\n  session_memory_max_mb: 0\n").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.claude_code", crate::backends::claude_code::register).unwrap();
+    registry.load_config(home).unwrap()
+  }
+
+  fn fake_env(bin: &Path, home: &Path, config_dir: &Path, transcript: &Path, root: &Path) -> Env {
+    let inherited = Env::from([
+      ("HOME".to_string(), home.to_string_lossy().into_owned()),
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display())),
+      ("CLAUDECODE".to_string(), "nested".to_string()),
+      ("CLAUDE_CONFIG_DIR".to_string(), "/synthetic/inherited".to_string()),
+      (crate::launch_loop::SESSION_ID_ENV.to_string(), "parent-session".to_string()),
+      ("ARG_LOG".to_string(), root.join("arguments.txt").to_string_lossy().into_owned()),
+      ("PROMPT_LOG".to_string(), root.join("prompt.txt").to_string_lossy().into_owned()),
+      ("TRANSCRIPT".to_string(), transcript.to_string_lossy().into_owned()),
+      ("FAKE_MODE".to_string(), "success".to_string()),
+    ]);
+    let env = compaction_env_from(config_dir, &inherited).unwrap();
+    assert!(!env.contains_key("CLAUDECODE"));
+    assert!(!env.contains_key(crate::launch_loop::SESSION_ID_ENV));
+    assert_eq!(env.get("CLAUDE_CONFIG_DIR").unwrap(), &config_dir.to_string_lossy());
+    assert_eq!(env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY").unwrap(), "1");
+    assert!(inherited.contains_key("CLAUDECODE"));
+    env
+  }
+
+  fn emit_sink() -> (EmitFn, Arc<Mutex<Vec<Value>>>) {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    (
+      Arc::new(move |event| {
+        let sink = Arc::clone(&sink);
+        Box::pin(async move {
+          sink.lock().unwrap().push(event);
+          Ok(())
+        })
+      }),
+      events,
+    )
+  }
+
+  fn call<'a>(
+    session_id: &'a str,
+    cwd: &'a Path,
+    config_dir: &'a Path,
+    emit: &'a EmitFn,
+    cfg: &'a CharlieBotConfig,
+    timeout_duration: StdDuration,
+  ) -> CompactionInput<'a> {
+    CompactionInput {
+      session_id,
+      cwd,
+      config_dir,
+      pre_tokens: Some(125_000),
+      emit,
+      cfg,
+      session_cgroup_id: Some("synthetic-session"),
+      account_label: "synthetic-account",
+      trigger: "expired_cache",
+      timeout_duration,
+    }
+  }
+
+  #[tokio::test]
+  async fn fake_claude_compaction_checks_env_argv_success_failure_and_timeout_notices() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let cfg = config(&home);
+    let account = root.path().join("account");
+    let bin = root.path().join("bin");
+    let cwd = root.path().join("work");
+    let transcript = account.join("projects/work/session-id.jsonl");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(&transcript, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
+    fs::write(bin.join("claude"), include_str!("../../../tests/fake_claude_compaction.sh")).unwrap();
+    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    let (emit, events) = emit_sink();
+    let inherited = fake_env(&bin, &home, &account, &transcript, root.path());
+
+    let success_env = inherited.clone();
+    let succeeded = compact_with_sonnet_inner(
+      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(1)),
+      move |path| compaction_env_from(path, &success_env),
+    )
+    .await
+    .unwrap();
+    assert!(succeeded);
+    assert_eq!(fs::read_to_string(root.path().join("prompt.txt")).unwrap(), "/compact\n");
+    let args = fs::read_to_string(root.path().join("arguments.txt")).unwrap();
+    assert!(args.contains("--resume\nsession-id\n--model\nclaude-sonnet-5"));
+    assert!(args.contains("--settings\n{\"disableClaudeAiConnectors\":true}"));
+    assert_eq!(events.lock().unwrap()[0]["type"], charliebot_core::event_types::CONTEXT_COMPACTED);
+    assert_eq!(events.lock().unwrap()[0]["compact_metadata"]["pre_tokens"], 125_000);
+
+    fs::write(&transcript, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
+    let mut failure_env = inherited.clone();
+    failure_env.insert("FAKE_MODE".to_string(), "failure".to_string());
+    let failed = compact_with_sonnet_inner(
+      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(1)),
+      move |path| compaction_env_from(path, &failure_env),
+    )
+    .await
+    .unwrap();
+    assert!(!failed);
+    assert_eq!(events.lock().unwrap()[1]["type"], charliebot_core::event_types::CONTEXT_COMPACT_FAILED);
+
+    fs::write(&transcript, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
+    let mut timeout_env = inherited;
+    timeout_env.insert("FAKE_MODE".to_string(), "timeout".to_string());
+    let timed_out = compact_with_sonnet_inner(
+      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_millis(100)),
+      move |path| compaction_env_from(path, &timeout_env),
+    )
+    .await
+    .unwrap();
+    assert!(!timed_out);
+    assert_eq!(events.lock().unwrap()[2]["type"], charliebot_core::event_types::CONTEXT_COMPACT_FAILED);
+  }
+}

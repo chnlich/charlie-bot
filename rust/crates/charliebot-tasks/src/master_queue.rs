@@ -10,7 +10,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::backend::BackendLifecycle;
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, oneshot, watch};
@@ -52,6 +52,7 @@ struct QueueState {
   session_consumers: HashMap<String, JoinHandle<()>>,
   consumer_cancel: HashMap<String, watch::Sender<bool>>,
   current_items: HashMap<String, Vec<String>>,
+  running_turn_metadata: HashMap<String, SessionMetadata>,
   active_procs: HashMap<String, Arc<AgentRunner>>,
   shutdown: bool,
 }
@@ -250,6 +251,33 @@ impl MasterQueue {
       .unwrap_or_default()
   }
 
+  pub fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata> {
+    self
+      .state
+      .lock()
+      .expect("master queue mutex is not poisoned")
+      .running_turn_metadata
+      .iter()
+      .filter(|(running_id, _)| running_id.as_str() != session_id)
+      .map(|(_, metadata)| metadata.clone())
+      .collect()
+  }
+
+  pub fn record_running_account_label(
+    &self,
+    session_id: &str,
+    lifecycle: &dyn BackendLifecycle,
+    label: &str,
+  ) -> anyhow::Result<()> {
+    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+    let metadata = state
+      .running_turn_metadata
+      .get_mut(session_id)
+      .ok_or_else(|| anyhow!("running_turns has no metadata for running turn {session_id}"))?;
+    lifecycle.record_account_label(metadata, Some(label));
+    Ok(())
+  }
+
   pub async fn terminate_active(&self, session_id: &str) -> anyhow::Result<()> {
     let runner = self.state.lock().expect("master queue mutex is not poisoned").active_procs.get(session_id).cloned();
     if let Some(runner) = runner {
@@ -330,6 +358,7 @@ impl MasterQueue {
         let item = state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front);
         if let Some(item) = &item {
           state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
+          state.running_turn_metadata.insert(session_id.clone(), item.session_meta.clone());
           teardown = Some((item.callbacks.clone(), item.auto_trigger));
         }
         item
@@ -349,7 +378,11 @@ impl MasterQueue {
       item.cancel = cancel.clone();
 
       let outcome = self.process_item(&session_id, &mut item, &mut last_cc_session_id, &mut last_account_label).await;
-      self.state.lock().expect("master queue mutex is not poisoned").current_items.remove(&session_id);
+      {
+        let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+        state.current_items.remove(&session_id);
+        state.running_turn_metadata.remove(&session_id);
+      }
       if let Err(error) = outcome {
         tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "session_consumer_item_error");
         if let Some(completion) = item.completion.take() {
@@ -371,6 +404,7 @@ impl MasterQueue {
       state.session_consumers.remove(&session_id);
       state.consumer_cancel.remove(&session_id);
       state.current_items.remove(&session_id);
+      state.running_turn_metadata.remove(&session_id);
       let queued = state.session_queues.remove(&session_id).unwrap_or_default();
       state.session_notifies.remove(&session_id);
       for mut item in queued {
@@ -401,7 +435,7 @@ impl MasterQueue {
   }
 
   async fn process_item(
-    &self,
+    self: &Arc<Self>,
     session_id: &str,
     item: &mut WorkItem,
     last_cc_session_id: &mut Option<String>,
@@ -411,7 +445,7 @@ impl MasterQueue {
     let mut result = if item.resume_record.is_some() {
       master_run::resume_cc(item).await?
     } else {
-      master_run::run_cc(self, item).await?
+      master_run::run_cc(Arc::clone(self), item).await?
     };
     if result.cancelled {
       return Err(anyhow!("manager turn cancelled"));
@@ -598,4 +632,34 @@ async fn broadcast_running_changed(
   fields.insert("auto_trigger".to_string(), json!(auto_trigger));
   callbacks.features.store.broadcast_sidebar(session_id, event_types::RUNNING_CHANGED, fields).await?;
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+  use charliebot_agents::backends::claude_code::claude_metadata;
+  use charliebot_store::metadata::TaskProfile;
+
+  use super::*;
+
+  #[test]
+  fn running_turn_snapshot_includes_labels_recorded_after_start() {
+    let queue = MasterQueue::new(Arc::new(BackendPool::default()));
+    let mut running = SessionMetadata::new("running", "Running", TaskProfile::Manager);
+    running.native_backend = Some("fable".to_string());
+    queue
+      .state
+      .lock()
+      .expect("master queue mutex is not poisoned")
+      .running_turn_metadata
+      .insert(running.id.clone(), running);
+
+    let lifecycle = ClaudeCodeLifecycle::new();
+    queue.record_running_account_label("running", &lifecycle, "synthetic-a").unwrap();
+
+    let other_turns = queue.running_turns_except("observer");
+    assert_eq!(other_turns.len(), 1);
+    assert_eq!(claude_metadata::account_of(&other_turns[0]).as_deref(), Some("synthetic-a"));
+    assert!(queue.running_turns_except("running").is_empty());
+  }
 }

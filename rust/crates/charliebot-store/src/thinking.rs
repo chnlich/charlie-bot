@@ -128,4 +128,35 @@ mod tests {
     store.clear_run_busy("synthetic", "run-1");
     assert_eq!(store.busy_since("synthetic"), None);
   }
+
+  #[test]
+  fn worker_run_opens_its_busy_interval_at_its_recorded_start_and_names_its_backend() {
+    let (_home, store) = make_test_store();
+    let started = UtcDateTime::parse("2026-01-01T00:00:00Z").unwrap();
+    store.mark_run_busy("worker", "run-1", started);
+    store.note_run_backend("worker", "fake");
+    assert_eq!(store.busy_since("worker"), Some(started));
+    assert_eq!(store.run_backend("worker"), Some("fake".to_string()));
+    assert_eq!(store.busy_since("root"), None);
+  }
+
+  #[test]
+  fn a_worker_run_finish_leaves_the_parent_busy_interval_open() {
+    let (_home, store) = make_test_store();
+    let queued = UtcDateTime::parse("2026-01-01T00:00:00Z").unwrap();
+    let started = UtcDateTime::parse("2026-01-01T00:05:00Z").unwrap();
+    store.mark_busy("root", queued).unwrap();
+    store.mark_run_busy("worker", "run-1", started);
+    store.clear_run_busy("worker", "run-1");
+    assert_eq!(store.busy_since("worker"), None);
+    assert_eq!(store.busy_since("root"), Some(queued));
+  }
+
+  #[test]
+  fn an_empty_backend_name_keeps_the_previous_run_backend() {
+    let (_home, store) = make_test_store();
+    store.note_run_backend("worker", "fake");
+    store.note_run_backend("worker", "");
+    assert_eq!(store.run_backend("worker"), Some("fake".to_string()));
+  }
 }

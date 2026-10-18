@@ -698,7 +698,52 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
 #[cfg(test)]
 pub(crate) mod test_support {
   use super::*;
+  use serde_json::json;
+
   use crate::hooks::EmptyRuntimeEventHooks;
+
+  /// An assistant text event with an explicit id (`conftest.assistant_event`).
+  pub(crate) fn assistant_event(text: &str, event_id: &str) -> Value {
+    json!({"id": event_id, "type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+  }
+
+  /// An assistant text event without id or timestamp (`conftest.assistant_text_event`).
+  pub(crate) fn assistant_text_event(text: &str) -> Value {
+    json!({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+  }
+
+  /// A text block then a tool_use block, stamped (`conftest.assistant_text_tool_use_event`).
+  pub(crate) fn assistant_text_tool_use_event(
+    text: &str,
+    tool_name: &str,
+    tool_input: Value,
+    timestamp: &str,
+  ) -> Value {
+    json!({
+      "type": "assistant",
+      "message": {"content": [
+        {"type": "text", "text": text},
+        {"type": "tool_use", "name": tool_name, "input": tool_input},
+      ]},
+      "timestamp": timestamp,
+    })
+  }
+
+  /// Two runs on one session with a queued user inside the first (`conftest.queued_user_reorder_events`).
+  pub(crate) fn queued_user_reorder_events() -> Vec<Value> {
+    vec![
+      json!({"session_id": "opencode-session"}),
+      json!({"id": "thinking-1", "type": "thinking", "content": "final thought"}),
+      json!({"id": "tool-1", "type": "tool_use", "name": "Read", "input": {"file_path": "report.txt"}}),
+      json!({"id": "queued-user", "type": "user", "content": "second question"}),
+      json!({"id": "tool-result-1", "type": "tool_result", "content": "report contents"}),
+      assistant_event("first conclusion", "assistant-1"),
+      json!({"id": "done-1", "type": "master_done", "thinking_seconds": 4}),
+      json!({"session_id": "opencode-session"}),
+      assistant_event("second answer", "assistant-2"),
+      json!({"id": "done-2", "type": "master_done", "thinking_seconds": 2}),
+    ]
+  }
 
   struct AccountLabels;
 
@@ -761,9 +806,17 @@ pub(crate) mod test_support {
 
   pub(crate) fn make_test_store_with_runtime(runtime_events: Arc<dyn RuntimeEventHooks>) -> (tempfile::TempDir, Store) {
     let home = tempfile::tempdir().unwrap();
-    let cfg =
-      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
-    let store = Store::new(
+    let store = open_test_store(home.path(), runtime_events).unwrap();
+    (home, store)
+  }
+
+  /// Open a store on an existing test home, the way a restarted process does.
+  pub(crate) fn open_test_store(
+    home: &std::path::Path,
+    runtime_events: Arc<dyn RuntimeEventHooks>,
+  ) -> StoreResult<Store> {
+    let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
+    Store::new(
       cfg,
       Vec::new(),
       StoreHooks {
@@ -773,8 +826,6 @@ pub(crate) mod test_support {
         runtime_events: Some(runtime_events),
       },
     )
-    .unwrap();
-    (home, store)
   }
 }
 

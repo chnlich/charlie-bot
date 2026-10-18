@@ -355,11 +355,78 @@ fn async_lock_for(locks: &StdMutex<HashMap<String, Arc<Mutex<()>>>>, session_id:
 mod tests {
   use std::sync::{Arc, Mutex as StdMutex};
 
+  use charliebot_core::config::CharlieBotConfig;
+
   use super::*;
-  use crate::hooks::{AfterTurnWork, RuntimeEventHooks};
-  use crate::metadata::{SessionMetadata, TaskProfile};
-  use crate::store::test_support::make_test_store;
-  use crate::store::test_support::make_test_store_with_runtime;
+  use crate::hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
+  use crate::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+  use crate::store::test_support::{
+    assistant_event, assistant_text_event, make_test_store, make_test_store_with_runtime, open_test_store,
+  };
+  use crate::streaming::Subscription;
+
+  /// Renderers under the given event types, each rendering nothing; the other hooks stay empty.
+  struct RendererHook(Vec<&'static str>);
+
+  impl RuntimeEventHooks for RendererHook {
+    fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn EventRenderer>)>> {
+      Ok(
+        self
+          .0
+          .iter()
+          .map(|name| (name.to_string(), Arc::new(|_: &Value| Ok(None)) as Arc<dyn EventRenderer>))
+          .collect(),
+      )
+    }
+
+    fn after_turn(&self, meta: SessionMetadata, event: Value, cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
+      EmptyRuntimeEventHooks.after_turn(meta, event, cfg)
+    }
+
+    fn mark_sidebar_dirty(&self, session_id: &str) {
+      EmptyRuntimeEventHooks.mark_sidebar_dirty(session_id)
+    }
+
+    fn drop_session_runtime_state(&self, session_id: &str) {
+      EmptyRuntimeEventHooks.drop_session_runtime_state(session_id)
+    }
+  }
+
+  /// Drain every frame already queued on a subscription; a frame is queued before its send returns.
+  async fn drain_frames(subscription: &mut Subscription) -> Vec<Value> {
+    let mut frames = Vec::new();
+    while let Ok(Some(frame)) = tokio::time::timeout(std::time::Duration::from_millis(1), subscription.recv()).await {
+      frames.push(serde_json::from_str(&frame).unwrap());
+    }
+    frames
+  }
+
+  /// The stored event without the fields the append and the feed add.
+  fn strip_stamps(mut event: Value) -> Value {
+    let object = event.as_object_mut().unwrap();
+    for key in ["id", "timestamp", "event_index"] {
+      object.remove(key);
+    }
+    event
+  }
+
+  async fn seed_session(store: &Store) {
+    write_test_session(store, "synthetic");
+    store
+      .append_chat_event(
+        "synthetic",
+        json!({
+          "type": "user",
+          "message": {"content": [{"type": "text", "text": "seed question"}]},
+          "timestamp": "2026-09-07T00:00:00Z",
+        }),
+      )
+      .await
+      .unwrap();
+    let mut answer = assistant_text_event("seed answer");
+    answer["timestamp"] = json!("2026-09-07T00:00:01Z");
+    store.append_chat_event("synthetic", answer).await.unwrap();
+  }
 
   struct AfterTurnHook {
     sender: StdMutex<Option<tokio::sync::oneshot::Sender<Value>>>,
@@ -566,5 +633,231 @@ mod tests {
     assert_eq!(failed["event_index"], 1);
     assert!(failed["id"].as_str().is_some());
     assert!(failed["timestamp"].as_str().is_some());
+  }
+
+  #[tokio::test]
+  async fn first_paint_surfaces_are_disjoint() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "q1", "timestamp": "t1"}))
+      .await
+      .unwrap();
+    store.persist_and_broadcast("synthetic", assistant_event("reply1", "a1")).await.unwrap();
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "master_done", "thinking_seconds": 1, "timestamp": "t2"}))
+      .await
+      .unwrap();
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "q2", "timestamp": "t3"}))
+      .await
+      .unwrap();
+    store.persist_and_broadcast("synthetic", assistant_event("IN PROGRESS", "a2")).await.unwrap();
+
+    let projection = store.get_message_projection("synthetic").unwrap().unwrap();
+    let draft = projection.pending_draft().unwrap().clone();
+    assert_eq!(draft["content"], "IN PROGRESS");
+    let (page, _, _) = projection.tail(40);
+    assert!(!page.contains(&draft));
+    assert!(!page.iter().any(|message| message["content"] == "IN PROGRESS"));
+    let (older, _, _) = projection.slice_before(projection.committed().len(), 40);
+    assert!(!older.iter().any(|message| message["content"] == "IN PROGRESS"));
+    assert_eq!(projection.history().last(), Some(&draft));
+  }
+
+  #[tokio::test]
+  async fn projection_memo_hit_archived_session_is_always_miss() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    store
+      .append_chat_event("synthetic", json!({"type": "user", "content": "old", "timestamp": "2020-01-01T00:00:00Z"}))
+      .await
+      .unwrap();
+    store
+      .append_chat_event("synthetic", json!({"type": "user", "content": "new", "timestamp": "2030-01-01T00:00:00Z"}))
+      .await
+      .unwrap();
+    assert!(store.get_message_projection("synthetic").unwrap().is_some());
+    let cutoff = UtcDateTime::parse("2025-01-01T00:00:00Z").unwrap();
+    assert!(store.archive_events_before("synthetic", cutoff).await.unwrap().is_some());
+    assert!(store.get_message_projection("synthetic").unwrap().is_none());
+    assert!(store.projection_memo_hit("synthetic").is_none());
+  }
+
+  #[tokio::test]
+  async fn persist_user_event_broadcasts_message_delta_only() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "ts"}))
+      .await
+      .unwrap();
+    let frames = drain_frames(&mut subscription).await;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["type"], "message");
+    assert_eq!(frames[0]["message"]["role"], "user");
+    assert_eq!(frames[0]["message"]["content"], "hi");
+  }
+
+  #[tokio::test]
+  async fn persist_handler_result_broadcasts_message_delta_and_raw_event() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    store
+      .persist_and_broadcast(
+        "synthetic",
+        json!({"type": "handler_result", "task": "Lint", "status": "ok", "message": "Done", "timestamp": "ts"}),
+      )
+      .await
+      .unwrap();
+    let frames = drain_frames(&mut subscription).await;
+    assert_eq!(
+      frames.iter().map(|frame| frame["type"].as_str().unwrap()).collect::<Vec<_>>(),
+      ["message", "handler_result"]
+    );
+    assert_eq!(frames[0]["message"]["role"], "system");
+    assert_eq!(frames[0]["message"]["content"], "✓ Lint: Done");
+  }
+
+  #[tokio::test]
+  async fn lazy_init_aggregator_after_restart_does_not_replay_history() {
+    let (home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "t1"}))
+      .await
+      .unwrap();
+    let mut answer = assistant_text_event("ok");
+    answer["timestamp"] = json!("t2");
+    store.persist_and_broadcast("synthetic", answer).await.unwrap();
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"}))
+      .await
+      .unwrap();
+
+    // A restarted process: a fresh store over the same home, with no live aggregator.
+    let restarted = open_test_store(home.path(), Arc::new(EmptyRuntimeEventHooks)).unwrap();
+    let mut subscription = restarted.subscribe(&streaming::session_channel("synthetic"));
+    restarted
+      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "next", "timestamp": "t4"}))
+      .await
+      .unwrap();
+    let frames = drain_frames(&mut subscription).await;
+    // Only the new event's delta is broadcast; the three events persisted above stay silent.
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["type"], "message");
+    assert_eq!(frames[0]["message"]["role"], "user");
+    assert_eq!(frames[0]["message"]["content"], "next");
+    assert_eq!(frames[0]["message"]["event_index"], 3);
+  }
+
+  #[tokio::test]
+  async fn catchup_restores_stream_deltas_and_live_feed_broadcasts() {
+    let (_home, store) = make_test_store();
+    seed_session(&store).await;
+
+    let aggregator = store.get_or_init_aggregator("synthetic").await.unwrap();
+    assert!(aggregator.lock().await.emits_stream_deltas());
+    let stored = store.session_events.aggregators.lock().unwrap().get("synthetic").cloned().unwrap();
+    assert!(Arc::ptr_eq(&aggregator, &stored));
+
+    let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    let mut live = assistant_text_event("live tail");
+    live["timestamp"] = json!("2026-09-07T00:00:02Z");
+    store.persist_and_broadcast("synthetic", live).await.unwrap();
+    let frames = drain_frames(&mut subscription).await;
+    assert!(frames.iter().any(|frame| frame["type"] == "stream"));
+  }
+
+  #[tokio::test]
+  async fn concurrent_first_persists_catch_up_once() {
+    let (_home, store) = make_test_store();
+    seed_session(&store).await;
+
+    let (first, second) =
+      tokio::join!(store.get_or_init_aggregator("synthetic"), store.get_or_init_aggregator("synthetic"));
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(first.lock().await.pending_draft_message().unwrap()["content"], "seed answer");
+  }
+
+  #[tokio::test]
+  async fn drop_mid_feed_discards_and_reruns() {
+    let (_home, store) = make_test_store();
+    seed_session(&store).await;
+    let epoch = store.epoch("synthetic");
+
+    let (aggregator, ()) = tokio::join!(store.get_or_init_aggregator("synthetic"), async {
+      store.drop_session_runtime_state("synthetic");
+    });
+    let aggregator = aggregator.unwrap();
+    assert_eq!(store.epoch("synthetic"), epoch + 1);
+    let stored = store.session_events.aggregators.lock().unwrap().get("synthetic").cloned().unwrap();
+    assert!(Arc::ptr_eq(&aggregator, &stored));
+    assert!(aggregator.lock().await.emits_stream_deltas());
+    assert_eq!(aggregator.lock().await.pending_draft_message().unwrap()["content"], "seed answer");
+  }
+
+  #[tokio::test]
+  async fn compact_boundary_emits_context_compacted_with_the_payload_whole() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    let event = store
+      .handle_compaction_event(
+        "synthetic",
+        &json!({
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {"trigger": "manual", "pre_tokens": 239708},
+        }),
+      )
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(
+      strip_stamps(event),
+      json!({
+        "type": "context_compacted",
+        "trigger": "manual",
+        "compact_metadata": {"trigger": "manual", "pre_tokens": 239708},
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn status_failed_emits_context_compact_failed() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    let rows = [
+      (
+        json!({"type": "system", "subtype": "status", "compact_result": "failed", "compact_error": "context too large"}),
+        json!("context too large"),
+      ),
+      (json!({"type": "system", "subtype": "status", "compact_result": "failed"}), Value::Null),
+    ];
+    for (input, expected_error) in rows {
+      let event = store.handle_compaction_event("synthetic", &input).await.unwrap().unwrap();
+      assert_eq!(strip_stamps(event), json!({"type": "context_compact_failed", "error": expected_error}));
+    }
+  }
+
+  #[test]
+  fn an_event_type_rendered_twice_fails_store_construction() {
+    let home = tempfile::tempdir().unwrap();
+    let error = open_test_store(home.path(), Arc::new(RendererHook(vec!["first_event", "first_event"])))
+      .err()
+      .expect("two renderers for one event type must fail");
+    assert!(error.to_string().contains("first_event"));
+  }
+
+  #[test]
+  fn a_feature_renderer_for_a_builtin_event_type_fails_store_construction() {
+    let home = tempfile::tempdir().unwrap();
+    let error = open_test_store(home.path(), Arc::new(RendererHook(vec!["master_done"])))
+      .err()
+      .expect("a feature renderer for a built-in event type must fail");
+    assert!(error.to_string().contains("master_done"));
   }
 }

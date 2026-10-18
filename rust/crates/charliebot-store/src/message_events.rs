@@ -213,4 +213,24 @@ mod tests {
     ];
     assert_eq!(stable_closed_prefix_len(&events), 1);
   }
+
+  #[test]
+  fn attachment_block_follows_the_text_per_upload_path() {
+    let first = "/sessions/node/uploads/one.png";
+    let second = "/sessions/node/uploads/two.png";
+    let uploads = [json!({"path": first}), json!({"path": second})];
+    assert_eq!(
+      build_agent_input_content("look at these", &uploads),
+      format!("look at these{ATTACHED_FILES_MARKER}{DEFAULT_ATTACHED_FILES_PROMPT}\n- {first}\n- {second}")
+    );
+  }
+
+  #[test]
+  fn upload_only_input_gets_the_block_alone() {
+    let path = "/sessions/node/uploads/shot.png";
+    assert_eq!(
+      build_agent_input_content("", &[json!({"path": path})]),
+      format!("[Attached files]\n{DEFAULT_ATTACHED_FILES_PROMPT}\n- {path}")
+    );
+  }
 }

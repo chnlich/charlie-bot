@@ -838,6 +838,7 @@ mod tests {
   use std::sync::Arc;
 
   use super::*;
+  use crate::store::test_support::{assistant_text_event, assistant_text_tool_use_event};
 
   fn parity_renderers() -> HashMap<String, Arc<dyn EventRenderer>> {
     let slack: Arc<dyn EventRenderer> = Arc::new(|event: &Value| {
@@ -1041,5 +1042,165 @@ mod tests {
         }
       })]
     );
+  }
+
+  #[test]
+  fn user_event_with_an_input_mode_renders_a_message_that_carries_it() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "user",
+        "content": "hello",
+        "input_mode": "voice",
+        "timestamp": "2026-04-29T00:00:00Z",
+      }))
+      .unwrap();
+    let modes: Vec<Value> = deltas.iter().map(|delta| delta["message"]["input_mode"].clone()).collect();
+    assert_eq!(modes, vec![json!("voice")]);
+  }
+
+  #[test]
+  fn assistant_text_then_master_done_commits_message() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    aggregator
+      .feed(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+      .unwrap();
+    let deltas = aggregator.feed(&json!({"type": "master_done", "thinking_seconds": 3, "timestamp": "t2"})).unwrap();
+    assert_eq!(
+      deltas,
+      vec![
+        json!({
+          "type": "message",
+          "message": {"role": "assistant", "content": "Hi", "event_index": 0, "id": "legacy:0", "timestamp": "t1"},
+        }),
+        json!({
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 3,
+            "event_index": 1,
+            "id": "legacy:1",
+            "timestamp": "t2",
+          },
+        }),
+      ]
+    );
+    assert!(aggregator.pending_draft_message().is_none());
+  }
+
+  #[test]
+  fn still_thinking_master_done_yields_separator_without_seconds() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let deltas = aggregator.feed(&json!({"type": "master_done", "still_thinking": true, "timestamp": "t1"})).unwrap();
+    assert_eq!(
+      deltas,
+      vec![json!({
+        "type": "message",
+        "message": {
+          "role": "separator",
+          "thinking_seconds": null,
+          "event_index": 0,
+          "id": "legacy:0",
+          "timestamp": "t1",
+        },
+      })]
+    );
+  }
+
+  #[test]
+  fn task_delegated_message_exposes_metadata_without_full_description_body() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let long_description = "## Goal\nDo a long task spec that belongs in Workers.";
+    let invocation = json!({
+      "task_type": "implement",
+      "repo_path": "/tmp/repo",
+      "base_branch": "main",
+      "task_spec_file": "/tmp/task.md",
+      "reviewer_context_file": "/tmp/reviewer.md",
+      "keep_worktree": false,
+      "backend": "codex-o3",
+    });
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "task_delegated",
+        "thread_id": "thread-id",
+        "description": long_description,
+        "timestamp": "2026-07-01T12:00:00Z",
+        "backend": "codex-o3",
+        "model": "o3",
+        "delegate_invocation": invocation,
+      }))
+      .unwrap();
+    assert_eq!(
+      deltas,
+      vec![json!({
+        "type": "message",
+        "message": {
+          "role": "task_delegated",
+          "content": "Task delegated",
+          "thread_id": "thread-id",
+          "child_session_id": "",
+          "delegate_invocation": invocation,
+          "backend": "codex-o3",
+          "model": "o3",
+          "event_index": 0,
+          "id": "legacy:0",
+          "timestamp": "2026-07-01T12:00:00Z",
+        },
+      })]
+    );
+    assert!(!deltas[0]["message"]["content"].as_str().unwrap().contains(long_description));
+    assert!(deltas[0]["message"].get("description").is_none());
+  }
+
+  #[test]
+  fn tool_use_attaches_to_buffer_then_tool_result_updates_output() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    aggregator.feed(&assistant_text_tool_use_event("Running", "Bash", json!({"command": "ls"}), "t1")).unwrap();
+    aggregator
+      .feed(&json!({
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "content": "file1\nfile2", "is_error": false}]},
+      }))
+      .unwrap();
+    let draft = aggregator.pending_draft_message().unwrap();
+    assert_eq!(draft["content"], "Running");
+    assert_eq!(
+      draft["tools"],
+      json!([{
+        "name": "Bash",
+        "input": {"command": "ls"},
+        "output": "file1\nfile2",
+        "is_error": false,
+      }])
+    );
+  }
+
+  #[test]
+  fn thinking_is_flushed_with_assistant_draft() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    aggregator
+      .feed(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+      .unwrap();
+    aggregator.feed(&json!({"type": "thinking", "content": "planning", "timestamp": "t2"})).unwrap();
+    let deltas = aggregator.feed(&json!({"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"})).unwrap();
+    assert_eq!(deltas[0]["message"]["role"], "assistant");
+    assert_eq!(deltas[0]["message"]["content"], "Hi");
+    assert_eq!(deltas[0]["message"]["thinking"], "planning");
+    assert_eq!(deltas[1]["message"]["role"], "separator");
+  }
+
+  #[test]
+  fn stream_deltas_stay_bounded_after_a_giant_tool_result() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    aggregator.feed(&json!({"type": "tool_use", "name": "Bash", "input": {"cmd": "cat big.log"}})).unwrap();
+    aggregator.feed(&json!({"type": "tool_result", "tool_name": "Bash", "content": "z".repeat(10_000_000)})).unwrap();
+    let mut serialized = Vec::new();
+    for i in 0..20 {
+      aggregator.feed(&assistant_text_event(&format!("delta {i}"))).unwrap();
+      let draft = aggregator.pending_draft_message().unwrap();
+      serialized.push(serde_json::to_string(&draft).unwrap().len());
+    }
+    assert!(serialized.iter().all(|len| *len < 100_000));
   }
 }

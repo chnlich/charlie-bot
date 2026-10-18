@@ -195,7 +195,7 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
 | Process | argv | Module |
 | --- | --- | --- |
 | git | `git rev-parse --short HEAD`, `git worktree add/remove --force/prune`, branch and merge operations | `src/infra/buildinfo.py`, `src/infra/git.py` |
-| ssh | `ssh <alias> true` (BatchMode, connect timeout); remote `kill -0`, exit-file reads and `sacct` for triggers | `src/features/host_auth/host_auth.py`, `src/infra/ssh.py`, `src/runtime/triggers.py` |
+| ssh | every argv comes from `src/infra/ssh.py::ssh_cmd`: `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=/home/<user>/.ssh/controlmasters/%C -o ControlPersist=1200 <host> <remote argv>`. Remote argv: `true` (host_auth probe), `kill -0`, exit-file reads and `sacct` (triggers), and the `bash -c` launch wrapper (`cli/launcher.py`) | `src/features/host_auth/host_auth.py`, `src/infra/ssh.py`, `src/runtime/triggers.py`, `src/runtime/cli/launcher.py` |
 | sacct | local `sacct` for `slurm_job` watches every 30 s | `src/runtime/triggers.py` |
 | tmux | `tmux -L charliebot ...`; sessions `charliebot-<id>`; the terminal's id is `terminal` for the default home, else `terminal-<sha256(home)[:8]>` | `src/runtime/agent_process/pty_common.py`, `src/features/terminal/terminal.py` |
 | code-server | `<code_server.bin> --config <path>`, detached, with stdio on `/dev/null` | `src/features/code_server/api.py` |

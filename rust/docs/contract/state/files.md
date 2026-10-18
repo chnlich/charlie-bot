@@ -322,6 +322,8 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
     in the standard HF cache layout under `models/`.
 - The two GitHub downloads are checked against pinned sha256 values (`SILERO_VAD_SHA256`, `QWEN3_ASR_SHA256`);
   an HF snapshot goes through `_verify_hf_snapshot`.
+- The Qwen3 archive extracts into `models/.<QWEN3_ASR_DIR_NAME>.<uuid4 hex>.extracting/`, which is `os.replace`d onto
+  `models/<QWEN3_ASR_DIR_NAME>/`. The staging directory is removed in a `finally` (`transcriber._ensure_qwen3_extracted`).
 
 ### 5.12 `vendor/katex/katex.min.js`
 
@@ -364,6 +366,15 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
 - Losing a create race: `os.replace` onto an existing non-empty `sessions/<id>` fails, and the writer returns the
   existing node's metadata (stable ids make the race idempotent).
 - A new node's `backend` is the explicit backend, else the parent's backend, else `backends.options[0].id`.
+
+### 5.17 Usage caches
+
+- Persisted: only the ledger (section 5.8). Its `captured_files` table holds the last ingested signature per source
+  file, which a capture uses to skip unchanged files, and `ledger_meta` holds `last_capture_at:<host>`.
+- In memory only, lost at restart:
+  - the quota panel cache `_cached_usage` in `src/features/usage/ext_usage.py`, keyed `<provider>:<label>`, served by
+    `GET /api/ext-usage` and broadcast on the sidebar channel;
+  - the stat-signature memos of the NDJSON readers (line counts and tails, `src/infra/ndjson.py`).
 
 ## 6. Session files
 
@@ -595,6 +606,11 @@ instead.
 | `<home name>_backup/charliebot-<%Y%m%d-%H%M%S>.tar.gz` (a sibling of the home) | `src/features/backup/backup.py` (cron handler `backup`) | see 7.1 |
 | `<publish.dir>/<token>/<basename>` | `charliebot publish` | see `cli.md` |
 | `/tmp/charliebot-oneshot-*`, `/tmp/charliebot-run-*`, `/tmp/charliebot-opencode-oneshot-*` | one-shot backends | temp working and transport directories, removed after the call |
+| `/tmp/charliebot-explain-*/` | `src/features/explain/explain.py` | the 0444 copy of the chat log that a one-shot reads; removed after the call |
+| `/tmp/headless-render-*/` | `src/features/artifacts/headless_render.py` | Chromium user-data directory of the headless height probe; removed when the renderer closes |
+| `/tmp/merge-chunks-*/`, `/tmp/merge-members-*/` | `src/features/trace/trace_merge.py` | fragment directories of a Perfetto merge; removed after the merge |
+| `<system tmp>/<TemporaryDirectory>` | `src/features/memory/memory_proposal.py` | a `git archive` extraction of one commit, linted and removed |
+| `/home/<user>/.ssh/controlmasters/` | `src/infra/ssh.py::_control_dir` (every `ssh_cmd` argv) | ssh ControlMaster sockets named `%C`, with `ControlPersist=1200`. The directory is created 0700; ssh creates each socket 0600. Used by host_auth probes, trigger probes and remote launches. |
 | `.page-height-probe-<hex>.html` beside an artifact | `src/features/artifacts/artifact_check.py` | temporary probe page for the headless height check |
 | tmux socket `charliebot` (default tmux socket directory) | `src/runtime/agent_process/pty_common.py` | terminal sessions `charliebot-<id>` |
 

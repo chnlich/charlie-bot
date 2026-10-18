@@ -50,7 +50,7 @@ class FakeServer:
     record({"prompt_text": body.get("text"), "prompt_files": len(body.get("files", [])), "session": session_id})
     self.active.add(session_id)
     self.emit({"type": "session.execution.started", "data": {"sessionID": session_id}})
-    for shell in step.get("shells", []):
+    for _ in step.get("shells", []):
       shell_id = self.new_id("sh")
       self.shells[shell_id] = {
           "id": shell_id,

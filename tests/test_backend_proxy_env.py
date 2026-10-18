@@ -11,7 +11,6 @@ import conftest
 import pytest
 
 from src.backends.charlie_code import charlie_code
-from src.backends.opencode import opencode
 from src.runtime.agent_process import base
 
 # Each row is the backend's shared conftest rig prefixed by its class:

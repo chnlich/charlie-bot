@@ -113,8 +113,16 @@ impl StreamingManager {
 
   /// Broadcast one JSON frame to every subscriber of the named channel.
   pub async fn broadcast(&self, channel: &str, frame: Value) -> StoreResult<()> {
-    let serialized = serde_json::to_string(&frame)
-      .map_err(|error| StoreError::new(format!("websocket frame serialization failed: {error}")))?;
+    self.broadcast_with_serializer(channel, frame, serialize_frame).await
+  }
+
+  async fn broadcast_with_serializer(
+    &self,
+    channel: &str,
+    frame: Value,
+    serializer: impl Fn(&Value) -> StoreResult<String>,
+  ) -> StoreResult<()> {
+    let serialized = serializer(&frame)?;
     let event_type = frame.get("type").and_then(Value::as_str);
     let is_stream = event_type == Some("stream");
     let hides_preview = event_type.is_some_and(|event_type| PREVIEW_HIDING_TYPES.contains(&event_type));
@@ -211,6 +219,7 @@ fn end_stream_window(manager: Weak<StreamingInner>, channel: &str, window_id: u6
 mod tests {
   use super::*;
   use serde_json::json;
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use tokio::time::{Duration, advance};
 
   #[tokio::test(start_paused = true)]
@@ -262,9 +271,18 @@ mod tests {
     let manager = StreamingManager::new();
     let mut first = manager.subscribe("session:synthetic");
     let mut second = manager.subscribe("session:synthetic");
-    manager.broadcast("session:synthetic", json!({"type": "error", "message": "failed"})).await.unwrap();
+    let serialize_calls = Arc::new(AtomicUsize::new(0));
+    let call_count = Arc::clone(&serialize_calls);
+    manager
+      .broadcast_with_serializer("session:synthetic", json!({"type": "error", "message": "failed"}), |frame| {
+        call_count.fetch_add(1, Ordering::SeqCst);
+        serialize_frame(frame)
+      })
+      .await
+      .unwrap();
     let first_frame = first.recv().await.unwrap();
     assert_eq!(second.recv().await.unwrap(), first_frame);
+    assert_eq!(serialize_calls.load(Ordering::SeqCst), 1);
 
     manager.unsubscribe(&mut first);
     assert!(first.recv().await.is_none());

@@ -13,6 +13,7 @@ import enum
 import json
 import math
 import mimetypes
+import os
 import pathlib
 import random
 import struct
@@ -452,6 +453,33 @@ def jinja_filter_cases() -> dict:
   return {"cases": cases}
 
 
+SSH_INVOCATIONS = [
+    ("login.example.test", ["true"]),
+    ("alice@gpu-login.example.test", ["squeue", "-u", "alice", "--format=%i %T"]),
+    ("192.0.2.10", ["sh", "-c", "echo 'a b' && exit 3"]),
+]
+
+
+def ssh_argv_cases() -> dict:
+  """The argv of `ssh_cmd` in `src/infra/ssh.py`, with its control directory under a temporary HOME.
+
+  The module fixes its control directory when it imports, so HOME is set before the import and the directory
+  `ssh_cmd` creates is removed with the temporary home. `{home}` in the fixture stands for that directory.
+  """
+  with tempfile.TemporaryDirectory() as home:
+    os.environ["HOME"] = home
+    from src.infra import ssh
+
+    cases = [
+        {
+            "host": host,
+            "remote_argv": remote,
+            "argv": [arg.replace(home, "{home}") for arg in ssh.ssh_cmd(host, *remote)]
+        } for host, remote in SSH_INVOCATIONS
+    ]
+  return {"cases": cases}
+
+
 def write_fixture(name: str, payload: dict) -> None:
   """Write one fixture file: ASCII-only JSON, so the committed bytes stay printable."""
   FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -468,6 +496,7 @@ def main() -> None:
   write_fixture("validation_422", validation_cases())
   write_fixture("mimetypes", mimetype_cases())
   write_fixture("jinja_filters", jinja_filter_cases())
+  write_fixture("ssh_argv", ssh_argv_cases())
 
 
 if __name__ == "__main__":

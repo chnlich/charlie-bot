@@ -1,0 +1,79 @@
+{
+ "generated_by": "rust/scripts/gen_compat_fixtures.py",
+ "python": "3.14.7",
+ "cases": [
+  {
+   "host": "login.example.test",
+   "remote_argv": [
+    "true"
+   ],
+   "argv": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ControlMaster=auto",
+    "-o",
+    "ControlPath={home}/.ssh/controlmasters/%C",
+    "-o",
+    "ControlPersist=1200",
+    "login.example.test",
+    "true"
+   ]
+  },
+  {
+   "host": "alice@gpu-login.example.test",
+   "remote_argv": [
+    "squeue",
+    "-u",
+    "alice",
+    "--format=%i %T"
+   ],
+   "argv": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ControlMaster=auto",
+    "-o",
+    "ControlPath={home}/.ssh/controlmasters/%C",
+    "-o",
+    "ControlPersist=1200",
+    "alice@gpu-login.example.test",
+    "squeue",
+    "-u",
+    "alice",
+    "--format=%i %T"
+   ]
+  },
+  {
+   "host": "192.0.2.10",
+   "remote_argv": [
+    "sh",
+    "-c",
+    "echo 'a b' && exit 3"
+   ],
+   "argv": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ControlMaster=auto",
+    "-o",
+    "ControlPath={home}/.ssh/controlmasters/%C",
+    "-o",
+    "ControlPersist=1200",
+    "192.0.2.10",
+    "sh",
+    "-c",
+    "echo 'a b' && exit 3"
+   ]
+  }
+ ]
+}

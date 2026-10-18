@@ -498,6 +498,16 @@ def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
         "refused_descending_cursor":
             _refusal(lambda: store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=descending.next_cursor)),
     }
+  if case == "blockers":
+    # The same collection as TaskTreeManager._structural_blockers: every run's blocker, in run order.
+    events = store.load_events_sync(RUN_SESSION_ID)
+    host_boot = runs.read_host_boot_time()
+    blockers = []
+    for run in store.list_run_records_sync(RUN_SESSION_ID):
+      blocker = store.run_blocker(run, events, host_boot)
+      if blocker is not None:
+        blockers.append(blocker)
+    return {"blockers": blockers}
   raise ValueError(f"unknown read case {case}")
 
 

@@ -553,42 +553,71 @@ async fn newest_run_is_the_latest_launch_and_a_queued_reservation_never_leads() 
 }
 
 #[tokio::test]
-async fn run_blocker_names_the_first_run_that_blocks_a_structural_change() {
+async fn run_blockers_name_each_run_that_blocks_a_structural_change() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
-  assert_eq!(store.run_blocker(RUN_SESSION_ID).unwrap(), None);
+  assert_eq!(store.run_blockers(RUN_SESSION_ID).unwrap(), Vec::new());
 
   register_runs(&store, vec![empty_run("run-queued", RunKind::Work)]).await;
   assert_eq!(
-    store.run_blocker(RUN_SESSION_ID).unwrap(),
-    Some(RunBlocker {
+    store.run_blockers(RUN_SESSION_ID).unwrap(),
+    vec![RunBlocker {
       run_id: "run-queued".to_string(),
       reason: "run run-queued is queued (pending dispatch)".to_string(),
-    })
+    }]
   );
   // A durable stop settles a run that never launched, so it blocks nothing.
   store.request_stop(RUN_SESSION_ID, "run-queued", "stop-queued").await.unwrap();
-  assert_eq!(store.run_blocker(RUN_SESSION_ID).unwrap(), None);
+  assert_eq!(store.run_blockers(RUN_SESSION_ID).unwrap(), Vec::new());
 
   let mut live = Command::new("sleep").arg("30").spawn().unwrap();
   let pid_start = proc_identity::read_pid_stat(live.id()).unwrap().pid_start;
   register_process_run(&store, "run-active", live.id(), &pid_start).await;
-  let active = store.run_blocker(RUN_SESSION_ID).unwrap();
+  let active = store.run_blockers(RUN_SESSION_ID).unwrap();
   finish_run(&store, "run-active", None).await;
   register_process_run(&store, "run-unresolved", live.id(), "forged-start").await;
-  let unresolved = store.run_blocker(RUN_SESSION_ID).unwrap();
+  let unresolved = store.run_blockers(RUN_SESSION_ID).unwrap();
   live.kill().unwrap();
   live.wait().unwrap();
   assert_eq!(
     active,
-    Some(RunBlocker { run_id: "run-active".to_string(), reason: "run run-active is active".to_string() })
+    vec![RunBlocker { run_id: "run-active".to_string(), reason: "run run-active is active".to_string() }]
   );
   assert_eq!(
     unresolved,
-    Some(RunBlocker {
+    vec![RunBlocker {
       run_id: "run-unresolved".to_string(),
       reason: "run run-unresolved has an unresolved process identity (needs recovery)".to_string(),
-    })
+    }]
+  );
+}
+
+#[tokio::test]
+async fn a_session_with_two_blocked_runs_reports_both_like_python() {
+  let root = tempfile::tempdir().unwrap();
+  let seed_home = root.path().join("blockers").join("seed-home");
+  let store = make_store(&seed_home);
+  register_runs(
+    &store,
+    vec![
+      launched_run("run-done", 1),
+      empty_run("queued-a", RunKind::Work),
+      empty_run("queued-stopped", RunKind::Work),
+      unresolved_run("run-unresolved", 2),
+    ],
+  )
+  .await;
+  finish_run(&store, "run-done", None).await;
+  store.request_stop(RUN_SESSION_ID, "queued-stopped", "stop-queued").await.unwrap();
+
+  let (python, rust) = read_on_copies(root.path(), &seed_home, "blockers", read_blockers);
+  assert_eq!(python, rust);
+  assert_eq!(
+    rust["blockers"],
+    json!([
+      "run queued-a is queued (pending dispatch)",
+      "run run-unresolved has an unresolved process identity (needs recovery)",
+    ])
   );
 }
 
@@ -625,6 +654,14 @@ async fn finish_run(store: &Store, run_id: &str, ended_at: Option<&str>) {
 fn launched_run(id: &str, minute: u32) -> RunRecord {
   let mut run = empty_run(id, RunKind::Work);
   run.started_at = Some(UtcDateTime::parse(&format!("2026-01-01T00:{minute:02}:00Z")).unwrap());
+  run
+}
+
+/// A launched run whose pid is above the kernel's PID_MAX_LIMIT (2^22), so no live process can hold it.
+fn unresolved_run(id: &str, minute: u32) -> RunRecord {
+  let mut run = launched_run(id, minute);
+  run.pid = Some(2_147_483_646);
+  run.pid_start = Some("forged-start".to_string());
   run
 }
 
@@ -865,6 +902,12 @@ fn page_json(page: &RunPage) -> Value {
 
 fn refusal<T>(result: Result<T, StoreError>) -> String {
   result.err().expect("the cursor is refused under the other order").to_string()
+}
+
+fn read_blockers(store: &Store) -> Value {
+  let reasons =
+    store.run_blockers(RUN_SESSION_ID).unwrap().into_iter().map(|blocker| blocker.reason).collect::<Vec<_>>();
+  json!({ "blockers": reasons })
 }
 
 fn empty_run(id: &str, kind: RunKind) -> RunRecord {

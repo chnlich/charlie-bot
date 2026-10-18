@@ -26,7 +26,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.slack", charliebot_slack::register),               // stub: src.features.slack
   ("src.features.discord", charliebot_discord::register),           // stub: src.features.discord
   ("src.features.web_reply", charliebot_web_reply::register),       // stub: src.features.web_reply
-  ("src.features.host_auth", charliebot_host_auth::register),       // stub: src.features.host_auth
+  ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),       // stub: src.features.diff_view
   ("src.features.explain", charliebot_explain::register),           // stub: src.features.explain
   ("src.features.improve", stub),                                   // stub: src.features.improve

@@ -344,7 +344,20 @@ dependencies = [
 name = "charliebot-host-auth"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-compat",
+ "charliebot-core",
  "charliebot-registry",
+ "futures-util",
+ "http",
+ "libc",
+ "minijinja",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

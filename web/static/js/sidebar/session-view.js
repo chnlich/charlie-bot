@@ -181,9 +181,7 @@ function setWorkerTranscriptMode(mode) {
 
 // usage.js (loaded first) paints the streaming node through this registration:
 // a worker transcript's draft paints tool rows instead of parsed text.
-if (typeof Chat !== 'undefined' && typeof Chat.setStreamDraftModeSupplier === 'function') {
-  Chat.setStreamDraftModeSupplier(transcriptTarget);
-}
+Chat.setStreamDraftModeSupplier(transcriptTarget);
 
 function setInputAreaVisible(visible) {
   const area = document.getElementById('input-area');

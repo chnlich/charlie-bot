@@ -21,6 +21,7 @@ mod request_log;
 mod request_path;
 mod routes;
 mod state;
+mod store_setup;
 mod templating;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -31,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
-use charliebot_core::{config, home, logging, paths};
+use charliebot_core::{config, home, logging, paths, v1_sessions};
 use nix::sys::signal::{SigHandler, Signal};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
@@ -98,11 +99,20 @@ async fn run() -> ExitCode {
     eprintln!("charliebot-server: initializing {} failed: {error}", paths::display(&cfg.charliebot_home));
     return ExitCode::from(EXIT_STARTUP);
   }
+  let store = match store_setup::create((*cfg).clone()) {
+    Ok(store) => Arc::new(store),
+    Err(error) => {
+      writer_fence.release();
+      eprintln!("charliebot-server: creating session store failed: {error}");
+      return ExitCode::from(EXIT_STARTUP);
+    }
+  };
   tracing::info!(path = %paths::display(&cfg.charliebot_home), "charliebot_home_ready");
   let state = Arc::new(AppState {
     templating: Templating::new(&repo_root),
     static_mounts: StaticMount::python_app_mounts(&repo_root),
     mime_types: MimeTypes::load(),
+    _store: store,
     config: state_parts.config,
     credentials: state_parts.credentials,
     build_info,
@@ -179,6 +189,7 @@ fn load_inputs() -> Result<(PathBuf, StateParts), String> {
   let parts = StateParts { config: state::config_cache(&home), credentials: state::credentials_cache(&home) };
   let cfg = parts.config.get().map_err(|error| error.to_string())?;
   config::require_backends(&cfg).map_err(|error| error.to_string())?;
+  v1_sessions::require_no_v1_sessions(&cfg)?;
   VoiceSettings::from_config(&cfg)?;
   parts.credentials.get().map_err(|error| error.to_string())?;
   Ok((repo_root, parts))

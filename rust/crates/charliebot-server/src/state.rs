@@ -8,6 +8,7 @@ use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigError};
 use charliebot_core::credentials::{self, Credentials};
 use charliebot_core::hot_reload::HotReload;
+use charliebot_store::Store;
 
 use crate::buildinfo::BuildInfo;
 use crate::routes::static_mounts::StaticMount;
@@ -23,6 +24,8 @@ pub struct AppState {
   /// The `/static` mounts in the Python app's route order.
   pub static_mounts: Vec<StaticMount>,
   pub mime_types: MimeTypes,
+  /// The sole owner of session metadata and chat event writes.
+  pub _store: Arc<Store>,
 }
 
 /// The hot-reloaded `config.yaml` of `home`.

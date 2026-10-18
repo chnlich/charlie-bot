@@ -43,7 +43,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.backends.gemini", backends::gemini),                  // stub: src.backends.gemini
   ("src.backends.kimi", backends::kimi),                      // stub: src.backends.kimi
   ("src.backends.opencode", backends::opencode),              // stub: src.backends.opencode
-  ("src.features.files", charliebot_files::register),         // stub: src.features.files
+  ("src.features.files", charliebot_files::register),
 ];
 
 /// The registry of every listed package, registered in list order. A failing registration fails the server's startup.

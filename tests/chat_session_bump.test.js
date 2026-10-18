@@ -1261,6 +1261,11 @@ test('turn engine: hidden mount projects nothing, first resize projects the tail
   assert.equal(wraps[wraps.length - 1].dataset.turnOpen, 'true',
       'folded rows sit above the last open turn');
   assert.ok(distanceFromBottom(root) < 150, 'first projection is bottom-pinned');
+
+  engine.setView('foryou');
+  checked.length = 0;
+  engine.reproject('scroll');
+  assert.equal(checked.length, 0, 'For you scroll bookkeeping does not run a projection check');
 });
 
 test('turn engine: resize never pulls a reading user, keeps a pinned user', () => {

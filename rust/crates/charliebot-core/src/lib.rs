@@ -12,4 +12,5 @@ pub mod paths;
 pub mod pyfmt;
 pub mod registry;
 pub mod run_token;
+pub mod ssh;
 pub mod timefmt;

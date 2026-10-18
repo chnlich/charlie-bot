@@ -22,9 +22,9 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.code_server", charliebot_code_server::register), // stub: src.features.code_server
   ("src.features.cron", features::cron),           // stub: src.features.cron
   ("src.features.diag", charliebot_diag::register), // stub: src.features.diag
-  ("src.features.slack", features::slack),         // stub: src.features.slack
-  ("src.features.discord", features::discord),     // stub: src.features.discord
-  ("src.features.web_reply", features::web_reply), // stub: src.features.web_reply
+  ("src.features.slack", charliebot_slack::register), // stub: src.features.slack
+  ("src.features.discord", charliebot_discord::register), // stub: src.features.discord
+  ("src.features.web_reply", charliebot_web_reply::register), // stub: src.features.web_reply
   ("src.features.host_auth", charliebot_host_auth::register), // stub: src.features.host_auth
   ("src.features.diff_view", charliebot_diff_view::register), // stub: src.features.diff_view
   ("src.features.explain", charliebot_explain::register), // stub: src.features.explain

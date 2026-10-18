@@ -49,8 +49,8 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | POST | `/api/sessions/{session_id}/group` | sessions | todo |  |
 | GET | `/api/sessions/{session_id}/events.jsonl` | sessions | todo |  |
 | GET | `/api/sessions/{session_id}/runs` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/effective-prompt` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/runs/{run_id}/context` | sessions | todo |  |
+| GET | `/api/sessions/{session_id}/effective-prompt` | sessions | todo | Reply segments from web_reply, Slack and Discord are not ported. |
+| GET | `/api/sessions/{session_id}/runs/{run_id}/context` | sessions | todo | Missing-run detail differs in the minted ID until R2a lands. |
 | POST | `/api/sessions/{session_id}/retry` | sessions | todo |  |
 | GET | `/api/sessions/{session_id}/task-inputs/pending` | sessions | todo |  |
 | POST | `/api/sessions/{session_id}/task-inputs/acknowledge` | sessions | todo |  |

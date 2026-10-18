@@ -68,7 +68,7 @@ pub async fn agent_one_shot_text(
   Ok(result.text.trim().to_string())
 }
 
-fn agent_environment_from_process() -> anyhow::Result<crate::agent_environment::AgentBaseEnvironment> {
+pub(crate) fn agent_environment_from_process() -> anyhow::Result<crate::agent_environment::AgentBaseEnvironment> {
   let mut values = BTreeMap::new();
   for (name, value) in env::vars_os() {
     let name = name.into_string().map_err(|_| anyhow::anyhow!("the process environment has a non-Unicode name"))?;
@@ -85,11 +85,11 @@ struct OneShotResult {
   saw_result: bool,
 }
 
-fn frame_system_prompt(system_prompt: &str, prompt: &str) -> String {
+pub(crate) fn frame_system_prompt(system_prompt: &str, prompt: &str) -> String {
   format!("<system-instructions>\n{system_prompt}\n</system-instructions>\n\n{prompt}")
 }
 
-fn assistant_text(event: &Value) -> String {
+pub(crate) fn assistant_text(event: &Value) -> String {
   let Some(blocks) = event.get("message").and_then(|message| message.get("content")).and_then(Value::as_array) else {
     return String::new();
   };

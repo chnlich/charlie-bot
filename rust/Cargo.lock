@@ -214,6 +214,7 @@ dependencies = [
  "bytes",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-store",
  "flate2",
  "futures-util",
  "http",
@@ -232,6 +233,20 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+]
+
+[[package]]
+name = "charliebot-store"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

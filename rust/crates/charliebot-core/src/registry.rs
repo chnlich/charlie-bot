@@ -6,6 +6,30 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::metadata_slot::MetadataSlot;
+
+/// Runtime contributions whose order follows package registration.
+#[derive(Debug, Default)]
+pub struct Registry {
+  metadata_slots: Vec<MetadataSlot>,
+}
+
+impl Registry {
+  /// Register one metadata slot in package registration order.
+  pub fn register_metadata_slot(&mut self, slot: MetadataSlot) -> Result<(), String> {
+    if self.metadata_slots.iter().any(|registered| registered.owner == slot.owner && registered.on == slot.on) {
+      return Err(format!("metadata owner {:?} is already registered for {:?}", slot.owner, slot.on));
+    }
+    self.metadata_slots.push(slot);
+    Ok(())
+  }
+
+  /// Return the collected metadata slots in registration order.
+  pub fn metadata_slots(&self) -> &[MetadataSlot] {
+    &self.metadata_slots
+  }
+}
+
 /// `registrations.PACKAGES`, in registration order. Every listed package is a page package: its
 /// `static/` serves under `/static/<kind>/<name>/` and its `templates/` joins the template search
 /// path, in this order (`page_render.register_page_package`).

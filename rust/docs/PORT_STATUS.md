@@ -141,3 +141,124 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET, HEAD | `/static/backends/opencode/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/features/files/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/{path:path}` | foundation | ported |  |
+
+## Services and lifespan
+
+Baseline: `rust/docs/contract/state/services.md`. Status describes this Rust workspace at this
+stage; `ported` means the startup or service behavior is implemented, `todo` means it is not yet
+implemented.
+
+| Kind | Service or step | Stage | Status | Note |
+| --- | --- | --- | --- | --- |
+| pre-loop | `agent_environment.apply_agent_environment` | foundation | todo | |
+| pre-loop | `config.get_config` | foundation | ported | |
+| pre-loop | `config.require_backends` | foundation | ported | |
+| pre-loop | `v1_sessions.require_no_v1_sessions` | foundation | ported | Runs before bind. |
+| pre-loop | Registered startup checks | foundation | todo | Cron and usage backend-reference checks. |
+| pre-loop | Start server on configured host and port | foundation | ported | |
+| lifespan | 1. Read config | foundation | ported | |
+| lifespan | 2. Acquire home writer fence | foundation | ported | |
+| lifespan | 3. Capture build information | foundation | ported | |
+| lifespan | 4. Initialize the home | foundation | ported | |
+| lifespan | 5. Log and sweep session cgroups | foundation | todo | |
+| lifespan | 6. Start task-tree recovery | agent-runtime | todo | |
+| lifespan | 7. Start early services | services | todo | |
+| lifespan | 8. Await task-tree recovery | agent-runtime | todo | |
+| lifespan | 9. Recover pending triggers | agent-runtime | todo | |
+| lifespan | 10. Start ready services | services | todo | |
+| lifespan | 11. Log ready and serve | foundation | ported | |
+| lifespan | 12. Stop services and close shared clients | services | todo | Signal shutdown and writer-fence release are implemented; service teardown is not. |
+| lifespan | 13. Release home writer fence | foundation | ported | |
+| service | `scheduler` | features/cron | todo | |
+| service | `slack` | features/slack | todo | |
+| service | `discord` | features/discord | todo | |
+| service | `host_auth` | features/host_auth | todo | |
+| service | `merge_pool` | features/trace | todo | |
+| service | `usage_tally` | features/usage | todo | |
+| service | `ext_usage` | features/usage | todo | |
+| service | `speech` | features/voice | todo | |
+
+## State files
+
+Baseline: `rust/docs/contract/state/files.md`. `S1` covers session metadata and chat history. Later
+run-record work is `S2`; task-tree runtime and feature-owned files remain with their named stages.
+
+| File kind | Stage | Status | Note |
+| --- | --- | --- | --- |
+| `config.yaml` | foundation | ported | |
+| `credentials.yaml` | foundation | ported | |
+| `config.d/cron.d/<name>.yaml` | features/cron | todo | |
+| `MASTER_AGENT_PROMPT.md` | agent-runtime | todo | |
+| `state/home_writer.lock` | foundation | ported | |
+| `state/writer_identity.json` | foundation | ported | |
+| `state/cron_alert_fingerprint.json` | features/cron | todo | |
+| `cache/cli_base_url.json` | foundation | todo | |
+| `cache/perfetto_merge/<sha256>.json.gz` | features/trace | todo | |
+| `host_auth.json` | features/host_auth | todo | |
+| `usage/ledger.sqlite3` | features/usage | todo | |
+| `prompt_bodies/<sha256>.md` | agent-runtime | todo | |
+| `memory/` | features/memory | todo | |
+| `memory-proposal/` | features/memory | todo | |
+| `models/` speech assets | features/voice | todo | |
+| `vendor/katex/katex.min.js` | foundation | todo | |
+| `voice_eval/<ts>/results.json` | features/voice | todo | |
+| `voice_eval/<ts>/summary.md` | features/voice | todo | |
+| `opencode/` | backends/opencode | todo | |
+| `sessions/.counter` | agent-runtime | todo | |
+| `sessions/.task-<id>-<pid>-<uuid>.tmp/` | agent-runtime | todo | |
+| in-memory usage caches | features/usage | todo | Not persisted files. |
+| `sessions/<sid>/metadata.json` | S1 | ported | Ordered typed metadata, registered slots, unknown keys, atomic writes. |
+| `sessions/<sid>/threads/<tid>/metadata.json` | S1 | ported | Typed thread model and registered slots. |
+| `sessions/<sid>/data/chat_events.jsonl` | S1 | ported | Append, sync, tolerant NDJSON reads, cache and ranges. |
+| `sessions/<sid>/data/archives/chat_events.<year>-W<week>.jsonl` | S1 | ported | Archive rotation and global `archive_offset`. |
+| `sessions/<sid>/data/explain_results.json` | features/explain | todo | |
+| `sessions/<sid>/data/runs/<run>/task_spec.md` | S2 | planned | |
+| `sessions/<sid>/data/runs/<run>/metadata.json` | S2 | planned | |
+| `sessions/<sid>/data/runs/<run>/events.jsonl` | S2 | planned | |
+| `sessions/<sid>/data/runs/<run>/agent.raw.ndjson` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/agent.stderr.log` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/agent.raw.cursor` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/agent.raw.ndjson.<n>` | agent-runtime | todo | Rotated raw output. |
+| `sessions/<sid>/data/runs/<run>/agent.stderr.log.<n>` | agent-runtime | todo | Rotated stderr. |
+| `sessions/<sid>/data/runs/<run>/stdout.log` | backends/antigravity | todo | |
+| `sessions/<sid>/data/runs/<run>/stderr.log` | backends/antigravity | todo | |
+| `sessions/<sid>/data/runs/<run>/task.md` | backends/charlie-code | todo | |
+| `sessions/<sid>/data/runs/<run>/harness_instructions.md` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/prompt_snapshot.json` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/launch_prompt.md` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/cold_read.json` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/hang_diagnostics.json` | agent-runtime | todo | |
+| legacy `sessions/<sid>/data/master_runs/<started_at>/` | agent-runtime | todo | Read-only baseline layout. |
+| legacy `sessions/<sid>/threads/<tid>/data/` | agent-runtime | todo | Read-only baseline layout. |
+| `sessions/<sid>/triggers/<trigger_id>.json` | agent-runtime | todo | |
+| `sessions/<sid>/launches/<launch_id>/metadata.json` | foundation | todo | |
+| `sessions/<sid>/launches/<launch_id>/log` | foundation | todo | |
+| `sessions/<sid>/launches/<launch_id>/exit` | foundation | todo | |
+| `sessions/<sid>/plans.json` | features/artifacts | todo | |
+| session artifact pages | features/artifacts | todo | |
+| `sessions/<sid>/uploads/<filename>` | chat | todo | |
+| `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | todo | |
+| `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | todo | |
+| `sessions/<sid>/loops/active.lock` | features/improve | todo | |
+| `sessions/<sid>/loops/<n>/state.json` | features/improve | todo | |
+| `sessions/<sid>/loops/<n>/goal.md` | features/improve | todo | |
+| `sessions/<sid>/loops/<n>/plan.md` | features/improve | todo | |
+| `sessions/<sid>/loops/<n>/iter_<n>.md` | features/improve | todo | |
+| `sessions/<sid>/CLAUDE.md` instructions | agent-runtime | todo | |
+| `sessions/<sid>/AGENTS.md` instructions | agent-runtime | todo | |
+| session cgroup directories | agent-runtime | todo | Outside the home. |
+| Claude `.credentials.json` | backends/claude-code | todo | Outside the home. |
+| Claude and Codex transcript files | backends/claude-code, backends/codex | todo | Outside the home. |
+| worktree directories | agent-runtime | todo | Outside the home. |
+| worktree trash | agent-runtime | todo | Outside the home. |
+| sibling backup archives | features/backup | todo | Outside the home. |
+| `<publish.dir>/<token>/<basename>` | CLI publish | todo | Outside the home. |
+| one-shot backend temporary directories | backends | todo | Outside the home. |
+| explain temporary directories | features/explain | todo | Outside the home. |
+| headless-render temporary directories | features/artifacts | todo | Outside the home. |
+| trace-merge temporary directories | features/trace | todo | Outside the home. |
+| memory proposal temporary extraction | features/memory | todo | Outside the home. |
+| SSH ControlMaster sockets | foundation | todo | Outside the home. |
+| artifact page-height probe files | features/artifacts | todo | Beside an artifact. |
+| tmux `charliebot-<id>` sockets | features/terminal | todo | Outside the home. |
+| repo config examples and prompt inputs | foundation | reader-only | Not written by the server. |

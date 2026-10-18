@@ -1716,4 +1716,31 @@ mod tests {
       fold_task_facts(&[json!({"id": "bad-import", "type": "task_imported", "pending_inputs": [{}]})]).unwrap_err();
     assert!(error.to_string().contains("without a stable input_id"));
   }
+
+  #[test]
+  fn task_spec_hash_matches_python_canonical_text() {
+    let implement = TaskSpec {
+      goal: "Ship the é change".to_string(),
+      acceptance: vec!["tests pass".to_string()],
+      context_refs: vec!["docs/a.md".to_string()],
+      repo_path: Some("/home/synthetic/repo".to_string()),
+      base_branch: Some("main".to_string()),
+      task_type: Some(TaskType::Implement),
+      keep_worktree: true,
+      cold_read: None,
+    };
+    let text = serde_json::to_string(&implement).unwrap();
+    assert_eq!(
+      text,
+      r#"{"goal":"Ship the é change","acceptance":["tests pass"],"context_refs":["docs/a.md"],"repo_path":"/home/synthetic/repo","base_branch":"main","task_type":"implement","keep_worktree":true,"cold_read":null}"#
+    );
+    assert_eq!(task_spec_hash(&implement).unwrap(), "c5ddb0177e12fd9b6e51707f3c41a0285c830bff33280ac66ebd0121cdd3a7c1");
+
+    let verify = TaskSpec { goal: "check".to_string(), task_type: Some(TaskType::Verify), ..TaskSpec::default() };
+    assert_eq!(
+      serde_json::to_string(&verify).unwrap(),
+      r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null}"#
+    );
+    assert_eq!(task_spec_hash(&verify).unwrap(), "9e765c73c0cf10b2fbaef99cb808d77a04b4451cc5924cdaa17b7ddf4c6f106b");
+  }
 }

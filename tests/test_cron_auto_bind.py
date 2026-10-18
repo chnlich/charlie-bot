@@ -231,7 +231,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   cron_session.last_scheduled_run = "2026-06-07T03:00:00-07:00"
   cron_session.last_scheduled_cron = "0 3 * * *"
   await session_blocks.store.save_metadata(cron_session)
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("sweep done")])],
@@ -570,7 +570,7 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   await scheduler._tick()  # binds; the daily task is not due
   node_id = _read_task_yaml(home)["session_id"]
 
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("reviewed: merged")])
   conftest.install_scripted_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
@@ -614,7 +614,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = conftest.install_scripted_backends(
       monkeypatch, [

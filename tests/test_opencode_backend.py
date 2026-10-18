@@ -62,6 +62,11 @@ def _requests(fake_oc: pathlib.Path, method: str, path_prefix: str) -> list[dict
   ]
 
 
+async def _loaded_directories(shared: server.OpenCodeServer) -> set[str]:
+  response = await shared.client.get("/api/debug/location")
+  return {entry["directory"] for entry in response.json()}
+
+
 async def _run_turn(backend: opencode.OpenCodeBackend,
                     prompt: str,
                     cwd: pathlib.Path,
@@ -248,6 +253,84 @@ def test_image_attachments_become_data_urls_and_other_files_are_skipped(tmp_path
   assert attachments == [{"uri": "data:image/png;base64,iVBORw==", "name": "a.png"}]
 
 
+class _Locations:
+  """A MockTransport handler for the debug-location routes: a loaded set, and the calls made against it."""
+
+  def __init__(self, loaded: list[str], status: int = 204) -> None:
+    self.loaded = loaded
+    self.status = status
+    self.calls: list[str] = []
+
+  def __call__(self, request: httpx.Request) -> httpx.Response:
+    if request.method == "GET" and request.url.path == "/api/debug/location":
+      self.calls.append("list")
+      return httpx.Response(200, json=[{"directory": directory} for directory in self.loaded])
+    if request.method == "DELETE" and request.url.path == "/api/debug/location":
+      directory = request.url.params["location[directory]"]
+      self.calls.append(f"release {directory}")
+      return httpx.Response(self.status)
+    raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+
+def _release_server(locations: _Locations) -> server.OpenCodeServer:
+  """A shared server whose process reads as running and whose client answers from *locations*; no process starts."""
+  shared = server.OpenCodeServer(None)
+  shared._proc = mock.Mock(pid=1, returncode=None)
+  shared._client = httpx.AsyncClient(base_url="http://opencode.test", transport=httpx.MockTransport(locations))
+  return shared
+
+
+@pytest.mark.asyncio
+async def test_release_unloads_each_unclaimed_directory_and_keeps_the_claimed_ones():
+  locations = _Locations(["/w/a", "/w/b", "/w/c"])
+  shared = _release_server(locations)
+  await shared.claim("/w/a")
+  await shared.claim("/w/b")
+  await shared.release_claim("/w/b")
+  assert locations.calls == ["list", "release /w/b", "release /w/c"]
+  assert shared._claims == {"/w/a": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["stopping", "exited", "starting"])
+async def test_release_is_skipped_unless_the_server_is_running(state):
+  locations = _Locations(["/w/a"])
+  shared = _release_server(locations)
+  await shared.claim("/w/a")
+  if state == "stopping":
+    shared._stopping = True
+  elif state == "exited":
+    shared._proc.returncode = 0
+  else:
+    shared._client = None
+  await shared.release_claim("/w/a")
+  assert locations.calls == []
+  assert not shared._claims
+
+
+@pytest.mark.asyncio
+async def test_failed_release_names_the_directory_and_the_status():
+  shared = _release_server(_Locations(["/w/a"], status=500))
+  await shared.claim("/w/b")
+  with pytest.raises(RuntimeError, match=r"release of directory /w/a returned HTTP 500"):
+    await shared.release_claim("/w/b")
+
+
+@pytest.mark.asyncio
+async def test_turn_end_steps_drop_the_claim_once_even_when_the_turn_steps_fail():
+  backend = opencode.OpenCodeBackend(model=MODEL)
+  backend._reset_run_state()
+  shared = mock.Mock(release_claim=mock.AsyncMock())
+  backend._claim = (shared, "/w/a")
+  # finish() fails once; its second call is the idempotent no-op it is on a real turn.
+  backend._turn = mock.Mock(finish=mock.AsyncMock(side_effect=[RuntimeError("interrupt failed"), None]))
+  with pytest.raises(RuntimeError, match="interrupt failed"):
+    await backend._turn_end_steps()
+  shared.release_claim.assert_awaited_once_with("/w/a")
+  await backend._turn_end_steps()
+  shared.release_claim.assert_awaited_once_with("/w/a")
+
+
 @pytest.mark.asyncio
 async def test_dispatch_routes_to_the_claimed_turn_and_settles_pending_interrupts(fake_oc):
   shared = server.OpenCodeServer(None)
@@ -403,6 +486,11 @@ async def test_turn_end_steps_run_in_order_and_remove_the_session_shells(fake_oc
   shell_list = next(i for i, call in enumerate(calls) if call.startswith("GET /api/shell"))
   shell_delete = next(i for i, call in enumerate(calls) if call.startswith("DELETE /api/shell/"))
   assert interrupt < shell_list < shell_delete
+  # The directory's claim drops only after the shell delete, which would otherwise reload it.
+  release = next(i for i, call in enumerate(calls) if call.startswith("DELETE /api/debug/location"))
+  assert shell_delete < release
+  release_request = _requests(fake_oc, "DELETE", "/api/debug/location")
+  assert [r["query"]["location[directory]"] for r in release_request] == [[str(fake_oc / "dir")]]
   assert server.server_for(None).process_alive
 
 
@@ -461,6 +549,39 @@ async def test_cancel_signals_only_its_turn_and_the_other_turn_completes(fake_oc
   cancelled_interrupt = f"/api/session/{cancelled._session_id}/interrupt"
   assert any(
       r.get("path") == cancelled_interrupt and r.get("body") is None for r in _read_log(fake_oc / "requests.jsonl"))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_release_keeps_claimed_directories_and_terminate_releases_before_returning(
+    fake_oc, monkeypatch, stop_servers):
+  _script(
+      fake_oc, monkeypatch,
+      {"prompts": {
+          "held": {
+              "events": [],
+              "hold": True
+          },
+          "quick": {
+              "events": _text_events("done")
+          },
+      }})
+  held = opencode.OpenCodeBackend(model=MODEL)
+  held_run = asyncio.create_task(_run_turn(held, "held", fake_oc / "a"))
+  while not any(r.get("prompt_text") == "held" for r in _read_log(fake_oc / "requests.jsonl")):
+    await asyncio.sleep(0.02)
+  shared = server.server_for(None)
+  # A directory loaded outside any turn holds no claim, so the next turn's end releases it.
+  await shared.client.get("/api/model", params={"location[directory]": str(fake_oc / "c")})
+  # A second turn in the same directory ends first: the held turn's claim keeps the directory loaded.
+  quick_events = await _run_turn(opencode.OpenCodeBackend(model=MODEL), "quick", fake_oc / "a")
+  assert quick_events[-1]["type"] == "result"
+  assert await _loaded_directories(shared) == {str(fake_oc / "a")}
+  await held.terminate()
+  assert await _loaded_directories(shared) == set()
+  await asyncio.wait_for(held_run, timeout=15)
+  releases = [r["query"]["location[directory]"] for r in _requests(fake_oc, "DELETE", "/api/debug/location")]
+  assert releases.count([str(fake_oc / "a")]) == 1
 
 
 @pytest.mark.integration
@@ -545,7 +666,11 @@ async def test_stream_loss_ends_running_turns_before_the_server_stops(fake_oc, m
   assert errors and "event stream" in errors[0]
   assert not shared.process_alive
   deletes = [r for r in _read_log(fake_oc / "requests.jsonl") if r.get("method") == "DELETE"]
-  assert len(deletes) == 1
+  # Only the shell delete of the turn-end steps: the loss sends no release, and the turn's claim
+  # drops after the server stopped, so that release is skipped too.
+  assert len(deletes) == 1 and deletes[0]["path"].startswith("/api/shell/")
+  assert not _requests(fake_oc, "GET", "/api/debug/location")
+  assert not shared._claims
 
 
 @pytest.mark.integration
@@ -611,9 +736,16 @@ async def test_wrong_major_version_fails_the_turn_naming_the_binary(fake_oc, mon
 @pytest.mark.asyncio
 async def test_missing_resume_session_fails_the_turn_naming_the_id(fake_oc, monkeypatch, stop_servers):
   _script(fake_oc, monkeypatch, {"prompts": {}})
+  shared = server.server_for(None)
+  await shared.ensure_running()
+  # The directory is loaded by an earlier turn; the failed turn's claim must still release it.
+  await shared.client.get("/api/model", params={"location[directory]": str(fake_oc / "dir")})
   events = await _run_turn(opencode.OpenCodeBackend(model=MODEL, resume_session_id="ses_gone"), "x", fake_oc / "dir")
   assert events[-1]["type"] == ET.ERROR and "ses_gone" in events[-1]["message"]
   assert not _requests(fake_oc, "POST", "/api/session")
+  releases = _requests(fake_oc, "DELETE", "/api/debug/location")
+  assert [r["query"]["location[directory]"] for r in releases] == [[str(fake_oc / "dir")]]
+  assert not shared._claims
 
 
 @pytest.mark.integration

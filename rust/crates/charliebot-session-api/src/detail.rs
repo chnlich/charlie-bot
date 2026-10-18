@@ -15,6 +15,7 @@ use axum::routing::get;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
+use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunOrder, RunRecord};
@@ -96,7 +97,7 @@ async fn session_detail(
   };
   match session_detail_payload(&features.store, &meta).await {
     Ok(payload) => responses::fast_json(StatusCode::OK, &payload),
-    Err(error) => task_error(error),
+    Err(error) => task_http_error(error),
   }
 }
 
@@ -168,18 +169,19 @@ async fn session_usage(
     Ok(meta) => meta,
     Err(error) => return store_error(error),
   };
-  let events = if meta.profile == TaskProfile::Worker {
+  let usage_owner = match features.startup.require::<charliebot_usage::SessionUsage>() {
+    Ok(usage) => usage,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let (usage, active_run_id) = if meta.profile == TaskProfile::Worker {
     match worker_transcript::load_worker_transcript(&features.store, &session_id) {
-      Ok(transcript) => transcript.events.clone(),
+      Ok(transcript) => (usage_owner.resolve_events_usage(&transcript.events), transcript.active_run_id.clone()),
       Err(error) => return store_error(error),
     }
   } else {
-    match features.store.load_chat_events_sync(&session_id) {
-      Ok(events) => events,
-      Err(error) => return store_error(error),
-    }
+    (usage_owner.resolve_session_usage(&session_id, &meta), None)
   };
-  let usage = match crate::usage::fold_usage(&events, &features.registry) {
+  let usage = match usage {
     Ok(usage) => usage.unwrap_or(Value::Null),
     Err(error) => return store_error(error),
   };
@@ -197,11 +199,7 @@ async fn session_usage(
   );
   payload.insert("usage".to_string(), usage);
   if meta.profile == TaskProfile::Worker {
-    let transcript = match worker_transcript::load_worker_transcript(&features.store, &session_id) {
-      Ok(transcript) => transcript,
-      Err(error) => return store_error(error),
-    };
-    payload.insert("active_run_id".to_string(), transcript.active_run_id.clone().map_or(Value::Null, Value::String));
+    payload.insert("active_run_id".to_string(), active_run_id.map_or(Value::Null, Value::String));
   }
   let mut response_meta = meta;
   response_meta.run_backend = match listing::run_backend(&features.store, &session_id) {
@@ -432,19 +430,19 @@ async fn pending_task_inputs(
   };
   let facts = match features.store.facts_of(&meta.id) {
     Ok(facts) => facts,
-    Err(error) => return store_error(error),
+    Err(error) => return task_http_error(error),
   };
   let run_records = match features.store.list_run_records_sync(&meta.id) {
     Ok(runs) => runs,
-    Err(error) => return store_error(error),
+    Err(error) => return task_http_error(error),
   };
   let all_events = match features.store.load_all_facts(&meta.id) {
     Ok(events) => events,
-    Err(error) => return store_error(error),
+    Err(error) => return task_http_error(error),
   };
   let pending = match pending_input_events(&facts, &run_records, &all_events, &meta.id) {
     Ok(pending) => pending,
-    Err(error) => return task_error(error),
+    Err(error) => return task_http_error(error),
   };
   let items = match pending.iter().map(|event| pending_input_value(event)).collect::<StoreResult<Vec<Value>>>() {
     Ok(items) => items,
@@ -571,22 +569,6 @@ fn response_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<Sessi
 
 fn store_error(error: StoreError) -> Response {
   crate::routes::store_error(error)
-}
-
-fn task_error(error: StoreError) -> Response {
-  match error {
-    StoreError::Conflict(blockers) => {
-      let message = blockers.join("; ");
-      responses::json(StatusCode::CONFLICT, &json!({"detail": {"message": message, "blockers": blockers}}))
-    }
-    StoreError::Archived(session_id) => {
-      responses::json(StatusCode::CONFLICT, &json!({"detail": format!("task {session_id} is archived")}))
-    }
-    StoreError::Invalid(detail) => responses::json(StatusCode::BAD_REQUEST, &json!({"detail": detail})),
-    StoreError::NotFound(detail) => responses::json(StatusCode::NOT_FOUND, &json!({"detail": detail})),
-    StoreError::Forbidden(detail) => responses::json(StatusCode::FORBIDDEN, &json!({"detail": detail})),
-    StoreError::Failure(detail) => responses::internal_error("RuntimeError", detail),
-  }
 }
 
 fn is_bad_run_cursor(error: &StoreError) -> bool {

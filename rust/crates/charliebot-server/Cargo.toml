@@ -35,6 +35,7 @@ charliebot-session-api.workspace = true
 charliebot-terminal.workspace = true
 charliebot-trace.workspace = true
 charliebot-usage.workspace = true
+charliebot-usage-page.workspace = true
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 flate2.workspace = true

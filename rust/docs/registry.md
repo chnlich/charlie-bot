@@ -27,11 +27,10 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
 ];
 ```
 
-Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. Its first entry is
-`("runtime.agents", charliebot_agents::register_runtime)`. It installs `agent_environment` and then
-`session_cgroups` as pre-recovery steps. This order matches `server.py:262-273`: the environment snapshot is
-available before recovery, and cgroup startup logging and stale sweeping happen before recovery and early services.
-No Python package owns these steps, so they do not appear in `PACKAGES`.
+Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. It installs the agent environment and
+session cgroup steps, then registers `runtime.usage`. That package inserts one `SessionUsage` into startup state
+before the session API routes serve requests. No Python package owns these steps, so they do not appear in
+`PACKAGES`.
 
 A package the port has not built calls a stub, and the entry carries a `// stub: <package>` marker. A stub that
 carries Python's `register` data makes those registrations (its config section, its metadata slots, its backend
@@ -217,7 +216,8 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 - Rust: `usage_resolver(backend_type: &'static str, constructor: UsageResolverConstructor)`, where
   `UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn UsageResolver> + Send + Sync>`.
   `UsageResolverHost` carries the hot-reloaded config and store; the store owns the events cache and chat-events path.
-  The registry stores cloneable constructors only. The usage owner builds each resolver once per backend type and retains it.
+  The registry stores cloneable constructors only. `charliebot-usage::SessionUsage` builds each resolver once per
+  backend type and retains it.
 - Example:
   ```rust
   let codex_home = host.codex_home();
@@ -357,7 +357,8 @@ Packages whose port has not landed still register their data, so the server's be
 Not registered yet:
 
 - `code_server`'s template global for the diff page, which the Rust page does not port yet.
-- Usage attributions and usage sources. The usage package is not ported.
+- The `src.features.usage` page package is not ported; the runtime session-usage owner and Codex's registered source
+  are separate from that page.
 - `cc-openai-compatible` and `cc-kimi` lifecycles. They use the default lifecycle, not the Python `ClaudeCliLifecycle`.
 - WebSocket routes, services and startup checks. No stub makes them yet. The ported `files` package registers the
   routers, file views and cards, and the ported `memory` package registers the diff root `memory`.

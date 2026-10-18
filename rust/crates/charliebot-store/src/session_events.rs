@@ -208,8 +208,12 @@ impl Store {
 
   /// Return a memoized projection only when the in-memory event list proves it current.
   pub fn projection_memo_hit(&self, session_id: &str) -> Option<Arc<MessageProjection>> {
-    let live_len =
-      self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).map(Vec::len)?;
+    let live_len = self
+      .events_cache
+      .lock()
+      .expect("event cache mutex is not poisoned")
+      .get(session_id)
+      .map(|cached| cached.events.len())?;
     let projection =
       self.session_events.projections.lock().expect("projection cache mutex is not poisoned").get(session_id)?;
     (projection.event_count() == live_len).then_some(projection)

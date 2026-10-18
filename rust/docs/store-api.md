@@ -19,7 +19,7 @@ accepts a cached metadata value.
 | `Store::persist_native_anchor_provenance(&self, session_id: &str, prompt_hash: &str, native_backend: &str, model: Option<&str>) -> StoreResult<()>` | `src/runtime/session_anchors.py::persist_native_anchor_provenance` |
 | `Store::clear_cc_session_anchor(&self, session_id: &str) -> StoreResult<()>` | `src/runtime/session_anchors.py::clear_cc_session_anchor` |
 | `Store::persist_account_label(&self, session_id: &str, label: &str) -> StoreResult<Option<String>>` | `src/runtime/session_anchors.py::persist_account_label`; `src/runtime/hooks/backend_types.py::record_account_label`, `account_keeper` |
-| `Store::context_state(&self, session_id: &str) -> StoreResult<(Option<i64>, Option<UtcDateTime>)>` | `src/runtime/session_anchors.py::context_state`; the fold tiers of `src/runtime/session_usage.py` |
+| `Store::context_state(&self, session_id: &str) -> StoreResult<(Option<i64>, Option<UtcDateTime>)>` | Legacy mirror of `src/runtime/session_anchors.py::context_state`; its caller moves to `SessionUsage::context_state` on the agent-runtime line |
 | `Store::update_thinking_state(&self, session_id: &str, updated_at: UtcDateTime) -> StoreResult<()>` | `src/runtime/session_anchors.py::update_thinking_state`; `src/runtime/session_store.py::save_field_fresh` |
 | `Store::mark_unread(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::mark_unread`, `_set_unread_flag` |
 | `Store::rename_session(&self, session_id: &str, name: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::rename_session` |
@@ -59,6 +59,7 @@ the Python writer's no-fsync behavior.
 | `Store::chat_events_path(&self, session_id: &str) -> PathBuf` | `src/runtime/chat_events.py::chat_events_path`, `ChatEventStore.get_chat_events_path` |
 | `Store::append_chat_event(&self, session_id: &str, event: Value) -> StoreResult<ChatEvent>` | `src/runtime/chat_events.py::ChatEventStore.save_chat_event`; `src/infra/ndjson.py::append_ndjson` |
 | `Store::load_chat_events_sync(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>>` | `src/runtime/chat_events.py::ChatEventStore.load_chat_events_sync`; `src/infra/ndjson.py::parse_ndjson_file` |
+| `Store::load_chat_events_delta_sync(&self, session_id: &str, known_generation: Option<u64>, covered: usize) -> StoreResult<ChatEventsDelta>` | `src/runtime/session_usage.py` facts memo: read the appended suffix for the same cached list, otherwise rebuild from the replacement list |
 | `Store::load_all_facts(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>>` | `src/runtime/task_sessions.py::fact_history` (archived segments plus live log) |
 | `Store::load_chat_events_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<(Vec<ChatEvent>, bool)>` | `src/runtime/chat_events.py::ChatEventStore.load_chat_events_range` |
 | `Store::find_event_by_id(&self, session_id: &str, event_id: &str) -> StoreResult<Option<ChatEvent>>` | `src/runtime/session_dispatch.py` replay lookup |
@@ -72,9 +73,11 @@ Append uses Python's default JSON separators with `ensure_ascii=False`, appends 
 returning. Readers skip blank and malformed lines, replace invalid UTF-8, and parse a partial final
 line. The control guard is store-bound, non-cloneable, and required by locked operations.
 
-`context_state` returns the context tokens of the claude, snapshot, and persisted `context_reading` tiers.
-Python's `resolve_session_usage` asks the backend's own usage resolver first (codex's native rollout), and
-that tier is not ported in S1. `load_all_facts` composes like Python's `fact_history`: the archived
+`load_chat_events_delta_sync` returns the cached generation, current event count, the suffix start index, and the
+events from that index. Appends retain the generation; cache eviction or replacement gives a new generation.
+`SessionUsage` uses this to advance its single event fold by the appended suffix. It asks the registered backend
+resolver first (Codex's native rollout), then the event tiers. `Store::context_state` remains unchanged until the
+agent-runtime caller switches to `SessionUsage::context_state`. `load_all_facts` composes like Python's `fact_history`: the archived
 count is the total event count minus the live event count, the archived events are the range read
 from 0 to that count, and archive files beyond that count stay unread.
 

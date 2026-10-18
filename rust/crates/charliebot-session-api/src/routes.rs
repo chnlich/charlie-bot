@@ -8,6 +8,7 @@ use axum::response::Response;
 use axum::routing::get;
 use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
+use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::sidebar_state;
 use flate2::Compression;
@@ -283,22 +284,7 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
   };
   match tree::tree_page(&features.store, parent_id, include_archived, limit, query.get("cursor")) {
     Ok(value) => responses::fast_json(StatusCode::OK, &value),
-    Err(error) if error.status_code() == Some(404) => {
-      responses::json(StatusCode::NOT_FOUND, &json!({"detail": error.to_string()}))
-    }
-    Err(error) if error.status_code() == Some(409) => responses::json(
-      StatusCode::CONFLICT,
-      &json!({
-        "detail": {
-          "message": error.to_string(),
-          "blockers": [error.to_string()],
-        }
-      }),
-    ),
-    Err(error) if error.status_code() == Some(400) => {
-      responses::json(StatusCode::BAD_REQUEST, &json!({"detail": error.to_string()}))
-    }
-    Err(error) => store_error(error),
+    Err(error) => task_http_error(error),
   }
 }
 
@@ -533,6 +519,16 @@ fn decode_query_component(value: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
+  use axum::body::to_bytes;
+  use axum::http::StatusCode;
+  use base64::Engine;
+  use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+  use charliebot_registry::{Registry, store_hooks};
+  use charliebot_store::Store;
+  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+
   use super::*;
 
   #[test]
@@ -543,5 +539,29 @@ mod tests {
   #[test]
   fn query_components_decode_plus_and_percent_escapes() {
     assert_eq!(decode_query_component("Atlas+%C3%A9").unwrap(), "Atlas é");
+  }
+
+  #[tokio::test]
+  async fn stale_tree_cursor_uses_the_shared_task_conflict_shape() {
+    let home = tempfile::tempdir().unwrap();
+    let registry = Arc::new(Registry::new());
+    let config = registry.load_config(home.path()).unwrap();
+    let store = Store::new(config, registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry))).unwrap();
+    let meta = SessionMetadata::new("synthetic-tree-session", "Synthetic tree", TaskProfile::Manager);
+    let metadata_path = store.metadata_path(&meta.id);
+    std::fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    std::fs::write(&metadata_path, meta.to_json_string(&[], true)).unwrap();
+    let cursor =
+      URL_SAFE_NO_PAD.encode(br#"{"r":"stale-revision","a":"2026-10-18T10:00:00Z","i":"synthetic-tree-session"}"#);
+    let error = tree::tree_page(&store, None, false, 1, Some(&cursor)).unwrap_err();
+    let detail = "task tree changed during pagination; refresh and re-paginate";
+    assert_eq!(error.to_string(), detail);
+    let response = task_http_error(error);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+      serde_json::from_slice::<Value>(&body).unwrap(),
+      json!({"detail": {"message": detail, "blockers": [detail]}})
+    );
   }
 }

@@ -449,6 +449,7 @@ dependencies = [
  "charliebot-terminal",
  "charliebot-trace",
  "charliebot-usage",
+ "charliebot-usage-page",
  "charliebot-voice",
  "charliebot-web-reply",
  "flate2",
@@ -481,6 +482,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "charliebot-tasks",
+ "charliebot-usage",
  "flate2",
  "http",
  "percent-encoding",
@@ -488,6 +490,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "time",
+ "tokio",
  "tracing",
 ]
 
@@ -581,6 +584,21 @@ dependencies = [
 
 [[package]]
 name = "charliebot-usage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "charliebot-usage-page"
 version = "0.1.0"
 dependencies = [
  "charliebot-registry",

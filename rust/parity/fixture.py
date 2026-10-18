@@ -892,17 +892,14 @@ def pin_times_outside_home(home: pathlib.Path, instant: datetime.datetime) -> No
 
   tree_root = home.parent
   stamp = int(instant.timestamp()) * 1_000_000_000
-  for dirpath, dirnames, filenames in os.walk(tree_root, topdown=False):
-    current = pathlib.Path(dirpath)
-    if current == tree_root:
-      dirnames[:] = [name for name in dirnames if name not in HARNESS_ENTRIES and name != home.name]
-      filenames = [name for name in filenames if name not in HARNESS_ENTRIES]
-    for name in [*filenames, *dirnames]:
-      os.utime(current / name, ns=(stamp, stamp), follow_symlinks=False)
-  for name in os.listdir(tree_root):
-    path = tree_root / name
-    if name not in HARNESS_ENTRIES and name != home.name and path.is_dir():
-      os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
+  for entry in tree_root.iterdir():
+    if entry.name in HARNESS_ENTRIES or entry == home:
+      continue
+    for dirpath, dirnames, filenames in os.walk(entry, topdown=False):
+      current = pathlib.Path(dirpath)
+      for name in [*filenames, *dirnames]:
+        os.utime(current / name, ns=(stamp, stamp), follow_symlinks=False)
+    os.utime(entry, ns=(stamp, stamp), follow_symlinks=False)
 
 
 async def build(manifest_path: pathlib.Path, extras: tuple[str, ...]) -> None:

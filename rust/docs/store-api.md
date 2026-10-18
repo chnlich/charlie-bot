@@ -158,6 +158,27 @@ elone rebind. `archive_subtree` accepts only `TaskCaller::Operator`, and it take
 The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
 launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 
+## Task errors (S3)
+
+Every task-tree refusal is a `StoreError` variant that names the Python class its route maps. The routes set the HTTP
+status from the class (`src/runtime/api/sessions.py::_task_http_error`), so the variant decides the status.
+
+| Python class | Rust variant | HTTP | Store producers |
+| --- | --- | --- | --- |
+| `task_errors.TaskInvalidError` | `StoreError::invalid` (`Invalid`) | 400 | `create_task`: a missing request id, a worker parent |
+| `task_errors.TaskNotFoundError`; `runs.RunNotFoundError` | `StoreError::not_found` (`NotFound`) | 404 | `load_task_meta` and every tree read of an absent node; `archive_subtree`; the locked slot, backend, adopt and rebind writes of an absent session; `require_run` |
+| `task_errors.TaskForbiddenError`; `takeoff_gate.DelegationBlockedError` | `StoreError::forbidden` (`Forbidden`) | 403 | an agent's create outside its own open manager task (`runtime_gate`); every `check_task_authorization` refusal; `archive_subtree` for a caller that is not the operator |
+| `task_errors.TaskArchivedError` | `StoreError::archived` (`Archived`) | 409, the sentence alone | none in the store yet: machine input to an archived node is refused by the dispatch admission (`session_dispatch.admit_input`) |
+| `task_errors.TaskConflictError` | `StoreError::conflict` (`Conflict`) | 409, `{message, blockers}` | a closed parent or ancestor (including a create under an archived parent); a relation cycle or hop limit; `archive_subtree`'s unfinished runs |
+| `runs.RunIdentityConflictError` | `StoreError::conflict` with one blocker | 409, `{message, blockers}` | the stop path's process identity checks (`follow_through_stop`) |
+| none: I/O, serialization, corrupt state, hook and invariant errors | `StoreError::new` (`Failure`) | none | every other error |
+
+`Display` gives the Python text: a conflict joins its blockers with `; `, and an archived refusal reads
+`task <id> is archived`. `blockers()` returns a conflict's list and `None` for every other variant. Python's
+`TaskArchivedError` is a `TaskConflictError` subclass, but its route answers the sentence alone, so the Rust archived
+variant carries no list. A refusal from `check_task_authorization` is `forbidden` on every path, as
+`DelegationBlockedError` is a 403 on every route.
+
 `create_task` without a name takes `Session N` from `sessions/.counter`. An unreadable or unparsable counter takes
 the session-directory count and is then rewritten with the next number, as Python's `_next_session_name` does.
 

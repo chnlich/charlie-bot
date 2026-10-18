@@ -904,32 +904,32 @@ impl Store {
     if !exited {
       let stat = first_stat.as_ref().expect("the process stat was read");
       if run.pid_start.as_deref() != Some(stat.pid_start.as_str()) {
-        return Err(StoreError::new(format!(
+        return Err(StoreError::conflict(vec![format!(
           "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
           run.id, run.pid_start, stat.pid_start
-        )));
+        )]));
       }
-      let started_at = run
-        .started_at
-        .ok_or_else(|| StoreError::new(format!("run {} has no usable started_at for identity validation", run.id)))?;
+      let started_at = run.started_at.ok_or_else(|| {
+        StoreError::conflict(vec![format!("run {} has no usable started_at for identity validation", run.id)])
+      })?;
       let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
       if started_at.into_inner() <= boot {
-        return Err(StoreError::new(format!(
+        return Err(StoreError::conflict(vec![format!(
           "run {} started_at predates the current host boot; recorded identity is stale",
           run.id
-        )));
+        )]));
       }
       if !proc_identity::is_run_alive(Some(pid), run.pid_start.as_deref(), Some(started_at.into_inner()), boot) {
         match proc_identity::read_pid_stat(pid) {
           None => exited = true,
           Some(current) if current.state == "Z" => exited = true,
           Some(current) if run.pid_start.as_deref() != Some(current.pid_start.as_str()) => {
-            return Err(StoreError::new(format!(
+            return Err(StoreError::conflict(vec![format!(
               "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
               run.id, run.pid_start, current.pid_start
-            )));
+            )]));
           }
-          Some(_) => return Err(StoreError::new(format!("run {} process identity is not live", run.id))),
+          Some(_) => return Err(StoreError::conflict(vec![format!("run {} process identity is not live", run.id)])),
         }
       }
       if !exited {
@@ -1001,7 +1001,7 @@ fn require_session_match(session_id: &str, run: &RunRecord) -> StoreResult<()> {
 fn require_run(store: &Store, session_id: &str, run_id: &str) -> StoreResult<RunRecord> {
   store
     .read_run_sync(session_id, run_id)?
-    .ok_or_else(|| StoreError::new(format!("run {run_id} not found in session {session_id}")))
+    .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))
 }
 
 /// The run's run_finished facts in log order.

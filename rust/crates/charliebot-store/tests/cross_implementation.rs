@@ -498,6 +498,38 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
 }
 
 #[tokio::test]
+async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_counter", root.path(), &[]);
+
+  let python_home = root.path().join("python-counter-home");
+  let rust_home = root.path().join("rust-counter-home");
+  copy_tree(&root.path().join("counter-base"), &python_home);
+  copy_tree(&root.path().join("counter-base"), &rust_home);
+
+  run_python_helper("create_unnamed_node", root.path(), &["python-counter-home"]);
+  let node = make_store(&rust_home)
+    .create_task(
+      CreateTask {
+        request_id: "counter-request".to_string(),
+        task_parent_id: Some("synthetic-counter-root".to_string()),
+        profile: charliebot_store::metadata::TaskProfile::Manager,
+        task: None,
+        name: None,
+        backend: Some("synthetic".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::System,
+      Map::new(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(node.name, "Session 2");
+  assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+}
+
+#[tokio::test]
 async fn task_gate_matches_python_cases_and_the_parity_fixture_tree() {
   let root = tempfile::tempdir().unwrap();
   let cases = materialize_gate_cases();

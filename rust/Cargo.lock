@@ -290,7 +290,17 @@ dependencies = [
 name = "charliebot-files"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "charliebot-compat",
+ "charliebot-core",
  "charliebot-registry",
+ "futures-util",
+ "http",
+ "nix",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
 ]
 
 [[package]]

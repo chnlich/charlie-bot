@@ -1,7 +1,5 @@
 //! Tool-capable single-prompt agent execution.
 
-use std::collections::BTreeMap;
-use std::env;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,18 +10,30 @@ use serde_json::Value;
 use tokio::time;
 
 use crate::backend_types::BuiltBackend;
+use crate::launch_loop::ChildEnvPolicy;
 use crate::runner::{AgentRunner, RunRequest};
 
 /// Run a built backend in a temporary working directory and collect its assistant text.
 pub async fn agent_one_shot_text(
-  mut built: BuiltBackend,
+  built: BuiltBackend,
   prompt: &str,
   system_prompt: &str,
   timeout: Option<Duration>,
 ) -> anyhow::Result<String> {
+  let agent_environment = crate::agent_environment::startup_agent_environment()?.as_ref().clone();
+  agent_one_shot_text_with_environment(built, prompt, system_prompt, timeout, agent_environment).await
+}
+
+async fn agent_one_shot_text_with_environment(
+  mut built: BuiltBackend,
+  prompt: &str,
+  system_prompt: &str,
+  timeout: Option<Duration>,
+  agent_environment: crate::agent_environment::AgentBaseEnvironment,
+) -> anyhow::Result<String> {
   built.launch.instructions_file = None;
   built.launch.instructions_content = None;
-  let cwd = tempfile::Builder::new().prefix("charliebot-oneshot-").tempdir()?;
+  let cwd = charliebot_core::tempdir::mkdtemp("charliebot-oneshot-")?;
   let result = Arc::new(Mutex::new(OneShotResult::default()));
   let event_result = Arc::clone(&result);
   let on_event = Arc::new(move |event: Value| -> BoxFuture<'static, anyhow::Result<()>> {
@@ -45,10 +55,11 @@ pub async fn agent_one_shot_text(
   let mut request = RunRequest::new(
     frame_system_prompt(system_prompt, prompt),
     cwd.path().to_path_buf(),
-    agent_environment_from_process()?,
+    agent_environment,
     crate::transport::cgroup::system_cgroup_base_dir(),
     built.registry,
   );
+  request.child_env_policy = ChildEnvPolicy::Inherited;
   request.on_event = on_event;
   match timeout {
     Some(limit) => match time::timeout(limit, runner.run(request)).await {
@@ -66,17 +77,6 @@ pub async fn agent_one_shot_text(
   }
   let result = result.lock().expect("one-shot result lock is not poisoned");
   Ok(result.text.trim().to_string())
-}
-
-pub(crate) fn agent_environment_from_process() -> anyhow::Result<crate::agent_environment::AgentBaseEnvironment> {
-  let mut values = BTreeMap::new();
-  for (name, value) in env::vars_os() {
-    let name = name.into_string().map_err(|_| anyhow::anyhow!("the process environment has a non-Unicode name"))?;
-    let value =
-      value.into_string().map_err(|_| anyhow::anyhow!("the process environment variable {name} is not Unicode"))?;
-    values.insert(name, value);
-  }
-  Ok(crate::agent_environment::AgentBaseEnvironment { values })
 }
 
 #[derive(Default)]
@@ -193,7 +193,20 @@ mod tests {
       registry: Arc::new(Registry::new()),
     };
 
-    let answer = agent_one_shot_text(built, "prompt", "system", None).await.unwrap();
+    let answer = agent_one_shot_text_with_environment(
+      built,
+      "prompt",
+      "system",
+      None,
+      crate::agent_environment::AgentBaseEnvironment {
+        values: Env::from([
+          ("PATH".to_string(), "/synthetic/agent-entry-points:/synthetic/system-bin:/bin:/usr/bin".to_string()),
+          ("PYDANTIC_DISABLE_PLUGINS".to_string(), "__all__".to_string()),
+        ]),
+      },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(answer, "first");
     assert!(!instructions_file.exists());

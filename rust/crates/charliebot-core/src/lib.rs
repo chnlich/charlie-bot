@@ -18,6 +18,7 @@ pub mod pyfmt;
 pub mod repo_root;
 pub mod run_token;
 pub mod ssh;
+pub mod tempdir;
 pub mod timefmt;
 pub mod v1_sessions;
 pub mod venv;

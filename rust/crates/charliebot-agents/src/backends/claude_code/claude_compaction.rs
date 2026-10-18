@@ -180,11 +180,12 @@ pub fn compaction_command(session_id: &str) -> Vec<String> {
 }
 
 pub fn compaction_env(config_dir: &Path) -> anyhow::Result<Env> {
-  let inherited = std::env::vars().collect::<Env>();
+  let inherited = crate::agent_environment::startup_agent_environment()?.values.clone();
   compaction_env_from(config_dir, &inherited)
 }
 
-fn compaction_env_from(config_dir: &Path, inherited: &Env) -> anyhow::Result<Env> {
+/// Build the compaction environment from the startup agent environment and selected account directory.
+pub fn compaction_env_from(config_dir: &Path, inherited: &Env) -> anyhow::Result<Env> {
   let mut env = inherited.clone();
   env.remove(crate::launch_loop::SESSION_ID_ENV);
   super::claude_child_env(&mut env);

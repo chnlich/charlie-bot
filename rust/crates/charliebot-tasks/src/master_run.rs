@@ -284,15 +284,13 @@ fn build_extra_flags(
   Ok((flags, resume_id))
 }
 
-fn build_master_env(item: &WorkItem, features: &FeatureContext) -> anyhow::Result<Env> {
-  let base = features.startup.require::<AgentBaseEnvironment>()?;
-  let mut env = base.values.clone();
-  env.remove(launch_loop::SESSION_ID_ENV);
-  env.insert("GIT_CEILING_DIRECTORIES".to_string(), item.cfg.charliebot_home.to_string_lossy().into_owned());
+fn build_master_env(item: &WorkItem) -> Env {
+  let mut env =
+    Env::from([("GIT_CEILING_DIRECTORIES".to_string(), item.cfg.charliebot_home.to_string_lossy().into_owned())]);
   if let Some(extra) = &item.extra_env {
     env.extend(extra.iter().map(|(key, value)| (key.clone(), value.clone())));
   }
-  Ok(env)
+  env
 }
 
 async fn handle_event(
@@ -767,7 +765,7 @@ pub(crate) async fn run_cc(
   let held_native_id = (!fresh_native).then(|| metadata.cc_session_id.clone()).flatten();
   let cwd = item.cfg.sessions_dir().join(&metadata.id);
   let context = turn_launch_context(Arc::clone(&queue), item, option.clone(), cwd.clone(), held_native_id.clone());
-  let env = build_master_env(item, &features)?;
+  let env = build_master_env(item);
   let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, &option.backend_type, Some(&option.model))));
   let log_dir = item.task_run.transport_dir.clone();
   let cc_session_id = Arc::new(Mutex::new(held_native_id));

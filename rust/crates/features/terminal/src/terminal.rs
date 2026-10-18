@@ -1,7 +1,5 @@
-use std::path::PathBuf;
-
 use axum::extract::ws::WebSocket;
-use charliebot_core::{home, paths};
+use charliebot_core::home;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -13,8 +11,7 @@ static ENSURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub(super) fn terminal_session_id() -> Result<String, String> {
   let profile_home = home::charliebot_home_dir().map_err(|error| error.to_string())?;
-  let default_home = PathBuf::from(paths::expanduser("~")).join(".charliebot");
-  if profile_home == default_home {
+  if profile_home == home::default_charliebot_home() {
     return Ok(TERMINAL_SESSION_ID.to_string());
   }
   let digest = Sha256::digest(profile_home.to_string_lossy().as_bytes());
@@ -34,14 +31,17 @@ pub(super) async fn ensure_terminal_session() -> Result<(), String> {
   }
 
   let name = terminal_tmux_name(&session_id);
-  let cwd = PathBuf::from(paths::expanduser("~"));
+  // The pane starts in the operator's home, which is the parent of the default CharlieBot home.
+  let default_home = home::default_charliebot_home();
+  let cwd = default_home.parent().ok_or("the default CharlieBot home has no parent directory")?;
+  // A pane inherits the tmux server's environment, which another profile may have started, so the profile
+  // home is passed to the pane explicitly.
   let mut env_args = Vec::new();
-  if std::env::var_os(home::CHARLIEBOT_HOME_ENV).is_some_and(|value| !value.to_string_lossy().trim().is_empty()) {
-    let profile_home = home::charliebot_home_dir().map_err(|error| error.to_string())?;
+  if let Some(profile_home) = home::explicit_charliebot_home().map_err(|error| error.to_string())? {
     env_args.push("-e".to_string());
     env_args.push(format!("{}={}", home::CHARLIEBOT_HOME_ENV, profile_home.display()));
   }
-  pty::start_tmux_session(&name, &cwd, &env_args, &["bash", "-l"]).await?;
+  pty::start_tmux_session(&name, cwd, &env_args, &["bash", "-l"]).await?;
   tracing::info!(name = %name, cwd = %cwd.display(), "terminal_tmux_session_created");
   Ok(())
 }

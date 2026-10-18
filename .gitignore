@@ -31,3 +31,6 @@ src/runtime/agent_process/_vfkspawn*.so
 # OS
 .DS_Store
 Thumbs.db
+
+# Rust build output
+rust/target/

@@ -1,0 +1,24 @@
+[package]
+name = "charliebot-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+hmac.workspace = true
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+time.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["crates/charliebot-core", "crates/charliebot-server"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+bytes = "1"
+flate2 = "1"
+futures-util = "0.3"
+hmac = "0.12"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+md-5 = "0.10"
+minijinja = { version = "2", features = ["loader", "json"] }
+minijinja-contrib = { version = "2", features = ["pycompat"] }
+nix = { version = "0.30", features = ["fs", "process", "hostname", "user", "signal"] }
+percent-encoding = "2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_path_to_error = "0.1"
+serde_yaml = "0.9"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2"
+tempfile = "3"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "time", "process", "sync", "io-util"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["catch-panic"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["registry"] }
+uuid = { version = "1", features = ["v4"] }
+
+charliebot-core = { path = "crates/charliebot-core" }

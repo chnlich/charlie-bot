@@ -20,6 +20,11 @@ OPENCODE_SERVER_START_TIMEOUT = 30.0  # seconds
 # escalates to SIGKILL.
 OPENCODE_SERVER_STOP_TIMEOUT = 5.0  # seconds
 
+# Grace for the server's own exit to surface when its event stream ends: a dying
+# server also drops the stream, and the failure should name the exit, not the
+# symptom. Paid only on the stream-loss path.
+OPENCODE_STREAM_EXIT_GRACE = 0.2  # seconds
+
 # The shared server stops after this long with no running turn. The next turn
 # starts it again.
 OPENCODE_SERVER_IDLE_EXIT_SECONDS = 3600.0  # seconds

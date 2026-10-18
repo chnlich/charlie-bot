@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import json
 import os
 import pathlib
@@ -314,6 +315,14 @@ class OpenCodeServer:
       reason = "opencode event stream closed"
     except Exception as e:
       reason = f"opencode event stream failed: {e}"
+    # An ended stream is usually the server dying: wait one grace for its exit
+    # so the failure names the exit code, not the symptom. wait()'s shield
+    # keeps the shared exit future pending for the cleanup path's waiter.
+    if self._proc is not None and self._proc.returncode is None:
+      with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(self._proc.wait(), timeout=opencode_limits.OPENCODE_STREAM_EXIT_GRACE)
+    if self._proc is not None and self._proc.returncode is not None:
+      reason = f"opencode serve exited with code {self._proc.returncode}: {self._tail_text()}"
     self._track(self._lose(reason))
     return reason
 

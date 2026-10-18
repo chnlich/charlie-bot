@@ -45,6 +45,7 @@ function elapsedHtml(prefix, startedAt) {
 
 function tickElapsed() {
   card.querySelectorAll('[data-elapsed-since]').forEach((span) => {
+    if (span.dataset.elapsedPrefix !== 'Running for ') return;
     const text = span.dataset.elapsedPrefix + elapsedText(span.dataset.elapsedSince);
     if (span.textContent !== text) span.textContent = text;
   });
@@ -85,7 +86,7 @@ function runRowHtml(row, activeStartedAt) {
   const state = String(row.state || '');
   let duration = '';
   if (state === 'running' && activeStartedAt) {
-    duration = elapsedHtml('', activeStartedAt);
+    duration = escapeHtml(elapsedText(activeStartedAt));
   } else if (row.started_at && row.ended_at) {
     const seconds = Math.floor((new Date(row.ended_at) - new Date(row.started_at)) / 1000);
     duration = escapeHtml(Chat.formatRunDuration(seconds));

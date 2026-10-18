@@ -296,15 +296,15 @@ test('an equal summary repoll writes nothing to the card but its elapsed time', 
   rig.context.Chat.mountWorkerSummary(RUNNING);
   const writes = rig.card().htmlWrites;
   const spans = rig.card().elapsedSpans;
-  assert.deepEqual(spans.map((span) => span.text), ['Running for 30s', '30s']);
+  assert.deepEqual(spans.map((span) => span.text), ['Running for 30s']);
   rig.context.Chat.applyWorkerSummary(structuredClone(RUNNING));
   assert.equal(rig.card().htmlWrites, writes);
-  assert.deepEqual(spans.map((span) => span.textWrites), [0, 0], 'an unmoved clock rewrites no text');
+  assert.deepEqual(spans.map((span) => span.textWrites), [0], 'an unmoved clock rewrites no text');
 
   clock.now += 5000;
   rig.context.Chat.applyWorkerSummary(structuredClone(RUNNING));
   assert.equal(rig.card().htmlWrites, writes, 'the elapsed time ticks in place');
-  assert.deepEqual(spans.map((span) => span.text), ['Running for 35s', '35s']);
+  assert.deepEqual(spans.map((span) => span.text), ['Running for 35s']);
 });
 
 test('an opened Show all fold stays open across a changed summary, and a session open folds it again', () => {

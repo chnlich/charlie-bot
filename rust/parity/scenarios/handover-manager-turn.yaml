@@ -19,7 +19,7 @@ fake_agent:
             usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-expect_starts: 1
+expect_starts: 1  # One dispatch: the Python run starts the manager agent once, and the second server adopts that process.
 directions: [python-to-candidate, candidate-to-python]
 steps:
   - name: send a manager message

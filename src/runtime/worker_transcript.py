@@ -146,7 +146,8 @@ def _header_error(state: str, events: list[dict]) -> tuple[str, int | None]:
 def _delivery_event(task_state: str, facts_events: list[dict], run_records: list[models.RunRecord]) -> dict | None:
   """The closing delivery summary once the task stands resolved (not open).
 
-  The summary and result refs ride the node's task_closed fact; the four
+  The summary, result refs and timestamp ride the node's task_closed fact
+  (the last one when the task closed more than once); the four
   evidence links ride the delivered Run's record (newest successful run, else
   the newest run when a resolved task never recorded a success).
   """
@@ -154,12 +155,14 @@ def _delivery_event(task_state: str, facts_events: list[dict], run_records: list
     return None
   summary = ""
   close_refs: list[str] = []
+  close_at = ""
   outcomes: dict[str, str] = {}
   for event in facts_events:
     kind = event.get("type")
     if kind == ET.TASK_CLOSED:
       summary = str(event.get("summary") or "")
       close_refs = [str(ref) for ref in (event.get("result_refs") or [])]
+      close_at = str(event.get("timestamp") or "")
     elif kind == ET.RUN_FINISHED:
       outcomes[str(event.get("run_id"))] = str(event.get("outcome") or "")
   delivered = next((run for run in reversed(run_records) if outcomes.get(run.id) == "success"), run_records[-1])
@@ -175,7 +178,7 @@ def _delivery_event(task_state: str, facts_events: list[dict], run_records: list
       "base_branch": delivered.base_branch or "",
       "branch_name": delivered.branch_name or "",
       "run_id": delivered.id,
-      "timestamp": models.utc_now_iso(),
+      "timestamp": close_at,
   }
 
 

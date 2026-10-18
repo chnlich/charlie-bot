@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
+use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::venv::VenvBin;
 use charliebot_registry::backend::Env;
 use charliebot_registry::context::{FeatureContext, StartupState};
@@ -16,7 +17,6 @@ use futures_util::future::BoxFuture;
 use crate::transport::cgroup;
 
 pub use charliebot_core::venv::VENV_BIN_ENV;
-pub const REPO_ROOT_ENV: &str = "CHARLIEBOT_REPO_ROOT";
 pub const ENTRY_POINT_RELATIVE: &str = "src/runtime/agent_entry_points";
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
 
@@ -62,12 +62,8 @@ pub fn from_process_environment(startup: &StartupState) -> anyhow::Result<AgentB
 
 fn agent_environment_from_startup(startup: &StartupState, values: &Env) -> anyhow::Result<AgentBaseEnvironment> {
   let venv_bin = startup.require::<VenvBin>()?;
-  let repo_root = values
-    .get(REPO_ROOT_ENV)
-    .filter(|value| !value.is_empty())
-    .map(PathBuf::from)
-    .context("CHARLIEBOT_REPO_ROOT is required to build the agent environment")?;
-  agent_environment(values, venv_bin.path(), &repo_root)
+  let repo_root = startup.require::<RepoRoot>()?;
+  agent_environment(values, venv_bin.path(), repo_root.path())
 }
 
 fn insert_agent_environment(startup: &StartupState, values: &Env) -> anyhow::Result<()> {
@@ -223,14 +219,14 @@ mod tests {
   }
 
   #[test]
-  fn pre_recovery_environment_uses_the_startup_venv_bin() {
+  fn pre_recovery_environment_uses_the_startup_venv_bin_and_repo_root() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");
     fs::create_dir_all(&venv_bin).unwrap();
     let startup = StartupState::default();
     startup.insert(VenvBin::new(Some(venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
+    startup.insert(RepoRoot::new(Some(root.path().as_os_str().to_os_string())).unwrap()).unwrap();
     let inherited = Env::from([
-      (REPO_ROOT_ENV.to_string(), root.path().display().to_string()),
       (VENV_BIN_ENV.to_string(), "/inherited/venv/bin".to_string()),
       ("PATH".to_string(), venv_bin.display().to_string()),
     ]);

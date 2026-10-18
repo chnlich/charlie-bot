@@ -8,8 +8,8 @@
 //! `charliebot_shutdown`, then raises the signal again under its default disposition, so the process ends killed by that
 //! signal as uvicorn's does.
 //!
-//! `CHARLIEBOT_REPO_ROOT` names the charlie-bot checkout whose `web/`, page packages and `configs/`
-//! the server serves; the Python server derives the same root from its own file location.
+//! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
+//! page packages and `configs/` the server serves; the Python server derives the same root from its own file location.
 
 mod app;
 mod auth;
@@ -26,13 +26,13 @@ mod store_setup;
 mod templating;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
+use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::venv::VenvBin;
 use charliebot_core::{config, home, logging, paths, v1_sessions};
 use charliebot_registry::lifespan::Lifespan;
@@ -47,8 +47,6 @@ use crate::routes::static_mounts::StaticMount;
 use crate::state::AppState;
 use crate::templating::Templating;
 
-/// The environment variable naming the charlie-bot checkout.
-const REPO_ROOT_ENV: &str = "CHARLIEBOT_REPO_ROOT";
 /// `timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT`: how long in-flight requests get after a stop signal.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// A config or environment error (Python's `main` raising).
@@ -103,8 +101,8 @@ async fn run() -> ExitCode {
     }
   };
 
-  let build_info = BuildInfo::capture(&repo_root);
-  if let Err(error) = home_init::init_charliebot_home(&cfg, &repo_root) {
+  let build_info = BuildInfo::capture(repo_root.path());
+  if let Err(error) = home_init::init_charliebot_home(&cfg, repo_root.path()) {
     writer_fence.release();
     eprintln!("charliebot-server: initializing {} failed: {error}", paths::display(&cfg.charliebot_home));
     return ExitCode::from(EXIT_STARTUP);
@@ -120,6 +118,7 @@ async fn run() -> ExitCode {
   tracing::info!(path = %paths::display(&cfg.charliebot_home), "charliebot_home_ready");
   let startup = StartupState::default();
   startup.insert(venv_bin).expect("the startup state is empty before the lifespan begins");
+  startup.insert(repo_root.clone()).expect("the startup state is empty before the lifespan begins");
   let features = Arc::new(FeatureContext {
     config: state_parts.config,
     credentials: state_parts.credentials,
@@ -138,8 +137,8 @@ async fn run() -> ExitCode {
   let state = Arc::new(AppState {
     features,
     build_info,
-    templating: Templating::new(&repo_root, registry.page_packages()),
-    static_mounts: StaticMount::python_app_mounts(&repo_root, registry.page_packages()),
+    templating: Templating::new(repo_root.path(), registry.page_packages()),
+    static_mounts: StaticMount::python_app_mounts(repo_root.path(), registry.page_packages()),
     mime_types: MimeTypes::load(),
   });
   tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready");
@@ -206,18 +205,13 @@ struct StateParts {
 }
 
 /// The repository root and the home's loaded files; any error names the input it concerns.
-fn load_inputs(registry: &Arc<Registry>) -> Result<(PathBuf, StateParts, VenvBin), String> {
+fn load_inputs(registry: &Arc<Registry>) -> Result<(RepoRoot, StateParts, VenvBin), String> {
   let venv_bin = VenvBin::new(std::env::var_os("CHARLIEBOT_VENV_BIN")).map_err(|error| error.to_string())?;
-  let repo_root = match std::env::var_os(REPO_ROOT_ENV) {
-    Some(value) if !value.is_empty() => PathBuf::from(value),
-    _ => {
-      return Err(format!("{REPO_ROOT_ENV} is not set; set it to the charlie-bot checkout the server serves"));
-    }
-  };
-  if !repo_root.join("web").join("templates").is_dir() {
+  let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
+  if !repo_root.path().join("web").join("templates").is_dir() {
     return Err(format!(
       "{REPO_ROOT_ENV}={} holds no web/templates directory; set it to a charlie-bot checkout",
-      repo_root.display()
+      repo_root.path().display()
     ));
   }
   let home = home::charliebot_home_dir().map_err(|error| error.to_string())?;

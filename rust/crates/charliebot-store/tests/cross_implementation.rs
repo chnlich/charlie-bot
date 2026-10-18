@@ -8,8 +8,8 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceListingFields,
-  StopResult, Store, StoreError, StoreHooks,
+  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RunKind, RunOutcome, RunOutcomeKind, RunRecord,
+  SequenceListingFields, StopResult, Store, StoreError, StoreHooks,
 };
 use serde_json::{Map, Value, json};
 
@@ -488,6 +488,7 @@ fn make_store(home: &Path) -> Store {
       account_labels: Some(account_labels),
       anchor_reconciler: Some(anchor_reconciler),
       sequence_listing: Some(sequence_listing),
+      runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
     },
   )
   .unwrap()

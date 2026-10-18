@@ -10,13 +10,14 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::{FromRequestParts, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
-use charliebot_core::run_token::{self, RunTokenClaims};
+use charliebot_core::run_token;
 use charliebot_store::Store;
+use http::request::Parts;
 use http::{HeaderMap, Method, StatusCode, header};
 use subtle::ConstantTimeEq;
 
@@ -50,7 +51,18 @@ pub enum Decision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonAsciiCredential;
 
-/// The agent caller identity resolved after a route verifies its bearer token.
+/// The verified caller of a route that takes it as an argument (`deps.require_caller`): the operator, or the run
+/// that a verified run token names while that run is active. The structural routes that take it are ported with their
+/// own parts, so until one exists the extractor below has no production caller.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallerIdentity {
+  Operator,
+  Run(RunCallerIdentity),
+}
+
+/// The run a verified run token stands for.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunCallerIdentity {
   pub session_id: String,
@@ -58,28 +70,55 @@ pub struct RunCallerIdentity {
   pub agent: String,
 }
 
-/// Validate a verified run token against the durable run record and finish facts.
-pub fn require_active_run(store: &Store, claims: &RunTokenClaims) -> Result<RunCallerIdentity, String> {
-  if let Some(refusal) =
-    store.run_identity_refusal(&claims.session_id, &claims.run_id).map_err(|error| error.to_string())?
-  {
-    return Err(refusal.to_string());
-  }
-  Ok(RunCallerIdentity {
-    session_id: claims.session_id.clone(),
-    run_id: claims.run_id.clone(),
-    agent: claims.agent.clone(),
-  })
+/// Why a route refuses its caller: a 401 with this detail, or a failure reading the durable run records.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallerRefusal {
+  Unauthorized(String),
+  Internal(String),
 }
 
-fn resolve_run_caller(headers: &HeaderMap, key: &str, store: &Store) -> Result<Option<RunCallerIdentity>, String> {
+/// Resolve the caller of one request (`deps.require_caller`). No bearer, or the access key itself, is the operator.
+/// Any other bearer is run-token use: it must verify under the key and name a run that is registered, unfinished and
+/// launched. It never falls back to the cookie or to the access key.
+#[allow(dead_code)]
+pub fn resolve_caller(headers: &HeaderMap, key: Option<&str>, store: &Store) -> Result<CallerIdentity, CallerRefusal> {
   let authorization = header_text(headers, &header::AUTHORIZATION);
   let bearer = run_token::bearer_from_authorization(Some(&authorization));
-  if bearer.is_empty() || credential_matches(bearer, key).map_err(|_| "non-ASCII credential".to_string())? {
-    return Ok(None);
+  if bearer.is_empty() {
+    return Ok(CallerIdentity::Operator);
   }
-  let claims = run_token::verify_run_token(bearer, key).map_err(|error| format!("invalid run token: {error}"))?;
-  require_active_run(store, &claims).map(Some)
+  let Some(key) = key else {
+    return Err(CallerRefusal::Unauthorized("run token presented but no signing key is configured".to_string()));
+  };
+  if bearer == key {
+    return Ok(CallerIdentity::Operator);
+  }
+  let claims = run_token::verify_run_token(bearer, key)
+    .map_err(|error| CallerRefusal::Unauthorized(format!("invalid run token: {error}")))?;
+  let refusal = store
+    .run_identity_refusal(&claims.session_id, &claims.run_id)
+    .map_err(|error| CallerRefusal::Internal(error.to_string()))?;
+  if let Some(detail) = refusal {
+    return Err(CallerRefusal::Unauthorized(detail.to_string()));
+  }
+  Ok(CallerIdentity::Run(RunCallerIdentity {
+    session_id: claims.session_id,
+    run_id: claims.run_id,
+    agent: claims.agent,
+  }))
+}
+
+impl FromRequestParts<Arc<AppState>> for CallerIdentity {
+  type Rejection = Response;
+
+  async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
+    let key = state.access_key().map_err(|error| responses::internal_error("ValueError", error.to_string()))?;
+    resolve_caller(&parts.headers, key.as_deref(), &state.features.store).map_err(|refusal| match refusal {
+      CallerRefusal::Unauthorized(detail) => unauthorized_detail(&detail),
+      CallerRefusal::Internal(message) => responses::internal_error("RuntimeError", message),
+    })
+  }
 }
 
 /// `hmac.compare_digest(candidate, key)` for two `str` values: constant-time equality, refusing non-ASCII text.
@@ -168,26 +207,13 @@ fn url_pairs(query: &str) -> Vec<(String, String)> {
 }
 
 /// The gate as an axum layer. It sits inside the request log, so its refusals are logged.
-pub async fn layer(State(state): State<Arc<AppState>>, mut request: Request, next: Next) -> Response {
+pub async fn layer(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
   let key = match state.access_key() {
     Ok(key) => key,
     Err(error) => return responses::internal_error("ValueError", error.to_string()),
   };
-  let path = request_path::of(&request);
-  let public_path = PUBLIC_PATHS.contains(&path) || PUBLIC_PREFIXES.iter().any(|prefix| path.starts_with(prefix));
-  match decide(request.method(), path, request.headers(), key.as_deref()) {
-    Ok(Decision::Pass) => {
-      if !public_path && let Some(key) = key.as_deref() {
-        match resolve_run_caller(request.headers(), key, &state._store) {
-          Ok(Some(identity)) => {
-            request.extensions_mut().insert(identity);
-          }
-          Ok(None) => {}
-          Err(detail) => return unauthorized_detail(&detail),
-        }
-      }
-      next.run(request).await
-    }
+  match decide(request.method(), request_path::of(&request), request.headers(), key.as_deref()) {
+    Ok(Decision::Pass) => next.run(request).await,
     Ok(Decision::LoginPage) => unauthorized("text/html; charset=utf-8", LOGIN_PAGE),
     Ok(Decision::JsonUnauthorized) => unauthorized("application/json", UNAUTHORIZED_JSON),
     Err(NonAsciiCredential) => {
@@ -205,6 +231,7 @@ fn unauthorized(content_type: &'static str, body: &'static str) -> Response {
     .expect("a fixed 401 response builds")
 }
 
+#[allow(dead_code)]
 fn unauthorized_detail(detail: &str) -> Response {
   responses::json(StatusCode::UNAUTHORIZED, &serde_json::json!({ "detail": detail }))
 }
@@ -285,13 +312,20 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn the_route_caller_extractor_refuses_unlaunched_and_finished_runs() {
+  async fn the_caller_resolves_operators_and_refuses_runs_without_an_active_launch() {
+    use charliebot_store::run_identity::{RUN_IDENTITY_NOT_LAUNCHED_DETAIL, RUN_IDENTITY_UNKNOWN_DETAIL};
     use charliebot_store::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 
     let home = tempfile::tempdir().unwrap();
-    let cfg = charliebot_core::config::load_config(home.path()).unwrap();
-    let store = crate::store_setup::create(cfg).unwrap();
+    let registry = Arc::new(crate::packages::registry().unwrap());
+    let cfg = registry.load_config(home.path()).unwrap();
+    let store = crate::store_setup::create(cfg, registry).unwrap();
     let claims = RunTokenClaims { session_id: "session-a".into(), run_id: "run-a".into(), agent: "worker".into() };
+    let identity = CallerIdentity::Run(RunCallerIdentity {
+      session_id: "session-a".into(),
+      run_id: "run-a".into(),
+      agent: "worker".into(),
+    });
     let guard = store.control_lock().await;
     store
       .register_run_locked(
@@ -332,27 +366,21 @@ mod tests {
     let token = run_token::sign_run_token(&claims, KEY).unwrap();
     let bearer = format!("Bearer {token}");
     let token_headers = headers(&[(&header::AUTHORIZATION, &bearer)]);
+    let operator_headers = headers(&[(&header::AUTHORIZATION, &format!("Bearer {KEY}"))]);
+    let unauthorized = |detail: &str| CallerRefusal::Unauthorized(detail.to_string());
+
+    assert_eq!(resolve_caller(&HeaderMap::new(), Some(KEY), &store), Ok(CallerIdentity::Operator));
+    assert_eq!(resolve_caller(&operator_headers, Some(KEY), &store), Ok(CallerIdentity::Operator));
     assert_eq!(
-      require_active_run(&store, &claims).unwrap_err(),
-      charliebot_store::run_identity::RUN_IDENTITY_NOT_LAUNCHED_DETAIL
+      resolve_caller(&token_headers, None, &store),
+      Err(unauthorized("run token presented but no signing key is configured"))
     );
-    assert_eq!(
-      resolve_run_caller(&token_headers, KEY, &store).unwrap_err(),
-      charliebot_store::run_identity::RUN_IDENTITY_NOT_LAUNCHED_DETAIL
-    );
+    assert_eq!(resolve_caller(&token_headers, Some(KEY), &store), Err(unauthorized(RUN_IDENTITY_NOT_LAUNCHED_DETAIL)));
     store.record_launch("session-a", "run-a", 424242, "12345").await.unwrap();
-    assert_eq!(require_active_run(&store, &claims).unwrap().run_id, "run-a");
-    assert_eq!(resolve_run_caller(&token_headers, KEY, &store).unwrap().unwrap().run_id, "run-a");
-    let outcome = RunOutcome::new(RunOutcomeKind::Success);
+    assert_eq!(resolve_caller(&token_headers, Some(KEY), &store), Ok(identity));
     let guard = store.control_lock().await;
-    store.record_finish_locked(&guard, "session-a", "run-a", outcome).await.unwrap();
-    assert_eq!(
-      require_active_run(&store, &claims).unwrap_err(),
-      charliebot_store::run_identity::RUN_IDENTITY_UNKNOWN_DETAIL
-    );
-    assert_eq!(
-      resolve_run_caller(&token_headers, KEY, &store).unwrap_err(),
-      charliebot_store::run_identity::RUN_IDENTITY_UNKNOWN_DETAIL
-    );
+    store.record_finish_locked(&guard, "session-a", "run-a", RunOutcome::new(RunOutcomeKind::Success)).await.unwrap();
+    drop(guard);
+    assert_eq!(resolve_caller(&token_headers, Some(KEY), &store), Err(unauthorized(RUN_IDENTITY_UNKNOWN_DETAIL)));
   }
 }

@@ -7,27 +7,27 @@ importing ``opencode.py``.
 
 from src.runtime.hooks import backend_lifecycle
 
-# httpx client for the per-run control API: health probe, model limit, session
-# create, prompt send. The long-lived SSE stream overrides this with
-# timeout=None (its liveness is the watchdog constant below).
+# httpx client for the shared server's control API: version probe, session
+# create and get, environment, prompt, interrupt, shells, model list. The
+# long-lived event stream is opened with timeout=None.
 OPENCODE_HTTP_API_TIMEOUT = 30.0  # seconds
 
-# Spawned `opencode serve` startup: deadline for the server URL to appear on
-# the subprocess's stdout.
+# Shared server startup: deadline for the listening line and the first
+# server.connected event on the global event stream.
 OPENCODE_SERVER_START_TIMEOUT = 30.0  # seconds
 
-# Grace for the spawned server to exit after SIGTERM; past it the shutdown
-# escalates to SIGKILL (base._graceful_shutdown).
+# Grace for the shared server to exit after SIGTERM; past it the shutdown
+# escalates to SIGKILL.
 OPENCODE_SERVER_STOP_TIMEOUT = 5.0  # seconds
 
-# POST to /session/{id}/abort when a turn is cancelled. Best-effort: a failure
-# is logged and cleanup proceeds without it.
-OPENCODE_ABORT_TIMEOUT = 5.0  # seconds
+# The shared server stops after this long with no running turn. The next turn
+# starts it again.
+OPENCODE_SERVER_IDLE_EXIT_SECONDS = 3600.0  # seconds
 
-# Grace wait for the stdout log-tail task to reach EOF after the run ends; past
-# it the task is cancelled. The tail loop polls on a sub-second interval, so EOF
-# arrives within milliseconds of the process exiting.
-OPENCODE_STDOUT_DRAIN_TIMEOUT = 5.0  # seconds
+# A turn waits this long for the earlier interrupts of its session to report
+# session.execution.interrupted before it sends its prompt. Past it the session
+# is stuck and the turn fails.
+OPENCODE_INTERRUPT_SETTLE_TIMEOUT = 30.0  # seconds
 
 # An opencode /event SSE stream carrying no session-id-bearing event for longer
 # than this is declared dead: the turn fails loudly through the normal backend

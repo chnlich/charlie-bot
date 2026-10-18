@@ -40,6 +40,7 @@ from src.backends.claude_code import claude_code
 from src.backends.codex import codex
 from src.backends.gemini import gemini_cli
 from src.backends.kimi import kimi
+from src.backends.opencode import server as opencode_server
 from src.backends.openai_compatible import openai_compatible_claude
 from src.backends.opencode import opencode
 from src.runtime.agent_process import base
@@ -146,8 +147,8 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathl
 
 
 async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  """opencode custom run() harness over the shared conftest spawn stub."""
-  monkeypatch.setattr(conftest.OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
+  """opencode run(): the turn process is pinned at spawn, before the shared server is looked for."""
+  monkeypatch.setattr(opencode_server, "OPENCODE_BIN", str(tmp_path / "absent-opencode"))
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
   backend: base.AgentBackend
@@ -156,17 +157,14 @@ async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathli
     observed.append((pid, backend.pid_start))
 
   backend = cls(model="provider/model", on_spawn=on_spawn)
-  conftest.stub_subprocess_spawn(monkeypatch, conftest.OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 1234)
-  monkeypatch.setattr(backend, "_read_server_url", mock.AsyncMock(side_effect=RuntimeError("stop after spawn")))
-  monkeypatch.setattr(backend, "_stream_stderr", mock.AsyncMock())
-  monkeypatch.setattr(backend, "_cleanup_server", mock.AsyncMock())
+  process = conftest.stub_subprocess_spawn(monkeypatch, conftest.OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 1234)
+  process.wait = mock.AsyncMock(return_value=0)
 
-  _events = [event async for event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+  events = [event async for event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
   assert observed == [(1234, _SENTINEL_STAT[0])]
   assert backend.pid_start == _SENTINEL_STAT[0]
-  assert backend._stderr_task is not None
-  await backend._stderr_task
+  assert events[-1]["type"] == "error" and str(tmp_path / "absent-opencode") in events[-1]["message"]
 
 
 async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:

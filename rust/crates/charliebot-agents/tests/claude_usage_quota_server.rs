@@ -206,9 +206,8 @@ fn serve(mut stream: TcpStream, routes: &Mutex<Routes>, recorded: &Mutex<Vec<(St
     .get_mut(path.as_str())
     .and_then(VecDeque::pop_front)
     .unwrap_or_else(|| (599, format!("no scripted response for {path}")));
-  let reason = reqwest::StatusCode::from_u16(status).unwrap().canonical_reason().unwrap();
   let response = format!(
-    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+    "HTTP/1.1 {status} scripted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
     payload.len()
   );
   stream.write_all(response.as_bytes()).unwrap();

@@ -7,12 +7,13 @@ use std::sync::OnceLock;
 
 use axum::Router;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use axum::routing::get;
 use charliebot_compat::mimetypes::MimeTypes;
-use charliebot_compat::{jinja, responses, static_files, validation};
+use charliebot_compat::{responses, static_files, validation};
 use charliebot_registry::FeatureContext;
+use charliebot_registry::templating::Templating;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 
@@ -36,7 +37,7 @@ pub(super) fn matches(path: &str) -> bool {
   path == VIEWER_PATH || path == MERGED_PATH
 }
 
-async fn perfetto_viewer(State(_features): State<std::sync::Arc<FeatureContext>>, uri: Uri) -> Response {
+async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>, uri: Uri, request: Parts) -> Response {
   let query = query_pairs(uri.query());
   let traces: Vec<String> = query.iter().filter(|(name, _)| name == "trace").map(|(_, value)| value.clone()).collect();
   let dir = last_value(&query, "dir").map(str::to_string);
@@ -104,9 +105,9 @@ async fn perfetto_viewer(State(_features): State<std::sync::Arc<FeatureContext>>
     "is_merge": is_merge,
     "is_direct_pass": trace_url.starts_with(MERGED_PATH) && !is_merge,
   });
-  match render_perfetto(&context) {
-    Ok(html) => responses::html(html),
-    Err((kind, detail)) => responses::internal_error(kind, detail),
+  match render_perfetto(&features, &context, &request) {
+    Ok(response) => response,
+    Err((kind, detail)) => responses::internal_error(&kind, detail),
   }
 }
 
@@ -195,12 +196,12 @@ fn serve_cached_trace(cache_path: &Path, headers: &HeaderMap) -> Response {
   response
 }
 
-fn render_perfetto(context: &Value) -> Result<String, (&'static str, String)> {
-  let root = std::env::current_dir().map_err(|error| ("OSError", error.to_string()))?;
-  let directories = vec![root.join("web/templates"), root.join("src/features/trace/templates")];
-  let environment = jinja::environment(jinja::file_system_loader(directories));
-  let template = environment.get_template("perfetto.html").map_err(|error| ("TemplateError", error.to_string()))?;
-  template.render(minijinja::Value::from_serialize(context)).map_err(|error| ("TemplateError", error.to_string()))
+fn render_perfetto(features: &FeatureContext, context: &Value, request: &Parts) -> Result<Response, (String, String)> {
+  let templating =
+    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+  templating
+    .render_page(features, "perfetto.html", context, request)
+    .map_err(|error| (error.kind().to_string(), error.to_string()))
 }
 
 fn trace_input(value: &str) -> (String, Option<PathBuf>) {

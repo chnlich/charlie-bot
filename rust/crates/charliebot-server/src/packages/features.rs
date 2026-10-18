@@ -8,15 +8,6 @@ use serde_json::json;
 
 use super::raw_section;
 
-/// `src/features/artifacts`: the `publish:` section.
-pub fn artifacts(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(ConfigSection {
-    key: "publish",
-    legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],
-    parse: raw_section,
-  })
-}
-
 /// `src/features/backend_pool`: the pool flag on each session.
 pub fn backend_pool(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.metadata_slot(MetadataSlot {
@@ -24,15 +15,6 @@ pub fn backend_pool(registry: &mut Registry) -> Result<(), RegistryError> {
     on: MetadataFile::Session,
     after: None,
     fields: vec![SlotField { name: "backend_from_pool", default: json!(false) }],
-  })
-}
-
-/// `src/features/code_server`: the `code_server:` section.
-pub fn code_server(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(ConfigSection {
-    key: "code_server",
-    legacy_keys: &[("code_server_bin", "code_server.bin"), ("code_server_config", "code_server.config")],
-    parse: raw_section,
   })
 }
 

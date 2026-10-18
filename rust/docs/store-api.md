@@ -1,7 +1,7 @@
 # `charliebot-store` API
 
 Baseline: Python tree at `d9fdcd7c9`. The store owns writes to session `metadata.json` and
-`data/chat_events.jsonl`. It receives the ordered `MetadataSlot` list and all three required runtime
+`data/chat_events.jsonl`. It receives the ordered `MetadataSlot` list and all four required runtime
 hooks at construction; absent hooks fail startup. Metadata mutation methods read from disk while
 holding the session lock, save atomically, then return a fresh read-back. No public whole-object save
 accepts a cached metadata value.
@@ -124,34 +124,45 @@ route accepts run-token identity. `records_generation` increments after each run
 | `archived_of(&self, session_id: &str) -> StoreResult<bool>`; `check_task_authorization(&self, session_id: &str, actor: &TaskActor) -> StoreResult<()>` | `src/runtime/task_sessions.py::archived_of`, `check_task_authorization` |
 | `ancestor_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`; `descendant_ids(&self, session_id: &str) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::ancestor_ids`, `descendant_ids` |
 | `resolve_successor_chain(&self, session_id: &str) -> StoreResult<Vec<SessionMetadata>>`; `deliver_to_successor(&self, session_id: &str, event: ChatEvent) -> StoreResult<Option<String>>` | `src/runtime/session_successor.py::resolve_successor_chain`, `deliver_to_successor` |
+| `task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity>` | `src/runtime/task_sessions.py::task_tree_activity` |
 | `invalidate_tree_index(&self)`; `require_open_ancestry(&self, session_id: &str) -> StoreResult<()>` | `src/runtime/task_sessions.py::invalidate_tree_index`, `_require_open_ancestry` |
 
 The task-tree index helpers (`_get_index`, `_index_meta`, `_ancestors`, `_children_of`,
 `_descendants`) and `task_state` share a cached index owned by the task-tree stage. The S1
 `update_slot_fields` entry already requires a guard and performs its own fresh per-session RMW.
 
-## Planned event bus, runtime state, and message helpers (S4)
+## Runtime event bus, message model, and busy state (S4, implemented)
 
-| Rust API planned | Python source |
+| Rust API | Python source |
 | --- | --- |
 | `prime_aggregator(&self, session_id: &str) -> StoreResult<u64>`; `announce_appended_event(&self, session_id: &str, event: &ChatEvent, epoch: u64) -> StoreResult<()>` | `src/runtime/session_events.py::prime_aggregator`, `announce_appended_event` |
-| `persist_and_broadcast(&self, session_id: &str, event: ChatEvent) -> StoreResult<ChatEvent>` | `src/runtime/session_events.py::persist_and_broadcast` |
-| `broadcast_only(&self, session_id: &str, frame: Value) -> StoreResult<()>`; `broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()>` | `src/runtime/session_events.py::broadcast_only`, `broadcast_task_tree_changed` |
+| `persist_and_broadcast(&self, session_id: &str, event: ChatEvent) -> StoreResult<ChatEvent>`; `drop_session_runtime_state(&self, session_id: &str)` | `src/runtime/session_events.py::persist_and_broadcast`, `drop_session_runtime_state` |
+| `subscribe(&self, channel: &str) -> Subscription`; `unsubscribe(&self, subscription: &mut Subscription)`; `broadcast(&self, channel: &str, frame: Value) -> StoreResult<()>` | `src/runtime/streaming.py::StreamingManager.subscribe`, `unsubscribe`, `broadcast` |
+| `session_channel(session_id: &str) -> String`; `SIDEBAR_CHANNEL`; `STREAM_COALESCE_INTERVAL` | `src/runtime/streaming.py` session/sidebar channels and `_STREAM_COALESCE_INTERVAL` |
+| `broadcast_only(&self, session_id: &str, frame: Value) -> StoreResult<()>`; `broadcast_sidebar(&self, session_id: &str, event_type: &str, fields: Map<String, Value>) -> StoreResult<()>`; `broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()>` | `src/runtime/session_events.py::broadcast_only`, `broadcast_sidebar`, `broadcast_task_tree_changed` |
+| `load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)>`; `load_chat_events_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<(Vec<ChatEvent>, bool)>`; `get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize>` | `src/runtime/session_events.py` event count, tail, and range reads; `src/runtime/chat_events.py` |
+| `get_message_projection(&self, session_id: &str) -> StoreResult<Option<Arc<MessageProjection>>>`; `projection_memo_hit(&self, session_id: &str) -> Option<Arc<MessageProjection>>` | `src/runtime/session_events.py` message projection memo |
+| `MessageAggregator::{new, with_renderers, feed, feed_indexed, flush_pending, pending_draft_message}` | `src/runtime/message_aggregator.py::MessageAggregator` |
+| `MessageProjection::{new, advanced, history, committed, pending_draft, tail, slice_before}` and bounded page-body cache methods | `src/runtime/message_projection.py::MessageProjection` |
+| `RuntimeEventHooks`, `EventRenderer`, and `AfterTurnWork` supplied in `StoreHooks.runtime_events` | `src/runtime/hooks/turn_contributions.py`; feature `event_renderers` and `after_turn` |
 | `mark_busy(&self, session_id: &str, since: UtcDateTime) -> StoreResult<(UtcDateTime, bool)>`; `clear_busy(&self, session_id: &str)`; `busy_since(&self, session_id: &str) -> Option<UtcDateTime>` | `src/runtime/thinking_state.py::mark_busy`, `clear_busy`, `busy_since` |
 | `mark_run_busy(&self, session_id: &str, run_id: &str, since: UtcDateTime)`; `clear_run_busy(&self, session_id: &str, run_id: &str)`; `note_run_backend(&self, session_id: &str, backend: &str)`; `run_backend(&self, session_id: &str) -> Option<String>` | `src/runtime/thinking_state.py::mark_run_busy`, `clear_run_busy`, `note_run_backend`, `run_backend` |
-| `task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity>` | `src/runtime/task_sessions.py::task_tree_activity` |
-| `build_agent_message_event(&self, session_id: &str, text: &str, provenance: MessageProvenance) -> ChatEvent` | `src/runtime/api/message_utils.py::build_agent_message_event` |
-| `master_done_input_event_ids(&self, event: &ChatEvent) -> Vec<String>`; `events_to_messages(&self, events: &[ChatEvent]) -> Vec<Message>` | `src/runtime/api/message_utils.py::master_done_input_event_ids`, `events_to_messages` |
-| `register_hook(&mut self, hook: StoreHook) -> StoreResult<()>`; `hooks(&self) -> &[StoreHook]` | `src/runtime/hooks/sequence_controllers.py`, `backend_types.py`, and feature hook registries |
+| `build_scheduled_trigger_event(content: &str) -> ChatEvent`; `build_agent_message_event(&self, session_id: &str, text: &str, provenance: MessageProvenance) -> ChatEvent`; `master_done_input_event_ids(&self, event: &ChatEvent) -> Vec<String>`; `events_to_messages(&self, events: &[ChatEvent]) -> StoreResult<Vec<Value>>`; `events_to_view(&self, events: &[ChatEvent]) -> StoreResult<(Vec<Value>, Option<Value>)>` | `src/runtime/api/message_utils.py::build_scheduled_trigger_event`, `build_agent_message_event`, `master_done_input_event_ids`, `events_to_messages`, `events_to_view` |
+| `require_session(&self, session_id: &str) -> StoreResult<SessionMetadata>`; `SESSION_NOT_FOUND_DETAIL` | `src/runtime/api/deps.py::require_session` (404 detail `Session not found`) |
+| `handle_compaction_event(&self, session_id: &str, event: &Value) -> StoreResult<Option<ChatEvent>>` | `src/runtime/streaming.py::handle_compaction_events` |
+| `normalize_user_message_event`, `serialize_uploaded_files`, `strip_attached_files_block`, `build_agent_input_content`, `stable_history_projection`, `stable_closed_prefix_len` | `src/runtime/message_events.py` |
 
 `persist_and_broadcast` feeds the aggregator after the durable append, broadcasts the event, and
-invokes each turn contribution's `after_turn` for `master_done`. The control-sink two-phase path
-primes before the tree lock, appends under the lock, then announces after release only when its
-epoch still matches. Neither behavior is part of S1.
+starts each registered turn contribution's `after_turn` work for `master_done`. Stream deltas are
+coalesced per channel over 200 ms, with a leading frame and the latest trailing frame; message and
+error frames discard a pending preview. The control-sink two-phase path primes before the tree lock,
+appends under the lock, then announces after release only when its epoch still matches. Feature event
+renderers and after-turn work enter through `StoreHooks.runtime_events`; they are not mutable store hooks.
 
 ## Not store-owned
 
 The feature request's plan files, explain results, voice files, host-auth data, usage ledger, trace
 cache, models, backup, trigger files, worktrees, and transport files remain owned by their feature or
-runtime components. `charliebot-store` supplies only metadata and chat-event access in S1. Usage
-storage's raw metadata scan is read-only and is exposed as `raw_metadata_scan`.
+runtime components. `charliebot-store` supplies metadata and chat-event access in S1 and the event,
+message, projection, and busy-state model in S4. Usage storage's raw metadata scan is read-only and is
+exposed as `raw_metadata_scan`.

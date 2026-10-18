@@ -1,10 +1,12 @@
-//! The registry's answers to the three hook traits the store calls (`charliebot_store::StoreHooks`). The store names no
+//! The registry's answers to the hook traits the store calls (`charliebot_store::StoreHooks`). The store names no
 //! package: it asks these adapters, which read the registered backend lifecycles and sequence controllers. The server
 //! injects them at startup, when it constructs the store.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_store::hooks::{AfterTurnWork, EventRenderer, RuntimeEventHooks};
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{AccountLabelKeeper, AnchorFieldReconciler, SequenceListingFields, StoreHooks, StoreResult};
 use serde_json::{Map, Value};
@@ -17,11 +19,14 @@ pub fn store_hooks(registry: Arc<Registry>) -> StoreHooks {
     Arc::new(LifecycleAccountLabels { registry: Arc::clone(&registry) });
   let anchor_reconciler: Arc<dyn AnchorFieldReconciler> =
     Arc::new(LifecycleAnchors { registry: Arc::clone(&registry) });
-  let sequence_listing: Arc<dyn SequenceListingFields> = Arc::new(RegisteredSequences { registry });
+  let sequence_listing: Arc<dyn SequenceListingFields> =
+    Arc::new(RegisteredSequences { registry: Arc::clone(&registry) });
+  let runtime_events: Arc<dyn RuntimeEventHooks> = Arc::new(RegistryRuntimeEvents { registry });
   StoreHooks {
     account_labels: Some(account_labels),
     anchor_reconciler: Some(anchor_reconciler),
     sequence_listing: Some(sequence_listing),
+    runtime_events: Some(runtime_events),
   }
 }
 
@@ -104,4 +109,33 @@ impl SequenceListingFields for RegisteredSequences {
   fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
     Ok(Vec::new())
   }
+}
+
+/// Bridges feature turn contributions and event renderers into the store's runtime event hooks.
+struct RegistryRuntimeEvents {
+  registry: Arc<Registry>,
+}
+
+impl RuntimeEventHooks for RegistryRuntimeEvents {
+  fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn EventRenderer>)>> {
+    let mut renderers = Vec::new();
+    for (_, contribution) in self.registry.turn_contributions.pairs() {
+      for (event_type, renderer_fn) in contribution.event_renderers() {
+        let boxed: Arc<dyn EventRenderer> = Arc::new(move |event: &Value| {
+          let res = renderer_fn(event);
+          Ok(if res.is_null() { None } else { Some(res) })
+        });
+        renderers.push((event_type.to_string(), boxed));
+      }
+    }
+    Ok(renderers)
+  }
+
+  fn after_turn(&self, _meta: SessionMetadata, _event: Value, _cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
+    Vec::new()
+  }
+
+  fn mark_sidebar_dirty(&self, _session_id: &str) {}
+
+  fn drop_session_runtime_state(&self, _session_id: &str) {}
 }

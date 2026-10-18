@@ -13,8 +13,13 @@ use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::aggregator::builtin_event_types;
 use crate::control::ControlLock;
+use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use crate::session_events::SessionEventState;
+use crate::streaming::StreamingManager;
+use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
 const METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -60,6 +65,8 @@ pub struct StoreHooks {
   pub anchor_reconciler: Option<Arc<dyn AnchorFieldReconciler>>,
   /// Sequence-controller listing contributions.
   pub sequence_listing: Option<Arc<dyn SequenceListingFields>>,
+  /// Feature event renderers, after-turn contributions, and runtime-state callbacks.
+  pub runtime_events: Option<Arc<dyn RuntimeEventHooks>>,
 }
 
 #[derive(Clone)]
@@ -76,12 +83,17 @@ pub struct Store {
   pub(crate) account_labels: Arc<dyn AccountLabelKeeper>,
   pub(crate) anchor_reconciler: Arc<dyn AnchorFieldReconciler>,
   pub(crate) sequence_listing: Arc<dyn SequenceListingFields>,
+  pub(crate) runtime_hooks: Arc<dyn RuntimeEventHooks>,
+  pub(crate) event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Vec<Value>>>,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
+  pub(crate) session_events: SessionEventState,
+  pub(crate) streaming_manager: StreamingManager,
+  pub(crate) thinking_state: ThinkingState,
 }
 
 impl Store {
@@ -93,6 +105,16 @@ impl Store {
       hooks.anchor_reconciler.ok_or_else(|| StoreError::new("store requires an anchor field reconciler"))?;
     let sequence_listing =
       hooks.sequence_listing.ok_or_else(|| StoreError::new("store requires sequence listing fields"))?;
+    let runtime_hooks = hooks.runtime_events.ok_or_else(|| StoreError::new("store requires runtime event hooks"))?;
+    let mut event_renderers = HashMap::new();
+    for (event_type, renderer) in runtime_hooks.event_renderers()? {
+      if builtin_event_types().contains(&event_type.as_str()) {
+        return Err(StoreError::new(format!("event type {event_type:?} already has a built-in renderer")));
+      }
+      if event_renderers.insert(event_type.clone(), renderer).is_some() {
+        return Err(StoreError::new(format!("event type {event_type:?} already has a renderer")));
+      }
+    }
     validate_slots(&slots)?;
     let store_id = Uuid::new_v4();
     Ok(Self {
@@ -101,12 +123,17 @@ impl Store {
       account_labels,
       anchor_reconciler,
       sequence_listing,
+      runtime_hooks,
+      event_renderers,
       metadata_cache: StdMutex::new(HashMap::new()),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),
+      session_events: SessionEventState::default(),
+      streaming_manager: StreamingManager::new(),
+      thinking_state: ThinkingState::default(),
     })
   }
 
@@ -669,6 +696,89 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+  use super::*;
+  use crate::hooks::EmptyRuntimeEventHooks;
+
+  struct AccountLabels;
+
+  impl AccountLabelKeeper for AccountLabels {
+    fn record_account_label(&self, meta: &mut SessionMetadata, label: Option<&str>) -> StoreResult<bool> {
+      let value = label.map_or(Value::Null, |label| Value::String(label.to_string()));
+      if meta.extra("label") == Some(&value) {
+        return Ok(false);
+      }
+      meta.set_extra("label", value);
+      Ok(true)
+    }
+
+    fn account_label(&self, meta: &SessionMetadata) -> Option<String> {
+      meta.extra("label").and_then(Value::as_str).map(str::to_string)
+    }
+  }
+
+  struct AnchorReconciler;
+
+  impl AnchorFieldReconciler for AnchorReconciler {
+    fn reconcile(&self, disk: &SessionMetadata, attempted: &mut SessionMetadata) -> StoreResult<()> {
+      attempted.cc_session_id.clone_from(&disk.cc_session_id);
+      attempted.native_backend.clone_from(&disk.native_backend);
+      Ok(())
+    }
+  }
+
+  struct SequenceListing;
+
+  impl SequenceListingFields for SequenceListing {
+    fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+      false
+    }
+
+    fn listing_fields(
+      &self,
+      _session_ids: &[String],
+      _now: UtcDateTime,
+    ) -> StoreResult<HashMap<String, Map<String, Value>>> {
+      Ok(HashMap::new())
+    }
+
+    fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+      Ok(HashMap::new())
+    }
+
+    fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+      Ok(HashMap::new())
+    }
+
+    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
+      Ok(Vec::new())
+    }
+  }
+
+  pub(crate) fn make_test_store() -> (tempfile::TempDir, Store) {
+    make_test_store_with_runtime(Arc::new(EmptyRuntimeEventHooks))
+  }
+
+  pub(crate) fn make_test_store_with_runtime(runtime_events: Arc<dyn RuntimeEventHooks>) -> (tempfile::TempDir, Store) {
+    let home = tempfile::tempdir().unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
+    let store = Store::new(
+      cfg,
+      Vec::new(),
+      StoreHooks {
+        account_labels: Some(Arc::new(AccountLabels)),
+        anchor_reconciler: Some(Arc::new(AnchorReconciler)),
+        sequence_listing: Some(Arc::new(SequenceListing)),
+        runtime_events: Some(runtime_events),
+      },
+    )
+    .unwrap();
+    (home, store)
+  }
+}
+
+#[cfg(test)]
 mod tests {
   use super::*;
 
@@ -732,6 +842,7 @@ mod tests {
       account_labels: Some(Arc::new(TestAccountLabels)),
       anchor_reconciler: Some(Arc::new(TestAnchorReconciler)),
       sequence_listing: Some(Arc::new(TestSequenceListing)),
+      runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
     }
   }
 

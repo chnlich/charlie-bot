@@ -51,6 +51,33 @@ impl Store {
     Ok(events)
   }
 
+  /// Read the latest live-log events without priming the event cache.
+  pub fn load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)> {
+    let path = self.chat_events_path(session_id);
+    let raw = match fs::read(&path) {
+      Ok(raw) => raw,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0, false)),
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+    };
+    let total = if raw.is_empty() {
+      0
+    } else {
+      raw.iter().filter(|byte| **byte == b'\n').count() + usize::from(!raw.ends_with(b"\n"))
+    };
+    let has_more = total > limit;
+    if limit == 0 || total == 0 {
+      return Ok((Vec::new(), total, has_more));
+    }
+    let mut lines: Vec<&[u8]> = raw.split(|byte| *byte == b'\n').collect();
+    if raw.ends_with(b"\n") {
+      lines.pop();
+    }
+    let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
+    let start = nonblank.len().saturating_sub(limit);
+    let events = nonblank[start..].iter().filter_map(|line| ndjson::parse_line(line)).collect();
+    Ok((events, total, has_more))
+  }
+
   /// Read all durable facts, archived segments first and the live log last.
   pub fn load_all_facts(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
     let mut events = Vec::new();
@@ -275,7 +302,7 @@ impl Store {
     Ok(Some(archive_path))
   }
 
-  fn read_archive_offset(&self, session_id: &str) -> StoreResult<usize> {
+  pub(crate) fn read_archive_offset(&self, session_id: &str) -> StoreResult<usize> {
     if let Some(meta) = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").get(session_id) {
       return Ok(meta.value.archive_offset.max(0) as usize);
     }
@@ -334,6 +361,8 @@ fn python_event_timestamp(value: UtcDateTime) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::store::test_support::make_test_store;
+  use serde_json::json;
 
   #[test]
   fn event_timestamp_matches_python_isoformat_offset() {
@@ -346,5 +375,27 @@ mod tests {
     let value = UtcDateTime::parse("2021-01-01T12:00:00Z").unwrap();
     let (year, week, _) = value.into_inner().date().to_iso_week_date();
     assert_eq!((year, week), (2020, 53));
+  }
+
+  #[tokio::test]
+  async fn event_count_tail_and_global_range_reads_agree() {
+    let (_home, store) = make_test_store();
+    let mut expected = Vec::new();
+    for index in 0..5 {
+      expected.push(store.append_chat_event("synthetic", json!({"type": "user", "content": index})).await.unwrap());
+    }
+
+    assert_eq!(store.get_chat_event_count_sync("synthetic").unwrap(), expected.len());
+    let (tail, total, has_more) = store.load_chat_events_tail("synthetic", 2).unwrap();
+    assert_eq!(tail, expected[3..]);
+    assert_eq!(total, 5);
+    assert!(has_more);
+
+    let (range, has_earlier) = store.load_chat_events_range("synthetic", 1, 4).unwrap();
+    assert_eq!(range, expected[1..4]);
+    assert!(has_earlier);
+    let (full, has_earlier) = store.load_chat_events_range("synthetic", 0, 5).unwrap();
+    assert_eq!(full, expected);
+    assert!(!has_earlier);
   }
 }

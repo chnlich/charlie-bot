@@ -1,0 +1,570 @@
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex as StdMutex};
+
+use serde_json::{Map, Value, json};
+use tokio::sync::{Mutex, OwnedMutexGuard};
+
+use crate::aggregator::MessageAggregator;
+use crate::projection::MessageProjection;
+use crate::streaming::{self, Subscription};
+use crate::{ChatEvent, Store, StoreError, StoreResult};
+
+const PROJECTION_LRU_LIMIT: usize = 64;
+const AGGREGATOR_INIT_SLICE_EVENTS: usize = 256;
+
+/// Raw event types whose rendered content is carried by message or stream deltas.
+pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
+  "assistant",
+  "user",
+  "scheduled_trigger",
+  "child_report",
+  "task_closed",
+  "task_reopened",
+  "web_reply",
+  "web_reply_notice",
+  "web_status",
+];
+
+/// Per-session aggregator and message-projection state.
+pub(crate) struct SessionEventState {
+  aggregators: StdMutex<HashMap<String, Arc<Mutex<MessageAggregator>>>>,
+  init_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+  event_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+  epochs: StdMutex<HashMap<String, u64>>,
+  projections: StdMutex<ProjectionCache>,
+}
+
+impl Default for SessionEventState {
+  fn default() -> Self {
+    Self {
+      aggregators: StdMutex::new(HashMap::new()),
+      init_locks: StdMutex::new(HashMap::new()),
+      event_locks: StdMutex::new(HashMap::new()),
+      epochs: StdMutex::new(HashMap::new()),
+      projections: StdMutex::new(ProjectionCache::default()),
+    }
+  }
+}
+
+#[derive(Default)]
+struct ProjectionCache {
+  values: HashMap<String, Arc<MessageProjection>>,
+  order: VecDeque<String>,
+}
+
+impl ProjectionCache {
+  fn get(&mut self, session_id: &str) -> Option<Arc<MessageProjection>> {
+    let value = self.values.get(session_id).cloned()?;
+    self.order.retain(|id| id != session_id);
+    self.order.push_back(session_id.to_string());
+    Some(value)
+  }
+
+  fn store(&mut self, session_id: &str, projection: Arc<MessageProjection>) {
+    self.order.retain(|id| id != session_id);
+    self.order.push_back(session_id.to_string());
+    self.values.insert(session_id.to_string(), projection);
+    while self.order.len() > PROJECTION_LRU_LIMIT {
+      let oldest = self.order.pop_front().expect("projection cache order is non-empty");
+      self.values.remove(&oldest);
+    }
+  }
+
+  fn remove(&mut self, session_id: &str) {
+    self.values.remove(session_id);
+    self.order.retain(|id| id != session_id);
+  }
+}
+
+impl Store {
+  /// Append an event, aggregate its message frames, then broadcast raw side-effect events.
+  pub async fn persist_and_broadcast(&self, session_id: &str, event: Value) -> StoreResult<ChatEvent> {
+    let _event_guard = self.event_lock(session_id).await;
+    let aggregator = self.get_or_init_aggregator(session_id).await?;
+    let meta = self.get_session(session_id).await?;
+    let appended = self.append_chat_event(session_id, event).await?;
+    let mut event = appended;
+    self.stamp_event_index(session_id, &mut event)?;
+    self.feed_and_broadcast(session_id, &event, &aggregator).await?;
+
+    if event.get("type").and_then(Value::as_str) == Some("master_done")
+      && let Some(meta) = meta
+    {
+      for work in self.runtime_hooks.after_turn(meta, event.clone(), self.cfg.clone()) {
+        let session_id = session_id.to_string();
+        let name = format!("after-turn-{}-{session_id}", work.name);
+        tokio::spawn(async move {
+          if let Err(error) = work.future.await {
+            tracing::error!(task = %name, error = %error, "after-turn contribution failed");
+          }
+        });
+      }
+    }
+    Ok(event)
+  }
+
+  /// Ensure the live aggregator is caught up before a caller appends under the control lock.
+  pub async fn prime_aggregator(&self, session_id: &str) -> StoreResult<u64> {
+    self.get_or_init_aggregator(session_id).await?;
+    Ok(self.epoch(session_id))
+  }
+
+  /// Announce an event that was appended before this call.
+  pub async fn announce_appended_event(&self, session_id: &str, event: &ChatEvent, epoch: u64) -> StoreResult<()> {
+    let _event_guard = self.event_lock(session_id).await;
+    let aggregator = {
+      let aggregators = self.session_events.aggregators.lock().expect("aggregator map mutex is not poisoned");
+      aggregators.get(session_id).cloned()
+    };
+    let Some(aggregator) = aggregator else {
+      tracing::debug!(session_id, event_type = ?event.get("type"), "announce skipped without live aggregator");
+      return Ok(());
+    };
+    if self.epoch(session_id) != epoch {
+      tracing::debug!(session_id, event_type = ?event.get("type"), "announce skipped after aggregator rebuild");
+      return Ok(());
+    }
+    let mut event = event.clone();
+    self.stamp_event_index(session_id, &mut event)?;
+    self.feed_and_broadcast(session_id, &event, &aggregator).await
+  }
+
+  /// Broadcast one frame on the session channel without persisting it.
+  pub async fn broadcast_only(&self, session_id: &str, frame: Value) -> StoreResult<()> {
+    self.broadcast(&streaming::session_channel(session_id), frame).await
+  }
+
+  /// Broadcast a session-scoped event on the shared sidebar channel.
+  pub async fn broadcast_sidebar(
+    &self,
+    session_id: &str,
+    event_type: &str,
+    fields: Map<String, Value>,
+  ) -> StoreResult<()> {
+    let mut frame = Map::new();
+    frame.insert("type".to_string(), json!(event_type));
+    frame.insert("session_id".to_string(), json!(session_id));
+    frame.extend(fields);
+    self.broadcast(streaming::SIDEBAR_CHANNEL, Value::Object(frame)).await
+  }
+
+  /// Notify sidebar subscribers that one task-tree fact changed.
+  pub async fn broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()> {
+    let mut fields = Map::new();
+    fields.insert("fact_type".to_string(), event_type.map_or(Value::Null, |value| json!(value)));
+    self.broadcast_sidebar(session_id, "task_tree_changed", fields).await
+  }
+
+  /// Broadcast a frame on any named channel.
+  pub async fn broadcast(&self, channel: &str, frame: Value) -> StoreResult<()> {
+    self.streaming_manager.broadcast(channel, frame).await
+  }
+
+  /// Subscribe to any channel, including the shared sidebar channel.
+  pub fn subscribe(&self, channel: &str) -> Subscription {
+    self.streaming_manager.subscribe(channel)
+  }
+
+  /// Remove one subscriber from its channel.
+  pub fn unsubscribe(&self, subscription: &mut Subscription) {
+    self.streaming_manager.unsubscribe(subscription);
+  }
+
+  /// Close every subscriber and discard pending stream deltas.
+  pub fn close_subscribers(&self) {
+    self.streaming_manager.close_all();
+  }
+
+  /// Return the memoized message projection for an unarchived session.
+  pub fn get_message_projection(&self, session_id: &str) -> StoreResult<Option<Arc<MessageProjection>>> {
+    let archive_offset = self.read_archive_offset(session_id)?;
+    if archive_offset != 0 {
+      return Ok(None);
+    }
+    let live = self.load_chat_events_sync(session_id)?;
+    let mut cache = self.session_events.projections.lock().expect("projection cache mutex is not poisoned");
+    if let Some(cached) = cache.get(session_id)
+      && cached.event_count() == live.len()
+    {
+      return Ok(Some(cached));
+    }
+    let cached = cache.get(session_id);
+    let projection = match cached {
+      Some(cached) if live.len() >= cached.event_count() => cached.advanced(&live[cached.event_count()..])?,
+      _ => MessageProjection::new(&live, 0, self.event_renderers.clone())?,
+    };
+    let projection = Arc::new(projection);
+    cache.store(session_id, Arc::clone(&projection));
+    Ok(Some(projection))
+  }
+
+  /// Return a memoized projection only when the in-memory event list proves it current.
+  pub fn projection_memo_hit(&self, session_id: &str) -> Option<Arc<MessageProjection>> {
+    let live_len =
+      self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).map(Vec::len)?;
+    let projection =
+      self.session_events.projections.lock().expect("projection cache mutex is not poisoned").get(session_id)?;
+    (projection.event_count() == live_len).then_some(projection)
+  }
+
+  /// Drop the cached events, live aggregator, projection, and feature-owned runtime state.
+  pub fn drop_session_runtime_state(&self, session_id: &str) {
+    self.clear_chat_events_cache(session_id);
+    self.session_events.aggregators.lock().expect("aggregator map mutex is not poisoned").remove(session_id);
+    self.session_events.init_locks.lock().expect("aggregator lock map mutex is not poisoned").remove(session_id);
+    self.session_events.event_locks.lock().expect("event lock map mutex is not poisoned").remove(session_id);
+    let mut epochs = self.session_events.epochs.lock().expect("aggregator epoch mutex is not poisoned");
+    let epoch = epochs.entry(session_id.to_string()).or_default();
+    *epoch += 1;
+    drop(epochs);
+    self.session_events.projections.lock().expect("projection cache mutex is not poisoned").remove(session_id);
+    self.runtime_hooks.drop_session_runtime_state(session_id);
+  }
+
+  /// Persist synthesized compaction events for compact-boundary and compact-failure input events.
+  pub async fn handle_compaction_event(&self, session_id: &str, event: &Value) -> StoreResult<Option<ChatEvent>> {
+    if event.get("type").and_then(Value::as_str) != Some("system") {
+      return Ok(None);
+    }
+    let subtype = event.get("subtype").and_then(Value::as_str);
+    if subtype == Some("compact_boundary") {
+      let metadata = event.get("compact_metadata").cloned().unwrap_or_else(|| json!({}));
+      let metadata = metadata.as_object().ok_or_else(|| StoreError::new("compact_metadata must be an object"))?;
+      let trigger = metadata.get("trigger").cloned().unwrap_or_else(|| json!("unknown"));
+      tracing::info!(
+        session_id,
+        trigger = ?trigger,
+        pre_tokens = ?metadata.get("pre_tokens"),
+        post_tokens = ?metadata.get("post_tokens"),
+        "cc_context_compacted"
+      );
+      return self
+        .persist_and_broadcast(
+          session_id,
+          json!({"type": "context_compacted", "trigger": trigger, "compact_metadata": metadata}),
+        )
+        .await
+        .map(Some);
+    }
+    if subtype == Some("status") && event.get("compact_result").and_then(Value::as_str) == Some("failed") {
+      let error = event.get("compact_error").cloned().unwrap_or(Value::Null);
+      tracing::info!(session_id, error = ?error, "cc_context_compact_failed");
+      return self
+        .persist_and_broadcast(session_id, json!({"type": "context_compact_failed", "error": error}))
+        .await
+        .map(Some);
+    }
+    Ok(None)
+  }
+
+  async fn feed_and_broadcast(
+    &self,
+    session_id: &str,
+    event: &ChatEvent,
+    aggregator: &Arc<Mutex<MessageAggregator>>,
+  ) -> StoreResult<()> {
+    let deltas = aggregator.lock().await.feed(event)?;
+    let channel = streaming::session_channel(session_id);
+    for delta in deltas {
+      self.broadcast(&channel, delta).await?;
+    }
+    let event_type = event.get("type").and_then(Value::as_str);
+    if !event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
+      self.broadcast(&channel, event.clone()).await?;
+    }
+    Ok(())
+  }
+
+  async fn get_or_init_aggregator(&self, session_id: &str) -> StoreResult<Arc<Mutex<MessageAggregator>>> {
+    if let Some(aggregator) =
+      self.session_events.aggregators.lock().expect("aggregator map mutex is not poisoned").get(session_id).cloned()
+    {
+      return Ok(aggregator);
+    }
+    loop {
+      let epoch = self.epoch(session_id);
+      let lock = async_lock_for(&self.session_events.init_locks, session_id);
+      let _init_guard = lock.lock().await;
+      if let Some(aggregator) =
+        self.session_events.aggregators.lock().expect("aggregator map mutex is not poisoned").get(session_id).cloned()
+      {
+        return Ok(aggregator);
+      }
+      let events = self.load_chat_events_sync(session_id)?;
+      let archive_offset = self.read_archive_offset(session_id)?;
+      let mut aggregator = MessageAggregator::with_renderers(archive_offset, false, self.event_renderers.clone());
+      let mut dropped = false;
+      let mut start = 0;
+      while start < events.len() {
+        let end = (start + AGGREGATOR_INIT_SLICE_EVENTS).min(events.len());
+        for event in &events[start..end] {
+          aggregator.feed(event)?;
+        }
+        start = end;
+        tokio::task::yield_now().await;
+        if self.epoch(session_id) != epoch {
+          dropped = true;
+          break;
+        }
+      }
+      if dropped || self.epoch(session_id) != epoch {
+        self.clear_chat_events_cache(session_id);
+        continue;
+      }
+      aggregator.set_emit_stream_deltas(true);
+      let aggregator = Arc::new(Mutex::new(aggregator));
+      self
+        .session_events
+        .aggregators
+        .lock()
+        .expect("aggregator map mutex is not poisoned")
+        .insert(session_id.to_string(), Arc::clone(&aggregator));
+      return Ok(aggregator);
+    }
+  }
+
+  fn stamp_event_index(&self, session_id: &str, event: &mut Value) -> StoreResult<()> {
+    let count = self.get_chat_event_count_sync(session_id)?;
+    let index = count.checked_sub(1).ok_or_else(|| StoreError::new("cannot index an empty chat event log"))?;
+    let object = event.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
+    object.insert("event_index".to_string(), json!(index));
+    Ok(())
+  }
+
+  fn epoch(&self, session_id: &str) -> u64 {
+    *self.session_events.epochs.lock().expect("aggregator epoch mutex is not poisoned").get(session_id).unwrap_or(&0)
+  }
+
+  async fn event_lock(&self, session_id: &str) -> OwnedMutexGuard<()> {
+    let lock = async_lock_for(&self.session_events.event_locks, session_id);
+    lock.lock_owned().await
+  }
+}
+
+fn async_lock_for(locks: &StdMutex<HashMap<String, Arc<Mutex<()>>>>, session_id: &str) -> Arc<Mutex<()>> {
+  Arc::clone(
+    locks
+      .lock()
+      .expect("session event lock map mutex is not poisoned")
+      .entry(session_id.to_string())
+      .or_insert_with(|| Arc::new(Mutex::new(()))),
+  )
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::{Arc, Mutex as StdMutex};
+
+  use super::*;
+  use crate::hooks::{AfterTurnWork, RuntimeEventHooks};
+  use crate::metadata::{SessionMetadata, TaskProfile};
+  use crate::store::test_support::make_test_store;
+  use crate::store::test_support::make_test_store_with_runtime;
+
+  struct AfterTurnHook {
+    sender: StdMutex<Option<tokio::sync::oneshot::Sender<Value>>>,
+  }
+
+  struct FeatureEventHook;
+
+  impl RuntimeEventHooks for FeatureEventHook {
+    fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
+      let renderer: Arc<dyn crate::hooks::EventRenderer> =
+        Arc::new(|event: &Value| Ok(Some(json!({"role": "feature", "content": event["content"].clone()}))));
+      Ok(vec![("feature_event".to_string(), renderer)])
+    }
+
+    fn after_turn(
+      &self,
+      _meta: SessionMetadata,
+      _event: Value,
+      _cfg: charliebot_core::config::CharlieBotConfig,
+    ) -> Vec<AfterTurnWork> {
+      Vec::new()
+    }
+
+    fn mark_sidebar_dirty(&self, _session_id: &str) {}
+
+    fn drop_session_runtime_state(&self, _session_id: &str) {}
+  }
+
+  impl RuntimeEventHooks for AfterTurnHook {
+    fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
+      Ok(Vec::new())
+    }
+
+    fn after_turn(
+      &self,
+      _meta: SessionMetadata,
+      event: Value,
+      _cfg: charliebot_core::config::CharlieBotConfig,
+    ) -> Vec<AfterTurnWork> {
+      let sender = self.sender.lock().unwrap().take().unwrap();
+      vec![AfterTurnWork {
+        name: "test-contribution".to_string(),
+        future: Box::pin(
+          async move { sender.send(event).map_err(|_| StoreError::new("after-turn receiver was dropped")) },
+        ),
+      }]
+    }
+
+    fn mark_sidebar_dirty(&self, _session_id: &str) {}
+
+    fn drop_session_runtime_state(&self, _session_id: &str) {}
+  }
+
+  fn write_test_session(store: &Store, session_id: &str) {
+    let metadata = SessionMetadata::new(session_id, "synthetic", TaskProfile::Manager);
+    let path = store.metadata_path(session_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, metadata.to_json_string(&[], true)).unwrap();
+  }
+
+  #[tokio::test]
+  async fn persist_broadcast_sends_message_deltas_and_suppresses_replaced_raw_events() {
+    let (_home, store) = make_test_store();
+    let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    let event = store
+      .persist_and_broadcast(
+        "synthetic",
+        json!({
+          "type": "assistant",
+          "id": "assistant-1",
+          "message": {"content": [{"type": "text", "text": "hello"}]},
+          "timestamp": "2026-01-01T00:00:00Z",
+        }),
+      )
+      .await
+      .unwrap();
+    assert_eq!(event["event_index"], 0);
+    let frame: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
+    assert_eq!(frame["type"], "stream");
+    assert_eq!(frame["message"]["content"], "hello");
+  }
+
+  #[tokio::test]
+  async fn sidebar_frames_are_public_and_task_tree_changes_include_the_fact_type() {
+    let (_home, store) = make_test_store();
+    let mut subscription = store.subscribe(streaming::SIDEBAR_CHANNEL);
+    store.broadcast_task_tree_changed("synthetic", Some("run_finished")).await.unwrap();
+    let frame: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
+    assert_eq!(
+      frame,
+      json!({
+        "type": "task_tree_changed",
+        "session_id": "synthetic",
+        "fact_type": "run_finished",
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn after_turn_contribution_starts_for_master_done_after_persistence() {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let hook = Arc::new(AfterTurnHook { sender: StdMutex::new(Some(sender)) });
+    let (_home, store) = make_test_store_with_runtime(hook);
+    write_test_session(&store, "synthetic");
+
+    let event = store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
+    assert_eq!(event["event_index"], 0);
+    let contribution_event = tokio::time::timeout(std::time::Duration::from_secs(1), receiver).await.unwrap().unwrap();
+    assert_eq!(contribution_event["type"], "master_done");
+    assert_eq!(contribution_event["event_index"], 0);
+    assert_eq!(store.load_chat_events_sync("synthetic").unwrap().len(), 1);
+  }
+
+  #[test]
+  fn construction_supplies_feature_renderers_to_message_helpers() {
+    let (_home, store) = make_test_store_with_runtime(Arc::new(FeatureEventHook));
+    let messages = store.events_to_messages(&[json!({"type": "feature_event", "content": "feature text"})]).unwrap();
+    assert_eq!(
+      messages,
+      vec![json!({
+        "role": "feature",
+        "content": "feature text",
+        "timestamp": null,
+        "event_index": 0,
+        "id": "legacy:0",
+      })]
+    );
+  }
+
+  #[tokio::test]
+  async fn projection_advances_immutably_and_runtime_drop_bumps_the_epoch() {
+    let (_home, store) = make_test_store();
+    store.append_chat_event("synthetic", json!({"type": "user", "content": "first"})).await.unwrap();
+    let first = store.get_message_projection("synthetic").unwrap().unwrap();
+    assert_eq!(first.event_count(), 1);
+    assert!(store.projection_memo_hit("synthetic").is_some());
+
+    store
+      .append_chat_event(
+        "synthetic",
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}}),
+      )
+      .await
+      .unwrap();
+    assert!(store.projection_memo_hit("synthetic").is_none());
+    let advanced = store.get_message_projection("synthetic").unwrap().unwrap();
+    assert_eq!(first.event_count(), 1);
+    assert_eq!(advanced.event_count(), 2);
+    assert_eq!(advanced.pending_draft().unwrap()["content"], "draft");
+
+    let epoch = store.prime_aggregator("synthetic").await.unwrap();
+    store.drop_session_runtime_state("synthetic");
+    assert_eq!(store.prime_aggregator("synthetic").await.unwrap(), epoch + 1);
+    assert!(store.projection_memo_hit("synthetic").is_none());
+  }
+
+  #[tokio::test]
+  async fn an_old_announce_is_skipped_after_the_aggregator_epoch_changes() {
+    let (_home, store) = make_test_store();
+    let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    let epoch = store.prime_aggregator("synthetic").await.unwrap();
+    let event = store
+      .append_chat_event(
+        "synthetic",
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "once"}]}}),
+      )
+      .await
+      .unwrap();
+    store.drop_session_runtime_state("synthetic");
+    store.announce_appended_event("synthetic", &event, epoch).await.unwrap();
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(1), subscription.recv()).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn compaction_inputs_persist_the_python_synthesized_event_shapes() {
+    let (_home, store) = make_test_store();
+    let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    assert!(store.handle_compaction_event("synthetic", &json!({"type": "user"})).await.unwrap().is_none());
+
+    let boundary = store
+      .handle_compaction_event(
+        "synthetic",
+        &json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": null}}),
+      )
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(boundary["type"], "context_compacted");
+    assert!(boundary["trigger"].is_null());
+    assert_eq!(boundary["compact_metadata"], json!({"trigger": null}));
+    let rendered: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
+    assert_eq!(rendered["type"], "message");
+    assert_eq!(rendered["message"]["content"], "Context compacted");
+    let raw: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
+    assert_eq!(raw["type"], "context_compacted");
+
+    let failed = store
+      .handle_compaction_event("synthetic", &json!({"type": "system", "subtype": "status", "compact_result": "failed"}))
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(failed["type"], "context_compact_failed");
+    assert!(failed["error"].is_null());
+    assert_eq!(failed["event_index"], 1);
+    assert!(failed["id"].as_str().is_some());
+    assert!(failed["timestamp"].as_str().is_some());
+  }
+}

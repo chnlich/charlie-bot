@@ -1,0 +1,4307 @@
+{
+  "format": 1,
+  "parity_chat_logs": [
+    {
+      "session": "06739622-6846-5ab5-90cc-c6adee2b3441",
+      "events": [
+        {
+          "id": "e96e5a9d-c7d9-4448-b019-a0ae60461216",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:13:39+00:00",
+          "actor": "user",
+          "source_session_id": "06739622-6846-5ab5-90cc-c6adee2b3441",
+          "request_id": "fixture-beacon",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "637e1082-9d82-4355-8475-e5c7ed7aa0ca",
+          "type": "user",
+          "timestamp": "2026-01-05T09:13:53+00:00",
+          "actor": "user",
+          "source_session_id": "06739622-6846-5ab5-90cc-c6adee2b3441",
+          "content": "Outline the beacon maintenance log."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-beacon_t1",
+          "id": "e01c8b8e-4f65-4043-930b-c92e7b62f6e4",
+          "timestamp": "2026-01-05T09:14:07+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "The log has four sections."
+              }
+            ]
+          },
+          "id": "b36f259f-ad20-4f1e-9b74-a726756134e7",
+          "timestamp": "2026-01-05T09:14:14+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 600,
+            "output_tokens": 70,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.004,
+          "id": "8d093596-0601-443a-8108-e369e1fdcab9",
+          "timestamp": "2026-01-05T09:14:21+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "637e1082-9d82-4355-8475-e5c7ed7aa0ca"
+          ],
+          "thinking_seconds": 4,
+          "id": "9c190f1d-5fdf-4c75-813f-75a13a06f55e",
+          "timestamp": "2026-01-05T09:14:28+00:00"
+        },
+        {
+          "id": "f3f04067-4e59-4b79-ad64-8b00d2f599a0",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:14:42+00:00",
+          "actor": "system",
+          "source_session_id": "06739622-6846-5ab5-90cc-c6adee2b3441",
+          "run_id": "28d5a264-54aa-5937-97b3-35af3b8e4f0f",
+          "input_event_ids": [
+            "637e1082-9d82-4355-8475-e5c7ed7aa0ca"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "f1eebcf0-1991-58d7-a46f-4fa9823b315a",
+          "type": "task_closed",
+          "timestamp": "2026-01-05T09:16:06+00:00",
+          "actor": "user",
+          "source_session_id": "06739622-6846-5ab5-90cc-c6adee2b3441",
+          "request_id": "archive-749797ac-1376-4c52-823c-9ef2f1143878",
+          "outcome": "archived",
+          "summary": "archived by the user",
+          "result_refs": [],
+          "run_ids": [],
+          "report_to": null
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Outline the beacon maintenance log.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "637e1082-9d82-4355-8475-e5c7ed7aa0ca",
+            "timestamp": "2026-01-05T09:13:53+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "The log has four sections.",
+            "event_index": 3,
+            "id": "b36f259f-ad20-4f1e-9b74-a726756134e7",
+            "timestamp": "2026-01-05T09:14:14+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "The log has four sections.",
+            "event_index": 3,
+            "id": "b36f259f-ad20-4f1e-9b74-a726756134e7",
+            "timestamp": "2026-01-05T09:14:14+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 4,
+            "timestamp": "2026-01-05T09:14:28+00:00",
+            "event_index": 5,
+            "id": "9c190f1d-5fdf-4c75-813f-75a13a06f55e"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task archived: archived by the user",
+            "timestamp": "2026-01-05T09:16:06+00:00",
+            "event_index": 7,
+            "id": "f1eebcf0-1991-58d7-a46f-4fa9823b315a"
+          }
+        }
+      ]
+    },
+    {
+      "session": "556bb3c6-ec8d-447e-a392-2d7c989115fe",
+      "events": [
+        {
+          "id": "771c41ae-3218-4492-a2a3-f5b7aae8ec3d",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:00:07+00:00",
+          "actor": "user",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "request_id": "fixture-atlas",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "de0bf099-fc0a-4da4-959c-b16cd9e05bca",
+          "type": "user",
+          "timestamp": "2026-01-05T09:00:42+00:00",
+          "actor": "user",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "Draft a plan for the Atlas survey of tide gauges.",
+          "uploaded_files": [
+            {
+              "filename": "stations.csv",
+              "path": "/home/<user>/parity-home/uploads/stations.csv"
+            }
+          ]
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-atlas_t1",
+          "id": "ec9a24c8-99f3-4dd1-b821-84c3bb92870b",
+          "timestamp": "2026-01-05T09:00:56+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "Listing the gauge sources first.",
+                "signature": "sig-parity-1"
+              }
+            ],
+            "usage": {
+              "input_tokens": 1200,
+              "output_tokens": 40,
+              "cache_read_input_tokens": 30000,
+              "cache_creation_input_tokens": 800
+            }
+          },
+          "id": "b5e463a9-7520-4006-b699-237421670139",
+          "timestamp": "2026-01-05T09:01:03+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "I will check the station list."
+              },
+              {
+                "type": "tool_use",
+                "id": "toolu_parity_01",
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory List every station file in the synthetic survey directory "
+                }
+              }
+            ],
+            "usage": {
+              "input_tokens": 1300,
+              "output_tokens": 60,
+              "cache_read_input_tokens": 31000,
+              "cache_creation_input_tokens": 0
+            }
+          },
+          "id": "7a8bdf04-4c51-4c95-97ae-692d37d8074a",
+          "timestamp": "2026-01-05T09:01:10+00:00"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_parity_01",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "north-pier.csv\nsouth-pier.csv"
+                  }
+                ],
+                "is_error": false
+              }
+            ]
+          },
+          "id": "85fb14cd-5421-434f-8de0-a7ba2434a37d",
+          "timestamp": "2026-01-05T09:01:17+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_parity_02",
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                }
+              }
+            ]
+          },
+          "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+          "timestamp": "2026-01-05T09:01:24+00:00"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_parity_02",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "notes.md: no such file"
+                  }
+                ],
+                "is_error": true
+              }
+            ]
+          },
+          "id": "77053f32-df07-4122-80fb-c1a327d11e45",
+          "timestamp": "2026-01-05T09:01:31+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_parity_03",
+                "name": "ExitPlanMode",
+                "input": {
+                  "plan": "1. Collect the gauge notes.\n2. Probe the mirrors.\n3. Merge the readings."
+                }
+              }
+            ]
+          },
+          "id": "e38a5c24-c757-4011-9154-ee45212d7bd5",
+          "timestamp": "2026-01-05T09:01:38+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "The plan has three steps; the survey child takes the first two."
+              }
+            ],
+            "usage": {
+              "input_tokens": 1500,
+              "output_tokens": 120,
+              "cache_read_input_tokens": 32000,
+              "cache_creation_input_tokens": 0
+            }
+          },
+          "id": "d8685fae-e505-47e5-a1a3-97e01b399179",
+          "timestamp": "2026-01-05T09:01:45+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 1500,
+            "output_tokens": 420,
+            "cache_read_input_tokens": 93000,
+            "cache_creation_input_tokens": 800
+          },
+          "total_cost_usd": 0.0421,
+          "id": "76c77ff1-2e84-4184-9c3d-e6627ec56be3",
+          "timestamp": "2026-01-05T09:01:52+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+          ],
+          "thinking_seconds": 12,
+          "id": "a2e19158-4e62-4c1b-899e-7780efe15a39",
+          "timestamp": "2026-01-05T09:01:59+00:00"
+        },
+        {
+          "id": "b029d040-1fe0-435e-b6c6-36601c1996ec",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:02:13+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "run_id": "e88cd894-3fd9-5e3e-b461-5ee153dd7c81",
+          "input_event_ids": [
+            "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+          ],
+          "outcome": "success"
+        },
+        {
+          "type": "handler_result",
+          "task": "nightly-digest",
+          "status": "ok",
+          "message": "digest posted",
+          "id": "4c86625f-13d7-423c-93e9-d58574a12dec",
+          "timestamp": "2026-01-05T09:02:20+00:00"
+        },
+        {
+          "type": "handler_result",
+          "task": "nightly-digest",
+          "status": "error",
+          "message": "digest source unreachable",
+          "id": "02dda59b-d365-43e2-ae8d-2653dda09d7a",
+          "timestamp": "2026-01-05T09:02:27+00:00"
+        },
+        {
+          "type": "resume_context_dropped",
+          "reason": "anchor_missing",
+          "id": "32d394ac-3f83-473d-adbc-ca9041142dae",
+          "timestamp": "2026-01-05T09:02:34+00:00"
+        },
+        {
+          "type": "resume_context_dropped",
+          "reason": "transcript_missing",
+          "id": "1a9eca6b-4294-4260-a20c-2a23e852f2a2",
+          "timestamp": "2026-01-05T09:02:41+00:00"
+        },
+        {
+          "type": "backend_switched",
+          "from": "claude-opus",
+          "to": "claude-sonnet",
+          "previous_native_backend": "claude-opus",
+          "previous_native_session_id": "native-atlas_t1",
+          "id": "7f7694a8-a772-4064-be52-28593d02ab59",
+          "timestamp": "2026-01-05T09:02:48+00:00"
+        },
+        {
+          "type": "backend_overlay_undeclared",
+          "backend": "claude-sonnet",
+          "id": "cc5654cb-d06a-4326-b273-65b089ed5cd0",
+          "timestamp": "2026-01-05T09:02:55+00:00"
+        },
+        {
+          "type": "model_fallback_notice",
+          "backend": "claude-sonnet",
+          "configured_model": "claude-sonnet-5",
+          "served_models": [
+            "claude-haiku-5"
+          ],
+          "id": "b073d620-673f-4fd9-b99b-ceddee310fbd",
+          "timestamp": "2026-01-05T09:03:02+00:00"
+        },
+        {
+          "type": "worker_summary",
+          "content": "Legacy worker summary: the gauge list is complete.",
+          "thread_id": "thread-legacy-atlas",
+          "origin_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "id": "7b94981e-6623-47d0-8121-44563f46f29b",
+          "timestamp": "2026-01-05T09:03:09+00:00"
+        },
+        {
+          "type": "web_reply",
+          "content": "Posted the outline to the reader.",
+          "web_reply": {
+            "answers": [
+              "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+            ],
+            "chars": 33
+          },
+          "id": "2b27f904-7284-4030-9a8e-6a20654d3d12",
+          "timestamp": "2026-01-05T09:03:16+00:00"
+        },
+        {
+          "type": "web_reply_notice",
+          "content": "No reply was posted for this message.",
+          "web_reply_notice": {
+            "input_event_id": "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+          },
+          "id": "c5df01a4-efc3-421a-8827-6c4aa06cf228",
+          "timestamp": "2026-01-05T09:03:23+00:00"
+        },
+        {
+          "type": "web_status",
+          "content": "Status: drafting",
+          "web_status": {
+            "drafting": "the outline"
+          },
+          "web_status_changed": [
+            "drafting"
+          ],
+          "id": "b24bd542-ae95-4e5e-9e2a-69883276bc2c",
+          "timestamp": "2026-01-05T09:03:30+00:00"
+        },
+        {
+          "type": "slack_reply",
+          "content": "Thread update posted.",
+          "id": "7ad43197-4045-456d-bafa-5be51e1e2cf4",
+          "timestamp": "2026-01-05T09:03:37+00:00"
+        },
+        {
+          "type": "discord_reply",
+          "content": "Channel update posted.",
+          "id": "5717ee75-f270-47fd-87a1-56557d11fe26",
+          "timestamp": "2026-01-05T09:03:44+00:00"
+        },
+        {
+          "type": "claude_account_login_required",
+          "id": "7851058b-23ad-41e3-ba47-a022f1e3560d",
+          "timestamp": "2026-01-05T09:03:51+00:00"
+        },
+        {
+          "type": "scheduled_run_skipped",
+          "task": "nightly-digest",
+          "skipped_at": "2026-01-05T09:30:00+00:00",
+          "reason": "previous run still active",
+          "id": "54c25f6b-d0d2-4845-b15e-9e1da8c07c1a",
+          "timestamp": "2026-01-05T09:03:58+00:00"
+        },
+        {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+            "status": "allowed_warning",
+            "resetsAt": 1767700000
+          },
+          "id": "7f999a88-91d2-467e-b1da-fcc3b093d19c",
+          "timestamp": "2026-01-05T09:04:05+00:00"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "backend": "claude-sonnet",
+          "reason": "undeclared",
+          "id": "305c139b-58ff-4dd0-b2eb-89e8cf7edbef",
+          "timestamp": "2026-01-05T09:04:12+00:00"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "backend": "claude-sonnet",
+          "reason": "unreadable",
+          "overlay": null,
+          "error": "FileNotFoundError",
+          "id": "b8ff393d-d6cd-4860-83ea-ca3ea3d1c99c",
+          "timestamp": "2026-01-05T09:04:19+00:00"
+        },
+        {
+          "id": "b74b07e1-88c0-4daa-9211-92cac75e7724",
+          "type": "agent_message",
+          "timestamp": "2026-01-05T09:04:26+00:00",
+          "actor": "agent",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "The survey child finished its outline.",
+          "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "from_session_name": "Atlas survey"
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-atlas_t2",
+          "id": "ca7dfd5d-19d2-4e88-88f1-def6bb3a9200",
+          "timestamp": "2026-01-05T09:04:40+00:00"
+        },
+        {
+          "type": "thinking",
+          "content": "Weighing two survey orders.",
+          "id": "88d5559a-8bff-4d52-903b-75dd9da796f1",
+          "timestamp": "2026-01-05T09:04:47+00:00"
+        },
+        {
+          "type": "tool_use",
+          "name": "Grep",
+          "input": {
+            "pattern": "gauge",
+            "path": "/srv/atlas"
+          },
+          "id": "8c14b9a1-82a0-4e4a-a66b-dcf3cfaa2e14",
+          "timestamp": "2026-01-05T09:04:54+00:00"
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "Grep",
+          "content": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012.csv: gauge reading\n/srv/atlas/gauge-013.csv: gauge reading\n/srv/atlas/gauge-014.csv: gauge reading\n/srv/atlas/gauge-015.csv: gauge reading\n/srv/atlas/gauge-016.csv: gauge reading\n/srv/atlas/gauge-017.csv: gauge reading\n/srv/atlas/gauge-018.csv: gauge reading\n/srv/atlas/gauge-019.csv: gauge reading\n/srv/atlas/gauge-020.csv: gauge reading\n/srv/atlas/gauge-021.csv: gauge reading\n/srv/atlas/gauge-022.csv: gauge reading\n/srv/atlas/gauge-023.csv: gauge reading\n/srv/atlas/gauge-024.csv: gauge reading\n/srv/atlas/gauge-025.csv: gauge reading\n/srv/atlas/gauge-026.csv: gauge reading\n/srv/atlas/gauge-027.csv: gauge reading\n/srv/atlas/gauge-028.csv: gauge reading\n/srv/atlas/gauge-029.csv: gauge reading\n/srv/atlas/gauge-030.csv: gauge reading\n/srv/atlas/gauge-031.csv: gauge reading\n/srv/atlas/gauge-032.csv: gauge reading\n/srv/atlas/gauge-033.csv: gauge reading\n/srv/atlas/gauge-034.csv: gauge reading\n/srv/atlas/gauge-035.csv: gauge reading\n/srv/atlas/gauge-036.csv: gauge reading\n/srv/atlas/gauge-037.csv: gauge reading\n/srv/atlas/gauge-038.csv: gauge reading\n/srv/atlas/gauge-039.csv: gauge reading\n",
+          "id": "ab3321fb-7a51-4432-aa6e-1e98e346ab17",
+          "timestamp": "2026-01-05T09:05:01+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "The outline is in; the readings need a merge pass."
+              }
+            ]
+          },
+          "id": "28dbe396-fc5f-44f3-aae7-dd444676c93a",
+          "timestamp": "2026-01-05T09:05:08+00:00"
+        },
+        {
+          "type": "system",
+          "subtype": "command_progress",
+          "content": "Still running: merge-readings (2m)",
+          "id": "6a9c7c8b-79d4-4075-897c-ea5a0ebdfe40",
+          "timestamp": "2026-01-05T09:05:15+00:00"
+        },
+        {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 150000
+          },
+          "id": "446cf39c-c0c1-48ac-a661-f9b2f7284d05",
+          "timestamp": "2026-01-05T09:05:22+00:00"
+        },
+        {
+          "type": "context_compacted",
+          "trigger": "auto",
+          "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 150000,
+            "post_tokens": 32000
+          },
+          "model": "claude-sonnet-5",
+          "id": "6becb3c9-1895-4446-96c4-73ee72d798c6",
+          "timestamp": "2026-01-05T09:05:29+00:00"
+        },
+        {
+          "type": "context_compact_failed",
+          "error": "summary exceeded the output limit",
+          "id": "0c78d5a9-54fc-4cd5-a476-05f5765df192",
+          "timestamp": "2026-01-05T09:05:36+00:00"
+        },
+        {
+          "type": "system",
+          "subtype": "context_reading",
+          "context_reading": {
+            "model": "claude-sonnet-5",
+            "context_tokens": 64000,
+            "context_full": 200000,
+            "context_compact_at": 160000
+          },
+          "id": "9af39cdb-2dca-4c9f-85cb-de07b74c0641",
+          "timestamp": "2026-01-05T09:05:43+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 2100,
+            "output_tokens": 300,
+            "cache_read_input_tokens": 60000,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.0187,
+          "id": "6b721163-3cdb-42c0-8778-82ea436aab0b",
+          "timestamp": "2026-01-05T09:05:50+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": true,
+          "input_event_ids": [
+            "b74b07e1-88c0-4daa-9211-92cac75e7724"
+          ],
+          "id": "6b0d5444-9c58-4ca3-8b05-cd8d517333ad",
+          "timestamp": "2026-01-05T09:05:57+00:00"
+        },
+        {
+          "id": "6faf5465-1fb9-4268-8e0d-c28ba1370bc8",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:06:11+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "run_id": "18e3b880-e0ce-55db-b504-bc0fb24bc560",
+          "input_event_ids": [
+            "b74b07e1-88c0-4daa-9211-92cac75e7724"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "63618923-61a0-45c3-b1cd-3cbc82995d28",
+          "type": "scheduled_trigger",
+          "timestamp": "2026-01-05T09:06:18+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "Weekly Atlas digest is due."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-atlas_t3",
+          "id": "4e5f81e4-e434-4192-9234-133cc39a95f5",
+          "timestamp": "2026-01-05T09:06:32+00:00"
+        },
+        {
+          "type": "assistant_error",
+          "content": "Backend returned HTTP 529 (overloaded)",
+          "id": "a1c4820c-ec27-4ecb-b7c0-050502343ff0",
+          "timestamp": "2026-01-05T09:06:39+00:00"
+        },
+        {
+          "type": "error",
+          "message": "Rate limited by the synthetic upstream",
+          "content": "Rate limited by the synthetic upstream",
+          "id": "a79b0c13-cfa2-46e7-b424-7ea3ac65dea0",
+          "timestamp": "2026-01-05T09:06:46+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "input_event_ids": [
+            "63618923-61a0-45c3-b1cd-3cbc82995d28"
+          ],
+          "thinking_seconds": 3,
+          "id": "ceda05b0-ae24-4a63-b473-801033975c0d",
+          "timestamp": "2026-01-05T09:06:53+00:00"
+        },
+        {
+          "id": "8d17fec1-96f9-46fd-905d-d8d089deb072",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:07:07+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "run_id": "6947a546-7d55-5db6-b943-c9b17cdba4cd",
+          "input_event_ids": [
+            "63618923-61a0-45c3-b1cd-3cbc82995d28"
+          ],
+          "outcome": "failed"
+        },
+        {
+          "id": "b0bc3814-716d-4147-88c4-e8b3fb5f5b1d",
+          "type": "agent_message",
+          "timestamp": "2026-01-05T09:07:14+00:00",
+          "actor": "agent",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "A duplicate digest request.",
+          "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "from_session_name": "Atlas survey"
+        },
+        {
+          "id": "17da424d-3940-519a-9d38-723a9dc49d17",
+          "type": "task_input_acknowledged",
+          "timestamp": "2026-01-05T09:07:21+00:00",
+          "actor": "user",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "request_id": "fixture-ack-atlas",
+          "input_ids": [
+            "b0bc3814-716d-4147-88c4-e8b3fb5f5b1d"
+          ],
+          "note": "handled in the survey thread"
+        },
+        {
+          "type": "clone_start",
+          "parent_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "parent_session_name": "Atlas planning",
+          "timestamp": "2026-01-05T09:24:44+00:00"
+        },
+        {
+          "id": "8f468b2e-b036-4a4a-ad3f-bb85092822b4",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:24:37+00:00",
+          "actor": "user",
+          "source_session_id": "556bb3c6-ec8d-447e-a392-2d7c989115fe",
+          "request_id": "history-copy-556bb3c6-ec8d-447e-a392-2d7c989115fe",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Draft a plan for the Atlas survey of tide gauges.",
+            "uploaded_files": [
+              {
+                "filename": "stations.csv",
+                "path": "/home/<user>/parity-home/uploads/stations.csv"
+              }
+            ],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "de0bf099-fc0a-4da4-959c-b16cd9e05bca",
+            "timestamp": "2026-01-05T09:00:42+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 3,
+            "id": "b5e463a9-7520-4006-b699-237421670139",
+            "timestamp": "2026-01-05T09:01:03+00:00",
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 4,
+            "id": "7a8bdf04-4c51-4c95-97ae-692d37d8074a",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 4,
+            "id": "7a8bdf04-4c51-4c95-97ae-692d37d8074a",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 6,
+            "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                },
+                "output": "",
+                "is_error": false
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 6,
+            "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                },
+                "output": "notes.md: no such file",
+                "is_error": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 8,
+            "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                },
+                "output": "notes.md: no such file",
+                "is_error": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "plan",
+            "content": "1. Collect the gauge notes.\n2. Probe the mirrors.\n3. Merge the readings.",
+            "event_index": 8,
+            "id": "e38a5c24-c757-4011-9154-ee45212d7bd5",
+            "timestamp": "2026-01-05T09:01:38+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "The plan has three steps; the survey child takes the first two.",
+            "event_index": 9,
+            "id": "d8685fae-e505-47e5-a1a3-97e01b399179",
+            "timestamp": "2026-01-05T09:01:45+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "The plan has three steps; the survey child takes the first two.",
+            "event_index": 9,
+            "id": "d8685fae-e505-47e5-a1a3-97e01b399179",
+            "timestamp": "2026-01-05T09:01:45+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 12,
+            "timestamp": "2026-01-05T09:01:59+00:00",
+            "event_index": 11,
+            "id": "a2e19158-4e62-4c1b-899e-7780efe15a39"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✓ nightly-digest: digest posted",
+            "timestamp": "2026-01-05T09:02:20+00:00",
+            "event_index": 13,
+            "id": "4c86625f-13d7-423c-93e9-d58574a12dec"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✗ nightly-digest: digest source unreachable",
+            "timestamp": "2026-01-05T09:02:27+00:00",
+            "event_index": 14,
+            "id": "02dda59b-d365-43e2-ae8d-2653dda09d7a"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed: no previous session anchor was found — started a new conversation",
+            "timestamp": "2026-01-05T09:02:34+00:00",
+            "event_index": 15,
+            "id": "32d394ac-3f83-473d-adbc-ca9041142dae"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed: the previous session transcript is missing — started a new conversation",
+            "timestamp": "2026-01-05T09:02:41+00:00",
+            "event_index": 16,
+            "id": "1a9eca6b-4294-4260-a20c-2a23e852f2a2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend switched: claude-opus → claude-sonnet",
+            "timestamp": "2026-01-05T09:02:48+00:00",
+            "event_index": 17,
+            "id": "7f7694a8-a772-4064-be52-28593d02ab59"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet declares no prompt_overlay — running without a fence",
+            "timestamp": "2026-01-05T09:02:55+00:00",
+            "event_index": 18,
+            "id": "cc5654cb-d06a-4326-b273-65b089ed5cd0"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Served by claude-haiku-5 (configured claude-sonnet-5)",
+            "timestamp": "2026-01-05T09:03:02+00:00",
+            "event_index": 19,
+            "id": "b073d620-673f-4fd9-b99b-ceddee310fbd"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "worker_summary",
+            "content": "Legacy worker summary: the gauge list is complete.",
+            "thread_id": "thread-legacy-atlas",
+            "origin_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+            "timestamp": "2026-01-05T09:03:09+00:00",
+            "event_index": 20,
+            "id": "7b94981e-6623-47d0-8121-44563f46f29b"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "web_reply",
+            "content": "Posted the outline to the reader.",
+            "timestamp": "2026-01-05T09:03:16+00:00",
+            "event_index": 21,
+            "id": "2b27f904-7284-4030-9a8e-6a20654d3d12"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "web_reply_notice",
+            "content": "No reply was posted for this message.",
+            "timestamp": "2026-01-05T09:03:23+00:00",
+            "event_index": 22,
+            "id": "c5df01a4-efc3-421a-8827-6c4aa06cf228"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "web_status",
+            "content": "Status: drafting",
+            "web_status": {
+              "drafting": "the outline"
+            },
+            "timestamp": "2026-01-05T09:03:30+00:00",
+            "event_index": 23,
+            "id": "b24bd542-ae95-4e5e-9e2a-69883276bc2c"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Posted to Slack: Thread update posted.",
+            "timestamp": "2026-01-05T09:03:37+00:00",
+            "event_index": 24,
+            "id": "7ad43197-4045-456d-bafa-5be51e1e2cf4"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Posted to Discord: Channel update posted.",
+            "timestamp": "2026-01-05T09:03:44+00:00",
+            "event_index": 25,
+            "id": "5717ee75-f270-47fd-87a1-56557d11fe26"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "claude_account_login_required",
+            "content": "One account in the Claude pool needs a new login; see the usage panel.",
+            "timestamp": "2026-01-05T09:03:51+00:00",
+            "event_index": 26,
+            "id": "7851058b-23ad-41e3-ba47-a022f1e3560d"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Scheduled run of 'nightly-digest' skipped at 2026-01-05T09:30:00+00:00: previous run still active",
+            "timestamp": "2026-01-05T09:03:58+00:00",
+            "event_index": 27,
+            "id": "54c25f6b-d0d2-4845-b15e-9e1da8c07c1a"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet declares no prompt_overlay — running without a fence",
+            "timestamp": "2026-01-05T09:04:12+00:00",
+            "event_index": 29,
+            "id": "305c139b-58ff-4dd0-b2eb-89e8cf7edbef"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet: prompt_overlay 'None' could not be loaded (FileNotFoundError) — running without a fence",
+            "timestamp": "2026-01-05T09:04:19+00:00",
+            "event_index": 30,
+            "id": "b8ff393d-d6cd-4860-83ea-ca3ea3d1c99c"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "agent_message",
+            "content": "The survey child finished its outline.",
+            "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+            "from_session_name": "Atlas survey",
+            "timestamp": "2026-01-05T09:04:26+00:00",
+            "event_index": 31,
+            "id": "b74b07e1-88c0-4daa-9211-92cac75e7724"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 33,
+            "id": "88d5559a-8bff-4d52-903b-75dd9da796f1",
+            "timestamp": "2026-01-05T09:04:47+00:00",
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 34,
+            "id": "8c14b9a1-82a0-4e4a-a66b-dcf3cfaa2e14",
+            "timestamp": "2026-01-05T09:04:47+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "",
+                "is_error": false
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 35,
+            "id": "8c14b9a1-82a0-4e4a-a66b-dcf3cfaa2e14",
+            "timestamp": "2026-01-05T09:04:47+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012",
+                "is_error": false,
+                "output_truncated": true
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "The outline is in; the readings need a merge pass.",
+            "event_index": 36,
+            "id": "28dbe396-fc5f-44f3-aae7-dd444676c93a",
+            "timestamp": "2026-01-05T09:05:08+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012",
+                "is_error": false,
+                "output_truncated": true
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "The outline is in; the readings need a merge pass.",
+            "event_index": 36,
+            "id": "28dbe396-fc5f-44f3-aae7-dd444676c93a",
+            "timestamp": "2026-01-05T09:05:08+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012",
+                "is_error": false,
+                "output_truncated": true
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Still running: merge-readings (2m)",
+            "timestamp": "2026-01-05T09:05:15+00:00",
+            "event_index": 37,
+            "id": "6a9c7c8b-79d4-4075-897c-ea5a0ebdfe40"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (auto, by Sonnet) — 150k → 32.0k tokens",
+            "kind": "context_compacted",
+            "timestamp": "2026-01-05T09:05:29+00:00",
+            "event_index": 39,
+            "id": "6becb3c9-1895-4446-96c4-73ee72d798c6"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "context_compact_failed",
+            "content": "Compaction failed — summary exceeded the output limit",
+            "timestamp": "2026-01-05T09:05:36+00:00",
+            "event_index": 40,
+            "id": "0c78d5a9-54fc-4cd5-a476-05f5765df192"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": null,
+            "timestamp": "2026-01-05T09:05:57+00:00",
+            "event_index": 43,
+            "id": "6b0d5444-9c58-4ca3-8b05-cd8d517333ad"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "scheduled_trigger",
+            "content": "Weekly Atlas digest is due.",
+            "timestamp": "2026-01-05T09:06:18+00:00",
+            "event_index": 45,
+            "id": "63618923-61a0-45c3-b1cd-3cbc82995d28"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: Backend returned HTTP 529 (overloaded)",
+            "timestamp": "2026-01-05T09:06:39+00:00",
+            "event_index": 47,
+            "id": "a1c4820c-ec27-4ecb-b7c0-050502343ff0"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: Rate limited by the synthetic upstream",
+            "timestamp": "2026-01-05T09:06:46+00:00",
+            "event_index": 48,
+            "id": "a79b0c13-cfa2-46e7-b424-7ea3ac65dea0"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 3,
+            "timestamp": "2026-01-05T09:06:53+00:00",
+            "event_index": 49,
+            "id": "ceda05b0-ae24-4a63-b473-801033975c0d"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "agent_message",
+            "content": "A duplicate digest request.",
+            "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+            "from_session_name": "Atlas survey",
+            "timestamp": "2026-01-05T09:07:14+00:00",
+            "event_index": 51,
+            "id": "b0bc3814-716d-4147-88c4-e8b3fb5f5b1d"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task input(s) acknowledged as handled: b0bc3814-716d-4147-88c4-e8b3fb5f5b1d — handled in the survey thread",
+            "timestamp": "2026-01-05T09:07:21+00:00",
+            "event_index": 52,
+            "id": "17da424d-3940-519a-9d38-723a9dc49d17"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "clone_start",
+            "content": "Atlas planning",
+            "parent_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+            "timestamp": "2026-01-05T09:24:44+00:00",
+            "event_index": 53,
+            "id": "legacy:53"
+          }
+        }
+      ]
+    },
+    {
+      "session": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+      "events": [
+        {
+          "id": "ac406faa-a982-4907-9845-2ee0a4f7c82a",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:17:58+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "request_id": "fixture-ember",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "3c2682b6-0ce2-4363-b6de-3711b81d08d6",
+          "type": "user",
+          "timestamp": "2026-01-05T09:18:12+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "content": "Summarize ember log week 1."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-ember_t0",
+          "id": "bbc7536e-5816-4c9e-9586-db18198d80c9",
+          "timestamp": "2026-01-05T09:18:26+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Week 1: steady readings, no gaps."
+              }
+            ]
+          },
+          "id": "479aac90-e7c4-432d-8163-7ebd725a044b",
+          "timestamp": "2026-01-05T09:18:33+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 300,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.002,
+          "id": "f8079ea8-a2c5-4831-8b7f-9747dd0ce94b",
+          "timestamp": "2026-01-05T09:18:40+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "3c2682b6-0ce2-4363-b6de-3711b81d08d6"
+          ],
+          "thinking_seconds": 2,
+          "id": "750f1eee-7951-4961-851a-d862c8d02c28",
+          "timestamp": "2026-01-05T09:18:47+00:00"
+        },
+        {
+          "id": "802a2a5f-f94f-4397-96bd-36fc294243a0",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:19:01+00:00",
+          "actor": "system",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "run_id": "3dea0216-11bc-5e9b-9661-ca7c03865981",
+          "input_event_ids": [
+            "3c2682b6-0ce2-4363-b6de-3711b81d08d6"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "40cced55-855a-4c87-a0c9-26a77261aafc",
+          "type": "user",
+          "timestamp": "2026-01-05T09:19:08+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "content": "Summarize ember log week 2."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-ember_t1",
+          "id": "e6216098-2a3d-43f8-b275-3de9379e52a8",
+          "timestamp": "2026-01-05T09:19:22+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Week 2: steady readings, no gaps."
+              }
+            ]
+          },
+          "id": "6e9a2ce6-7ec6-4198-96cb-3d2100ee86d1",
+          "timestamp": "2026-01-05T09:19:29+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 301,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.002,
+          "id": "e5103c2e-fa14-4755-adf0-606a81878731",
+          "timestamp": "2026-01-05T09:19:36+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "40cced55-855a-4c87-a0c9-26a77261aafc"
+          ],
+          "thinking_seconds": 3,
+          "id": "1cf31c72-e29b-4ac9-a7ca-5ad7895f9d53",
+          "timestamp": "2026-01-05T09:19:43+00:00"
+        },
+        {
+          "id": "6fd42154-fb2e-4fdb-b2d8-6eb4f677071d",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:19:57+00:00",
+          "actor": "system",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "run_id": "d4c60040-b1df-588c-a7a2-fadde60f6fda",
+          "input_event_ids": [
+            "40cced55-855a-4c87-a0c9-26a77261aafc"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "67d969b4-bbd1-4cef-9cb1-f88df1d82572",
+          "type": "user",
+          "timestamp": "2026-01-05T09:20:11+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "content": "Summarize ember log week 3."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-ember_t2",
+          "id": "f62ea50f-419c-4479-8a62-564c033eb84a",
+          "timestamp": "2026-01-05T09:20:25+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Week 3: steady readings, no gaps."
+              }
+            ]
+          },
+          "id": "66decc52-8ac9-4b09-993e-b3b681a163c2",
+          "timestamp": "2026-01-05T09:20:32+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 302,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.002,
+          "id": "a0c92a22-5fa0-4d9b-8ee4-1304788bd97f",
+          "timestamp": "2026-01-05T09:20:39+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "67d969b4-bbd1-4cef-9cb1-f88df1d82572"
+          ],
+          "thinking_seconds": 4,
+          "id": "a01d9a93-b4c8-4f6c-b8f0-c93ef0131281",
+          "timestamp": "2026-01-05T09:20:46+00:00"
+        },
+        {
+          "id": "429f3fa9-ec2d-46db-a3c8-d947e6e9114c",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:21:00+00:00",
+          "actor": "system",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "run_id": "063b47df-3988-5f2b-82f3-f448688bdb43",
+          "input_event_ids": [
+            "67d969b4-bbd1-4cef-9cb1-f88df1d82572"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "b45374ae-64da-4a2e-b97f-d79adac1f40d",
+          "type": "user",
+          "timestamp": "2026-01-05T09:21:07+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "content": "Summarize ember log week 4."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-ember_t3",
+          "id": "61371e70-b65c-4586-ad60-0f15e3f29002",
+          "timestamp": "2026-01-05T09:21:21+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Week 4: steady readings, no gaps."
+              }
+            ]
+          },
+          "id": "ff47302e-0738-47b5-9893-1637676fcbe9",
+          "timestamp": "2026-01-05T09:21:28+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 303,
+            "output_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.002,
+          "id": "f0df6493-1c4b-4664-8faf-da65bf5fe392",
+          "timestamp": "2026-01-05T09:21:35+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "b45374ae-64da-4a2e-b97f-d79adac1f40d"
+          ],
+          "thinking_seconds": 5,
+          "id": "5254f6db-2197-49b0-bf5f-23cd25205f73",
+          "timestamp": "2026-01-05T09:21:42+00:00"
+        },
+        {
+          "id": "9aa8883d-f7ce-48f2-b6fb-c64965068b94",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:21:56+00:00",
+          "actor": "system",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "run_id": "22e7c2f4-c78a-5565-9f77-d9d44c1d2cb7",
+          "input_event_ids": [
+            "b45374ae-64da-4a2e-b97f-d79adac1f40d"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "532e5714-a3a2-5890-80ae-75a75928990e",
+          "type": "task_closed",
+          "timestamp": "2026-01-05T09:22:03+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "request_id": "archive-8e1ff263-c405-4fbb-bbaa-a5847be9a06f",
+          "outcome": "archived",
+          "summary": "archived by the user",
+          "result_refs": [],
+          "run_ids": [],
+          "report_to": null
+        },
+        {
+          "id": "dfa04c15-1aa0-5549-a1c5-a4d62154b91a",
+          "type": "task_reopened",
+          "timestamp": "2026-01-05T09:22:10+00:00",
+          "actor": "user",
+          "source_session_id": "66fb22ff-ed94-5ba0-b920-9fffb3d085a8",
+          "request_id": "fixture-ember-restore",
+          "closed_event_id": "532e5714-a3a2-5890-80ae-75a75928990e",
+          "reason": "fixture restore"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Summarize ember log week 1.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "3c2682b6-0ce2-4363-b6de-3711b81d08d6",
+            "timestamp": "2026-01-05T09:18:12+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Week 1: steady readings, no gaps.",
+            "event_index": 3,
+            "id": "479aac90-e7c4-432d-8163-7ebd725a044b",
+            "timestamp": "2026-01-05T09:18:33+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Week 1: steady readings, no gaps.",
+            "event_index": 3,
+            "id": "479aac90-e7c4-432d-8163-7ebd725a044b",
+            "timestamp": "2026-01-05T09:18:33+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 2,
+            "timestamp": "2026-01-05T09:18:47+00:00",
+            "event_index": 5,
+            "id": "750f1eee-7951-4961-851a-d862c8d02c28"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Summarize ember log week 2.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 7,
+            "id": "40cced55-855a-4c87-a0c9-26a77261aafc",
+            "timestamp": "2026-01-05T09:19:08+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Week 2: steady readings, no gaps.",
+            "event_index": 9,
+            "id": "6e9a2ce6-7ec6-4198-96cb-3d2100ee86d1",
+            "timestamp": "2026-01-05T09:19:29+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Week 2: steady readings, no gaps.",
+            "event_index": 9,
+            "id": "6e9a2ce6-7ec6-4198-96cb-3d2100ee86d1",
+            "timestamp": "2026-01-05T09:19:29+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 3,
+            "timestamp": "2026-01-05T09:19:43+00:00",
+            "event_index": 11,
+            "id": "1cf31c72-e29b-4ac9-a7ca-5ad7895f9d53"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Summarize ember log week 3.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 13,
+            "id": "67d969b4-bbd1-4cef-9cb1-f88df1d82572",
+            "timestamp": "2026-01-05T09:20:11+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Week 3: steady readings, no gaps.",
+            "event_index": 15,
+            "id": "66decc52-8ac9-4b09-993e-b3b681a163c2",
+            "timestamp": "2026-01-05T09:20:32+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Week 3: steady readings, no gaps.",
+            "event_index": 15,
+            "id": "66decc52-8ac9-4b09-993e-b3b681a163c2",
+            "timestamp": "2026-01-05T09:20:32+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 4,
+            "timestamp": "2026-01-05T09:20:46+00:00",
+            "event_index": 17,
+            "id": "a01d9a93-b4c8-4f6c-b8f0-c93ef0131281"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Summarize ember log week 4.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 19,
+            "id": "b45374ae-64da-4a2e-b97f-d79adac1f40d",
+            "timestamp": "2026-01-05T09:21:07+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Week 4: steady readings, no gaps.",
+            "event_index": 21,
+            "id": "ff47302e-0738-47b5-9893-1637676fcbe9",
+            "timestamp": "2026-01-05T09:21:28+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Week 4: steady readings, no gaps.",
+            "event_index": 21,
+            "id": "ff47302e-0738-47b5-9893-1637676fcbe9",
+            "timestamp": "2026-01-05T09:21:28+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 5,
+            "timestamp": "2026-01-05T09:21:42+00:00",
+            "event_index": 23,
+            "id": "5254f6db-2197-49b0-bf5f-23cd25205f73"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task archived: archived by the user",
+            "timestamp": "2026-01-05T09:22:03+00:00",
+            "event_index": 25,
+            "id": "532e5714-a3a2-5890-80ae-75a75928990e"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task reopened: fixture restore",
+            "timestamp": "2026-01-05T09:22:10+00:00",
+            "event_index": 26,
+            "id": "dfa04c15-1aa0-5549-a1c5-a4d62154b91a"
+          }
+        }
+      ]
+    },
+    {
+      "session": "6f9bcb97-0109-5847-83e9-b668465a90fa",
+      "events": [
+        {
+          "id": "25b1aa62-dd9f-4e81-a399-7b19ad0ccba5",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:14:49+00:00",
+          "actor": "user",
+          "source_session_id": "6f9bcb97-0109-5847-83e9-b668465a90fa",
+          "request_id": "fixture-beacon_draft",
+          "task_parent_id": "06739622-6846-5ab5-90cc-c6adee2b3441",
+          "task_spec_hash": null
+        },
+        {
+          "id": "e02d2bb8-2a10-42dd-9b39-36f6f384d5b4",
+          "type": "user",
+          "timestamp": "2026-01-05T09:15:03+00:00",
+          "actor": "user",
+          "source_session_id": "6f9bcb97-0109-5847-83e9-b668465a90fa",
+          "content": "Draft the first section."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-beacon_draft_t1",
+          "id": "8e355538-9d69-4f4f-a3eb-a81605c63d16",
+          "timestamp": "2026-01-05T09:15:17+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Section one drafted."
+              }
+            ]
+          },
+          "id": "a004231a-aa4b-4713-bfcf-622f9489098b",
+          "timestamp": "2026-01-05T09:15:24+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 500,
+            "output_tokens": 60,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.003,
+          "id": "d889ec66-6441-4188-a730-3e14a1dddd52",
+          "timestamp": "2026-01-05T09:15:31+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "e02d2bb8-2a10-42dd-9b39-36f6f384d5b4"
+          ],
+          "thinking_seconds": 6,
+          "id": "41a50ea3-9f82-43ad-a2b7-999acfe1bc63",
+          "timestamp": "2026-01-05T09:15:38+00:00"
+        },
+        {
+          "id": "07dabf57-e14d-4cc1-ae1d-4686c28c212f",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:15:52+00:00",
+          "actor": "system",
+          "source_session_id": "6f9bcb97-0109-5847-83e9-b668465a90fa",
+          "run_id": "777e55f4-b5e2-55ec-afd4-ec1864e24bfe",
+          "input_event_ids": [
+            "e02d2bb8-2a10-42dd-9b39-36f6f384d5b4"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "caafe9ae-817b-53d6-b4f4-08a4d8eff795",
+          "type": "task_closed",
+          "timestamp": "2026-01-05T09:16:13+00:00",
+          "actor": "user",
+          "source_session_id": "6f9bcb97-0109-5847-83e9-b668465a90fa",
+          "request_id": "archive-749797ac-1376-4c52-823c-9ef2f1143878",
+          "outcome": "archived",
+          "summary": "",
+          "result_refs": [],
+          "run_ids": [],
+          "report_to": null,
+          "archived_with": "06739622-6846-5ab5-90cc-c6adee2b3441"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Draft the first section.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "e02d2bb8-2a10-42dd-9b39-36f6f384d5b4",
+            "timestamp": "2026-01-05T09:15:03+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Section one drafted.",
+            "event_index": 3,
+            "id": "a004231a-aa4b-4713-bfcf-622f9489098b",
+            "timestamp": "2026-01-05T09:15:24+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Section one drafted.",
+            "event_index": 3,
+            "id": "a004231a-aa4b-4713-bfcf-622f9489098b",
+            "timestamp": "2026-01-05T09:15:24+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 6,
+            "timestamp": "2026-01-05T09:15:38+00:00",
+            "event_index": 5,
+            "id": "41a50ea3-9f82-43ad-a2b7-999acfe1bc63"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task archived:",
+            "timestamp": "2026-01-05T09:16:13+00:00",
+            "event_index": 7,
+            "id": "caafe9ae-817b-53d6-b4f4-08a4d8eff795"
+          }
+        }
+      ]
+    },
+    {
+      "session": "81ea0a75-251f-5687-8bdd-a84e64b0377e",
+      "events": [
+        {
+          "id": "38d112d4-05c8-4541-a8f2-3406fbdf4691",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:16:41+00:00",
+          "actor": "user",
+          "source_session_id": "81ea0a75-251f-5687-8bdd-a84e64b0377e",
+          "request_id": "fixture-delta",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "dd630239-ee2c-4681-ac9f-e1128e97a912",
+          "type": "user",
+          "timestamp": "2026-01-05T09:16:55+00:00",
+          "actor": "user",
+          "source_session_id": "81ea0a75-251f-5687-8bdd-a84e64b0377e",
+          "content": "What changed in the delta release notes?"
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-delta_t1",
+          "id": "870d46fa-ab56-4a31-b3e7-38ee884f41a3",
+          "timestamp": "2026-01-05T09:17:09+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Two fixes and one new flag."
+              }
+            ]
+          },
+          "id": "7cf2f3c7-3bdb-4916-8ea2-611650c7dd7a",
+          "timestamp": "2026-01-05T09:17:16+00:00"
+        },
+        {
+          "type": "slack_reply",
+          "content": "Two fixes and one new flag.",
+          "id": "c9e9f6c4-e03c-48b8-b478-d264a331c042",
+          "timestamp": "2026-01-05T09:17:23+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.004,
+          "id": "10420a77-d8d5-45de-9584-5d77b8c2cb49",
+          "timestamp": "2026-01-05T09:17:30+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "dd630239-ee2c-4681-ac9f-e1128e97a912"
+          ],
+          "thinking_seconds": 7,
+          "id": "6d007ea0-73b0-4eaf-a8f3-42db6a0f1c94",
+          "timestamp": "2026-01-05T09:17:37+00:00"
+        },
+        {
+          "id": "3708ae35-a61c-4779-923f-aaf766a3153a",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:17:51+00:00",
+          "actor": "system",
+          "source_session_id": "81ea0a75-251f-5687-8bdd-a84e64b0377e",
+          "run_id": "597d82ad-4597-5d4f-88f0-d32ebcf34c87",
+          "input_event_ids": [
+            "dd630239-ee2c-4681-ac9f-e1128e97a912"
+          ],
+          "outcome": "success"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "What changed in the delta release notes?",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "dd630239-ee2c-4681-ac9f-e1128e97a912",
+            "timestamp": "2026-01-05T09:16:55+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Two fixes and one new flag.",
+            "event_index": 3,
+            "id": "7cf2f3c7-3bdb-4916-8ea2-611650c7dd7a",
+            "timestamp": "2026-01-05T09:17:16+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Two fixes and one new flag.",
+            "event_index": 3,
+            "id": "7cf2f3c7-3bdb-4916-8ea2-611650c7dd7a",
+            "timestamp": "2026-01-05T09:17:16+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Posted to Slack: Two fixes and one new flag.",
+            "timestamp": "2026-01-05T09:17:23+00:00",
+            "event_index": 4,
+            "id": "c9e9f6c4-e03c-48b8-b478-d264a331c042"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 7,
+            "timestamp": "2026-01-05T09:17:37+00:00",
+            "event_index": 6,
+            "id": "6d007ea0-73b0-4eaf-a8f3-42db6a0f1c94"
+          }
+        }
+      ]
+    },
+    {
+      "session": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+      "events": [
+        {
+          "id": "6e3c465f-6c71-474c-a944-26eaf00c451c",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:07:35+00:00",
+          "actor": "user",
+          "source_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "request_id": "delegate-c24ebed249b5c451ce197058",
+          "task_parent_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "task_spec_hash": "21b494a6155168a58135a62204dc050c5035e0d72d9e0ba4d955b9f29b273b14"
+        },
+        {
+          "id": "3387294d-d780-4ebd-86b9-6d0eff755e2a",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:10:09+00:00",
+          "actor": "system",
+          "source_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "run_id": "98102a79-5709-5a57-b99c-29e5fbaaf8db",
+          "input_event_ids": [],
+          "outcome": "failed"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "backend": "claude-sonnet",
+          "reason": "undeclared",
+          "id": "76be4813-a5d2-4501-a703-63e272b79e99",
+          "timestamp": "2026-01-05T09:10:23+00:00"
+        },
+        {
+          "id": "19a04b7d-d354-4653-938e-5cf9abb624a4",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:11:26+00:00",
+          "actor": "system",
+          "source_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "run_id": "0f884dc4-1062-55f0-8b1f-1ae26e19090b",
+          "input_event_ids": [],
+          "outcome": "success"
+        },
+        {
+          "id": "ba5be357-ec57-50ca-85e4-6391af2458e7",
+          "type": "task_closed",
+          "timestamp": "2026-01-05T09:11:33+00:00",
+          "actor": "system",
+          "source_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "request_id": "auto:0f884dc4-1062-55f0-8b1f-1ae26e19090b",
+          "outcome": "completed",
+          "summary": "Run 0f884dc4-1062-55f0-8b1f-1ae26e19090b completed",
+          "result_refs": [
+            "run:0f884dc4-1062-55f0-8b1f-1ae26e19090b",
+            "spec:21b494a6155168a58135a62204dc050c5035e0d72d9e0ba4d955b9f29b273b14"
+          ],
+          "run_ids": [
+            "0f884dc4-1062-55f0-8b1f-1ae26e19090b"
+          ],
+          "report_to": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet declares no prompt_overlay — running without a fence",
+            "timestamp": "2026-01-05T09:10:23+00:00",
+            "event_index": 2,
+            "id": "76be4813-a5d2-4501-a703-63e272b79e99"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task completed: Run 0f884dc4-1062-55f0-8b1f-1ae26e19090b completed",
+            "timestamp": "2026-01-05T09:11:33+00:00",
+            "event_index": 4,
+            "id": "ba5be357-ec57-50ca-85e4-6391af2458e7"
+          }
+        }
+      ]
+    },
+    {
+      "session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+      "events": [
+        {
+          "id": "6384e0b3-7b55-4bcb-91f1-20682cc85dc0",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:00:21+00:00",
+          "actor": "user",
+          "source_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "request_id": "fixture-atlas_survey",
+          "task_parent_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "task_spec_hash": null
+        },
+        {
+          "id": "66e921f0-58d8-40e6-a8d1-a6c0d873527f",
+          "type": "user",
+          "timestamp": "2026-01-05T09:07:28+00:00",
+          "actor": "user",
+          "source_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "content": "Split the survey into notes, probe and scout work."
+        },
+        {
+          "type": "task_delegated",
+          "thread_id": "98102a79-5709-5a57-b99c-29e5fbaaf8db",
+          "description": "Collect survey notes from the three gauge archives.",
+          "backend": "claude-sonnet",
+          "model": "claude-sonnet-5",
+          "child_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "delegate_invocation": {
+            "task_type": "quick-edit",
+            "repo_path": null,
+            "base_branch": null,
+            "task_spec_file": null,
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          },
+          "id": "fbcd7d9a-68f9-480a-a1b2-fecba1309fcd",
+          "timestamp": "2026-01-05T09:07:49+00:00"
+        },
+        {
+          "type": "task_delegated",
+          "thread_id": "e5dce19c-aa83-53ea-a90d-a37306b75e80",
+          "description": "Probe the gauge mirrors for stale readings.",
+          "backend": "claude-sonnet",
+          "model": "claude-sonnet-5",
+          "child_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+          "delegate_invocation": {
+            "task_type": "verify",
+            "repo_path": null,
+            "base_branch": null,
+            "task_spec_file": null,
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          },
+          "id": "afa7949b-a174-45ef-874a-2522af77ee26",
+          "timestamp": "2026-01-05T09:08:10+00:00"
+        },
+        {
+          "type": "task_delegated",
+          "thread_id": "eeb371d2-cca8-5289-a027-3f3f24d4bc30",
+          "description": "Scout mirror latency with the timing script.",
+          "backend": "claude-sonnet",
+          "model": "claude-sonnet-5",
+          "child_session_id": "db0e9583-4634-522a-afdb-6cb238bc8024",
+          "delegate_invocation": {
+            "task_type": "script-run",
+            "repo_path": null,
+            "base_branch": null,
+            "task_spec_file": null,
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          },
+          "id": "4d0cc681-12b5-44ff-91e3-74aa9f55d94e",
+          "timestamp": "2026-01-05T09:08:31+00:00"
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-survey_t1",
+          "id": "a15ce461-a6b7-4628-8e40-81f1b34f3d61",
+          "timestamp": "2026-01-05T09:08:45+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Delegated notes, probe and scout work."
+              }
+            ]
+          },
+          "id": "61fa3053-096e-44d9-8498-af35fd41e2f3",
+          "timestamp": "2026-01-05T09:08:52+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 900,
+            "output_tokens": 80,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.006,
+          "id": "d3491cae-6cb3-4c44-8709-c9a0ea1cd45c",
+          "timestamp": "2026-01-05T09:08:59+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "66e921f0-58d8-40e6-a8d1-a6c0d873527f"
+          ],
+          "thinking_seconds": 5,
+          "id": "2dd4f136-11a3-4ca3-bc06-039bbb10885c",
+          "timestamp": "2026-01-05T09:09:06+00:00"
+        },
+        {
+          "id": "c1bac4ef-726b-461a-9baa-1931c2685259",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:09:20+00:00",
+          "actor": "system",
+          "source_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "run_id": "9bc0ad54-c580-551c-9b70-1f12a72f03fd",
+          "input_event_ids": [
+            "66e921f0-58d8-40e6-a8d1-a6c0d873527f"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "9035da6e-e742-54a0-9f71-c3fff5a9c3f6",
+          "type": "child_report",
+          "timestamp": "2026-01-05T09:10:16+00:00",
+          "actor": "agent",
+          "source_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "child_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "child_event_id": "3387294d-d780-4ebd-86b9-6d0eff755e2a",
+          "outcome": "failed",
+          "summary": "Opening the first archive.",
+          "result_refs": [
+            "run:98102a79-5709-5a57-b99c-29e5fbaaf8db"
+          ]
+        },
+        {
+          "id": "a52deb71-2224-52f9-8995-52d37898d2cc",
+          "type": "child_report",
+          "timestamp": "2026-01-05T09:11:40+00:00",
+          "actor": "system",
+          "source_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "child_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+          "child_event_id": "ba5be357-ec57-50ca-85e4-6391af2458e7",
+          "outcome": "completed",
+          "summary": "Run 0f884dc4-1062-55f0-8b1f-1ae26e19090b completed",
+          "result_refs": [
+            "run:0f884dc4-1062-55f0-8b1f-1ae26e19090b",
+            "spec:21b494a6155168a58135a62204dc050c5035e0d72d9e0ba4d955b9f29b273b14"
+          ]
+        },
+        {
+          "id": "f5974589-d50b-58c5-a29a-18abd95cf9b9",
+          "type": "child_report",
+          "timestamp": "2026-01-05T09:12:29+00:00",
+          "actor": "agent",
+          "source_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+          "child_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+          "child_event_id": "b866febe-9479-4aef-9108-23e632e0a347",
+          "outcome": "interrupted",
+          "summary": "Probing the first mirror.",
+          "result_refs": [
+            "run:e5dce19c-aa83-53ea-a90d-a37306b75e80"
+          ]
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-survey_t2",
+          "id": "46b201d7-83e5-47ed-9744-0a5f5e8a7ff0",
+          "timestamp": "2026-01-05T09:12:57+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Notes delivered; the probe was interrupted and archived."
+              }
+            ]
+          },
+          "id": "7a6b7390-39db-49c7-9df9-52c0361feab7",
+          "timestamp": "2026-01-05T09:13:04+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 1100,
+            "output_tokens": 140,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.0071,
+          "id": "e29a2a0f-b400-4701-8b4f-b1f5dfb2d65a",
+          "timestamp": "2026-01-05T09:13:11+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "9035da6e-e742-54a0-9f71-c3fff5a9c3f6",
+            "a52deb71-2224-52f9-8995-52d37898d2cc",
+            "f5974589-d50b-58c5-a29a-18abd95cf9b9"
+          ],
+          "thinking_seconds": 9,
+          "id": "ecf53f70-e07b-41a6-b607-917b2852ed61",
+          "timestamp": "2026-01-05T09:13:18+00:00"
+        },
+        {
+          "id": "f192d5a6-4667-4670-a03a-7b82df8a70e2",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:13:32+00:00",
+          "actor": "system",
+          "source_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "run_id": "6429bf80-3a4b-573d-b8eb-598d4378bf02",
+          "input_event_ids": [
+            "9035da6e-e742-54a0-9f71-c3fff5a9c3f6",
+            "a52deb71-2224-52f9-8995-52d37898d2cc",
+            "f5974589-d50b-58c5-a29a-18abd95cf9b9"
+          ],
+          "outcome": "success"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Split the survey into notes, probe and scout work.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "66e921f0-58d8-40e6-a8d1-a6c0d873527f",
+            "timestamp": "2026-01-05T09:07:28+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "task_delegated",
+            "content": "Task delegated",
+            "thread_id": "98102a79-5709-5a57-b99c-29e5fbaaf8db",
+            "child_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+            "delegate_invocation": {
+              "task_type": "quick-edit",
+              "repo_path": null,
+              "base_branch": null,
+              "task_spec_file": null,
+              "reviewer_context_file": null,
+              "keep_worktree": false,
+              "backend": null
+            },
+            "backend": "claude-sonnet",
+            "model": "claude-sonnet-5",
+            "timestamp": "2026-01-05T09:07:49+00:00",
+            "event_index": 2,
+            "id": "fbcd7d9a-68f9-480a-a1b2-fecba1309fcd"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "task_delegated",
+            "content": "Task delegated",
+            "thread_id": "e5dce19c-aa83-53ea-a90d-a37306b75e80",
+            "child_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+            "delegate_invocation": {
+              "task_type": "verify",
+              "repo_path": null,
+              "base_branch": null,
+              "task_spec_file": null,
+              "reviewer_context_file": null,
+              "keep_worktree": false,
+              "backend": null
+            },
+            "backend": "claude-sonnet",
+            "model": "claude-sonnet-5",
+            "timestamp": "2026-01-05T09:08:10+00:00",
+            "event_index": 3,
+            "id": "afa7949b-a174-45ef-874a-2522af77ee26"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "task_delegated",
+            "content": "Task delegated",
+            "thread_id": "eeb371d2-cca8-5289-a027-3f3f24d4bc30",
+            "child_session_id": "db0e9583-4634-522a-afdb-6cb238bc8024",
+            "delegate_invocation": {
+              "task_type": "script-run",
+              "repo_path": null,
+              "base_branch": null,
+              "task_spec_file": null,
+              "reviewer_context_file": null,
+              "keep_worktree": false,
+              "backend": null
+            },
+            "backend": "claude-sonnet",
+            "model": "claude-sonnet-5",
+            "timestamp": "2026-01-05T09:08:31+00:00",
+            "event_index": 4,
+            "id": "4d0cc681-12b5-44ff-91e3-74aa9f55d94e"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Delegated notes, probe and scout work.",
+            "event_index": 6,
+            "id": "61fa3053-096e-44d9-8498-af35fd41e2f3",
+            "timestamp": "2026-01-05T09:08:52+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Delegated notes, probe and scout work.",
+            "event_index": 6,
+            "id": "61fa3053-096e-44d9-8498-af35fd41e2f3",
+            "timestamp": "2026-01-05T09:08:52+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 5,
+            "timestamp": "2026-01-05T09:09:06+00:00",
+            "event_index": 8,
+            "id": "2dd4f136-11a3-4ca3-bc06-039bbb10885c"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "child_report",
+            "content": "Opening the first archive.",
+            "child_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+            "outcome": "failed",
+            "result_refs": [
+              "run:98102a79-5709-5a57-b99c-29e5fbaaf8db"
+            ],
+            "timestamp": "2026-01-05T09:10:16+00:00",
+            "event_index": 10,
+            "id": "9035da6e-e742-54a0-9f71-c3fff5a9c3f6"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "child_report",
+            "content": "Run 0f884dc4-1062-55f0-8b1f-1ae26e19090b completed",
+            "child_session_id": "85aa8fab-f299-568b-bb3a-075c05eb226c",
+            "outcome": "completed",
+            "result_refs": [
+              "run:0f884dc4-1062-55f0-8b1f-1ae26e19090b",
+              "spec:21b494a6155168a58135a62204dc050c5035e0d72d9e0ba4d955b9f29b273b14"
+            ],
+            "timestamp": "2026-01-05T09:11:40+00:00",
+            "event_index": 11,
+            "id": "a52deb71-2224-52f9-8995-52d37898d2cc"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "child_report",
+            "content": "Probing the first mirror.",
+            "child_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+            "outcome": "interrupted",
+            "result_refs": [
+              "run:e5dce19c-aa83-53ea-a90d-a37306b75e80"
+            ],
+            "timestamp": "2026-01-05T09:12:29+00:00",
+            "event_index": 12,
+            "id": "f5974589-d50b-58c5-a29a-18abd95cf9b9"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Notes delivered; the probe was interrupted and archived.",
+            "event_index": 14,
+            "id": "7a6b7390-39db-49c7-9df9-52c0361feab7",
+            "timestamp": "2026-01-05T09:13:04+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Notes delivered; the probe was interrupted and archived.",
+            "event_index": 14,
+            "id": "7a6b7390-39db-49c7-9df9-52c0361feab7",
+            "timestamp": "2026-01-05T09:13:04+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 9,
+            "timestamp": "2026-01-05T09:13:18+00:00",
+            "event_index": 16,
+            "id": "ecf53f70-e07b-41a6-b607-917b2852ed61"
+          }
+        }
+      ]
+    },
+    {
+      "session": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+      "events": [
+        {
+          "id": "1f655bde-673a-4998-b55a-d7650323749b",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:07:56+00:00",
+          "actor": "user",
+          "source_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+          "request_id": "delegate-71938ac5dbc369dd11c362f3",
+          "task_parent_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "task_spec_hash": "365ef02ccf7e6ca4e3c2bdef0919d3aaa0060d69661c48a66395a2961b09c40a"
+        },
+        {
+          "id": "b866febe-9479-4aef-9108-23e632e0a347",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:12:22+00:00",
+          "actor": "system",
+          "source_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+          "run_id": "e5dce19c-aa83-53ea-a90d-a37306b75e80",
+          "input_event_ids": [],
+          "outcome": "interrupted"
+        },
+        {
+          "id": "3dbf18f1-7cda-513f-bd74-eba98fa83f24",
+          "type": "task_closed",
+          "timestamp": "2026-01-05T09:12:36+00:00",
+          "actor": "system",
+          "source_session_id": "b85c4cb5-18d4-588a-9611-870df1e18f22",
+          "request_id": "unsuccessful:e5dce19c-aa83-53ea-a90d-a37306b75e80",
+          "outcome": "archived",
+          "summary": "run e5dce19c-aa83-53ea-a90d-a37306b75e80 ended interrupted; archived by the server",
+          "result_refs": [],
+          "run_ids": [
+            "e5dce19c-aa83-53ea-a90d-a37306b75e80"
+          ],
+          "report_to": null
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task archived: run e5dce19c-aa83-53ea-a90d-a37306b75e80 ended interrupted; archived by the server",
+            "timestamp": "2026-01-05T09:12:36+00:00",
+            "event_index": 2,
+            "id": "3dbf18f1-7cda-513f-bd74-eba98fa83f24"
+          }
+        }
+      ]
+    },
+    {
+      "session": "bd403bef-2631-572a-b34f-b5f483b7883a",
+      "events": [
+        {
+          "id": "771c41ae-3218-4492-a2a3-f5b7aae8ec3d",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:00:07+00:00",
+          "actor": "user",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "request_id": "fixture-atlas",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "de0bf099-fc0a-4da4-959c-b16cd9e05bca",
+          "type": "user",
+          "timestamp": "2026-01-05T09:00:42+00:00",
+          "actor": "user",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "Draft a plan for the Atlas survey of tide gauges.",
+          "uploaded_files": [
+            {
+              "filename": "stations.csv",
+              "path": "/home/<user>/parity-home/uploads/stations.csv"
+            }
+          ]
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-atlas_t1",
+          "id": "ec9a24c8-99f3-4dd1-b821-84c3bb92870b",
+          "timestamp": "2026-01-05T09:00:56+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "Listing the gauge sources first.",
+                "signature": "sig-parity-1"
+              }
+            ],
+            "usage": {
+              "input_tokens": 1200,
+              "output_tokens": 40,
+              "cache_read_input_tokens": 30000,
+              "cache_creation_input_tokens": 800
+            }
+          },
+          "id": "b5e463a9-7520-4006-b699-237421670139",
+          "timestamp": "2026-01-05T09:01:03+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "I will check the station list."
+              },
+              {
+                "type": "tool_use",
+                "id": "toolu_parity_01",
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory List every station file in the synthetic survey directory "
+                }
+              }
+            ],
+            "usage": {
+              "input_tokens": 1300,
+              "output_tokens": 60,
+              "cache_read_input_tokens": 31000,
+              "cache_creation_input_tokens": 0
+            }
+          },
+          "id": "7a8bdf04-4c51-4c95-97ae-692d37d8074a",
+          "timestamp": "2026-01-05T09:01:10+00:00"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_parity_01",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "north-pier.csv\nsouth-pier.csv"
+                  }
+                ],
+                "is_error": false
+              }
+            ]
+          },
+          "id": "85fb14cd-5421-434f-8de0-a7ba2434a37d",
+          "timestamp": "2026-01-05T09:01:17+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_parity_02",
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                }
+              }
+            ]
+          },
+          "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+          "timestamp": "2026-01-05T09:01:24+00:00"
+        },
+        {
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_parity_02",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "notes.md: no such file"
+                  }
+                ],
+                "is_error": true
+              }
+            ]
+          },
+          "id": "77053f32-df07-4122-80fb-c1a327d11e45",
+          "timestamp": "2026-01-05T09:01:31+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_parity_03",
+                "name": "ExitPlanMode",
+                "input": {
+                  "plan": "1. Collect the gauge notes.\n2. Probe the mirrors.\n3. Merge the readings."
+                }
+              }
+            ]
+          },
+          "id": "e38a5c24-c757-4011-9154-ee45212d7bd5",
+          "timestamp": "2026-01-05T09:01:38+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "text",
+                "text": "The plan has three steps; the survey child takes the first two."
+              }
+            ],
+            "usage": {
+              "input_tokens": 1500,
+              "output_tokens": 120,
+              "cache_read_input_tokens": 32000,
+              "cache_creation_input_tokens": 0
+            }
+          },
+          "id": "d8685fae-e505-47e5-a1a3-97e01b399179",
+          "timestamp": "2026-01-05T09:01:45+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 1500,
+            "output_tokens": 420,
+            "cache_read_input_tokens": 93000,
+            "cache_creation_input_tokens": 800
+          },
+          "total_cost_usd": 0.0421,
+          "id": "76c77ff1-2e84-4184-9c3d-e6627ec56be3",
+          "timestamp": "2026-01-05T09:01:52+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+          ],
+          "thinking_seconds": 12,
+          "id": "a2e19158-4e62-4c1b-899e-7780efe15a39",
+          "timestamp": "2026-01-05T09:01:59+00:00"
+        },
+        {
+          "id": "b029d040-1fe0-435e-b6c6-36601c1996ec",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:02:13+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "run_id": "e88cd894-3fd9-5e3e-b461-5ee153dd7c81",
+          "input_event_ids": [
+            "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+          ],
+          "outcome": "success"
+        },
+        {
+          "type": "handler_result",
+          "task": "nightly-digest",
+          "status": "ok",
+          "message": "digest posted",
+          "id": "4c86625f-13d7-423c-93e9-d58574a12dec",
+          "timestamp": "2026-01-05T09:02:20+00:00"
+        },
+        {
+          "type": "handler_result",
+          "task": "nightly-digest",
+          "status": "error",
+          "message": "digest source unreachable",
+          "id": "02dda59b-d365-43e2-ae8d-2653dda09d7a",
+          "timestamp": "2026-01-05T09:02:27+00:00"
+        },
+        {
+          "type": "resume_context_dropped",
+          "reason": "anchor_missing",
+          "id": "32d394ac-3f83-473d-adbc-ca9041142dae",
+          "timestamp": "2026-01-05T09:02:34+00:00"
+        },
+        {
+          "type": "resume_context_dropped",
+          "reason": "transcript_missing",
+          "id": "1a9eca6b-4294-4260-a20c-2a23e852f2a2",
+          "timestamp": "2026-01-05T09:02:41+00:00"
+        },
+        {
+          "type": "backend_switched",
+          "from": "claude-opus",
+          "to": "claude-sonnet",
+          "previous_native_backend": "claude-opus",
+          "previous_native_session_id": "native-atlas_t1",
+          "id": "7f7694a8-a772-4064-be52-28593d02ab59",
+          "timestamp": "2026-01-05T09:02:48+00:00"
+        },
+        {
+          "type": "backend_overlay_undeclared",
+          "backend": "claude-sonnet",
+          "id": "cc5654cb-d06a-4326-b273-65b089ed5cd0",
+          "timestamp": "2026-01-05T09:02:55+00:00"
+        },
+        {
+          "type": "model_fallback_notice",
+          "backend": "claude-sonnet",
+          "configured_model": "claude-sonnet-5",
+          "served_models": [
+            "claude-haiku-5"
+          ],
+          "id": "b073d620-673f-4fd9-b99b-ceddee310fbd",
+          "timestamp": "2026-01-05T09:03:02+00:00"
+        },
+        {
+          "type": "worker_summary",
+          "content": "Legacy worker summary: the gauge list is complete.",
+          "thread_id": "thread-legacy-atlas",
+          "origin_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "id": "7b94981e-6623-47d0-8121-44563f46f29b",
+          "timestamp": "2026-01-05T09:03:09+00:00"
+        },
+        {
+          "type": "web_reply",
+          "content": "Posted the outline to the reader.",
+          "web_reply": {
+            "answers": [
+              "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+            ],
+            "chars": 33
+          },
+          "id": "2b27f904-7284-4030-9a8e-6a20654d3d12",
+          "timestamp": "2026-01-05T09:03:16+00:00"
+        },
+        {
+          "type": "web_reply_notice",
+          "content": "No reply was posted for this message.",
+          "web_reply_notice": {
+            "input_event_id": "de0bf099-fc0a-4da4-959c-b16cd9e05bca"
+          },
+          "id": "c5df01a4-efc3-421a-8827-6c4aa06cf228",
+          "timestamp": "2026-01-05T09:03:23+00:00"
+        },
+        {
+          "type": "web_status",
+          "content": "Status: drafting",
+          "web_status": {
+            "drafting": "the outline"
+          },
+          "web_status_changed": [
+            "drafting"
+          ],
+          "id": "b24bd542-ae95-4e5e-9e2a-69883276bc2c",
+          "timestamp": "2026-01-05T09:03:30+00:00"
+        },
+        {
+          "type": "slack_reply",
+          "content": "Thread update posted.",
+          "id": "7ad43197-4045-456d-bafa-5be51e1e2cf4",
+          "timestamp": "2026-01-05T09:03:37+00:00"
+        },
+        {
+          "type": "discord_reply",
+          "content": "Channel update posted.",
+          "id": "5717ee75-f270-47fd-87a1-56557d11fe26",
+          "timestamp": "2026-01-05T09:03:44+00:00"
+        },
+        {
+          "type": "claude_account_login_required",
+          "id": "7851058b-23ad-41e3-ba47-a022f1e3560d",
+          "timestamp": "2026-01-05T09:03:51+00:00"
+        },
+        {
+          "type": "scheduled_run_skipped",
+          "task": "nightly-digest",
+          "skipped_at": "2026-01-05T09:30:00+00:00",
+          "reason": "previous run still active",
+          "id": "54c25f6b-d0d2-4845-b15e-9e1da8c07c1a",
+          "timestamp": "2026-01-05T09:03:58+00:00"
+        },
+        {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+            "status": "allowed_warning",
+            "resetsAt": 1767700000
+          },
+          "id": "7f999a88-91d2-467e-b1da-fcc3b093d19c",
+          "timestamp": "2026-01-05T09:04:05+00:00"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "backend": "claude-sonnet",
+          "reason": "undeclared",
+          "id": "305c139b-58ff-4dd0-b2eb-89e8cf7edbef",
+          "timestamp": "2026-01-05T09:04:12+00:00"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "backend": "claude-sonnet",
+          "reason": "unreadable",
+          "overlay": null,
+          "error": "FileNotFoundError",
+          "id": "b8ff393d-d6cd-4860-83ea-ca3ea3d1c99c",
+          "timestamp": "2026-01-05T09:04:19+00:00"
+        },
+        {
+          "id": "b74b07e1-88c0-4daa-9211-92cac75e7724",
+          "type": "agent_message",
+          "timestamp": "2026-01-05T09:04:26+00:00",
+          "actor": "agent",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "The survey child finished its outline.",
+          "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "from_session_name": "Atlas survey"
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-atlas_t2",
+          "id": "ca7dfd5d-19d2-4e88-88f1-def6bb3a9200",
+          "timestamp": "2026-01-05T09:04:40+00:00"
+        },
+        {
+          "type": "thinking",
+          "content": "Weighing two survey orders.",
+          "id": "88d5559a-8bff-4d52-903b-75dd9da796f1",
+          "timestamp": "2026-01-05T09:04:47+00:00"
+        },
+        {
+          "type": "tool_use",
+          "name": "Grep",
+          "input": {
+            "pattern": "gauge",
+            "path": "/srv/atlas"
+          },
+          "id": "8c14b9a1-82a0-4e4a-a66b-dcf3cfaa2e14",
+          "timestamp": "2026-01-05T09:04:54+00:00"
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "Grep",
+          "content": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012.csv: gauge reading\n/srv/atlas/gauge-013.csv: gauge reading\n/srv/atlas/gauge-014.csv: gauge reading\n/srv/atlas/gauge-015.csv: gauge reading\n/srv/atlas/gauge-016.csv: gauge reading\n/srv/atlas/gauge-017.csv: gauge reading\n/srv/atlas/gauge-018.csv: gauge reading\n/srv/atlas/gauge-019.csv: gauge reading\n/srv/atlas/gauge-020.csv: gauge reading\n/srv/atlas/gauge-021.csv: gauge reading\n/srv/atlas/gauge-022.csv: gauge reading\n/srv/atlas/gauge-023.csv: gauge reading\n/srv/atlas/gauge-024.csv: gauge reading\n/srv/atlas/gauge-025.csv: gauge reading\n/srv/atlas/gauge-026.csv: gauge reading\n/srv/atlas/gauge-027.csv: gauge reading\n/srv/atlas/gauge-028.csv: gauge reading\n/srv/atlas/gauge-029.csv: gauge reading\n/srv/atlas/gauge-030.csv: gauge reading\n/srv/atlas/gauge-031.csv: gauge reading\n/srv/atlas/gauge-032.csv: gauge reading\n/srv/atlas/gauge-033.csv: gauge reading\n/srv/atlas/gauge-034.csv: gauge reading\n/srv/atlas/gauge-035.csv: gauge reading\n/srv/atlas/gauge-036.csv: gauge reading\n/srv/atlas/gauge-037.csv: gauge reading\n/srv/atlas/gauge-038.csv: gauge reading\n/srv/atlas/gauge-039.csv: gauge reading\n",
+          "id": "ab3321fb-7a51-4432-aa6e-1e98e346ab17",
+          "timestamp": "2026-01-05T09:05:01+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "The outline is in; the readings need a merge pass."
+              }
+            ]
+          },
+          "id": "28dbe396-fc5f-44f3-aae7-dd444676c93a",
+          "timestamp": "2026-01-05T09:05:08+00:00"
+        },
+        {
+          "type": "system",
+          "subtype": "command_progress",
+          "content": "Still running: merge-readings (2m)",
+          "id": "6a9c7c8b-79d4-4075-897c-ea5a0ebdfe40",
+          "timestamp": "2026-01-05T09:05:15+00:00"
+        },
+        {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 150000
+          },
+          "id": "446cf39c-c0c1-48ac-a661-f9b2f7284d05",
+          "timestamp": "2026-01-05T09:05:22+00:00"
+        },
+        {
+          "type": "context_compacted",
+          "trigger": "auto",
+          "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 150000,
+            "post_tokens": 32000
+          },
+          "model": "claude-sonnet-5",
+          "id": "6becb3c9-1895-4446-96c4-73ee72d798c6",
+          "timestamp": "2026-01-05T09:05:29+00:00"
+        },
+        {
+          "type": "context_compact_failed",
+          "error": "summary exceeded the output limit",
+          "id": "0c78d5a9-54fc-4cd5-a476-05f5765df192",
+          "timestamp": "2026-01-05T09:05:36+00:00"
+        },
+        {
+          "type": "system",
+          "subtype": "context_reading",
+          "context_reading": {
+            "model": "claude-sonnet-5",
+            "context_tokens": 64000,
+            "context_full": 200000,
+            "context_compact_at": 160000
+          },
+          "id": "9af39cdb-2dca-4c9f-85cb-de07b74c0641",
+          "timestamp": "2026-01-05T09:05:43+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 2100,
+            "output_tokens": 300,
+            "cache_read_input_tokens": 60000,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.0187,
+          "id": "6b721163-3cdb-42c0-8778-82ea436aab0b",
+          "timestamp": "2026-01-05T09:05:50+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": true,
+          "input_event_ids": [
+            "b74b07e1-88c0-4daa-9211-92cac75e7724"
+          ],
+          "id": "6b0d5444-9c58-4ca3-8b05-cd8d517333ad",
+          "timestamp": "2026-01-05T09:05:57+00:00"
+        },
+        {
+          "id": "6faf5465-1fb9-4268-8e0d-c28ba1370bc8",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:06:11+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "run_id": "18e3b880-e0ce-55db-b504-bc0fb24bc560",
+          "input_event_ids": [
+            "b74b07e1-88c0-4daa-9211-92cac75e7724"
+          ],
+          "outcome": "success"
+        },
+        {
+          "id": "63618923-61a0-45c3-b1cd-3cbc82995d28",
+          "type": "scheduled_trigger",
+          "timestamp": "2026-01-05T09:06:18+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "Weekly Atlas digest is due."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-atlas_t3",
+          "id": "4e5f81e4-e434-4192-9234-133cc39a95f5",
+          "timestamp": "2026-01-05T09:06:32+00:00"
+        },
+        {
+          "type": "assistant_error",
+          "content": "Backend returned HTTP 529 (overloaded)",
+          "id": "a1c4820c-ec27-4ecb-b7c0-050502343ff0",
+          "timestamp": "2026-01-05T09:06:39+00:00"
+        },
+        {
+          "type": "error",
+          "message": "Rate limited by the synthetic upstream",
+          "content": "Rate limited by the synthetic upstream",
+          "id": "a79b0c13-cfa2-46e7-b424-7ea3ac65dea0",
+          "timestamp": "2026-01-05T09:06:46+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "input_event_ids": [
+            "63618923-61a0-45c3-b1cd-3cbc82995d28"
+          ],
+          "thinking_seconds": 3,
+          "id": "ceda05b0-ae24-4a63-b473-801033975c0d",
+          "timestamp": "2026-01-05T09:06:53+00:00"
+        },
+        {
+          "id": "8d17fec1-96f9-46fd-905d-d8d089deb072",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:07:07+00:00",
+          "actor": "system",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "run_id": "6947a546-7d55-5db6-b943-c9b17cdba4cd",
+          "input_event_ids": [
+            "63618923-61a0-45c3-b1cd-3cbc82995d28"
+          ],
+          "outcome": "failed"
+        },
+        {
+          "id": "b0bc3814-716d-4147-88c4-e8b3fb5f5b1d",
+          "type": "agent_message",
+          "timestamp": "2026-01-05T09:07:14+00:00",
+          "actor": "agent",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "content": "A duplicate digest request.",
+          "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "from_session_name": "Atlas survey"
+        },
+        {
+          "id": "17da424d-3940-519a-9d38-723a9dc49d17",
+          "type": "task_input_acknowledged",
+          "timestamp": "2026-01-05T09:07:21+00:00",
+          "actor": "user",
+          "source_session_id": "bd403bef-2631-572a-b34f-b5f483b7883a",
+          "request_id": "fixture-ack-atlas",
+          "input_ids": [
+            "b0bc3814-716d-4147-88c4-e8b3fb5f5b1d"
+          ],
+          "note": "handled in the survey thread"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Draft a plan for the Atlas survey of tide gauges.",
+            "uploaded_files": [
+              {
+                "filename": "stations.csv",
+                "path": "/home/<user>/parity-home/uploads/stations.csv"
+              }
+            ],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "de0bf099-fc0a-4da4-959c-b16cd9e05bca",
+            "timestamp": "2026-01-05T09:00:42+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 3,
+            "id": "b5e463a9-7520-4006-b699-237421670139",
+            "timestamp": "2026-01-05T09:01:03+00:00",
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 4,
+            "id": "7a8bdf04-4c51-4c95-97ae-692d37d8074a",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 4,
+            "id": "7a8bdf04-4c51-4c95-97ae-692d37d8074a",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 6,
+            "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                },
+                "output": "",
+                "is_error": false
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 6,
+            "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                },
+                "output": "notes.md: no such file",
+                "is_error": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "I will check the station list.",
+            "event_index": 8,
+            "id": "2ba69b61-2fb9-475d-9286-90dd651ddde1",
+            "timestamp": "2026-01-05T09:01:10+00:00",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "ls stations/",
+                  "description": "List every station file in the synthetic survey directory Li"
+                },
+                "output": "north-pier.csv\nsouth-pier.csv",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/srv/atlas/notes.md"
+                },
+                "output": "notes.md: no such file",
+                "is_error": true
+              }
+            ],
+            "thinking": "Listing the gauge sources first."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "plan",
+            "content": "1. Collect the gauge notes.\n2. Probe the mirrors.\n3. Merge the readings.",
+            "event_index": 8,
+            "id": "e38a5c24-c757-4011-9154-ee45212d7bd5",
+            "timestamp": "2026-01-05T09:01:38+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "The plan has three steps; the survey child takes the first two.",
+            "event_index": 9,
+            "id": "d8685fae-e505-47e5-a1a3-97e01b399179",
+            "timestamp": "2026-01-05T09:01:45+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "The plan has three steps; the survey child takes the first two.",
+            "event_index": 9,
+            "id": "d8685fae-e505-47e5-a1a3-97e01b399179",
+            "timestamp": "2026-01-05T09:01:45+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 12,
+            "timestamp": "2026-01-05T09:01:59+00:00",
+            "event_index": 11,
+            "id": "a2e19158-4e62-4c1b-899e-7780efe15a39"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✓ nightly-digest: digest posted",
+            "timestamp": "2026-01-05T09:02:20+00:00",
+            "event_index": 13,
+            "id": "4c86625f-13d7-423c-93e9-d58574a12dec"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✗ nightly-digest: digest source unreachable",
+            "timestamp": "2026-01-05T09:02:27+00:00",
+            "event_index": 14,
+            "id": "02dda59b-d365-43e2-ae8d-2653dda09d7a"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed: no previous session anchor was found — started a new conversation",
+            "timestamp": "2026-01-05T09:02:34+00:00",
+            "event_index": 15,
+            "id": "32d394ac-3f83-473d-adbc-ca9041142dae"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed: the previous session transcript is missing — started a new conversation",
+            "timestamp": "2026-01-05T09:02:41+00:00",
+            "event_index": 16,
+            "id": "1a9eca6b-4294-4260-a20c-2a23e852f2a2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend switched: claude-opus → claude-sonnet",
+            "timestamp": "2026-01-05T09:02:48+00:00",
+            "event_index": 17,
+            "id": "7f7694a8-a772-4064-be52-28593d02ab59"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet declares no prompt_overlay — running without a fence",
+            "timestamp": "2026-01-05T09:02:55+00:00",
+            "event_index": 18,
+            "id": "cc5654cb-d06a-4326-b273-65b089ed5cd0"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Served by claude-haiku-5 (configured claude-sonnet-5)",
+            "timestamp": "2026-01-05T09:03:02+00:00",
+            "event_index": 19,
+            "id": "b073d620-673f-4fd9-b99b-ceddee310fbd"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "worker_summary",
+            "content": "Legacy worker summary: the gauge list is complete.",
+            "thread_id": "thread-legacy-atlas",
+            "origin_session_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+            "timestamp": "2026-01-05T09:03:09+00:00",
+            "event_index": 20,
+            "id": "7b94981e-6623-47d0-8121-44563f46f29b"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "web_reply",
+            "content": "Posted the outline to the reader.",
+            "timestamp": "2026-01-05T09:03:16+00:00",
+            "event_index": 21,
+            "id": "2b27f904-7284-4030-9a8e-6a20654d3d12"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "web_reply_notice",
+            "content": "No reply was posted for this message.",
+            "timestamp": "2026-01-05T09:03:23+00:00",
+            "event_index": 22,
+            "id": "c5df01a4-efc3-421a-8827-6c4aa06cf228"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "web_status",
+            "content": "Status: drafting",
+            "web_status": {
+              "drafting": "the outline"
+            },
+            "timestamp": "2026-01-05T09:03:30+00:00",
+            "event_index": 23,
+            "id": "b24bd542-ae95-4e5e-9e2a-69883276bc2c"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Posted to Slack: Thread update posted.",
+            "timestamp": "2026-01-05T09:03:37+00:00",
+            "event_index": 24,
+            "id": "7ad43197-4045-456d-bafa-5be51e1e2cf4"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Posted to Discord: Channel update posted.",
+            "timestamp": "2026-01-05T09:03:44+00:00",
+            "event_index": 25,
+            "id": "5717ee75-f270-47fd-87a1-56557d11fe26"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "claude_account_login_required",
+            "content": "One account in the Claude pool needs a new login; see the usage panel.",
+            "timestamp": "2026-01-05T09:03:51+00:00",
+            "event_index": 26,
+            "id": "7851058b-23ad-41e3-ba47-a022f1e3560d"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Scheduled run of 'nightly-digest' skipped at 2026-01-05T09:30:00+00:00: previous run still active",
+            "timestamp": "2026-01-05T09:03:58+00:00",
+            "event_index": 27,
+            "id": "54c25f6b-d0d2-4845-b15e-9e1da8c07c1a"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet declares no prompt_overlay — running without a fence",
+            "timestamp": "2026-01-05T09:04:12+00:00",
+            "event_index": 29,
+            "id": "305c139b-58ff-4dd0-b2eb-89e8cf7edbef"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude-sonnet: prompt_overlay 'None' could not be loaded (FileNotFoundError) — running without a fence",
+            "timestamp": "2026-01-05T09:04:19+00:00",
+            "event_index": 30,
+            "id": "b8ff393d-d6cd-4860-83ea-ca3ea3d1c99c"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "agent_message",
+            "content": "The survey child finished its outline.",
+            "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+            "from_session_name": "Atlas survey",
+            "timestamp": "2026-01-05T09:04:26+00:00",
+            "event_index": 31,
+            "id": "b74b07e1-88c0-4daa-9211-92cac75e7724"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 33,
+            "id": "88d5559a-8bff-4d52-903b-75dd9da796f1",
+            "timestamp": "2026-01-05T09:04:47+00:00",
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 34,
+            "id": "8c14b9a1-82a0-4e4a-a66b-dcf3cfaa2e14",
+            "timestamp": "2026-01-05T09:04:47+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "",
+                "is_error": false
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 35,
+            "id": "8c14b9a1-82a0-4e4a-a66b-dcf3cfaa2e14",
+            "timestamp": "2026-01-05T09:04:47+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012",
+                "is_error": false,
+                "output_truncated": true
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "The outline is in; the readings need a merge pass.",
+            "event_index": 36,
+            "id": "28dbe396-fc5f-44f3-aae7-dd444676c93a",
+            "timestamp": "2026-01-05T09:05:08+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012",
+                "is_error": false,
+                "output_truncated": true
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "The outline is in; the readings need a merge pass.",
+            "event_index": 36,
+            "id": "28dbe396-fc5f-44f3-aae7-dd444676c93a",
+            "timestamp": "2026-01-05T09:05:08+00:00",
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "gauge",
+                  "path": "/srv/atlas"
+                },
+                "output": "/srv/atlas/gauge-000.csv: gauge reading\n/srv/atlas/gauge-001.csv: gauge reading\n/srv/atlas/gauge-002.csv: gauge reading\n/srv/atlas/gauge-003.csv: gauge reading\n/srv/atlas/gauge-004.csv: gauge reading\n/srv/atlas/gauge-005.csv: gauge reading\n/srv/atlas/gauge-006.csv: gauge reading\n/srv/atlas/gauge-007.csv: gauge reading\n/srv/atlas/gauge-008.csv: gauge reading\n/srv/atlas/gauge-009.csv: gauge reading\n/srv/atlas/gauge-010.csv: gauge reading\n/srv/atlas/gauge-011.csv: gauge reading\n/srv/atlas/gauge-012",
+                "is_error": false,
+                "output_truncated": true
+              }
+            ],
+            "thinking": "Weighing two survey orders."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Still running: merge-readings (2m)",
+            "timestamp": "2026-01-05T09:05:15+00:00",
+            "event_index": 37,
+            "id": "6a9c7c8b-79d4-4075-897c-ea5a0ebdfe40"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (auto, by Sonnet) — 150k → 32.0k tokens",
+            "kind": "context_compacted",
+            "timestamp": "2026-01-05T09:05:29+00:00",
+            "event_index": 39,
+            "id": "6becb3c9-1895-4446-96c4-73ee72d798c6"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "context_compact_failed",
+            "content": "Compaction failed — summary exceeded the output limit",
+            "timestamp": "2026-01-05T09:05:36+00:00",
+            "event_index": 40,
+            "id": "0c78d5a9-54fc-4cd5-a476-05f5765df192"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": null,
+            "timestamp": "2026-01-05T09:05:57+00:00",
+            "event_index": 43,
+            "id": "6b0d5444-9c58-4ca3-8b05-cd8d517333ad"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "scheduled_trigger",
+            "content": "Weekly Atlas digest is due.",
+            "timestamp": "2026-01-05T09:06:18+00:00",
+            "event_index": 45,
+            "id": "63618923-61a0-45c3-b1cd-3cbc82995d28"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: Backend returned HTTP 529 (overloaded)",
+            "timestamp": "2026-01-05T09:06:39+00:00",
+            "event_index": 47,
+            "id": "a1c4820c-ec27-4ecb-b7c0-050502343ff0"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: Rate limited by the synthetic upstream",
+            "timestamp": "2026-01-05T09:06:46+00:00",
+            "event_index": 48,
+            "id": "a79b0c13-cfa2-46e7-b424-7ea3ac65dea0"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 3,
+            "timestamp": "2026-01-05T09:06:53+00:00",
+            "event_index": 49,
+            "id": "ceda05b0-ae24-4a63-b473-801033975c0d"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "agent_message",
+            "content": "A duplicate digest request.",
+            "from_session": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+            "from_session_name": "Atlas survey",
+            "timestamp": "2026-01-05T09:07:14+00:00",
+            "event_index": 51,
+            "id": "b0bc3814-716d-4147-88c4-e8b3fb5f5b1d"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task input(s) acknowledged as handled: b0bc3814-716d-4147-88c4-e8b3fb5f5b1d — handled in the survey thread",
+            "timestamp": "2026-01-05T09:07:21+00:00",
+            "event_index": 52,
+            "id": "17da424d-3940-519a-9d38-723a9dc49d17"
+          }
+        }
+      ]
+    },
+    {
+      "session": "d1a57d23-356b-5490-bc9f-f90139516c9a",
+      "events": [
+        {
+          "id": "dc13348a-f281-48a2-b1b5-b954e3f3208a",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:16:20+00:00",
+          "actor": "user",
+          "source_session_id": "d1a57d23-356b-5490-bc9f-f90139516c9a",
+          "request_id": "fixture-cobalt",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "f9afcd5a-b256-4cc7-827d-ffa5ddecf45f",
+          "type": "user",
+          "timestamp": "2026-01-05T09:16:34+00:00",
+          "actor": "user",
+          "source_session_id": "d1a57d23-356b-5490-bc9f-f90139516c9a",
+          "content": "Collect three cobalt pigment suppliers."
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Collect three cobalt pigment suppliers.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "f9afcd5a-b256-4cc7-827d-ffa5ddecf45f",
+            "timestamp": "2026-01-05T09:16:34+00:00"
+          }
+        }
+      ]
+    },
+    {
+      "session": "db0e9583-4634-522a-afdb-6cb238bc8024",
+      "events": [
+        {
+          "id": "8ada37c5-065c-4388-8447-fb12d18ad86b",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:08:17+00:00",
+          "actor": "user",
+          "source_session_id": "db0e9583-4634-522a-afdb-6cb238bc8024",
+          "request_id": "delegate-b8be41f62194d5cec7fb03a0",
+          "task_parent_id": "9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf",
+          "task_spec_hash": "81937b25656d0a16bfce3abf0faf7297ecfa4a6de33ecfa9c7efe62d1b9b167f"
+        },
+        {
+          "id": "1a5c5b44-4f76-44db-a70e-c6444501482c",
+          "type": "run_stop_requested",
+          "timestamp": "2026-01-05T09:12:43+00:00",
+          "actor": "system",
+          "source_session_id": "db0e9583-4634-522a-afdb-6cb238bc8024",
+          "request_id": "fixture-scout-stop",
+          "run_id": "eeb371d2-cca8-5289-a027-3f3f24d4bc30"
+        }
+      ],
+      "frames": []
+    },
+    {
+      "session": "f8088323-4d5f-5b98-bac5-0795aa2ded71",
+      "events": [
+        {
+          "id": "3fb99af7-cb0e-43ac-a4d1-6383b0e0ac2f",
+          "type": "task_created",
+          "timestamp": "2026-01-05T09:22:17+00:00",
+          "actor": "user",
+          "source_session_id": "f8088323-4d5f-5b98-bac5-0795aa2ded71",
+          "request_id": "fixture-fable",
+          "task_parent_id": null,
+          "task_spec_hash": null
+        },
+        {
+          "id": "774903a1-6d7f-42be-8734-be8906a205ad",
+          "type": "user",
+          "timestamp": "2026-01-05T09:22:31+00:00",
+          "actor": "user",
+          "source_session_id": "f8088323-4d5f-5b98-bac5-0795aa2ded71",
+          "content": "Sketch the fable roadmap for next quarter."
+        },
+        {
+          "type": "session_attached",
+          "session_id": "native-fable_t1",
+          "id": "76b6128d-3293-464e-9301-f5e05aec0aa7",
+          "timestamp": "2026-01-05T09:22:45+00:00"
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Roadmap sketched as two plans."
+              }
+            ]
+          },
+          "id": "71a9de1d-f892-47f5-a5ba-f792e7596494",
+          "timestamp": "2026-01-05T09:22:52+00:00"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 650,
+            "output_tokens": 90,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.005,
+          "id": "05a8ba6b-d135-478d-9db4-07b340a2bd9b",
+          "timestamp": "2026-01-05T09:22:59+00:00"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "input_event_ids": [
+            "774903a1-6d7f-42be-8734-be8906a205ad"
+          ],
+          "thinking_seconds": 8,
+          "id": "50f654f6-152f-4411-8bbd-59d68331fcd6",
+          "timestamp": "2026-01-05T09:23:06+00:00"
+        },
+        {
+          "id": "71b9e98c-7f1b-416a-bf91-2af6e64fe2c2",
+          "type": "run_finished",
+          "timestamp": "2026-01-05T09:23:20+00:00",
+          "actor": "system",
+          "source_session_id": "f8088323-4d5f-5b98-bac5-0795aa2ded71",
+          "run_id": "778bba41-9516-5ca2-8295-b0ffa9117f19",
+          "input_event_ids": [
+            "774903a1-6d7f-42be-8734-be8906a205ad"
+          ],
+          "outcome": "success"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Sketch the fable roadmap for next quarter.",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 1,
+            "id": "774903a1-6d7f-42be-8734-be8906a205ad",
+            "timestamp": "2026-01-05T09:22:31+00:00"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Roadmap sketched as two plans.",
+            "event_index": 3,
+            "id": "71a9de1d-f892-47f5-a5ba-f792e7596494",
+            "timestamp": "2026-01-05T09:22:52+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Roadmap sketched as two plans.",
+            "event_index": 3,
+            "id": "71a9de1d-f892-47f5-a5ba-f792e7596494",
+            "timestamp": "2026-01-05T09:22:52+00:00"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 8,
+            "timestamp": "2026-01-05T09:23:06+00:00",
+            "event_index": 5,
+            "id": "50f654f6-152f-4411-8bbd-59d68331fcd6"
+          }
+        }
+      ]
+    }
+  ],
+  "synthetic_sequences": [
+    {
+      "name": "assistant_tool_thinking_and_commit",
+      "event_index_offset": 17,
+      "events": [
+        {
+          "type": "assistant",
+          "id": "synthetic-assistant-1",
+          "timestamp": "2026-01-01T00:00:00Z",
+          "message": {
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "Plan the file read.",
+                "signature": "discard-me"
+              },
+              {
+                "type": "text",
+                "text": "Reading "
+              },
+              {
+                "type": "tool_use",
+                "id": "tool-1",
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/notes.md"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "id": "synthetic-tool-result-1",
+          "message": {
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "first\nsecond",
+                "is_error": false
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "synthetic-assistant-2",
+          "timestamp": "2026-01-01T00:00:02Z",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "the notes."
+              }
+            ]
+          }
+        },
+        {
+          "type": "master_done",
+          "id": "synthetic-done",
+          "thinking_seconds": 4,
+          "timestamp": "2026-01-01T00:00:03Z"
+        },
+        {
+          "type": "user",
+          "id": "synthetic-user-2",
+          "content": "Next question",
+          "input_mode": "voice"
+        }
+      ],
+      "frames": [
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Reading ",
+            "event_index": 17,
+            "id": "synthetic-assistant-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/notes.md"
+                },
+                "output": "",
+                "is_error": false
+              }
+            ],
+            "thinking": "Plan the file read."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Reading ",
+            "event_index": 17,
+            "id": "synthetic-assistant-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/notes.md"
+                },
+                "output": "first\nsecond",
+                "is_error": false
+              }
+            ],
+            "thinking": "Plan the file read."
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Reading ",
+            "event_index": 19,
+            "id": "synthetic-assistant-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "tools": [
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/notes.md"
+                },
+                "output": "first\nsecond",
+                "is_error": false
+              }
+            ],
+            "thinking": "Plan the file read."
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "the notes.",
+            "event_index": 19,
+            "id": "synthetic-assistant-2",
+            "timestamp": "2026-01-01T00:00:02Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "the notes.",
+            "event_index": 19,
+            "id": "synthetic-assistant-2",
+            "timestamp": "2026-01-01T00:00:02Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 4,
+            "timestamp": "2026-01-01T00:00:03Z",
+            "event_index": 20,
+            "id": "synthetic-done"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "Next question",
+            "uploaded_files": [],
+            "input_mode": "voice",
+            "event_index": 21,
+            "id": "synthetic-user-2",
+            "timestamp": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "bounded_preview_and_empty_draft",
+      "event_index_offset": 0,
+      "events": [
+        {
+          "type": "assistant",
+          "id": "synthetic-preview",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-preview",
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                }
+              },
+              {
+                "type": "text",
+                "text": "draft"
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant_error",
+          "content": "stop preview",
+          "timestamp": "2026-01-01T00:01:00Z"
+        }
+      ],
+      "frames": [
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "draft",
+            "event_index": 0,
+            "id": "synthetic-preview",
+            "timestamp": null,
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "draft",
+            "event_index": 0,
+            "id": "synthetic-preview",
+            "timestamp": null,
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: stop preview",
+            "timestamp": "2026-01-01T00:01:00Z",
+            "event_index": 1,
+            "id": "legacy:1"
+          }
+        }
+      ]
+    }
+  ]
+}

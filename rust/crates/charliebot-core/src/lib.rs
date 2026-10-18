@@ -14,6 +14,7 @@ pub mod metadata_slot;
 pub mod paths;
 pub mod proc_identity;
 pub mod pyfmt;
+pub mod repo_root;
 pub mod run_token;
 pub mod ssh;
 pub mod timefmt;
@@ -21,4 +22,5 @@ pub mod v1_sessions;
 pub mod venv;
 
 pub use metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+pub use repo_root::RepoRoot;
 pub use venv::VenvBin;

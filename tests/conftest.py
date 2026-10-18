@@ -18,7 +18,8 @@ import time
 import types
 import uuid
 import wave
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator
+from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, Self
 from unittest import mock
 
@@ -272,6 +273,7 @@ from src.infra import event_types as ET  # noqa: E402
 from src.runtime import runs  # noqa: E402
 from src.runtime import thinking_state  # noqa: E402
 from src.infra import backend_models, models  # noqa: E402
+from src.backends.claude_code import claude_accounts  # noqa: E402
 from src.backends.claude_code import claude_config  # noqa: E402
 from src.runtime import streaming  # noqa: E402
 from src.features.memory import memory  # noqa: E402
@@ -781,6 +783,40 @@ def rate_limit_event(
               },
           },
   }
+
+
+def patch_select_with_transient_reading(monkeypatch: pytest.MonkeyPatch, reading_now: datetime.datetime) -> None:
+  """Patch ``claude_accounts.select`` so an account move's below-line select sees ext-1 cross the line.
+
+  The wrapper recognizes the move's select by ``min_headroom`` with exclusions, records a
+  line-crossing reading for ext-1 at *reading_now* just before it, and forwards every call to the
+  real select.
+  """
+  real_select = claude_accounts.select
+
+  def select_with_transient(
+      cfg: core_config.CharlieBotConfig,
+      model: str | None,
+      exclude: Iterable[str] = (),
+      busy_accounts: AbstractSet[str] | None = None,
+      now: datetime.datetime | None = None,
+      account_pool: str | None = None,
+      min_headroom: float = 0.0,
+  ) -> claude_config.ClaudeAccount | None:
+    if min_headroom > 0 and exclude:
+      # The move's below-line select: the target's reading crosses the line first.
+      claude_accounts.observe_rate_limit(
+          "ext-1", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=reading_now)
+    return real_select(
+        cfg,
+        model,
+        exclude=exclude,
+        busy_accounts=busy_accounts,
+        now=now,
+        account_pool=account_pool,
+        min_headroom=min_headroom)
+
+  monkeypatch.setattr(claude_accounts, "select", select_with_transient)
 
 
 def codex_token_count_event(timestamp: Any, **payload_inner: Any) -> dict:

@@ -725,6 +725,9 @@ mod tests {
   async fn lazy_init_aggregator_after_restart_does_not_replay_history() {
     let (home, store) = make_test_store();
     write_test_session(&store, "synthetic");
+    // Root-session creation writes this fact before the three chat events in
+    // the Python fixture, so the new user event has global index 4.
+    store.append_chat_event("synthetic", json!({"type": "task_created"})).await.unwrap();
     store
       .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "t1"}))
       .await
@@ -745,12 +748,12 @@ mod tests {
       .await
       .unwrap();
     let frames = drain_frames(&mut subscription).await;
-    // Only the new event's delta is broadcast; the three events persisted above stay silent.
+    // Only the new event's delta is broadcast; the four events persisted above stay silent.
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["type"], "message");
     assert_eq!(frames[0]["message"]["role"], "user");
     assert_eq!(frames[0]["message"]["content"], "next");
-    assert_eq!(frames[0]["message"]["event_index"], 3);
+    assert_eq!(frames[0]["message"]["event_index"], 4);
   }
 
   #[tokio::test]

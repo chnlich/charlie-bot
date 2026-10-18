@@ -354,6 +354,20 @@ def _check_agent_after_stop(side: Side, expected: str, starts: list[dict], pendi
   return lines
 
 
+def _exit_lines(sides: list[Side], when: str) -> list[str]:
+  """Name each server that has exited. Call it only while the harness means every server in *sides* to be running."""
+  lines = []
+  for side in sides:
+    status = side.server.exit_status() if side.server is not None else None
+    if status is not None:
+      lines.append(f"{side.label} server exited with status {status} {when}; log {side.server.log_path}")
+  return lines
+
+
+def _owner_notes(sides: list[Side]) -> list[str]:
+  return [f"{side.label} server owner pid {side.server.owner_pid} listens on port {side.port}" for side in sides]
+
+
 def _recording_marks(sides: list[Side]) -> list[int]:
   return [side.fake_set.mark() if side.fake_set is not None else 0 for side in sides]
 
@@ -428,6 +442,8 @@ def _websocket_request(
     return status, frames, collected, lines
   except TimeoutError:
     return None, frames, collected, [f"{side.label} WebSocket handshake timed out within {step.timeout_seconds}s"]
+  except OSError as error:
+    return None, frames, collected, [f"{side.label} WebSocket connect failed: {error}"]
   if step.expect_reject is not None:
     socket.close()
     return 101, frames, collected, [f"{side.label} WebSocket connected, expected HTTP {step.expect_reject} rejection"]
@@ -503,14 +519,14 @@ def _run_handover_step(
       }
       for side, starts in zip(sides, starts_before_stop, strict=True)
   ]
+  lines = _exit_lines(sides, f"before handover step {step.name!r} stopped it")
   for side in sides:
     if side.server is None:
       raise RuntimeError(f"{side.label} has no server to hand over")
     side.server.stop_server()
-  lines = [
+  lines.extend(
       line for side, starts, pending in zip(sides, starts_before_stop, pending_before_stop, strict=True)
-      for line in _check_agent_after_stop(side, step.agent_after_stop, starts, pending)
-  ]
+      for line in _check_agent_after_stop(side, step.agent_after_stop, starts, pending))
   for side, argv in zip(sides, handover_argv, strict=True):
     side.start_server(argv)
   for side in sides:
@@ -520,7 +536,14 @@ def _run_handover_step(
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
   lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
-  result = StepResult(scenario.name, step.name, step.route, (None, None), lines, compare.describe_delta(deltas[0]), [])
+  lines.extend(_exit_lines(sides, f"during handover step {step.name!r}"))
+  result = StepResult(
+      scenario.name,
+      step.name,
+      step.route, (None, None),
+      lines,
+      compare.describe_delta(deltas[0]), [],
+      notes=_owner_notes(sides))
   return result, after
 
 
@@ -539,6 +562,10 @@ def _run_step(
         responses.append(_request(side, step, manifest))
       except scenario_file.ScenarioError as error:
         lines.append(f"request not sent to {side.label}: {error}")
+        responses.append(None)
+      except (OSError, http.client.HTTPException) as error:
+        # A failed request fails this step. The exit check after the step names the status of a server that died.
+        lines.append(f"request to {side.label} failed: {error}")
         responses.append(None)
     baseline, candidate = responses
     for side, response in zip(sides, responses, strict=True):
@@ -584,6 +611,7 @@ def _run_step(
     raise ValueError(f"unknown scenario step kind {step.kind!r}")
   after = _settle_sides(sides)
   _prepare_contexts(sides, after)
+  lines.extend(_exit_lines(sides, f"during step {step.name!r}"))
   if baseline is not None and candidate is not None:
     lines.extend(compare.response_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
@@ -613,7 +641,7 @@ def _save_responses(log_dir: pathlib.Path, number: int, sides: list[Side], resul
 
 
 def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
-  lines = []
+  lines = _exit_lines(sides, "before the shutdown step")
   notes = []
   for side in sides:
     if side.server is not None:
@@ -742,10 +770,15 @@ def _run_scenario(
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
     startup_lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
     startup_lines.extend(_recording_diff_since(sides, startup_marks, "(startup)"))
+    startup_lines.extend(_exit_lines(sides, "during server startup"))
     results.append(
         StepResult(
-            scenario.name, "server startup", "(startup)", (None, None), startup_lines,
-            compare.describe_delta(deltas[0]), []))
+            scenario.name,
+            "server startup",
+            "(startup)", (None, None),
+            startup_lines,
+            compare.describe_delta(deltas[0]), [],
+            notes=_owner_notes(sides)))
     before = after
     for number, step in enumerate(scenario.steps, start=1):
       handover_argv = [python_argv, candidate_handover_argv]

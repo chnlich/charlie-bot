@@ -254,8 +254,10 @@ function applyTranscriptUpdate(data) {
       sessionOlderBeforeCursor = Infinity;
       sessionLoadingMore = false;
       if (engine) {
-        // A reset invalidates the engine's whole projection; remount on the
-        // new messages instead of repainting under a live engine.
+        // No older page remains, so the sentinel leaves the page. A reset
+        // invalidates the engine's whole projection; remount on the new
+        // messages instead of repainting under a live engine.
+        engine.holdWorkerSentinel(null);
         Chat.TurnEngine.mountIfAvailable(
             container, data.messages || [], SESSION_ID,
             {pinned: wasPinned, readingAnchor: wasPinned ? null : reading, view: engine.view});
@@ -691,6 +693,7 @@ function renderSessionView(data) {
   // a worker's bootstrap carries worker_summary.
   Chat.ForYou.setSession(session);
   Chat.mountWorkerSummary(data.worker_summary || null);
+  const isWorker = session.profile === 'worker';
 
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;
@@ -729,13 +732,16 @@ function renderSessionView(data) {
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
   Chat.ForYou.renderToggle(turnEngine ? turnEngine.view : Chat.ForYou.EVERYTHING);
 
-  if (sessionHasMore) ensureSentinel(container, 'idle');
+  if (sessionHasMore) {
+    const sentinel = ensureSentinel(container, 'idle');
+    // A worker page's engine keeps its sentinel off the For-you list.
+    if (turnEngine && isWorker) turnEngine.holdWorkerSentinel(sentinel);
+  }
 
   // A worker node renders its Run transcript through the main chat column
   // (this file's transcript poll keeps it live) and takes no message input.
   // Set the transcript mode before the streaming paint: the draft's paint
   // renders worker tool rows when the mode is on.
-  const isWorker = session.profile === 'worker';
   setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
   setInputAreaVisible(!isWorker);
 
@@ -880,7 +886,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       if (!sessionHasMore && sentinel) {
         const heightBeforeSentinelRemoval = container.scrollHeight;
         sentinel.remove();
-        if (Chat.ForYou.isWorker()) engine.clearWorkerPaginationSentinel(sentinel);
+        if (Chat.ForYou.isWorker()) engine.holdWorkerSentinel(null);
         const removedHeight = heightBeforeSentinelRemoval - container.scrollHeight;
         if (removedHeight) {
           engine.writeScrollTop(Math.max(0, container.scrollTop - removedHeight));

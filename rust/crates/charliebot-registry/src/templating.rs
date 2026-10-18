@@ -214,6 +214,8 @@ impl std::fmt::Display for RenderError {
   }
 }
 
+impl std::error::Error for RenderError {}
+
 /// The `request` a page template sees: the method, the raw path and the raw query string, a subset of Starlette's
 /// `Request`.
 fn request_context(request: &Parts) -> serde_json::Value {

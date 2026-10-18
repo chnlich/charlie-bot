@@ -4302,6 +4302,2204 @@
           }
         }
       ]
+    },
+    {
+      "name": "tool_buffer_flush_and_plan_commit",
+      "event_index_offset": 3,
+      "events": [
+        {
+          "type": "assistant",
+          "id": "syn-tool-1",
+          "timestamp": "2026-01-02T00:00:00Z",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Checking "
+              },
+              {
+                "type": "tool_use",
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "syn-tool-2",
+          "name": "Read",
+          "input": {
+            "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+          }
+        },
+        {
+          "type": "tool_result",
+          "id": "syn-result-2",
+          "content": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+          "is_error": true
+        },
+        {
+          "type": "tool_use",
+          "id": "syn-tool-3",
+          "name": "CustomTool",
+          "input": {
+            "alpha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "beta": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        {
+          "type": "tool_result",
+          "id": "syn-result-3",
+          "content": [
+            {
+              "type": "text",
+              "text": "first"
+            },
+            {
+              "type": "image",
+              "source": "x"
+            },
+            {
+              "type": "text",
+              "text": "second"
+            }
+          ],
+          "is_error": false
+        },
+        {
+          "type": "user",
+          "id": "syn-internal-1",
+          "message": {
+            "content": [
+              {
+                "type": "tool_result",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "line one"
+                  },
+                  {
+                    "type": "text",
+                    "text": "line two"
+                  },
+                  {
+                    "type": "tool_reference"
+                  }
+                ],
+                "is_error": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-plan-1",
+          "timestamp": "2026-01-02T00:00:05Z",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "name": "ExitPlanMode",
+                "input": {
+                  "plan": "Step 1: read. Step 2: write."
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-text-2",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Buffered answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-plan-2",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "name": "ExitPlanMode",
+                "input": {
+                  "plan": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-plan-3",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "name": "ExitPlanMode",
+                "input": {}
+              }
+            ]
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "syn-tool-4",
+          "name": "Grep",
+          "input": {
+            "pattern": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+            "path": "/src/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "glob": "*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs"
+          }
+        },
+        {
+          "type": "tool_result",
+          "id": "syn-result-4",
+          "content": "matched",
+          "is_error": false
+        },
+        {
+          "type": "user",
+          "id": "syn-user-3",
+          "content": "follow up",
+          "timestamp": "2026-01-02T00:01:00Z"
+        },
+        {
+          "type": "assistant",
+          "id": "syn-text-3",
+          "timestamp": "2026-01-02T00:01:02Z",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Done "
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-text-4",
+          "timestamp": "2026-01-02T00:01:03Z",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "reading."
+              }
+            ]
+          }
+        },
+        {
+          "type": "master_done",
+          "id": "syn-done-3",
+          "timestamp": "2026-01-02T00:01:04Z"
+        },
+        {
+          "type": "assistant",
+          "id": "syn-open",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "still "
+              },
+              {
+                "type": "tool_use",
+                "name": "Glob",
+                "input": {
+                  "pattern": "**/*.py"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "frames": [
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 3,
+            "id": "syn-tool-1",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 4,
+            "id": "syn-tool-2",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 5,
+            "id": "syn-tool-2",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+                },
+                "output": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+                "is_error": true,
+                "input_truncated": true,
+                "output_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 6,
+            "id": "syn-tool-3",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+                },
+                "output": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+                "is_error": true,
+                "input_truncated": true,
+                "output_truncated": true
+              },
+              {
+                "name": "CustomTool",
+                "input": {
+                  "alpha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "beta": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 7,
+            "id": "syn-tool-3",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+                },
+                "output": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+                "is_error": true,
+                "input_truncated": true,
+                "output_truncated": true
+              },
+              {
+                "name": "CustomTool",
+                "input": {
+                  "alpha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "beta": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                "output": [
+                  {
+                    "type": "text",
+                    "text": "first"
+                  },
+                  {
+                    "type": "image",
+                    "source": "x"
+                  },
+                  {
+                    "type": "text",
+                    "text": "second"
+                  }
+                ],
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 7,
+            "id": "syn-tool-3",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+                },
+                "output": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+                "is_error": true,
+                "input_truncated": true,
+                "output_truncated": true
+              },
+              {
+                "name": "CustomTool",
+                "input": {
+                  "alpha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "beta": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                "output": "line one\nline two",
+                "is_error": true,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Checking ",
+            "event_index": 9,
+            "id": "syn-tool-3",
+            "timestamp": "2026-01-02T00:00:00Z",
+            "tools": [
+              {
+                "name": "Bash",
+                "input": {
+                  "command": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              },
+              {
+                "name": "Read",
+                "input": {
+                  "file_path": "/work/pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+                },
+                "output": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+                "is_error": true,
+                "input_truncated": true,
+                "output_truncated": true
+              },
+              {
+                "name": "CustomTool",
+                "input": {
+                  "alpha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "beta": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                "output": "line one\nline two",
+                "is_error": true,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "plan",
+            "content": "Step 1: read. Step 2: write.",
+            "event_index": 9,
+            "id": "syn-plan-1",
+            "timestamp": "2026-01-02T00:00:05Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Buffered answer",
+            "event_index": 10,
+            "id": "syn-text-2",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "plan",
+            "content": "Buffered answer",
+            "event_index": 11,
+            "id": "syn-plan-2",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 13,
+            "id": "syn-tool-4",
+            "timestamp": null,
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+                  "path": "/src/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "glob": "*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs"
+                },
+                "output": "",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 14,
+            "id": "syn-tool-4",
+            "timestamp": null,
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+                  "path": "/src/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "glob": "*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs"
+                },
+                "output": "matched",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 14,
+            "id": "syn-tool-4",
+            "timestamp": null,
+            "tools": [
+              {
+                "name": "Grep",
+                "input": {
+                  "pattern": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+                  "path": "/src/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "glob": "*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs*.rs"
+                },
+                "output": "matched",
+                "is_error": false,
+                "input_truncated": true
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "follow up",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 15,
+            "id": "syn-user-3",
+            "timestamp": "2026-01-02T00:01:00Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Done ",
+            "event_index": 16,
+            "id": "syn-text-3",
+            "timestamp": "2026-01-02T00:01:02Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Done ",
+            "event_index": 17,
+            "id": "syn-text-3",
+            "timestamp": "2026-01-02T00:01:02Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "reading.",
+            "event_index": 17,
+            "id": "syn-text-4",
+            "timestamp": "2026-01-02T00:01:03Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "reading.",
+            "event_index": 17,
+            "id": "syn-text-4",
+            "timestamp": "2026-01-02T00:01:03Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": null,
+            "timestamp": "2026-01-02T00:01:04Z",
+            "event_index": 18,
+            "id": "syn-done-3"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "still ",
+            "event_index": 19,
+            "id": "syn-open",
+            "timestamp": null,
+            "tools": [
+              {
+                "name": "Glob",
+                "input": {
+                  "pattern": "**/*.py"
+                },
+                "output": "",
+                "is_error": false
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thinking_deltas_and_draft_flush",
+      "event_index_offset": 40,
+      "events": [
+        {
+          "type": "thinking",
+          "id": "syn-think-1",
+          "content": "Plan "
+        },
+        {
+          "type": "thinking",
+          "id": "syn-think-2",
+          "content": 7,
+          "timestamp": "2026-01-03T00:00:00Z"
+        },
+        {
+          "type": "assistant",
+          "id": "syn-asst-1",
+          "timestamp": "2026-01-03T00:00:01Z",
+          "message": {
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "Snapshot wins",
+                "signature": "discard"
+              },
+              {
+                "type": "text",
+                "text": "Answer "
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-asst-2",
+          "timestamp": "2026-01-03T00:00:02Z",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "second part"
+              }
+            ]
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-asst-3",
+          "message": {
+            "content": []
+          }
+        },
+        {
+          "type": "assistant",
+          "id": "syn-asst-4"
+        },
+        {
+          "type": "assistant",
+          "id": "syn-asst-5",
+          "message": {
+            "content": null
+          }
+        },
+        {
+          "type": "thinking",
+          "id": "syn-think-3"
+        },
+        {
+          "type": "user",
+          "id": "syn-user-1",
+          "content": "interrupt",
+          "input_mode": "text",
+          "timestamp": "2026-01-03T00:00:03Z"
+        },
+        {
+          "type": "thinking",
+          "id": "syn-think-4",
+          "content": "Fresh "
+        },
+        {
+          "type": "master_done",
+          "id": "syn-done-4",
+          "thinking_seconds": 0,
+          "timestamp": "2026-01-03T00:00:04Z"
+        },
+        {
+          "type": "assistant",
+          "id": "syn-asst-6",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "tail"
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "id": "syn-internal-2",
+          "message": {
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "no tools",
+                "is_error": true
+              }
+            ]
+          }
+        }
+      ],
+      "frames": [
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 40,
+            "id": "syn-think-1",
+            "timestamp": null,
+            "thinking": "Plan "
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 41,
+            "id": "syn-think-2",
+            "timestamp": "2026-01-03T00:00:00Z",
+            "thinking": "Plan 7"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "Answer ",
+            "event_index": 42,
+            "id": "syn-asst-1",
+            "timestamp": "2026-01-03T00:00:01Z",
+            "thinking": "Snapshot wins"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "Answer ",
+            "event_index": 43,
+            "id": "syn-asst-1",
+            "timestamp": "2026-01-03T00:00:01Z",
+            "thinking": "Snapshot wins"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "second part",
+            "event_index": 43,
+            "id": "syn-asst-2",
+            "timestamp": "2026-01-03T00:00:02Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "second part",
+            "event_index": 44,
+            "id": "syn-asst-3",
+            "timestamp": "2026-01-03T00:00:02Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "second part",
+            "event_index": 45,
+            "id": "syn-asst-4",
+            "timestamp": "2026-01-03T00:00:02Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "second part",
+            "event_index": 46,
+            "id": "syn-asst-5",
+            "timestamp": "2026-01-03T00:00:02Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "second part",
+            "event_index": 47,
+            "id": "syn-think-3",
+            "timestamp": "2026-01-03T00:00:02Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "second part",
+            "event_index": 47,
+            "id": "syn-think-3",
+            "timestamp": "2026-01-03T00:00:02Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "interrupt",
+            "uploaded_files": [],
+            "input_mode": "text",
+            "event_index": 48,
+            "id": "syn-user-1",
+            "timestamp": "2026-01-03T00:00:03Z"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 49,
+            "id": "syn-think-4",
+            "timestamp": null,
+            "thinking": "Fresh "
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "event_index": 49,
+            "id": "syn-think-4",
+            "timestamp": null,
+            "thinking": "Fresh "
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 0,
+            "timestamp": "2026-01-03T00:00:04Z",
+            "event_index": 50,
+            "id": "syn-done-4"
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "tail",
+            "event_index": 51,
+            "id": "syn-asst-6",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "stream",
+          "message": {
+            "role": "assistant",
+            "content": "tail",
+            "event_index": 51,
+            "id": "syn-asst-6",
+            "timestamp": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "compaction_renderings",
+      "event_index_offset": 0,
+      "events": [
+        {
+          "type": "context_compacted",
+          "id": "syn-c1",
+          "timestamp": "2026-01-04T00:00:00Z",
+          "trigger": "manual",
+          "model": "claude-opus-5",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 239708,
+            "post_tokens": 12000
+          }
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c2",
+          "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 1014500,
+            "post_tokens": 0
+          }
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c3",
+          "trigger": "",
+          "model": "claude-sonnet-5",
+          "pre_tokens": 99999
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c4",
+          "trigger": "manual",
+          "model": "claude",
+          "compact_metadata": {}
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c5",
+          "trigger": "manual",
+          "model": "",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 0,
+            "post_tokens": 5
+          }
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c6",
+          "model": 42
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c7",
+          "trigger": "manual",
+          "model": "sonnet-x",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 15500,
+            "post_tokens": 9000
+          }
+        },
+        {
+          "type": "context_compacted",
+          "id": "syn-c8",
+          "trigger": "auto",
+          "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 4000,
+            "post_tokens": 2000
+          }
+        },
+        {
+          "type": "context_compact_failed",
+          "id": "syn-f1",
+          "model": "claude-haiku-5",
+          "error": "context too large"
+        },
+        {
+          "type": "context_compact_failed",
+          "id": "syn-f2"
+        },
+        {
+          "type": "context_compact_failed",
+          "id": "syn-f3",
+          "model": "",
+          "error": ""
+        },
+        {
+          "type": "context_compact_failed",
+          "id": "syn-f4",
+          "error": {
+            "code": 7
+          }
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (manual, by Opus) — 240k → 12.0k tokens",
+            "kind": "context_compacted",
+            "timestamp": "2026-01-04T00:00:00Z",
+            "event_index": 0,
+            "id": "syn-c1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (auto) — was 1014k tokens",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 1,
+            "id": "syn-c2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (by Sonnet) — was 100.0k tokens",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 2,
+            "id": "syn-c3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (manual, by Claude)",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 3,
+            "id": "syn-c4"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (manual)",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 4,
+            "id": "syn-c5"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (auto)",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 5,
+            "id": "syn-c6"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (manual, by Sonnet) — 15.5k → 9.0k tokens",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 6,
+            "id": "syn-c7"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context compacted (auto) — 4.0k → 2.0k tokens",
+            "kind": "context_compacted",
+            "timestamp": null,
+            "event_index": 7,
+            "id": "syn-c8"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "context_compact_failed",
+            "content": "Compaction by Haiku failed — context too large",
+            "timestamp": null,
+            "event_index": 8,
+            "id": "syn-f1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "context_compact_failed",
+            "content": "Compaction failed",
+            "timestamp": null,
+            "event_index": 9,
+            "id": "syn-f2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "context_compact_failed",
+            "content": "Compaction failed",
+            "timestamp": null,
+            "event_index": 10,
+            "id": "syn-f3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "context_compact_failed",
+            "content": "Compaction failed — {'code': 7}",
+            "timestamp": null,
+            "event_index": 11,
+            "id": "syn-f4"
+          }
+        }
+      ]
+    },
+    {
+      "name": "errors_notices_and_unknown_events",
+      "event_index_offset": 5,
+      "events": [
+        {
+          "type": "assistant_error",
+          "id": "syn-e1",
+          "content": "rate limited",
+          "timestamp": "2026-01-05T00:00:00Z"
+        },
+        {
+          "type": "assistant_error",
+          "id": "syn-e2"
+        },
+        {
+          "type": "error",
+          "id": "syn-e3",
+          "content": "",
+          "message": "fallback text"
+        },
+        {
+          "type": "error",
+          "id": "syn-e4",
+          "content": null,
+          "message": null
+        },
+        {
+          "type": "error",
+          "id": "syn-e5",
+          "content": {
+            "detail": [
+              "x"
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "syn-e6",
+          "content": "not rendered"
+        },
+        {
+          "type": "stream",
+          "id": "syn-e7",
+          "message": {
+            "content": "not rendered"
+          }
+        },
+        {
+          "type": "system",
+          "id": "syn-s1",
+          "subtype": "command_progress",
+          "content": "running tests"
+        },
+        {
+          "type": "system",
+          "id": "syn-s2",
+          "subtype": "status",
+          "compact_result": "ok"
+        },
+        {
+          "type": "system",
+          "id": "syn-s3",
+          "subtype": "command_progress"
+        },
+        {
+          "type": "mystery_event",
+          "id": "syn-m1",
+          "content": "unknown"
+        },
+        {
+          "type": "tool_result",
+          "id": "syn-r1",
+          "content": "orphan"
+        },
+        {
+          "type": "user",
+          "id": "syn-u-cc",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "not a result"
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "id": "syn-u-msg",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "user",
+          "id": "syn-u-legacy",
+          "content": "legacy footer\n\n[Attached files]\n- /work/a.png\n- /work/b.txt",
+          "timestamp": "2026-01-05T00:00:01Z"
+        },
+        {
+          "type": "user",
+          "id": "syn-u-malformed",
+          "content": "bad\n\n[Attached files]\nnot a list"
+        },
+        {
+          "type": "user",
+          "id": "syn-u-structured",
+          "content": "with files\n\n[Attached files]\n- /work/x.png",
+          "uploaded_files": [
+            {
+              "path": "/work/c.png",
+              "filename": "c.png"
+            }
+          ]
+        },
+        {
+          "type": "user",
+          "id": "syn-u-string-upload",
+          "content": "string upload",
+          "uploaded_files": [
+            "/work/s.md"
+          ]
+        },
+        {
+          "type": "user",
+          "id": "syn-u-empty-upload",
+          "content": "empty uploads",
+          "uploaded_files": []
+        },
+        {
+          "type": "master_done",
+          "id": "syn-d1",
+          "still_thinking": true,
+          "timestamp": "2026-01-05T00:00:02Z"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: rate limited",
+            "timestamp": "2026-01-05T00:00:00Z",
+            "event_index": 5,
+            "id": "syn-e1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: ",
+            "timestamp": null,
+            "event_index": 6,
+            "id": "syn-e2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: fallback text",
+            "timestamp": null,
+            "event_index": 7,
+            "id": "syn-e3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: Unknown error",
+            "timestamp": null,
+            "event_index": 8,
+            "id": "syn-e4"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Error: {'detail': ['x']}",
+            "timestamp": null,
+            "event_index": 9,
+            "id": "syn-e5"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "running tests",
+            "timestamp": null,
+            "event_index": 12,
+            "id": "syn-s1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "",
+            "timestamp": null,
+            "event_index": 14,
+            "id": "syn-s3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "legacy footer",
+            "uploaded_files": [
+              {
+                "filename": "a.png",
+                "path": "/work/a.png"
+              },
+              {
+                "filename": "b.txt",
+                "path": "/work/b.txt"
+              }
+            ],
+            "input_mode": null,
+            "event_index": 19,
+            "id": "syn-u-legacy",
+            "timestamp": "2026-01-05T00:00:01Z"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "bad\n\n[Attached files]\nnot a list",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 20,
+            "id": "syn-u-malformed",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "with files\n\n[Attached files]\n- /work/x.png",
+            "uploaded_files": [
+              {
+                "path": "/work/c.png",
+                "filename": "c.png"
+              }
+            ],
+            "input_mode": null,
+            "event_index": 21,
+            "id": "syn-u-structured",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "string upload",
+            "uploaded_files": [
+              {
+                "filename": "s.md",
+                "path": "/work/s.md"
+              }
+            ],
+            "input_mode": null,
+            "event_index": 22,
+            "id": "syn-u-string-upload",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "user",
+            "content": "empty uploads",
+            "uploaded_files": [],
+            "input_mode": null,
+            "event_index": 23,
+            "id": "syn-u-empty-upload",
+            "timestamp": null
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": null,
+            "timestamp": "2026-01-05T00:00:02Z",
+            "event_index": 24,
+            "id": "syn-d1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "task_run_and_control_events",
+      "event_index_offset": 100,
+      "events": [
+        {
+          "type": "task_delegated",
+          "id": "syn-t1",
+          "thread_id": "th-1",
+          "child_session_id": "child-1",
+          "delegate_invocation": {
+            "task_type": "review"
+          },
+          "backend": "",
+          "resolved_backend": "codex-o3",
+          "model": "",
+          "resolved_model": "o3",
+          "timestamp": "2026-02-01T00:00:00Z"
+        },
+        {
+          "type": "task_delegated",
+          "id": "syn-t2",
+          "thread_id": "th-2",
+          "created_at": "2026-02-01T00:00:01Z"
+        },
+        {
+          "type": "task_delegated",
+          "id": "syn-t3",
+          "thread_id": "th-3"
+        },
+        {
+          "type": "worker_summary",
+          "id": "syn-w1",
+          "content": "done",
+          "thread_id": "th-1",
+          "origin_session_id": "origin-1"
+        },
+        {
+          "type": "worker_summary",
+          "id": "syn-w2",
+          "content": "no origin"
+        },
+        {
+          "type": "worker_summary",
+          "id": "syn-w3",
+          "origin_session_id": null,
+          "thread_id": "th-2"
+        },
+        {
+          "type": "handler_result",
+          "id": "syn-h1",
+          "task": "lint",
+          "status": "ok",
+          "message": "clean"
+        },
+        {
+          "type": "handler_result",
+          "id": "syn-h2",
+          "task": "test",
+          "status": "failed",
+          "message": "2 failed"
+        },
+        {
+          "type": "handler_result",
+          "id": "syn-h3"
+        },
+        {
+          "type": "clone_start",
+          "id": "syn-cl1",
+          "parent_session_name": "Parent",
+          "parent_session_id": "p-1"
+        },
+        {
+          "type": "clone_start",
+          "id": "syn-cl2"
+        },
+        {
+          "type": "scheduled_trigger",
+          "id": "syn-st1",
+          "content": "nightly wake"
+        },
+        {
+          "type": "agent_message",
+          "id": "syn-am1",
+          "content": "hello",
+          "from_session": "s-9",
+          "from_session_name": "Survey"
+        },
+        {
+          "type": "backend_switched",
+          "id": "syn-bs1",
+          "from": "claude",
+          "to": "codex"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "id": "syn-bo1",
+          "backend": "codex",
+          "reason": "undeclared"
+        },
+        {
+          "type": "backend_overlay_inactive",
+          "id": "syn-bo2",
+          "backend": "claude",
+          "reason": "unreadable",
+          "overlay": "fence.md",
+          "error": "PermissionError"
+        },
+        {
+          "type": "backend_overlay_undeclared",
+          "id": "syn-bo3",
+          "backend": "legacy"
+        },
+        {
+          "type": "model_fallback_notice",
+          "id": "syn-mf1",
+          "configured_model": "claude-opus-5",
+          "served_models": [
+            "claude-sonnet-5",
+            "claude-haiku-5"
+          ]
+        },
+        {
+          "type": "model_fallback_notice",
+          "id": "syn-mf2",
+          "configured_model": null,
+          "served_models": []
+        },
+        {
+          "type": "child_report",
+          "id": "syn-cr1",
+          "summary": "built",
+          "child_session_id": "child-1",
+          "outcome": "completed",
+          "result_refs": [
+            "/r/1"
+          ]
+        },
+        {
+          "type": "child_report",
+          "id": "syn-cr2"
+        },
+        {
+          "type": "run_header",
+          "id": "syn-rh1",
+          "kind": "implement",
+          "backend_label": "Codex",
+          "backend": "codex-o3",
+          "state": "running",
+          "launched": true,
+          "launch_failed": false,
+          "task_spec_ref": "spec.md",
+          "launch_prompt_ref": "prompt.md",
+          "run_id": "run-1",
+          "error": null
+        },
+        {
+          "type": "run_header",
+          "id": "syn-rh2",
+          "kind": "",
+          "backend": "fake",
+          "state": "failed",
+          "launched": false,
+          "launch_failed": true,
+          "task_spec_ref": null,
+          "launch_prompt_ref": "p2",
+          "error": "spawn failed"
+        },
+        {
+          "type": "run_header",
+          "id": "syn-rh3",
+          "state": "withheld",
+          "withheld": "disk low",
+          "launched": false,
+          "launch_failed": false,
+          "task_spec_ref": "s",
+          "launch_prompt_ref": "p"
+        },
+        {
+          "type": "run_delivery",
+          "id": "syn-rd1",
+          "summary": "shipped",
+          "task_state": "completed",
+          "result_refs": [
+            "/r/2"
+          ],
+          "raw_log_ref": "raw.log",
+          "events_ref": "ev.json",
+          "result_ref": "res.json",
+          "repo_path": "/repo",
+          "base_branch": "main",
+          "branch_name": "feat/x",
+          "run_id": "run-2"
+        },
+        {
+          "type": "run_delivery",
+          "id": "syn-rd2",
+          "task_state": "failed"
+        },
+        {
+          "type": "task_closed",
+          "id": "syn-tc1",
+          "outcome": "completed",
+          "summary": "all good"
+        },
+        {
+          "type": "task_closed",
+          "id": "syn-tc2"
+        },
+        {
+          "type": "task_closed",
+          "id": "syn-tc3",
+          "outcome": "abandoned",
+          "summary": null
+        },
+        {
+          "type": "task_reopened",
+          "id": "syn-tr1",
+          "reason": "new input"
+        },
+        {
+          "type": "task_reopened",
+          "id": "syn-tr2"
+        },
+        {
+          "type": "task_input_acknowledged",
+          "id": "syn-ia1",
+          "input_ids": [
+            "syn-u-1",
+            "syn-u-2"
+          ],
+          "note": "covered by plan"
+        },
+        {
+          "type": "task_input_acknowledged",
+          "id": "syn-ia2",
+          "input_ids": []
+        },
+        {
+          "type": "resume_context_dropped",
+          "id": "syn-rc1",
+          "reason": "anchor_missing"
+        },
+        {
+          "type": "resume_context_dropped",
+          "id": "syn-rc2",
+          "reason": "transcript_missing"
+        },
+        {
+          "type": "resume_context_dropped",
+          "id": "syn-rc3",
+          "reason": "other"
+        },
+        {
+          "type": "master_done",
+          "id": "syn-d2",
+          "thinking_seconds": 12,
+          "timestamp": "2026-02-01T00:00:10Z"
+        }
+      ],
+      "frames": [
+        {
+          "type": "message",
+          "message": {
+            "role": "task_delegated",
+            "content": "Task delegated",
+            "thread_id": "th-1",
+            "child_session_id": "child-1",
+            "delegate_invocation": {
+              "task_type": "review"
+            },
+            "backend": "codex-o3",
+            "model": "o3",
+            "timestamp": "2026-02-01T00:00:00Z",
+            "event_index": 100,
+            "id": "syn-t1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "task_delegated",
+            "content": "Task delegated",
+            "thread_id": "th-2",
+            "child_session_id": "",
+            "delegate_invocation": null,
+            "backend": "",
+            "model": "",
+            "timestamp": "2026-02-01T00:00:01Z",
+            "event_index": 101,
+            "id": "syn-t2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "task_delegated",
+            "content": "Task delegated",
+            "thread_id": "th-3",
+            "child_session_id": "",
+            "delegate_invocation": null,
+            "backend": "",
+            "model": "",
+            "timestamp": null,
+            "event_index": 102,
+            "id": "syn-t3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "worker_summary",
+            "content": "done",
+            "thread_id": "th-1",
+            "origin_session_id": "origin-1",
+            "timestamp": null,
+            "event_index": 103,
+            "id": "syn-w1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "worker_summary",
+            "content": "no origin",
+            "thread_id": null,
+            "timestamp": null,
+            "event_index": 104,
+            "id": "syn-w2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "worker_summary",
+            "content": "",
+            "thread_id": "th-2",
+            "timestamp": null,
+            "event_index": 105,
+            "id": "syn-w3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✓ lint: clean",
+            "timestamp": null,
+            "event_index": 106,
+            "id": "syn-h1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✗ test: 2 failed",
+            "timestamp": null,
+            "event_index": 107,
+            "id": "syn-h2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "✗ : ",
+            "timestamp": null,
+            "event_index": 108,
+            "id": "syn-h3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "clone_start",
+            "content": "Parent",
+            "parent_session_id": "p-1",
+            "timestamp": null,
+            "event_index": 109,
+            "id": "syn-cl1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "clone_start",
+            "content": "Unknown session",
+            "parent_session_id": "",
+            "timestamp": null,
+            "event_index": 110,
+            "id": "syn-cl2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "scheduled_trigger",
+            "content": "nightly wake",
+            "timestamp": null,
+            "event_index": 111,
+            "id": "syn-st1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "agent_message",
+            "content": "hello",
+            "from_session": "s-9",
+            "from_session_name": "Survey",
+            "timestamp": null,
+            "event_index": 112,
+            "id": "syn-am1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend switched: claude → codex",
+            "timestamp": null,
+            "event_index": 113,
+            "id": "syn-bs1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend codex declares no prompt_overlay — running without a fence",
+            "timestamp": null,
+            "event_index": 114,
+            "id": "syn-bo1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend claude: prompt_overlay 'fence.md' could not be loaded (PermissionError) — running without a fence",
+            "timestamp": null,
+            "event_index": 115,
+            "id": "syn-bo2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Backend legacy declares no prompt_overlay — running without a fence",
+            "timestamp": null,
+            "event_index": 116,
+            "id": "syn-bo3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Served by claude-sonnet-5, claude-haiku-5 (configured claude-opus-5)",
+            "timestamp": null,
+            "event_index": 117,
+            "id": "syn-mf1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Served by  (configured )",
+            "timestamp": null,
+            "event_index": 118,
+            "id": "syn-mf2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "child_report",
+            "content": "built",
+            "child_session_id": "child-1",
+            "outcome": "completed",
+            "result_refs": [
+              "/r/1"
+            ],
+            "timestamp": null,
+            "event_index": 119,
+            "id": "syn-cr1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "child_report",
+            "content": "",
+            "child_session_id": "",
+            "outcome": "",
+            "result_refs": [],
+            "timestamp": null,
+            "event_index": 120,
+            "id": "syn-cr2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "run_header",
+            "content": "Run implement · Codex · running",
+            "run_id": "run-1",
+            "state": "running",
+            "error": "",
+            "launched": true,
+            "launch_failed": false,
+            "task_spec_ref": "spec.md",
+            "launch_prompt_ref": "prompt.md",
+            "timestamp": null,
+            "event_index": 121,
+            "id": "syn-rh1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "run_header",
+            "content": "Run run · fake · launch failed",
+            "run_id": "",
+            "state": "failed",
+            "error": "spawn failed",
+            "launched": false,
+            "launch_failed": true,
+            "task_spec_ref": null,
+            "launch_prompt_ref": "p2",
+            "timestamp": null,
+            "event_index": 122,
+            "id": "syn-rh2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "kind": "run_header",
+            "content": "Run run · withheld · disk low",
+            "run_id": "",
+            "state": "withheld",
+            "error": "",
+            "launched": false,
+            "launch_failed": false,
+            "task_spec_ref": "s",
+            "launch_prompt_ref": "p",
+            "timestamp": null,
+            "event_index": 123,
+            "id": "syn-rh3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "run_delivery",
+            "content": "shipped",
+            "task_state": "completed",
+            "completed": true,
+            "result_refs": [
+              "/r/2"
+            ],
+            "raw_log_ref": "raw.log",
+            "events_ref": "ev.json",
+            "result_ref": "res.json",
+            "repo_path": "/repo",
+            "base_branch": "main",
+            "branch_name": "feat/x",
+            "run_id": "run-2",
+            "timestamp": null,
+            "event_index": 124,
+            "id": "syn-rd1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "run_delivery",
+            "content": "",
+            "task_state": "failed",
+            "completed": false,
+            "result_refs": [],
+            "raw_log_ref": "",
+            "events_ref": "",
+            "result_ref": "",
+            "repo_path": "",
+            "base_branch": "",
+            "branch_name": "",
+            "run_id": "",
+            "timestamp": null,
+            "event_index": 125,
+            "id": "syn-rd2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task completed: all good",
+            "timestamp": null,
+            "event_index": 126,
+            "id": "syn-tc1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task completed:",
+            "timestamp": null,
+            "event_index": 127,
+            "id": "syn-tc2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task abandoned:",
+            "timestamp": null,
+            "event_index": 128,
+            "id": "syn-tc3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task reopened: new input",
+            "timestamp": null,
+            "event_index": 129,
+            "id": "syn-tr1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task reopened:",
+            "timestamp": null,
+            "event_index": 130,
+            "id": "syn-tr2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task input(s) acknowledged as handled: syn-u-1, syn-u-2 — covered by plan",
+            "timestamp": null,
+            "event_index": 131,
+            "id": "syn-ia1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Task input(s) acknowledged as handled:",
+            "timestamp": null,
+            "event_index": 132,
+            "id": "syn-ia2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed: no previous session anchor was found — started a new conversation",
+            "timestamp": null,
+            "event_index": 133,
+            "id": "syn-rc1"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed: the previous session transcript is missing — started a new conversation",
+            "timestamp": null,
+            "event_index": 134,
+            "id": "syn-rc2"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "system",
+            "content": "Context not resumed — started a new conversation",
+            "timestamp": null,
+            "event_index": 135,
+            "id": "syn-rc3"
+          }
+        },
+        {
+          "type": "message",
+          "message": {
+            "role": "separator",
+            "thinking_seconds": 12,
+            "timestamp": "2026-02-01T00:00:10Z",
+            "event_index": 136,
+            "id": "syn-d2"
+          }
+        }
+      ]
     }
   ]
 }

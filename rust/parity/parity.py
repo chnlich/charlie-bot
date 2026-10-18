@@ -49,6 +49,8 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 # root in file content, and a file's size (and every ETag, memo revision or offset derived from it) matches
 # only when the roots are equally long.
 TREE_NAMES = {"baseline": "base", "candidate": "cand"}
+# The scratch root's map from each run directory's short name to its scenario, direction and tree paths.
+RUNS_MANIFEST = "runs.json"
 # The rename --tamper applies to the candidate home: a deliberate mismatch that shows the harness failing.
 TAMPER_SESSION = "atlas"
 TAMPER_NAME = "Atlas planning (tampered)"
@@ -874,6 +876,7 @@ def main() -> int:
     print("\n".join(lines), flush=True)
 
   results: list[StepResult] = []
+  runs: list[dict] = []
   try:
     for index, scenario in enumerate(scenarios):
       run_plans: list[tuple[str | None, list[str], list[str]]]
@@ -888,12 +891,15 @@ def main() -> int:
       else:
         run_plans = [(None, candidate_argv, candidate_argv)]
       for run_number, (direction, candidate_first, candidate_handover) in enumerate(run_plans, start=1):
-        heading = f"== [{scenario.stage}] {scenario.name} ({scenario.path.name})"
+        # The short name keeps every tree's socket path under 107 bytes; RUNS_MANIFEST maps it back to the scenario.
+        run_name = f"{index:02d}-{run_number:02d}"
+        heading = f"== [{scenario.stage}] {scenario.name} ({scenario.path.name}) run {run_name}"
         if direction is not None:
           heading += f" direction={direction}"
         emit([heading])
-        suffix = f"-{direction}" if direction is not None else ""
-        scenario_dir = scratch / f"{index:02d}-{scenario.name}-{run_number:02d}{suffix}"
+        scenario_dir = scratch / run_name
+        trees = {label: str(scenario_dir / name) for label, name in TREE_NAMES.items()}
+        runs.append({"run": run_name, "scenario": scenario.name, "direction": direction, "trees": trees})
         # The ports stay reserved until both servers of this run have stopped.
         with servers.pick_ports(2) as ports:
           scenario_results = _run_scenario(
@@ -908,7 +914,8 @@ def main() -> int:
     failed = [result for result in results if not result.passed]
     clean = bool(results) and not failed and not guard_report.violations
     if args.keep or not clean:
-      print(f"\ntrees and logs kept in {scratch}")
+      (scratch / RUNS_MANIFEST).write_text(json.dumps(runs, indent=2) + "\n", encoding="utf-8")
+      print(f"\ntrees and logs kept in {scratch}; {RUNS_MANIFEST} maps each run to its scenario and trees")
     else:
       shutil.rmtree(scratch)
 

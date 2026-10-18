@@ -35,6 +35,41 @@ shutdown and re-attachment into server lifespan.
 | `autonamer::parse_name_and_group` and `fuzzy_match_group` | `src/runtime/autonamer.py:108`, `:141` |
 | `spawner_backends::unknown_backend_pin_refusal` | `src/runtime/spawner_backends.py:32` |
 
+## Input dispatch and master triggers
+
+`dispatch::Dispatcher` owns durable task inputs, run claims and child reports over the shared store. Its executor and
+post-finish completion traits are supplied by the execution and completion stages. The dispatcher also implements
+`charliebot_registry::sequence::SequenceDispatch` for sequence controllers.
+
+| Rust item | Python source |
+| --- | --- |
+| `dispatch` module | `src/runtime/session_dispatch.py:1` |
+| `dispatch::DispatchExecutor` and `DispatchExecutor::launch` | `src/runtime/session_dispatch.py:157-161`, `:481-515` |
+| `dispatch::RunFinishedCompletion` and `RunFinishedCompletion::after_run_finished` | `src/runtime/session_dispatch.py:52-60`; completion behavior at `src/runtime/task_completion.py:1023-1055` |
+| `dispatch::Dispatcher`, `Dispatcher::new` | `src/runtime/session_dispatch.py:152-161` |
+| `Dispatcher::set_executor` | `src/runtime/task_execution.py:2625-2632` (executor registration) |
+| `Dispatcher::admit_input` | `src/runtime/session_dispatch.py:167-278` |
+| `Dispatcher::pending_inputs`, `pending_input_blockers` | `src/runtime/session_dispatch.py:343-387` |
+| `Dispatcher::claim_input_batch_locked` | `src/runtime/session_dispatch.py:393-424` |
+| `Dispatcher::dispatch_pending` | `src/runtime/session_dispatch.py:430-515` |
+| `Dispatcher::wake_parent` | `src/runtime/session_dispatch.py:517-528` |
+| `Dispatcher::finish_run` | `src/runtime/session_dispatch.py:530-593` |
+| `Dispatcher::report_source_event` | `src/runtime/session_dispatch.py:599-613` |
+| `Dispatcher::child_report_provenance`, `child_report_provenances` | `src/runtime/session_dispatch.py:309-341` |
+| `Dispatcher::deliver_child_report` | `src/runtime/session_dispatch.py:615-673` |
+| `Dispatcher::deliver_child_report_locked` | `src/runtime/session_dispatch.py:675-713` |
+| `Dispatcher::recover_pending_reports`, `recover_pending_reports_locked` | `src/runtime/session_dispatch.py:751-800` |
+| `Dispatcher::undelivered_report_blockers` | `src/runtime/session_dispatch.py:802-809` |
+| `dispatch::note_run_liveness` | `src/runtime/task_sessions.py:602-622`, `src/runtime/runs.py:556-570` |
+| `dispatch::unprocessed_input_blocker` | `src/runtime/session_dispatch.py:140-144` |
+| `dispatch::inputs_not_pending_conflict` | `src/runtime/session_dispatch.py:147-149` |
+| `dispatch::child_report_text` | `src/runtime/session_dispatch.py:119-131` |
+| `dispatch::dispatcher(&FeatureContext)` | `src/runtime/task_sessions.py:357`, `src/runtime/task_execution.py:2625-2638` |
+| `master_trigger` module | `src/runtime/master_trigger.py:1` |
+| `master_trigger::TriggerMasterRequest` and its fields | `src/runtime/master_trigger.py:41-53` |
+| `TriggerMasterRequest::new` | `src/runtime/master_trigger.py:41-53` (default arguments) |
+| `master_trigger::trigger_master` | `src/runtime/master_trigger.py:41-87` |
+
 ## Prompt assembly
 
 `prompts` assembles the managed instructions of every agent run. For the same sources it produces the same blocks,

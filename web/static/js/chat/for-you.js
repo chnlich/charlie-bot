@@ -2,15 +2,16 @@
   const Chat = globalThis.Chat;
 
 // ---------------------------------------------------------------------------
-// The For-you view: the session page's reading layer for a web session.
+// The For-you view: the session page's reading layer for web and worker sessions.
 //
 // For you shows the user's messages, the agent's web replies (web_reply), the
 // web reply notices (web_reply_notice) and error rows, in order, and nothing
 // else. When none of them is in the store, one row offers Everything. Everything
 // shows the whole record, as the page always has. A web session (a manager
-// session that is not a Slack or Discord thread), root or child, opens in For
-// you; a thread session and a worker session open in Everything. A manual switch
-// holds for that session until the page reloads.
+// session that is not a Slack or Discord thread), root or child, and a worker
+// session open in For you; a thread session opens in Everything. A worker's For
+// you holds its one summary card (chat/worker-summary.js) — nothing else. A
+// manual switch holds for that session until the page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
 // (what shows, the web-session test and the default view), the empty-state row
@@ -25,6 +26,34 @@ const ERROR_PREFIX = 'Error: ';
 // The manual view choice of each session on this page: a reload empties it, as
 // the sidebar's expanded nodes reset.
 const manualViews = new Map();
+// The profile of the session this page shows, set by every open path
+// (session-view.js renderSessionView). The worker's For you holds only its
+// summary card, so the row filter and the empty row need to know it.
+let currentProfile = null;
+let summaryCardRenderer = null;
+
+function setSession(session) {
+  currentProfile = session ? (session.profile || null) : null;
+}
+
+// A worker session's For you holds its one summary card and nothing else —
+// no message rows, no empty-state row.
+function isWorker() {
+  return currentProfile === 'worker';
+}
+
+// A later chat module registers the worker card renderer. The projection calls
+// this only for worker sessions, after all page scripts have loaded.
+function registerSummaryCardRenderer(renderer) {
+  if (summaryCardRenderer) throw new Error('Worker summary card renderer is already registered');
+  if (typeof renderer !== 'function') throw new Error('Worker summary card renderer must be a function');
+  summaryCardRenderer = renderer;
+}
+
+function summaryCard() {
+  if (!summaryCardRenderer) throw new Error('Worker summary card renderer is not registered');
+  return summaryCardRenderer();
+}
 
 function isErrorMessage(msg) {
   return msg.role === 'system' && String(msg.content || '').startsWith(ERROR_PREFIX);
@@ -36,6 +65,7 @@ function showsInForYou(msg) {
 
 // The store's entries that For you shows, in order.
 function items(entries) {
+  if (isWorker()) return [];
   return entries.filter((entry) => showsInForYou(entry.msg));
 }
 
@@ -55,9 +85,10 @@ function isWebSession(session) {
   return session.profile === 'manager' && session.slack_origin == null && session.discord_origin == null;
 }
 
-// A web session, root or child, opens in For you; a thread session and a worker
-// session open in Everything.
+// A web session, root or child, or a worker session opens in For you; a thread
+// session opens in Everything.
 function defaultView(session) {
+  if (session.profile === 'worker') return FOR_YOU;
   return isWebSession(session) ? FOR_YOU : EVERYTHING;
 }
 
@@ -86,7 +117,11 @@ function setChatView(view) {
 const ForYou = {
   FOR_YOU,
   EVERYTHING,
+  setSession,
   items,
+  isWorker,
+  registerSummaryCardRenderer,
+  summaryCard,
   buildEmptyLine,
   isWebSession,
   defaultView,

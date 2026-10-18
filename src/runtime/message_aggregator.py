@@ -138,6 +138,129 @@ def extract_tool_result_text(block: dict) -> str:
   return str(raw)
 
 
+# ---------------------------------------------------------------------------
+# Run-level readers over one Run's already-parsed events.
+#
+# The worker-transcript extension reads these in src/runtime/worker_transcript.py
+# (a Run's summary rows, its cause); the conditions are the aggregator's own
+# ingestion conditions restated over the same event dicts, so the counts and
+# rows a page renders match what these helpers report.
+# ---------------------------------------------------------------------------
+
+
+def _run_text_blocks(msg: dict | None) -> list[dict]:
+  blocks = (msg or {}).get("content") or []
+  return blocks if isinstance(blocks, list) else []
+
+
+def _assistant_tool_uses(ev: dict) -> list[dict]:
+  return [
+      block for block in _run_text_blocks(ev.get("message"))
+      if isinstance(block, dict) and block.get("type") == "tool_use"
+  ]
+
+
+def run_tool_call_count(events: list[dict]) -> int:
+  """How many tool rows the aggregator buffers for these Run events.
+
+  The count walks the two places ``_feed`` opens a tool slot from: a rendered
+  assistant event's ``tool_use`` blocks (each except ExitPlanMode, which never
+  becomes a tool row) and each standalone ``tool_use`` event. everything else
+  (tool_result user events attach output, thinking/text carried content) opens
+  no row, so the count is exactly the tool-call rows a page can show for the
+  Run.
+  """
+  count = 0
+  for ev in events:
+    event_type = ev.get("type")
+    if event_type == ET.ASSISTANT:
+      count += sum(1 for block in _assistant_tool_uses(ev) if block.get("name") != "ExitPlanMode")
+    elif event_type == ET.TOOL_USE:
+      count += 1
+  return count
+
+
+def run_last_tool(events: list[dict]) -> dict | None:
+  """The Run's newest tool row: {name, input, timestamp}, or None.
+
+  Same sources as :func:`run_tool_call_count` (assistant tool_use blocks,
+  standalone tool_use events), walked newest first; the timestamp is the
+  event's own.
+  """
+  for ev in reversed(events):
+    if ev.get("type") == ET.ASSISTANT:
+      blocks = [block for block in _assistant_tool_uses(ev) if block.get("name") != "ExitPlanMode"]
+      if blocks:
+        tool = tool_preview({"name": blocks[-1].get("name", ""), "input": blocks[-1].get("input")})
+        return {"name": tool.get("name", ""), "input": tool.get("input"), "timestamp": ev.get("timestamp")}
+    elif ev.get("type") == ET.TOOL_USE:
+      tool = tool_preview({"name": ev.get("name", ""), "input": ev.get("input")})
+      return {"name": tool.get("name", ""), "input": tool.get("input"), "timestamp": ev.get("timestamp")}
+  return None
+
+
+def _assistant_event_text(ev: dict) -> str:
+  msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+  return extract_text_from_message(msg).strip()
+
+
+def run_last_assistant_text(events: list[dict]) -> dict | None:
+  """The Run's newest non-empty assistant text, with its event timestamp."""
+  for ev in reversed(events):
+    if ev.get("type") == ET.ASSISTANT:
+      text = _assistant_event_text(ev)
+      if text:
+        return {"text": text, "timestamp": ev.get("timestamp")}
+  return None
+
+
+def run_last_text(events: list[dict]) -> dict | None:
+  """Newest non-empty result-or-assistant text, whichever kind is newer.
+
+  Matches review._worker_summary_from_events_log over these already-parsed
+  events: {text, timestamp}, or None.
+  """
+  for ev in reversed(events):
+    event_type = ev.get("type")
+    if event_type == ET.RESULT:
+      val = ev.get("result")
+      if isinstance(val, str):
+        stripped = val.strip()
+        if stripped:
+          return {"text": stripped, "timestamp": ev.get("timestamp")}
+      continue
+    if event_type == ET.ASSISTANT:
+      text = _assistant_event_text(ev)
+      if text:
+        return {"text": text, "timestamp": ev.get("timestamp")}
+  return None
+
+
+def run_cause(events: list[dict]) -> tuple[str, str, int, str] | None:
+  """The one cause rule of a Run's dead: text, its first line, event position.
+
+  The newest error event that carries a non-empty ``message`` field decides;
+  only when no error event carries text does the newest error event decide
+  overall. The full text feeds the Run header's own fold, the first line the
+  summary's cause row, the index tells worker_transcript which event the
+  header already carries (so the row shows it once).
+  """
+  fallback = None
+  for index in range(len(events) - 1, -1, -1):
+    ev = events[index]
+    if ev.get("type") != ET.ERROR:
+      continue
+    message = ev.get("message")
+    if isinstance(message, str) and message.strip():
+      text = message.strip()
+      return text, text.split("\n")[0], index, str(ev.get("timestamp") or "")
+    content = ev.get("content")
+    if fallback is None and isinstance(content, str) and content.strip():
+      text = content.strip()
+      fallback = (text, text.split("\n")[0], index, str(ev.get("timestamp") or ""))
+  return fallback
+
+
 def _handler_result_msg(ev: dict) -> dict:
   icon = '✓' if ev.get('status') == ET.HANDLER_STATUS_OK else '✗'
   return {
@@ -293,7 +416,9 @@ def _run_header_msg(ev: dict) -> dict:
   task spec and launch prompt link row. The header events are synthesized in
   process by worker_transcript, so the four keys read directly. A withheld
   Run's content word reads "withheld · <reason>" — the reason rides its own
-  field.
+  field. A terminated Run's header carries ``tool_calls`` (the run_tool_calls
+  count); the header line ends with it — a running Run carries None, its
+  count lives in the summary instead.
   """
   parts = [f"Run {ev.get('kind') or 'run'}"]
   backend = ev.get("backend_label") or ev.get("backend") or ""
@@ -306,6 +431,12 @@ def _run_header_msg(ev: dict) -> dict:
     state_word = "launch failed" if ev["launch_failed"] else state
   if state_word:
     parts.append(state_word)
+  # A terminated Run's line ends with its tool-call count; a running or queued
+  # Run carries None (its count lives in the summary while it streams).
+  tool_calls = ev.get("tool_calls")
+  if tool_calls is not None:
+    count = int(tool_calls)
+    parts.append(f"{count} tool call" if count == 1 else f"{count} tool calls")
   return {
       "role": "system",
       "kind": ET.RUN_HEADER,
@@ -313,10 +444,41 @@ def _run_header_msg(ev: dict) -> dict:
       "run_id": ev.get("run_id") or "",
       "state": state,
       "error": ev.get("error") or "",
+      "tool_calls": ev.get("tool_calls"),
       "launched": ev["launched"],
       "launch_failed": ev["launch_failed"],
       "task_spec_ref": ev["task_spec_ref"],
       "launch_prompt_ref": ev["launch_prompt_ref"],
+  }
+
+
+def _run_end_msg(ev: dict) -> dict:
+  """The transcribed run_end: a separator closing one Run's turn.
+
+  Like a MASTER_DONE separator, so the existing turn folds wrap each
+  terminated Run's segment; the difference reads in the content the frontend
+  paints for it ("run ended", the run duration) and in the buttons it keeps
+  off. ``thinking_seconds`` carries the Run's duration, so the deleted turn
+  row shows it the same way it shows a chat round's thinking time.
+  """
+  return {"role": "separator", "kind": ET.RUN_END, ET.THINKING_SECONDS: ev.get("duration_seconds")}
+
+
+def _run_error_msg(ev: dict) -> dict:
+  """A Run event's error line, restated for the worker transcript.
+
+  Same content rule as the plain error handler, but the kind marks the row:
+  the frontend folds it past its first line, so a dead process's full stderr
+  shows as one line with a "N more lines" button instead of an opened wall.
+  Manager sessions' error rows never hit this kind (only worker_transcript's
+  projection rewrites the type).
+  """
+  text = str(ev.get('content') or ev.get('message') or 'Unknown error')
+  return {
+      "role": "system",
+      "kind": ET.RUN_ERROR,
+      "content": f"Error: {text}",
+      "line_count": text.count("\n") + 1,
   }
 
 
@@ -444,6 +606,10 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
     # summary. They ride the projected event list only — never an events file.
     ET.RUN_HEADER:
         _run_header_msg,
+    ET.RUN_END:
+        _run_end_msg,
+    ET.RUN_ERROR:
+        _run_error_msg,
     ET.RUN_DELIVERY:
         _run_delivery_msg,
     ET.TASK_CLOSED:

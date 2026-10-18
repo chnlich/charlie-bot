@@ -192,6 +192,9 @@ function messageIdentityAttrs(msg) {
   const id = messageRenderId(msg);
   let attrs = id ? ' data-message-id="' + escapeHtmlAttr(id) + '"' : '';
   if (msg && msg.role) attrs += ' data-message-role="' + escapeHtmlAttr(msg.role) + '"';
+  // The worker-only run_header tag lets the turn fold label that Run's row;
+  // ordinary manager messages keep their existing rendered attributes.
+  if (msg && msg.kind === 'run_header') attrs += ' data-message-kind="run_header"';
   // The turn fold row reads its time field from here — a message without a
   // timestamp emits no attribute and the row's time field stays empty.
   if (msg && msg.timestamp) attrs += ' data-message-ts="' + escapeHtmlAttr(msg.timestamp) + '"';

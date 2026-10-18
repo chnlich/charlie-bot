@@ -56,7 +56,12 @@ function buildStreamHarness(markedSource, options = {}) {
     restoreBottomPin() {},
     // paintStreamDraft consults the turn engine's pin intent; the harness runs
     // usage.js without the chat bundle, so the lookup sees no engine.
-    Chat: {activeTurnEngineFor: () => null},
+    Chat: {
+      activeTurnEngineFor: () => null,
+      // usage.js wires its own registration entry; a no-chat-bundle harness
+      // records it on this shallow Chat like namespace.js does for the page.
+      wire(globals, chatOnly) { Object.assign(this, globals, chatOnly || {}); },
+    },
     // Length-proportional escape stub: the real thinkingToggleHtml's cost shape
     // (regex passes over the full thinking text) without a DOM.
     thinkingToggleHtml: (id, thinking) =>

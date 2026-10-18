@@ -120,6 +120,7 @@
   function rowSpecOf(turn) {
     return {
       headRole: turn.head.msg.role,
+      headKind: turn.head.msg.kind || null,
       headText: String(turn.head.msg.content || ''),
       headTs: turn.head.msg.timestamp || null,
       conclusionText: turn.conclusion ? String(turn.conclusion.msg.content || '') : null,
@@ -163,6 +164,7 @@
       // streaming output off the list.
       this.forYouEmpty = null;
       this.forYouHolder = null;
+      this.workerPaginationSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
       // the front, a live message at the back. attach derives the segments from
       // it, so every projection reads the same order.
@@ -995,6 +997,10 @@
     // place carry over, and every projection node is built again.
     attach(options = {}) {
       const streamEl = document.getElementById('streaming-msg');
+      if (forYouRules.isWorker()) {
+        const sentinel = document.getElementById('load-more-sentinel');
+        if (sentinel) this.workerPaginationSentinel = sentinel;
+      }
       while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
       this.domBySeg.clear();
       this.window = null;
@@ -1141,9 +1147,14 @@
       // The pagination sentinel is a page fixture the attach wipe drops; a
       // same-session switch keeps it, and each projection places it again
       // (the For-you list leads with it, Everything prepends it).
-      const sentinel = document.getElementById('load-more-sentinel');
+      const sentinel = document.getElementById('load-more-sentinel')
+        || (forYouRules.isWorker() ? this.workerPaginationSentinel : null);
       this.attach(view === VIEW_FOR_YOU ? {pinned: true} : (this.everythingPlace || {}));
-      if (sentinel) this.container.prepend(sentinel);
+      if (sentinel && !(view === VIEW_FOR_YOU && forYouRules.isWorker())) this.container.prepend(sentinel);
+    }
+
+    clearWorkerPaginationSentinel(sentinel) {
+      if (this.workerPaginationSentinel === sentinel) this.workerPaginationSentinel = null;
     }
 
     // reproject for the For-you view. A scroll only records the reader's
@@ -1171,13 +1182,17 @@
 
     // The list's children, in order: the pagination sentinel, the shown rows or
     // the empty-state row, and the stream holder (hidden: the streaming output
-    // sits in it, off the list).
+    // sits in it, off the list). A worker session's For you holds its one
+    // summary card instead of the empty-state row — item rows never show there.
     syncForYouChildren() {
       const children = [];
-      const sentinel = document.getElementById('load-more-sentinel');
+      const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
       if (sentinel) children.push(sentinel);
       const shown = forYouRules.items(this.displayEntries());
-      if (!shown.length) children.push(this.forYouEmptyNode());
+      if (!shown.length) {
+        if (forYouRules.isWorker()) children.push(forYouRules.summaryCard());
+        else children.push(this.forYouEmptyNode());
+      }
       for (const entry of shown) children.push(this.forYouEntryNode(entry));
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);

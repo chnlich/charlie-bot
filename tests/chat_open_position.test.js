@@ -73,10 +73,11 @@ function openRig({messages, session = {}, thinkingSince = null, pendingDraft = n
   context.fetch = async () => ({ok: false, status: 500, json: async () => ({})});
   createChatSidebarContext(context);
   context.Chat.buildTurnEngineMessageNode = heightNodeFactory;
-  context.renderSessionView({
-    session: Object.assign(
-        {id: 'session-a', name: 'open position', backend: 'claude-opus-4.6', round_ratings: {}},
-        session),
+  const payloadSession = Object.assign(
+      {id: 'session-a', name: 'open position', backend: 'claude-opus-4.6', round_ratings: {}},
+      session);
+  const payload = {
+    session: payloadSession,
     messages,
     pending_draft: pendingDraft,
     event_count: 40,
@@ -85,7 +86,11 @@ function openRig({messages, session = {}, thinkingSince = null, pendingDraft = n
     active_backend_type: '',
     switchable_backends: [],
     has_more: false,
-  });
+  };
+  if (payloadSession.profile === 'worker') {
+    payload.worker_summary = {task_state: 'open', runs: [], closing: {}};
+  }
+  context.renderSessionView(payload);
   const engine = context.Chat.activeTurnEngineFor(root);
   assert.ok(engine && engine.alive, 'the turn engine mounted for the open');
   return {context, root, engine, timers};

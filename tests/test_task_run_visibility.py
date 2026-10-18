@@ -21,7 +21,14 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import task_sessions, thinking_state, worker_transcript
+from src.runtime import (
+    control_events,
+    message_aggregator,
+    task_completion,
+    task_sessions,
+    thinking_state,
+    worker_transcript,
+)
 from tests import test_task_execution
 
 
@@ -157,7 +164,9 @@ async def test_failed_run_header_reads_failed_with_its_error(
   messages = entry.projection.committed
   header = messages[0]
   assert header["state"] == "failed"  # the state every existing reader keys off
-  assert header["content"].endswith("launch failed")
+  # A terminated Run's header line ends with its tool-call count (here zero:
+  # the launch refusal wrote no tool rows).
+  assert header["content"].endswith("launch failed · 0 tool calls")
   assert header["launched"] is False and header["launch_failed"] is True
   assert header["error"] == error_text
   # The error text appears exactly once — the header's error field; the chosen
@@ -204,7 +213,8 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
   messages = entry.projection.committed
   header = messages[0]
   assert header["state"] == "failed"
-  assert header["content"].endswith("failed") and not header["content"].endswith("launch failed")
+  assert header["content"].endswith(
+      "failed · 0 tool calls") and not header["content"].endswith("launch failed · 0 tool calls")
   assert header["launched"] is True and header["launch_failed"] is False
   assert header["error"] == error_text
   assert [m for m in messages if error_text in str(m.get("content") or "")] == []
@@ -307,3 +317,347 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
     # The error text appears exactly once: the header's error field.
     assert [m for m in failed_body["messages"] if error_text in str(m.get("content") or "")] == []
     assert [m for m in failed_body["messages"] if m.get("error") == error_text] == [failed_header]
+
+
+# ---------------------------------------------------------------------------
+# The summary card's one object (plan 4.2)
+# ---------------------------------------------------------------------------
+
+
+def _assistant_text_event(text: str) -> dict:
+  return {
+      "type": ET.ASSISTANT,
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": text
+          }]
+      },
+      "timestamp": models.utc_now_iso(),
+  }
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_a_delivered_task_with_delivery_links_and_closing_words(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A delivered worker's card object: task_state/closed_at/landed, the
+  delivered run's refs, one row per run with its tool-call count, and each
+  role's newest run's own last text."""
+  cfg, session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=60)
+  ended = started + datetime.timedelta(seconds=10, microseconds=900_000)
+  review_started = ended + datetime.timedelta(seconds=1)
+  review_ended = review_started + datetime.timedelta(seconds=2)
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="run-1", session_id=worker.id, kind="work", backend="fake", model="fake-model", started_at=started))
+  await tree.runs.record_launch(worker.id, "run-1", pid=424452, pid_start="1-424452")
+  _write_run_events(
+      tree, worker.id, "run-1", [
+          {
+              "type": ET.TOOL_USE,
+              "name": "Bash",
+              "input": {
+                  "command": "uv run pytest"
+              },
+              "timestamp": models.utc_now_iso()
+          },
+          _assistant_text_event("All checks pass."),
+      ])
+  await tree.runs.record_finish(worker.id, "run-1", "success", ended_at=ended)
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="run-2",
+          session_id=worker.id,
+          kind="review",
+          backend="fake",
+          model="fake-model",
+          review_of_run_id="run-1",
+          started_at=review_started))
+  await tree.runs.record_launch(worker.id, "run-2", pid=424453, pid_start="1-424453")
+  _write_run_events(
+      tree, worker.id, "run-2", [
+          {
+              "type": ET.TOOL_USE,
+              "name": "Read",
+              "input": {
+                  "file_path": "/tmp/diff"
+              },
+              "timestamp": models.utc_now_iso()
+          },
+          _assistant_text_event("Review approved."),
+      ])
+  await tree.runs.record_finish(worker.id, "run-2", "success", ended_at=review_ended)
+
+  meta = await tree.load_meta(worker.id)
+  assert meta is not None
+  async with tree.control_lock:
+    await tree.completion._append_closed(
+        worker.id,
+        meta,
+        request_id="complete-run-1",
+        outcome="completed",
+        summary="Delivered result",
+        result_refs=["run:run-1", "review:run-2", f"{task_completion.LANDING_REF_PREFIX}origin/main@abc123"],
+        run_ids=["run-1", "run-2"],
+        actor=control_events.ACTOR_SYSTEM)
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  summary = entry.summary
+  assert summary["task_state"] == "completed"
+  assert summary["closed_at"]
+  assert summary["landed"] == "origin/main@abc123"
+  assert summary["delivery"]["run_id"] == "run-2"
+  assert summary["active"] is None
+  assert summary["cause"] is None
+  assert summary["stop"] is None
+  row = summary["runs"][0]
+  assert row["run_id"] == "run-1" and row["kind"] == "work"
+  assert row["state"] == "success"  # the fact's own outcome word, per run
+  assert row["started_at"] and row["ended_at"] and row["ended_at"] > row["started_at"]
+  assert [item["tool_calls"] for item in summary["runs"]] == [1, 1]
+  assert summary["closing"]["work"] == {"run_id": "run-1", "text": "All checks pass."}
+  assert summary["closing"]["review"] == {"run_id": "run-2", "text": "Review approved."}
+  assert summary["links"]["task_spec_ref"] == ""
+  assert summary["links"]["launch_prompt_ref"] == ""
+  assert "raw_log_ref" in summary["links"]
+  assert "events_ref" in summary["links"]
+  # The inserts ride the projection in order: the run header, its transcript
+  # events, its run_end separator, then the delivery close.
+  messages = entry.projection.committed
+  headers = [m for m in messages if m.get("kind") == ET.RUN_HEADER]
+  ends = [m for m in messages if m.get("kind") == ET.RUN_END]
+  deliveries = [m for m in messages if m.get("role") == ET.RUN_DELIVERY]
+  assert [len(headers), len(ends), len(deliveries)] == [2, 2, 1]
+  assert ends[0]["role"] == "separator" and ends[0]["thinking_seconds"] is not None
+  run_end_events = [event for event in entry.events if event.get("type") == ET.RUN_END]
+  run_end_event = run_end_events[0]
+  assert run_end_event["timestamp"] == row["ended_at"]
+  assert run_end_event["duration_seconds"] == 10
+  assert run_end_events[1]["duration_seconds"] == 2
+  assert run_end_event["duration_seconds"] == ends[0]["thinking_seconds"]
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+    response = client.get(f"/api/sessions/{worker.id}/bootstrap")
+    assert response.status_code == 200, response.text
+    assert response.json()["worker_summary"] == summary
+
+
+@pytest.mark.asyncio
+async def test_summary_follows_a_running_run_and_its_streaming_appends(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A live run: the card's active block shows its counts and the newest text
+  and tool with their own timestamps; a streaming append rebuilds the memo
+  (the summary follows) but does not move the client-facing revision."""
+  import src.runtime.runs as runs_mod
+
+  _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="run-live",
+          session_id=worker.id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          started_at=datetime.datetime.now(datetime.UTC)))
+  await tree.runs.record_launch(worker.id, "run-live", pid=424461, pid_start="1-424461")
+  monkeypatch.setattr(runs_mod, "is_run_alive", lambda *a, **k: True)
+
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  summary = entry.summary
+  assert summary["task_state"] == "open" and summary["delivery"] is None
+  assert summary["active"]["run_id"] == "run-live"
+  assert summary["active"]["last_text"] is None and summary["active"]["last_tool"] is None
+  assert summary["closing"]["work"] == {"run_id": "run-live", "text": None}
+  # A live run reads no tool-call count in its header row.
+  assert summary["runs"][0]["tool_calls"] == 0
+  # ... and its projection carries no run_end separator while it runs.
+  assert [m for m in entry.projection.committed if m.get("kind") == ET.RUN_END] == []
+
+  revision = entry.revision
+  second = worker_transcript.load_worker_transcript(tree, worker.id)
+  assert second.revision == revision  # an unchanged read returns the memo
+
+  _write_run_events(
+      tree, worker.id, "run-live", [
+          {
+              "type": ET.TOOL_USE,
+              "name": "Read",
+              "input": {
+                  "file_path": "/tmp/notes.md"
+              },
+              "timestamp": models.utc_now_iso()
+          },
+          _assistant_text_event("Working through it."),
+          {
+              "type": ET.RESULT,
+              "result": "A later result event",
+              "timestamp": models.utc_now_iso()
+          },
+      ])
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  summary = entry.summary
+  assert summary["active"]["tool_calls"] == 1
+  assert summary["active"]["last_tool"]["name"] == "Read"
+  assert summary["active"]["last_text"] == {
+      "timestamp": summary["active"]["last_text"]["timestamp"],
+      "text": "Working through it."
+  }
+  assert summary["closing"]["work"]["text"] == "A later result event"
+  assert summary["active"]["last_tool"]["timestamp"]
+  assert entry.revision == revision  # a streaming append never resets the page
+  assert summary["runs"][0]["tool_calls"] == 1
+
+  await tree.runs.record_finish(worker.id, "run-live", "success")
+  finished = worker_transcript.load_worker_transcript(tree, worker.id)
+  assert finished.revision != revision  # a Run state change requires a full render
+  finished_revision = finished.revision
+  _write_run_events(tree, worker.id, "run-live", [_assistant_text_event("Post-finish event update.")])
+  updated = worker_transcript.load_worker_transcript(tree, worker.id)
+  assert updated.revision != finished_revision  # terminal Run log changes are part of the revision
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_a_failed_run_cause_and_a_stop_request(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A stopped, failed run: the cause sentence rides the newest error event
+  that carries a message (the newline-folded first line), the newest stop
+  request fact names its run, request id and time — and the terminated run
+  closes with its run_end separator."""
+  _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="run-dead",
+          session_id=worker.id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          started_at=datetime.datetime.now(datetime.UTC)))
+  await tree.runs.record_launch(worker.id, "run-dead", pid=424462, pid_start="1-424462")
+  await tree.runs.request_stop(worker.id, "run-dead", request_id="chat-cancel:sess-1")
+  _write_run_events(
+      tree, worker.id, "run-dead", [
+          {
+              "type": ET.ERROR,
+              "content": "peer closed connection\nwhile streaming",
+              "message": "peer closed connection\nwhile streaming",
+              "timestamp": models.utc_now_iso(),
+          },
+          {
+              "type": ET.ERROR,
+              "content": "newer stderr noise",
+              "timestamp": models.utc_now_iso(),
+          },
+      ])
+  ended = datetime.datetime.now(datetime.UTC)
+  await tree.runs.record_finish(worker.id, "run-dead", "failed", ended_at=ended)
+
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  summary = entry.summary
+  assert summary["task_state"] == "open"
+  assert summary["cause"]["run_id"] == "run-dead"
+  assert summary["cause"]["text"] == "peer closed connection"
+  assert summary["cause"]["timestamp"]
+  assert summary["stop"] == {
+      "run_id": "run-dead",
+      "request_id": "chat-cancel:sess-1",
+      "timestamp": summary["stop"]["timestamp"],
+  }
+  messages = entry.projection.committed
+  headers = [m for m in messages if m.get("kind") == ET.RUN_HEADER]
+  ends = [m for m in messages if m.get("kind") == ET.RUN_END]
+  assert [len(headers), len(ends)] == [1, 1]
+  assert headers[0]["error"] == "peer closed connection\nwhile streaming"
+  # The run_end separator closes the run at its own terminal time with its
+  # duration (the two clocks both write around the finish; they may differ in
+  # their microseconds).
+  assert ends[0]["timestamp"] is not None
+  assert ends[0]["thinking_seconds"] is not None and ends[0]["thinking_seconds"] >= 0
+
+
+def test_run_cause_falls_back_to_the_newest_error_with_text() -> None:
+  events = [
+      {
+          "type": ET.ERROR,
+          "content": "usable older stderr",
+          "timestamp": "older"
+      },
+      {
+          "type": ET.ERROR,
+          "content": "  ",
+          "timestamp": "empty"
+      },
+      {
+          "type": ET.ERROR,
+          "timestamp": "newest-empty"
+      },
+  ]
+
+  assert message_aggregator.run_cause(events) == ("usable older stderr", "usable older stderr", 0, "older")
+
+
+def test_run_tool_count_matches_aggregator_rows_and_last_tool_preview() -> None:
+  long_command = "x" * (message_aggregator.TOOL_PREVIEW_CHARS + 50)
+  events = [
+      {
+          "type": ET.ASSISTANT,
+          "message":
+              {
+                  "content":
+                      [
+                          {
+                              "type": "tool_use",
+                              "name": "Bash",
+                              "input": {
+                                  "command": long_command
+                              }
+                          },
+                          {
+                              "type": "tool_use",
+                              "name": "ExitPlanMode",
+                              "input": {
+                                  "plan": "done"
+                              }
+                          },
+                      ]
+              },
+          "timestamp": "assistant-time",
+      },
+      {
+          "type": ET.TOOL_USE,
+          "name": "Read",
+          "input": {
+              "file_path": "/tmp/file"
+          },
+          "timestamp": "tool-time"
+      },
+      {
+          "type": ET.ASSISTANT,
+          "message": {
+              "content": [{
+                  "type": "tool_use",
+                  "name": "ExitPlanMode",
+                  "input": {
+                      "plan": "done"
+                  }
+              }]
+          },
+          "timestamp": "plan-time",
+      },
+  ]
+  aggregator = message_aggregator.MessageAggregator(emit_stream_deltas=False)
+  messages = [
+      delta["message"] for delta in aggregator.feed_indexed(list(enumerate(events))) if delta["type"] == "message"
+  ]
+  messages.extend(delta["message"] for delta in aggregator.flush_pending())
+  rendered_tool_rows = sum(len(message.get("tools", [])) for message in messages)
+
+  assert message_aggregator.run_tool_call_count(events) == rendered_tool_rows == 2
+  assert message_aggregator.run_last_tool(events) == {
+      "name": "Read",
+      "input": {
+          "file_path": "/tmp/file"
+      },
+      "timestamp": "tool-time",
+  }
+  last_bash = message_aggregator.run_last_tool(events[:1])
+  assert last_bash["name"] == "Bash"
+  assert len(last_bash["input"]["command"]) == message_aggregator.TOOL_PREVIEW_CHARS

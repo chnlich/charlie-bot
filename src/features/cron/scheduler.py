@@ -416,7 +416,15 @@ class Scheduler:
       # checkpoint advances only after it exists, so a replayed occurrence
       # re-admits the same leaf/Run (stable firing identity).
       await cron_sequence.register_leaf_run(
-          tree, leaf.id, task_cfg, firing, kind="scheduled_step", position=0, backend=backend, model=model)
+          tree,
+          leaf.id,
+          task_cfg,
+          firing,
+          kind="scheduled_step",
+          position=0,
+          backend=backend,
+          model=model,
+          task_spec_text=task_cfg.steps[0].prompt)
       await self._record_bound_fire(meta, task_cfg)
       handle = tasks.create_logged_task(
           cron_sequence.run_firing_steps(task_cfg, meta, tree, firing, leaf.id),
@@ -427,7 +435,15 @@ class Scheduler:
 
     leaf = await self._bound_leaf(task_cfg, meta, tree, firing, goal=task_cfg.prompt or "")
     await cron_sequence.register_leaf_run(
-        tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
+        tree,
+        leaf.id,
+        task_cfg,
+        firing,
+        kind="work",
+        position=None,
+        backend=backend,
+        model=model,
+        task_spec_text=task_cfg.prompt)
     await self._record_bound_fire(meta, task_cfg)
     handle = await self._launch_bound_round(
         task_cfg, meta, tree, firing, leaf.id, backend=backend, model=model, record_handle=record_handle)
@@ -488,7 +504,15 @@ class Scheduler:
 
     async def _round() -> None:
       run = await cron_sequence.register_leaf_run(
-          tree, leaf_id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
+          tree,
+          leaf_id,
+          task_cfg,
+          firing,
+          kind="work",
+          position=None,
+          backend=backend,
+          model=model,
+          task_spec_text=task_cfg.prompt)
       observation = await cron_sequence.launch_and_settle(tree, leaf_id, run.id, prompt=None)
       if observation.withheld is not None:
         # No process started and no terminal fact will arrive. The launch

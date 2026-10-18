@@ -203,11 +203,49 @@ test('a Run header reads its own state: queued in amber, failed in red with its 
   const failed = header('failed', {error: 'RuntimeError: worktree <prep> failed'});
   assertWellFormedMarkup(failed, 'failed header');
   assert.match(failed, /id="run-dot-run-failed" class="[^"]*bg-red-500/);
-  assert.match(failed, /id="run-error-run-failed"[^>]*>RuntimeError: worktree &lt;prep&gt; failed</);
+  assert.match(failed, /id="run-error-run-failed"[^>]*>(?:<span[^>]*>)?RuntimeError: worktree &lt;prep&gt; failed</);
+
+  const multiline = header('failed', {error: 'peer closed connection\nwhile streaming\nretry exhausted'});
+  assert.match(multiline, /peer closed connection/);
+  assert.match(multiline, /2 more lines/);
+  assert.match(multiline, /while streaming[\s\S]*retry exhausted/);
 
   assert.match(header('running'), /id="run-dot-run-running" class="[^"]*bg-blue-500/);
   assert.match(header('success'), /id="run-dot-run-success" class="[^"]*bg-green-500/);
   assert.match(header('stopped'), /id="run-dot-run-stopped" class="[^"]*bg-slate-500/);
+});
+
+test('a run_end separator omits buttons while an ordinary separator keeps its duration and button', () => {
+  const context = loadChatRendering();
+  context.Chat.registerSeparatorButton((_sessionId, _eventIndex) => '<button class="separator-action">Action</button>');
+
+  const managerSeparator = context.renderMessage({
+    role: 'separator', id: 'manager-end', event_index: 12, thinking_seconds: 45,
+  }, 'sess-1');
+  assert.match(managerSeparator, /response complete &middot; 45s/);
+  assert.match(managerSeparator, /class="separator-action"/);
+
+  const runEnd = context.renderMessage({
+    role: 'separator', kind: 'run_end', id: 'run-end', event_index: 13, thinking_seconds: 68,
+  }, 'sess-1');
+  assert.match(runEnd, /run ended &middot; 1m08s/);
+  assert.doesNotMatch(runEnd, /<button\b/);
+});
+
+test('run_error rows fold their later lines while manager error rows remain unchanged', () => {
+  const context = loadChatRendering();
+  const runError = context.renderMessage({
+    role: 'system', kind: 'run_error', content: 'Error: first line\nsecond line\nthird line', line_count: 3,
+  }, 'sess-1');
+  assert.match(runError, /Error: first line/);
+  assert.match(runError, /2 more lines/);
+  assert.match(runError, /second line[\s\S]*third line/);
+
+  const managerError = context.renderMessage({
+    role: 'system', content: 'Error: first line\nsecond line\nthird line',
+  }, 'sess-1');
+  assert.match(managerError, /Error: first line\nsecond line\nthird line/);
+  assert.doesNotMatch(managerError, /more lines/);
 });
 
 test('a Run header carries its own time, and a queued header carries none', () => {

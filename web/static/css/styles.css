@@ -335,6 +335,14 @@ body { overscroll-behavior: none; }
 .child-report[data-folded="false"] .child-report-more { display: none; }
 .child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
 .child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
+/* Worker summary card folds (chat/worker-summary.js): a closing passage clamps
+   to three lines the way the child-report card does; data-folded="false" shows
+   all of it. */
+.worker-summary-fold[data-folded="true"] .worker-summary-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.worker-summary-fold[data-folded="true"] .worker-summary-less,
+.worker-summary-fold[data-folded="false"] .worker-summary-more { display: none; }
+.worker-summary-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(148, 163, 184, 0.85); }
+.worker-summary-toggle:hover { color: #e2e8f0; text-decoration: underline; }
 /* Sidebar row settings popover (sidebar/row-menu.js): the one shared menu,
    appended to document.body and fixed-positioned under its anchor. */
 .row-menu {

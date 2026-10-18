@@ -33,7 +33,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.memory", charliebot_memory::register),             // stub: src.features.memory
   ("src.features.ncu", charliebot_ncu::register),                   // stub: src.features.ncu
   ("src.features.terminal", charliebot_terminal::register),
-  ("src.features.trace", charliebot_trace::register), // stub: src.features.trace
+  ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage::register), // stub: src.features.usage
   ("src.features.voice", charliebot_voice::register), // stub: src.features.voice
   ("src.backends.openai_compatible", backends::openai_compatible), // stub: src.backends.openai_compatible

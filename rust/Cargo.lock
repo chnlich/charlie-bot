@@ -549,7 +549,22 @@ dependencies = [
 name = "charliebot-trace"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-compat",
+ "charliebot-core",
  "charliebot-registry",
+ "flate2",
+ "futures-util",
+ "http",
+ "libc",
+ "minijinja",
+ "percent-encoding",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

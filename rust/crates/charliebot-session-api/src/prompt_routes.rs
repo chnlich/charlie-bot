@@ -101,7 +101,7 @@ async fn effective_prompt(
     Ok(repo_root) => repo_root,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  let env = PromptEnv { cfg: &cfg, registry: &features.registry, checkout: &*repo_root };
+  let env = PromptEnv { cfg: &cfg, registry: &features.registry, checkout: &repo_root };
   let coherent = match prompts::assemble_coherent_snapshot(&features.store, &env, &meta, kind, option).await {
     Ok(coherent) => coherent,
     Err(error) => {

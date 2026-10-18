@@ -190,6 +190,7 @@ name = "charliebot-agents"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
@@ -197,6 +198,7 @@ dependencies = [
  "libc",
  "nix",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1512,6 +1514,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

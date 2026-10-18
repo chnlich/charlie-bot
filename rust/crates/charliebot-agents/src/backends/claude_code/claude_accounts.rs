@@ -13,6 +13,7 @@ use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
+use super::usage_quota::QuotaState;
 use super::{claude_config, login_dirs};
 
 pub const POOL_DOMAIN: &str = "pool";
@@ -49,11 +50,13 @@ struct Readings {
   login_notified: HashSet<String>,
 }
 
-/// One server's mutable observations for every Claude account.
+/// One server's mutable observations for every Claude account. The quota accounts of the usage panel keep their
+/// process-wide state in `quota`.
 #[derive(Default)]
 pub struct ClaudeAccountState {
   readings: std::sync::Mutex<Readings>,
   pub(super) pool_choice: tokio::sync::Mutex<()>,
+  pub quota: QuotaState,
 }
 
 impl ClaudeAccountState {
@@ -156,7 +159,8 @@ pub fn credentials_present(account: &claude_config::ClaudeAccount) -> bool {
   data.get("claudeAiOauth").and_then(|oauth| oauth.get("accessToken")).is_some_and(json_truthy)
 }
 
-fn json_truthy(value: &Value) -> bool {
+/// Python truthiness of a JSON value.
+pub fn json_truthy(value: &Value) -> bool {
   match value {
     Value::Null => false,
     Value::Bool(value) => *value,
@@ -262,7 +266,9 @@ fn model_family(model: Option<&str>) -> String {
   }
 }
 
-fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTime) -> bool {
+/// Whether one stored usage-panel window is expired at `now`, judged against the time its reading was `sampled`
+/// (`usage_sources.panel_window_expired`).
+pub fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTime) -> bool {
   let resets_at =
     window.get(usage::PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok());
   if resets_at.is_some_and(|reset| reset <= now && sampled < reset) {

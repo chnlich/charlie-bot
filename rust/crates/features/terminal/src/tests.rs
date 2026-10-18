@@ -134,6 +134,8 @@ fn terminal_ids_follow_the_profile_home() {
 
   _env.set(home::CHARLIEBOT_HOME_ENV, Some(OsStr::new("~/debug-profile")));
   assert_eq!(terminal::terminal_session_id().unwrap(), expected_terminal_id(&home_dir.join("debug-profile")));
+  _env.set(home::CHARLIEBOT_HOME_ENV, Some(OsStr::new("~/.charliebot")));
+  assert_eq!(terminal::terminal_session_id().unwrap(), "terminal");
   _env.set(home::CHARLIEBOT_HOME_ENV, Some(OsStr::new("relative-profile")));
   assert_eq!(
     terminal::terminal_session_id().unwrap_err(),

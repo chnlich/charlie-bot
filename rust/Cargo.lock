@@ -263,6 +263,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-discord"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
 name = "charliebot-explain"
 version = "0.1.0"
 dependencies = [
@@ -339,17 +349,20 @@ dependencies = [
  "charliebot-core",
  "charliebot-diag",
  "charliebot-diff-view",
+ "charliebot-discord",
  "charliebot-explain",
  "charliebot-files",
  "charliebot-host-auth",
  "charliebot-memory",
  "charliebot-ncu",
  "charliebot-registry",
+ "charliebot-slack",
  "charliebot-store",
  "charliebot-terminal",
  "charliebot-trace",
  "charliebot-usage",
  "charliebot-voice",
+ "charliebot-web-reply",
  "flate2",
  "futures-util",
  "http",
@@ -368,6 +381,16 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+]
+
+[[package]]
+name = "charliebot-slack"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -415,6 +438,15 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "charliebot-web-reply"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_json",
 ]
 
 [[package]]

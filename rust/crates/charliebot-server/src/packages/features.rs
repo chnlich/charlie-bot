@@ -1,12 +1,9 @@
-//! The data that the feature packages register before their ports land: config sections with their legacy keys, and
-//! the metadata slots of the session file.
+//! The stubs of `src/features/backend_pool` and `src/features/cron`: the metadata slots of the session file. The other
+//! feature packages register from their own crates under `rust/crates/features/`.
 
-use charliebot_core::config::ConfigSection;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{Registry, RegistryError};
 use serde_json::json;
-
-use super::raw_section;
 
 /// `src/features/backend_pool`: the pool flag on each session.
 pub fn backend_pool(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -28,52 +25,5 @@ pub fn cron(registry: &mut Registry) -> Result<(), RegistryError> {
       .into_iter()
       .map(|name| SlotField { name, default: serde_json::Value::Null })
       .collect(),
-  })
-}
-
-/// `src/features/slack`: the `slack:` section, then the Slack fields of each session.
-pub fn slack(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(ConfigSection {
-    key: "slack",
-    legacy_keys: &[
-      ("slack_allowed_user_ids", "slack.allowed_user_ids"),
-      ("credentials: slack_bot_token", "slack.bot_token"),
-      ("credentials: slack_app_token", "slack.app_token"),
-      ("credentials: slack_user_token", "slack.user_token"),
-    ],
-    parse: raw_section,
-  })?;
-  registry.metadata_slot(MetadataSlot {
-    owner: "slack",
-    on: MetadataFile::Session,
-    after: Some("successor_session_id"),
-    fields: ["slack_origin", "slack_watermark_ts"]
-      .into_iter()
-      .map(|name| SlotField { name, default: serde_json::Value::Null })
-      .collect(),
-  })
-}
-
-/// `src/features/discord`: the `discord:` section, then the Discord fields of each session.
-pub fn discord(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(ConfigSection { key: "discord", legacy_keys: &[], parse: raw_section })?;
-  registry.metadata_slot(MetadataSlot {
-    owner: "discord",
-    on: MetadataFile::Session,
-    after: Some("successor_session_id"),
-    fields: ["discord_origin", "discord_watermark_id"]
-      .into_iter()
-      .map(|name| SlotField { name, default: serde_json::Value::Null })
-      .collect(),
-  })
-}
-
-/// `src/features/web_reply`: the web-reply status of each session.
-pub fn web_reply(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.metadata_slot(MetadataSlot {
-    owner: "web_reply",
-    on: MetadataFile::Session,
-    after: None,
-    fields: vec![SlotField { name: "web_status", default: serde_json::Value::Null }],
   })
 }

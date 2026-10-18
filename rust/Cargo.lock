@@ -632,10 +632,12 @@ dependencies = [
 name = "charliebot-web-reply"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

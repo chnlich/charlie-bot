@@ -204,6 +204,11 @@ pub trait SequenceDispatch: Send + Sync {
   fn wake_parent<'a>(&'a self, parent_id: &'a str, report: Value) -> BoxFuture<'a, StoreResult<bool>>;
 }
 
+/// A restore's result (`task_completion.py::restore_chain_locked`): the restored ids, topmost first, and one
+/// `(node, event, epoch)` announcement per `task_reopened` fact the call wrote. The caller sends each announcement
+/// with its epoch after it releases the control lock.
+pub type RestoreOutcome = (Vec<String>, Vec<(String, Value, u64)>);
+
 /// Completion calls exposed to sequence controllers.
 pub trait SequenceCompletion: Send + Sync {
   fn evaluate_automatic_completion<'a>(
@@ -230,13 +235,14 @@ pub trait SequenceCompletion: Send + Sync {
     reason: &'a str,
   ) -> BoxFuture<'a, StoreResult<Vec<String>>>;
 
+  /// The restore's core for a caller that holds the control lock; returns Python's `(restored, announcements)` pair.
   fn restore_chain_locked<'a>(
     &'a self,
     guard: &'a ControlGuard,
     session_id: &'a str,
     request_id: &'a str,
     reason: &'a str,
-  ) -> BoxFuture<'a, StoreResult<Vec<String>>>;
+  ) -> BoxFuture<'a, StoreResult<RestoreOutcome>>;
 }
 
 /// Session-event aggregation calls exposed to sequence controllers.
@@ -627,7 +633,7 @@ mod tests {
       _session_id: &'a str,
       _request_id: &'a str,
       _reason: &'a str,
-    ) -> BoxFuture<'a, StoreResult<Vec<String>>> {
+    ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
       Box::pin(async { Err(StoreError::new("completion test seam was called")) })
     }
   }

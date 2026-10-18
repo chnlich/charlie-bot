@@ -96,11 +96,6 @@ impl StoreError {
     Self::Conflict(blockers)
   }
 
-  /// Construct a client-visible bad-request error.
-  pub fn bad_request(detail: impl Into<String>) -> Self {
-    Self::Invalid(detail.into())
-  }
-
   /// Return the HTTP status associated with this error, when one exists.
   pub fn status_code(&self) -> Option<u16> {
     match self {

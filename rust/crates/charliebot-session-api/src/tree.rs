@@ -143,7 +143,7 @@ fn decode_cursor(cursor: &str) -> StoreResult<(String, UtcDateTime, String)> {
 }
 
 fn malformed_cursor(cursor: &str) -> StoreError {
-  StoreError::bad_request(format!("malformed tree page cursor: {}", pyfmt::str_repr(cursor)))
+  StoreError::invalid(format!("malformed tree page cursor: {}", pyfmt::str_repr(cursor)))
 }
 
 #[cfg(test)]
@@ -161,7 +161,7 @@ mod tests {
   }
 
   #[test]
-  fn malformed_tree_cursors_are_bad_requests() {
+  fn malformed_tree_cursors_are_invalid_requests() {
     let error = decode_cursor("bad cursor").unwrap_err();
     assert_eq!(error.status_code(), Some(400));
     assert_eq!(error.to_string(), "malformed tree page cursor: 'bad cursor'");

@@ -81,7 +81,7 @@ pub fn build_segments(
   };
   let (overlay_segments, overlay_error) = overlay_rule_segments(repo, inputs.overlay);
   segments.extend(overlay_segments);
-  segments.extend(env.registry.instruction_segments(meta, kind, env.cfg)?);
+  segments.extend(env.registry.instruction_segments(meta, kind, env.cfg, env.checkout)?);
   let bodies_dir = env.cfg.charliebot_home.join(PROMPT_BODIES_DIR);
   segments.extend(local_rule_segments(&bodies_dir, inputs.chain, inputs.node_ref, &meta.id)?);
   Ok((segments, overlay_error))

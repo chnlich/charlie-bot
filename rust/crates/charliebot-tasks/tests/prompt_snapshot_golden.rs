@@ -279,6 +279,7 @@ impl TurnContribution for GoldenContribution {
     meta: &SessionMetadata,
     kind: &str,
     _cfg: &CharlieBotConfig,
+    _repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
     if meta.name != "Scoped Contribution" {
       return Ok(Vec::new());

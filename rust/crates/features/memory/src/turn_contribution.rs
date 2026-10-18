@@ -2,6 +2,7 @@
 //! run's managed instructions.
 
 use anyhow::Result;
+use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::turn::{PromptSource, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
@@ -25,6 +26,7 @@ impl TurnContribution for MemoryTurn {
     meta: &SessionMetadata,
     kind: &str,
     cfg: &CharlieBotConfig,
+    _repo: &RepoRoot,
   ) -> Result<Vec<RuleSegment>> {
     let selection = memory_selection_for(meta, kind, cfg)?;
     Ok(selection.map(|selection| rule_segments(&selection)).unwrap_or_default())
@@ -82,12 +84,18 @@ mod tests {
   use std::fs;
   use std::path::Path;
 
+  use charliebot_core::RepoRoot;
   use charliebot_core::config::{
     BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
   };
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
 
   use super::*;
+
+  /// The checkout the memory segments never read: the contribution takes it and ignores it.
+  fn checkout() -> RepoRoot {
+    RepoRoot::new(Some("/synthetic/checkout".into())).unwrap()
+  }
 
   fn config(home: &Path) -> CharlieBotConfig {
     CharlieBotConfig {
@@ -144,7 +152,12 @@ mod tests {
   fn a_manager_gets_the_resident_entry_as_a_memory_source() {
     let home = seeded_home();
     let segments = MemoryTurn
-      .instruction_segments(&SessionMetadata::new("s", "s", TaskProfile::Manager), "manager_turn", &config(home.path()))
+      .instruction_segments(
+        &SessionMetadata::new("s", "s", TaskProfile::Manager),
+        "manager_turn",
+        &config(home.path()),
+        &checkout(),
+      )
       .unwrap();
     let full = segments.iter().find(|segment| segment.delivery == "full").expect("a full segment");
     assert_eq!(full.sources[0].scope, SCOPE_MEMORY);
@@ -157,12 +170,12 @@ mod tests {
     let home = seeded_home();
     let cfg = config(home.path());
     let matched = worker_meta(Some("/home/synthetic/gamma-service/"));
-    let segments = MemoryTurn.instruction_segments(&matched, "work", &cfg).unwrap();
+    let segments = MemoryTurn.instruction_segments(&matched, "work", &cfg, &checkout()).unwrap();
     let full = segments.iter().find(|segment| segment.delivery == "full").expect("a full segment");
     assert_eq!(full.sources[0].source_ref, "memory:gamma-service/build");
 
     let other = worker_meta(Some("/home/synthetic/unrelated-repo"));
-    let segments = MemoryTurn.instruction_segments(&other, "work", &cfg).unwrap();
+    let segments = MemoryTurn.instruction_segments(&other, "work", &cfg, &checkout()).unwrap();
     assert!(segments.iter().all(|segment| segment.delivery != "full"));
   }
 
@@ -170,7 +183,7 @@ mod tests {
   fn a_repo_less_worker_gets_the_index_only_and_no_guessed_project() {
     let home = seeded_home();
     let cfg = config(home.path());
-    let segments = MemoryTurn.instruction_segments(&worker_meta(None), "review", &cfg).unwrap();
+    let segments = MemoryTurn.instruction_segments(&worker_meta(None), "review", &cfg, &checkout()).unwrap();
     assert!(segments.iter().all(|segment| segment.delivery != "full"));
     assert!(segments.iter().any(|segment| segment.delivery == "index"));
   }

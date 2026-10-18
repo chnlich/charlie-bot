@@ -10,7 +10,6 @@ let sessionHasMore = false;
 let sessionOlderBeforeCursor = Infinity;
 let sessionLoadingMore = false;
 let suppressScrollLoad = false;
-let viewportFillCount = 0;
 let triggerZoneFillCount = 0;
 let lazySessionDataTimer = null;
 function getDefaultBackendId() {
@@ -698,7 +697,6 @@ function renderSessionView(data) {
   sessionOlderBeforeCursor = data.oldest_message_ordinal;
   sessionLoadingMore = false;
   suppressScrollLoad = false;
-  viewportFillCount = 0;
 
   // Update header
   const headerName = document.getElementById('header-session-name');
@@ -731,7 +729,8 @@ function renderSessionView(data) {
   Chat.ForYou.renderToggle(turnEngine ? turnEngine.view : Chat.ForYou.EVERYTHING);
 
   if (sessionHasMore) {
-    const sentinel = ensureSentinel(container, 'idle');
+    // The mount's own projection may have started the first page already.
+    const sentinel = ensureSentinel(container, sessionLoadingMore ? 'loading' : 'idle');
     // A worker page's engine keeps its sentinel off the For-you list.
     if (turnEngine && isWorker) turnEngine.holdWorkerSentinel(sentinel);
   }
@@ -771,13 +770,10 @@ function renderSessionView(data) {
   switchTab(tabAfterSessionSwitch());
 
   // A tail page shorter than the viewport leaves the container unscrollable, so
-  // no scroll event ever fires and the idle sentinel would wait forever. This
-  // attempt returns immediately when the container is already scrollable —
-  // a freshly mounted engine has not written its bottom pin yet, so scrollTop
-  // is not a scrollability signal here.
-  if (sessionHasMore && container.scrollHeight <= container.clientHeight + 80) {
-    loadOlderIfNeeded(container);
-  }
+  // no scroll event ever fires and the idle sentinel would wait forever: run the
+  // fill check. The turn engine runs it after each of its projections too, which
+  // covers a container that is hidden now and shown later.
+  fillIfShort(container, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -823,11 +819,28 @@ function initScrollPagination() {
   });
 }
 
-async function loadOlderIfNeeded(container, isViewportFill) {
-  if (!isViewportFill) {
-    viewportFillCount = 0;
-    triggerZoneFillCount = 0;
-  }
+// The fill rule. Load the next older page when all of these hold: older history
+// remains, no page is in flight, the list is visible (clientHeight > 0), and its
+// content is no taller than its viewport plus 80px. Such a list cannot scroll,
+// so no scroll event will ever ask for the page. The sizes tell it, not
+// scrollTop: a freshly mounted engine has not written its bottom pin yet.
+// The turn engine calls this after every projection, so the two flags are read
+// before any layout size. Returns the load's promise, or null when the rule
+// does not hold.
+function fillIfShort(container, isContinuation) {
+  if (!sessionHasMore || sessionLoadingMore) return null;
+  const viewport = container.clientHeight;
+  if (viewport === 0 || container.scrollHeight > viewport + 80) return null;
+  return loadOlderIfNeeded(container, isContinuation);
+}
+
+Chat.registerProjectionCheck((container) => { fillIfShort(container, false); });
+
+// `isContinuation` marks a call that continues a chain; any other call (a user
+// gesture, a click on the failed sentinel, a fresh fill) starts a burst and
+// resets the trigger-zone counter.
+async function loadOlderIfNeeded(container, isContinuation) {
+  if (!isContinuation) triggerZoneFillCount = 0;
   const engine = Chat.activeTurnEngineFor(container);
   if (engine && engine.view === 'foryou' && Chat.ForYou.isWorker()) return;
   if (!sessionHasMore || sessionLoadingMore) return;
@@ -950,22 +963,22 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     if (sessionLoadingMore === flight) sessionLoadingMore = false;
   }
 
-  // Bounded auto-continue: only after a page actually lands (not on failure —
-  // the failed sentinel must wait for a user click, not auto-retry). Both
-  // burst counters reset on a non-fill (user-gesture) call. Two cases:
-  // - viewport fill: the container is not scrollable, so no scroll event will
-  //   ever fire; fetch until it overflows (at most 5 consecutive).
-  // - trigger zone: the container is scrollable but the viewport is still
-  //   parked within 80px of the top — e.g. pages that merged into the leading
-  //   pending segment never moved the position; keep fetching until the
-  //   position leaves the zone (at most 30 consecutive).
+  // Auto-continue: only after a page actually lands. A failed page ends the
+  // chain: the failed sentinel offers a retry by click, and the engine's next
+  // projection of a short list asks the fill check again. Two cases:
+  // - fill: the list is visible but too short to scroll, so no scroll event will
+  //   ever fire; the fill check loads the next page. No count bounds this chain:
+  //   each page moves the cursor strictly back, so it ends when the server
+  //   reports has_more false or the cursor stops moving.
+  // - trigger zone: the list scrolls but the viewport is still parked within
+  //   80px of the top — e.g. pages that merged into the leading pending segment
+  //   never moved the position; keep fetching until the position leaves the zone
+  //   (at most 30 consecutive). A hidden list takes neither case.
   if (pageLanded && sessionHasMore) {
-    if (container.scrollHeight <= container.clientHeight + 80) {
-      if (viewportFillCount < 5) {
-        viewportFillCount++;
-        await loadOlderIfNeeded(container, true);
-      }
-    } else if (container.scrollTop <= 80) {
+    const fill = fillIfShort(container, true);
+    if (fill) {
+      await fill;
+    } else if (container.clientHeight > 0 && container.scrollTop <= 80) {
       if (triggerZoneFillCount < 30) {
         triggerZoneFillCount++;
         await loadOlderIfNeeded(container, true);

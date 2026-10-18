@@ -65,7 +65,7 @@ pub(crate) fn tree_page(
   if let Some(cursor) = cursor {
     let (cursor_revision, cursor_time, cursor_id) = decode_cursor(cursor)?;
     if cursor_revision != revision {
-      return Err(StoreError::conflict("task tree changed during pagination; refresh and re-paginate"));
+      return Err(StoreError::conflict(vec!["task tree changed during pagination; refresh and re-paginate".into()]));
     }
     rows.retain(|(created_at, id, _)| (*created_at, id.as_str()) > (cursor_time, cursor_id.as_str()));
   }

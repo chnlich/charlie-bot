@@ -1,0 +1,261 @@
+{
+ "generated_by": "rust/scripts/gen_compat_fixtures.py",
+ "python": "3.14.7",
+ "cases": [
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": null
+   },
+   "output": "null"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": true
+   },
+   "output": "true"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": 0
+   },
+   "output": "0"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": 1.5
+   },
+   "output": "1.5"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": 1e-05
+   },
+   "output": "1e-05"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": 1e+16
+   },
+   "output": "1e+16"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": -0.0
+   },
+   "output": "-0.0"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": 18446744073709551615
+   },
+   "output": "18446744073709551615"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": "a<b>&'c\"d\\e"
+   },
+   "output": "\"a\\u003cb\\u003e\\u0026\\u0027c\\\"d\\\\e\""
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": "\ud83d\ude00 \u00e9 \u2028"
+   },
+   "output": "\"\\ud83d\\ude00 \\u00e9 \\u2028\""
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": []
+   },
+   "output": "[]"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": {}
+   },
+   "output": "{}"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": {
+     "b": [
+      1,
+      {
+       "d": null
+      }
+     ],
+     "a": "\u00e9"
+    }
+   },
+   "output": "{\"a\": \"\\u00e9\", \"b\": [1, {\"d\": null}]}"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": {
+     "<script>": "</script>",
+     "k&": [
+      "'q'"
+     ]
+    }
+   },
+   "output": "{\"\\u003cscript\\u003e\": \"\\u003c/script\\u003e\", \"k\\u0026\": [\"\\u0027q\\u0027\"]}"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": [
+     1.25,
+     "x",
+     false
+    ]
+   },
+   "output": "[1.25, \"x\", false]"
+  },
+  {
+   "template": "{{ value|tojson }}",
+   "context": {
+    "value": {
+     "z": {
+      "y": {
+       "x": 1
+      }
+     },
+     "a": null
+    }
+   },
+   "output": "{\"a\": null, \"z\": {\"y\": {\"x\": 1}}}"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": "a b/c?d=e&f#g"
+   },
+   "output": "a%20b/c%3Fd%3De%26f%23g"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": "\u00e9/\u4e2d ~_.-"
+   },
+   "output": "%C3%A9/%E4%B8%AD%20~_.-"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": ""
+   },
+   "output": ""
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": "100%"
+   },
+   "output": "100%25"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": 42
+   },
+   "output": "42"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": 1.5
+   },
+   "output": "1.5"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": 1e-05
+   },
+   "output": "1e-05"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": true
+   },
+   "output": "True"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": null
+   },
+   "output": "None"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": [
+     [
+      "a",
+      1
+     ],
+     [
+      "b c",
+      "x/y&z"
+     ]
+    ]
+   },
+   "output": "a=1&amp;b+c=x%2Fy%26z"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": {
+     "k": "v w",
+     "n": null
+    }
+   },
+   "output": "k=v+w&amp;n=None"
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": {}
+   },
+   "output": ""
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {
+    "value": []
+   },
+   "output": ""
+  },
+  {
+   "template": "{{ value|urlencode }}",
+   "context": {},
+   "output": ""
+  },
+  {
+   "template": "v={{ v|urlencode }}&n={{ n|tojson }}",
+   "context": {
+    "v": "1.0-abc~",
+    "n": {
+     "b": 2,
+     "a": 1
+    }
+   },
+   "output": "v=1.0-abc~&n={\"a\": 1, \"b\": 2}"
+  }
+ ]
+}

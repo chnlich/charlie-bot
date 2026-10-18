@@ -2,11 +2,9 @@
 //!
 //! Each render builds a fresh minijinja environment, so a template, a page part or a template directory
 //! that changes on disk takes effect at the next render without a restart, as Jinja2's auto-reload does.
-//! The environment reproduces the Jinja2 behaviors the pages observe: autoescaping with markupsafe's
-//! escape table, Python's `str()` of printed values, the `tojson` filter as Jinja2's
-//! `htmlsafe_json_dumps` with `sort_keys`, `urlencode` as `quote(safe="/")`, Python's `dict.get`, and
-//! one stripped trailing newline per template. The search path is `web/templates`, then each page
-//! package's `templates/`, in registration order.
+//! The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with this page's
+//! globals and `page_parts` added. The search path is `web/templates`, then each page package's
+//! `templates/`, in registration order.
 
 use std::collections::HashMap;
 use std::io;
@@ -14,9 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use charliebot_compat::jinja;
 use charliebot_core::{pyfmt, registry};
-use minijinja::value::ValueKind;
-use minijinja::{AutoEscape, Environment, Error, ErrorKind, Output, State, Value};
+use minijinja::{Environment, Error, ErrorKind, Value};
 use sha1::{Digest, Sha1};
 
 use crate::git;
@@ -152,14 +150,7 @@ impl Templating {
   }
 
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
-    let mut environment = Environment::new();
-    let directories = self.directories.clone();
-    environment.set_loader(move |name| load_template(&directories, name));
-    environment.set_auto_escape_callback(|_| AutoEscape::Html);
-    environment.set_formatter(markupsafe_formatter);
-    environment.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
-    environment.add_filter("tojson", tojson);
-    environment.add_filter("urlencode", urlencode);
+    let mut environment = jinja::environment(jinja::file_system_loader(self.directories.clone()));
     let repo_root = self.repo_root.clone();
     environment.add_function("page_parts", move |slot: String| {
       page_parts(&repo_root, &slot)
@@ -285,132 +276,5 @@ fn collect_html_names(directory: &Path, prefix: &str, names: &mut Vec<String>) {
     if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
       collect_html_names(&entry.path(), &format!("{rel}/"), names);
     }
-  }
-}
-
-/// Jinja2 `FileSystemLoader.get_source`: the first search directory holding the name wins; a `..`
-/// segment names no template. The text is read as UTF-8 with universal newlines.
-fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, Error> {
-  let mut pieces = Vec::new();
-  for piece in name.split('/') {
-    if piece == ".." {
-      return Ok(None);
-    }
-    if !piece.is_empty() && piece != "." {
-      pieces.push(piece);
-    }
-  }
-  for directory in directories {
-    let path = pieces.iter().fold(directory.clone(), |path, piece| path.join(piece));
-    if path.is_file() {
-      let bytes = std::fs::read(&path).map_err(|error| {
-        Error::new(ErrorKind::InvalidOperation, format!("reading template {}: {error}", path.display()))
-      })?;
-      let text = String::from_utf8(bytes).map_err(|error| {
-        Error::new(ErrorKind::InvalidOperation, format!("UnicodeDecodeError: template {}: {error}", path.display()))
-      })?;
-      return Ok(Some(text.replace("\r\n", "\n").replace('\r', "\n")));
-    }
-  }
-  Ok(None)
-}
-
-/// Print a value as Jinja2 does under autoescaping: markup prints as is; anything else prints as
-/// Python's `str()` of it, escaped with markupsafe's table.
-fn markupsafe_formatter(out: &mut Output, state: &State, value: &Value) -> Result<(), Error> {
-  if value.is_safe() || state.auto_escape() == AutoEscape::None {
-    return out.write_str(&python_text(value)?).map_err(Error::from);
-  }
-  out.write_str(&markupsafe_escape(&python_text(value)?)).map_err(Error::from)
-}
-
-/// `markupsafe.escape`: `& < > ' "` as `&amp; &lt; &gt; &#39; &#34;`.
-pub fn markupsafe_escape(text: &str) -> String {
-  let mut out = String::with_capacity(text.len());
-  for c in text.chars() {
-    match c {
-      '&' => out.push_str("&amp;"),
-      '<' => out.push_str("&lt;"),
-      '>' => out.push_str("&gt;"),
-      '\'' => out.push_str("&#39;"),
-      '"' => out.push_str("&#34;"),
-      c => out.push(c),
-    }
-  }
-  out
-}
-
-/// Python's `str()` of a template value; an undefined value prints as nothing (Jinja2 `Undefined`).
-fn python_text(value: &Value) -> Result<String, Error> {
-  Ok(match value.kind() {
-    ValueKind::Undefined => String::new(),
-    ValueKind::String => value.as_str().expect("a string value has text").to_string(),
-    _ => pyfmt::python_str(&to_json(value)?),
-  })
-}
-
-fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
-  serde_json::to_value(value).map_err(|error| Error::new(ErrorKind::BadSerialization, error.to_string()))
-}
-
-/// Jinja2's `tojson` (`htmlsafe_json_dumps` with `sort_keys=True`): `json.dumps` text with `< > & '`
-/// escaped as JSON unicode escapes, marked safe.
-fn tojson(value: Value) -> Result<Value, Error> {
-  let text = pyfmt::json_dumps(&to_json(&value)?, &pyfmt::JINJA_TOJSON)
-    .replace('<', "\\u003c")
-    .replace('>', "\\u003e")
-    .replace('&', "\\u0026")
-    .replace('\'', "\\u0027");
-  Ok(Value::from_safe_string(text))
-}
-
-/// Jinja2's `urlencode` of a scalar: `urllib.parse.quote(str(value), safe="/")`.
-fn urlencode(value: Value) -> Result<String, Error> {
-  if matches!(value.kind(), ValueKind::Seq | ValueKind::Map | ValueKind::Iterable) {
-    return Err(Error::new(ErrorKind::InvalidOperation, "urlencode of a mapping or sequence is not ported"));
-  }
-  let mut out = String::new();
-  for byte in python_text(&value)?.bytes() {
-    if byte.is_ascii_alphanumeric() || b"/_.-~".contains(&byte) {
-      out.push(byte as char);
-    } else {
-      out.push_str(&format!("%{byte:02X}"));
-    }
-  }
-  Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use serde_json::json;
-
-  fn render_str(source: &str, context: serde_json::Value) -> String {
-    let templating = Templating::new(Path::new("/nonexistent"));
-    let environment = templating.environment(Vec::new());
-    environment.render_str(source, Value::from_serialize(&context)).unwrap()
-  }
-
-  #[test]
-  fn printing_follows_jinja2_under_autoescape() {
-    let context = json!({"text": "<a href='x'>&\"/", "none": null, "yes": true, "number": 1.5, "items": ["a", 1]});
-    assert_eq!(
-      render_str("{{ text }}|{{ none }}|{{ yes }}|{{ number }}|{{ items }}|{{ missing }}", context),
-      "&lt;a href=&#39;x&#39;&gt;&amp;&#34;/|None|True|1.5|[&#39;a&#39;, 1]|"
-    );
-  }
-
-  #[test]
-  fn tojson_matches_htmlsafe_json_dumps() {
-    let context = json!({"value": {"b": "</script>&'", "a": [true, null, "\u{b7}"]}});
-    assert_eq!(
-      render_str("{{ value|tojson }}", context),
-      concat!(r#"{"a": [true, null, ""#, "\\u00b7", r#""], "b": ""#, "\\u003c/script\\u003e\\u0026\\u0027", r#""}"#)
-    );
-  }
-
-  #[test]
-  fn urlencode_keeps_slashes() {
-    assert_eq!(render_str("{{ v|urlencode }}", json!({"v": "a b/\u{b7}~"})), "a%20b/%C2%B7~");
   }
 }

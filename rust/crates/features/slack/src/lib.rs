@@ -1,7 +1,10 @@
 //! `src/features/slack`: registers the `slack:` config section, the Slack fields of each session and the turn
-//! contribution that renders `slack_reply` events. The rest of the package is not ported yet.
+//! contribution that carries the thread reply contract in manager runs and renders `slack_reply` events. The rest of
+//! the package is not ported yet.
 
 mod event_types;
+pub mod metadata;
+mod thread_contract;
 mod turn_contribution;
 
 use std::sync::Arc;

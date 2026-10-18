@@ -506,7 +506,7 @@ impl Store {
       });
     }
     if run.pid.is_none() {
-      if stop_requested(&events, run_id, None) {
+      if stop_requested_in_events(&events, run_id, None) {
         return Ok(RunDisplayState::Stopped);
       }
       if withheld_reason(&events, run_id).is_some() {
@@ -534,7 +534,7 @@ impl Store {
         continue;
       }
       if run.pid.is_none() {
-        if stop_requested(&events, &run.id, None) {
+        if stop_requested_in_events(&events, &run.id, None) {
           continue;
         }
         blockers.push(RunBlocker { reason: format!("run {} is queued (pending dispatch)", run.id), run_id: run.id });
@@ -656,7 +656,7 @@ impl Store {
     let guard = self.control_lock().await;
     let mut run = require_run(self, session_id, run_id)?;
     let events = self.load_all_facts(session_id)?;
-    if stop_requested(&events, run_id, None) {
+    if stop_requested_in_events(&events, run_id, None) {
       return Err(StoreError::new(format!("run {run_id} has a stop request; refusing new process")));
     }
     if run.started_at.is_none() {
@@ -805,7 +805,7 @@ impl Store {
       if other.id == run.id || terminal_outcome(events, &other.id)?.is_some() {
         continue;
       }
-      if other.pid.is_none() && stop_requested(events, &other.id, None) {
+      if other.pid.is_none() && stop_requested_in_events(events, &other.id, None) {
         continue;
       }
       foreign.extend(other.input_event_ids);
@@ -858,7 +858,7 @@ impl Store {
       if let Some(outcome) = terminal_outcome(&events, run_id)? {
         return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
       }
-      if !stop_requested(&events, run_id, Some(reason)) {
+      if !stop_requested_in_events(&events, run_id, Some(reason)) {
         let event_id = self.next_control_event_id()?;
         let event = control_events::build_control_event(
           "run_stop_requested",
@@ -888,7 +888,7 @@ impl Store {
     if let Some(outcome) = terminal_outcome(&events, run_id)? {
       return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
     }
-    if !stop_requested(&events, run_id, None) {
+    if !stop_requested_in_events(&events, run_id, None) {
       return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: None });
     }
     if run.pid.is_none() {
@@ -1033,7 +1033,10 @@ pub fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<Ru
   }
 }
 
-fn stop_requested(events: &[Value], run_id: &str, request_id: Option<&str>) -> bool {
+/// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. The pure
+/// fact scan behind the stop checks of `RunStore.stop_requested` (`runs.py::stop_requested_in_events`); the task tree
+/// reads the same facts through it.
+pub fn stop_requested_in_events(events: &[Value], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
       && event.get("run_id").and_then(Value::as_str) == Some(run_id)

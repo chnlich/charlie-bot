@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use crate::run_records::RunDisplayState;
+use crate::run_records::{RunDisplayState, stop_requested_in_events};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -881,7 +881,7 @@ impl Store {
     let confirmed = facts.confirmed_input_ids;
     let mut claimed = HashSet::new();
     for run in records {
-      let stopped_before_launch = run.pid.is_none() && stop_requested(&events, &run.id);
+      let stopped_before_launch = run.pid.is_none() && stop_requested_in_events(&events, &run.id, None);
       if stopped_before_launch {
         continue;
       }
@@ -1142,7 +1142,10 @@ fn no_user_message_error(session_id: &str) -> StoreError {
   ))
 }
 
-fn is_read_only_exempt(task: Option<&TaskSpec>) -> bool {
+/// Whether a node's task carries the read-only exemption: verify and cold-read are read-only and repo-less, so the
+/// runtime gate does not need a user message for them. The one owner of the judgment
+/// (`takeoff_gate.is_read_only_exempt`); no task is not exempt.
+pub fn is_read_only_exempt(task: Option<&TaskSpec>) -> bool {
   task
     .and_then(|task| task.task_type)
     .is_some_and(|task_type| matches!(task_type, TaskType::Verify | TaskType::ColdRead))
@@ -1256,13 +1259,6 @@ fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
     }
   }
   Ok(count)
-}
-
-fn stop_requested(events: &[Value], run_id: &str) -> bool {
-  events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
-      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
-  })
 }
 
 fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {

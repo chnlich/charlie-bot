@@ -1,0 +1,24 @@
+stage: features
+name: features-harness-terminal
+steps:
+  - kind: ws
+    name: send a command through terminal PTY
+    path: /ws/terminal
+    send:
+      - json: {type: pty_resize, cols: 80, rows: 24}
+      - json: {type: pty_input, data: ZWNobyBwYXJpdHktJCgoNio3KSkK}
+    collect:
+      where: {type: pty_output}
+      field: data
+      decode: base64
+    until: {collected_contains: parity-42}
+    timeout_seconds: 10
+    compare: {collected_contains: [parity-42]}
+  - kind: ws
+    name: reject terminal without access token
+    path: /ws/terminal
+    auth: none
+    send: []
+    until: {frames: 0}
+    timeout_seconds: 5
+    expect_reject: 403

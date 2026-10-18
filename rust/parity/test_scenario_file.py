@@ -100,6 +100,69 @@ def test_new_step_kinds_and_keys_load(tmp_path: pathlib.Path, step: dict[str, An
 
 
 @pytest.mark.parametrize(
+    "fields", [
+        {"config": {"paths": {"workspace_dirs": ["${tree.root}/workspace"]}}},
+        {"credentials": {"synthetic": {"home": "${tree.home}"}}},
+        {"fakes": {"slack": {}, "discord": {}, "gemini": {}, "muse": {}}},
+        {"fixture_extras": ["sample_files"]},
+        {"voice_models": True},
+    ])
+def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) -> None:
+  scenario = _load(tmp_path, [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}], **fields)
+  assert scenario.name == "loader"
+
+
+@pytest.mark.parametrize(
+    "step,fields", [
+        ({
+            "name": "raw body file",
+            "method": "POST",
+            "path": "/api/voice/${sessions.atlas}/confirm",
+            "body_file": "audio/not-wave.bin",
+        }, {}),
+        ({
+            "name": "multipart body",
+            "method": "POST",
+            "path": "/api/voice/${sessions.atlas}",
+            "multipart": {
+                "audio": {"file": "audio/silence.wav", "content_type": "audio/wav"},
+                "backend": "gemini",
+            },
+        }, {}),
+        ({
+            "kind": "ws",
+            "name": "websocket frame forms",
+            "path": "/ws/anything",
+            "send": [{"json": {"type": "hello"}}, {"text": "plain"}, {"binary_file": "audio/silence.pcm"}],
+            "collect": {"where": {"type": "partial"}, "field": "text", "decode": "none"},
+            "until": {"frames": 1},
+            "timeout_seconds": 1,
+        }, {}),
+        ({
+            "kind": "ws",
+            "name": "websocket rejected upgrade",
+            "path": "/ws/anything",
+            "auth": "none",
+            "send": [],
+            "until": {"frames": 0},
+            "timeout_seconds": 1,
+            "expect_reject": 403,
+        }, {}),
+        ({
+            "kind": "fake",
+            "name": "fake inbound message",
+            "fake": "slack",
+            "action": "socket_event",
+            "payload": {"type": "message"},
+        }, {"fakes": {"slack": {}}}),
+    ])
+def test_new_http_websocket_and_fake_forms_load(
+    tmp_path: pathlib.Path, step: dict[str, Any], fields: dict[str, Any]) -> None:
+  scenario = _load(tmp_path, [step], **fields)
+  assert scenario.steps[0].name == step["name"]
+
+
+@pytest.mark.parametrize(
     "step", [
         {
             "kind": "wait",
@@ -164,6 +227,77 @@ def test_new_step_kinds_and_keys_load(tmp_path: pathlib.Path, step: dict[str, An
                 "at_gate": "ready"
             },
             "open": "ready"
+        },
+        {
+            "name": "multiple HTTP bodies",
+            "method": "POST",
+            "path": "/api/auth/status",
+            "json": {},
+            "body_file": "audio/not-wave.bin",
+        },
+        {
+            "name": "missing HTTP body file",
+            "method": "POST",
+            "path": "/api/auth/status",
+            "body_file": "missing.bin",
+        },
+        {
+            "name": "invalid multipart file fields",
+            "method": "POST",
+            "path": "/api/auth/status",
+            "multipart": {"audio": {"file": "audio/not-wave.bin"}},
+        },
+        {
+            "kind": "ws",
+            "name": "bad websocket path",
+            "path": "/terminal",
+            "until": {"frames": 0},
+            "timeout_seconds": 1,
+        },
+        {
+            "kind": "ws",
+            "name": "missing websocket until",
+            "path": "/ws/anything",
+            "timeout_seconds": 1,
+        },
+        {
+            "kind": "ws",
+            "name": "bad websocket send frame",
+            "path": "/ws/anything",
+            "send": [{"json": {}, "text": "two forms"}],
+            "until": {"frames": 0},
+            "timeout_seconds": 1,
+        },
+        {
+            "kind": "ws",
+            "name": "collected compare needs collect",
+            "path": "/ws/anything",
+            "until": {"frames": 0},
+            "timeout_seconds": 1,
+            "compare": {"collected_contains": ["ready"]},
+        },
+        {
+            "kind": "ws",
+            "name": "reject cannot send frames",
+            "path": "/ws/anything",
+            "send": [{"text": "unexpected"}],
+            "until": {"frames": 0},
+            "timeout_seconds": 1,
+            "expect_reject": 403,
+        },
+        {
+            "kind": "fake",
+            "name": "unsupported fake action",
+            "fake": "slack",
+            "action": "dispatch",
+            "payload": {},
+        },
+        {
+            "kind": "fake",
+            "name": "missing fake declaration",
+            "fake": "slack",
+            "action": "socket_event",
+            "payload": {},
         },
     ])
 def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any]) -> None:

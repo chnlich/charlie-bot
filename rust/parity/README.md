@@ -13,11 +13,14 @@ One run walks the selected scenarios. For each scenario it:
 2. Runs `fixture.py` in each tree. It builds the same synthetic home through the Python server's own writers.
    The harness then checks that both homes match file for file.
 3. Writes the scenario's fake-agent script into both trees before either server starts.
-4. Starts the baseline Python server and the candidate. A handover scenario starts its candidate in the named
+4. Starts one declared fake-service set per side, then starts the baseline Python server and the candidate. A
+   handover scenario starts its candidate in the named
    direction and starts the next server after the handover step.
-5. Sends HTTP steps to both servers. Wait steps observe durable state, and gate steps release fake agents.
-   Handover steps stop and restart servers on the same homes.
-6. Stops each final server, kills any fake agent that remains alive, and compares the home deltas.
+5. Sends HTTP and WebSocket steps to both servers. Fake steps push provider events to both fake services. Wait
+   steps observe durable state, and gate steps release fake agents. Handover steps stop and restart servers on
+   the same homes.
+6. Stops each final server, kills any fake agent that remains alive, stops each fake set, and compares the home
+   deltas and fake recordings.
 7. Reads every server trace, including each second server, and lists file changes outside its tree.
 
 The modules:
@@ -34,6 +37,19 @@ The modules:
 | `normalize.py` | every normalization rule, each with the field it masks and why the value cannot match |
 | `scenario_file.py` | the scenario format: loading, validation, references, route templates |
 | `scenarios/*.yaml` | the scenarios, each tagged with its port stage |
+| `fakes/__init__.py` | readiness, lifecycle, inbound pushes and refused-host reporting |
+| `fakes/authority.py` | run-local certificate authority and fake-host leaf certificate |
+| `fakes/proxy.py` | loopback-only HTTPS CONNECT proxy, TLS termination, and request parsing |
+| `fakes/recorder.py` | each side's append-only fake-service traffic log |
+| `fakes/slack.py` | Slack Web API and Socket Mode fake |
+| `fakes/discord.py` | Discord REST and gateway fake |
+| `fakes/gemini.py` | Gemini Live transcription fake |
+| `fakes/muse.py` | Muse realtime transcription fake |
+| `fixture_extras/discord_thread.py` | synthetic Discord-origin session for thread reply scenarios |
+| `fixture_extras/sample_files.py` | workspace file for the file-route scenario |
+| `fixture_extras/trace_files.py` | small Chrome traces for `features-harness-trace-merge` |
+| `data/generate_silence.py` | generator for the one-second synthetic voice audio |
+| `data/audio/` | generated WAV, PCM and invalid-WAV request bodies |
 
 ## Running
 
@@ -43,6 +59,7 @@ From the worktree root (the first `uv run` builds the worktree `.venv` the serve
 uv run python rust/parity/parity.py --python-vs-python
 uv run python rust/parity/parity.py --rust-bin rust/target/release/<server-binary>
 uv run python rust/parity/parity.py --python-vs-python --stage server-skeleton --stage session-read-api
+uv run python rust/parity/parity.py --python-vs-python --stage features
 ```
 
 - `--python-vs-python` runs the Python server as the candidate too. Every scenario must pass in this mode. A
@@ -54,6 +71,9 @@ uv run python rust/parity/parity.py --python-vs-python --stage server-skeleton -
 - `--stage NAME` (repeatable) runs only the scenarios of that stage. An unknown stage is an error.
 - `--tamper` renames one session in the candidate home after the fixture check. The run must fail; use it to
   see the harness catch a difference.
+- `--voice-models DIR` selects the read-only model source for scenarios with `voice_models: true`. Its default is
+  `~/.charliebot/models`. Before starting any server, the harness checks for the VAD file, sherpa archive and
+  extracted model directory, then links those entries into each synthetic home.
 - `--keep` keeps the trees and logs. A run that fails keeps them anyway and prints their path.
 
 Needs `/usr/bin/strace` and a kernel with Landlock (Linux 5.13 or newer, enabled in the LSM list).
@@ -82,12 +102,17 @@ Each process under test (the fixture generator and each server) runs with:
 - `HOME` set to its tree, `CHARLIEBOT_HOME` to `<tree>/home` and `TMPDIR` to `<tree>/tmp`;
 - `PATH` set to `<tree>/fake-bin:/usr/bin:/bin`. Each fake-bin wrapper starts `fake_agent.py` with
   `/usr/bin/python3 -I` for `claude`, `codex`, `opencode`, `charlie-code`, `gemini` or `agy`;
-- every proxy variable pointed at a closed loopback port, so no request leaves the host;
+- every proxy variable pointed at a closed loopback port, except that a scenario declaring `fakes` sends HTTPS
+  requests through its own loopback-only CONNECT proxy. That proxy terminates TLS for declared fake hosts and
+  refuses every other CONNECT target with 403; it has no outbound connection path. The server trusts the
+  run-local CA only in that scenario;
 - an environment built from scratch, with nothing inherited from the harness;
 - `PYTHONDONTWRITEBYTECODE=1`, because bytecode caches would land in the worktree;
 - the synthetic config: `127.0.0.1`, a free port in 18600-18699, the fixed test access key, one backend option,
   no integration, the session cgroup limits and the disk-headroom check off, and both path settings inside the
   tree.
+- `TMUX_TMPDIR` is the tree's `tmp/` directory, and the harness kills the `charliebot` tmux server when a server
+  stops or is handed over. Tree creation checks that the resulting socket path is at most 107 bytes.
 
 The Python server starts as `<worktree>/.venv/bin/python server.py` from the worktree root. Every server receives
 `CHARLIEBOT_VENV_BIN=<worktree>/.venv/bin`.
@@ -152,6 +177,11 @@ The generator writes `fixture-manifest.json` at the tree root: the ids of `sessi
 `session` and `run` id), `inputs`, plus `missing_session` and `missing_run`, two ids no fixture entry has.
 Scenarios reference these ids.
 
+`fixture.py --extras NAME[,NAME...]` runs each extra after the base fixture's final write and before coverage,
+recovery and time pinning. Extras use the server writers for server-format files and plain tree writes for files
+with no server writer. When extras run, the fixture also pins tree entries outside the home except harness-owned
+entries. With no extras, the base fixture layout and manifest stay unchanged.
+
 ## Scenarios
 
 A scenario is a YAML file under `scenarios/`:
@@ -179,6 +209,19 @@ Scenario fields:
   in each tree at scenario end.
 - `directions` names a non-empty subset of `python-to-candidate` and `candidate-to-python`. Add it when a scenario
   has a `handover` step. A scenario without handover refuses this key.
+- `config` deep-merges into the synthetic `config.yaml`; nested mappings merge, while lists and scalar values
+  replace the earlier value. `credentials` deep-merges into `credentials.yaml`; the harness refuses a
+  `charliebot` key so the access key stays fixed. Strings in either overlay may use `${tree.root}` and
+  `${tree.home}`.
+- `fakes` maps `slack`, `discord`, `gemini` or `muse` to that fake's seed mapping. Empty seeds select the
+  documented synthetic defaults. Seed keys are validated by each module: Slack accepts `channel_name`,
+  `thread_messages` and `failures`; Discord accepts `bot_user_id`, `application_flags`, `guilds`, `channels`,
+  `messages` and `failures`; Gemini and Muse accept `transcript` and `handshake_error`.
+- `fixture_extras` is an ordered list of module names under `fixture_extras/`. Each module's `async build(b)`
+  returns tree-relative values recorded at `extras.<name>` in the manifest. Sessions created by an extra use
+  `Builder.node` and appear under `sessions`.
+- `voice_models: true` links the three sherpa entries from `--voice-models` into `<tree>/home/models/`. The
+  source directory is read only.
 
 Each fake-agent start names its executable, lists its steps and gives its exit code. A start without a matching
 entry prints the stand-in line and records `scripted: false`.
@@ -206,10 +249,13 @@ verified run-token claims.
 
 Step fields:
 
-- `kind`: `http` (the default), `wait`, `gate` or `handover`. `ws` remains reserved.
+- `kind`: `http` (the default), `ws`, `fake`, `wait`, `gate` or `handover`.
 - `name` is required for every step. HTTP steps also require `method` and `path`. `path` carries no query string.
 - `query` and `headers` map names to scalar values.
 - `json` is a request body, sent as `application/json`.
+- `body_file` sends a raw file from `data/`. `multipart` maps form fields to scalar values or to
+  `{file: PATH, content_type: TYPE}` entries. Both sides use the same fixed multipart boundary. A step may
+  contain at most one of `json`, `body_file` and `multipart`.
 - `auth` is `bearer` (the default), `cookie` or `none`.
 - `expect_status` (optional) is the status both servers must return.
 - `capture` maps a name to a dotted field of each server's own JSON response. A later step references the value
@@ -222,6 +268,30 @@ Step fields:
 - `gate` requires `open`; the harness writes `open-<name>` in both fake-agent directories.
 - `handover` requires `agent_after_stop`: `alive`, `exited` or `terminated`. It checks every scripted start that
   had no exit marker before the server stopped.
+- `ws` targets any `/ws/...` path. It accepts `query`, `auth` (`token` or `none`), an ordered `send` list of
+  `{json: ...}`, `{text: ...}` or `{binary_file: PATH}` frames, an optional `collect` rule, a required `until`
+  condition and a required `timeout_seconds`. `collect` selects JSON frames by exact `where` fields, reads a
+  dotted `field`, and concatenates it as text or decoded base64. `until` is `{frames: N}`, `{close: true}` or
+  `{collected_contains: TEXT}`. The default `compare: frames` compares received frames in order; JSON frames
+  compare structurally. `compare: {collected_contains: [TEXT, ...]}` checks each string in both collected results
+  for endpoints whose frame timing varies. `expect_reject: STATUS` expects an HTTP rejection of the upgrade and
+  sends no frames. The route template is `WS <path>`.
+- `fake` pushes one inbound event through a declared provider. `slack/socket_event` wraps `payload` in an
+  `events_api` Socket Mode envelope. `discord/dispatch` sends an op 0 dispatch whose payload contains `t` and
+  `d`. Both fake services must be ready on both sides before the step runs. Its route template is
+  `FAKE <fake> <action>`.
+
+The harness waits for each declared Slack fake to send `hello` and each Discord gateway fake to receive IDENTIFY
+and send READY before the first step. Gemini and Muse become ready with their fake set. The proxy records HTTP
+requests, WebSocket handshakes and client text or binary messages. HTTP requests compare as a multiset within a
+step because listener and boot-backfill requests interleave; WebSocket messages compare in order within each
+connection. Discord op 1 heartbeats are excluded because the client's first beat includes an unseeded random
+delay. Refused proxy hosts are written to each tree's `logs/fakes.jsonl` and listed in the report, outside step
+comparison.
+
+`features-harness-trace-merge` sends two synthetic traces through `/perfetto/merged`. Python's spawned process
+pool creates POSIX semaphores under `/dev/shm/sem.*`; the sandbox permits the shared-memory directory for those
+files, and the guard exempts only those semaphore paths. Other `/dev/shm` writes remain outside-write findings.
 
 The baseline always hands over from Python to Python. The candidate starts the direction's first server and hands
 over to the other server. A handover delta covers the stop and second startup.
@@ -229,7 +299,9 @@ over to the other server. A handover delta covers the stop and second startup.
 Strings reference the manifest as `${sessions.atlas}`, `${runs.notes_r2.run}`, `${runs.notes_r2.session}`,
 `${inputs.atlas_u1}`, `${missing_session}` or `${missing_run}`. A step's route template is its method and path
 with each reference replaced by a placeholder (`{session_id}`, `{run_id}`, `{input_id}`, `{<capture name>}`).
-The report groups steps by template.
+Extras use `${extras.<name>.<key>}` and route placeholders `{<name>.<key>}`. `${tree.root}` and `${tree.home}`
+resolve to each side's own paths and become `{tree}` and `{home}` in route templates. The report groups steps by
+template.
 
 To add a scenario, add a YAML file under `scenarios/` with a stage tag and run it in `--python-vs-python`
 mode. The new steps must pass there before they mean anything against a candidate. A fixture kind the scenario
@@ -249,6 +321,9 @@ Fake-agent starts compare structurally after normalization. `expect_starts` chec
   new content of each. `.json`, `.jsonl` and `.yaml` files compare structurally; other files compare as bytes.
   A step's file changes count once both trees have been still for one quiet interval
   (`compare.SETTLE_QUIET_SECONDS`).
+- Fake traffic compares after every step, including startup and shutdown. Each step compares HTTP requests as a
+  multiset and compares each WebSocket connection's handshakes and messages in order. Refused proxy hosts stay
+  in `logs/fakes.jsonl` and the report but are excluded from parity differences.
 
 ## Normalization rules
 
@@ -266,6 +341,17 @@ field one side omits still shows as a difference:
   hold given values;
 - `TextRule` masks the `value` group of a pattern in one route's non-JSON body (`RESPONSE_TEXT_RULES`);
 - `IGNORED_HEADERS` names the headers left out, each with its reason.
+- `RESPONSE_HEADER_RULES` replaces only the named header value on one route. The merged-trace ETag and
+  `Last-Modified` come from a cache artifact created at each server's wall-clock time; their body bytes still
+  compare. `MERGED_TRACE_CACHE_PATH_RULE` masks the SHA-256 key derived from each tree's absolute trace paths and
+  file times, while the cache artifact bytes still compare.
+- `IGNORED_REQUEST_HEADERS` names generated request-framing headers the fake recorder leaves out, each with its
+  reason. Explicit feature headers, including authorization and Discord's user-agent, remain compared.
+- the voice archive stem rule masks `YYYY-MM-DDTHHMMSS.mmmZ_<8 hex>` in paths because the write clock and uuid4
+  draw are independent on each side;
+- the named Discord heartbeat rule omits only op 1 messages the gateway client sends, because its first interval
+  includes an unseeded random delay;
+- `WS_FRAME_RULES` selects any frame-specific normalization by WebSocket route template.
 
 To add a rule, append it to the matching tuple with a `reason` that names why no implementation can produce
 the same value: wall-clock time, a random id, a pid, a duration, a per-server path or port. A value that

@@ -1,16 +1,11 @@
-"""Scenario files: YAML documents under scenarios/, each tagged with the port stage its routes belong to.
+"""Scenario files define the inputs and comparisons that make one server route reproducible.
 
-A scenario names its stage and lists its steps. HTTP steps send requests to both servers. Wait steps observe
-durable state, gate steps release fake agents, and handover steps restart a server on the same home.
-
-Strings in a step may reference the fixture manifest as ``${sessions.atlas}``, ``${runs.notes_r2.run}`` or
-``${missing_session}`` (``${missing_run}``), and an earlier step's capture as ``${capture.name}``. A step's route template is its
-method and path with every reference replaced by a placeholder (``{session_id}``, ``{run_id}``, ...); the
-report groups steps by it. A capture reads a value out of each server's own JSON response, so a cursor one
-server issued goes back to that server.
+HTTP and WebSocket steps drive both servers. Fake steps inject provider events, while wait, gate and handover
+steps coordinate the scripted agent. References name fixture values, side-local tree paths and prior captures.
 """
 
 import dataclasses
+import importlib
 import math
 import pathlib
 import re
@@ -19,17 +14,32 @@ from typing import Any
 import yaml
 
 SCENARIO_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
-STEP_KINDS = ("http", "wait", "gate", "handover")
-RESERVED_KINDS = ("ws",)
+DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
+FIXTURE_EXTRAS_DIR = pathlib.Path(__file__).resolve().parent / "fixture_extras"
+STEP_KINDS = ("http", "ws", "fake", "wait", "gate", "handover")
 AUTH_MODES = ("bearer", "cookie", "none")
+WS_AUTH_MODES = ("token", "none")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 HANDOVER_DIRECTIONS = ("python-to-candidate", "candidate-to-python")
+FAKE_NAMES = ("slack", "discord", "gemini", "muse")
+FAKE_ACTIONS = {"slack": ("socket_event",), "discord": ("dispatch",)}
+WS_COMPARE_MODES = ("frames",)
+MULTIPART_BOUNDARY = "charliebot-parity-multipart-boundary-1792318577"
 
 _REFERENCE = re.compile(r"\$\{(?P<ref>[A-Za-z0-9_.]+)\}")
-_SCENARIO_KEYS = {"stage", "name", "description", "steps", "fake_agent", "expect_starts", "directions"}
-_HTTP_STEP_KEYS = {
-    "kind", "name", "method", "path", "query", "headers", "json", "auth", "expect_status", "capture", "defer_files"
+_SCENARIO_KEYS = {
+    "stage", "name", "description", "steps", "fake_agent", "expect_starts", "directions", "config", "credentials",
+    "fakes", "fixture_extras", "voice_models"
 }
+_HTTP_STEP_KEYS = {
+    "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth",
+    "expect_status", "capture", "defer_files"
+}
+_WS_STEP_KEYS = {
+    "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare",
+    "expect_reject"
+}
+_FAKE_STEP_KEYS = {"kind", "name", "fake", "action", "payload"}
 _WAIT_STEP_KEYS = {"kind", "name", "timeout_seconds", "until"}
 _GATE_STEP_KEYS = {"kind", "name", "open"}
 _HANDOVER_STEP_KEYS = {"kind", "name", "agent_after_stop"}
@@ -49,6 +59,8 @@ class Step:
   headers: dict[str, str]
   json_body: Any
   has_json: bool
+  body_file: str | None
+  multipart: dict | None
   auth: str
   expect_status: int | None
   capture: dict[str, str]
@@ -57,13 +69,24 @@ class Step:
   until: dict | None
   open: str | None
   agent_after_stop: str | None
+  send: tuple[dict, ...]
+  collect: dict | None
+  compare: str | dict
+  expect_reject: int | None
+  fake: str | None
+  action: str | None
+  payload: Any
 
   @property
   def route(self) -> str:
     """The route template: method and path with each reference as its placeholder."""
-    if self.kind != "http":
-      return f"({self.kind})"
-    return f"{self.method} {_REFERENCE.sub(lambda match: _placeholder(match['ref']), self.path)}"
+    if self.kind == "http":
+      return f"{self.method} {_REFERENCE.sub(lambda match: _placeholder(match['ref']), self.path)}"
+    if self.kind == "ws":
+      return f"WS {_REFERENCE.sub(lambda match: _placeholder(match['ref']), self.path)}"
+    if self.kind == "fake":
+      return f"FAKE {self.fake} {self.action}"
+    return f"({self.kind})"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,10 +98,21 @@ class Scenario:
   fake_agent: dict | None
   expect_starts: int | None
   directions: tuple[str, ...] | None
+  config: dict
+  credentials: dict
+  fakes: dict[str, dict]
+  fixture_extras: tuple[str, ...]
+  voice_models: bool
 
 
 def _placeholder(ref: str) -> str:
   parts = ref.split(".")
+  if parts[0] == "tree":
+    if len(parts) != 2 or parts[1] not in ("root", "home"):
+      raise ScenarioError(f"unknown tree reference ${{{ref}}}")
+    return "{" + parts[1] + "}"
+  if parts[0] == "extras":
+    return "{" + ".".join(parts[1:]) + "}"
   if parts[0] in ("sessions", "missing_session") or parts[-1] == "session":
     return "{session_id}"
   if parts[0] in ("runs", "missing_run"):
@@ -101,6 +135,150 @@ def _string_map(value: Any, where: str) -> dict[str, str]:
   return mapped
 
 
+def _overlay_value(value: Any, where: str) -> Any:
+  if isinstance(value, dict):
+    if any(not isinstance(key, str) for key in value):
+      raise ScenarioError(f"{where} mapping keys must be strings")
+    return {key: _overlay_value(item, f"{where}.{key}") for key, item in value.items()}
+  if isinstance(value, list):
+    return [_overlay_value(item, f"{where}[]") for item in value]
+  if value is None or isinstance(value, (str, bool, int)):
+    return value
+  if isinstance(value, float) and math.isfinite(value):
+    return value
+  raise ScenarioError(f"{where} must contain YAML scalar, list or mapping values")
+
+
+def _overlay_mapping(value: Any, where: str) -> dict:
+  if not isinstance(value, dict):
+    raise ScenarioError(f"{where} must be a mapping")
+  return _overlay_value(value, where)
+
+
+def _data_file(value: Any, where: str) -> str:
+  if (not isinstance(value, str) or not value or pathlib.PurePosixPath(value).is_absolute() or
+      ".." in pathlib.PurePosixPath(value).parts):
+    raise ScenarioError(f"{where} must be a file path under rust/parity/data")
+  path = DATA_DIR / value
+  if not path.is_file():
+    raise ScenarioError(f"{where} names missing data file {value!r}")
+  return value
+
+
+def _positive_timeout(value: Any, where: str) -> float:
+  valid_type = isinstance(value, (int, float)) and not isinstance(value, bool)
+  try:
+    finite = valid_type and math.isfinite(value)
+  except OverflowError:
+    finite = False
+  if not finite or value <= 0:
+    raise ScenarioError(f"{where} must be positive")
+  return float(value)
+
+
+def _collect(raw: Any, where: str) -> dict:
+  if not isinstance(raw, dict) or set(raw) != {"where", "field", "decode"}:
+    raise ScenarioError(f"{where}.collect requires where, field and decode")
+  if not isinstance(raw["where"], dict) or any(not isinstance(key, str) for key in raw["where"]):
+    raise ScenarioError(f"{where}.collect.where must map string fields to JSON values")
+  if not isinstance(raw["field"], str) or not raw["field"]:
+    raise ScenarioError(f"{where}.collect.field must be a non-empty dotted path")
+  if raw["decode"] not in ("base64", "none"):
+    raise ScenarioError(f"{where}.collect.decode must be base64 or none")
+  return raw
+
+
+def _ws_until(raw: Any, where: str) -> dict:
+  if not isinstance(raw, dict) or len(raw) != 1:
+    raise ScenarioError(f"{where}.until must contain one condition")
+  kind, value = next(iter(raw.items()))
+  if kind == "frames":
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+      raise ScenarioError(f"{where}.until.frames must be a non-negative integer")
+  elif kind == "close":
+    if value is not True:
+      raise ScenarioError(f"{where}.until.close must be true")
+  elif kind == "collected_contains":
+    if not isinstance(value, str) or not value:
+      raise ScenarioError(f"{where}.until.collected_contains must be a non-empty string")
+  else:
+    raise ScenarioError(f"{where}.until has unknown condition {kind!r}")
+  return {kind: value}
+
+
+def _ws_send(raw: Any, where: str) -> tuple[dict, ...]:
+  if not isinstance(raw, list):
+    raise ScenarioError(f"{where}.send must be a list")
+  frames = []
+  for index, frame in enumerate(raw, start=1):
+    frame_where = f"{where}.send frame {index}"
+    if not isinstance(frame, dict) or len(frame) != 1:
+      raise ScenarioError(f"{frame_where} requires one json, text or binary_file key")
+    kind, value = next(iter(frame.items()))
+    if kind == "json":
+      frames.append({kind: _overlay_value(value, frame_where)})
+    elif kind == "text" and isinstance(value, str):
+      frames.append({kind: value})
+    elif kind == "binary_file":
+      frames.append({kind: _data_file(value, frame_where)})
+    else:
+      raise ScenarioError(f"{frame_where} must be json, text or binary_file")
+  return tuple(frames)
+
+
+def _multipart(raw: Any, where: str) -> dict:
+  if not isinstance(raw, dict) or not raw:
+    raise ScenarioError(f"{where}.multipart must be a non-empty mapping")
+  fields = {}
+  for name, value in raw.items():
+    field_where = f"{where}.multipart.{name}"
+    if not isinstance(name, str) or not name:
+      raise ScenarioError(f"{where}.multipart field names must be non-empty strings")
+    if isinstance(value, dict):
+      if set(value) != {"file", "content_type"} or not isinstance(value["content_type"], str) or not value["content_type"]:
+        raise ScenarioError(f"{field_where} file value requires file and content_type")
+      fields[name] = {"file": _data_file(value["file"], field_where), "content_type": value["content_type"]}
+    elif value is None or isinstance(value, (str, int, float, bool)):
+      fields[name] = value
+    else:
+      raise ScenarioError(f"{field_where} must be a scalar or a file mapping")
+  return fields
+
+
+def _fake_seeds(raw: Any, path: pathlib.Path) -> dict[str, dict]:
+  if not isinstance(raw, dict):
+    raise ScenarioError(f"{path.name}.fakes must map fake names to seed mappings")
+  seeds = {}
+  for name, seed in raw.items():
+    if not isinstance(name, str) or name not in FAKE_NAMES:
+      raise ScenarioError(f"{path.name}.fakes has unknown fake {name!r}; expected {FAKE_NAMES}")
+    if not isinstance(seed, dict):
+      raise ScenarioError(f"{path.name}.fakes.{name} must be a seed mapping")
+    module_name = f".fakes.{name}" if __package__ else f"fakes.{name}"
+    fake_module = importlib.import_module(module_name, __package__ or None)
+    try:
+      fake_module.validate_seed(seed)
+    except ValueError as error:
+      raise ScenarioError(f"{path.name}.fakes.{name}: {error}") from error
+    seeds[name] = _overlay_mapping(seed, f"{path.name}.fakes.{name}")
+  return seeds
+
+
+def _fixture_extras(raw: Any, path: pathlib.Path) -> tuple[str, ...]:
+  if not isinstance(raw, list):
+    raise ScenarioError(f"{path.name}.fixture_extras must be a list")
+  names = []
+  for name in raw:
+    if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
+      raise ScenarioError(f"{path.name}.fixture_extras entries must be module names")
+    if not (FIXTURE_EXTRAS_DIR / f"{name}.py").is_file():
+      raise ScenarioError(f"{path.name}.fixture_extras names missing module {name!r}")
+    if name in names:
+      raise ScenarioError(f"{path.name}.fixture_extras must not repeat {name!r}")
+    names.append(name)
+  return tuple(names)
+
+
 def _step(raw: Any, where: str) -> Step:
   if not isinstance(raw, dict):
     raise ScenarioError(f"{where} must be a mapping")
@@ -109,12 +287,12 @@ def _step(raw: Any, where: str) -> Step:
   kind = raw.get("kind", "http")
   if not isinstance(kind, str):
     raise ScenarioError(f"{where}: step kind must be a string")
-  if kind in RESERVED_KINDS:
-    raise ScenarioError(f"{where}: step kind {kind!r} is reserved for a later stage and not implemented yet")
   if kind not in STEP_KINDS:
     raise ScenarioError(f"{where}: unknown step kind {kind!r}")
   allowed = {
       "http": _HTTP_STEP_KEYS,
+      "ws": _WS_STEP_KEYS,
+      "fake": _FAKE_STEP_KEYS,
       "wait": _WAIT_STEP_KEYS,
       "gate": _GATE_STEP_KEYS,
       "handover": _HANDOVER_STEP_KEYS,
@@ -130,6 +308,8 @@ def _step(raw: Any, where: str) -> Step:
   headers: dict[str, str] = {}
   json_body = None
   has_json = False
+  body_file = None
+  multipart_fields = None
   auth = "none"
   expect_status = None
   capture: dict[str, str] = {}
@@ -138,6 +318,13 @@ def _step(raw: Any, where: str) -> Step:
   until = None
   open_name = None
   agent_after_stop = None
+  send: tuple[dict, ...] = ()
+  collect = None
+  compare_mode: str | dict = "frames"
+  expect_reject = None
+  fake_name = None
+  action = None
+  payload = None
   if kind == "http":
     for required in ("method", "path"):
       if not isinstance(raw.get(required), str) or not raw[required]:
@@ -161,7 +348,51 @@ def _step(raw: Any, where: str) -> Step:
     headers = _string_map(raw.get("headers", {}), f"{where}.headers")
     json_body = raw.get("json")
     has_json = "json" in raw
+    body_kinds = [key for key in ("json", "body_file", "multipart") if key in raw]
+    if len(body_kinds) > 1:
+      raise ScenarioError(f"{where}: choose at most one of json, body_file and multipart")
+    if "body_file" in raw:
+      body_file = _data_file(raw["body_file"], f"{where}.body_file")
+    if "multipart" in raw:
+      multipart_fields = _multipart(raw["multipart"], where)
     capture = _string_map(raw.get("capture", {}), f"{where}.capture")
+  elif kind == "ws":
+    path = raw.get("path", "")
+    if not isinstance(path, str) or not path.startswith("/ws/") or "?" in path:
+      raise ScenarioError(f"{where}: path must start with /ws/ and carry no query (use query)")
+    query = _string_map(raw.get("query", {}), f"{where}.query")
+    auth = raw.get("auth", "token")
+    if auth not in WS_AUTH_MODES:
+      raise ScenarioError(f"{where}: auth must be one of {WS_AUTH_MODES}")
+    send = _ws_send(raw.get("send", []), where)
+    collect = _collect(raw["collect"], where) if "collect" in raw else None
+    until = _ws_until(raw.get("until"), where)
+    timeout_seconds = _positive_timeout(raw.get("timeout_seconds"), f"{where}.timeout_seconds")
+    compare_mode = raw.get("compare", "frames")
+    if isinstance(compare_mode, dict):
+      if set(compare_mode) != {"collected_contains"} or not isinstance(compare_mode["collected_contains"], list) or any(
+          not isinstance(item, str) or not item for item in compare_mode["collected_contains"]):
+        raise ScenarioError(f"{where}.compare must be frames or collected_contains with non-empty strings")
+      if collect is None:
+        raise ScenarioError(f"{where}.compare collected_contains requires collect")
+    elif compare_mode not in WS_COMPARE_MODES:
+      raise ScenarioError(f"{where}.compare must be frames or collected_contains")
+    if "collected_contains" in until and collect is None:
+      raise ScenarioError(f"{where}.until collected_contains requires collect")
+    if "expect_reject" in raw:
+      expect_reject = raw["expect_reject"]
+      if not isinstance(expect_reject, int) or isinstance(expect_reject, bool) or not 400 <= expect_reject <= 599:
+        raise ScenarioError(f"{where}.expect_reject must be an HTTP error status")
+      if send:
+        raise ScenarioError(f"{where}: expect_reject cannot send frames")
+  elif kind == "fake":
+    fake_name = raw.get("fake")
+    action = raw.get("action")
+    if not isinstance(fake_name, str) or fake_name not in FAKE_ACTIONS or action not in FAKE_ACTIONS.get(fake_name, ()):
+      raise ScenarioError(f"{where}: fake and action must name a supported inbound action")
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+      raise ScenarioError(f"{where}: payload must be a mapping")
   elif kind == "wait":
     timeout_seconds = raw.get("timeout_seconds")
     valid_timeout_type = isinstance(timeout_seconds, (int, float)) and not isinstance(timeout_seconds, bool)
@@ -189,6 +420,8 @@ def _step(raw: Any, where: str) -> Step:
       headers=headers,
       json_body=json_body,
       has_json=has_json,
+      body_file=body_file,
+      multipart=multipart_fields,
       auth=auth,
       expect_status=expect_status,
       capture=capture,
@@ -197,6 +430,13 @@ def _step(raw: Any, where: str) -> Step:
       until=until,
       open=open_name,
       agent_after_stop=agent_after_stop,
+      send=send,
+      collect=collect,
+      compare=compare_mode,
+      expect_reject=expect_reject,
+      fake=fake_name,
+      action=action,
+      payload=payload,
   )
 
 
@@ -279,6 +519,20 @@ def load(path: pathlib.Path) -> Scenario:
   if not isinstance(steps, list) or not steps:
     raise ScenarioError(f"{path}: 'steps' must be a non-empty list")
   parsed_steps = tuple(_step(step, f"{path.name} step {index + 1}") for index, step in enumerate(steps))
+  config_overlay = _overlay_mapping(raw.get("config", {}), f"{path.name}.config")
+  credentials_overlay = _overlay_mapping(raw.get("credentials", {}), f"{path.name}.credentials")
+  if "charliebot" in credentials_overlay:
+    raise ScenarioError(f"{path.name}.credentials refuses the charliebot key")
+  for overlay_name, overlay in (("config", config_overlay), ("credentials", credentials_overlay)):
+    for text in _strings(overlay):
+      for match in _REFERENCE.finditer(text):
+        if match["ref"] not in ("tree.root", "tree.home"):
+          raise ScenarioError(f"{path.name}.{overlay_name} only accepts ${{tree.root}} and ${{tree.home}} references")
+  fakes = _fake_seeds(raw.get("fakes", {}), path)
+  fixture_extras = _fixture_extras(raw.get("fixture_extras", []), path)
+  voice_models = raw.get("voice_models", False)
+  if not isinstance(voice_models, bool):
+    raise ScenarioError(f"{path.name}.voice_models must be a boolean")
   handovers = [step for step in parsed_steps if step.kind == "handover"]
   has_script = "fake_agent" in raw
   has_expectation = "expect_starts" in raw
@@ -308,6 +562,9 @@ def load(path: pathlib.Path) -> Scenario:
   ]
   if needs_script and not has_script:
     raise ScenarioError(f"{path}: step {needs_script[0].name!r} needs a fake_agent script")
+  for step in parsed_steps:
+    if step.kind == "fake" and step.fake not in fakes:
+      raise ScenarioError(f"{path.name} step {step.name!r}: fake {step.fake!r} is not declared in fakes")
   return Scenario(
       path=path,
       stage=raw["stage"],
@@ -316,6 +573,11 @@ def load(path: pathlib.Path) -> Scenario:
       fake_agent=fake_agent,
       expect_starts=expect_starts,
       directions=directions,
+      config=config_overlay,
+      credentials=credentials_overlay,
+      fakes=fakes,
+      fixture_extras=fixture_extras,
+      voice_models=voice_models,
   )
 
 
@@ -331,8 +593,13 @@ def load_all(stages: list[str] | None) -> list[Scenario]:
   return scenarios
 
 
-def _lookup(ref: str, manifest: dict, captures: dict[str, Any]) -> str:
+def _lookup(ref: str, manifest: dict, captures: dict[str, Any], tree_root: str, tree_home: str) -> str:
   parts = ref.split(".")
+  if parts[0] == "tree":
+    values = {"root": tree_root, "home": tree_home}
+    if len(parts) != 2 or parts[1] not in values:
+      raise ScenarioError(f"unknown reference ${{{ref}}}")
+    return values[parts[1]]
   value: Any = captures if parts[0] == "capture" else manifest
   for part in parts[1:] if parts[0] == "capture" else parts:
     if not isinstance(value, dict) or part not in value:
@@ -357,25 +624,31 @@ def check_references(scenario: Scenario, manifest: dict) -> None:
   """Every manifest reference resolves, and every capture reference names a capture of an earlier step."""
   captured: set[str] = set()
   for step in scenario.steps:
-    texts = _strings([step.path, step.query, step.headers, step.json_body, step.until])
+    texts = _strings([
+        step.path, step.query, step.headers, step.json_body, step.multipart, step.send, step.collect, step.until,
+        step.payload
+    ])
     for match in (match for text in texts for match in _REFERENCE.finditer(text)):
       ref = match["ref"]
       if ref.startswith("capture."):
         if ref.split(".", 1)[1] not in captured:
           raise ScenarioError(f"{scenario.path.name} step {step.name!r}: ${{{ref}}} names no earlier capture")
+      elif ref.startswith("tree."):
+        if ref not in ("tree.root", "tree.home"):
+          raise ScenarioError(f"{scenario.path.name} step {step.name!r}: unknown tree reference ${{{ref}}}")
       else:
-        _lookup(ref, manifest, {})
+        _lookup(ref, manifest, {}, "", "")
     captured.update(step.capture)
 
 
-def substitute(value: Any, manifest: dict, captures: dict[str, Any]) -> Any:
+def substitute(value: Any, manifest: dict, captures: dict[str, Any], tree_root: str, tree_home: str) -> Any:
   """*value* with every ``${...}`` reference resolved, inside strings, lists and mappings."""
   if isinstance(value, str):
-    return _REFERENCE.sub(lambda match: _lookup(match["ref"], manifest, captures), value)
+    return _REFERENCE.sub(lambda match: _lookup(match["ref"], manifest, captures, tree_root, tree_home), value)
   if isinstance(value, list):
-    return [substitute(item, manifest, captures) for item in value]
+    return [substitute(item, manifest, captures, tree_root, tree_home) for item in value]
   if isinstance(value, dict):
-    return {key: substitute(item, manifest, captures) for key, item in value.items()}
+    return {key: substitute(item, manifest, captures, tree_root, tree_home) for key, item in value.items()}
   return value
 
 

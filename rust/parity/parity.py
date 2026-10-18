@@ -13,25 +13,29 @@ outside the trees. See README.md.
 """
 
 import argparse
+import base64
 import collections
 import concurrent.futures
+import contextlib
 import dataclasses
 import http.client
 import json
 import os
 import pathlib
-import signal
 import shutil
+import signal
 import sys
 import tempfile
 import time
 import urllib.parse
 
 import compare
+import fakes
 import guard
 import normalize
 import scenario_file
 import servers
+from fakes import authority
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PARITY_DIR = pathlib.Path(__file__).resolve().parent
@@ -46,6 +50,11 @@ TREE_NAMES = {"baseline": "base", "candidate": "cand"}
 # The rename --tamper applies to the candidate home: a deliberate mismatch that shows the harness failing.
 TAMPER_SESSION = "atlas"
 TAMPER_NAME = "Atlas planning (tampered)"
+VOICE_MODEL_ENTRIES = (
+    "silero_vad.onnx",
+    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+)
 
 
 @dataclasses.dataclass
@@ -58,6 +67,7 @@ class StepResult:
   files: str
   responses: list[compare.Response | None]
   direction: str | None = None
+  notes: list[str] = dataclasses.field(default_factory=list)
 
   @property
   def passed(self) -> bool:
@@ -75,10 +85,14 @@ class Side:
     self.server_processes: list[servers.ServerProcess] = []
     self.ctx = normalize.Context(tree_root=str(tree.root))
     self.captures: dict[str, object] = {}
+    self.fake_set: fakes.FakeSet | None = None
+    self.ca_file: pathlib.Path | None = None
 
   def start_server(self, argv: list[str]) -> None:
     process_number = len(self.server_processes) + 1
-    server = servers.ServerProcess(self.label, argv, self.tree, self.port, REPO_ROOT, process_number)
+    proxy_url = self.fake_set.proxy_url if self.fake_set is not None else None
+    server = servers.ServerProcess(
+        self.label, argv, self.tree, self.port, REPO_ROOT, process_number, proxy_url=proxy_url, ca_file=self.ca_file)
     server.start()
     self.server = server
     self.server_processes.append(server)
@@ -98,13 +112,13 @@ def _preflight(rust_bin: pathlib.Path | None) -> None:
     raise SystemExit(f"parity: --rust-bin is not an executable file: {rust_bin}")
 
 
-def _build_fixtures(sides: list[Side]) -> dict:
+def _build_fixtures(sides: list[Side], extras: tuple[str, ...]) -> dict:
   """Generate both homes in parallel and check they match; return the manifest."""
 
   def build(side: Side) -> None:
     servers.run_traced(
-        [str(PYTHON), str(FIXTURE), "--manifest",
-         str(side.tree.root / "fixture-manifest.json")],
+        [str(PYTHON), str(FIXTURE), "--manifest", str(side.tree.root / "fixture-manifest.json"),
+         *(["--extras", ",".join(extras)] if extras else [])],
         tree=side.tree,
         repo_root=REPO_ROOT,
         trace_log=side.tree.root / "logs" / f"{side.tree.label}.fixture.strace",
@@ -140,12 +154,19 @@ def _read_spawns(tree: servers.Tree) -> list[dict]:
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _substitute(side: Side, value: object, manifest: dict) -> object:
+  return scenario_file.substitute(value, manifest, side.captures, str(side.tree.root), str(side.tree.home))
+
+
 def _prepare_contexts(sides: list[Side], snapshots: list[compare.Snapshot]) -> None:
   for side, snapshot in zip(sides, snapshots, strict=True):
     extra_files = ()
     spawns_path = _spawns_path(side.tree)
     if spawns_path.exists():
       extra_files = (("fake-agent/spawns.jsonl", spawns_path.read_bytes()),)
+    fake_log = side.tree.root / "logs" / "fakes.jsonl"
+    if fake_log.exists():
+      extra_files += (("logs/fakes.jsonl", fake_log.read_bytes()),)
     compare.prepare_context(snapshot, side.ctx, extra_files)
 
 
@@ -155,7 +176,7 @@ def _process_alive(record: dict) -> bool:
 
 
 def _event_condition(side: Side, condition: dict, manifest: dict) -> bool:
-  resolved = scenario_file.substitute(condition, manifest, side.captures)
+  resolved = _substitute(side, condition, manifest)
   events_path = side.tree.home / "sessions" / resolved["session"] / "data" / "chat_events.jsonl"
   if not events_path.exists():
     return False
@@ -171,7 +192,7 @@ def _event_condition(side: Side, condition: dict, manifest: dict) -> bool:
 
 
 def _file_field_condition(side: Side, condition: dict, manifest: dict) -> bool:
-  resolved = scenario_file.substitute(condition, manifest, side.captures)
+  resolved = _substitute(side, condition, manifest)
   path = side.tree.home / resolved["path"]
   if os.path.commonpath((str(path.resolve()), str(side.tree.home.resolve()))) != str(side.tree.home.resolve()):
     raise RuntimeError(f"wait path escapes {side.tree.home}: {resolved['path']}")
@@ -250,9 +271,9 @@ def _tamper(side: Side, manifest: dict) -> None:
 def _request(side: Side, step: scenario_file.Step, manifest: dict) -> compare.Response:
   if side.server is None:
     raise RuntimeError(f"{side.label} has no running server")
-  path = scenario_file.substitute(step.path, manifest, side.captures)
-  query = scenario_file.substitute(step.query, manifest, side.captures)
-  headers = scenario_file.substitute(step.headers, manifest, side.captures)
+  path = _substitute(side, step.path, manifest)
+  query = _substitute(side, step.query, manifest)
+  headers = _substitute(side, step.headers, manifest)
   if step.auth == "bearer":
     headers["Authorization"] = f"Bearer {servers.ACCESS_KEY}"
   elif step.auth == "cookie":
@@ -261,8 +282,13 @@ def _request(side: Side, step: scenario_file.Step, manifest: dict) -> compare.Re
     raise ValueError(f"unknown auth mode {step.auth!r}")
   body = None
   if step.has_json:
-    body = json.dumps(scenario_file.substitute(step.json_body, manifest, side.captures)).encode()
+    body = json.dumps(_substitute(side, step.json_body, manifest)).encode()
     headers.setdefault("Content-Type", "application/json")
+  elif step.body_file is not None:
+    body = (scenario_file.DATA_DIR / step.body_file).read_bytes()
+  elif step.multipart is not None:
+    body = _multipart_body(step.multipart)
+    headers.setdefault("Content-Type", f"multipart/form-data; boundary={scenario_file.MULTIPART_BOUNDARY}")
   url = path + ("?" + urllib.parse.urlencode(query) if query else "")
   connection = http.client.HTTPConnection(servers.HOST, side.server.port, timeout=REQUEST_TIMEOUT_SECONDS)
   try:
@@ -271,6 +297,28 @@ def _request(side: Side, step: scenario_file.Step, manifest: dict) -> compare.Re
     return compare.Response(response.status, response.getheaders(), response.read())
   finally:
     connection.close()
+
+
+def _multipart_body(fields: dict) -> bytes:
+  boundary = scenario_file.MULTIPART_BOUNDARY
+  parts = []
+  for name, value in fields.items():
+    if isinstance(value, dict):
+      file_path = scenario_file.DATA_DIR / value["file"]
+      parts.extend((
+          f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{file_path.name}\"\r\n".encode(),
+          f"Content-Type: {value['content_type']}\r\n\r\n".encode(),
+          file_path.read_bytes(),
+          b"\r\n",
+      ))
+    else:
+      parts.extend((
+          f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n".encode(),
+          str(value).encode("utf-8"),
+          b"\r\n",
+      ))
+  parts.append(f"--{boundary}--\r\n".encode())
+  return b"".join(parts)
 
 
 def _capture(side: Side, step: scenario_file.Step, response: compare.Response) -> list[str]:
@@ -298,6 +346,137 @@ def _check_agent_after_stop(side: Side, expected: str, starts: list[dict], pendi
   return lines
 
 
+def _recording_marks(sides: list[Side]) -> list[int]:
+  return [side.fake_set.mark() if side.fake_set is not None else 0 for side in sides]
+
+
+def _recording_diff_since(sides: list[Side], marks: list[int] | None = None, result_route: str = "") -> list[str]:
+  marks = marks if marks is not None else [0, 0]
+  recordings = [
+      side.fake_set.records_since(mark) if side.fake_set is not None else []
+      for side, mark in zip(sides, marks, strict=True)
+  ]
+  return compare.recording_diff(recordings[0], recordings[1], result_route, sides[0].ctx, sides[1].ctx)
+
+
+def _settle_sides(sides: list[Side]) -> list[compare.Snapshot]:
+  """Wait until both trees and in-memory fake recordings are quiet for one comparison interval."""
+  deadline = time.monotonic() + compare.SETTLE_TIMEOUT_SECONDS
+  previous: tuple[list[compare.Snapshot], list[list[dict]]] | None = None
+  while time.monotonic() < deadline:
+    try:
+      snapshots = [compare.snapshot(side.tree.root, servers.HARNESS_ENTRIES) for side in sides]
+    except compare.TreeChangingError:
+      previous = None
+      time.sleep(compare.SETTLE_QUIET_SECONDS)
+      continue
+    records = [side.fake_set.recorder.snapshot() if side.fake_set is not None else [] for side in sides]
+    current = snapshots, records
+    if current == previous:
+      return snapshots
+    previous = current
+    time.sleep(compare.SETTLE_QUIET_SECONDS)
+  raise RuntimeError(f"trees and fake recordings kept changing for {compare.SETTLE_TIMEOUT_SECONDS}s")
+
+
+def _normalize_ws_frame(frame: dict, route: str, ctx: normalize.Context) -> dict:
+  if "json" in frame:
+    return {"json": normalize.normalize_json(frame["json"], normalize.ws_frame_rules(route), ctx)}
+  if "text" in frame:
+    return {"text": normalize.normalize_text(frame["text"], ctx)}
+  return {"binary_base64": base64.b64encode(frame["binary"]).decode("ascii")}
+
+
+def _websocket_request(
+    side: Side,
+    step: scenario_file.Step,
+    manifest: dict,
+) -> tuple[int | None, list[dict], str, list[str]]:
+  if side.server is None:
+    raise RuntimeError(f"{side.label} has no running server")
+  from websockets import exceptions
+  from websockets.sync import client
+
+  path = _substitute(side, step.path, manifest)
+  query = _substitute(side, step.query, manifest)
+  if step.auth == "token":
+    query["token"] = servers.ACCESS_KEY
+  uri = f"ws://{servers.HOST}:{side.server.port}{path}"
+  if query:
+    uri += "?" + urllib.parse.urlencode(query)
+  deadline = time.monotonic() + step.timeout_seconds
+  lines: list[str] = []
+  frames: list[dict] = []
+  collected = ""
+  try:
+    socket = client.connect(
+        uri,
+        proxy=None,
+        open_timeout=step.timeout_seconds,
+        close_timeout=1,
+        max_size=None,
+    )
+  except exceptions.InvalidStatus as error:
+    status = error.response.status_code
+    if step.expect_reject is None:
+      lines.append(f"{side.label} WebSocket handshake rejected with HTTP {status}")
+    return status, frames, collected, lines
+  except TimeoutError:
+    return None, frames, collected, [f"{side.label} WebSocket handshake timed out within {step.timeout_seconds}s"]
+  if step.expect_reject is not None:
+    socket.close()
+    return 101, frames, collected, [f"{side.label} WebSocket connected, expected HTTP {step.expect_reject} rejection"]
+  with socket:
+    for outgoing in step.send:
+      resolved = _substitute(side, outgoing, manifest)
+      if "json" in resolved:
+        socket.send(json.dumps(resolved["json"], ensure_ascii=False))
+      elif "text" in resolved:
+        socket.send(resolved["text"])
+      else:
+        socket.send((scenario_file.DATA_DIR / resolved["binary_file"]).read_bytes())
+    while True:
+      if "frames" in step.until and len(frames) >= step.until["frames"]:
+        break
+      if "collected_contains" in step.until and step.until["collected_contains"] in collected:
+        break
+      try:
+        received = socket.recv(timeout=max(0.0, deadline - time.monotonic()))
+      except exceptions.ConnectionClosed:
+        if "close" in step.until:
+          break
+        lines.append(f"{side.label} WebSocket closed before until condition {step.until}")
+        break
+      except TimeoutError:
+        lines.append(f"{side.label} WebSocket receive timed out waiting for {step.until}")
+        break
+      if isinstance(received, bytes):
+        frame = {"binary": received}
+      else:
+        try:
+          frame = {"json": json.loads(received)}
+        except json.JSONDecodeError:
+          frame = {"text": received}
+      frames.append(frame)
+      if step.collect is not None and "json" in frame:
+        document = frame["json"]
+        if isinstance(document, dict) and all(document.get(key) == value for key, value in step.collect["where"].items()):
+          try:
+            value = scenario_file.extract(document, step.collect["field"])
+          except scenario_file.ScenarioError:
+            value = None
+          if value is not None:
+            if step.collect["decode"] == "base64":
+              collected += base64.b64decode(value, validate=True).decode("utf-8")
+            elif isinstance(value, str):
+              collected += value
+            else:
+              raise ValueError(f"{side.label} collect field {step.collect['field']!r} is not text")
+      if "collected_contains" in step.until and step.until["collected_contains"] in collected:
+        break
+  return 101, frames, collected, lines
+
+
 def _run_handover_step(
     scenario: scenario_file.Scenario,
     sides: list[Side],
@@ -308,6 +487,7 @@ def _run_handover_step(
 ) -> tuple[StepResult, list[compare.Snapshot]]:
   if step.agent_after_stop is None:
     raise RuntimeError(f"handover step {step.name!r} has no validated agent_after_stop value")
+  record_marks = _recording_marks(sides)
   starts_before_stop = [_read_spawns(side.tree) for side in sides]
   pending_before_stop = [
       {
@@ -329,10 +509,11 @@ def _run_handover_step(
     side.start_server(argv)
   for side in sides:
     side.wait_ready()
-  after = compare.settle_all([side.tree.root for side in sides], servers.HARNESS_ENTRIES)
+  after = _settle_sides(sides)
   _prepare_contexts(sides, after)
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
   lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
+  lines.extend(_recording_diff_since(sides, record_marks, step.route))
   result = StepResult(scenario.name, step.name, step.route, (None, None), lines, compare.describe_delta(deltas[0]), [])
   return result, after
 
@@ -344,6 +525,7 @@ def _run_step(
     return _run_handover_step(scenario, sides, step, manifest, before, handover_argv)
   lines: list[str] = []
   responses: list[compare.Response | None] = []
+  record_marks = _recording_marks(sides)
   baseline = candidate = None
   if step.kind == "http":
     for side in sides:
@@ -363,12 +545,42 @@ def _run_step(
       raise RuntimeError(f"gate step {step.name!r} has no validated open name")
     for side in sides:
       (side.tree.root / "fake-agent" / f"open-{step.open}").write_text("open\n", encoding="utf-8")
+  elif step.kind == "fake":
+    for side in sides:
+      if side.fake_set is None:
+        raise RuntimeError(f"{side.label} has no declared fake services")
+      missing = side.fake_set.wait_ready((step.fake,), fakes.FAKE_READY_TIMEOUT_SECONDS)
+      if missing:
+        lines.append(f"{side.label} fake {missing[0]} was not ready before step {step.name!r}")
+      else:
+        payload = _substitute(side, step.payload, manifest)
+        side.fake_set.push(step.fake, step.action, payload)
+  elif step.kind == "ws":
+    outcomes = [_websocket_request(side, step, manifest) for side in sides]
+    statuses = tuple(outcome[0] for outcome in outcomes)
+    for outcome in outcomes:
+      lines.extend(outcome[3])
+    if step.expect_reject is not None:
+      for side, status in zip(sides, statuses, strict=True):
+        if status != step.expect_reject:
+          lines.append(f"{side.label} WebSocket rejection status {status}, scenario expects {step.expect_reject}")
+    elif isinstance(step.compare, dict):
+      required = step.compare["collected_contains"]
+      for side, outcome in zip(sides, outcomes, strict=True):
+        lines.extend(
+            f"{side.label} collected WebSocket text does not contain {text!r}"
+            for text in required if text not in outcome[2])
+    else:
+      left_frames = [_normalize_ws_frame(frame, step.route, sides[0].ctx) for frame in outcomes[0][1]]
+      right_frames = [_normalize_ws_frame(frame, step.route, sides[1].ctx) for frame in outcomes[1][1]]
+      lines.extend(f"WebSocket {line}" for line in compare.json_diff(left_frames, right_frames))
   else:
     raise ValueError(f"unknown scenario step kind {step.kind!r}")
-  after = compare.settle_all([side.tree.root for side in sides], servers.HARNESS_ENTRIES)
+  after = _settle_sides(sides)
   _prepare_contexts(sides, after)
   if baseline is not None and candidate is not None:
     lines.extend(compare.response_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
+  lines.extend(_recording_diff_since(sides, record_marks, step.route))
   deltas = None
   if not step.defer_files:
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
@@ -378,6 +590,8 @@ def _run_step(
       if response is not None:
         lines.extend(_capture(side, step, response))
   statuses = (baseline.status if baseline else None, candidate.status if candidate else None)
+  if step.kind == "ws":
+    statuses = outcomes[0][0], outcomes[1][0]
   files = compare.describe_delta(deltas[0]) if deltas is not None else ""
   next_before = before if step.defer_files else after
   return StepResult(scenario.name, step.name, step.route, statuses, lines, files, responses), next_before
@@ -385,29 +599,37 @@ def _run_step(
 
 def _save_responses(log_dir: pathlib.Path, number: int, sides: list[Side], result: StepResult) -> None:
   """Keep both raw responses of a differing step next to the server logs."""
-  for side, response in zip(sides, result.responses):
+  for side, response in zip(sides, result.responses, strict=True):
     if response is not None:
       head = [f"HTTP {response.status}", *(f"{name}: {value}" for name, value in response.headers), "", ""]
       (log_dir /
        f"step{number:03d}.{side.label}.response").write_bytes("\n".join(head).encode() + response.decoded_body())
 
 
-def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[dict]]:
+def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
   lines = []
+  notes = []
   for side in sides:
     if side.server is not None:
       try:
         side.server.stop_server()
       except RuntimeError as error:
         lines.append(f"{side.label} server stop: {error}")
+        side.server.kill()
+  for side in sides:
+    if side.fake_set is not None:
+      try:
+        side.fake_set.stop()
+      except RuntimeError as error:
+        lines.append(f"{side.label} fake-service stop: {error}")
+      for host, count in sorted(side.fake_set.refused_hosts().items()):
+        notes.append(f"{side.label} fake proxy refused {host} x{count}")
   survivors = [record for side in sides for record in _read_spawns(side.tree) if _process_alive(record)]
   for record in survivors:
     identity = servers.process_identity(int(record["pid"]))
     if identity is not None and identity[1] == record["pid_start"] and identity[0] != "Z":
-      try:
+      with contextlib.suppress(ProcessLookupError):
         os.kill(int(record["pid"]), signal.SIGKILL)
-      except ProcessLookupError:
-        pass
     lines.append(f"fake agent remained alive at scenario end and was killed: {record}")
   for side in sides:
     for server in side.server_processes:
@@ -415,7 +637,7 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[dict]]:
         server.wait_trace()
       except RuntimeError as error:
         lines.append(f"{side.label} strace cleanup: {error}")
-  return lines, survivors
+  return lines, notes
 
 
 def _spawns_diff(sides: list[Side], expect_starts: int | None) -> list[str]:
@@ -436,6 +658,24 @@ def _spawns_diff(sides: list[Side], expect_starts: int | None) -> list[str]:
   return lines
 
 
+def _check_voice_models(scenarios: list[scenario_file.Scenario], model_dir: pathlib.Path) -> None:
+  if not any(scenario.voice_models for scenario in scenarios):
+    return
+  for name in VOICE_MODEL_ENTRIES:
+    path = model_dir / name
+    present = path.is_dir() if name == VOICE_MODEL_ENTRIES[2] else path.is_file()
+    if not present:
+      raise SystemExit(f"parity: missing voice model entry {path}; provide it with --voice-models DIR")
+
+
+def _link_voice_models(sides: list[Side], model_dir: pathlib.Path) -> None:
+  for side in sides:
+    target_dir = side.tree.home / "models"
+    target_dir.mkdir()
+    for name in VOICE_MODEL_ENTRIES:
+      (target_dir / name).symlink_to(model_dir / name, target_is_directory=name == VOICE_MODEL_ENTRIES[2])
+
+
 def _run_scenario(
     scenario: scenario_file.Scenario,
     work_dir: pathlib.Path,
@@ -444,6 +684,8 @@ def _run_scenario(
     direction: str | None,
     tamper: bool,
     guard_report: guard.Report,
+    certificates: authority.Certificates | None,
+    voice_model_dir: pathlib.Path,
 ) -> list[StepResult]:
   log_dir = work_dir / "logs"
   log_dir.mkdir(parents=True)
@@ -452,48 +694,73 @@ def _run_scenario(
   sides = []
   for label, port in (("baseline", ports[0]), ("candidate", ports[1])):
     tree = servers.make_tree(TREE_NAMES[label], work_dir / TREE_NAMES[label])
-    servers.write_home_config(tree, port)
-    sides.append(Side(label, tree, port))
+    side = Side(label, tree, port)
+    if scenario.fakes:
+      if certificates is None:
+        raise RuntimeError("a scenario declares fakes but no run certificate was generated")
+      side.ca_file = certificates.ca
+    config_overlay = scenario_file.substitute(scenario.config, {}, {}, str(tree.root), str(tree.home))
+    credentials_overlay = scenario_file.substitute(scenario.credentials, {}, {}, str(tree.root), str(tree.home))
+    servers.write_home_config(tree, port, config_overlay, credentials_overlay)
+    sides.append(side)
   if len(str(sides[0].tree.root)) != len(str(sides[1].tree.root)):
     raise RuntimeError(f"tree roots differ in length: {sides[0].tree.root} {sides[1].tree.root}")
-  manifest = _build_fixtures(sides)
+  manifest = _build_fixtures(sides, scenario.fixture_extras)
   scenario_file.check_references(scenario, manifest)
+  if scenario.voice_models:
+    _link_voice_models(sides, voice_model_dir)
   _write_fake_agent_script(sides, scenario.fake_agent)
   if tamper:
     _tamper(sides[1], manifest)
   before = [compare.snapshot(side.tree.root, servers.HARNESS_ENTRIES) for side in sides]
   results: list[StepResult] = []
   try:
+    if scenario.fakes:
+      if certificates is None:
+        raise RuntimeError("fake services need a run-local certificate")
+      for side in sides:
+        side.fake_set = fakes.FakeSet(side.tree.root, scenario.fakes, certificates.leaf, certificates.private_key)
+        side.fake_set.start()
+    startup_marks = _recording_marks(sides)
     sides[0].start_server(python_argv)
     sides[1].start_server(candidate_first_argv)
     for side in sides:
       side.wait_ready()
-    after = compare.settle_all([side.tree.root for side in sides], servers.HARNESS_ENTRIES)
+    startup_lines = []
+    for side in sides:
+      if side.fake_set is not None:
+        missing = side.fake_set.wait_ready(tuple(scenario.fakes), fakes.FAKE_READY_TIMEOUT_SECONDS)
+        startup_lines.extend(f"{side.label} fake {name} did not become ready" for name in missing)
+    after = _settle_sides(sides)
     _prepare_contexts(sides, after)
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
+    startup_lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
+    startup_lines.extend(_recording_diff_since(sides, startup_marks, "(startup)"))
     results.append(
         StepResult(
             scenario.name, "server startup", "(startup)", (None, None),
-            compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx), compare.describe_delta(deltas[0]),
+            startup_lines, compare.describe_delta(deltas[0]),
             []))
     before = after
     for number, step in enumerate(scenario.steps, start=1):
       handover_argv = [python_argv, candidate_handover_argv]
       result, before = _run_step(scenario, sides, step, manifest, before, handover_argv)
       results.append(result)
-      if not result.passed:
+      if not result.passed and result.responses:
         _save_responses(log_dir, number, sides, result)
   finally:
-    cleanup_lines, _ = _cleanup_scenario(sides)
-    after = [compare.snapshot(side.tree.root, servers.HARNESS_ENTRIES) for side in sides]
+    shutdown_marks = _recording_marks(sides)
+    cleanup_lines, refusal_notes = _cleanup_scenario(sides)
+    after = _settle_sides(sides)
     _prepare_contexts(sides, after)
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
+    cleanup_lines.extend(_recording_diff_since(sides, shutdown_marks, "(shutdown)"))
     cleanup_lines.extend(_spawns_diff(sides, scenario.expect_starts))
     results.append(
         StepResult(
             scenario.name, "server shutdown and fake-agent cleanup", "(shutdown)", (None, None),
             [*cleanup_lines, *compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx)],
-            compare.describe_delta(deltas[0]), []))
+            compare.describe_delta(deltas[0]), [], notes=refusal_notes))
   for side in sides:
     trace_logs = [side.tree.root / "logs" / f"{side.tree.label}.fixture.strace"]
     trace_logs.extend(server.trace_log for server in side.server_processes)
@@ -511,7 +778,7 @@ def _format_step(result: StepResult) -> list[str]:
     head += f"  [{result.direction}]"
   if result.files:
     head += f"  [{result.files}]"
-  return [head, *(f"      {line}" for line in result.lines)]
+  return [head, *(f"      {line}" for line in result.lines), *(f"      note: {note}" for note in result.notes)]
 
 
 def _route_summary(results: list[StepResult]) -> list[str]:
@@ -534,6 +801,12 @@ def main() -> int:
   mode.add_argument("--rust-bin", type=pathlib.Path, help="the candidate server executable")
   parser.add_argument("--stage", action="append", help="run only scenarios of this stage (repeatable)")
   parser.add_argument(
+      "--voice-models",
+      type=pathlib.Path,
+      default=pathlib.Path.home() / ".charliebot" / "models",
+      help="read-only source directory for the sherpa voice model links",
+  )
+  parser.add_argument(
       "--tamper",
       action="store_true",
       help=f"rename session {TAMPER_SESSION!r} in the candidate home: the run must fail")
@@ -543,8 +816,15 @@ def main() -> int:
   _preflight(rust_bin)
   candidate_argv = [str(rust_bin)] if rust_bin else [str(PYTHON), "server.py"]
   scenarios = scenario_file.load_all(args.stage)
+  voice_model_dir = args.voice_models.expanduser().resolve()
+  _check_voice_models(scenarios, voice_model_dir)
+  if any(scenario.fakes for scenario in scenarios) and not authority.OPENSSL.is_file():
+    raise SystemExit(f"parity: fake services require {authority.OPENSSL}")
+  if any(scenario.name == "features-harness-terminal" for scenario in scenarios) and shutil.which("tmux") is None:
+    raise SystemExit("parity: features-harness-terminal requires tmux on PATH")
   # The servers run only on homes under /tmp, whatever TMPDIR says.
   scratch = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-parity-", dir="/tmp"))
+  certificates = authority.generate(scratch / "certificates") if any(scenario.fakes for scenario in scenarios) else None
   guard_report = guard.Report()
   output: list[str] = []
 
@@ -574,7 +854,8 @@ def main() -> int:
         suffix = f"-{direction}" if direction is not None else ""
         scenario_dir = scratch / f"{index:02d}-{scenario.name}-{run_number:02d}{suffix}"
         scenario_results = _run_scenario(
-            scenario, scenario_dir, candidate_first, candidate_handover, direction, args.tamper, guard_report)
+            scenario, scenario_dir, candidate_first, candidate_handover, direction, args.tamper, guard_report,
+            certificates, voice_model_dir)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

@@ -27,6 +27,40 @@ import yaml
 
 TREE_PLACEHOLDER = "<tree>"
 _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
+_VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
+_MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
+
+
+@dataclasses.dataclass(frozen=True)
+class TextPatternRule:
+  name: str
+  pattern: re.Pattern[str]
+  reason: str
+
+
+VOICE_STEM_RULE = TextPatternRule(
+    "voice-archive-stem",
+    _VOICE_STEM,
+    "wall-clock milliseconds and uuid4 hex: the voice archive names each recording at upload time",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class PathPatternRule:
+  name: str
+  pattern: re.Pattern[str]
+  reason: str
+
+  @property
+  def placeholder(self) -> str:
+    return f"<{self.name}>"
+
+
+MERGED_TRACE_CACHE_PATH_RULE = PathPatternRule(
+    "merged-trace-cache-key",
+    _MERGED_TRACE_CACHE_PATH,
+    "the cache key hashes each tree's absolute trace paths and file times; the merged gzip bytes still compare",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,6 +128,8 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
             "GET /api/sessions/{session_id}/transcript",
         )),
 )
+
+WS_FRAME_RULES: dict[str, tuple[FieldRule, ...]] = {}
 
 RESPONSE_TEXT_RULES: tuple[TextRule, ...] = (
     # The page embeds the session bootstrap as sorted-key JSON: the delivery row's run_id, task_state and
@@ -256,6 +292,80 @@ IGNORED_HEADERS: dict[str, str] = {
 }
 
 
+@dataclasses.dataclass(frozen=True)
+class ResponseHeaderRule:
+  name: str
+  target: str
+  header: str
+  reason: str
+
+  @property
+  def placeholder(self) -> str:
+    return f"<{self.name}>"
+
+
+RESPONSE_HEADER_RULES: tuple[ResponseHeaderRule, ...] = (
+    ResponseHeaderRule(
+        "merged-trace-etag",
+        "GET /perfetto/merged",
+        "etag",
+        "the generated gzip file's mtime and size; its tree-specific path has a separate cache file",
+    ),
+    ResponseHeaderRule(
+        "merged-trace-last-modified",
+        "GET /perfetto/merged",
+        "last-modified",
+        "wall-clock time when each server created its identical merged gzip bytes",
+    ),
+)
+
+IGNORED_REQUEST_HEADERS: dict[str, str] = {
+    "host": "transport routing: CONNECT already chooses the fake host; it carries no request behavior",
+    "accept": "HTTP client default: the feature request does not set this header",
+    "accept-encoding": "HTTP client default: automatic response decoding is outside the feature request",
+    "content-length": "framing: the parsed request body is compared structurally",
+    "connection": "framing: HTTP connection reuse is independent of the feature request",
+    "keep-alive": "framing: HTTP connection reuse is independent of the feature request",
+    "expect": "transport negotiation: no feature request depends on a 100-continue exchange",
+    "proxy-connection": "proxy transport: generated for the local CONNECT tunnel",
+    "upgrade": "WebSocket framing: handshake type is already recorded separately",
+    "sec-websocket-key": "WebSocket handshake nonce: required by the protocol and random per connection",
+    "sec-websocket-version": "WebSocket protocol version: fixed negotiation metadata",
+    "sec-websocket-extensions": "WebSocket extension negotiation: library-generated framing metadata",
+}
+
+@dataclasses.dataclass(frozen=True)
+class IgnoredMessageRule:
+  name: str
+  fake: str
+  direction: str
+  field: str
+  value: Any
+  reason: str
+
+
+IGNORED_MESSAGE_RULES: tuple[IgnoredMessageRule, ...] = (
+    IgnoredMessageRule(
+        "discord-heartbeat",
+        "discord",
+        "server_to_fake",
+        "op",
+        1,
+        "Discord op 1 heartbeat timing includes an unseeded random first interval",
+    ),
+)
+
+
+def ignored_fake_message(record: dict) -> bool:
+  """Whether a recorded WebSocket message matches a narrowly named ignored-frame rule."""
+  message = record.get("message")
+  if not isinstance(message, dict):
+    return False
+  return any(
+      record.get("fake") == rule.fake and record.get("direction") == rule.direction and
+      message.get(rule.field) == rule.value for rule in IGNORED_MESSAGE_RULES)
+
+
 @dataclasses.dataclass
 class Context:
   """One server's per-run values the tree path rule rewrites."""
@@ -317,7 +427,16 @@ def normalize_text(text: str, ctx: Context) -> str:
       return identifier
     return ctx.minted_uuids.setdefault(identifier, f"<minted-{len(ctx.minted_uuids) + 1}>")
 
+  normalized = VOICE_STEM_RULE.pattern.sub(f"<{VOICE_STEM_RULE.name}>", normalized)
   return _UUID.sub(replace_uuid, normalized)
+
+
+def normalize_path(path: str, ctx: Context) -> str:
+  """Normalize one tree-relative or absolute file path, including the voice archive name rule."""
+  normalized = normalize_text(path, ctx)
+  if MERGED_TRACE_CACHE_PATH_RULE.pattern.fullmatch(normalized):
+    return MERGED_TRACE_CACHE_PATH_RULE.placeholder
+  return normalized
 
 
 def _normalize_strings(value: Any, ctx: Context) -> Any:
@@ -386,16 +505,35 @@ def response_rules(route: str) -> tuple[FieldRule, ...]:
   return tuple(rule for rule in RESPONSE_RULES if rule.target == route)
 
 
+def ws_frame_rules(route: str) -> tuple[FieldRule, ...]:
+  """Frame rules are keyed by the WebSocket route template, matching response-rule selection."""
+  return WS_FRAME_RULES.get(route, ())
+
+
 def file_rules(relative_path: str) -> tuple[FieldRule, ...]:
   return tuple(rule for rule in FILE_RULES if fnmatch.fnmatchcase(relative_path, rule.target))
 
 
-def normalize_headers(headers: list[tuple[str, str]], ctx: Context) -> dict[str, list[str]]:
+def normalize_headers(headers: list[tuple[str, str]], ctx: Context, route: str) -> dict[str, list[str]]:
   """The compared headers: lowercased names, ignored ones dropped, values under the tree path rule."""
   compared: dict[str, list[str]] = {}
   for name, value in headers:
     lowered = name.lower()
     if lowered in IGNORED_HEADERS:
       continue
-    compared.setdefault(lowered, []).append(normalize_text(value, ctx))
+    rule = next(
+        (rule for rule in RESPONSE_HEADER_RULES if rule.target == route and rule.header == lowered),
+        None,
+    )
+    compared.setdefault(lowered, []).append(rule.placeholder if rule else normalize_text(value, ctx))
+  return compared
+
+
+def request_headers(headers: list[tuple[str, str]]) -> dict[str, list[str]]:
+  """The explicit feature request headers; generated transport headers are named in IGNORED_HEADERS."""
+  compared: dict[str, list[str]] = {}
+  for name, value in headers:
+    lowered = name.lower()
+    if lowered not in IGNORED_REQUEST_HEADERS:
+      compared.setdefault(lowered, []).append(value)
   return compared

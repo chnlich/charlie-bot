@@ -16,7 +16,7 @@ _ARGV_VALUE = re.compile(r"\$\{argv:(?P<flag>[^}]+)\}")
 _PDEATHSIG_OPTION = 2
 
 
-class MissingArgvFlag(ValueError):
+class MissingArgvFlag(ValueError):  # noqa: N818
   """An emit value names a command-line flag the backend did not pass."""
 
 

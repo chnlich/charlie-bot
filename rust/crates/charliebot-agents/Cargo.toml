@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
@@ -14,6 +15,7 @@ futures-util.workspace = true
 libc.workspace = true
 nix.workspace = true
 regex.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

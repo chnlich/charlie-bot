@@ -335,7 +335,11 @@ mod tests {
 
   /// A host whose Claude config dir sits under `root`, and a config whose sessions and worktrees sit there too.
   fn host_and_config(root: &Path) -> (ClaudeHost, Arc<CharlieBotConfig>) {
-    let host = ClaudeHost { home: root.to_path_buf(), claude_config_dir: root.join("claude-home") };
+    let host = ClaudeHost {
+      home: root.to_path_buf(),
+      claude_config_dir: root.join("claude-home"),
+      charliebot_home: root.join("home"),
+    };
     let cfg = test_support::load_config(&root.join("home"), &[], &root.join("worktrees"));
     (host, Arc::new(cfg))
   }

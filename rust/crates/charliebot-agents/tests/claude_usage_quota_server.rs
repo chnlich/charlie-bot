@@ -157,7 +157,11 @@ impl Fixture {
   }
 
   fn host(&self) -> ClaudeHost {
-    ClaudeHost { home: self.root.path().to_path_buf(), claude_config_dir: self.root.path().join("claude-home") }
+    ClaudeHost {
+      home: self.root.path().to_path_buf(),
+      claude_config_dir: self.root.path().join("claude-home"),
+      charliebot_home: self.root.path().join("home"),
+    }
   }
 }
 

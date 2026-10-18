@@ -52,13 +52,18 @@ const PACKAGE: &str = "src.backends.claude_code";
 pub struct ClaudeHost {
   pub home: PathBuf,
   pub claude_config_dir: PathBuf,
+  pub charliebot_home: PathBuf,
 }
 
 impl ClaudeHost {
   /// The host of the running server. HOME must be set, as `Path.home()` needs it.
   pub fn from_process() -> anyhow::Result<Self> {
     let home = std::env::var_os("HOME").context("HOME must be set for the Claude Code usage source")?;
-    Ok(Self { home: PathBuf::from(home), claude_config_dir: login_dirs::claude_config_dir()? })
+    Ok(Self {
+      home: PathBuf::from(home),
+      claude_config_dir: login_dirs::claude_config_dir()?,
+      charliebot_home: charliebot_core::home::charliebot_home_dir()?,
+    })
   }
 
   /// `Path.home() / ".claude"`: the default login directory.
@@ -157,7 +162,11 @@ pub(crate) mod test_support {
   use super::*;
 
   pub fn synthetic_host() -> ClaudeHost {
-    ClaudeHost { home: PathBuf::from("/synthetic/home"), claude_config_dir: PathBuf::from("/synthetic/home/.claude") }
+    ClaudeHost {
+      home: PathBuf::from("/synthetic/home"),
+      claude_config_dir: PathBuf::from("/synthetic/home/.claude"),
+      charliebot_home: PathBuf::from("/synthetic/profile"),
+    }
   }
 
   /// An HTTP client that reaches no host: the unit tests never send a request through it.

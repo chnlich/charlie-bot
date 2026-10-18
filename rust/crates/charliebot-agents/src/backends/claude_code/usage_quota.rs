@@ -671,7 +671,7 @@ pub fn transform_response(raw: &Value, account: &str, quota: &QuotaState) -> any
   let known = |key: &str| CLAUDE_WINDOW_FIELDS.iter().any(|(camel, snake, _)| key == *camel || key == *snake);
   for (key, value) in raw {
     if !known(key) && value.as_object().is_some_and(|object| object.contains_key("utilization")) {
-      warn_limit_shape(quota, account, key, "unrecognized window field");
+      warn_limit_shape(quota, account, LimitSlot::Name(key), "unrecognized window field");
     }
   }
 
@@ -709,7 +709,7 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
     None | Some(Value::Null) => return Ok(Vec::new()),
     Some(Value::Array(entries)) => entries,
     Some(_) => {
-      warn_limit_shape(quota, account, "limits", "limits is not a list");
+      warn_limit_shape(quota, account, LimitSlot::Name("limits"), "limits is not a list");
       return Ok(Vec::new());
     }
   };
@@ -719,9 +719,9 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
       .as_object()
       .and_then(|object| object.get("kind"))
       .and_then(Value::as_str)
-      .map_or_else(|| index.to_string(), str::to_string);
+      .map_or(LimitSlot::Index(index), LimitSlot::Name);
     let Some(entry) = entry.as_object() else {
-      warn_limit_shape(quota, account, &slot, "entry is not an object");
+      warn_limit_shape(quota, account, slot, "entry is not an object");
       continue;
     };
     let scope = match entry.get("scope") {
@@ -732,7 +732,7 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
     let Some(window_minutes) =
       LIMIT_GROUP_WINDOW_MINUTES.iter().find(|(known, _)| Some(*known) == group).map(|(_, minutes)| *minutes)
     else {
-      warn_limit_shape(quota, account, &slot, "unknown limit group");
+      warn_limit_shape(quota, account, slot, "unknown limit group");
       continue;
     };
     let display_name = scope
@@ -743,12 +743,12 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
       .and_then(Value::as_str)
       .filter(|name| !name.is_empty());
     let Some(display_name) = display_name else {
-      warn_limit_shape(quota, account, &slot, "missing model display_name");
+      warn_limit_shape(quota, account, slot, "missing model display_name");
       continue;
     };
     let utilization = as_utilization(entry.get("percent"));
     if utilization.is_none() {
-      warn_limit_shape(quota, account, &slot, "missing percent");
+      warn_limit_shape(quota, account, slot, "missing percent");
     }
     let resets_at = match entry.get("resets_at") {
       Some(value) if json_truthy(value) => value.clone(),
@@ -773,18 +773,43 @@ fn as_utilization(value: Option<&Value>) -> Option<f64> {
 }
 
 /// Logs one unrecognized limit shape the first time the process sees it for an account.
-fn warn_limit_shape(quota: &QuotaState, account: &str, slot: &str, reason: &str) {
-  let key = (account.to_string(), slot.to_string(), reason.to_string());
+#[derive(Clone, Copy)]
+enum LimitSlot<'a> {
+  Name(&'a str),
+  Index(usize),
+}
+
+impl LimitSlot<'_> {
+  fn key(self) -> String {
+    match self {
+      Self::Name(name) => name.to_string(),
+      Self::Index(index) => index.to_string(),
+    }
+  }
+}
+
+fn warn_limit_shape(quota: &QuotaState, account: &str, slot: LimitSlot<'_>, reason: &str) {
+  let key = (account.to_string(), slot.key(), reason.to_string());
   let fresh = quota.warned.lock().expect("the warnings are not poisoned").limit_shapes.insert(key);
   if fresh {
-    tracing::warn!(
-      target: "charliebot_agents",
-      provider = PROVIDER,
-      account = account,
-      slot = slot,
-      reason = reason,
-      "ext_usage_unknown_limit_shape"
-    );
+    match slot {
+      LimitSlot::Name(slot) => tracing::warn!(
+        target: "charliebot_agents",
+        provider = PROVIDER,
+        account = account,
+        slot = slot,
+        reason = reason,
+        "ext_usage_unknown_limit_shape"
+      ),
+      LimitSlot::Index(slot) => tracing::warn!(
+        target: "charliebot_agents",
+        provider = PROVIDER,
+        account = account,
+        slot = slot,
+        reason = reason,
+        "ext_usage_unknown_limit_shape"
+      ),
+    }
   }
 }
 
@@ -926,7 +951,11 @@ mod tests {
   }
 
   fn host_at(home: &Path) -> ClaudeHost {
-    ClaudeHost { home: home.to_path_buf(), claude_config_dir: home.join(".claude") }
+    ClaudeHost {
+      home: home.to_path_buf(),
+      claude_config_dir: home.join(".claude"),
+      charliebot_home: home.to_path_buf(),
+    }
   }
 
   fn accounts() -> QuotaAccounts {

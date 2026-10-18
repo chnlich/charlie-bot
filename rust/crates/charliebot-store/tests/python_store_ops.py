@@ -398,8 +398,83 @@ def _verify_runs(root: pathlib.Path) -> None:
       assert len(facts) == 1 and facts[0]["request_id"] == "stop-request"
 
 
+
+# ---------------------------------------------------------------------------
+# Cross-implementation read-parity cases: each computes the Python answer for a
+# fixture home the Rust test builds and copies, as JSON for the Rust side.
+# ---------------------------------------------------------------------------
+
+
+def _events_store(home: pathlib.Path) -> chat_events.ChatEventStore:
+  def session_dir(session_id: str) -> pathlib.Path:
+    return home / "sessions" / session_id
+
+  def metadata_path(session_id: str) -> pathlib.Path:
+    return session_dir(session_id) / "metadata.json"
+
+  return chat_events.ChatEventStore(session_dir, metadata_path, {})
+
+
+def _fact_history(store: chat_events.ChatEventStore, session_id: str) -> list[dict]:
+  """task_sessions.fact_history's composition over the chat-events store primitives."""
+  live = store.load_chat_events_sync(session_id)
+  archived_count = max(0, store.get_chat_event_count_sync(session_id) - len(live))
+  if not archived_count:
+    return live
+  archived, _has_more = store.load_chat_events_range(session_id, 0, archived_count)
+  return [*archived, *live]
+
+
+def _range_read(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
+  store = _events_store(home)
+  windows = [(6, 7), (7, 9), (8, 10), (6, 10), (9, 12), (11, 15), (7, 7), (0, 3), (3, 5)]
+  result = []
+  for start, end in windows:
+    events, has_more = store.load_chat_events_range(session_id, start, end)
+    result.append({"start": start, "end": end, "has_more": has_more, "events": events})
+  (root / "expected.json").write_text(json.dumps(result), encoding="utf-8")
+
+
+def _listing_raw_scan(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
+  from src.infra import json_utils
+
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  cfg = config.load_config()
+  store = session_store.SessionStore(cfg)
+  metas = asyncio.run(store.load_session_metas())
+  listed = {meta.id: meta.model_dump(mode="json") for meta in metas}
+  raw = {}
+  for session_dir in sorted(cfg.sessions_dir.iterdir()):
+    if not session_dir.is_dir():
+      continue
+    # The scan consumer skips a missing or malformed file after load_json_meta logs it.
+    meta = json_utils.load_json_meta(session_dir / "metadata.json", "storage_cool_meta_read_failed")
+    if isinstance(meta, dict):
+      raw[session_dir.name] = meta.get("name")
+  (root / "expected.json").write_text(json.dumps({"listed": listed, "raw": raw}), encoding="utf-8")
+
+
+def _facts(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
+  store = _events_store(home)
+  events = _fact_history(store, session_id)
+  (root / "expected.json").write_text(json.dumps(events), encoding="utf-8")
+
+
+CASES = {
+    "range_read": _range_read,
+    "listing_raw_scan": _listing_raw_scan,
+    "facts": _facts,
+}
+
+
+def _parity_case(case: str, root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
+  if case not in CASES:
+    raise ValueError(f"unknown parity case {case}")
+  CASES[case](root, home, session_id)
+
+
 if __name__ == "__main__":
-  mode, root_text = sys.argv[1:]
+  mode, root_text, *rest = sys.argv[1:]
   root = pathlib.Path(root_text)
   # Package registration reads the environment's home before any operation picks its own, so keep it off the live home.
   os.environ["CHARLIEBOT_HOME"] = str(root / "bootstrap-home")
@@ -413,5 +488,8 @@ if __name__ == "__main__":
     _apply_runs(root)
   elif mode == "verify_runs":
     _verify_runs(root)
+  elif mode.startswith("parity:"):
+    _case, case = mode.split(":", 1)
+    _parity_case(case, root, root / "python-home", rest[0])
   else:
     raise ValueError(f"unknown mode {mode}")

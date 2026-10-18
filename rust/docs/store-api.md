@@ -71,8 +71,9 @@ line. The control guard is store-bound, non-cloneable, and required by locked op
 
 `context_state` returns the context tokens of the claude, snapshot, and persisted `context_reading` tiers.
 Python's `resolve_session_usage` asks the backend's own usage resolver first (codex's native rollout), and
-that tier is not ported in S1. `load_all_facts` reads every `chat_events.*.jsonl` archive file; Python's
-`fact_history` reads the first `archive_offset` archived events.
+that tier is not ported in S1. `load_all_facts` composes like Python's `fact_history`: the archived
+count is the total event count minus the live event count, the archived events are the range read
+from 0 to that count, and archive files beyond that count stay unread.
 
 ## Run records (S2, implemented)
 
@@ -172,3 +173,13 @@ cache, models, backup, trigger files, worktrees, and transport files remain owne
 runtime components. `charliebot-store` supplies metadata and chat-event access in S1 and the event,
 message, projection, and busy-state model in S4. Usage storage's raw metadata scan is read-only and is
 exposed as `raw_metadata_scan`.
+
+## Known divergences from Python
+
+- Non-UTC offsets in chat-event timestamps normalize to UTC on read and write. Python's writers
+  produce only UTC, so no file the Python server writes carries another offset.
+- Slot values are not type-checked on write. `MetadataSlot` carries defaults only, so a typed write
+  refusal like `metadata_slots.set_fields`'s pydantic validation lives with the caller.
+- Archive rotation has no lock against a concurrent append, so an append racing
+  `archive_events_before` can land in either the old or the new live file. Python has the same
+  window.

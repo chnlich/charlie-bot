@@ -8,4 +8,5 @@ publish.workspace = true
 [dependencies]
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
+charliebot-store.workspace = true
 serde_json.workspace = true

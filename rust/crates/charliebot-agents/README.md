@@ -26,19 +26,19 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `kill::detach` | `src/runtime/agent_process/base.py:1198` |
 | `kill::python_exit_code` | `src/runtime/agent_process/spawn.py:57` |
 | `recovery::TypeLineFilter`, `TypeLineFilter::new` | `src/infra/ndjson.py:463`, `:483` |
-| `recovery::parse_raw_lines`, `project_raw_events`, `result_exit_code` | `src/runtime/runs.py:167`, `:200`, `:225` |
-| `recovery::project_raw_file`, `scan_result_exit`, `raw_completion_time` | `src/runtime/runs.py:266`, `:288`, `:311` |
-| `rotation::rotate_stale_transport` | `src/runtime/agent_process/base.py:596` |
-| `spawn::SpawnSpec`, its fields, and `SpawnSpec::new` | `src/runtime/agent_process/base.py:785`, `:878` |
-| `spawn::RawStdin`, `SpawnedChild`, and its fields | `src/runtime/agent_process/base.py:936` |
-| `spawn::spawn_raw_log`, `spawn_piped`, `spawn_one_shot` | `src/runtime/agent_process/base.py:785`, `:812`, `:936` |
-| `spawn::pin_identity_and_on_spawn` | `src/runtime/agent_process/base.py:919` |
+| `recovery::parse_raw_lines`, `project_raw_events`, `result_event_of` | `src/runtime/runs.py:444`, `:470`, `:483` |
+| `recovery::read_run_outcome`, `outcome_from_events`, `read_run_blocker` | `src/runtime/runs.py:382`, `:431`, `:518` |
+| `rotation::find_free_session_dir_number`, `find_free_run_number` | `src/infra/session_layout.py:270`, `:298` |
+| `rotation::current_run_dir`, `create_run_dir` | `src/infra/session_layout.py:321`, `:351` |
+| `spawn::ChildProcessHandle`, `ChildProcessHandle::new`, `pid`, `pgid`, `wait`, `try_wait` | `src/infra/process.py:192` |
+| `spawn::spawn_process` | `src/runtime/agent_process/spawn.py:17` |
 | `spawn::iter_ndjson_events` | `src/runtime/agent_process/base.py:347` |
 | `spawn::STDERR_TAIL_BYTES`, `tee_stream`, and `stream_stderr` | `src/runtime/agent_process/base.py:37`, `:60`, `:1064` |
 | `VENV_BIN_ENV`, `REPO_ROOT_ENV`, `ENTRY_POINT_RELATIVE`, `AgentBaseEnvironment` and its `values` field | `src/runtime/agent_environment.py:28-36`, `server.py:582` |
 | `agent_environment`, `from_process_environment`, and the root `build_backend` export | `src/runtime/agent_environment.py:53`, `server.py:582`, `src/runtime/hooks/backend_types.py:33-60` |
 | `pre_recovery_step`, `run_session_cgroup_startup`, `session_cgroup_step`, and `register_runtime` | `server.py:262-273`; `src/runtime/agent_environment.py:121-153` |
-| `BuiltBackend` and its `backend` and `launch` fields; `backend_types::build_backend`, root `build_backend`, `build_translate_fallback` | `src/runtime/hooks/backend_types.py:33-60` |
+| `BuiltBackend` and its `backend`, `launch`, and registry fields; `backend_types::build_backend`, root `build_backend`, `build_translate_fallback` | `src/runtime/hooks/backend_types.py:33-60` |
+| `agent_one_shot_text(built: BuiltBackend, prompt: &str, system_prompt: &str, timeout: Option<Duration>) -> anyhow::Result<String>` | `src/runtime/agent_process/base.py:712`, `:1156-1189` |
 | `backends::claude_code` and `backends::claude_code::register` | `src/backends/claude_code/__init__.py:17-75` |
 | `ClaudeCodeBackend`, `ClaudeCodeBackend::build_command`, and its `AgentBackend` methods | `src/backends/claude_code/claude_code.py:240-292`; `src/runtime/agent_process/base.py:641-770` |
 | `HEADLESS_DISALLOWED_TOOLS`, `DISALLOWED_TOOLS_FLAG`, `SKIP_PERMISSIONS_FLAG`, `INSTRUCTIONS_FILE_NAME`, `INSTRUCTIONS_WRITTEN_EVENT` | `src/backends/claude_code/claude_code.py:24-37`, `:276-292` |

@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use charliebot_agents::backend_types;
 use charliebot_agents::backends::claude_code;
@@ -78,7 +79,7 @@ fn option(case: &Value) -> BackendOption {
   }
 }
 
-fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Registry) -> Value {
+fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -> Value {
   let mut kwargs = Map::new();
   if !case["claude_session_id"].is_null() {
     kwargs.insert("claude_session_id".to_string(), case["claude_session_id"].clone());
@@ -98,7 +99,7 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Registry) -> Val
     backend_kwargs: kwargs,
     ..LaunchArgs::default()
   };
-  let backend = backend_types::build_backend(registry, &option(case), cfg, launch).unwrap().backend;
+  let backend = backend_types::build_backend(Arc::clone(registry), &option(case), cfg, launch).unwrap().backend;
   let argv = backend.build_command(case["prompt"].as_str().unwrap()).unwrap();
   let inherited: Env = case["env"]
     .as_object()
@@ -124,6 +125,7 @@ fn registered_claude_factory_matches_the_python_argv_and_env_matrix() {
   let cfg = main_module();
   let mut registry = Registry::new();
   registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
+  let registry = Arc::new(registry);
   let expected_rust = cases.iter().map(|case| rust_result(case, &cfg, &registry)).collect::<Vec<_>>();
   let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
   let repository = manifest.ancestors().nth(3).unwrap();

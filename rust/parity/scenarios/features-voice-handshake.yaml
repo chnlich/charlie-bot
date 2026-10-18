@@ -1,0 +1,31 @@
+stage: features
+name: features-voice-handshake
+credentials:
+  gemini:
+    api_key: gemini-parity-synthetic-key
+  meta:
+    model_api_key: muse-parity-synthetic-key
+fakes:
+  gemini:
+    handshake_error: synthetic Gemini handshake refusal
+  muse:
+    handshake_error: synthetic Muse handshake refusal
+steps:
+  - kind: ws
+    name: Gemini setup reply refuses the session
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: gemini}
+    send:
+      - binary_file: audio/silence.pcm
+      - json: {type: end}
+    until: {close: true}
+    timeout_seconds: 15
+  - kind: ws
+    name: Muse handshake refuses the session
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: muse}
+    send:
+      - binary_file: audio/silence.pcm
+      - json: {type: end}
+    until: {close: true}
+    timeout_seconds: 15

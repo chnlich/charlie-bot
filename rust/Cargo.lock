@@ -538,12 +538,24 @@ dependencies = [
 name = "charliebot-voice"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
  "minijinja",
+ "percent-encoding",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

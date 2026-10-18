@@ -50,6 +50,13 @@ steps:
     until: {close: true}
     timeout_seconds: 5
   - kind: ws
+    name: resize outside the packed range ends the terminal relay
+    path: /ws/terminal
+    send:
+      - json: {type: pty_resize, cols: 70000, rows: 30}
+    until: {close: true}
+    timeout_seconds: 5
+  - kind: ws
     name: write scrollback for the next terminal attachment
     path: /ws/terminal
     send:

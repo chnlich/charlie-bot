@@ -7,10 +7,13 @@
 // The server computes the summary (src/runtime/worker_transcript.py) and sends
 // it two ways: as ``worker_summary`` in the bootstrap payload and as
 // ``summary`` on every transcript poll. This file paints that one object into
-// the card and replaces the whole card on every poll side by side with the
-// incremental messages — the card never blocks the transcript's own append
-// path. session-view.js feeds the bootstrap value, the poll feeds the rest;
-// turn-engine.js asks for the card node when it builds the For-you list.
+// the card, side by side with the incremental messages — the card never
+// blocks the transcript's own append path. A poll that brings the summary the
+// card shows writes only the elapsed-time text; a changed summary repaints
+// the card and keeps each closing passage's fold as the reader left it.
+// session-view.js feeds the bootstrap value (mountWorkerSummary) and each
+// poll's (applyWorkerSummary); turn-engine.js asks for the card node when it
+// builds the For-you list.
 //
 // Card states: a delivered task shows its result, close time, landed commit and
 // diff link, one row per run and both roles' closing words; a running one
@@ -22,6 +25,30 @@
 const card = document.createElement('div');
 card.className = 'worker-summary w-full rounded-xl border border-slate-700 bg-slate-800/70 px-4 py-3 space-y-3 text-sm';
 let currentSummary = null;
+// The JSON of the summary the card shows: a poll bringing the same JSON
+// leaves the card as the reader has it.
+let currentSummaryJson = 'null';
+// The closing roles ('work', 'review') whose Show all fold the reader opened.
+const openFolds = new Set();
+
+// The whole seconds since an ISO time, in the Run duration words.
+function elapsedText(startedAt) {
+  return Chat.formatRunDuration(Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)));
+}
+
+// An elapsed time that ticks in place: the span names its start, and each
+// poll rewrites its text from that start.
+function elapsedHtml(prefix, startedAt) {
+  return '<span data-elapsed-since="' + escapeHtmlAttr(String(startedAt)) + '" data-elapsed-prefix="'
+    + escapeHtmlAttr(prefix) + '">' + escapeHtml(prefix + elapsedText(startedAt)) + '</span>';
+}
+
+function tickElapsed() {
+  card.querySelectorAll('[data-elapsed-since]').forEach((span) => {
+    const text = span.dataset.elapsedPrefix + elapsedText(span.dataset.elapsedSince);
+    if (span.textContent !== text) span.textContent = text;
+  });
+}
 
 // A run's event time reads as a bare clock (the card shows HH:MM:SS on the
 // current-step rows); the closing and stop lines use the full bubble time.
@@ -53,37 +80,48 @@ function statusOf(summary) {
 }
 
 // One line per Run in the card: kind, backend, state · duration, tool calls.
-function runRowHtml(row, elapsedStartedAt) {
-  let state = String(row.state || '');
+// The live Run's duration is the active Run's elapsed time.
+function runRowHtml(row, activeStartedAt) {
+  const state = String(row.state || '');
   let duration = '';
-  if (state === 'running' && elapsedStartedAt) {
-    duration = Chat.formatTurnDuration(Math.max(0, Math.floor((Date.now() - elapsedStartedAt) / 1000)));
+  if (state === 'running' && activeStartedAt) {
+    duration = elapsedHtml('', activeStartedAt);
   } else if (row.started_at && row.ended_at) {
     const seconds = Math.floor((new Date(row.ended_at) - new Date(row.started_at)) / 1000);
-    duration = Chat.formatTurnDuration(seconds);
+    duration = escapeHtml(Chat.formatRunDuration(seconds));
   }
-  const parts = [String(row.kind || 'work') + ' run'];
-  if (row.backend_label) parts.push(String(row.backend_label));
+  const parts = [escapeHtml(String(row.kind || 'work') + ' run')];
+  if (row.backend_label) parts.push(escapeHtml(String(row.backend_label)));
   if (duration) parts.push(duration);
-  parts.push(state);
-  parts.push(toolCallWords(row.tool_calls));
+  parts.push(escapeHtml(state));
+  parts.push(escapeHtml(toolCallWords(row.tool_calls)));
   return '<div class="flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap">'
-    + parts.map((part) => escapeHtml(part)).join('<span class="text-slate-500"> · </span>')
+    + parts.join('<span class="text-slate-500"> · </span>')
     + '</div>';
 }
 
-// A closing passage folds behind one button past three lines or a weight of
-// 360 (a wide code point counts 2) — the child-report card's rule. The full
-// text stays in the markup.
-function textHtml(text) {
+// The Show all toggle of one closing passage: flips its fold and records the
+// role, so a repaint keeps the fold as the reader left it.
+function toggleWorkerSummaryFold(button) {
+  const fold = button.closest('.worker-summary-fold');
+  const opening = fold.dataset.folded === 'true';
+  fold.dataset.folded = opening ? 'false' : 'true';
+  button.setAttribute('aria-expanded', String(opening));
+  if (opening) openFolds.add(fold.dataset.foldKey);
+  else openFolds.delete(fold.dataset.foldKey);
+}
+
+// A long closing passage (Chat.isLongPassage) folds behind one button, keyed
+// by its role; the full text stays in the markup.
+function textHtml(text, foldKey) {
   if (!text) return '';
   const body = '<div class="whitespace-pre-wrap break-words text-slate-300">' + escapeHtml(String(text)) + '</div>';
-  let weight = 0;
-  for (const ch of String(text)) weight += wc2chIsWide(ch.codePointAt(0)) ? 2 : 1;
-  const long = String(text).split('\n').length > 3 || weight > 360;
-  if (!long) return body;
-  return '<div class="worker-summary-fold" data-folded="true">' + body.replace('whitespace-pre-wrap', 'worker-summary-clamp whitespace-pre-wrap')
-    + '<button type="button" class="worker-summary-toggle" aria-expanded="false" onclick="var c=this.closest(\'.worker-summary-fold\');var o=c.dataset.folded===\'true\';c.dataset.folded=o?\'false\':\'true\';this.setAttribute(\'aria-expanded\',String(o))">'
+  if (!Chat.isLongPassage(text)) return body;
+  const open = openFolds.has(foldKey);
+  return '<div class="worker-summary-fold" data-fold-key="' + foldKey + '" data-folded="' + String(!open) + '">'
+    + body.replace('whitespace-pre-wrap', 'worker-summary-clamp whitespace-pre-wrap')
+    + '<button type="button" class="worker-summary-toggle" aria-expanded="' + String(open)
+    + '" onclick="toggleWorkerSummaryFold(this)">'
     + '<span class="worker-summary-more">Show all ▾</span><span class="worker-summary-less">Show less ▴</span></button></div>';
 }
 
@@ -123,10 +161,10 @@ function currentStepHtml(active) {
 }
 
 // A role's closing block, only once the Run that carried it exists.
-function closingHtml(label, closing) {
+function closingHtml(label, closing, foldKey) {
   if (!closing || !closing.text) return '';
   return '<div><div class="text-xs font-semibold text-slate-400">' + escapeHtml(label) + '</div>'
-    + textHtml(closing.text) + '</div>';
+    + textHtml(closing.text, foldKey) + '</div>';
 }
 
 function linksRow(summary) {
@@ -140,36 +178,38 @@ function linksRow(summary) {
   return '<p class="text-xs flex flex-wrap gap-3">' + links.join('') + '</p>';
 }
 
-// The landed commit with the delivery link registry's Diff link beside it, only
-// once the task recorded a landed ref.
+// The landed commit of the current close, with the delivery link registry's
+// Diff link beside it. The server sends landed and delivery from the current
+// close only, so both are null while the task is open.
 function landedHtml(summary) {
   if (!summary.landed) return '';
-  const links = (summary.delivery && typeof Chat.deliveryLinksHtml === 'function')
-    ? Chat.deliveryLinksHtml(summary.delivery, typeof SESSION_ID !== 'undefined' ? SESSION_ID : '')
-    : '';
+  const links = summary.delivery ? Chat.deliveryLinksHtml(summary.delivery, SESSION_ID) : '';
   return '<p class="text-xs text-slate-400">Landed <span class="break-all text-slate-300">'
     + escapeHtml(String(summary.landed)) + '</span> ' + links + '</p>';
 }
 
+// The status line's time: the close time once the task is closed, the live
+// Run's elapsed time while it runs.
+function statusTimeHtml(summary) {
+  if (summary.task_state !== 'open') {
+    return '<span class="text-xs text-slate-400 whitespace-nowrap" title="' + escapeHtmlAttr(String(summary.closed_at))
+      + '">' + escapeHtml('Ended ' + formatBubbleTime(summary.closed_at)) + '</span>';
+  }
+  if (summary.active && summary.active.started_at) {
+    return '<span class="text-xs text-slate-400 whitespace-nowrap">'
+      + elapsedHtml('Running for ', summary.active.started_at) + '</span>';
+  }
+  return '';
+}
+
 function render() {
   const summary = currentSummary;
-  if (!summary) return;
   const status = statusOf(summary);
-  const activeStart = summary.active && summary.active.started_at ? new Date(summary.active.started_at).getTime() : null;
-  let suffix = '';
-  if (summary.closed_at) {
-    suffix = 'Ended ' + formatBubbleTime(summary.closed_at);
-  } else if (activeStart != null) {
-    suffix = 'Running for ' + Chat.formatTurnDuration(Math.max(0, Math.floor((Date.now() - activeStart) / 1000)));
-  }
+  const activeStart = summary.active && summary.active.started_at ? summary.active.started_at : null;
   const head = '<div class="flex items-center gap-2">'
     + '<span class="w-2 h-2 rounded-full flex-shrink-0 ' + status.dot + '"></span>'
     + '<span class="font-semibold text-slate-200">' + escapeHtml(status.label) + '</span>'
-    + (suffix
-      ? '<span class="text-xs text-slate-400 whitespace-nowrap"'
-        + (summary.closed_at ? ' title="' + escapeHtmlAttr(String(summary.closed_at)) + '"' : '')
-        + '>' + escapeHtml(suffix) + '</span>'
-      : '')
+    + statusTimeHtml(summary)
     + '</div>';
   const causeHtml = summary.cause
     ? '<div class="text-xs text-red-400 break-words">' + escapeHtml('Cause: ' + summary.cause.text) + '</div>'
@@ -187,17 +227,32 @@ function render() {
       : '')
     + currentStepHtml(summary.active)
     + causeHtml + stopHtml
-    + closingHtml("Worker's last message", summary.closing && summary.closing.work)
-    + closingHtml('Review verdict', summary.closing && summary.closing.review)
+    + closingHtml("Worker's last message", summary.closing && summary.closing.work, 'work')
+    + closingHtml('Review verdict', summary.closing && summary.closing.review, 'review')
     + linksRow(summary);
 }
 
-// Applies the newest summary (bootstrap or poll) and repaints the card. A
-// session that carries no summary (every non-worker) empties the card state;
-// its For-you list has no card then.
+// Applies a poll's summary. The summary the card already shows writes only
+// the elapsed-time text; a changed one repaints the card, each fold as the
+// reader left it. A session that carries no summary (every non-worker)
+// empties the card state; its For-you list has no card then.
 function applyWorkerSummary(summary) {
+  const json = JSON.stringify(summary || null);
+  if (json === currentSummaryJson) {
+    if (currentSummary) tickElapsed();
+    return;
+  }
+  currentSummaryJson = json;
   currentSummary = summary || null;
   if (currentSummary) render();
+}
+
+// A session open paints its bootstrap summary afresh, every fold closed.
+function mountWorkerSummary(summary) {
+  openFolds.clear();
+  currentSummaryJson = 'null';
+  currentSummary = null;
+  applyWorkerSummary(summary);
 }
 
 // The card node for the For-you list, or null while no summary is showing.
@@ -206,6 +261,6 @@ function workerSummaryCard() {
 }
 
 Chat.ForYou.registerSummaryCardRenderer(workerSummaryCard);
-Chat.wire({applyWorkerSummary, workerSummaryCard}, {});
+Chat.wire({applyWorkerSummary, mountWorkerSummary, workerSummaryCard, toggleWorkerSummaryFold}, {});
 
 })();

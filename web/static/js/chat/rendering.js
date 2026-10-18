@@ -289,6 +289,12 @@ function formatTurnDuration(seconds) {
   return Math.floor(total / 60) + 'm' + String(total % 60).padStart(2, '0') + 's';
 }
 
+// A Run's whole-second duration: the turn row's words, except that a Run
+// shorter than one second reads 0s.
+function formatRunDuration(seconds) {
+  return Number(seconds) === 0 ? '0s' : formatTurnDuration(seconds);
+}
+
 function formatTurnTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -507,9 +513,19 @@ function registerDeliveryLink(link) {
   deliveryLinks.push(link);
 }
 
-// The package delivery links, exposed for the worker summary card's Diff link.
+// The package delivery links: the delivery banner's tail and the worker
+// summary card's Diff link.
 function deliveryLinksHtml(msg, sessionId) {
   return deliveryLinks.map((link) => evidenceLinkHtml(link.label, link.href(msg, sessionId))).join('');
+}
+
+// A passage folds behind a button when it runs past three lines, or past a
+// weight of 360 where each wide (CJK) code point counts 2: the child report
+// card's rule, which the worker summary card's closing passages share.
+function isLongPassage(text) {
+  let weight = 0;
+  for (const ch of String(text)) weight += wc2chIsWide(ch.codePointAt(0)) ? 2 : 1;
+  return String(text).split('\n').length > 3 || weight > 360;
 }
 
 // A worker transcript's per-Run header (a system line of kind run_header):
@@ -753,7 +769,7 @@ function renderMessage(msg, sessionId) {
       evidenceLinkHtml('Raw log', evidenceHref(msg.raw_log_ref)),
       evidenceLinkHtml('Events', evidenceHref(msg.events_ref)),
       evidenceLinkHtml('Result', evidenceHref(msg.result_ref)),
-    ].concat(deliveryLinks.map(function(link) { return evidenceLinkHtml(link.label, link.href(msg, sessionId)); }));
+    ].join('') + deliveryLinksHtml(msg, sessionId);
     var refsHtml = '';
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     if (refs.length) {
@@ -764,7 +780,7 @@ function renderMessage(msg, sessionId) {
     return openMessageWrapper("flex justify-start", msg) + '<div class="max-w-[90%] overflow-hidden rounded-xl border ' + palette + ' px-4 py-3 space-y-1 text-sm">'
       + '<p class="text-xs font-semibold uppercase tracking-wider ' + labelClass + '">' + escapeHtml(stateLabel) + '</p>'
       + (msg.content ? '<p class="text-slate-200 whitespace-pre-wrap">' + escapeHtml(String(msg.content)) + '</p>' : '')
-      + '<p class="text-xs flex flex-wrap gap-3">' + links.join('') + '</p>'
+      + '<p class="text-xs flex flex-wrap gap-3">' + links + '</p>'
       + refsHtml + timeDiv() + '</div></div>';
   }
   if (msg.role === "child_report") {
@@ -773,11 +789,8 @@ function renderMessage(msg, sessionId) {
     var outcomeColorCls = reportOutcome === "completed" ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
     var reportText = String(msg.content || "");
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
-    // A report folds behind a button when it runs past three lines, or past a
-    // weight of 360 where each wide (CJK) code point counts 2, or it has refs.
-    var reportWeight = 0;
-    for (var ch of reportText) reportWeight += wc2chIsWide(ch.codePointAt(0)) ? 2 : 1;
-    var longText = reportText.split("\n").length > 3 || reportWeight > 360;
+    // A report folds behind a button when it is a long passage or it has refs.
+    var longText = isLongPassage(reportText);
     var foldable = longText || refs.length > 0;
     var refsHtml = "";
     if (refs.length) {
@@ -863,7 +876,7 @@ function renderMessage(msg, sessionId) {
     if (msg.kind === "run_end") {
       // The end of one Run: its duration, no rating and no clone buttons.
       sepLabel = "run ended" + (msg.thinking_seconds != null
-        ? " &middot; " + formatTurnDuration(Number(msg.thinking_seconds)) : "");
+        ? " &middot; " + formatRunDuration(msg.thinking_seconds) : "");
     } else if (sessionId) {
       if (msg.event_index != null) {
         buttons = separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
@@ -961,7 +974,9 @@ const CHAT_ONLY = {
   evidenceLinkHtml,
   evidenceHref,
   deliveryLinksHtml,
+  isLongPassage,
   formatTurnDuration,
+  formatRunDuration,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

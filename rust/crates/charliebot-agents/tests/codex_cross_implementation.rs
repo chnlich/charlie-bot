@@ -581,7 +581,7 @@ fn check_quota(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec
   expect_eq(failures, "quota case count", &json!(cases.len()), &json!(expected.len()));
   for (case, python_case) in cases.iter().zip(expected) {
     let account = CodexQuotaAccount::new(Path::new(text(&case["codex_home"])));
-    let fetch = runtime.block_on(account.fetch());
+    let fetch = runtime.block_on(account.fetch()).expect("the rollout listing succeeds");
     let marked = fetch.as_ref().map(|entry| account.mark_expired(entry, UtcDateTime::parse(&rfc3339(fx.now)).unwrap()));
     let rust = json!({
       "id": case["id"],

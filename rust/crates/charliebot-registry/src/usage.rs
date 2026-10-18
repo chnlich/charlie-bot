@@ -52,8 +52,8 @@ pub struct UsageOps {
 pub trait UsageSourceImpl: Send + Sync {
   fn ops(&self) -> UsageOps;
 
-  /// The source's log files on this host, each with its account label.
-  fn logs(&self) -> anyhow::Result<Vec<(PathBuf, String)>> {
+  /// The source's log files on this host, each with its account label, read from the loaded config.
+  fn logs(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
     undeclared("logs")
   }
 
@@ -69,7 +69,7 @@ pub trait UsageSourceImpl: Send + Sync {
 
   /// The source's accounts on the quota panel, derived from the live config on every call. An account that stays in
   /// the config comes back as the same `Arc`, so its state (a 429 backoff, for one) survives between calls.
-  fn quota_accounts(&self, _cfg: &CharlieBotConfig) -> Vec<Arc<dyn QuotaAccount>> {
+  fn quota_accounts(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
     undeclared("quota_accounts")
   }
 
@@ -126,9 +126,9 @@ pub trait QuotaAccount: Send + Sync {
   fn provider(&self) -> &str;
   fn provider_label(&self) -> &str;
   fn label(&self) -> &str;
-  /// Why the last `fetch` returned `None`.
+  /// Why the last `fetch` returned `Ok(None)`.
   fn last_error(&self) -> String;
-  fn fetch<'a>(&'a self) -> BoxFuture<'a, Option<Map<String, Value>>>;
+  fn fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>>;
   /// Sets or clears `login_required` on the cached entry, after each fetch of this account.
   fn mark_login_required(&self, _entry: &mut Map<String, Value>) {}
   /// The entry as one emit shows it at `now`. Never writes into `entry`.
@@ -260,15 +260,19 @@ impl Registry {
     }
   }
 
-  /// The quota accounts of every source that declares `quota_accounts`, in source registration order.
-  pub fn quota_accounts(&self, cfg: &CharlieBotConfig) -> Vec<Arc<dyn QuotaAccount>> {
-    self
-      .usage_sources
-      .values()
-      .filter_map(|source| source.implementation.as_ref())
-      .filter(|implementation| implementation.ops().quota_accounts)
-      .flat_map(|implementation| implementation.quota_accounts(cfg))
-      .collect()
+  /// The quota accounts of every source that declares `quota_accounts`, in source registration order. The first source
+  /// error stops the call.
+  pub fn quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
+    let mut accounts = Vec::new();
+    for source in self.usage_sources.values() {
+      let Some(implementation) = source.implementation.as_ref() else {
+        continue;
+      };
+      if implementation.ops().quota_accounts {
+        accounts.extend(implementation.quota_accounts(cfg)?);
+      }
+    }
+    Ok(accounts)
   }
 
   /// The sweep of every source that declares `sweep`, in source registration order.
@@ -280,5 +284,60 @@ impl Registry {
       .filter(|implementation| implementation.ops().sweep)
       .map(|implementation| implementation.sweep(scope))
       .collect()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::atomic::{AtomicUsize, Ordering};
+
+  use super::*;
+
+  struct QuotaSource {
+    error: Option<&'static str>,
+    calls: Arc<AtomicUsize>,
+  }
+
+  impl UsageSourceImpl for QuotaSource {
+    fn ops(&self) -> UsageOps {
+      UsageOps { quota_accounts: true, ..UsageOps::default() }
+    }
+
+    fn quota_accounts(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
+      self.calls.fetch_add(1, Ordering::SeqCst);
+      if let Some(error) = self.error {
+        anyhow::bail!("{error}");
+      }
+      Ok(Vec::new())
+    }
+  }
+
+  fn source(name: &'static str, error: Option<&'static str>, calls: Arc<AtomicUsize>) -> UsageSource {
+    UsageSource {
+      name,
+      id_prefixes: &[],
+      run_logs_only: false,
+      implementation: Some(Arc::new(QuotaSource { error, calls })),
+    }
+  }
+
+  #[test]
+  fn quota_accounts_returns_the_first_source_error() {
+    let first_calls = Arc::new(AtomicUsize::new(0));
+    let second_calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = Registry::new();
+    registry
+      .usage_sources
+      .insert("first-package", "first", source("first", Some("first source failed"), first_calls.clone()))
+      .unwrap();
+    registry.usage_sources.insert("second-package", "second", source("second", None, second_calls.clone())).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let cfg = registry.load_config(home.path()).unwrap();
+
+    let error = registry.quota_accounts(&cfg).err().unwrap();
+
+    assert_eq!(error.to_string(), "first source failed");
+    assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_calls.load(Ordering::SeqCst), 0);
   }
 }

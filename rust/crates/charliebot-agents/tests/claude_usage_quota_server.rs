@@ -16,10 +16,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use charliebot_agents::backends::claude_code::ClaudeHost;
 use charliebot_agents::backends::claude_code::claude_accounts::{self, ClaudeAccountState};
+use charliebot_agents::backends::claude_code::usage_logs::ClaudeLogs;
 use charliebot_agents::backends::claude_code::usage_quota::{ClaudeQuotaAccount, QuotaAccounts, QuotaHttp};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_registry::Registry;
-use charliebot_registry::usage::QuotaAccount;
+use charliebot_registry::usage::{QuotaAccount, UsageSourceImpl};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
@@ -139,15 +140,14 @@ impl Fixture {
   }
 
   /// A config with one pool login whose directory is this fixture's login directory.
-  fn pool_config(&self) -> charliebot_core::config::CharlieBotConfig {
+  fn config_with_pool_dir(&self, config_dir: &str) -> charliebot_core::config::CharlieBotConfig {
     let home = self.root.path().join("home");
     fs::create_dir_all(&home).unwrap();
     fs::write(
       home.join("config.yaml"),
       format!(
-        "paths:\n  worktree_dir: '{}'\naccounts:\n  claude:\n    - label: invite-1\n      config_dir: '{}'\n",
+        "paths:\n  worktree_dir: '{}'\naccounts:\n  claude:\n    - label: invite-1\n      config_dir: '{config_dir}'\n",
         self.root.path().join("worktrees").display(),
-        self.login_dir.display(),
       ),
     )
     .unwrap();
@@ -156,12 +156,20 @@ impl Fixture {
     registry.load_config(&home).unwrap()
   }
 
+  fn pool_config(&self) -> charliebot_core::config::CharlieBotConfig {
+    self.config_with_pool_dir(&self.login_dir.display().to_string())
+  }
+
   fn host(&self) -> ClaudeHost {
-    ClaudeHost {
-      home: self.root.path().to_path_buf(),
-      claude_config_dir: self.root.path().join("claude-home"),
-      charliebot_home: self.root.path().join("home"),
-    }
+    ClaudeHost { home: self.root.path().to_path_buf(), claude_config_dir: self.root.path().join("claude-home") }
+  }
+}
+
+struct WorkingDirectoryRestore(PathBuf);
+
+impl Drop for WorkingDirectoryRestore {
+  fn drop(&mut self) {
+    env::set_current_dir(&self.0).expect("the original working directory is restored");
   }
 }
 
@@ -198,8 +206,9 @@ fn serve(mut stream: TcpStream, routes: &Mutex<Routes>, recorded: &Mutex<Vec<(St
     .get_mut(path.as_str())
     .and_then(VecDeque::pop_front)
     .unwrap_or_else(|| (599, format!("no scripted response for {path}")));
+  let reason = reqwest::StatusCode::from_u16(status).unwrap().canonical_reason().unwrap();
   let response = format!(
-    "HTTP/1.1 {status} scripted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
     payload.len()
   );
   stream.write_all(response.as_bytes()).unwrap();
@@ -220,8 +229,8 @@ fn a_fresh_token_fetches_the_panel_without_renewal_and_probes_the_cli_once() {
 
   let (first, second) = fixture.with_claude(|| block_on(async { (account.fetch().await, account.fetch().await) }));
 
-  let first = first.expect("a fresh token fetches the panel");
-  assert!(second.is_some());
+  let first = first.expect("the usage request succeeds").expect("a fresh token fetches the panel");
+  assert!(second.expect("the second usage request succeeds").is_some());
   assert_eq!(first["windows"][0]["utilization"], json!(12.0));
   let usage = fixture.requests("/usage");
   assert_eq!(usage.len(), 2);
@@ -241,7 +250,7 @@ fn an_expired_token_renews_once_and_rewrites_the_credentials_file() {
 
   let result = fixture.with_claude(|| block_on(account.fetch()));
 
-  assert!(result.is_some());
+  assert!(result.expect("the usage request succeeds").is_some());
   let usage = fixture.requests("/usage");
   assert_eq!(usage.len(), 2);
   assert_eq!(usage[0].headers["authorization"], "Bearer tok-stored");
@@ -270,7 +279,7 @@ fn a_refused_renewal_leaves_the_credentials_and_reports_a_failed_refresh() {
 
   let result = fixture.with_claude(|| block_on(account.fetch()));
 
-  assert!(result.is_none());
+  assert!(result.expect("a refused renewal returns no reading").is_none());
   assert_eq!(account.last_error(), "token refresh failed");
   assert_eq!(fixture.requests("/usage").len(), 1);
   assert_eq!(fixture.requests("/token").len(), 1);
@@ -286,7 +295,7 @@ fn a_pool_login_whose_renewal_was_refused_is_marked_only_after_an_auth_failure_i
   let invite = logins.iter().find(|login| login.label() == "invite-1").unwrap();
 
   let result = fixture.with_claude(|| block_on(invite.fetch()));
-  assert!(result.is_none());
+  assert!(result.expect("a refused renewal returns no reading").is_none());
   assert_eq!(invite.last_error(), "token refresh failed");
 
   // The refused login keeps its access token on disk, so the pool still judges it healthy.
@@ -306,8 +315,43 @@ fn a_rate_limited_account_backs_off_without_a_second_request() {
 
   let (first, second) = fixture.with_claude(|| block_on(async { (account.fetch().await, account.fetch().await) }));
 
-  assert!(first.is_none());
-  assert!(second.is_none());
+  assert!(first.expect("a rate limit returns no reading").is_none());
+  assert!(second.expect("backoff returns no reading").is_none());
   assert_eq!(account.last_error(), "rate limited");
   assert_eq!(fixture.requests("/usage").len(), 1, "the backoff holds the second round back");
+}
+
+#[test]
+fn an_http_error_returns_the_python_status_error_text() {
+  let fixture = Fixture::new(FRESH, vec![(500, "{}")], vec![]);
+  let account = fixture.account("work (default)");
+
+  let error = fixture.with_claude(|| block_on(account.fetch())).unwrap_err();
+
+  assert_eq!(
+    error.to_string(),
+    format!(
+      "Server error '500 Internal Server Error' for url '{}/usage'\nFor more information check: \
+       https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+      fixture.base
+    )
+  );
+}
+
+#[test]
+fn quota_accounts_returns_the_config_derivation_error() {
+  let fixture = Fixture::new(FRESH, vec![], vec![]);
+  let config = fixture.config_with_pool_dir("relative-login");
+  let source = ClaudeLogs::new(fixture.host(), Arc::clone(&fixture.state), fixture.http());
+  let original_dir = env::current_dir().unwrap();
+  let deleted_dir = fixture.root.path().join("deleted-working-directory");
+  fs::create_dir(&deleted_dir).unwrap();
+  env::set_current_dir(&deleted_dir).unwrap();
+  let restore = WorkingDirectoryRestore(original_dir);
+  fs::remove_dir(&deleted_dir).unwrap();
+
+  let error = source.quota_accounts(&config).err().unwrap();
+
+  drop(restore);
+  assert!(error.to_string().contains("reading the working directory"));
 }

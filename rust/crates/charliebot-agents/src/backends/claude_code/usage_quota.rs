@@ -272,7 +272,7 @@ impl ClaudeQuotaAccount {
       return Ok(None);
     }
     self.clear_backoff();
-    let response = response.error_for_status().context("the usage endpoint refused the request")?;
+    let response = raise_for_status(response)?;
     let raw: Value = response.json().await.context("the usage response is not JSON")?;
     let usage = transform_response(&raw, &self.label, &self.state.quota)?;
     // The account pool ranks logins by their newest reading, and the panel poll is that reading's source.
@@ -401,22 +401,8 @@ impl QuotaAccount for ClaudeQuotaAccount {
     self.round.lock().expect("the account round is not poisoned").last_error.clone()
   }
 
-  fn fetch<'a>(&'a self) -> BoxFuture<'a, Option<Map<String, Value>>> {
-    Box::pin(async move {
-      match self.fetch_round().await {
-        Ok(usage) => usage,
-        Err(error) => {
-          tracing::error!(
-            target: "charliebot_agents",
-            provider = PROVIDER,
-            account = %self.label,
-            error = %format!("{error:#}"),
-            "ext_usage_poll_error"
-          );
-          None
-        }
-      }
-    })
+  fn fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>> {
+    Box::pin(async move { self.fetch_round().await })
   }
 
   fn mark_login_required(&self, entry: &mut Map<String, Value>) {
@@ -526,6 +512,26 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
   // expiresAt is deliberately not read: renewal keys off the server's 401, never a local expiry check.
   quota.warned.lock().expect("the warnings are not poisoned").credentials.retain(|(_, known)| known != path);
   Ok(Some(Credentials { access_token, refresh_token }))
+}
+
+/// The status error text returned by Python's `httpx.Response.raise_for_status`.
+fn raise_for_status(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
+  let status = response.status();
+  let category = match status.as_u16() {
+    100..=199 => "Informational response",
+    300..=399 => "Redirect response",
+    400..=499 => "Client error",
+    500..=599 => "Server error",
+    _ => return Ok(response),
+  };
+  let reason = status.canonical_reason().context("the HTTP status has no canonical reason")?;
+  bail!(
+    "{category} '{} {}' for url '{}'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/{}",
+    status.as_u16(),
+    reason,
+    response.url(),
+    status.as_u16()
+  );
 }
 
 /// Logs one credentials warning per event and path until a read of the path returns a token.
@@ -951,11 +957,7 @@ mod tests {
   }
 
   fn host_at(home: &Path) -> ClaudeHost {
-    ClaudeHost {
-      home: home.to_path_buf(),
-      claude_config_dir: home.join(".claude"),
-      charliebot_home: home.to_path_buf(),
-    }
+    ClaudeHost { home: home.to_path_buf(), claude_config_dir: home.join(".claude") }
   }
 
   fn accounts() -> QuotaAccounts {

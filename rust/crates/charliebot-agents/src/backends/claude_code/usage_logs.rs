@@ -8,8 +8,7 @@
 //! on resume and fork, so a response dedupes on its id within a file. The record's session is the transcript's file
 //! stem.
 //!
-//! The registry's `logs` takes no config, so this source reads `accounts.claude` from the current profile config each
-//! time it lists transcripts.
+//! The registry passes the loaded config to `logs`, so this source reads `accounts.claude` through that config.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -50,26 +49,12 @@ impl ClaudeLogs {
   }
 
   /// The current config's login directories: the default one and every `accounts.claude` entry, sorted and deduplicated.
-  fn login_dirs(&self) -> anyhow::Result<Vec<PathBuf>> {
-    let config_path = self.host.charliebot_home.join(charliebot_core::config::CONFIG_FILENAME);
-    let document = charliebot_core::config::read_yaml_document(&config_path)
-      .with_context(|| format!("reading Claude account config from {}", config_path.display()))?;
-    let document = match document {
-      serde_yaml::Value::Null => return Ok(vec![self.host.default_dir()]),
-      serde_yaml::Value::Mapping(mapping) => mapping,
-      other => bail!("{}: the document must be a mapping of sections, got {other:?}", config_path.display()),
-    };
-    let key = serde_yaml::Value::String("accounts".to_string());
-    let accounts = match document.get(&key) {
-      Some(value) => serde_yaml::from_value::<AccountsConfig>(value.clone())
-        .with_context(|| format!("{}: invalid config key accounts", config_path.display()))?,
-      None => AccountsConfig::default(),
-    };
+  fn login_dirs(&self, cfg: &CharlieBotConfig) -> Vec<PathBuf> {
     let mut dirs = BTreeSet::from([self.host.default_dir()]);
-    for account in &accounts.claude {
+    for account in &cfg.section::<AccountsConfig>("accounts").claude {
       dirs.insert(self.host.expand(&account.config_dir));
     }
-    Ok(dirs.into_iter().collect())
+    dirs.into_iter().collect()
   }
 }
 
@@ -78,9 +63,9 @@ impl UsageSourceImpl for ClaudeLogs {
     UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: true, sweep: true }
   }
 
-  fn logs(&self) -> anyhow::Result<Vec<(PathBuf, String)>> {
+  fn logs(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
     let mut logs = Vec::new();
-    for (label, login_dir) in labeled_login_dirs(&self.login_dirs()?) {
+    for (label, login_dir) in labeled_login_dirs(&self.login_dirs(cfg)) {
       for path in walk_jsonl(&login_dir.join("projects"))? {
         logs.push((path, label.clone()));
       }
@@ -92,19 +77,8 @@ impl UsageSourceImpl for ClaudeLogs {
     read_transcript(path, account)
   }
 
-  fn quota_accounts(&self, cfg: &CharlieBotConfig) -> Vec<Arc<dyn QuotaAccount>> {
-    match self.quota.derive(&self.host, cfg) {
-      Ok(accounts) => accounts,
-      Err(error) => {
-        tracing::error!(
-          target: "charliebot_agents",
-          provider = "claude",
-          error = %format!("{error:#}"),
-          "ext_usage_quota_accounts_failed"
-        );
-        Vec::new()
-      }
-    }
+  fn quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
+    self.quota.derive(&self.host, cfg)
   }
 
   fn sweep(&self, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
@@ -380,12 +354,8 @@ mod tests {
       fs::create_dir_all(dir.join("projects")).unwrap();
       fs::write(dir.join("projects/session.jsonl"), "synthetic\n").unwrap();
     }
-    super::super::test_support::load_config(&profile, &[("ext-1", &first_dir)], &worktrees);
-    let host = ClaudeHost {
-      home: root.path().to_path_buf(),
-      claude_config_dir: default_dir.clone(),
-      charliebot_home: profile.clone(),
-    };
+    let host = ClaudeHost { home: root.path().to_path_buf(), claude_config_dir: default_dir.clone() };
+    let initial_cfg = super::super::test_support::load_config(&profile, &[("ext-1", &first_dir)], &worktrees);
     let source = ClaudeLogs::new(
       host,
       Arc::new(ClaudeAccountState::new()),
@@ -396,13 +366,14 @@ mod tests {
       )),
     );
 
-    let initial = source.logs().unwrap();
+    assert!(!root.path().join(charliebot_core::config::CONFIG_FILENAME).exists());
+    let initial = source.logs(&initial_cfg).unwrap();
     assert_eq!(initial.len(), 2);
     assert!(initial.contains(&(default_dir.join("projects/session.jsonl"), "work (default)".to_string())));
     assert!(initial.contains(&(first_dir.join("projects/session.jsonl"), "ext-1".to_string())));
 
-    super::super::test_support::load_config(&profile, &[("ext-2", &second_dir)], &worktrees);
-    let refreshed = source.logs().unwrap();
+    let refreshed_cfg = super::super::test_support::load_config(&profile, &[("ext-2", &second_dir)], &worktrees);
+    let refreshed = source.logs(&refreshed_cfg).unwrap();
     assert_eq!(refreshed.len(), 2);
     assert!(refreshed.contains(&(default_dir.join("projects/session.jsonl"), "work (default)".to_string())));
     assert!(refreshed.contains(&(second_dir.join("projects/session.jsonl"), "ext-2".to_string())));

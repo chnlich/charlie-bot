@@ -1,8 +1,10 @@
 //! `src/features/chat_threads`: the Slack and Discord thread sessions. Their turn contribution names the thread brief,
-//! their sidebar subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view.
+//! their sidebar subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The reply contract
+//! that the platform turn contributions share is in `thread_entry`.
 
 mod api;
 mod sidebar;
+pub mod thread_entry;
 mod thread_sessions;
 mod turn_contribution;
 

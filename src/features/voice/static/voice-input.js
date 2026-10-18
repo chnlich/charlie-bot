@@ -52,7 +52,7 @@ const VOICE_INPUT_MODE = 'voice';
 // The note a fallback decode's inserted text carries beside the composer: the
 // upload named a live backend id and the server decoded it with the local
 // engine, the lower-quality path the user may want to drop and re-record.
-const VOICE_LOCAL_FALLBACK_NOTE = '本地引擎转写（质量较低）';
+const VOICE_LOCAL_FALLBACK_NOTE = 'Transcribed by the local engine (lower quality)';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so
 // the budget grows with the run; a fixed wait is either too short for long

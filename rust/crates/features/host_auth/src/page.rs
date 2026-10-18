@@ -1,11 +1,11 @@
 //! The standing page (`src/features/host_auth/api.py` `host_auth_page`, `_page_rows`, `_summary`, `_format_remaining`):
-//! the template context built from the state, rendered through charliebot-compat's Jinja2 environment.
-
-use std::path::Path;
+//! the template context built from the state and rendered through the shared template handle.
 
 use anyhow::Context;
-use charliebot_compat::jinja;
-use charliebot_registry::pages::package_directory;
+use axum::response::Response;
+use charliebot_registry::FeatureContext;
+use charliebot_registry::templating::Templating;
+use http::request::Parts;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
@@ -15,29 +15,23 @@ use crate::host_auth::{
 };
 use crate::timestamps::{self, LocalFormat};
 
-/// The package whose `templates/` holds the page.
-const PACKAGE: &str = "src.features.host_auth";
 const TEMPLATE: &str = "host_auth.html";
 /// A countdown under a day is highlighted.
 const AMBER_UNDER_SEC: f64 = 24.0 * 3600.0;
 
-/// The page rendered from `state` at `now`. The templates are the checkout's `web/templates` (the partials) and the
-/// package's own `templates/`, in that search order.
-pub fn render(state: &State, now: OffsetDateTime, repo_root: &Path) -> anyhow::Result<String> {
-  let context = context(state, now)?;
-  let directories =
-    vec![repo_root.join("web").join("templates"), package_directory(repo_root, PACKAGE).join("templates")];
-  let environment = jinja::environment(jinja::file_system_loader(directories));
-  let template = environment.get_template(TEMPLATE)?;
-  Ok(template.render(minijinja::Value::from_serialize(&context))?)
-}
-
-/// The checkout the page's templates come from. The server requires `CHARLIEBOT_REPO_ROOT` at startup, so it is set
-/// whenever a request arrives.
-pub fn repo_root() -> anyhow::Result<std::path::PathBuf> {
-  std::env::var_os("CHARLIEBOT_REPO_ROOT")
-    .map(Into::into)
-    .context("CHARLIEBOT_REPO_ROOT names the checkout whose templates the host-auth page renders")
+/// Render the host-auth page with request data available to the registered template globals.
+pub fn render(
+  features: &FeatureContext,
+  state: &State,
+  now: OffsetDateTime,
+  request: &Parts,
+) -> Result<Response, (String, String)> {
+  let context = context(state, now).map_err(|error| ("Exception".to_string(), error.to_string()))?;
+  let templating =
+    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+  templating
+    .render_page(features, TEMPLATE, &context, request)
+    .map_err(|error| (error.kind().to_string(), error.to_string()))
 }
 
 /// The template context of `host_auth_page`.
@@ -247,13 +241,13 @@ mod tests {
   }
 
   #[test]
-  fn the_page_renders_the_repository_templates_with_the_host_rows() {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+  fn the_page_context_contains_the_template_rows() {
     let state =
       state_with(json!([host("login-held", STATUS_NEEDS_OKTA, json!({"detail": "Okta verification required"}))]));
     let now = timestamps::parse("2026-09-15T08:00:00+00:00").expect("the stamp parses");
-    let html = render(&state, now, &repo_root).expect("the page renders");
-    assert!(html.contains("login-held"));
-    assert!(html.contains("Okta verification required"));
+    let page = context(&state, now).expect("the context builds");
+    assert_eq!(page["hosts"][0]["alias"], json!("login-held"));
+    assert_eq!(page["hosts"][0]["detail_lines"], json!(["Okta verification required"]));
+    assert_eq!(page["hosts"][0]["deadline_kind"], json!("pending_okta"));
   }
 }

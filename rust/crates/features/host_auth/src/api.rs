@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::State;
+use axum::http::request::Parts;
 use axum::response::Response;
 use axum::routing::{get, post};
 use charliebot_compat::responses;
@@ -17,12 +19,13 @@ use crate::host_auth::{self, RoundSlot};
 use crate::page;
 use crate::timestamps;
 
-/// The routes, which read the state file and the checkout's templates from the process itself.
-pub fn routes(_features: &Arc<FeatureContext>) -> Router {
+/// Register host-auth routes with the application feature context as shared state.
+pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/host-auth", get(host_auth_page).head(get_not_allowed).fallback(get_not_allowed))
     .route("/api/host-auth/status", get(host_auth_status).head(get_not_allowed).fallback(get_not_allowed))
     .route("/api/host-auth/probe", post(host_auth_probe).fallback(post_not_allowed))
+    .with_state(Arc::clone(features))
 }
 
 /// The paths the routes answer, for the trailing-slash redirect: a slashed form of one of them redirects to it.
@@ -31,16 +34,17 @@ pub fn matches(path: &str) -> bool {
 }
 
 /// `GET /host-auth`: the standing page, rendered from the state file.
-async fn host_auth_page() -> Response {
-  let rendered = tokio::task::spawn_blocking(|| -> anyhow::Result<String> {
-    let state = host_auth::load_state(&host_auth::default_state_path()?);
-    page::render(&state, timestamps::utc_now(), &page::repo_root()?)
+async fn host_auth_page(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
+  let rendered = tokio::task::spawn_blocking(move || {
+    let state_path = host_auth::default_state_path().map_err(|error| ("Exception".to_string(), error.to_string()))?;
+    let state = host_auth::load_state(&state_path);
+    page::render(&features, &state, timestamps::utc_now(), &request)
   })
   .await
   .expect("rendering the host-auth page does not panic");
   match rendered {
-    Ok(html) => responses::html(html),
-    Err(error) => failure(error),
+    Ok(response) => response,
+    Err((kind, detail)) => responses::internal_error(&kind, detail),
   }
 }
 

@@ -428,7 +428,8 @@ impl Store {
         .ok_or_else(|| StoreError::new("run_finished fact has no string timestamp"))?;
       let parsed = UtcDateTime::parse(timestamp)
         .map_err(|error| StoreError::new(format!("run_finished fact timestamp is invalid: {error}")))?;
-      fact_times.entry(run_id.to_string()).or_insert(parsed);
+      // The last fact per run wins, as Python's dict assignment in last_ended_run_id does.
+      fact_times.insert(run_id.to_string(), parsed);
     }
     let runs = self.list_run_records_sync(session_id)?;
     let mut latest: Option<(UtcDateTime, usize, String)> = None;

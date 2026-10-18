@@ -621,6 +621,15 @@ mod tests {
     assert!(outcome.cgroup_exit_report.as_deref().unwrap().contains("session 内存上限触发"));
   }
 
+  /// Waits until the runner holds the spawned child, failing after 5 s.
+  async fn wait_for_active_child(runner: &AgentRunner) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while runner.active.lock().expect("active process lock poisoned").is_none() {
+      assert!(tokio::time::Instant::now() < deadline, "runner never acquired the child within 5 s");
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+  }
+
   #[tokio::test]
   async fn terminate_signals_the_child_group_and_waits_for_exit() {
     let root = tempfile::tempdir().unwrap();
@@ -640,7 +649,7 @@ mod tests {
         ))
         .await
     });
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    wait_for_active_child(&runner).await;
     runner.terminate().await.unwrap();
     let outcome = tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap().unwrap();
     assert!(outcome.exit_code.is_some_and(|code| code != 0));
@@ -667,7 +676,7 @@ mod tests {
         ))
         .await
     });
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    wait_for_active_child(&runner).await;
     runner.detach();
     let outcome = tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap().unwrap();
     assert_eq!(outcome.exit_code, None);

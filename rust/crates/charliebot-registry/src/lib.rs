@@ -7,6 +7,7 @@
 //! typed registration method and one reader. `rust/docs/registry.md` lists them with their Python sources.
 
 pub mod backend;
+pub mod caller;
 pub mod context;
 pub mod lifespan;
 pub mod pages;
@@ -14,6 +15,7 @@ pub mod registry;
 pub mod sequence;
 pub mod sidebar;
 pub mod store_hooks;
+pub mod task_errors;
 pub mod templating;
 pub mod turn;
 pub mod usage;

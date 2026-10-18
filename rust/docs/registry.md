@@ -265,6 +265,20 @@ lock. `restore_chain` takes the lock itself and returns the restored ids.
   services in reverse, then the early ones in reverse, then runs the let-go steps in order.
 - Example: `registry.recovery_step("sweep_orphans", sweep_orphans)?;`
 
+## Route helpers
+
+`caller::resolve_caller(headers: &HeaderMap, features: &FeatureContext) -> Result<CallerIdentity, Response>` resolves
+the operator or active agent identity from request headers, the live `FeatureContext.credentials` and the store's run
+identity. `CallerIdentity` exposes `is_operator()`, `session_id()` and `claims()`, and implements
+`FromRequestParts<Arc<FeatureContext>>` for route extractors. It follows Python `src/runtime/api/deps.py:108-148`,
+`src/runtime/run_token.py:62-100` and `src/runtime/run_identity.py:32`. Every Rust handler ported from a route listed
+under "Routes that use `require_caller`" in `rust/docs/contract/auth.md` must use this extractor.
+
+`task_errors::task_http_error(error: StoreError) -> Response` is the shared HTTP mapping for task-domain errors. It
+follows Python `src/runtime/api/sessions.py:793-810`: refusal variants use their FastAPI status and detail, conflicts
+include their message and blockers, and failures use the ordinary unhandled-exception response. Every task-error
+answer from a route uses this function.
+
 ## The typed startup state
 
 `FeatureContext` holds the config and credentials (`Arc<HotReload<_>>`), the store, the registry and the

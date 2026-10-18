@@ -57,19 +57,16 @@ mod tests {
   use std::fs;
   use std::sync::Arc;
 
-  use axum::Json;
   use axum::Router;
   use axum::body::{Body, to_bytes};
-  use axum::extract::Path as RoutePath;
   use axum::http::{Method, Request, StatusCode, header};
   use axum::response::Response;
-  use axum::routing::get;
   use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME};
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_core::metadata_slot::MetadataSlot;
   use charliebot_registry::context::{FeatureContext, StartupState};
-  use charliebot_registry::{RegisterFn, Registry, RegistryError};
+  use charliebot_registry::{RegisterFn, Registry};
   use charliebot_store::Store;
   use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
   use serde_json::{Value, json};
@@ -77,31 +74,12 @@ mod tests {
   use tower::ServiceExt;
 
   const LISTING: (&str, RegisterFn) = ("runtime.session_api", charliebot_session_api::register);
-  const PER_SESSION: (&str, RegisterFn) = ("test.per_session_routes", per_session_stand_in);
   const CHAT_THREADS: (&str, RegisterFn) = ("src.features.chat_threads", crate::register);
   const SLACK: (&str, RegisterFn) = ("src.features.slack", charliebot_slack::register);
   const DISCORD: (&str, RegisterFn) = ("src.features.discord", charliebot_discord::register);
-  /// The server's order: the listing routes, the per-session stand-in, this package, then the Slack and Discord
+  /// The server's order: the session-api's listing and per-session routes, this package, then the Slack and Discord
   /// packages that own the origin slots (`src/app/registrations.py` lists them after the chat-threads package).
-  const SERVER: [(&str, RegisterFn); 5] = [LISTING, PER_SESSION, CHAT_THREADS, SLACK, DISCORD];
-
-  /// Stands in for the per-session read routes of `GET /api/sessions/{session_id}`, which the session-api crate does
-  /// not serve yet. The route-order test needs a route with that path.
-  fn per_session_stand_in(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.router(per_session_routes, per_session_matches)
-  }
-
-  fn per_session_routes(_features: &Arc<FeatureContext>) -> Router {
-    Router::new().route("/api/sessions/{session_id}", get(per_session))
-  }
-
-  fn per_session_matches(path: &str) -> bool {
-    path.starts_with("/api/sessions/")
-  }
-
-  async fn per_session(RoutePath(session_id): RoutePath<String>) -> Json<Value> {
-    Json(json!({"session_id": session_id}))
-  }
+  const SERVER: [(&str, RegisterFn); 4] = [LISTING, CHAT_THREADS, SLACK, DISCORD];
 
   /// The server's composition in miniature: the packages register in the given order, and the app merges their
   /// routers in that order, as `charliebot-server`'s `app::build` does.
@@ -322,11 +300,11 @@ mod tests {
     let expected = HashSet::from([corpus.thread.clone(), corpus.slack_thread, corpus.child, corpus.grandchild]);
     assert_eq!(row_ids(&rows), expected);
 
-    // The per-session route still answers the ids the static path does not claim.
+    // The session-api's per-session route still answers the ids the static path does not claim.
     let per_session = send(&app, get_request(&format!("/api/sessions/{}", corpus.thread), false)).await;
     assert_eq!(per_session.status(), StatusCode::OK);
     let body = serde_json::from_slice::<Value>(&bytes(per_session).await).expect("the body is JSON");
-    assert_eq!(body, json!({"session_id": corpus.thread}));
+    assert_eq!(body["id"], json!(corpus.thread));
 
     // An API GET route does not answer HEAD: 405 with `allow: GET`.
     let head = Request::builder()

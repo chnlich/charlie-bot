@@ -1248,12 +1248,9 @@ mod tests {
 
   #[test]
   fn compaction_model_note_names_the_family_as_model_family_does() {
-    for (model, note) in [
-      ("claude", "by Claude"),
-      ("claude-opus-5", "by Opus"),
-      ("Sonnet-X", "by Sonnet"),
-      ("CLAUDE-haiku-5", "by Haiku"),
-    ] {
+    for (model, note) in
+      [("claude", "by Claude"), ("claude-opus-5", "by Opus"), ("Sonnet-X", "by Sonnet"), ("CLAUDE-haiku-5", "by Haiku")]
+    {
       assert_eq!(model_note(&json!({"model": model})), note, "model {model}");
     }
   }

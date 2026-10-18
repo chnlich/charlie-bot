@@ -12,12 +12,13 @@ One run walks the selected scenarios. For each scenario it:
    `cand/` for the candidate), and writes a synthetic `config.yaml` and `credentials.yaml` into each home.
 2. Runs `fixture.py` in each tree. It builds the same synthetic home through the Python server's own writers.
    The harness then checks that both homes match file for file.
-3. Starts the baseline (always the Python server) and the candidate, waits until both answer, and waits until
-   both trees are still. It compares what each server's startup wrote as the `(startup)` step.
-4. Sends each step's request to both servers and compares the responses. Once both trees are still, it
-   compares what the step added, removed or changed in each tree.
-5. Stops both servers with SIGTERM and compares what shutdown wrote as the `(shutdown)` step.
-6. Reads every process's syscall trace and lists each file changed outside its own tree.
+3. Writes the scenario's fake-agent script into both trees before either server starts.
+4. Starts the baseline Python server and the candidate. A handover scenario starts its candidate in the named
+   direction and starts the next server after the handover step.
+5. Sends HTTP steps to both servers. Wait steps observe durable state, and gate steps release fake agents.
+   Handover steps stop and restart servers on the same homes.
+6. Stops each final server, kills any fake agent that remains alive, and compares the home deltas.
+7. Reads every server trace, including each second server, and lists file changes outside its tree.
 
 The modules:
 
@@ -26,6 +27,7 @@ The modules:
 | `parity.py` | entry point: the run loop, the requests, the report |
 | `fixture.py` | the deterministic synthetic home and its manifest |
 | `servers.py` | the trees, the synthetic config, the process environment, starting and stopping servers |
+| `fake_agent.py` | scripted fake agents, spawn records and gate markers |
 | `sandbox.py` | the Landlock launcher that confines every process under test to its own tree |
 | `guard.py` | the outside-write guard: parses the strace logs |
 | `compare.py` | tree snapshots and deltas, response and file comparison, the structural JSON diff |
@@ -45,8 +47,10 @@ uv run python rust/parity/parity.py --python-vs-python --stage server-skeleton -
 
 - `--python-vs-python` runs the Python server as the candidate too. Every scenario must pass in this mode. A
   failure here is a harness bug or a missing normalization rule, never a port gap.
+- A handover scenario runs once per `directions` value against a candidate. Python-to-Python mode runs it once.
 - `--rust-bin PATH` runs PATH as the candidate, with the same environment as the Python server plus
-  `CHARLIEBOT_REPO_ROOT` naming the worktree. The binary reads its home from `CHARLIEBOT_HOME`.
+  `CHARLIEBOT_REPO_ROOT` naming the worktree and `CHARLIEBOT_VENV_BIN` naming its venv bin directory. The binary
+  reads its home from `CHARLIEBOT_HOME`.
 - `--stage NAME` (repeatable) runs only the scenarios of that stage. An unknown stage is an error.
 - `--tamper` renames one session in the candidate home after the fixture check. The run must fail; use it to
   see the harness catch a difference.
@@ -76,8 +80,8 @@ differing step.
 Each process under test (the fixture generator and each server) runs with:
 
 - `HOME` set to its tree, `CHARLIEBOT_HOME` to `<tree>/home` and `TMPDIR` to `<tree>/tmp`;
-- `PATH` set to `<tree>/fake-bin:/usr/bin:/bin`. `fake-bin` holds stand-ins named `claude`, `codex`,
-  `opencode`, `charlie-code`, `gemini` and `agy`; each prints one line and exits 1, so no agent CLI ever starts;
+- `PATH` set to `<tree>/fake-bin:/usr/bin:/bin`. Each fake-bin wrapper starts `fake_agent.py` with
+  `/usr/bin/python3 -I` for `claude`, `codex`, `opencode`, `charlie-code`, `gemini` or `agy`;
 - every proxy variable pointed at a closed loopback port, so no request leaves the host;
 - an environment built from scratch, with nothing inherited from the harness;
 - `PYTHONDONTWRITEBYTECODE=1`, because bytecode caches would land in the worktree;
@@ -85,7 +89,15 @@ Each process under test (the fixture generator and each server) runs with:
   no integration, the session cgroup limits and the disk-headroom check off, and both path settings inside the
   tree.
 
-The Python server starts as `<worktree>/.venv/bin/python server.py` from the worktree root.
+The Python server starts as `<worktree>/.venv/bin/python server.py` from the worktree root. Every server receives
+`CHARLIEBOT_VENV_BIN=<worktree>/.venv/bin`.
+
+Without `fake-agent/script.json`, the fake prints the stand-in line and exits 1. It reads stdin to EOF before
+the first scripted step unless stdin is a TTY. A `flock` on `fake-agent/lock` assigns each start the next script
+entry and appends one record to `fake-agent/spawns.jsonl`; every start writes `exit-<index>` before it exits.
+The record includes argv, cwd, pid and `/proc` start time, stdout target, stdin byte count and digest, nice value,
+session ownership, parent-death signal, selected environment, and decoded run-token claims with signature validity.
+The scenario end checks that no recorded process remains alive.
 
 ### The outside-write guard
 
@@ -98,9 +110,10 @@ Every process under test runs as `strace -f -y ... -- python sandbox.py --allow-
   path that `-y` prints, a directory descriptor plus a relative path, or the thread's working directory, which
   it tracks through `chdir`, `fchdir` and every clone, fork and vfork.
 - A change outside the tree that completed is a violation and fails the run.
-- A change the sandbox refused changed nothing. The report lists it as refused. The Python server's startup
-  sweep of empty `charliebot-sess-*` cgroups under `/sys/fs/cgroup/user.slice/user-<uid>.slice/.../app.slice`
-  shows up there on every run.
+- A change the sandbox refused changed nothing. The report lists it as refused. The Python startup sweep targets
+  empty `charliebot-sess-*` cgroups for the current uid. Landlock refuses the sweep inside the harness.
+- Outside the harness, that sweep removes every empty `charliebot-sess-*` cgroup for the uid, including cgroups
+  of a live server. The live server recreates them at its next launch.
 
 Why a syscall trace, not a filesystem scan: the host is shared. A before-and-after scan of `HOME` or `/tmp` sees
 every other process's writes (a live server, other worktrees, editors) and cannot tell them apart. inotify cannot
@@ -160,17 +173,58 @@ steps:
     expect_status: 200
 ```
 
+Scenario fields:
+
+- `fake_agent` gives the starts each fake agent consumes in order. `expect_starts` gives the required record count
+  in each tree at scenario end.
+- `directions` names a non-empty subset of `python-to-candidate` and `candidate-to-python`. Add it when a scenario
+  has a `handover` step. A scenario without handover refuses this key.
+
+Each fake-agent start names its executable, lists its steps and gives its exit code. A start without a matching
+entry prints the stand-in line and records `scripted: false`.
+
+```yaml
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-session}
+        - emit:
+            type: assistant
+            message: {role: assistant, model: claude-sonnet-5, content: [{type: text, text: Done.}]}
+        - gate: manager
+        - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
+      exit_code: 0
+expect_starts: 1
+directions: [python-to-candidate, candidate-to-python]
+```
+
+Each `emit` writes one JSON line to stdout and flushes it. A string equal to `${argv:<flag>}` reads the value
+after `<flag>`. A missing flag writes an error to stderr and exits 2. A `gate` writes `at-<name>` and polls for
+`open-<name>` every 20 ms. Each start records its argv, cwd, pid, process start time, stdio, environment and
+verified run-token claims.
+
 Step fields:
 
-- `kind`: `http`, the only kind so far. `ws`, `wait` and `handover` are reserved for later stages; a scenario
-  that uses one fails to load until a stage implements it.
-- `name`, `method` and `path` are required. `path` carries no query string.
+- `kind`: `http` (the default), `wait`, `gate` or `handover`. `ws` remains reserved.
+- `name` is required for every step. HTTP steps also require `method` and `path`. `path` carries no query string.
 - `query` and `headers` map names to scalar values.
 - `json` is a request body, sent as `application/json`.
 - `auth` is `bearer` (the default), `cookie` or `none`.
 - `expect_status` (optional) is the status both servers must return.
 - `capture` maps a name to a dotted field of each server's own JSON response. A later step references the value
   as `${capture.name}`, so a cursor a server issued goes back to that server.
+- `defer_files: true` skips this HTTP step's file comparison. The next step compares changes since before the request.
+- `wait` requires `timeout_seconds` and one `until` condition. Both trees must meet it before the timeout.
+- `until.event` matches chat events by session, type and fields. `count` requires that many matches and defaults to 1.
+- `until.file_field` reads a dotted field from a home-relative JSON file and compares it with `equals`.
+- `until.at_gate` waits for the gate marker and for `agent.raw.cursor` to equal the raw stdout file size.
+- `gate` requires `open`; the harness writes `open-<name>` in both fake-agent directories.
+- `handover` requires `agent_after_stop`: `alive`, `exited` or `terminated`. It checks every scripted start that
+  had no exit marker before the server stopped.
+
+The baseline always hands over from Python to Python. The candidate starts the direction's first server and hands
+over to the other server. A handover delta covers the stop and second startup.
 
 Strings reference the manifest as `${sessions.atlas}`, `${runs.notes_r2.run}`, `${runs.notes_r2.session}`,
 `${inputs.atlas_u1}`, `${missing_session}` or `${missing_run}`. A step's route template is its method and path
@@ -182,6 +236,8 @@ mode. The new steps must pass there before they mean anything against a candidat
 needs goes into `fixture.py`, built through a server writer, with its id recorded in the manifest.
 
 ## What is compared
+
+Fake-agent starts compare structurally after normalization. `expect_starts` checks each tree's record count.
 
 - Status code.
 - Headers: all except `date`, `server`, `content-length`, `transfer-encoding`, `connection` and `keep-alive`
@@ -200,6 +256,11 @@ needs goes into `fixture.py`, built through a server writer, with its id recorde
 field one side omits still shows as a difference:
 
 - the tree path rule rewrites each tree root to `<tree>` in every string, header value and file;
+- the minted UUID rule leaves fixture UUIDs intact. Other UUIDs read as `<minted-N>` by first appearance in sorted
+  paths and document order. It applies to paths, file contents, response bodies and spawn records;
+- runtime field rules mask process ids and `/proc` start times, wall-clock timestamps in run, chat-event, session
+  and trigger records, and measured `master_done` durations. Their reasons are recorded beside each rule in
+  `normalize.py`;
 - `FieldRule` masks one JSON field of one route's body (`RESPONSE_RULES`) or of one home file (`FILE_RULES`).
   Its `field` is a dotted path where `[*]` steps into every list element; `when` restricts it to objects that
   hold given values;

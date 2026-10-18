@@ -151,6 +151,17 @@ def snapshot(root: pathlib.Path, skip: tuple[str, ...]) -> Snapshot:
   return entries
 
 
+def prepare_context(
+    entries: Snapshot,
+    ctx: normalize.Context,
+    extra_files: tuple[tuple[str, bytes], ...] = (),
+) -> None:
+  """Assign minted UUID names from sorted tree entries and explicitly compared harness files."""
+  values = [(path, entry.kind, entry.data) for path, entry in entries.items()]
+  values.extend((path, "file", data) for path, data in extra_files)
+  normalize.prepare_snapshot(values, ctx)
+
+
 def settle_all(roots: list[pathlib.Path], skip: tuple[str, ...]) -> list[Snapshot]:
   """Each tree once two rounds of snapshots SETTLE_QUIET_SECONDS apart agree; raises past SETTLE_TIMEOUT_SECONDS.
 
@@ -204,28 +215,44 @@ def _normalized_file(relative: str, entry: Entry, ctx: normalize.Context) -> Any
     return [normalize.normalize_json(json.loads(line), rules, ctx) for line in entry.data.splitlines() if line.strip()]
   if relative.endswith((".yaml", ".yml")):
     return normalize.normalize_json(yaml.safe_load(entry.data), rules, ctx)
-  return entry.data.replace(ctx.tree_root.encode(), normalize.TREE_PLACEHOLDER.encode())
+  return normalize.normalize_text(entry.data.decode("utf-8", errors="surrogateescape"), ctx).encode(
+      "utf-8", errors="surrogateescape")
 
 
-def _content_diff(relative: str, left: Entry, right: Entry, left_ctx: normalize.Context,
-                  right_ctx: normalize.Context) -> list[str]:
-  left_value = _normalized_file(relative, left, left_ctx)
-  right_value = _normalized_file(relative, right, right_ctx)
+def _content_diff(
+    left_relative: str,
+    left: Entry,
+    right_relative: str,
+    right: Entry,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+) -> list[str]:
+  left_value = _normalized_file(left_relative, left, left_ctx)
+  right_value = _normalized_file(right_relative, right, right_ctx)
   if isinstance(left_value, bytes) and isinstance(right_value, bytes):
     return [] if left_value == right_value else _text_diff(left_value, right_value)
   return json_diff(left_value, right_value)
 
 
+def _normalized_path_map(paths: Any, ctx: normalize.Context) -> dict[str, str]:
+  return {normalize.normalize_text(path, ctx): path for path in paths}
+
+
 def tree_diff(left: Snapshot, right: Snapshot, left_ctx: normalize.Context, right_ctx: normalize.Context) -> list[str]:
   """Every difference between two whole trees (the fixture determinism check)."""
   lines: list[str] = []
-  for path in sorted(left.keys() | right.keys()):
-    if path not in right:
+  left_paths = _normalized_path_map(left, left_ctx)
+  right_paths = _normalized_path_map(right, right_ctx)
+  for path in sorted(left_paths.keys() | right_paths.keys()):
+    if path not in right_paths:
       lines.append(f"{path}: only in baseline")
-    elif path not in left:
+    elif path not in left_paths:
       lines.append(f"{path}: only in candidate")
     else:
-      lines.extend(f"{path}: {line}" for line in _content_diff(path, left[path], right[path], left_ctx, right_ctx))
+      left_path, right_path = left_paths[path], right_paths[path]
+      lines.extend(
+          f"{path}: {line}"
+          for line in _content_diff(left_path, left[left_path], right_path, right[right_path], left_ctx, right_ctx))
   return lines
 
 
@@ -233,16 +260,22 @@ def delta_diff(left: Delta, right: Delta, left_ctx: normalize.Context, right_ctx
   """Every difference between what one step changed in each tree."""
   lines: list[str] = []
   for label, left_paths, right_paths in (
-      ("added", left.added.keys(), right.added.keys()),
-      ("removed", left.removed, right.removed),
-      ("changed", left.changed.keys(), right.changed.keys()),
+      ("added", left.added, right.added),
+      ("removed", {path: None for path in left.removed}, {path: None for path in right.removed}),
+      ("changed", left.changed, right.changed),
   ):
-    lines.extend(f"file {label} by baseline only: {path}" for path in sorted(left_paths - right_paths))
-    lines.extend(f"file {label} by candidate only: {path}" for path in sorted(right_paths - left_paths))
+    left_names = _normalized_path_map(left_paths, left_ctx)
+    right_names = _normalized_path_map(right_paths, right_ctx)
+    lines.extend(f"file {label} by baseline only: {path}" for path in sorted(left_names.keys() - right_names.keys()))
+    lines.extend(f"file {label} by candidate only: {path}" for path in sorted(right_names.keys() - left_names.keys()))
   for new_left, new_right in ((left.added, right.added), (left.changed, right.changed)):
-    for path in sorted(new_left.keys() & new_right.keys()):
+    left_names = _normalized_path_map(new_left, left_ctx)
+    right_names = _normalized_path_map(new_right, right_ctx)
+    for path in sorted(left_names.keys() & right_names.keys()):
+      left_path, right_path = left_names[path], right_names[path]
       lines.extend(
-          f"file {path}: {line}" for line in _content_diff(path, new_left[path], new_right[path], left_ctx, right_ctx))
+          f"file {path}: {line}" for line in _content_diff(
+              left_path, new_left[left_path], right_path, new_right[right_path], left_ctx, right_ctx))
   return lines
 
 

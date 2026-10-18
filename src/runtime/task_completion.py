@@ -1184,19 +1184,18 @@ class TaskCompletionManager:
     """Explicit cancellation with reason, preserving all evidence.
 
         An operator cancels any open task; an agent cancels only a direct
-        child of its own task (the session its verified run token binds).
-        Refuses active/unresolved execution or open children with 409 — never
-        unprocessed input, which stays as preserved history on the cancelled
-        node. It never recursively stops the subtree (Run cancel stays the
-        separate operation), and duplicate request ids replay the original
-        outcome — only to a caller authorized for that cancel, never as an
-        authorization bypass.
+        child of its own task (the session its verified run token binds). A
+        worker cancellation closes the task and requests stops for its
+        non-terminal Runs; a manager cancellation keeps the existing blockers.
+        Duplicate request ids replay the original close only to a caller
+        authorized for that cancel.
         """
 
     if not isinstance(caller, run_token.CallerIdentity):
       raise task_errors.TaskForbiddenError("task cancellation requires operator credentials")
     if caller.is_operator:
       actor = control_events.ACTOR_USER
+      target_meta = None
     else:
       # Agent scope, decided before the replay lookup: a replayed
       # request id returns its original outcome only to a caller
@@ -1204,8 +1203,8 @@ class TaskCompletionManager:
       # to replays. The token's bound session IS the agent's own task.
       claims = caller.claims
       assert claims is not None  # a verified agent caller always carries its claims
-      target = await self._tree.load_task_meta(session_id)
-      if target.task_parent_id != claims.session_id:
+      target_meta = await self._tree.load_task_meta(session_id)
+      if target_meta.task_parent_id != claims.session_id:
         raise task_errors.TaskForbiddenError("an agent may only cancel a direct child of its own task")
       actor = control_events.ACTOR_AGENT
     if not request_id:
@@ -1213,10 +1212,15 @@ class TaskCompletionManager:
     if not reason.strip():
       raise task_errors.TaskInvalidError("cancellation requires a reason")
     tree = self._tree
+    if target_meta is None:
+      target_meta = await tree.load_task_meta(session_id)
+    if target_meta.profile == "worker":
+      return await self._cancel_worker_task(
+          session_id, request_id=request_id, reason=reason, actor=actor, target_meta=target_meta)
     replay = self._replay_close_request(session_id, request_id)
     if replay is not None:
       return replay[1]
-    pre_meta = await tree.load_task_meta(session_id)
+    pre_meta = target_meta
     child_epoch = await tree.session_events.prime_aggregator(session_id)
     parent_epoch = (
         await tree.session_events.prime_aggregator(pre_meta.task_parent_id) if pre_meta.task_parent_id else None)
@@ -1260,6 +1264,121 @@ class TaskCompletionManager:
             report=str(report.get("id")),
             error=str(exc))
     return {"session_id": session_id, "closed_event_id": close_event["id"]}
+
+  async def _cancel_worker_task(
+      self,
+      session_id: str,
+      *,
+      request_id: str,
+      reason: str,
+      actor: str,
+      target_meta: models.SessionMetadata,
+  ) -> dict:
+    """Close one worker and request its non-sequence Run stops under one lock."""
+    tree = self._tree
+    child_epoch = await tree.session_events.prime_aggregator(session_id)
+    parent_epoch = (
+        await tree.session_events.prime_aggregator(target_meta.task_parent_id) if target_meta.task_parent_id else None)
+    close_event: dict | None = None
+    report: dict = {}
+    report_created = False
+    async with tree.control_lock:
+      index = await tree._get_index()
+      meta = tree._index_meta(index, session_id)
+      replay = self._replay_close_request(session_id, request_id)
+      if replay is None:
+        state = tree.task_state(session_id)
+        if state != "open":
+          raise task_errors.TaskConflictError([(f"task {session_id} is {state}; only an open task can be cancelled")])
+        open_descendants = [
+            descendant for descendant in tree._descendants(index, session_id) if tree.task_state(descendant) == "open"
+        ]
+        if open_descendants:
+          raise task_errors.TaskConflictError(
+              [f"has open descendant task {descendant}" for descendant in open_descendants])
+        events = tree.runs.load_events_sync(session_id)
+        run_records = tree.runs.list_run_records_sync(session_id)
+        sequence_blockers = [
+            f"run {run.id} is owned by a sequence controller" for run in run_records
+            if not tree.runs.run_has_terminal_fact(run, events) and run.sequence_ref is not None
+        ]
+        if sequence_blockers:
+          raise task_errors.TaskConflictError(sequence_blockers)
+        stoppable_runs = [run for run in run_records if not tree.runs.run_has_terminal_fact(run, events)]
+        close_event, report, report_created = await self._append_closed(
+            session_id,
+            meta,
+            request_id=request_id,
+            outcome="cancelled",
+            summary=reason,
+            result_refs=[],
+            run_ids=[],
+            actor=actor)
+        for run in stoppable_runs:
+          appended = await tree.runs.append_stop_request_locked(session_id, run.id, f"cancel:{request_id}")
+          assert appended, f"run {run.id} became terminal while the worker cancel lock was held"
+      elif replay[0] == 202:
+        return {**replay[1], "stopped_runs": []}
+
+      stop_request_id = f"cancel:{request_id}"
+      stop_runs = self._cancel_stop_runs(session_id, stop_request_id)
+
+    identity_error: runs.RunIdentityConflictError | None = None
+    for run in stop_runs:
+      if run.pid is None:
+        continue
+      try:
+        await tree.runs.reconcile_stop_request(session_id, run.id)
+      except runs.RunIdentityConflictError as exc:
+        if identity_error is None:
+          identity_error = exc
+        else:
+          log.warning("worker_cancel_stop_identity_conflict", session_id=session_id, run_id=run.id, error=str(exc))
+
+    if close_event is not None:
+      await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
+      if report_created and parent_epoch is not None:
+        await tree.session_events.announce_appended_event(str(target_meta.task_parent_id), report, epoch=parent_epoch)
+      if report_created and target_meta.task_parent_id:
+        try:
+          await tree.dispatch.wake_parent(str(target_meta.task_parent_id), report=report)
+        except Exception as exc:
+          log.warning(
+              "cancel_parent_wake_failed",
+              session_id=session_id,
+              parent=str(target_meta.task_parent_id),
+              report=str(report.get("id")),
+              error=str(exc))
+    if identity_error is not None:
+      raise identity_error
+    return {
+        "session_id": session_id,
+        "closed_event_id": replay[1]["closed_event_id"] if close_event is None else close_event["id"],
+        "stopped_runs": self._cancel_stopped_run_results(session_id, stop_request_id),
+    }
+
+  def _cancel_stop_runs(self, session_id: str, request_id: str) -> list[models.RunRecord]:
+    """Runs named by one cancellation's durable stop facts, in fact order."""
+    tree = self._tree
+    events = tree.runs.load_events_sync(session_id)
+    stopped_ids = list(
+        dict.fromkeys(
+            str(event["run_id"])
+            for event in events
+            if event.get("type") == ET.RUN_STOP_REQUESTED and event.get("request_id") == request_id))
+    records = {run.id: run for run in tree.runs.list_run_records_sync(session_id)}
+    return [records[run_id] for run_id in stopped_ids]
+
+  def _cancel_stopped_run_results(self, session_id: str, request_id: str) -> list[dict]:
+    """The cancellation's durable Run set with outcomes from current facts."""
+    tree = self._tree
+    events = tree.runs.load_events_sync(session_id)
+    return [
+        {
+            "run_id": run.id,
+            "outcome": "never_launched" if run.pid is None else tree.runs.terminal_outcome(events, run.id),
+        } for run in self._cancel_stop_runs(session_id, request_id)
+    ]
 
   async def restore_task(
       self,

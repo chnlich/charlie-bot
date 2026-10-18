@@ -2354,6 +2354,8 @@ class TaskExecutionAdapter:
         """
     tree = self._tree
     async with tree.control_lock:
+      if tree.task_state(session_id) != "open":
+        return None
       events = tree.runs.load_events_sync(session_id)
       if tree.runs.terminal_outcome(events, work_run.id) != "success":
         return None
@@ -2587,16 +2589,30 @@ class TaskExecutionAdapter:
       return
     if summary is None:
       summary = await self._worker_failure_summary(session_id, run)
-    # The delivery entry owns the wake: a freshly created report wakes the
-    # parent's next serialized turn; a replayed one wakes nobody.
-    await self._tree.dispatch.deliver_child_report(
-        session_id,
-        source_event=source,
-        outcome=outcome,
-        summary=summary,
-        result_refs=[f"{task_completion.RUN_REF_PREFIX}{run.id}"],
-        recipient=meta.task_parent_id,
-    )
+    parent_id = str(meta.task_parent_id)
+    parent_epoch = await self._tree.session_events.prime_aggregator(parent_id)
+    async with self._tree.control_lock:
+      if self._tree.task_state(session_id) != "open":
+        return
+      report, report_created = await self._tree.dispatch.deliver_child_report_locked(
+          session_id,
+          source_event=source,
+          outcome=outcome,
+          summary=summary,
+          result_refs=[f"{task_completion.RUN_REF_PREFIX}{run.id}"],
+          recipient=meta.task_parent_id,
+      )
+    if report_created:
+      await self._tree.session_events.announce_appended_event(parent_id, report, epoch=parent_epoch)
+      if self._tree.task_state(parent_id) != "open":
+        log.info(
+            "child_report_into_archived_parent_kept_as_history",
+            parent=parent_id,
+            child=session_id,
+            report=str(report.get("id")),
+        )
+      else:
+        await self._tree.dispatch.wake_parent(parent_id, report=report)
     archive_run = deciding_run if deciding_run is not None else run
     await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 
@@ -2721,13 +2737,12 @@ async def _reconcile_node(
   # fact; the pass records it before the replay and dispatch below run.
   if tree.task_state(session_id) != "open":
     for run in run_records:
-      if run.pid is not None:
-        continue
       if tree.runs.run_has_terminal_fact(run, events):
         continue
       if tree.runs.stop_requested(events, run.id):
         continue
       await tree.runs.request_stop(session_id, run.id, closed_task_stop_request_id(run.id))
+      events = tree.runs.load_events_sync(session_id)
 
   # --- 2. launched, non-terminal Runs re-attach or drain -----------------
   for run in run_records:

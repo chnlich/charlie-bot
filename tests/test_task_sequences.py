@@ -1479,7 +1479,7 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
-  proc = subprocess.Popen(["/bin/sleep", "30"])
+  proc = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
   try:
     pid, pid_start = conftest.identity_of(proc.pid)
     run = await tree.runs.get_run(child_id, "iter-run-1")

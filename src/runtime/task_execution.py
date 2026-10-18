@@ -84,9 +84,9 @@ from src.runtime import (
     task_prompts,
     task_sessions,
     thinking_state,
+    worker,
 )
 from src.runtime.hooks import backend_lifecycle, backend_types, sequence_controllers, turn_contributions
-from src.runtime.worker import QuotaExhaustedError, Worker
 
 log = log_once.LazyStructlogLogger()
 
@@ -98,7 +98,7 @@ def run_worker_binding(
     pid: int | None = None,
     pid_start: str | None = None,
 ) -> models.ThreadMetadata:
-  """The Run-backed worker identity a v2 launch hands to :class:`Worker`.
+  """The Run-backed worker identity a v2 launch hands to :class:`~src.runtime.worker.Worker`.
 
     An in-memory thread record that is never written: the Worker reads its id,
     session id, process identity and the backend's preassigned conversation id.
@@ -1434,7 +1434,7 @@ class TaskExecutionAdapter:
 
     error = ""
     exit_code = -1
-    worker: Worker | None = None
+    worker_adapter: worker.Worker | None = None
     try:
       # A repository run starts in its worktree root: a review in its work Run's worktree, a work
       # Run in the worktree its context build recorded on the Run (read again here). A repo-less
@@ -1446,7 +1446,7 @@ class TaskExecutionAdapter:
       # The Worker places the launch through the backend's lifecycle and relays the run when
       # the lifecycle asks for it (src/runtime/launch_loop.py). A refused launch — before the
       # first process or at a relay — ends the run through the LaunchRefused branch below.
-      worker = Worker(
+      worker_adapter = worker.Worker(
           binding,
           working_dir,
           events_log,
@@ -1461,11 +1461,11 @@ class TaskExecutionAdapter:
       )
       # Session-level notices (a pool login that needs re-login, a relay compaction) reach
       # the session chat through the successor chain.
-      worker.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
-      exit_code = await worker.run()
+      worker_adapter.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
+      exit_code = await worker_adapter.run()
     except backend_lifecycle.LaunchRefused as exc:
-      if worker is not None:
-        await worker.terminate()
+      if worker_adapter is not None:
+        await worker_adapter.terminate()
       error = str(exc)
       if exc.quota_exhausted:
         self._quota_failures[(session_id, run_id)] = exc.resets_at
@@ -1478,16 +1478,16 @@ class TaskExecutionAdapter:
       # The run's own events log carries the evidence: the failure-summary
       # reader and the sequence quota classification read this event.
       await self._record_launch_error_event(session_id, run_id, error, quota_exhausted=exc.quota_exhausted)
-    except QuotaExhaustedError as exc:
-      if worker is not None:
-        await worker.terminate()
+    except worker.QuotaExhaustedError as exc:
+      if worker_adapter is not None:
+        await worker_adapter.terminate()
       error = str(exc)
       self._quota_failures[(session_id, run_id)] = exc.resets_at
       log.warning("task_run_quota_exhausted", session_id=session_id, run_id=run_id, error=error)
     except Exception as exc:  # setup/transport failure: the run failed loudly
       log.error("task_run_failed", session_id=session_id, run_id=run_id, error=str(exc), exc_info=True)
-      if worker is not None:
-        await worker.terminate()
+      if worker_adapter is not None:
+        await worker_adapter.terminate()
       error = str(exc)
 
     durable_outcome = await self._finalize_worker_run(meta, run, option, exit_code=exit_code, error=error)
@@ -2066,7 +2066,7 @@ class TaskExecutionAdapter:
     binding = run_worker_binding(run_id, session_id, pid=run.pid, pid_start=run.pid_start)
     if backend_types.traits_for(option.type).preassigned_session_id:
       backend_types.lifecycle_for(option).assign_thread_native_id(binding, run.native_session_id)
-    worker = Worker(
+    worker_adapter = worker.Worker(
         binding,
         pathlib.Path(run.worktree_path) if run.worktree_path else run_dir,
         events_log,
@@ -2075,8 +2075,8 @@ class TaskExecutionAdapter:
         backend_option=option,
     )
     # Session-level notices reach the session chat exactly as a fresh run's do.
-    worker.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
-    exit_code = await worker.resume(is_alive=is_alive, on_silence=None)
+    worker_adapter.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
+    exit_code = await worker_adapter.resume(is_alive=is_alive, on_silence=None)
     durable_outcome = await self._finalize_worker_run(
         meta, run, option, exit_code=exit_code, error="", ended_at=ended_at)
     await self._after_worker_run(meta, run, durable_outcome)

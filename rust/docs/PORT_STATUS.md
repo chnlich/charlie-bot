@@ -101,7 +101,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | POST | `/api/internal/improve/stop` | features/improve | todo |  |
 | POST | `/api/internal/improve` | features/improve | todo |  |
 | GET | `/ncu` | features/ncu | todo |  |
-| WS | `/ws/terminal` | features/terminal | todo | the token check is ported; every upgrade answers 403 |
+| WS | `/ws/terminal` | features/terminal | ported |  |
 | GET | `/perfetto` | features/trace | todo |  |
 | GET | `/perfetto/merged` | features/trace | todo |  |
 | GET | `/api/ext-usage` | features/usage | todo |  |
@@ -277,5 +277,6 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |
 | SSH ControlMaster sockets | foundation | todo | Outside the home. |
 | artifact page-height probe files | features/artifacts | todo | Beside an artifact. |
-| tmux `charliebot-<id>` sockets | features/terminal | todo | Outside the home. |
+| tmux socket `charliebot` | features/terminal | ported | Outside the home. |
+| tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |
 | repo config examples and prompt inputs | foundation | reader-only | Not written by the server. |

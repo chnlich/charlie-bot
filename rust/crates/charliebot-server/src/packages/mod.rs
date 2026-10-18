@@ -32,14 +32,14 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.improve", stub),                                   // stub: src.features.improve
   ("src.features.memory", charliebot_memory::register),             // stub: src.features.memory
   ("src.features.ncu", charliebot_ncu::register),                   // stub: src.features.ncu
-  ("src.features.terminal", charliebot_terminal::register),         // stub: src.features.terminal
-  ("src.features.trace", charliebot_trace::register),               // stub: src.features.trace
-  ("src.features.usage", charliebot_usage::register),               // stub: src.features.usage
-  ("src.features.voice", charliebot_voice::register),               // stub: src.features.voice
-  ("src.backends.openai_compatible", backends::openai_compatible),  // stub: src.backends.openai_compatible
-  ("src.backends.antigravity", backends::antigravity),              // stub: src.backends.antigravity
-  ("src.backends.charlie_code", backends::charlie_code),            // stub: src.backends.charlie_code
-  ("src.backends.claude_code", backends::claude_code),              // stub: src.backends.claude_code
+  ("src.features.terminal", charliebot_terminal::register),
+  ("src.features.trace", charliebot_trace::register), // stub: src.features.trace
+  ("src.features.usage", charliebot_usage::register), // stub: src.features.usage
+  ("src.features.voice", charliebot_voice::register), // stub: src.features.voice
+  ("src.backends.openai_compatible", backends::openai_compatible), // stub: src.backends.openai_compatible
+  ("src.backends.antigravity", backends::antigravity), // stub: src.backends.antigravity
+  ("src.backends.charlie_code", backends::charlie_code), // stub: src.backends.charlie_code
+  ("src.backends.claude_code", backends::claude_code), // stub: src.backends.claude_code
   ("src.backends.codex", charliebot_agents::backends::codex::register),
   ("src.backends.gemini", backends::gemini),     // stub: src.backends.gemini
   ("src.backends.kimi", backends::kimi),         // stub: src.backends.kimi

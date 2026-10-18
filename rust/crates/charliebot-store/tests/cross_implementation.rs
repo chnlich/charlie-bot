@@ -521,6 +521,22 @@ async fn run_pages_walk_the_launch_order_and_refuse_a_malformed_cursor() {
 }
 
 #[tokio::test]
+async fn last_ended_run_ranks_a_run_by_its_last_finish_fact_like_python() {
+  let root = tempfile::tempdir().unwrap();
+  let seed_home = root.path().join("last_ended").join("seed-home");
+  let store = make_store(&seed_home);
+  register_runs(&store, vec![launched_run("run-early", 1), launched_run("run-late", 2)]).await;
+  finish_run(&store, "run-late", Some("2026-01-01T00:05:00Z")).await;
+  // run-early has no ended_at mirror, so its last finish fact times it.
+  append_finish_fact(&store, "run-early", "2026-01-01T00:03:00Z", "success").await;
+  append_finish_fact(&store, "run-early", "2026-01-01T00:09:00Z", "failed").await;
+
+  let (python, rust) = read_on_copies(root.path(), &seed_home, "last_ended", read_last_ended);
+  assert_eq!(python, rust);
+  assert_eq!(rust["last_ended_run_id"], "run-early");
+}
+
+#[tokio::test]
 async fn descending_run_pages_and_cross_order_cursor_refusals_match_python() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("pages").join("seed-home");
@@ -667,6 +683,24 @@ fn unresolved_run(id: &str, minute: u32) -> RunRecord {
 
 fn newest_run_id(store: &Store) -> Option<String> {
   store.newest_run_record_sync(RUN_SESSION_ID).unwrap().map(|run| run.id)
+}
+
+/// Append a run_finished fact directly, so one run can carry more than one.
+async fn append_finish_fact(store: &Store, run_id: &str, timestamp: &str, outcome: &str) {
+  let event = charliebot_store::control_events::build_control_event(
+    "run_finished",
+    charliebot_store::control_events::ACTOR_SYSTEM,
+    RUN_SESSION_ID,
+    None,
+    Some(UtcDateTime::parse(timestamp).unwrap()),
+    [
+      ("run_id".to_string(), json!(run_id)),
+      ("input_event_ids".to_string(), json!([])),
+      ("outcome".to_string(), json!(outcome)),
+    ],
+  );
+  let guard = store.control_lock().await;
+  store.append_control_fact(&guard, RUN_SESSION_ID, event).await.unwrap();
 }
 
 fn clear_ended_at(store: &Store, run_id: &str) {
@@ -902,6 +936,10 @@ fn page_json(page: &RunPage) -> Value {
 
 fn refusal<T>(result: Result<T, StoreError>) -> String {
   result.err().expect("the cursor is refused under the other order").to_string()
+}
+
+fn read_last_ended(store: &Store) -> Value {
+  json!({ "last_ended_run_id": store.last_ended_run_id(RUN_SESSION_ID).unwrap() })
 }
 
 fn read_blockers(store: &Store) -> Value {

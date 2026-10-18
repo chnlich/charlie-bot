@@ -208,3 +208,5 @@ exposed as `raw_metadata_scan`.
   window.
 - The session counter parses a signed 64-bit integer. Python's `int()` also accepts digit underscores and larger
   values; here such a counter takes the session-directory count.
+- The task-tree writes (`create_task`, `archive_unsuccessful_worker`, `archive_subtree`) do not send Python's
+  best-effort task-tree-changed notification after each control fact. The sidebar task owns that wiring.

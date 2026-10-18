@@ -1,6 +1,7 @@
 //! Agent process transport, backend implementations, launch planning, and environment setup.
 
 pub mod agent_environment;
+pub mod backend_pool;
 pub mod backend_types;
 pub mod backends;
 pub mod event_builders;
@@ -16,8 +17,9 @@ pub use one_shot::agent_one_shot_text;
 
 mod one_shot;
 
-/// Register agent environment and session cgroup startup steps before package registration.
+/// Register agent environment, session cgroup and backend pool startup steps before package registration.
 pub fn register_runtime(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.pre_recovery_step("agent_environment", agent_environment::pre_recovery_step)?;
-  registry.pre_recovery_step("session_cgroups", agent_environment::session_cgroup_step)
+  registry.pre_recovery_step("session_cgroups", agent_environment::session_cgroup_step)?;
+  registry.pre_recovery_step("backend_pool", backend_pool::pre_recovery_step)
 }

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, anyhow};
+use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::runner::AgentRunner;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -15,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::autonamer::{self, LightBackendPool, RotatingLightBackendPool};
+use crate::autonamer;
 use crate::master_run;
 use crate::master_state::{MasterResumeRequest, MasterTurnRequest, WorkItem};
 
@@ -58,22 +59,12 @@ struct QueueState {
 /// Owns per-session queues, consumers, current work items, and active backend runners.
 pub struct MasterQueue {
   state: Mutex<QueueState>,
-  light_backend_pool: Arc<dyn LightBackendPool>,
-}
-
-impl Default for MasterQueue {
-  fn default() -> Self {
-    Self::new()
-  }
+  backend_pool: Arc<BackendPool>,
 }
 
 impl MasterQueue {
-  pub fn new() -> Self {
-    Self::with_light_backend_pool(Arc::new(RotatingLightBackendPool::default()))
-  }
-
-  pub fn with_light_backend_pool(pool: Arc<dyn LightBackendPool>) -> Self {
-    Self { state: Mutex::new(QueueState::default()), light_backend_pool: pool }
+  pub fn new(backend_pool: Arc<BackendPool>) -> Self {
+    Self { state: Mutex::new(QueueState::default()), backend_pool }
   }
 
   pub fn session_callbacks(
@@ -128,11 +119,11 @@ impl MasterQueue {
         as BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
     });
     let after_features = Arc::clone(&features);
-    let pool = Arc::clone(&self.light_backend_pool);
+    let pool = Arc::clone(&self.backend_pool);
     let after_round = Arc::new(move |cfg: Arc<CharlieBotConfig>, session_id: String| {
       let features = Arc::clone(&after_features);
       let pool = Arc::clone(&pool);
-      Box::pin(async move { autonamer::name_after_round(&features, &cfg, &session_id, pool.as_ref()).await })
+      Box::pin(async move { autonamer::name_after_round(&features, &cfg, &session_id, pool).await })
         as BoxFuture<'static, anyhow::Result<()>>
     });
     SessionCallbacks {

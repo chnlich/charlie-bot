@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, bail};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
@@ -21,7 +22,7 @@ use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, SequenceListingFields, Store, StoreHooks,
   StoreResult,
 };
-use charliebot_tasks::autonamer::LightBackendPool;
+use charliebot_tasks::autonamer;
 use charliebot_tasks::master_queue::{
   MarkUnreadFn, PersistAccountLabelFn, PersistAndBroadcastFn, PersistNativeIdFn, SessionCallbacks,
 };
@@ -294,8 +295,18 @@ fn config_with_features(
       (charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string()),
     ]),
   })?;
+  startup.insert(BackendPool::default())?;
   if install_queue {
-    startup.insert(master_queue::MasterQueue::new())?;
+    let features = Arc::new(FeatureContext {
+      config: Arc::new(config_reload),
+      credentials: Arc::new(credentials_reload),
+      store: Arc::new(store),
+      registry,
+      startup: Arc::clone(&startup),
+    });
+    let pool = charliebot_agents::backend_pool::backend_pool(&features)?;
+    startup.insert(master_queue::MasterQueue::new(pool))?;
+    return Ok((Arc::clone(&cfg), features));
   }
   Ok((
     Arc::clone(&cfg),
@@ -792,39 +803,20 @@ async fn after_round_names_default_session_and_reuses_group_case() -> anyhow::Re
   Ok(())
 }
 
-struct FixedLightBackendPool {
-  options: Vec<BackendOption>,
-  exclusions: Mutex<Vec<Vec<String>>>,
-}
-
-impl LightBackendPool for FixedLightBackendPool {
-  fn select(&self, _cfg: &CharlieBotConfig, exclude: &[String]) -> Option<BackendOption> {
-    self.exclusions.lock().expect("fake backend pool mutex is not poisoned").push(exclude.to_vec());
-    self.options.iter().find(|option| !exclude.contains(&option.id)).cloned()
-  }
-
-  fn cool(&self, _backend_id: &str, _resets_at: Option<UtcDateTime>) {}
-
-  fn is_quota_error(&self, text: &str) -> bool {
-    text.to_lowercase().contains("quota")
-  }
-}
-
 #[test]
-fn injected_light_backend_pool_excludes_each_selected_member() -> anyhow::Result<()> {
+fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow::Result<()> {
   let first = backend_option_for("light-a", "codex", String::new(), None);
   let second = backend_option_for("light-b", "codex", String::new(), None);
-  let cfg = config(Path::new("/synthetic/home"), Some(first.clone()));
-  let pool = FixedLightBackendPool { options: vec![first, second], exclusions: Mutex::new(Vec::new()) };
-
-  let selected =
-    charliebot_tasks::autonamer::iter_light_backends(&cfg, &pool).map(|option| option.id).collect::<Vec<_>>();
-
+  let mut cfg = config(Path::new("/synthetic/home"), Some(first));
+  cfg.backends.options.push(second);
+  cfg.backends.pool.push("light-b".to_string());
+  let pool = Arc::new(BackendPool::default());
+  let selected = autonamer::iter_light_backends(&cfg, pool)
+    .collect::<anyhow::Result<Vec<_>>>()?
+    .into_iter()
+    .map(|option| option.id)
+    .collect::<Vec<_>>();
   assert_eq!(selected, ["light-a", "light-b"]);
-  assert_eq!(
-    *pool.exclusions.lock().expect("fake backend pool mutex is not poisoned"),
-    [vec![], vec!["light-a".to_string()], vec!["light-a".to_string(), "light-b".to_string()]]
-  );
   Ok(())
 }
 

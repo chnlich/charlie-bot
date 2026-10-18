@@ -1,7 +1,7 @@
 # charliebot-tasks
 
 This crate owns manager turns. `MasterQueue` contains the per-session work queues, consumers, current items, active
-runners, and the rotating pool used by after-round naming. Each session consumer runs one manager turn at a time,
+runners, and the shared backend pool used by after-round naming. Each session consumer runs one manager turn at a time,
 persists its translated events through `charliebot-store`, and finishes with the unread decision and session anchors.
 
 The execution task inserts `MasterQueue` into typed startup state and wires chat routes. The recovery task wires
@@ -11,7 +11,7 @@ shutdown and re-attachment into server lifespan.
 
 | Rust item | Python source |
 | --- | --- |
-| `MasterQueue`, `MasterQueue::new`, and `MasterQueue::with_light_backend_pool` | `src/runtime/master_cc_state.py:11-17`; `src/runtime/autonamer.py:129` |
+| `MasterQueue` and `MasterQueue::new(Arc<BackendPool>)` | `src/runtime/master_cc_state.py:11-17`; `src/runtime/backend_pool.py` |
 | `MasterQueue::session_callbacks` and `master_queue::session_callbacks` | `src/infra/models.py:723-744` |
 | `SessionCallbacks` and `PersistAndBroadcastFn`, `MarkUnreadFn`, `PersistNativeIdFn`, `PersistAccountLabelFn`, `ContextStateFn`, `TaskTreeActivityFn`, and `AfterRoundFn` | `src/infra/models.py:723-744` |
 | `MasterTurnRequest` and its fields | `src/runtime/master_cc_queue.py:54-118` |
@@ -27,8 +27,7 @@ shutdown and re-attachment into server lifespan.
 | `TaskSpawnCallback`, `TaskFinishCallback`, and `ResumeLiveness` | `src/runtime/master_cc_state.py:32-49` |
 | `master_state` module and its work item | `src/runtime/master_cc_state.py:32-49` |
 | `master_queue` module | `src/runtime/master_cc_queue.py:54-446` |
-| `master_run` module | `src/runtime/master_cc_run.py:36-957` |
-| `LightBackendPool::{select, cool, is_quota_error}` and `RotatingLightBackendPool` | `src/runtime/backend_pool.py:82-123` |
+| `master_run` module | `src/runtime/master_cc_run.py:36-846` |
 | `autonamer::iter_light_backends` | `src/runtime/autonamer.py:129` |
 | `autonamer::name_after_round` | `src/runtime/autonamer.py:197` |
 | `autonamer::maybe_auto_name` | `src/runtime/autonamer.py:232` |

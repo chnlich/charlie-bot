@@ -1,35 +1,34 @@
 import asyncio
 import atexit
 import contextlib
+import dataclasses
+import datetime
 import importlib
 import io
 import itertools
 import json
 import os
+import pathlib
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import uuid
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self
 from unittest import mock
 
 import fastapi
 import pytest
 import yaml
-from _pytest.runner import runtestprotocol
-from fastapi import APIRouter, FastAPI
-from fastapi.testclient import TestClient
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.requests import Request
+from _pytest import runner
+from fastapi import testclient
+from starlette import requests
+from starlette.middleware import gzip
 
 _REAL_ASYNCIO_SLEEP = asyncio.sleep
 
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
   # Annotation-only: the fake-VAD seam's feed sizes; the runtimes import numpy locally.
   pass
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
@@ -183,7 +182,7 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
   default protocol out; returning None would defer to it.
   """
   item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
-  reports = runtestprotocol(item, log=False, nextitem=nextitem)
+  reports = runner.runtestprotocol(item, log=False, nextitem=nextitem)
   trips = [rep for rep in reports if getattr(rep, _TRIP_ELAPSED_ATTR, None) is not None]
   if len(trips) != 1 or not all(rep.passed or rep is trips[0] for rep in reports):
     # Nothing tripped, or the attempt owns a failure the budget cannot explain:
@@ -197,7 +196,7 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
   setattr(item, _ELAPSED_ATTR, 0.0)
   setattr(item, _BUDGET_REPORTED_ATTR, False)
   item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
-  runtestprotocol(item, log=True, nextitem=nextitem)
+  runner.runtestprotocol(item, log=True, nextitem=nextitem)
   _record_rerun_event(item)
   item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
   return True
@@ -323,7 +322,7 @@ def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
   """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only);
   give the drive seam that shape."""
 
-  def dump_dom_drive(chrome_bin: Path, probe_uri: str) -> int:
+  def dump_dom_drive(chrome_bin: pathlib.Path, probe_uri: str) -> int:
     proc = subprocess.run(
         [str(chrome_bin), "--headless", "--dump-dom", probe_uri], capture_output=True, check=False, timeout=60)
     if proc.returncode != 0:
@@ -405,9 +404,10 @@ def make_work_item(
   )
 
 
-def _test_transport_dir(cfg: CharlieBotConfig, session_id: str, run_id: str) -> Path:
+def _test_transport_dir(cfg: CharlieBotConfig, session_id: str, run_id: str) -> pathlib.Path:
   sessions_dir = getattr(cfg, "sessions_dir", None)
-  root = sessions_dir if isinstance(sessions_dir, Path) else Path(tempfile.gettempdir()) / "charliebot-test-runs"
+  root = sessions_dir if isinstance(sessions_dir,
+                                    pathlib.Path) else pathlib.Path(tempfile.gettempdir()) / "charliebot-test-runs"
   return root / session_id / "data" / "runs" / run_id
 
 
@@ -598,7 +598,7 @@ async def run_resume_round(
     await drain_session_consumer(meta.id, timeout=5)
 
 
-def crashed_run_record(raw_log: Path) -> models.MasterRunRecord:
+def crashed_run_record(raw_log: pathlib.Path) -> models.MasterRunRecord:
   """MasterRunRecord for the re-attach tests' crashed run: raw log on disk, no process left behind.
 
   pid=None leaves the record with no liveness probe and no kill path, so a test pairs it with
@@ -608,19 +608,19 @@ def crashed_run_record(raw_log: Path) -> models.MasterRunRecord:
   return models.MasterRunRecord(
       pid=None,
       pid_start=None,
-      started_at=datetime.now(UTC) - timedelta(seconds=60),
+      started_at=datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=60),
       raw_log=str(raw_log),
   )
 
 
-def append_events(path: Path, events: list[dict]) -> None:
+def append_events(path: pathlib.Path, events: list[dict]) -> None:
   """Append seed chat events as JSONL; append (not truncate) is what lets a test stage history first."""
   path.parent.mkdir(parents=True, exist_ok=True)
   with open(path, "a", encoding="utf-8") as f:
     f.writelines(json.dumps(event) + "\n" for event in events)
 
 
-def read_chat_events(home: Path, session_id: str) -> list[dict]:
+def read_chat_events(home: pathlib.Path, session_id: str) -> list[dict]:
   """Parse a session's chat_events.jsonl under a staged CHARLIEBOT_HOME; [] when absent.
 
   Each event stays an unmodeled dict so tests assert the exact persisted shape.
@@ -633,22 +633,23 @@ def read_chat_events(home: Path, session_id: str) -> list[dict]:
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Path], bool]) -> list[Path]:
+def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[pathlib.Path],
+                                                                            bool]) -> list[pathlib.Path]:
   """Patch ``Path.read_text`` to collect every read path that *include* accepts; returns the live list.
 
   The patch starts where the helper is called, so stage warmup reads first; the returned list grows
   with each matching read until monkeypatch reverts at teardown. An empty-list assert is the
   "steady state pays no file read" check the per-file memo suites share.
   """
-  real_read_text = Path.read_text
-  reads: list[Path] = []
+  real_read_text = pathlib.Path.read_text
+  reads: list[pathlib.Path] = []
 
-  def counting_read_text(path: Path, *args: object, **kwargs: object) -> str:
+  def counting_read_text(path: pathlib.Path, *args: object, **kwargs: object) -> str:
     if include(path):
       reads.append(path)
     return real_read_text(path, *args, **kwargs)
 
-  monkeypatch.setattr(Path, "read_text", counting_read_text)
+  monkeypatch.setattr(pathlib.Path, "read_text", counting_read_text)
   return reads
 
 
@@ -761,7 +762,8 @@ def delegate_invocation(**overrides: Any) -> dict:
   return invocation
 
 
-def rate_limit_event(status: str, utilization: float, resets_in: timedelta = timedelta(hours=3)) -> dict:
+def rate_limit_event(
+    status: str, utilization: float, resets_in: datetime.timedelta = datetime.timedelta(hours=3)) -> dict:
   """A Claude RATE_LIMIT_EVENT: five_hour window at *utilization*, seven_day at a low fixed value."""
   return {
       "type": ET.RATE_LIMIT_EVENT,
@@ -769,7 +771,7 @@ def rate_limit_event(status: str, utilization: float, resets_in: timedelta = tim
           {
               "status": status,
               "rateLimitType": "five_hour",
-              "resetsAt": (datetime.now(UTC) + resets_in).timestamp(),
+              "resetsAt": (datetime.datetime.now(datetime.UTC) + resets_in).timestamp(),
               "unifiedWindows": {
                   "five_hour": {
                       "utilization": utilization
@@ -866,28 +868,28 @@ def make_json_response(payload: dict[str, Any], status_code: int = 200) -> mock.
   return resp
 
 
-def archive_cutoff_events() -> tuple[datetime, list[dict]]:
+def archive_cutoff_events() -> tuple[datetime.datetime, list[dict]]:
   """(cutoff, events) where five `e{i}` events predate and three `f{i}` events follow the cutoff."""
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=UTC)
-  cutoff = base + timedelta(days=3)
+  base = datetime.datetime(2026, 5, 10, 0, 0, 0, tzinfo=datetime.UTC)
+  cutoff = base + datetime.timedelta(days=3)
   events = [
       {
           "type": "user",
           "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
+          "timestamp": (base + datetime.timedelta(hours=i)).isoformat()
       } for i in range(5)
   ]
   events += [
       {
           "type": "user",
           "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
+          "timestamp": (cutoff + datetime.timedelta(hours=i)).isoformat()
       } for i in range(3)
   ]
   return cutoff, events
 
 
-def backdate_task_created_event(mgr: SessionBlocks, session_id: str, timestamp: datetime) -> None:
+def backdate_task_created_event(mgr: SessionBlocks, session_id: str, timestamp: datetime.datetime) -> None:
   """Place a task fixture's creation fact before the archived event corpus."""
   from src.infra import event_types as ET
 
@@ -899,14 +901,14 @@ def backdate_task_created_event(mgr: SessionBlocks, session_id: str, timestamp: 
   mgr.events.chat_events.clear_cache(session_id)
 
 
-async def recycle_archive_cutoff_events(mgr: SessionBlocks, session_id: str) -> tuple[datetime, Path]:
+async def recycle_archive_cutoff_events(mgr: SessionBlocks, session_id: str) -> tuple[datetime.datetime, pathlib.Path]:
   """Seed the task-created fixture and archive_cutoff_events()'s corpus in timestamp order.
 
   Returns (cutoff, live path). The task creation fact and five e-events end up
   in the weekly archive; the three f-events stay live.
   """
   cutoff, events = archive_cutoff_events()
-  backdate_task_created_event(mgr, session_id, cutoff - timedelta(days=1))
+  backdate_task_created_event(mgr, session_id, cutoff - datetime.timedelta(days=1))
   live_path = mgr.events.get_chat_events_path(session_id)
   append_events(live_path, events)
   await mgr.lifecycle.recycle_history_before(session_id, cutoff)
@@ -932,7 +934,7 @@ async def make_parent(mgr: SessionBlocks, *, name: str = "Parent") -> str:
   return parent.id
 
 
-def make_sessions_dir_config(tmp_path: Path) -> mock.MagicMock:
+def make_sessions_dir_config(tmp_path: pathlib.Path) -> mock.MagicMock:
   """A MagicMock config for patched CLI ``get_config`` calls: ``sessions_dir`` points at a created
   dir under tmp_path. Callers rely on the sessions root existing while the test's cwd (tmp_path
   itself) sits outside it, so session resolution reads the cwd as sessionless. The dir name is
@@ -943,7 +945,7 @@ def make_sessions_dir_config(tmp_path: Path) -> mock.MagicMock:
   return cfg
 
 
-def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> mock.MagicMock:
+def setup_session_cwd(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> mock.MagicMock:
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
   what the tests patch into src.runtime.cli.common.get_config (the readback/diff readers). The sessions
   root itself rides the light seam resolve_session_id reads, so the cwd derivation answers from
@@ -978,14 +980,14 @@ def assert_cli_reject_exit2(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
-def make_home_config(tmp_path: Path) -> CharlieBotConfig:
+def make_home_config(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
   registered so a root created without a backend resolves its default (backends.options[0])."""
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
-@dataclass
+@dataclasses.dataclass
 class SessionBlocks:
   """The nine session blocks of one test, all built on one cfg, and the task tree last built over them.
 
@@ -1044,7 +1046,7 @@ def thread_blocks(
   return blocks.store, blocks.lifecycle, blocks.events, blocks.successor
 
 
-def build_env(tmp_path: Path) -> tuple[object, SessionBlocks, task_sessions.TaskTreeManager]:
+def build_env(tmp_path: pathlib.Path) -> tuple[object, SessionBlocks, task_sessions.TaskTreeManager]:
   """(cfg, SessionBlocks, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
   blocks' cfg, so tree-created sessions land in the same home."""
   cfg = make_home_config(tmp_path)
@@ -1159,7 +1161,7 @@ def live_subprocess() -> subprocess.Popen:
   return subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
 
 
-def run_git(cwd: Path | str, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
+def run_git(cwd: pathlib.Path | str, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
   """Run one git command in *cwd* and return its stripped stdout.
 
   check=True fails the test with the exact command and git's stderr;
@@ -1171,7 +1173,7 @@ def run_git(cwd: Path | str, *args: str, check: bool = True, env: dict[str, str]
   return result.stdout.strip()
 
 
-def init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
+def init_repo_with_origin(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
   """A synthetic repo with a bare origin carrying main (the landing target)."""
   origin = tmp_path / "origin.git"
   subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
@@ -1187,13 +1189,13 @@ def init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
 
 
 @pytest.fixture()
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: pathlib.Path) -> pathlib.Path:
   """One synthetic git repo for a delegate or landing target test."""
   r, _origin = init_repo_with_origin(tmp_path / "authz-repo")
   return r
 
 
-def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edit") -> dict:
+def delegate_payload(session_id: str, repo: pathlib.Path, *, task_type: str = "quick-edit") -> dict:
   """The /api/internal/delegate request body one test delegation sends."""
   return {
       "session_id": session_id,
@@ -1205,7 +1207,7 @@ def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edi
   }
 
 
-def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_master_cc_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/".charliebot" with one fake codex backend registered: the
   shape task-tree manager-turn tests drive through the queue and backend runner."""
   return CharlieBotConfig(
@@ -1214,16 +1216,16 @@ def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def make_session_blocks(tmp_path: Path) -> SessionBlocks:
+def make_session_blocks(tmp_path: pathlib.Path) -> SessionBlocks:
   """Session blocks over a SimpleNamespace cfg whose sessions_dir is tmp_path/"sessions"; a test
   needing a richer cfg builds its own."""
-  cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
+  cfg = types.SimpleNamespace(sessions_dir=tmp_path / "sessions")
   cfg.sessions_dir.mkdir()
   return build_session_blocks(cfg)
 
 
 async def make_home_session(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     *,
     name: str,
     backend: str | None = None) -> tuple[CharlieBotConfig, SessionBlocks, models.SessionMetadata]:
@@ -1237,7 +1239,7 @@ async def make_home_session(
   return cfg, mgr, session
 
 
-def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
+def apply_config_overrides(app: fastapi.FastAPI, cfg: CharlieBotConfig) -> None:
   """Bind both config dependency keys to the one instance on *app*.
 
   A mounted route resolves cfg through either dependency (deps.get_config_on_loop
@@ -1249,7 +1251,7 @@ def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
   app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
 
 
-def override_session_blocks(app: FastAPI, session_blocks: Any) -> None:
+def override_session_blocks(app: fastapi.FastAPI, session_blocks: Any) -> None:
   """Bind the session dependency keys on *app* to the blocks of *session_blocks*."""
   app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[deps.get_session_events] = lambda: session_blocks.events
@@ -1264,19 +1266,19 @@ def override_session_blocks(app: FastAPI, session_blocks: Any) -> None:
 def make_router_client(
     cfg: CharlieBotConfig,
     session_blocks: SessionBlocks,
-    router: APIRouter,
+    router: fastapi.APIRouter,
     prefix: str,
-) -> TestClient:
+) -> testclient.TestClient:
   """TestClient mounting one router with cfg/session_blocks as dependency overrides; a test needing
   extra routers or overrides builds its own FastAPI app."""
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(router, prefix=prefix)
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
-  return TestClient(app)
+  return testclient.TestClient(app)
 
 
-def include_registered_routers(app: FastAPI, prefix: str, *, before_runtime: bool = False) -> None:
+def include_registered_routers(app: fastapi.FastAPI, prefix: str, *, before_runtime: bool = False) -> None:
   """Include the routers that packages registered under *prefix*, the way server.py includes them.
 
   *before_runtime* picks the routers registered to answer ahead of the runtime's own: a rig that
@@ -1287,12 +1289,12 @@ def include_registered_routers(app: FastAPI, prefix: str, *, before_runtime: boo
       app.include_router(getattr(importlib.import_module(module), attr), prefix=router_prefix, tags=list(tags))
 
 
-def make_sessions_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> TestClient:
+def make_sessions_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
   """make_router_client over the sessions router, mounted at /api/sessions."""
   return make_router_client(cfg, session_blocks, sessions.router, "/api/sessions")
 
 
-def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | None = None) -> TestClient:
+def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | None = None) -> testclient.TestClient:
   """make_router_client over the internal router, mounted at /api/internal, plus the feature routers
   registered under that prefix; the internal routes take cfg through the on-loop dependency
   (same instance the sync key serves), so the override keys in make_router_client cover them.
@@ -1304,49 +1306,49 @@ def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | N
   return client
 
 
-def make_cron_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> TestClient:
+def make_cron_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
   """make_router_client over the cron router, mounted at /api/cron."""
   return make_router_client(cfg, session_blocks, cron_api.router, "/api/cron")
 
 
 def make_cron_sessions_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
   """TestClient mounting the cron router plus the sessions router (the scheduled listing and
   unarchive endpoints) with cfg/session_blocks/tree as dependency overrides."""
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(cron_api.router, prefix="/api/cron")
   app.include_router(sessions.router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
-  return TestClient(app)
+  return testclient.TestClient(app)
 
 
 def make_sessions_listing_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
   """TestClient mounting the sessions router with its config and manager overrides."""
-  app = FastAPI()
+  app = fastapi.FastAPI()
   include_registered_routers(app, "/api/sessions", before_runtime=True)
   app.include_router(sessions.router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
-  return TestClient(app)
+  return testclient.TestClient(app)
 
 
 def make_sessions_listing_page_client(
-    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
   """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
   same overrides make_sessions_listing_client carries."""
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(pages.router)
   apply_config_overrides(app, cfg)
   override_session_blocks(app, session_blocks)
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
-  return TestClient(app)
+  return testclient.TestClient(app)
 
 
-def page_initial_sessions(page_client: TestClient, session_id: str) -> list[dict]:
+def page_initial_sessions(page_client: testclient.TestClient, session_id: str) -> list[dict]:
   """The homepage render's INITIAL_SESSIONS row list for *session_id*, parsed.
 
   The sidebar-list tests read the server-rendered page, not a JSON endpoint:
@@ -1359,7 +1361,7 @@ def page_initial_sessions(page_client: TestClient, session_id: str) -> list[dict
   return json.loads(match.group(1))
 
 
-def walk_archived_pages(client: TestClient, limit: int = 2) -> list[dict]:
+def walk_archived_pages(client: testclient.TestClient, limit: int = 2) -> list[dict]:
   """GET /api/sessions/archived page by page, threading the keyset cursor.
 
   Returns every page's JSON body in walk order. The limit stays pinned, and
@@ -1412,7 +1414,7 @@ def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str
   }
 
 
-def make_page_request(path: str) -> Request:
+def make_page_request(path: str) -> requests.Request:
   """Starlette Request for a GET against path with the full test-server scope (scheme/server/client);
   a test needing headers, cookies, or a non-GET method builds its own scope."""
   scope = {
@@ -1425,10 +1427,10 @@ def make_page_request(path: str) -> Request:
       "server": ("testserver", 80),
       "client": ("127.0.0.1", 12345),
   }
-  return Request(scope)
+  return requests.Request(scope)
 
 
-def mount_production_gzip(app: FastAPI) -> None:
+def mount_production_gzip(app: fastapi.FastAPI) -> None:
   """Mount the stock gzip middleware with the server's production numbers.
 
   The precompressed-response tests' served-as-is and zero-deflate assertions pin production
@@ -1437,7 +1439,7 @@ def mount_production_gzip(app: FastAPI) -> None:
   deliberate: the subclass changes which responder deflates, not whether an already-compressed
   body deflates, so the skip contract under test is the same.
   """
-  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+  app.add_middleware(gzip.GZipMiddleware, minimum_size=1000, compresslevel=1)
 
 
 def assert_gzip_served(resp: Any) -> None:
@@ -1450,7 +1452,7 @@ def assert_gzip_served(resp: Any) -> None:
   assert resp.headers["vary"] == "Accept-Encoding"
 
 
-def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
+def make_transcript(config_dir: pathlib.Path, cc_session_id: str) -> pathlib.Path:
   """Write a fake Claude Code session transcript under config_dir and return its path."""
   transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
   transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -1458,7 +1460,7 @@ def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   return transcript
 
 
-def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mtime_ns: int) -> Path:
+def seed_transcript_copy(config_dir: pathlib.Path, cc_session_id: str, body: str, *, mtime_ns: int) -> pathlib.Path:
   """One transcript copy with an explicit mtime, so newness never rides on timing."""
   path = make_transcript(config_dir, cc_session_id)
   path.write_text(body, encoding="utf-8")
@@ -1466,7 +1468,7 @@ def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mti
   return path
 
 
-def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:
+def write_pool_credentials(config_dir: pathlib.Path, access_token: str = "token") -> None:
   """Write Claude OAuth credentials into a pool account's config dir, marking the login present."""
   config_dir.mkdir(parents=True, exist_ok=True)
   (config_dir / login_dirs.CREDENTIALS_FILE).write_text(
@@ -1477,11 +1479,11 @@ def write_pool_credentials(config_dir: Path, access_token: str = "token") -> Non
 
 
 def pool_cfg(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     backend_options: list[models.BackendOption],
     *,
-    home: Path,
-    worktree_dir: Path,
+    home: pathlib.Path,
+    worktree_dir: pathlib.Path,
     labels: tuple[str, ...],
     claude_pools: dict[str, list[str]] | None = None,
 ) -> CharlieBotConfig:
@@ -1494,7 +1496,7 @@ def pool_cfg(
       claude_config.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels
   ]
   for account in accounts:
-    write_pool_credentials(Path(account.config_dir))
+    write_pool_credentials(pathlib.Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(worktree_dir)},
@@ -1515,7 +1517,7 @@ POOLED_FABLE_ID = "claude-fable-5"
 
 
 def fable_pool_cfg(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
     claude_pools: dict[str, list[str]] | None = None,
 ) -> CharlieBotConfig:
@@ -1855,7 +1857,7 @@ def plan_page_html(goal_body: str = "Ship the fix.") -> str:
           '<div class="foot"><p>How to respond.</p></div></body></html>')
 
 
-def write_stub_chrome(tmp_path: Path, height: int) -> str:
+def write_stub_chrome(tmp_path: pathlib.Path, height: int) -> str:
   """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
   stub = tmp_path / f"stub-chrome-{height}.sh"
   stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
@@ -1863,7 +1865,7 @@ def write_stub_chrome(tmp_path: Path, height: int) -> str:
   return str(stub)
 
 
-def build_plan_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_plan_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig for plan tests: the 800px stub chrome answers the page-height measurement, and the
   sessions/worktrees dirs live under tmp_path so each test owns its own tree."""
   return CharlieBotConfig(
@@ -1874,7 +1876,7 @@ def build_plan_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_scheduler_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_scheduler_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig for scheduler cron tests: the home and worktrees dirs live under tmp_path so each test
   owns its own tree, and both the opus and codex backends are registered for backend-override cases."""
   return CharlieBotConfig(
@@ -1884,7 +1886,7 @@ def build_scheduler_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_sessions_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig for sessions tests: the .charliebot home lives under tmp_path so each test owns its own
   tree, and the backend list registers opus only."""
   return CharlieBotConfig(
@@ -1893,7 +1895,7 @@ def build_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_slack_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig for slack tests: the home dir lives under tmp_path so each test owns its own tree, and the
   stubbed test tokens plus the single allowed user id wire the delivery and listener paths under
   src.features.slack.slack_listener."""
@@ -2101,7 +2103,7 @@ class FakeSlackClient:
     return f"name-of-{channel_id}"
 
 
-def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
+def cfg_with_repo(repo_root: pathlib.Path) -> CharlieBotConfig:
   """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
   charlie_bot_repo is a derived property tied to the installed package location, so a plain
   namespace stand-in is used to redirect it for these isolated fail-loud tests)."""
@@ -2113,7 +2115,7 @@ def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
   return _Cfg()  # type: ignore[return-value]
 
 
-def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_two_backend_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
   own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering
   cases exercise."""
@@ -2123,7 +2125,7 @@ def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_worktree_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
   worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
   touch real host worktrees. One cc-claude backend registered so a root created without a backend
@@ -2138,7 +2140,7 @@ def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
 
 
-def deploy_publish_lane(tmp_path: Path) -> Path:
+def deploy_publish_lane(tmp_path: pathlib.Path) -> pathlib.Path:
   """Create ``tmp_path / "publish"`` the way the host's deployment step leaves it (the directory
   plus its blank index.html) and return it."""
   publish_dir = tmp_path / "publish"
@@ -2147,7 +2149,7 @@ def deploy_publish_lane(tmp_path: Path) -> Path:
   return publish_dir
 
 
-def build_publish_cfg(tmp_path: Path) -> CharlieBotConfig:
+def build_publish_cfg(tmp_path: pathlib.Path) -> CharlieBotConfig:
   """CharlieBotConfig with the publish lane deployed under tmp_path (``deploy_publish_lane``) and
   ``PUBLISH_BASE_URL`` set."""
   return CharlieBotConfig(
@@ -2159,7 +2161,7 @@ def build_publish_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hello</p>") -> Path:
+def write_artifact(tmp_path: pathlib.Path, name: str = "page.html", body: str = "<p>hello</p>") -> pathlib.Path:
   """Write one fake artifact source file under tmp_path/artifacts and return its path; publish and
   slack publish-lane tests stage here the file a published URL points at."""
   path = tmp_path / "artifacts" / name
@@ -2179,7 +2181,7 @@ def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, conte
   return f"artifacts/{name}"
 
 
-def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
+def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> pathlib.Path:
   """Write meta as the session's threads/<meta["id"]>/metadata.json and return the file path."""
   thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
   thread_dir.mkdir(parents=True, exist_ok=True)
@@ -2188,7 +2190,7 @@ def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pat
   return path
 
 
-def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
+def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> pathlib.Path:
   """Write data as the session's plans.json and return the file path."""
   plans_path = cfg.sessions_dir / session_id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2232,7 +2234,7 @@ def build_scheduler(cfg: Any, blocks: SessionBlocks) -> scheduler.Scheduler:
   return scheduler.Scheduler(cfg, blocks.store, blocks.events, blocks.listing, blocks.lifecycle)
 
 
-def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, scheduler.Scheduler]:
+def make_scheduler_setup(tmp_path: pathlib.Path) -> tuple[CharlieBotConfig, SessionBlocks, scheduler.Scheduler]:
   """Real cfg/blocks/scheduler trio for scheduler and cron-task tests; the scheduler holds the
   process-wide blocks because a private events block keeps its own chat-event cache and its
   rounds would never reach the HTTP/WS read paths."""
@@ -2242,7 +2244,8 @@ def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlock
 
 
 async def make_plan_setup(
-    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionBlocks, plans.PlanRegistryManager, models.SessionMetadata]:
+    tmp_path: pathlib.Path,
+) -> tuple[CharlieBotConfig, SessionBlocks, plans.PlanRegistryManager, models.SessionMetadata]:
   """Session blocks and the plan manager plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
   session_blocks = build_session_blocks(cfg)
@@ -2251,7 +2254,8 @@ async def make_plan_setup(
   return cfg, session_blocks, plan_mgr, meta
 
 
-async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, triggers.TriggerManager, str]:
+async def make_trigger_setup(
+    tmp_path: pathlib.Path) -> tuple[CharlieBotConfig, SessionBlocks, triggers.TriggerManager, str]:
   """Real cfg/blocks/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
   cfg = make_home_config(tmp_path)
   session_blocks = build_session_blocks(cfg)
@@ -2272,12 +2276,12 @@ def pidfd_open_available() -> None:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
 
 
-def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
+def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: pathlib.Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
   stub_credentials({"charliebot": {"access_key": ""}})
   monkeypatch.setattr(
       CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-      lambda: SimpleNamespace(server_base_url="https://server", sessions_dir=sessions_dir))
+      lambda: types.SimpleNamespace(server_base_url="https://server", sessions_dir=sessions_dir))
   monkeypatch.setattr(CLI_COMMON_BASE_URL_PATCH_TARGET, lambda: "https://server")
 
 
@@ -2291,9 +2295,9 @@ def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
   given, so the CLI's success path runs; a test can set the response after entering). The mock is
   yielded for that and for call assertions."""
   base_url = str(getattr(cfg, "server_base_url", "http://localhost:18498"))
-  with mock.patch("sys.argv", argv), \
-       mock.patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       mock.patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url), \
+  with mock.patch("sys.argv", argv),\
+       mock.patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),\
+       mock.patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url),\
        mock.patch(transport_target, **transport_kw) as transport_mock:
     if "return_value" not in transport_kw:
       transport_mock.return_value = make_json_response({})
@@ -2312,7 +2316,7 @@ def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
 
 
-def registering_post(cfg: SimpleNamespace, session_id: str, calls: list[dict]) -> Callable:
+def registering_post(cfg: types.SimpleNamespace, session_id: str, calls: list[dict]) -> Callable:
   """post_internal_api stand-in: persists the trigger the way the server would, then answers."""
 
   def post(endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
@@ -2334,7 +2338,7 @@ def registering_post(cfg: SimpleNamespace, session_id: str, calls: list[dict]) -
 
 
 def run_reply_stdin_case(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], verb: str,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], verb: str,
     readback: dict[str, Any]) -> None:
   """Drive one platform reply CLI's ``--file -`` arm with the reply piped on stdin.
 
@@ -2353,7 +2357,7 @@ def run_reply_stdin_case(
 
 
 def run_reply_file_case(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], verb: str,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], verb: str,
     readback: dict[str, Any]) -> None:
   """Drive one platform reply CLI's ``--file <path>`` arm with the reply text on disk.
 
@@ -2432,7 +2436,7 @@ def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
   """Plant in-memory credentials for get_credentials(): the given sections become the cached
   Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
   memory and no file is read."""
-  core_config._credentials_cache.seed(core_config.Credentials(path=Path("credentials.yaml"), sections=sections))
+  core_config._credentials_cache.seed(core_config.Credentials(path=pathlib.Path("credentials.yaml"), sections=sections))
 
 
 def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
@@ -2489,8 +2493,9 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   reset_config_caches()
 
 
-def _guarded_get_config(real: Callable[[], CharlieBotConfig], accessor: str, tmp_path: Path,
-                        violations: list[str]) -> Callable[[], CharlieBotConfig]:
+def _guarded_get_config(
+    real: Callable[[], CharlieBotConfig], accessor: str, tmp_path: pathlib.Path,
+    violations: list[str]) -> Callable[[], CharlieBotConfig]:
   """*real* wrapped to record and raise when the config it returns has its home outside *tmp_path*."""
 
   def guarded() -> CharlieBotConfig:
@@ -2507,7 +2512,7 @@ def _guarded_get_config(real: Callable[[], CharlieBotConfig], accessor: str, tmp
 
 
 @pytest.fixture(autouse=True)
-def block_home_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+def block_home_violations(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
   """A session block accessor builds its block from get_config(); its home must sit under this test's tmp_path.
 
   Each test starts with no block singleton, so every accessor call builds one and passes the check;
@@ -2525,7 +2530,7 @@ def block_home_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
       monkeypatch.setattr(
           module, "get_config", _guarded_get_config(module.get_config, module.__name__, tmp_path, violations))
     else:
-      shim = SimpleNamespace(
+      shim = types.SimpleNamespace(
           get_config=_guarded_get_config(module.config.get_config, module.__name__, tmp_path, violations))
       monkeypatch.setattr(module, "config", shim)
   yield violations
@@ -2534,7 +2539,7 @@ def block_home_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
 
 
 @pytest.fixture
-def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def temp_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Point HOME at a temp dir and reset the config/cron module-level caches.
 
   ``CHARLIEBOT_HOME`` wins over ``HOME`` in ``src.infra.config.charliebot_home_dir`` when both
@@ -2548,7 +2553,7 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def path_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def path_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Point ``Path.home()`` at a created ``tmp_path / "home"`` and return it.
 
   ``Path.home()`` honors a redirected ``HOME`` env (the ``temp_home`` route), so this
@@ -2558,12 +2563,12 @@ def path_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """
   home = tmp_path / "home"
   home.mkdir()
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+  monkeypatch.setattr(pathlib.Path, "home", staticmethod(lambda: home))
   return home
 
 
 @pytest.fixture
-def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+def profile_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[pathlib.Path]:
   """Point ``CHARLIEBOT_HOME`` at a fresh tmp dir and clear the config module caches around it.
 
   ``get_config()`` caches process-wide on a fingerprint, so an instance cached under an
@@ -2587,13 +2592,13 @@ async def make_cron_session(
       backend=backend)
 
 
-def cron_d_dir(home: Path) -> Path:
+def cron_d_dir(home: pathlib.Path) -> pathlib.Path:
   """The per-job cron dir under a HOME-rooted test dir; once the temp_home fixture points HOME at
   ``home``, this is the dir ``get_scheduled_tasks`` scans for per-job host files."""
-  return Path(home) / ".charliebot" / "config.d" / "cron.d"
+  return pathlib.Path(home) / ".charliebot" / "config.d" / "cron.d"
 
 
-def write_cron_task(home: Path, name: str, text: str) -> Path:
+def write_cron_task(home: pathlib.Path, name: str, text: str) -> pathlib.Path:
   """Write one per-job cron host file ``<name>.yaml`` under ``cron_d_dir(home)`` verbatim (dump_yaml
   output, or raw text for a loader-rejection case); the returned path is what assertions read back."""
   p = cron_d_dir(home) / f"{name}.yaml"
@@ -2602,17 +2607,21 @@ def write_cron_task(home: Path, name: str, text: str) -> Path:
   return p
 
 
-def write_nightly_prompt(home: Path, body: str) -> Path:
+def write_nightly_prompt(home: pathlib.Path, body: str) -> pathlib.Path:
   """Write the nightly job's prompt source ``<home>/prompts/nightly.md`` and return its path; a
   pointer-backed host file's ``prompt_file`` names this path and the pointed file owns the body."""
-  p = Path(home) / "prompts" / "nightly.md"
+  p = pathlib.Path(home) / "prompts" / "nightly.md"
   p.parent.mkdir(parents=True, exist_ok=True)
   p.write_text(body, encoding="utf-8")
   return p
 
 
 def write_nightly_task(
-    home: Path, *, project: str | None = None, backend: str | None = None, repo: str | None = None) -> Path:
+    home: pathlib.Path,
+    *,
+    project: str | None = None,
+    backend: str | None = None,
+    repo: str | None = None) -> pathlib.Path:
   """Seed one healthy 'nightly' cron job (pointer-backed host file, as production files look)
   and return its yaml path; the optional keys are the task fields the scheduler tests vary."""
   prompt_path = write_nightly_prompt(home, "run nightly\n")
@@ -2651,7 +2660,7 @@ def memory_entry_text(
   return "\n".join(header) + "\n" + body
 
 
-def write_memory_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
+def write_memory_topics(memory_dir: pathlib.Path, lines: list[str] | None = None) -> None:
   """Write a memory store's ``topics`` file (one topic per line; the default is the
   seeded production vocabulary DEFAULT_MEMORY_TOPICS) and create the ``entries/``
   dir the loader scans."""
@@ -2661,7 +2670,7 @@ def write_memory_topics(memory_dir: Path, lines: list[str] | None = None) -> Non
       "".join(line + "\n" for line in (lines or memory.DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
 
 
-def write_memory_entry(memory_dir: Path, topic: str, slug: str, **kw: Any) -> Path:
+def write_memory_entry(memory_dir: pathlib.Path, topic: str, slug: str, **kw: Any) -> pathlib.Path:
   """Write one entry file ``entries/<topic>/<slug>.md`` via memory_entry_text; the returned path is
   what assertions read back."""
   d = memory_dir / "entries" / topic
@@ -2832,7 +2841,7 @@ def install_scripted_backends(
   return builds
 
 
-def make_worker(tmp_path: Path, thread_id: str) -> worker_module.Worker:
+def make_worker(tmp_path: pathlib.Path, thread_id: str) -> worker_module.Worker:
   """A Worker whose events log and config home both live under tmp_path."""
   return worker_module.Worker(
       models.ThreadMetadata.model_construct(id=thread_id),
@@ -2844,7 +2853,7 @@ def make_worker(tmp_path: Path, thread_id: str) -> worker_module.Worker:
 
 
 async def process_worker_event(
-    worker: worker_module.Worker, tmp_path: Path, event: dict, monkeypatch: pytest.MonkeyPatch) -> str:
+    worker: worker_module.Worker, tmp_path: pathlib.Path, event: dict, monkeypatch: pytest.MonkeyPatch) -> str:
   """Append one event through Worker._process_event with the broadcast seam stubbed.
 
   The events log is driven through a real O_APPEND fd and closed even when the
@@ -3009,7 +3018,7 @@ def make_os_replace_spy(captured_targets: list[str]) -> Callable[[str, str], Non
   return capture_replace
 
 
-def make_read_at_os_replace(read_at_swap: list[str], target: Path) -> Callable[[str, str], None]:
+def make_read_at_os_replace(read_at_swap: list[str], target: pathlib.Path) -> Callable[[str, str], None]:
   """os.replace side-effect reading ``target`` at the swap instant, then performing the real swap.
 
   The read must precede the real swap: it observes the previous document at the instant a
@@ -3083,7 +3092,7 @@ async def cancel_and_drain(task: asyncio.Task) -> None:
 
 # Shared test helpers, single-homed here: the waits and the settle/reader
 # spies, imported across the suite's test files.
-def _cfg(home: Path) -> CharlieBotConfig:
+def _cfg(home: pathlib.Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},

@@ -175,7 +175,7 @@ Module: `src/runtime/home_writer_fence.py`. One server per home.
 
   | Field | Type | Meaning |
   | --- | --- | --- |
-  | `argv` | list[str] | the holder's `sys.argv` |
+  | `argv` | str | the holder's `sys.argv` joined with single spaces (`" ".join(os.sys.argv)`), not a JSON list |
   | `home` | str | the resolved home |
   | `pid` | int | holder pid |
   | `pid_start` | str | `/proc/<pid>/stat` field 22 of the holder |

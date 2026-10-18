@@ -19,11 +19,6 @@ from typing import Any
 
 from . import recorder
 
-if __package__ and __package__.startswith("rust.parity"):
-  from .. import normalize
-else:
-  import normalize
-
 LOGGER = logging.getLogger(__name__)
 _HEADER_END = b"\r\n\r\n"
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -130,25 +125,27 @@ class WebSocketConnection:
           message: Any = json.loads(text)
         except json.JSONDecodeError:
           message = text
-        self._traffic.record({
-            "kind": "ws_message",
-            "fake": self.fake,
-            "connection": self.connection_id,
-            "path": self.path,
-            "direction": "server_to_fake",
-            "message_type": "text",
-            "message": message,
-        })
+        self._traffic.record(
+            {
+                "kind": "ws_message",
+                "fake": self.fake,
+                "connection": self.connection_id,
+                "path": self.path,
+                "direction": "server_to_fake",
+                "message_type": "text",
+                "message": message,
+            })
         return text
-      self._traffic.record({
-          "kind": "ws_message",
-          "fake": self.fake,
-          "connection": self.connection_id,
-          "path": self.path,
-          "direction": "server_to_fake",
-          "message_type": "binary",
-          "message": complete_payload,
-      })
+      self._traffic.record(
+          {
+              "kind": "ws_message",
+              "fake": self.fake,
+              "connection": self.connection_id,
+              "path": self.path,
+              "direction": "server_to_fake",
+              "message_type": "binary",
+              "message": complete_payload,
+          })
       return complete_payload
 
   async def send_text(self, text: str) -> None:
@@ -277,15 +274,16 @@ class LocalHTTPSProxy:
           headers=headers,
           body=_parse_body(body, headers),
       )
-      self._traffic.record({
-          "kind": "http",
-          "fake": fake,
-          "method": method,
-          "path": path,
-          "query": query,
-          "headers": normalize.request_headers(_flat_headers(headers)),
-          "body": request.body,
-      })
+      self._traffic.record(
+          {
+              "kind": "http",
+              "fake": fake,
+              "method": method,
+              "path": path,
+              "query": query,
+              "headers": headers,
+              "body": request.body,
+          })
       response = self._http_handler(fake, request)
       await self._send_http_response(writer, response)
       if headers.get("connection", [""])[-1].lower() == "close":
@@ -303,21 +301,22 @@ class LocalHTTPSProxy:
     key = headers["sec-websocket-key"][-1]
     accept = base64.b64encode(hashlib.sha1((key + _WEBSOCKET_GUID).encode("ascii")).digest()).decode("ascii")
     writer.write(
-        ("HTTP/1.1 101 Switching Protocols\r\n"
-         "Upgrade: websocket\r\n"
-         "Connection: Upgrade\r\n"
-         f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode("ascii"))
+        (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode("ascii"))
     connection_id = self._connection_id(fake)
-    self._traffic.record({
-        "kind": "ws_handshake",
-        "fake": fake,
-        "connection": connection_id,
-        "path": path,
-        "query": query,
-        "headers": normalize.request_headers(_flat_headers(headers)),
-    })
-    return WebSocketConnection(
-        reader, writer, fake, connection_id, path, query, headers, self._traffic)
+    self._traffic.record(
+        {
+            "kind": "ws_handshake",
+            "fake": fake,
+            "connection": connection_id,
+            "path": path,
+            "query": query,
+            "headers": headers,
+        })
+    return WebSocketConnection(reader, writer, fake, connection_id, path, query, headers, self._traffic)
 
   async def _read_head(self, reader: asyncio.StreamReader) -> tuple[str, dict[str, list[str]]]:
     raw = await reader.readuntil(_HEADER_END)
@@ -347,10 +346,6 @@ class LocalHTTPSProxy:
     await writer.drain()
 
 
-def _flat_headers(headers: dict[str, list[str]]) -> list[tuple[str, str]]:
-  return [(name, value) for name, values in headers.items() for value in values]
-
-
 def _parse_body(body: bytes, headers: dict[str, list[str]]) -> Any:
   if not body:
     return None
@@ -371,11 +366,12 @@ def _parse_body(body: bytes, headers: dict[str, list[str]]) -> Any:
       if filename is None:
         fields.append({"name": name, "value": payload.decode(part.get_content_charset() or "utf-8")})
       else:
-        fields.append({
-            "name": name,
-            "filename": filename,
-            "content_type": part.get_content_type(),
-            "content": payload,
-        })
+        fields.append(
+            {
+                "name": name,
+                "filename": filename,
+                "content_type": part.get_content_type(),
+                "content": payload,
+            })
     return fields
   return body

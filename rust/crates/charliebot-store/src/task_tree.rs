@@ -1240,12 +1240,8 @@ fn profile_name(profile: TaskProfile) -> &'static str {
 fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
   let mut count = 0;
   for entry in fs::read_dir(sessions_dir).map_err(|error| path_error(sessions_dir, error))? {
-    if entry
-      .map_err(|error| path_error(sessions_dir, error))?
-      .file_type()
-      .map_err(|error| path_error(sessions_dir, error))?
-      .is_dir()
-    {
+    // Path::is_dir follows symlinks, as Python's Path.is_dir does; DirEntry::file_type would not.
+    if entry.map_err(|error| path_error(sessions_dir, error))?.path().is_dir() {
       count += 1;
     }
   }

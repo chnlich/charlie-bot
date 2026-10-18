@@ -297,6 +297,8 @@ class ServerProcess:
     self.log_path = tree.root / "logs" / f"{tree.label}.server-{process_number}.log"
     self._proc: subprocess.Popen | None = None
     self._server_identity: tuple[int, str] | None = None
+    # The pid whose socket listens on the port, verified by wait_ready.
+    self.owner_pid: int | None = None
 
   @property
   def base_url(self) -> str:
@@ -317,7 +319,11 @@ class ServerProcess:
       log_file.close()
 
   def wait_ready(self) -> None:
-    """Poll the public auth-status route until it answers 200; a dead server raises with its log tail."""
+    """Poll the public auth-status route until this server's own listener answers 200.
+
+    A dead server raises with its log tail. A listener held by another process raises at once, naming that process,
+    because the requests would reach it instead.
+    """
     deadline = time.monotonic() + READY_TIMEOUT_SECONDS
     url = self.base_url + "/api/auth/status"
     while time.monotonic() < deadline:
@@ -325,17 +331,37 @@ class ServerProcess:
         raise RuntimeError(
             f"{self.label} server exited {self._proc.returncode} before it was ready; log tail:\n"
             f"{log_tail(self.log_path)}")
-      try:
-        with urllib.request.urlopen(url, timeout=2) as response:
-          if response.status == 200:
-            self._server_identity = self._capture_identity()
-            return
-      except (urllib.error.URLError, ConnectionError, TimeoutError):
-        pass
+      owner = self._listener_owner()
+      if owner is not None:
+        try:
+          with urllib.request.urlopen(url, timeout=2) as response:
+            if response.status == 200:
+              self.owner_pid = owner
+              self._server_identity = self._capture_identity()
+              return
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+          pass
       time.sleep(0.1)
     raise RuntimeError(
         f"{self.label} server not ready after {READY_TIMEOUT_SECONDS}s; log tail:\n"
         f"{log_tail(self.log_path)}")
+
+  def exit_status(self) -> int | None:
+    """The server's exit status once it has exited, else None. strace exits with its traced process's status."""
+    return self._proc.poll()
+
+  def _listener_owner(self) -> int | None:
+    """The pid in this server's process tree that holds the listening socket on the port; None before the bind."""
+    inodes = _listener_inodes(self.port)
+    if not inodes:
+      return None
+    for pid in _process_tree(self._proc.pid):
+      if _socket_inodes(pid) & inodes:
+        return pid
+    owner = _socket_owner(inodes)
+    owner_text = "an unknown pid (no readable descriptor table holds it)" if owner is None else f"pid {owner}"
+    raise RuntimeError(
+        f"{self.label} port {self.port} is listened on by {owner_text}, outside the server's process tree")
 
   def _server_pid(self) -> int | None:
     """The traced server's pid: strace's one direct child (the sandbox launcher execs into the server)."""
@@ -478,3 +504,62 @@ def process_identity(pid: int) -> tuple[str, str] | None:
     return None
   fields = stat.rsplit(")", 1)[1].split()
   return fields[0], fields[19]
+
+
+# The /proc/net/tcp state column of a listening socket.
+LISTEN_STATE = "0A"
+
+
+def _listener_inodes(port: int) -> set[int]:
+  """The inodes of the listening IPv4 and IPv6 TCP sockets on *port*."""
+  inodes: set[int] = set()
+  for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+    # The first line is the column header.
+    for line in pathlib.Path(table).read_text(encoding="utf-8").splitlines()[1:]:
+      fields = line.split()
+      local_port = int(fields[1].rsplit(":", 1)[1], 16)
+      if fields[3] == LISTEN_STATE and local_port == port:
+        inodes.add(int(fields[9]))
+  return inodes
+
+
+def _process_tree(root: int) -> list[int]:
+  """*root* and every descendant, read from each task's children list."""
+  pids = [root]
+  for pid in pids:  # the loop also visits the children appended below
+    try:
+      tasks = list(pathlib.Path(f"/proc/{pid}/task").iterdir())
+    except FileNotFoundError:
+      continue  # the process exited during the walk
+    for task in tasks:
+      try:
+        children = (task / "children").read_text(encoding="utf-8").split()
+      except FileNotFoundError:
+        continue  # the task exited during the walk
+      pids.extend(int(child) for child in children)
+  return pids
+
+
+def _socket_inodes(pid: int) -> set[int]:
+  """The inodes of the sockets in *pid*'s descriptor table; empty once the process exits or its table is unreadable."""
+  try:
+    descriptors = list((pathlib.Path("/proc") / str(pid) / "fd").iterdir())
+  except (FileNotFoundError, PermissionError):
+    return set()  # the process exited, or another user's descriptor table is not readable here
+  inodes: set[int] = set()
+  for descriptor in descriptors:
+    try:
+      target = os.readlink(descriptor)
+    except FileNotFoundError:
+      continue  # the descriptor closed during the scan
+    if target.startswith("socket:["):
+      inodes.add(int(target[len("socket:["):-1]))
+  return inodes
+
+
+def _socket_owner(inodes: set[int]) -> int | None:
+  """The pid with a readable descriptor table that holds one of *inodes*, or None when no readable table does."""
+  for entry in pathlib.Path("/proc").iterdir():
+    if entry.name.isdecimal() and _socket_inodes(int(entry.name)) & inodes:
+      return int(entry.name)
+  return None

@@ -1,9 +1,32 @@
 """Port reservation and listener ownership for the parity servers."""
 
 import concurrent.futures
+import os
+import pathlib
+import socket
 import threading
 
+import pytest
+
 from rust.parity import servers
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def test_wait_ready_refuses_a_listener_outside_the_server_tree(tmp_path: pathlib.Path) -> None:
+  # This test process holds the listener, so the server's tree never owns the port.
+  with servers.pick_ports(1) as ports, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind((servers.HOST, ports[0]))
+    listener.listen()
+    tree = servers.make_tree("candidate", tmp_path / "candidate")
+    server = servers.ServerProcess("candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1)
+    server.start()
+    try:
+      with pytest.raises(RuntimeError, match=f"port {ports[0]}") as error:
+        server.wait_ready()
+    finally:
+      server.kill()
+  assert str(os.getpid()) in str(error.value)
 
 
 def test_concurrent_pick_ports_return_disjoint_ports() -> None:

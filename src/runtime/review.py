@@ -168,33 +168,21 @@ def review_git_venue(branch_name: str, wt_path: str) -> str:
 
 
 def _worker_summary_from_events_log(worker_log: pathlib.Path) -> str | None:
-  """The worker's own closing words: the newest non-empty result-or-assistant
-  text, whichever kind is newer, or None.
+  """The worker's own closing words (message_aggregator.closing_text), or None.
 
   Streams the log from the end and stops at the first event that settles the
   answer; blank, malformed and missing-file cases follow the shared walk's
-  skip contract (None, never an error). Only result and assistant events can
+  skip contract (None, never an error). Only the closing-text types can
   settle the answer, so the walk parses nothing else — the multi-megabyte
   tool_result lines between the answer and the tail would otherwise parse
   whole.
   """
-  summary_types = frozenset({ET.RESULT, ET.ASSISTANT})
+  summary_types = message_aggregator.CLOSING_TEXT_TYPES
   for event in ndjson.iter_ndjson_events_from_end(worker_log, log_event=ndjson.PARSE_SKIP_LOG_EVENT, log_fields={},
                                                   parse_filter=ndjson.type_line_filter(summary_types)):
-    ev_type = event.get("type")
-    if ev_type == ET.RESULT:
-      val = event.get("result")
-      if isinstance(val, str):
-        stripped = val.strip()
-        if stripped:
-          return stripped
-      # empty / non-string: fall through to look for assistant text
-      continue
-    if ev_type == ET.ASSISTANT:
-      msg = event.get("message") if isinstance(event.get("message"), dict) else None
-      text = message_aggregator.extract_text_from_message(msg).strip()
-      if text:
-        return text
+    text = message_aggregator.closing_text(event)
+    if text is not None:
+      return text
   return None
 
 

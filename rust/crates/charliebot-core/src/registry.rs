@@ -4,6 +4,8 @@
 //! server reads the same contributions from the tables below; a port stage that brings a package's
 //! behavior over adds that package's rows here.
 
+use std::path::{Path, PathBuf};
+
 /// `registrations.PACKAGES`, in registration order. Every listed package is a page package: its
 /// `static/` serves under `/static/<kind>/<name>/` and its `templates/` joins the template search
 /// path, in this order (`page_render.register_page_package`).
@@ -136,4 +138,9 @@ pub fn legacy_destination(key: &str) -> Option<String> {
     return Some(new.to_string());
   }
   lookup(&format!("{CREDENTIALS_PREFIX}{key}")).map(|new| format!("credentials.yaml {new}"))
+}
+
+/// `src/<kind>/<name>` for the package `src.<kind>.<name>`, under the checkout at `repo_root`.
+pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
+  package.split('.').fold(repo_root.to_path_buf(), |path, part| path.join(part))
 }

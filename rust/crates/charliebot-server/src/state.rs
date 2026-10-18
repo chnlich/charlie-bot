@@ -4,13 +4,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigError};
 use charliebot_core::credentials::{self, Credentials};
 use charliebot_core::hot_reload::HotReload;
 
 use crate::buildinfo::BuildInfo;
-use crate::mimetypes::MimeTypes;
-use crate::static_files::StaticMount;
+use crate::routes::static_mounts::StaticMount;
 use crate::templating::Templating;
 
 pub struct AppState {

@@ -41,7 +41,8 @@ impl MimeTypes {
     database
   }
 
-  fn builtin() -> MimeTypes {
+  /// The CPython built-in table alone, without the host's `mime.types` files.
+  pub fn builtin() -> MimeTypes {
     MimeTypes {
       types: mimetypes_table::TYPES_MAP.iter().map(|(ext, kind)| (ext.to_string(), kind.to_string())).collect(),
     }

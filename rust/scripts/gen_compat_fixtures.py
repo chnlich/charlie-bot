@@ -12,6 +12,7 @@ Run from the repository root; the output goes to rust/fixtures/python/:
 import enum
 import json
 import math
+import mimetypes
 import pathlib
 import random
 import struct
@@ -353,6 +354,32 @@ def validation_cases() -> dict:
   }
 
 
+EXTRA_MIME_PATHS = [
+    "/static/.hidden",
+    "/static.d/noext",
+    "/static/x.tar.gz",
+    "/static/x.gz.gz",
+    "/static/x.TGZ",
+    "/static/x.SVGZ",
+    "/static/x.tar.Z",
+    "/static/x.html.br",
+    "/static/x.UNKNOWNEXT",
+    "/static/x.png.bz2",
+    "/static/x.JS",
+]
+
+
+def mimetype_cases() -> dict:
+  """The content type CPython's `mimetypes` guesses for each built-in suffix, and for paths that combine them.
+
+  `MimeTypes()` reads only the built-in tables, the tables rust/crates/charliebot-compat/src/mimetypes_table.rs holds.
+  """
+  database = mimetypes.MimeTypes()
+  suffixes = [*mimetypes._types_map_default, *mimetypes._suffix_map_default, *mimetypes._encodings_map_default]
+  paths = sorted({f"/static/file{suffix}" for suffix in suffixes} | set(EXTRA_MIME_PATHS))
+  return {"cases": [{"path": path, "type": database.guess_type(path)[0]} for path in paths]}
+
+
 def write_fixture(name: str, payload: dict) -> None:
   """Write one fixture file: ASCII-only JSON, so the committed bytes stay printable."""
   FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -367,6 +394,7 @@ def write_fixture(name: str, payload: dict) -> None:
 def main() -> None:
   write_fixture("json_renders", json_renders())
   write_fixture("validation_422", validation_cases())
+  write_fixture("mimetypes", mimetype_cases())
 
 
 if __name__ == "__main__":

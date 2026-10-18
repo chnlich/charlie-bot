@@ -3,6 +3,10 @@
 //! the outbound HTTP client. Each piece reproduces one Python module's bytes; a crate that answers
 //! the same routes takes them from here rather than writing its own.
 
+pub mod headers;
 pub mod json;
+pub mod mimetypes;
+mod mimetypes_table;
 pub mod responses;
+pub mod static_files;
 pub mod validation;

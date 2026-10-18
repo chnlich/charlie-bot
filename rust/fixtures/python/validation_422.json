@@ -1,0 +1,782 @@
+{
+ "generated_by": "rust/scripts/gen_compat_fixtures.py",
+ "python": "3.14.7",
+ "endpoints": {
+  "/query/int": [
+   {
+    "source": "query",
+    "name": "v",
+    "type": "int",
+    "default": 100,
+    "ge": 1,
+    "le": 500
+   }
+  ],
+  "/query/int-ge": [
+   {
+    "source": "query",
+    "name": "v",
+    "type": "int",
+    "default": 0,
+    "ge": 0
+   }
+  ],
+  "/query/bool": [
+   {
+    "source": "query",
+    "name": "v",
+    "type": "bool",
+    "default": false
+   }
+  ],
+  "/query/literal": [
+   {
+    "source": "query",
+    "name": "v",
+    "type": "literal",
+    "default": "three-dot",
+    "choices": [
+     "three-dot",
+     "two-dot"
+    ]
+   }
+  ],
+  "/query/enum": [
+   {
+    "source": "query",
+    "name": "v",
+    "type": "enum",
+    "default": "a",
+    "choices": [
+     "a",
+     "b",
+     "c"
+    ]
+   }
+  ],
+  "/query/required": [
+   {
+    "source": "query",
+    "name": "repo",
+    "type": "str",
+    "required": true
+   }
+  ],
+  "/query/combined": [
+   {
+    "source": "query",
+    "name": "repo",
+    "type": "str",
+    "required": true
+   },
+   {
+    "source": "query",
+    "name": "limit",
+    "type": "int",
+    "default": 100,
+    "ge": 1,
+    "le": 500
+   },
+   {
+    "source": "query",
+    "name": "include_archived",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "source": "query",
+    "name": "mode",
+    "type": "literal",
+    "default": "three-dot",
+    "choices": [
+     "three-dot",
+     "two-dot"
+    ]
+   }
+  ],
+  "/path/{item_id}": [
+   {
+    "source": "path",
+    "name": "item_id",
+    "type": "int",
+    "required": true
+   }
+  ]
+ },
+ "query_cases": [
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=12",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=%2012%20",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=%2B5",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1_000",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"1_000\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.0",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=-0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"-0\",\"ctx\":{\"ge\":1}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=0x10",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"0x10\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=%D9%A1%D9%A2",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"\u0661\u0662\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1e3",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1e3\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=%20%20",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"  \"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=-6",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"-6\",\"ctx\":{\"ge\":1}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=501",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"501\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=10000000000",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"10000000000\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=a%26b",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"a&b\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=%097%0A",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1__0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1__0\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=_1",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"_1\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=00012",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.5",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.5\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=.5",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\".5\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.0e2",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.0e2\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=-1.0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"-1.0\",\"ctx\":{\"ge\":1}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1_0.0",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.000000000000000000001",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.000000000000000000001\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=99999999999999999999999",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"99999999999999999999999\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=-99999999999999999999999",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"-99999999999999999999999\",\"ctx\":{\"ge\":1}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.0000",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=5.0%20",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1_000.0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"1_000.0\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1.0_0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.0_0\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=500",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=1&v=abc",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=abc&v=1",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int",
+   "url": "/query/int?v=2.50",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"2.50\"}]}"
+  },
+  {
+   "endpoint": "/query/int-ge",
+   "url": "/query/int-ge?v=0",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/int-ge",
+   "url": "/query/int-ge?v=-1",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}}]}"
+  },
+  {
+   "endpoint": "/query/int-ge",
+   "url": "/query/int-ge?v=x",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"}]}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=True",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=TRUE",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=%20yes%20",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\" yes \"}]}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=on",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=0",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=2",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"2\"}]}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"\"}]}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=oFf",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=t",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=N",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=maybe",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=1.0",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"1.0\"}]}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=y",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=no",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=false",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=1",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=yes",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=off",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?v=f",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/bool",
+   "url": "/query/bool?",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/literal",
+   "url": "/query/literal?v=three-dot",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/literal",
+   "url": "/query/literal?v=two-dot",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/literal",
+   "url": "/query/literal?v=x",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'three-dot' or 'two-dot'\",\"input\":\"x\",\"ctx\":{\"expected\":\"'three-dot' or 'two-dot'\"}}]}"
+  },
+  {
+   "endpoint": "/query/literal",
+   "url": "/query/literal?v=",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'three-dot' or 'two-dot'\",\"input\":\"\",\"ctx\":{\"expected\":\"'three-dot' or 'two-dot'\"}}]}"
+  },
+  {
+   "endpoint": "/query/literal",
+   "url": "/query/literal?v=Three-dot",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'three-dot' or 'two-dot'\",\"input\":\"Three-dot\",\"ctx\":{\"expected\":\"'three-dot' or 'two-dot'\"}}]}"
+  },
+  {
+   "endpoint": "/query/literal",
+   "url": "/query/literal?",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/enum",
+   "url": "/query/enum?v=b",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/enum",
+   "url": "/query/enum?v=z",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"enum\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'a', 'b' or 'c'\",\"input\":\"z\",\"ctx\":{\"expected\":\"'a', 'b' or 'c'\"}}]}"
+  },
+  {
+   "endpoint": "/query/enum",
+   "url": "/query/enum?v=",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"enum\",\"loc\":[\"query\",\"v\"],\"msg\":\"Input should be 'a', 'b' or 'c'\",\"input\":\"\",\"ctx\":{\"expected\":\"'a', 'b' or 'c'\"}}]}"
+  },
+  {
+   "endpoint": "/query/enum",
+   "url": "/query/enum?",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/required",
+   "url": "/query/required?repo=r",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/required",
+   "url": "/query/required?repo=",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/required",
+   "url": "/query/required?",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"repo\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "endpoint": "/query/required",
+   "url": "/query/required?other=1",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"repo\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "endpoint": "/query/combined",
+   "url": "/query/combined?repo=r&limit=0&include_archived=maybe&mode=x",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}},{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"include_archived\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"},{\"type\":\"literal_error\",\"loc\":[\"query\",\"mode\"],\"msg\":\"Input should be 'three-dot' or 'two-dot'\",\"input\":\"x\",\"ctx\":{\"expected\":\"'three-dot' or 'two-dot'\"}}]}"
+  },
+  {
+   "endpoint": "/query/combined",
+   "url": "/query/combined?limit=abc&mode=two-dot",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"repo\"],\"msg\":\"Field required\",\"input\":null},{\"type\":\"int_parsing\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+  },
+  {
+   "endpoint": "/query/combined",
+   "url": "/query/combined?repo=r&limit=5&include_archived=true&mode=two-dot",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/query/combined",
+   "url": "/query/combined?repo=r&limit=501",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"501\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+   "endpoint": "/query/combined",
+   "url": "/query/combined?",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"repo\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "endpoint": "/path/{item_id}",
+   "url": "/path/abc",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"path\",\"item_id\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+  },
+  {
+   "endpoint": "/path/{item_id}",
+   "url": "/path/12",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "endpoint": "/path/{item_id}",
+   "url": "/path/1.5",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"path\",\"item_id\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.5\"}]}"
+  },
+  {
+   "endpoint": "/path/{item_id}",
+   "url": "/path/-3",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  }
+ ],
+ "body_cases": [
+  {
+   "name": "missing_fields",
+   "content": "{}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"count\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "wrong_types",
+   "content": "{\"name\": 5, \"count\": \"x\", \"ratio\": 0, \"flag\": \"maybe\", \"tags\": \"t\", \"meta\": [], \"choice\": \"meh\", \"note\": \"n\"}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"name\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"int_parsing\",\"loc\":[\"body\",\"count\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"},{\"type\":\"greater_than\",\"loc\":[\"body\",\"ratio\"],\"msg\":\"Input should be greater than 0\",\"input\":0,\"ctx\":{\"gt\":0.0}},{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"flag\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"},{\"type\":\"list_type\",\"loc\":[\"body\",\"tags\"],\"msg\":\"Input should be a valid list\",\"input\":\"t\"},{\"type\":\"dict_type\",\"loc\":[\"body\",\"meta\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]},{\"type\":\"literal_error\",\"loc\":[\"body\",\"choice\"],\"msg\":\"Input should be 'thumbs_up' or 'thumbs_down'\",\"input\":\"meh\",\"ctx\":{\"expected\":\"'thumbs_up' or 'thumbs_down'\"}}]}"
+  },
+  {
+   "name": "name_short",
+   "content": "{\"name\": \"a\", \"count\": 1}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 2 characters\",\"input\":\"a\",\"ctx\":{\"min_length\":2}}]}"
+  },
+  {
+   "name": "name_long",
+   "content": "{\"name\": \"abcd\", \"count\": 1}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_too_long\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at most 3 characters\",\"input\":\"abcd\",\"ctx\":{\"max_length\":3}}]}"
+  },
+  {
+   "name": "name_number",
+   "content": "{\"name\": 1.5, \"count\": 1}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"name\"],\"msg\":\"Input should be a valid string\",\"input\":1.5}]}"
+  },
+  {
+   "name": "extra_field",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"zzz\": 1}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"zzz\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}]}"
+  },
+  {
+   "name": "count_fraction",
+   "content": "{\"name\": \"ab\", \"count\": 1.5}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"count\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":1.5}]}"
+  },
+  {
+   "name": "count_null",
+   "content": "{\"name\": \"ab\", \"count\": null}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_type\",\"loc\":[\"body\",\"count\"],\"msg\":\"Input should be a valid integer\",\"input\":null}]}"
+  },
+  {
+   "name": "ratio_high",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"ratio\": 2.0}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"body\",\"ratio\"],\"msg\":\"Input should be less than or equal to 1\",\"input\":2.0,\"ctx\":{\"le\":1.0}}]}"
+  },
+  {
+   "name": "ratio_string",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"ratio\": \"x\"}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"float_parsing\",\"loc\":[\"body\",\"ratio\"],\"msg\":\"Input should be a valid number, unable to parse string as a number\",\"input\":\"x\"}]}"
+  },
+  {
+   "name": "ratio_list",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"ratio\": []}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"float_type\",\"loc\":[\"body\",\"ratio\"],\"msg\":\"Input should be a valid number\",\"input\":[]}]}"
+  },
+  {
+   "name": "ratio_tiny",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"ratio\": 1e-08}",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  },
+  {
+   "name": "ratio_big",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"ratio\": 1e21}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"body\",\"ratio\"],\"msg\":\"Input should be less than or equal to 1\",\"input\":1e+21,\"ctx\":{\"le\":1.0}}]}"
+  },
+  {
+   "name": "meta_bad_value",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"meta\": {\"k\": \"x\"}}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"body\",\"meta\",\"k\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"x\"}]}"
+  },
+  {
+   "name": "meta_fraction",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"meta\": {\"k\": 1.5}}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"meta\",\"k\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":1.5}]}"
+  },
+  {
+   "name": "meta_null",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"meta\": null}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\",\"meta\"],\"msg\":\"Input should be a valid dictionary\",\"input\":null}]}"
+  },
+  {
+   "name": "tags_bad_item",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"tags\": [1]}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"tags\",0],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+  },
+  {
+   "name": "tags_null",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"tags\": null}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"tags\"],\"msg\":\"Input should be a valid list\",\"input\":null}]}"
+  },
+  {
+   "name": "choice_number",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"choice\": 1}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"choice\"],\"msg\":\"Input should be 'thumbs_up' or 'thumbs_down'\",\"input\":1,\"ctx\":{\"expected\":\"'thumbs_up' or 'thumbs_down'\"}}]}"
+  },
+  {
+   "name": "flag_string",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"flag\": \"maybe\"}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"flag\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
+  },
+  {
+   "name": "note_blank",
+   "content": "{\"name\": \"ab\", \"count\": 1, \"note\": \"   \"}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"note\"],\"msg\":\"Value error, must not be blank\",\"input\":\"   \",\"ctx\":{\"error\":{}}}]}"
+  },
+  {
+   "name": "list_body",
+   "content": "[1, 2]",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[1,2]}]}"
+  },
+  {
+   "name": "string_body",
+   "content": "\"x\"",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
+  },
+  {
+   "name": "invalid_json_at_one",
+   "content": "{bad",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+  },
+  {
+   "name": "invalid_json_mid_body",
+   "content": "{\"name\": \"ab\",\n  \"count\": x}",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",26],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+  },
+  {
+   "name": "empty_body",
+   "content": "",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "name": "accepted",
+   "content": "{\"name\": \"ab\", \"count\": \"12\", \"flag\": 1, \"ratio\": 1.0}",
+   "status": 200,
+   "body": "{\"ok\":true}"
+  }
+ ]
+}

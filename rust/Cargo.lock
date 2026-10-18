@@ -131,6 +131,7 @@ dependencies = [
  "bytes",
  "charliebot-core",
  "http",
+ "percent-encoding",
  "serde_json",
  "tracing",
 ]

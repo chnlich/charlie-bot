@@ -171,6 +171,7 @@ dependencies = [
  "futures-util",
  "libc",
  "nix",
+ "regex",
  "serde_json",
  "serde_yaml",
  "tempfile",
@@ -418,6 +419,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-tasks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-web-reply",
+ "futures-util",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "charliebot-terminal"
 version = "0.1.0"
 dependencies = [
@@ -456,6 +478,7 @@ version = "0.1.0"
 dependencies = [
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
  "serde_json",
 ]
 

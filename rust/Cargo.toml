@@ -5,6 +5,7 @@ members = [
     "crates/charliebot-core",
     "crates/charliebot-compat",
     "crates/charliebot-server",
+    "crates/charliebot-tasks",
     "crates/features/pyhtml",
     "crates/features/artifacts",
     "crates/features/backup",
@@ -72,6 +73,7 @@ tracing-subscriber = { version = "0.3", features = ["registry"] }
 uuid = { version = "1", features = ["v4", "v5"] }
 
 charliebot-artifacts = { path = "crates/features/artifacts" }
+charliebot-agents = { path = "crates/charliebot-agents" }
 charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }
 charliebot-code-server = { path = "crates/features/code_server" }
@@ -88,6 +90,7 @@ charliebot-ncu = { path = "crates/features/ncu" }
 charliebot-registry = { path = "crates/charliebot-registry" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/charliebot-store" }
+charliebot-tasks = { path = "crates/charliebot-tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }
 charliebot-usage = { path = "crates/features/usage" }

@@ -1,9 +1,10 @@
 //! The web-reply package's turn contribution (`src/features/web_reply/turn_contribution.py`). It renders the
-//! `web_reply`, `web_reply_notice` and `web_status` events as chat lines. The reply rules, the round-end audit and the
-//! unread claim are not ported yet.
+//! `web_reply`, `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for plain
+//! manager sessions.
 
 use charliebot_core::event_types::{WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
 use charliebot_registry::turn::{EventRenderer, TurnContribution};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use serde_json::{Value, json};
 
 /// The web-reply turn contribution.
@@ -12,6 +13,12 @@ pub struct WebReplyTurnContribution;
 impl TurnContribution for WebReplyTurnContribution {
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     vec![(WEB_REPLY, web_reply_message), (WEB_REPLY_NOTICE, web_reply_notice_message), (WEB_STATUS, web_status_message)]
+  }
+
+  fn claims_turn_end_unread(&self, meta: &SessionMetadata) -> bool {
+    meta.profile == TaskProfile::Manager
+      && meta.extra.get("slack_origin").is_none_or(Value::is_null)
+      && meta.extra.get("discord_origin").is_none_or(Value::is_null)
   }
 }
 
@@ -78,5 +85,18 @@ mod tests {
   fn web_status_without_content_or_status_renders_empty_and_null() {
     let event = json!({});
     assert_eq!(web_status_message(&event).to_string(), r#"{"role":"web_status","content":"","web_status":null}"#);
+  }
+
+  #[test]
+  fn only_plain_manager_sessions_claim_the_turn_end_unread_mark() {
+    let contribution = WebReplyTurnContribution;
+    let manager = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
+    let worker = SessionMetadata::new("synthetic-worker", "Worker", TaskProfile::Worker);
+    let mut thread = manager.clone();
+    thread.extra.insert("slack_origin".to_string(), json!({"channel_id":"synthetic-channel"}));
+
+    assert!(contribution.claims_turn_end_unread(&manager));
+    assert!(!contribution.claims_turn_end_unread(&worker));
+    assert!(!contribution.claims_turn_end_unread(&thread));
   }
 }

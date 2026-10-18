@@ -5,14 +5,17 @@ use std::process::Command;
 use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_core::proc_identity;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, SequenceListingFields, Store, StoreError, StoreHooks,
+  AccountLabelKeeper, AnchorFieldReconciler, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceListingFields,
+  Store, StoreError, StoreHooks,
 };
 use serde_json::{Map, Value, json};
 
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
 const THREAD_ID: &str = "00000000-0000-4000-8000-000000000002";
+const RUN_SESSION_ID: &str = "00000000-0000-4000-8000-000000000101";
 const FIXED_TIME: &str = "2025-02-03T04:05:06.123456Z";
 const OPS: &[&str] = &[
   "persist_cc_session_id",
@@ -244,6 +247,208 @@ fn listing_filters_status_and_builds_stable_archived_pages() {
   assert!(store.list_archived_page(None, 2, Some("2025-02-03T00:00:00Z"), None).is_err());
 }
 
+#[tokio::test]
+async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_runs", root.path());
+  run_python_helper("apply_runs", root.path());
+  let fixed = UtcDateTime::parse(FIXED_TIME).unwrap();
+
+  for operation in ["register", "retry", "launch", "observation", "finish", "repeat_finish", "stop"] {
+    let operation_root = root.path().join(operation);
+    let python_home = operation_root.join("python-result");
+    let python_store = make_store(&python_home);
+    let run_id = match operation {
+      "register" => "run-register".to_string(),
+      "retry" => charliebot_store::control_events::stable_run_id(RUN_SESSION_ID, "retry-request"),
+      _ => "run-a".to_string(),
+    };
+    let python_run = python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap();
+    assert_eq!(python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap(), python_run);
+    assert_eq!(
+      python_store.list_run_records_sync(RUN_SESSION_ID).unwrap().len(),
+      if operation == "retry" { 2 } else { 1 }
+    );
+
+    let shared_home = operation_root.join("shared-home");
+    if shared_home.exists() {
+      fs::remove_dir_all(&shared_home).unwrap();
+    }
+    copy_tree(&operation_root.join("seed-home"), &shared_home);
+    let store = make_store(&shared_home);
+    if matches!(operation, "finish" | "stop") {
+      store.set_control_event_ids_for_replay(&["00000000-0000-4000-8000-000000000199"]);
+    }
+
+    match operation {
+      "register" => {
+        let guard = store.control_lock().await;
+        let registered = store
+          .register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-register", RunKind::Work), "synthetic task spec")
+          .await
+          .unwrap();
+        assert_eq!(registered.task_spec_hash, python_run.task_spec_hash);
+        let duplicate = store
+          .register_run_locked(
+            &guard,
+            RUN_SESSION_ID,
+            empty_run("run-register", RunKind::Review),
+            "ignored replacement",
+          )
+          .await
+          .unwrap();
+        assert_eq!(duplicate.kind, RunKind::Work);
+      }
+      "retry" => {
+        let previous = store.read_run_sync(RUN_SESSION_ID, "run-previous").unwrap().unwrap();
+        let guard = store.control_lock().await;
+        let retried = store.create_retry_run_locked(&guard, RUN_SESSION_ID, "retry-request", &previous).await.unwrap();
+        assert_eq!(retried.id, run_id);
+        assert_eq!(retried.retry_of_run_id.as_deref(), Some("run-previous"));
+        assert_eq!(
+          store.create_retry_run_locked(&guard, RUN_SESSION_ID, "retry-request", &previous).await.unwrap(),
+          retried
+        );
+      }
+      "launch" => {
+        store.record_launch(RUN_SESSION_ID, "run-a", 424242, "12345").await.unwrap();
+      }
+      "observation" => {
+        let mut fields = Map::new();
+        fields.insert("native_session_id".to_string(), json!("native-a"));
+        fields.insert("model".to_string(), json!("model-b"));
+        fields.insert("raw_log_ref".to_string(), json!("/tmp/run.raw"));
+        store.record_observation(RUN_SESSION_ID, "run-a", fields).await.unwrap();
+      }
+      "finish" => {
+        let guard = store.control_lock().await;
+        let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
+        outcome.input_event_ids = vec!["input-a".to_string()];
+        outcome.exit_code = Some(0);
+        outcome.ended_at = Some(fixed);
+        store.record_finish_locked(&guard, RUN_SESSION_ID, "run-a", outcome).await.unwrap();
+      }
+      "repeat_finish" => {
+        let guard = store.control_lock().await;
+        let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
+        outcome.input_event_ids = vec!["ignored-input".to_string()];
+        outcome.exit_code = Some(0);
+        outcome.ended_at = Some(fixed);
+        store.record_finish_locked(&guard, RUN_SESSION_ID, "run-a", outcome).await.unwrap();
+      }
+      "stop" => {
+        store.request_stop(RUN_SESSION_ID, "run-a", "stop-request").await.unwrap();
+      }
+      _ => unreachable!("the run operation list names every operation"),
+    }
+
+    assert_eq!(
+      store.records_generation(),
+      if matches!(operation, "register" | "retry" | "launch" | "observation" | "finish" | "repeat_finish") {
+        1
+      } else {
+        0
+      },
+      "{operation}"
+    );
+    assert_run_files_equal(&python_home, &shared_home, &run_id, operation);
+    let facts_path = store.chat_events_path(RUN_SESSION_ID);
+    let python_facts_path = python_store.chat_events_path(RUN_SESSION_ID);
+    assert_eq!(normalize_facts(&facts_path), normalize_facts(&python_facts_path), "{operation}");
+    assert_eq!(store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap().id, run_id);
+  }
+
+  run_python_helper("verify_runs", root.path());
+}
+
+#[tokio::test]
+async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+
+  let mut mismatched = Command::new("sleep").arg("30").spawn().unwrap();
+  let pid = mismatched.id();
+  let actual_start = proc_identity::read_pid_stat(pid).unwrap().pid_start;
+  register_process_run(&store, "run-mismatch", pid, "forged-start").await;
+  let stop_error = store.request_stop(RUN_SESSION_ID, "run-mismatch", "mismatch-stop").await.unwrap_err();
+  let remained_alive = mismatched.try_wait().unwrap().is_none();
+  if remained_alive {
+    mismatched.kill().unwrap();
+  }
+  mismatched.wait().unwrap();
+  assert!(stop_error.to_string().contains("identity mismatch"));
+  assert!(remained_alive);
+  assert!(
+    store
+      .load_all_facts(RUN_SESSION_ID)
+      .unwrap()
+      .iter()
+      .any(|event| event["type"] == "run_stop_requested" && event["run_id"] == "run-mismatch")
+  );
+  assert_ne!(actual_start, "forged-start");
+
+  let mut reconciled = Command::new("sleep").arg("30").spawn().unwrap();
+  let pid = reconciled.id();
+  let pid_start = proc_identity::read_pid_stat(pid).unwrap().pid_start;
+  register_process_run(&store, "run-reconcile", pid, &pid_start).await;
+  let event = charliebot_store::control_events::build_control_event(
+    "run_stop_requested",
+    charliebot_store::control_events::ACTOR_SYSTEM,
+    RUN_SESSION_ID,
+    Some("reconcile-stop-event"),
+    Some(UtcDateTime::now()),
+    [("request_id".to_string(), json!("reconcile-stop")), ("run_id".to_string(), json!("run-reconcile"))],
+  );
+  let guard = store.control_lock().await;
+  store.append_control_fact(&guard, RUN_SESSION_ID, event).await.unwrap();
+  drop(guard);
+
+  let result = store.reconcile_stop_request(RUN_SESSION_ID, "run-reconcile").await.unwrap();
+  let process_exited = reconciled.try_wait().unwrap().is_some();
+  if !process_exited {
+    reconciled.kill().unwrap();
+  }
+  reconciled.wait().unwrap();
+  assert!(process_exited);
+  assert_eq!(result.outcome, Some(RunOutcomeKind::Interrupted));
+  assert_eq!(
+    store.run_display_state(RUN_SESSION_ID, "run-reconcile").unwrap(),
+    charliebot_store::RunDisplayState::Interrupted
+  );
+}
+
+#[tokio::test]
+async fn launch_refuses_a_durable_stop_and_preserves_the_first_start_time() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let guard = store.control_lock().await;
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-launch", RunKind::Work), "").await.unwrap();
+  drop(guard);
+
+  let first = store.record_launch(RUN_SESSION_ID, "run-launch", 111111, "first-start").await.unwrap();
+  let replacement = store.record_launch(RUN_SESSION_ID, "run-launch", 222222, "second-start").await.unwrap();
+  assert_eq!(replacement.started_at, first.started_at);
+  assert_eq!((replacement.pid, replacement.pid_start.as_deref()), (Some(222222), Some("second-start")));
+
+  let guard = store.control_lock().await;
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-queued-stop", RunKind::Work), "").await.unwrap();
+  drop(guard);
+  store.request_stop(RUN_SESSION_ID, "run-queued-stop", "queued-stop").await.unwrap();
+  let error = store.record_launch(RUN_SESSION_ID, "run-queued-stop", 333333, "third-start").await.unwrap_err();
+  assert!(error.to_string().contains("has a stop request"));
+  let queued = store.read_run_sync(RUN_SESSION_ID, "run-queued-stop").unwrap().unwrap();
+  assert_eq!((queued.pid, queued.pid_start), (None, None));
+}
+
+async fn register_process_run(store: &Store, run_id: &str, pid: u32, pid_start: &str) {
+  let mut run = empty_run(run_id, RunKind::Work);
+  run.pid = Some(pid);
+  run.pid_start = Some(pid_start.to_string());
+  run.started_at = Some(UtcDateTime::now());
+  let guard = store.control_lock().await;
+  store.register_run_locked(&guard, RUN_SESSION_ID, run, "").await.unwrap();
+}
+
 fn make_store(home: &Path) -> Store {
   fs::create_dir_all(home).unwrap();
   let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
@@ -399,4 +604,98 @@ fn run_python_helper(mode: &str, root: &Path) {
     String::from_utf8_lossy(&output.stdout),
     String::from_utf8_lossy(&output.stderr),
   );
+}
+
+fn empty_run(id: &str, kind: RunKind) -> RunRecord {
+  RunRecord {
+    id: id.to_string(),
+    session_id: RUN_SESSION_ID.to_string(),
+    kind,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
+    backend: None,
+    model: None,
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
+    repo_path: None,
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
+  }
+}
+
+fn copy_tree(source: &Path, destination: &Path) {
+  fs::create_dir_all(destination).unwrap();
+  for entry in fs::read_dir(source).unwrap() {
+    let entry = entry.unwrap();
+    let target = destination.join(entry.file_name());
+    if entry.file_type().unwrap().is_dir() {
+      copy_tree(&entry.path(), &target);
+    } else {
+      fs::copy(entry.path(), target).unwrap();
+    }
+  }
+}
+
+fn assert_run_files_equal(python_home: &Path, rust_home: &Path, run_id: &str, operation: &str) {
+  let relative = Path::new("sessions").join(RUN_SESSION_ID).join("data").join("runs").join(run_id);
+  let python_dir = python_home.join(&relative);
+  let rust_dir = rust_home.join(relative);
+  assert_eq!(
+    normalize_model(&python_dir.join("metadata.json")),
+    normalize_model(&rust_dir.join("metadata.json")),
+    "{operation}"
+  );
+  let python_spec = python_dir.join("task_spec.md");
+  let rust_spec = rust_dir.join("task_spec.md");
+  assert_eq!(python_spec.exists(), rust_spec.exists(), "{operation}");
+  if python_spec.exists() {
+    assert_eq!(fs::read(python_spec).unwrap(), fs::read(rust_spec).unwrap(), "{operation}");
+  }
+}
+
+fn normalize_model(path: &Path) -> String {
+  let mut raw = fs::read_to_string(path).unwrap();
+  let value: Value = serde_json::from_str(&raw).unwrap();
+  for key in ["started_at", "ended_at"] {
+    if let Some(Value::String(timestamp)) = value.get(key) {
+      let field = format!("\"{key}\": {}", serde_json::to_string(timestamp).unwrap());
+      assert_eq!(raw.matches(&field).count(), 1, "{key} in {}", path.display());
+      raw = raw.replace(&field, &format!("\"{key}\": \"<wall-clock>\""));
+    }
+  }
+  raw
+}
+
+fn normalize_facts(path: &Path) -> Vec<String> {
+  let raw = match fs::read_to_string(path) {
+    Ok(raw) => raw,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+    Err(error) => panic!("{}: {error}", path.display()),
+  };
+  raw
+    .lines()
+    .map(|line| {
+      let value: Value = serde_json::from_str(line).unwrap();
+      let mut normalized = line.to_string();
+      if let Some(Value::String(timestamp)) = value.get("timestamp") {
+        let field = format!("\"timestamp\": {}", serde_json::to_string(timestamp).unwrap());
+        assert_eq!(normalized.matches(&field).count(), 1, "{line}");
+        normalized = normalized.replace(&field, "\"timestamp\": \"<wall-clock>\"");
+      }
+      normalized
+    })
+    .collect()
 }

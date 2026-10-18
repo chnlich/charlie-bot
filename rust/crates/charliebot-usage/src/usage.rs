@@ -119,7 +119,8 @@ impl UsageFold {
     if self.unknown_cost || self.total_cost <= 0.0 {
       None
     } else {
-      Some((self.total_cost * 10_000.0).round_ties_even() / 10_000.0)
+      // Python's round(total, 4) rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
+      Some(format!("{:.4}", self.total_cost).parse().expect("a formatted float parses back"))
     }
   }
 }
@@ -527,6 +528,41 @@ mod tests {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.1}), json!({"type": "result", "total_cost_usd": 0.2})];
     assert_eq!(fold_usage(&events, &registry()).unwrap().unwrap()["total_cost_usd"], 0.3);
+  }
+
+  #[test]
+  fn total_cost_rounds_the_exact_binary_value_like_python() {
+    // Python: round(0.12345, 4) == 0.1235 and round(2.67895, 4) == 2.6789; scaling by 10_000 gets the first wrong.
+    for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
+      let events = vec![json!({"type": "result", "total_cost_usd": cost})];
+      assert_eq!(fold_usage(&events, &registry()).unwrap().unwrap()["total_cost_usd"], expected);
+    }
+  }
+
+  #[test]
+  fn claude_reading_takes_the_smaller_of_model_and_declared_windows() {
+    let mut registry = Registry::new();
+    registry
+      .register_package("src.backends.claude_code", |registry| {
+        registry
+          .reading_limits("claude", || ContextLimits { declared_window: Some(500_000), compact_reserve: Some(20_000) })
+      })
+      .unwrap();
+    let events = vec![
+      json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 150_000}}}),
+      json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 200_000}}, "total_cost_usd": 0.5}),
+    ];
+    let usage = fold_usage(&events, &registry).unwrap().unwrap();
+    assert_eq!(usage["context_tokens"], 150_000);
+    assert_eq!(usage["context_full"], 200_000);
+    assert_eq!(usage["context_compact_at"], 180_000);
+    assert_eq!(usage["total_cost_usd"], 0.5);
+
+    // A model absent from modelUsage falls back to the declared window alone.
+    let unlisted = vec![json!({"type": "assistant", "message": {"model": "model-b", "usage": {"input_tokens": 1}}})];
+    let usage = fold_usage(&unlisted, &registry).unwrap().unwrap();
+    assert_eq!(usage["context_full"], 500_000);
+    assert_eq!(usage["context_compact_at"], 480_000);
   }
 
   #[test]

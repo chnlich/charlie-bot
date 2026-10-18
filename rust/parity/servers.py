@@ -31,7 +31,7 @@ STAND_IN_NAMES = ("claude", "codex", "opencode", "charlie-code", "gemini", "agy"
 # A loopback port with no listener: every proxied request a server makes is refused at once.
 CLOSED_PROXY = "http://127.0.0.1:9"
 # The tree entries the harness itself writes; the file comparison skips them.
-HARNESS_ENTRIES = ("fake-bin", "fixture-manifest.json")
+HARNESS_ENTRIES = ("fake-bin", "fixture-manifest.json", "logs")
 # Syscalls that change a file or directory. openat/open/creat count only with a write flag (guard.py checks).
 TRACED_SYSCALLS = (
     "open", "openat", "openat2", "creat", "mkdir", "mkdirat", "mknod", "mknodat", "rename", "renameat", "renameat2",
@@ -74,7 +74,7 @@ class Tree:
 def make_tree(label: str, root: pathlib.Path) -> Tree:
   """Lay out one empty tree with its fake-bin stand-ins."""
   tree = Tree(label, root)
-  for path in (tree.home, tree.tmp, tree.fake_bin, tree.workspace, tree.worktrees):
+  for path in (tree.home, tree.tmp, tree.fake_bin, tree.workspace, tree.worktrees, tree.root / "logs"):
     path.mkdir(parents=True)
   for name in STAND_IN_NAMES:
     stand_in = tree.fake_bin / name
@@ -196,14 +196,14 @@ class ServerProcess:
   """One traced server process bound to one tree and port."""
 
   def __init__(
-      self, label: str, argv: list[str], tree: Tree, port: int, repo_root: pathlib.Path, log_dir: pathlib.Path) -> None:
+      self, label: str, argv: list[str], tree: Tree, port: int, repo_root: pathlib.Path) -> None:
     self.label = label
     self.argv = argv
     self.tree = tree
     self.port = port
     self.repo_root = repo_root
-    self.trace_log = log_dir / f"{tree.label}.server.strace"
-    self.log_path = log_dir / f"{tree.label}.server.log"
+    self.trace_log = tree.root / "logs" / f"{tree.label}.server.strace"
+    self.log_path = tree.root / "logs" / f"{tree.label}.server.log"
     self._proc: subprocess.Popen | None = None
 
   @property

@@ -67,8 +67,9 @@ FAIL  GET /api/sessions/{session_id}                             200/200  detail
 
 A summary per route template follows, then the outside-write guard, then the verdict. The exit code is 0 when
 every step matches and the guard found no outside change, and 1 otherwise. The console caps each step at 25
-difference lines. `rust/parity/out/last-report.txt` holds the full report, and a kept run's `logs/` directory
-holds each server's log and strace file and both raw responses of every differing step.
+difference lines. `rust/parity/out/last-report.txt` holds the full report. Each tree's `logs/` directory holds
+that side's process log and strace file. A kept run's `logs/` directory holds both raw responses of every
+differing step.
 
 ## Isolation
 

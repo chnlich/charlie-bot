@@ -64,10 +64,10 @@ class StepResult:
 class Side:
   """One server under comparison: its tree, process, normalization context and captures."""
 
-  def __init__(self, label: str, argv: list[str], tree: servers.Tree, port: int, log_dir: pathlib.Path) -> None:
+  def __init__(self, label: str, argv: list[str], tree: servers.Tree, port: int) -> None:
     self.label = label
     self.tree = tree
-    self.server = servers.ServerProcess(label, argv, tree, port, REPO_ROOT, log_dir)
+    self.server = servers.ServerProcess(label, argv, tree, port, REPO_ROOT)
     self.ctx = normalize.Context(tree_root=str(tree.root))
     self.captures: dict[str, object] = {}
 
@@ -81,7 +81,7 @@ def _preflight(rust_bin: pathlib.Path | None) -> None:
     raise SystemExit(f"parity: --rust-bin is not an executable file: {rust_bin}")
 
 
-def _build_fixtures(sides: list[Side], log_dir: pathlib.Path) -> dict:
+def _build_fixtures(sides: list[Side]) -> dict:
   """Generate both homes in parallel and check they match; return the manifest."""
 
   def build(side: Side) -> None:
@@ -90,8 +90,8 @@ def _build_fixtures(sides: list[Side], log_dir: pathlib.Path) -> dict:
          str(side.tree.root / "fixture-manifest.json")],
         tree=side.tree,
         repo_root=REPO_ROOT,
-        trace_log=log_dir / f"{side.tree.label}.fixture.strace",
-        log_path=log_dir / f"{side.tree.label}.fixture.log")
+        trace_log=side.tree.root / "logs" / f"{side.tree.label}.fixture.strace",
+        log_path=side.tree.root / "logs" / f"{side.tree.label}.fixture.log")
 
   with concurrent.futures.ThreadPoolExecutor(len(sides)) as pool:
     for future in [pool.submit(build, side) for side in sides]:
@@ -204,10 +204,10 @@ def _run_scenario(
   for label, argv, port in (("baseline", python_argv, ports[0]), ("candidate", candidate_argv, ports[1])):
     tree = servers.make_tree(TREE_NAMES[label], work_dir / TREE_NAMES[label])
     servers.write_home_config(tree, port)
-    sides.append(Side(label, argv, tree, port, log_dir))
+    sides.append(Side(label, argv, tree, port))
   if len(str(sides[0].tree.root)) != len(str(sides[1].tree.root)):
     raise RuntimeError(f"tree roots differ in length: {sides[0].tree.root} {sides[1].tree.root}")
-  manifest = _build_fixtures(sides, log_dir)
+  manifest = _build_fixtures(sides)
   scenario_file.check_references(scenario, manifest)
   if tamper:
     _tamper(sides[1], manifest)
@@ -244,7 +244,7 @@ def _run_scenario(
     for side in sides:
       side.server.kill()
   for side in sides:
-    for trace in (log_dir / f"{side.tree.label}.fixture.strace", side.server.trace_log):
+    for trace in (side.tree.root / "logs" / f"{side.tree.label}.fixture.strace", side.server.trace_log):
       guard.scan(trace, (side.tree.root,), REPO_ROOT, guard_report)
   return results
 

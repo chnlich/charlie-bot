@@ -53,6 +53,8 @@ TASK_COUNTER_ROOT_ID = "synthetic-counter-root"
 TASK_ARCHIVE_ROOT_ID = "synthetic-archive-root"
 TASK_ARCHIVE_MID_ID = "synthetic-archive-mid"
 TASK_ARCHIVE_LEAF_ID = "synthetic-archive-leaf"
+TASK_DELEGATE_ROOT_ID = "synthetic-delegate-root"
+TASK_DELEGATE_RUN_ID = "synthetic-delegate-run"
 
 
 def _registered() -> None:
@@ -784,6 +786,61 @@ def _archive_subtree_mode(root: pathlib.Path, home_name: str) -> None:
   asyncio.run(_archive_subtree(root / home_name))
 
 
+async def _prepare_delegate(root: pathlib.Path) -> None:
+  _registered()
+  tree = _task_tree(root / "delegate-base")
+  await _create_task_node(tree, session_id=TASK_DELEGATE_ROOT_ID, parent_id=None, request_id="delegate-root")
+  request = control_events.build_control_event(
+      "user", actor="user", source_session_id=TASK_DELEGATE_ROOT_ID, content="Ship the synthetic change.")
+  async with tree.control_lock:
+    await tree.events.append(TASK_DELEGATE_ROOT_ID, request)
+
+
+async def _delegate_task(home: pathlib.Path) -> None:
+  _registered()
+  tree = _task_tree(home)
+  spec = models.TaskSpec(
+      goal="## Goal\n\nShip the synthetic change.\n\nKeep the public API.",
+      acceptance=["the synthetic tests pass"],
+      context_refs=["docs/synthetic.md"],
+      repo_path="/home/synthetic/repo",
+      base_branch="main",
+      task_type=models.TaskType.IMPLEMENT,
+      keep_worktree=True,
+  )
+  # The internal delegate route's shape: an agent caller, a worker child, then the work run registered with the spec.
+  caller = run_token.CallerIdentity(
+      kind="agent", claims=run_token.RunTokenClaims(TASK_DELEGATE_ROOT_ID, "synthetic-manager-run", "manager"))
+  child = await tree.create_task(
+      request_id="delegate-request",
+      task_parent_id=TASK_DELEGATE_ROOT_ID,
+      profile="worker",
+      task=spec,
+      name=None,
+      backend="synthetic",
+      caller=caller,
+  )
+  assert child.name == "Ship the synthetic change.", child.name
+  record = models.RunRecord(
+      id=TASK_DELEGATE_RUN_ID,
+      session_id=child.id,
+      kind="work",
+      backend="synthetic",
+      repo_path=spec.repo_path,
+      base_branch=spec.base_branch,
+  )
+  async with tree.control_lock:
+    await tree.runs.register_run_locked(record, task_spec_text=task_sessions.canonical_task_spec_text(spec))
+
+
+def _prepare_delegate_mode(root: pathlib.Path) -> None:
+  asyncio.run(_prepare_delegate(root))
+
+
+def _delegate_task_mode(root: pathlib.Path, home_name: str) -> None:
+  asyncio.run(_delegate_task(root / home_name))
+
+
 def _gate_parity(root: pathlib.Path) -> None:
   cases = json.loads((root / "gate-cases.json").read_text(encoding="utf-8"))["cases"]
   results = {}
@@ -879,6 +936,10 @@ if __name__ == "__main__":
     _prepare_archive_mode(root)
   elif mode == "archive_subtree":
     _archive_subtree_mode(root, extra[0])
+  elif mode == "prepare_delegate":
+    _prepare_delegate_mode(root)
+  elif mode == "delegate_task":
+    _delegate_task_mode(root, extra[0])
   elif mode == "gate_parity":
     _gate_parity(root)
   elif mode == "prepare_parity_gate":

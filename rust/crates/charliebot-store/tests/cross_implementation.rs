@@ -7,7 +7,7 @@ use std::sync::Arc;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
-use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind,
@@ -546,6 +546,69 @@ async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
     fs::read_to_string(rust_home.join("sessions/synthetic-archive-leaf/data/chat_events.jsonl")).unwrap();
   assert!(leaf_facts.contains("\"archived_with\": \"synthetic-archive-root\""));
   assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+}
+
+#[tokio::test]
+async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_delegate", root.path(), &[]);
+  let base = root.path().join("delegate-base");
+
+  // A run's task_spec_ref is an absolute path, so both implementations write under one home path, in turn.
+  let shared_home = root.path().join("delegate-shared-home");
+  copy_tree(&base, &shared_home);
+  run_python_helper("delegate_task", root.path(), &["delegate-shared-home"]);
+  let python_home = root.path().join("delegate-python-result");
+  copy_tree(&shared_home, &python_home);
+  fs::remove_dir_all(&shared_home).unwrap();
+  copy_tree(&base, &shared_home);
+
+  let spec = TaskSpec {
+    goal: "## Goal\n\nShip the synthetic change.\n\nKeep the public API.".to_string(),
+    acceptance: vec!["the synthetic tests pass".to_string()],
+    context_refs: vec!["docs/synthetic.md".to_string()],
+    repo_path: Some("/home/synthetic/repo".to_string()),
+    base_branch: Some("main".to_string()),
+    task_type: Some(TaskType::Implement),
+    keep_worktree: true,
+    cold_read: None,
+  };
+  let store = make_store(&shared_home);
+  let child = store
+    .create_task(
+      CreateTask {
+        request_id: "delegate-request".to_string(),
+        task_parent_id: Some("synthetic-delegate-root".to_string()),
+        profile: TaskProfile::Worker,
+        task: Some(spec.clone()),
+        name: None,
+        backend: Some("synthetic".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Agent { session_id: "synthetic-delegate-root".to_string() },
+      Map::new(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(child.name, "Ship the synthetic change.");
+  let guard = store.control_lock().await;
+  let record = RunRecord {
+    backend: Some("synthetic".to_string()),
+    repo_path: spec.repo_path.clone(),
+    base_branch: spec.base_branch.clone(),
+    session_id: child.id.clone(),
+    ..empty_run("synthetic-delegate-run", RunKind::Work)
+  };
+  store.register_run_locked(&guard, &child.id, record, Some(&serde_json::to_string(&spec).unwrap())).await.unwrap();
+  drop(guard);
+
+  let run_dir = shared_home.join("sessions").join(&child.id).join("data/runs/synthetic-delegate-run");
+  assert_eq!(fs::read_to_string(run_dir.join("task_spec.md")).unwrap(), serde_json::to_string(&spec).unwrap());
+  let created =
+    store.load_chat_events_sync(&child.id).unwrap().into_iter().find(|event| event["type"] == "task_created").unwrap();
+  assert!(created["task_spec_hash"].is_string());
+  assert_eq!(normalized_files(&python_home), normalized_files(&shared_home));
 }
 
 #[tokio::test]

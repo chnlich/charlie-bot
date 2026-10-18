@@ -1,5 +1,6 @@
 //! Session naming after a finished manager round.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,33 +110,52 @@ pub async fn maybe_auto_name(
     return Ok(());
   }
 
-  let mut generated = None;
-  for option in iter_light_backends(cfg, Arc::clone(&pool)) {
-    let option = option?;
-    let attempt = generate_name(features, cfg, &option, &prompt, &system_prompt, &session_meta.id).await;
-    let raw = match attempt {
-      Ok(raw) => raw,
-      Err(error) => {
-        tracing::warn!(target: "charliebot_tasks", session_id = %session_meta.id, error = %error, "autonamer_failed");
-        if backend_pool::is_quota_error(&error.to_string()) {
-          pool.cool(&option.id, None);
-        }
-        continue;
-      }
-    };
-    let (name, group) = parse_name_and_group(&raw);
-    let Some(name) = name.filter(|name| name.chars().count() <= 60) else {
-      tracing::warn!(target: "charliebot_tasks", session_id = %session_meta.id, error = "empty or unparseable response", "autonamer_failed");
-      continue;
-    };
-    generated = Some((prefix_session_number_if_default(&session_meta.name, &name), group));
-    break;
-  }
+  let prompt = prompt.as_str();
+  let system_prompt = system_prompt.as_str();
+  let session_id = session_meta.id.as_str();
+  let generated = generate_from_light_backends(cfg, session_id, Arc::clone(&pool), |option| async move {
+    generate_name(features, cfg, &option, prompt, system_prompt, session_id).await
+  })
+  .await?;
   let Some((name, group)) = generated else {
     return Ok(());
   };
+  let name = prefix_session_number_if_default(&session_meta.name, &name);
   let group = group.map(|group| fuzzy_match_group(&group, existing_groups));
   apply_name_to_session(features, session_meta, Some(&name), group.as_deref()).await
+}
+
+async fn generate_from_light_backends<F, Fut>(
+  cfg: &CharlieBotConfig,
+  session_id: &str,
+  pool: Arc<BackendPool>,
+  mut generate: F,
+) -> anyhow::Result<Option<(String, Option<String>)>>
+where
+  F: FnMut(BackendOption) -> Fut,
+  Fut: Future<Output = anyhow::Result<String>>,
+{
+  for option in iter_light_backends(cfg, Arc::clone(&pool)) {
+    let option = option?;
+    let backend_id = option.id.clone();
+    match generate(option).await {
+      Ok(raw) => {
+        let (name, group) = parse_name_and_group(&raw);
+        let Some(name) = name.filter(|name| name.chars().count() <= 60) else {
+          tracing::warn!(target: "charliebot_tasks", session_id, error = "empty or unparseable response", "autonamer_failed");
+          continue;
+        };
+        return Ok(Some((name, group)));
+      }
+      Err(error) => {
+        tracing::warn!(target: "charliebot_tasks", session_id, error = %error, "autonamer_failed");
+        if backend_pool::is_quota_error(&error.to_string()) {
+          pool.cool(&backend_id, None);
+        }
+      }
+    }
+  }
+  Ok(None)
 }
 
 async fn generate_name(
@@ -290,6 +310,10 @@ fn json_type_name(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
+  use serde_yaml::Mapping;
+  use std::path::PathBuf;
+  use std::sync::Mutex;
 
   #[test]
   fn default_names_keep_the_session_number_and_clone_prefix() {
@@ -309,5 +333,57 @@ mod tests {
     );
     assert_eq!(fuzzy_match_group("rust", &["Rust".to_string(), "Research".to_string()]), "Rust");
     assert_eq!(parse_name_and_group("[]"), (None, None));
+  }
+
+  #[tokio::test]
+  async fn quota_from_a_light_backend_cools_the_shared_pool_before_the_next_attempt() {
+    let options = ["light-a", "light-b"]
+      .into_iter()
+      .map(|id| BackendOption {
+        id: id.to_string(),
+        label: id.to_string(),
+        model: "synthetic-model".to_string(),
+        prompt_overlay: None,
+        backend_type: "codex".to_string(),
+        type_fields: Mapping::new(),
+      })
+      .collect();
+    let cfg = CharlieBotConfig {
+      charliebot_home: PathBuf::from("/synthetic/home"),
+      headless_chrome_bin: "/synthetic/chrome".to_string(),
+      server: ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 18650,
+        subprocess_buffer_limit_mb: 1,
+        session_memory_max_mb: 0,
+        session_swap_max_mb: 0,
+        session_tasks_max: 0,
+        min_free_disk_gib: 0,
+      },
+      paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
+      backends: BackendsConfig { pool: vec!["light-a".to_string(), "light-b".to_string()], options },
+      ui: UiConfig { home_services: Vec::new() },
+      telegram: TelegramConfig { chat_id: None },
+      sections: Sections::default(),
+    };
+    let pool = Arc::new(BackendPool::default());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let generated = generate_from_light_backends(&cfg, "session-a", Arc::clone(&pool), |option| {
+      let calls = Arc::clone(&calls);
+      async move {
+        calls.lock().expect("scripted call log lock is not poisoned").push(option.id.clone());
+        if option.id == "light-a" {
+          Err(anyhow::anyhow!("429 quota exceeded"))
+        } else {
+          Ok(r#"{"name":"Synthetic title","group":"Research"}"#.to_string())
+        }
+      }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(*calls.lock().unwrap(), ["light-a".to_string(), "light-b".to_string()]);
+    assert_eq!(generated, Some(("Synthetic title".to_string(), Some("Research".to_string()))));
+    assert_eq!(pool.select(&cfg, "light_oneshot", &[]).unwrap().unwrap().id, "light-b");
   }
 }

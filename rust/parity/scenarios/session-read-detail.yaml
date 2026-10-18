@@ -3,6 +3,14 @@
 stage: session-read-api
 name: session-detail
 steps:
+  - name: events viewer page
+    method: GET
+    path: /sessions/${sessions.atlas}/events
+    expect_status: 200
+  - name: events viewer page with a missing session
+    method: GET
+    path: /sessions/${missing_session}/events
+    expect_status: 404
   - name: detail, manager root, starred, grouped
     method: GET
     path: /api/sessions/${sessions.atlas}

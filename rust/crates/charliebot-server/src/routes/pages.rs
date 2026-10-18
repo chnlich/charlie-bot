@@ -1,102 +1,304 @@
-//! `GET /`: the chat page (`src/app/pages.py` `index`).
-//!
-//! The page renders `index.html` with the config's backend facts, the auth flag, the host name, the version stamps and
-//! the template globals the registered packages add. The session half of the context (the sidebar listing, the redirect
-//! to the first session, the `?session=` bootstrap) ports with the session routes; until then the page renders the
-//! empty-sessions context, and a home whose sessions directory holds anything fails the request rather than render a
-//! sidebar that omits its sessions.
+//! The chat page, home page and per-session events viewer (`src/app/pages.py`).
 
-use std::path::Path;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
-use axum::extract::State;
-use axum::http::request::Parts;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{StatusCode, Uri, request::Parts};
 use axum::response::Response;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CharlieBotConfig, HomeService};
 use charliebot_core::paths;
 use charliebot_registry::Registry;
 use charliebot_registry::templating::Templating;
+use charliebot_session_api::{detail, listing};
+use charliebot_store::StoreError;
+use futures_util::future::join_all;
+use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 
 use super::{Family, get_only};
 use crate::state::AppState;
 use charliebot_compat::responses::{self, Failure};
 
-pub const FAMILY: Family = Family { routes, matches: |_, path| path == "/" };
+pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path) };
 
 fn routes() -> Router<Arc<AppState>> {
-  Router::new().route("/", get_only(index))
+  Router::new()
+    .route("/", get_only(index))
+    .route("/home", get_only(home_page))
+    .route("/sessions/{session_id}/events", get_only(events_viewer))
+}
+
+fn is_page_path(path: &str) -> bool {
+  if path == "/" || path == "/home" {
+    return true;
+  }
+  let Some(rest) = path.strip_prefix("/sessions/") else { return false };
+  let Some((session_id, page)) = rest.split_once('/') else { return false };
+  !session_id.is_empty() && page == "events"
 }
 
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
-  let rendered = tokio::task::spawn_blocking(move || render_index(&state, &request))
+  let cfg = match state.config() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("ValueError", error.to_string()),
+  };
+  let credentials = match state.credentials() {
+    Ok(credentials) => credentials,
+    Err(error) => return responses::internal_error("ValueError", error.to_string()),
+  };
+  let session = session_query(&request);
+  let features = Arc::clone(&state.features);
+  let listing_result =
+    tokio::task::spawn_blocking(move || listing::active_page_values(&features.store, &features.registry))
+      .await
+      .expect("the chat page listing task does not panic");
+  let mut load_errors = Vec::new();
+  let mut initial_sessions = match listing_result {
+    Ok(rows) => rows,
+    Err(error) => {
+      tracing::error!(error = %error, "list_sessions_failed");
+      load_errors.push("Failed to load sessions. Check server logs for details.".to_string());
+      Vec::new()
+    }
+  };
+
+  if session.is_none()
+    && let Some(first) = initial_sessions.first()
+  {
+    let session_id = first.get("id").and_then(Value::as_str).expect("a sidebar row has an id");
+    return responses::redirect(&format!("/?session={session_id}"));
+  }
+
+  let mut active_session = Value::Null;
+  let mut pending_draft = Value::Null;
+  let mut event_count = Value::from(0);
+  let mut session_bootstrap = Value::Null;
+  if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
+    match state.features.store.get_session(session_id).await {
+      Ok(Some(meta)) => {
+        active_session = serde_json::to_value(&meta).expect("session metadata serializes to JSON");
+        match detail::build_bootstrap_payload(&state.features.store, &state.features.registry, &cfg, &meta) {
+          Ok(bootstrap) => {
+            let bootstrap_session = bootstrap.get("session").expect("a bootstrap payload has a session");
+            let bootstrap_session = bootstrap_session.as_object().expect("a bootstrap session is an object");
+            let active = active_session.as_object_mut().expect("session metadata serializes to an object");
+            for name in ["run_backend", "thinking_since"] {
+              if let Some(value) = bootstrap_session.get(name) {
+                active.insert(name.to_string(), value.clone());
+              }
+            }
+            pending_draft = bootstrap.get("pending_draft").expect("a bootstrap payload has a pending draft").clone();
+            event_count = bootstrap.get("event_count").expect("a bootstrap payload has an event count").clone();
+            session_bootstrap = bootstrap;
+            for row in &mut initial_sessions {
+              if row.get("id").and_then(Value::as_str) == Some(session_id)
+                && let Some(object) = row.as_object_mut()
+              {
+                object.insert("has_unread".to_string(), Value::Bool(false));
+              }
+            }
+          }
+          Err(error) => {
+            tracing::error!(session_id, error = %error, "load_session_data_failed");
+            load_errors.push("Failed to load session data. Check server logs for details.".to_string());
+          }
+        }
+      }
+      Ok(None) => {}
+      Err(error) => tracing::error!(session_id, error = %error, "get_session_failed"),
+    }
+  }
+
+  let default_backend_id = cfg.backends.options.first().map_or("claude", |option| option.id.as_str());
+  let active_backend = active_session
+    .get("run_backend")
+    .and_then(Value::as_str)
+    .filter(|backend| !backend.is_empty())
+    .or_else(|| active_session.get("backend").and_then(Value::as_str).filter(|backend| !backend.is_empty()))
+    .unwrap_or(default_backend_id);
+  let active_option = cfg.get_backend_option(active_backend);
+  let context = json!({
+    "initial_sessions": initial_sessions,
+    "active_session": active_session,
+    "pending_draft": pending_draft,
+    "event_count": event_count,
+    "session_bootstrap": session_bootstrap,
+    "backend_options": cfg.backends.options
+      .iter()
+      .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
+      .collect::<Vec<_>>(),
+    "backend_compact": match compact_facts(&cfg, &state.features.registry) {
+      Ok(facts) => Value::Object(facts),
+      Err(error) => return responses::internal_error(&error.kind, error.detail),
+    },
+    "default_backend_id": default_backend_id,
+    "active_backend": active_backend,
+    "active_backend_label": active_option.map_or(active_backend, |option| option.label.as_str()),
+    "active_backend_type": active_option.map_or("", |option| option.backend_type.as_str()),
+    "load_errors": load_errors,
+  });
+  render_page(
+    state,
+    request,
+    "index.html",
+    context,
+    PageRuntime::Index { cfg, auth_enabled: credentials.access_key().is_some() },
+  )
+  .await
+}
+
+async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Response {
+  let cfg = match state.config() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("ValueError", error.to_string()),
+  };
+  let probes = cfg.ui.home_services.iter().map(|service| {
+    let url = service.url.clone();
+    tokio::task::spawn_blocking(move || probe_home_service(&url))
+  });
+  let statuses = join_all(probes)
     .await
-    .expect("rendering the index does not panic");
+    .into_iter()
+    .map(|probe| probe.expect("a home service probe does not panic"))
+    .collect::<Vec<_>>();
+  let services =
+    cfg.ui.home_services.iter().zip(statuses).map(|(service, up)| home_service_value(service, up)).collect::<Vec<_>>();
+  let mut destinations = vec![json!({
+    "name": "Chat",
+    "url": "/",
+    "description": "The CharlieBot chat and session UI."
+  })];
+  destinations.extend(
+    state
+      .features
+      .registry
+      .home_cards()
+      .iter()
+      .map(|card| json!({"name": card.name, "url": card.url, "description": card.description})),
+  );
+  render_page(
+    state,
+    request,
+    "home.html",
+    json!({"destinations": destinations, "services": services}),
+    PageRuntime::Home,
+  )
+  .await
+}
+
+async fn events_viewer(
+  State(state): State<Arc<AppState>>,
+  AxumPath(session_id): AxumPath<String>,
+  request: Parts,
+) -> Response {
+  let session = match state.features.store.get_session(&session_id).await {
+    Ok(Some(session)) => session,
+    Ok(None) | Err(StoreError::NotFound(_)) => return session_not_found(),
+    Err(error) => {
+      tracing::error!(session_id, error = %error, "get_session_failed");
+      return responses::json(StatusCode::INTERNAL_SERVER_ERROR, &json!({"detail": "Failed to load session"}));
+    }
+  };
+  let session = serde_json::to_value(session).expect("session metadata serializes to JSON");
+  let context = json!({
+    "session": session,
+    "session_id": session_id,
+    "events_url": format!("/api/sessions/{session_id}/events.jsonl"),
+  });
+  render_page(state, request, "events_viewer.html", context, PageRuntime::Events).await
+}
+
+enum PageRuntime {
+  Index { cfg: Arc<CharlieBotConfig>, auth_enabled: bool },
+  Home,
+  Events,
+}
+
+async fn render_page(
+  state: Arc<AppState>,
+  request: Parts,
+  name: &'static str,
+  mut context: Value,
+  runtime: PageRuntime,
+) -> Response {
+  let rendered = tokio::task::spawn_blocking(move || {
+    let templating =
+      state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+    let hostname = hostname()?;
+    let object = context.as_object_mut().expect("a page context is a JSON object");
+    object.insert("hostname".to_string(), Value::String(hostname));
+    match runtime {
+      PageRuntime::Index { cfg, auth_enabled } => {
+        let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+        object.insert("sessions_root".to_string(), Value::String(paths::display(&cfg.sessions_dir())));
+        object.insert("version".to_string(), Value::String(templating.git_version().to_string()));
+        object.insert("static_asset_version".to_string(), Value::String(asset_version));
+        object.insert("auth_enabled".to_string(), Value::Bool(auth_enabled));
+      }
+      PageRuntime::Home => {}
+      PageRuntime::Events => {
+        let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+        object.insert("static_asset_version".to_string(), Value::String(asset_version));
+      }
+    }
+    templating.render_page(&state.features, name, &context, &request).map_err(|error| failure(error.kind(), error))
+  })
+  .await
+  .expect("rendering a page does not panic");
   match rendered {
     Ok(response) => response,
-    Err(failure) => responses::internal_error(&failure.kind, failure.detail),
+    Err(error) => responses::internal_error(&error.kind, error.detail),
   }
+}
+
+fn home_service_value(service: &HomeService, up: bool) -> Value {
+  json!({
+    "name": service.name,
+    "description": service.description,
+    "url": service.url,
+    "status": if up { "up" } else { "down" },
+  })
+}
+
+fn probe_home_service(url: &str) -> bool {
+  let Ok(parsed) = url.parse::<Uri>() else { return false };
+  let Some(host) = parsed.host() else { return false };
+  let port = parsed.port_u16().unwrap_or(if parsed.scheme_str() == Some("https") { 443 } else { 80 });
+  let Ok(addresses) = (host, port).to_socket_addrs() else { return false };
+  addresses.into_iter().any(|address| TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok())
+}
+
+fn session_query(request: &Parts) -> Option<String> {
+  let mut session = None;
+  for part in request.uri.query().unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
+    let (name, value) = part.split_once('=').unwrap_or((part, ""));
+    if decode_query_component(name) == "session" {
+      session = Some(decode_query_component(value));
+    }
+  }
+  session
+}
+
+fn decode_query_component(value: &str) -> String {
+  percent_decode_str(&value.replace('+', " ")).decode_utf8_lossy().into_owned()
+}
+
+fn session_not_found() -> Response {
+  responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Session not found"}))
+}
+
+fn hostname() -> Result<String, Failure> {
+  nix::unistd::gethostname()
+    .map_err(|error| failure("OSError", error))?
+    .into_string()
+    .map_err(|name| failure("UnicodeDecodeError", format!("host name is not UTF-8: {}", name.to_string_lossy())))
 }
 
 fn failure(kind: &str, detail: impl ToString) -> Failure {
   Failure { kind: kind.to_string(), detail: detail.to_string() }
-}
-
-fn render_index(state: &AppState, request: &Parts) -> Result<Response, Failure> {
-  let cfg = state.config().map_err(|error| failure("ValueError", error))?;
-  let credentials = state.credentials().map_err(|error| failure("ValueError", error))?;
-  require_no_sessions(&cfg.sessions_dir())?;
-  let templating =
-    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
-  let options = &cfg.backends.options;
-  let default_backend_id = options.first().map_or("claude", |option| option.id.as_str());
-  let active_option = cfg.get_backend_option(default_backend_id);
-  let hostname = nix::unistd::gethostname()
-    .map_err(|error| failure("OSError", error))?
-    .into_string()
-    .map_err(|name| failure("UnicodeDecodeError", format!("host name is not UTF-8: {}", name.to_string_lossy())))?;
-  let context = json!({
-    "initial_sessions": [],
-    "active_session": null,
-    "pending_draft": null,
-    "event_count": 0,
-    "session_bootstrap": null,
-    "backend_options": options
-      .iter()
-      .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
-      .collect::<Vec<_>>(),
-    "backend_compact": compact_facts(&cfg, &state.features.registry)?,
-    "default_backend_id": default_backend_id,
-    "active_backend": default_backend_id,
-    "active_backend_label": active_option.map_or(default_backend_id, |option| option.label.as_str()),
-    "active_backend_type": active_option.map_or("", |option| option.backend_type.as_str()),
-    "load_errors": [],
-    "auth_enabled": credentials.access_key().is_some(),
-    "hostname": hostname,
-    "sessions_root": paths::display(&cfg.sessions_dir()),
-    "version": templating.git_version(),
-    "static_asset_version": templating.static_asset_version().map_err(|error| failure("OSError", error))?,
-  });
-  templating
-    .render_page(&state.features, "index.html", &context, request)
-    .map_err(|error| failure(error.kind(), &error))
-}
-
-/// The session listing is not ported: a home with anything under `sessions/` fails the request.
-fn require_no_sessions(sessions_dir: &Path) -> Result<(), Failure> {
-  let mut entries = match std::fs::read_dir(sessions_dir) {
-    Ok(entries) => entries,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-    Err(error) => return Err(failure("OSError", format!("{}: {error}", sessions_dir.display()))),
-  };
-  if entries.next().is_some() {
-    return Err(failure(
-      "NotImplementedError",
-      format!("{} holds sessions, and the session sidebar is not ported", sessions_dir.display()),
-    ));
-  }
-  Ok(())
 }
 
 /// `_compact_facts`: per configured backend type, whether manual compaction runs and the hint.

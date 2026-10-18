@@ -669,7 +669,10 @@ def unresolved_reference(
 
   The inputs are the values a step's runner substitutes. Any other reference error still raises.
   """
-  inputs = [step.path, step.query, step.headers, step.json_body, list(step.send), step.until, step.payload]
+  inputs = [
+      step.path, step.query, step.headers, step.json_body, step.multipart,
+      list(step.send), step.collect, step.until, step.payload
+  ]
   try:
     substitute(inputs, manifest, captures, tree_root, tree_home)
   except UnresolvedReferenceError as error:

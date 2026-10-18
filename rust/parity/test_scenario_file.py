@@ -660,3 +660,36 @@ def test_unresolved_capture_fails_only_its_step(tmp_path: pathlib.Path) -> None:
   malformed = _load(tmp_path, [{"name": "read", "method": "GET", "path": "/api/${sessions}"}])
   with pytest.raises(scenario_file.ScenarioError, match=re.escape("names a dict")):
     scenario_file.check_references(malformed, manifest)
+
+
+def test_unresolved_references_in_multipart_and_collect_fail_their_steps(tmp_path: pathlib.Path) -> None:
+  capture = {"name": "capture", "method": "GET", "path": "/api/auth/status", "capture": {"input_id": "id"}}
+  multipart = {
+      "name": "multipart",
+      "method": "POST",
+      "path": "/api/upload",
+      "multipart": {
+          "text": "${capture.input_id}"
+      },
+  }
+  collect = {
+      "kind": "ws",
+      "name": "collect",
+      "path": "/ws/test",
+      "collect": {
+          "where": {
+              "text": "${capture.input_id}"
+          },
+          "field": "text",
+          "decode": "none"
+      },
+      "until": {
+          "frames": 0
+      },
+      "timeout_seconds": 1,
+  }
+  scenario = _load(tmp_path, [capture, multipart, collect])
+  manifest = {"sessions": {"atlas": "synthetic-session"}}
+  scenario_file.check_references(scenario, manifest)
+  messages = [scenario_file.unresolved_reference(step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps]
+  assert messages == [None, "unresolved reference ${capture.input_id}", "unresolved reference ${capture.input_id}"]

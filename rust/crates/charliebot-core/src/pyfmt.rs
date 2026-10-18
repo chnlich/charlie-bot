@@ -42,6 +42,24 @@ pub const FENCE_RECORD_JSON: JsonStyle =
 pub const RUN_TOKEN_PAYLOAD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: true, item_separator: ",", key_separator: ":", indent: None };
 
+/// The shortest round-trip decimal digits of a finite, nonzero magnitude and the exponent of the first digit.
+///
+/// CPython takes, among the shortest candidates, the one nearest the exact value, and breaks an exact tie
+/// toward the even digit. Rust's shortest form can break that tie the other way (`1743746592103460.25`
+/// prints `...3`), so the digits come from the exact rounding to the same count when that rounding
+/// round-trips; Rust's shortest form is the fallback.
+fn shortest_digits(magnitude: f64) -> (String, i32) {
+  let shortest = format!("{magnitude:e}");
+  let (mantissa, _) = shortest.split_once('e').expect("LowerExp output carries an exponent");
+  let count = mantissa.bytes().filter(u8::is_ascii_digit).count();
+  let exact = format!("{magnitude:.*e}", count - 1);
+  let text = if exact.parse::<f64>() == Ok(magnitude) { exact } else { shortest };
+  let (mantissa, exponent) = text.split_once('e').expect("LowerExp output carries an exponent");
+  let exponent: i32 = exponent.parse().expect("LowerExp exponent is an integer");
+  let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+  (digits.trim_end_matches('0').to_string(), exponent)
+}
+
 /// CPython `repr(float)`: the shortest round-trip digits, exponent form when the decimal point
 /// position is below -3 or above 16, and a trailing `.0` on integral values.
 pub fn float_repr(x: f64) -> String {
@@ -54,13 +72,8 @@ pub fn float_repr(x: f64) -> String {
   if x == 0.0 {
     return if x.is_sign_negative() { "-0.0" } else { "0.0" }.to_string();
   }
-  // Rust's LowerExp without a precision prints the shortest round-trip mantissa, the same digit
-  // string CPython's repr picks; only the layout differs.
-  let scientific = format!("{x:e}");
-  let (mantissa, exponent) = scientific.split_once('e').expect("LowerExp output carries an exponent");
-  let exponent: i32 = exponent.parse().expect("LowerExp exponent is an integer");
-  let negative = mantissa.starts_with('-');
-  let digits: String = mantissa.trim_start_matches('-').chars().filter(|c| *c != '.').collect();
+  let negative = x < 0.0;
+  let (digits, exponent) = shortest_digits(x.abs());
   let point = exponent + 1;
   let body = if point <= -4 || point > 16 {
     let mut text = digits[..1].to_string();
@@ -80,6 +93,37 @@ pub fn float_repr(x: f64) -> String {
     format!("{}.{}", &digits[..point as usize], &digits[point as usize..])
   };
   if negative { format!("-{body}") } else { body }
+}
+
+/// pydantic's `model_dump_json` float form: the shortest round-trip digits in fixed notation when the decimal
+/// exponent is in `-5..16`, and in scientific notation otherwise, whose exponent has neither `+` nor padding
+/// (`1e16`, `1.5e-7`, `0.00001`). Checked against pydantic over random doubles; `repr` differs (`1e+16`).
+/// `x` must be finite: `write_json` renders NaN and the infinities before a float reaches this function.
+pub fn pydantic_float_repr(x: f64) -> String {
+  if x == 0.0 {
+    return if x.is_sign_negative() { "-0.0" } else { "0.0" }.to_string();
+  }
+  let (digits, exponent) = shortest_digits(x.abs());
+  let body = if (-5..16).contains(&exponent) {
+    if exponent >= 0 {
+      let point = exponent as usize + 1;
+      if digits.len() <= point {
+        format!("{}{}.0", digits, "0".repeat(point - digits.len()))
+      } else {
+        format!("{}.{}", &digits[..point], &digits[point..])
+      }
+    } else {
+      format!("0.{}{}", "0".repeat(exponent.unsigned_abs() as usize - 1), digits)
+    }
+  } else {
+    let mut text = digits[..1].to_string();
+    if digits.len() > 1 {
+      text.push('.');
+      text.push_str(&digits[1..]);
+    }
+    format!("{text}e{exponent}")
+  };
+  if x < 0.0 { format!("-{body}") } else { body }
 }
 
 /// CPython `repr(str)` for the strings this server reports (purposes, paths, config keys).
@@ -139,14 +183,28 @@ fn python_repr(value: &Value) -> String {
   }
 }
 
+/// How a float prints: `json.dumps` writes `repr(float)`, pydantic's `model_dump_json` its own form.
+#[derive(Clone, Copy)]
+enum FloatForm {
+  Python,
+  Pydantic,
+}
+
 /// `json.dumps(value, ...)` under `style`. NaN and the infinities print as CPython's `allow_nan` forms.
 pub fn json_dumps(value: &Value, style: &JsonStyle) -> String {
   let mut out = String::new();
-  write_json(&mut out, value, style, 0);
+  write_json(&mut out, value, style, FloatForm::Python, 0);
   out
 }
 
-fn write_json(out: &mut String, value: &Value, style: &JsonStyle, level: usize) {
+/// `model_dump_json(...)` of a pydantic model under `style`: the `json_dumps` layout with floats in pydantic's form.
+pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
+  let mut out = String::new();
+  write_json(&mut out, value, style, FloatForm::Pydantic, 0);
+  out
+}
+
+fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatForm, level: usize) {
   match value {
     Value::Null => out.push_str("null"),
     Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
@@ -158,7 +216,10 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, level: usize) 
         } else if float.is_infinite() {
           if float > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
         } else {
-          float_repr(float)
+          match floats {
+            FloatForm::Python => float_repr(float),
+            FloatForm::Pydantic => pydantic_float_repr(float),
+          }
         });
       } else {
         out.push_str(&number.to_string());
@@ -173,7 +234,7 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, level: usize) 
       out.push('[');
       for (index, item) in items.iter().enumerate() {
         write_separator(out, style, level + 1, index == 0);
-        write_json(out, item, style, level + 1);
+        write_json(out, item, style, floats, level + 1);
       }
       write_closing_indent(out, style, level);
       out.push(']');
@@ -192,7 +253,7 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, level: usize) 
         write_separator(out, style, level + 1, index == 0);
         write_json_str(out, key, style.ensure_ascii);
         out.push_str(style.key_separator);
-        write_json(out, item, style, level + 1);
+        write_json(out, item, style, floats, level + 1);
       }
       write_closing_indent(out, style, level);
       out.push('}');
@@ -247,6 +308,22 @@ pub fn write_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
 mod tests {
   use super::*;
   use serde_json::json;
+
+  #[test]
+  fn float_digits_break_exact_ties_toward_the_even_digit() {
+    // 1743746592103460.25 lies exactly between ...460.2 and ...460.3; CPython and pydantic print the even one.
+    let tie = 1_743_746_592_103_460.0_f64 + 0.25;
+    assert_eq!(float_repr(tie), "1743746592103460.2");
+    assert_eq!(pydantic_float_repr(tie), "1743746592103460.2");
+  }
+
+  #[test]
+  fn pydantic_floats_use_exponent_form_outside_the_fixed_range() {
+    assert_eq!(pydantic_float_repr(1e16), "1e16");
+    assert_eq!(pydantic_float_repr(1.5e-7), "1.5e-7");
+    assert_eq!(pydantic_float_repr(1e-5), "0.00001");
+    assert_eq!(pydantic_float_repr(-2.5), "-2.5");
+  }
 
   #[test]
   fn float_repr_matches_cpython() {

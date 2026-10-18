@@ -620,7 +620,7 @@ fn finish_metadata(
       output.insert(name.clone(), value.clone());
     }
   }
-  pyfmt::json_dumps(&Value::Object(output), &MODEL_JSON)
+  pyfmt::model_json_dumps(&Value::Object(output), &MODEL_JSON)
 }
 
 fn place_slot(output: &mut Map<String, Value>, extras: &Map<String, Value>, slot: &MetadataSlot) {
@@ -665,6 +665,27 @@ mod tests {
     let value = UtcDateTime::parse("2026-01-01T00:00:00.123400+00:00").unwrap();
     assert_eq!(value.to_string(), "2026-01-01T00:00:00.123400Z");
     assert_eq!(UtcDateTime::parse("2026-01-01T00:00:00").unwrap().to_string(), "2026-01-01T00:00:00Z");
+  }
+
+  #[test]
+  fn floats_render_as_pydantic_model_json() {
+    // Pinned from pydantic's model_dump_json, the Python baseline's metadata writer.
+    let cases = [
+      ("1e16", "1e16"),
+      ("1.5e-7", "1.5e-7"),
+      ("1e22", "1e22"),
+      ("1e308", "1e308"),
+      ("1e-5", "0.00001"),
+      ("0.0001", "0.0001"),
+      ("1234567890123456.0", "1234567890123456.0"),
+      ("-0.0", "-0.0"),
+    ];
+    for (input, expected) in cases {
+      let mut session = SessionMetadata::new("synthetic-id", "session", TaskProfile::Manager);
+      session.set_extra("probe", serde_json::from_str::<Value>(input).unwrap());
+      let text = session.to_json_string(&[], true);
+      assert!(text.contains(&format!("\"probe\": {expected}\n")), "{input} rendered as {text}");
+    }
   }
 
   #[test]

@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 
+import fastapi
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
@@ -45,23 +46,16 @@ from conftest import (
     stub_credentials,
     user_tool_result_event,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 import src.runtime.task_execution as task_execution_module
 from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
-from src.features.voice.turn_contribution import VOICE_NOTE
+from src.features.voice import turn_contribution
+from src.infra import constants, models
 from src.infra import event_types as ET
-from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.infra.models import PatchSessionTaskRequest, RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
-from src.runtime import backend_pool, message_events
+from src.runtime import backend_pool, message_events, session_anchors, session_fork, task_errors, task_sessions
 from src.runtime import runs as runs_mod
 from src.runtime.api import message_utils
-from src.runtime.runs import RAW_LOG_NAME
-from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
-from src.runtime.session_fork import HISTORY_LOCATION_NOTE
-from src.runtime.task_errors import TaskConflictError, TaskInvalidError
-from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests
 # pass it as headers=. It is not a caller identity; conftest's OPERATOR (CallerIdentity)
@@ -207,14 +201,14 @@ def make_pm_build(text: str, pm_builds: list | None = None):
   return pm_build
 
 
-def make_api_client(cfg, session_blocks, task_mgr) -> TestClient:
+def make_api_client(cfg, session_blocks, task_mgr) -> testclient.TestClient:
   from src.features.improve import api as improve_api
   from src.infra import config
   from src.runtime.api import internal as internal_api
   from src.runtime.api import sessions as sessions_api
   from src.runtime.api.deps import get_config_on_loop, get_run_store, get_task_manager
 
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
   app.include_router(internal_api.router, prefix="/api/internal")
   app.include_router(improve_api.router, prefix="/api/internal")
@@ -223,13 +217,14 @@ def make_api_client(cfg, session_blocks, task_mgr) -> TestClient:
   override_session_blocks(app, session_blocks)
   app.dependency_overrides[get_task_manager] = lambda: task_mgr
   app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
-  return TestClient(app)
+  return testclient.TestClient(app)
 
 
-async def wait_for_terminal_run(tree: TaskTreeManager,
-                                session_id: str,
-                                run_id: str,
-                                timeout: float = 15.0) -> tuple[RunRecord, str]:
+async def wait_for_terminal_run(
+    tree: task_sessions.TaskTreeManager,
+    session_id: str,
+    run_id: str,
+    timeout: float = 15.0) -> tuple[models.RunRecord, str]:
   """Poll one Run until its end record lands (the launch is fire-and-forget).
 
     The terminal fact and the metadata mirror land as two writes under one
@@ -249,7 +244,8 @@ async def wait_for_terminal_run(tree: TaskTreeManager,
   pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
 
 
-async def wait_for_worktree(tree: TaskTreeManager, session_id: str, run_id: str, timeout: float) -> pathlib.Path:
+async def wait_for_worktree(
+    tree: task_sessions.TaskTreeManager, session_id: str, run_id: str, timeout: float) -> pathlib.Path:
   """Poll one Run until the spawner records its worktree and return the path.
 
     ``executor.launch`` returns before the spawn chain fills the record in, so
@@ -264,7 +260,8 @@ async def wait_for_worktree(tree: TaskTreeManager, session_id: str, run_id: str,
   pytest.fail(f"run {run_id} never recorded its worktree within {timeout}s")
 
 
-async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeout: float, what: str) -> RunRecord:
+async def wait_for_review_terminal(
+    tree: task_sessions.TaskTreeManager, session_id: str, timeout: float, what: str) -> models.RunRecord:
   """Poll a session's runs until its first review Run carries a terminal fact; return it.
 
     The review Run's id is not known before the work Run's gate releases, so the
@@ -280,14 +277,14 @@ async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeo
   pytest.fail(f"{what} never reached a terminal fact within {timeout}s")
 
 
-def work_run_worktree(tree: TaskTreeManager, worker_id: str) -> pathlib.Path:
+def work_run_worktree(tree: task_sessions.TaskTreeManager, worker_id: str) -> pathlib.Path:
   """The one work-kind run's worktree path (asserts exactly one work run)."""
   work = [r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work"]
   assert len(work) == 1 and work[0].worktree_path
   return pathlib.Path(work[0].worktree_path)
 
 
-def implement_marker_commit(tree: TaskTreeManager, worker_id: str) -> None:
+def implement_marker_commit(tree: task_sessions.TaskTreeManager, worker_id: str) -> None:
   """The implement backend's side effect: commit marker.txt on the work branch."""
   wt = work_run_worktree(tree, worker_id)
   (wt / "marker.txt").write_text("implemented\n")
@@ -343,11 +340,11 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   from src.runtime.api.deps import require_caller
   from src.runtime.run_token import RunTokenClaims
   queued_claims = RunTokenClaims(session_id=manager.id, run_id="run-queued", agent=manager.name or "m")
-  await tree.runs.register_run(RunRecord(id="run-queued", session_id=manager.id, kind="manager_turn"))
+  await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=manager.id, kind="manager_turn"))
   with pytest.raises(HTTPException, match="has not launched"):
     await require_caller(_bearer(queued_claims), tree.runs)
   launched_claims = RunTokenClaims(session_id=manager.id, run_id="run-launched", agent=manager.name or "m")
-  await tree.runs.register_run(RunRecord(id="run-launched", session_id=manager.id, kind="manager_turn"))
+  await tree.runs.register_run(models.RunRecord(id="run-launched", session_id=manager.id, kind="manager_turn"))
   await tree.runs.record_launch(manager.id, "run-launched", pid=424900, pid_start="ps-900")
   identity = await require_caller(_bearer(launched_claims), tree.runs)
   assert identity.claims.run_id == "run-launched"
@@ -357,7 +354,7 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   assert len(builds) == 1
   assert builds[0]["kwargs"].get("on_spawn") is not None
   captured_env = builds[0]["backend"].env or {}
-  assert captured_env.get(SESSION_ID_ENV_VAR) == manager.id
+  assert captured_env.get(constants.SESSION_ID_ENV_VAR) == manager.id
   assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
 
 
@@ -414,7 +411,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
       parent=None,
       request_id="one-click-root",
       profile="manager",
-      task=TaskSpec(goal="", acceptance=[], context_refs=[]),
+      task=models.TaskSpec(goal="", acceptance=[], context_refs=[]),
       name=None)
   assert manager.task is not None and manager.task.goal == ""
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -643,10 +640,10 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   # second process for their operation.
   assert len(builds) == 3
   captured_envs = [build["backend"].env or {} for build in builds]
-  assert {env.get(SESSION_ID_ENV_VAR) for env in captured_envs
+  assert {env.get(constants.SESSION_ID_ENV_VAR) for env in captured_envs
          } == {child_id, first_named.json()["session_id"],
                sibling.json()["session_id"]}
-  assert all(env.get(RUN_TOKEN_ENV) for env in captured_envs)
+  assert all(env.get(constants.RUN_TOKEN_ENV) for env in captured_envs)
   assert all(env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home) for env in captured_envs)
   worker_run = await tree.runs.get_run(child_id, run_id)
   assert worker_run is not None and worker_run.kind == "work"
@@ -702,7 +699,7 @@ async def test_repo_review_context_refuses_a_task_with_an_empty_goal(
   empty_spec = {"goal": "", "repo_path": str(repo), "base_branch": "main", "task_type": "implement"}
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, empty_spec))
-  work_run = RunRecord(
+  work_run = models.RunRecord(
       id="run-work",
       session_id=worker.id,
       kind="work",
@@ -712,12 +709,13 @@ async def test_repo_review_context_refuses_a_task_with_an_empty_goal(
       base_branch="main",
       branch_name="charliebot/task-empty-goal",
       worktree_path=str(tmp_path / "empty-goal-worktree"))
-  with pytest.raises(TaskInvalidError):
+  with pytest.raises(task_errors.TaskInvalidError):
     await tree.dispatch.executor._build_review_context(worker.id, work_run)
 
 
 async def _claimed_work_run_after(
-    tree: TaskTreeManager, session_id: str, earlier_run_ids: set[str], timeout: float) -> RunRecord:
+    tree: task_sessions.TaskTreeManager, session_id: str, earlier_run_ids: set[str],
+    timeout: float) -> models.RunRecord:
   """The node's next work run, once its reservation holds a claimed batch.
 
     The dispatcher binds a run's input batch at reservation, before the run's
@@ -935,7 +933,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
   # a new message dispatches a new round at once — no explicit retry gate.
   first_in = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
   await tree.runs.register_run(
-      RunRecord(id="run-failed", session_id=manager.id, kind="manager_turn", backend="fake", model="fake-model"))
+      models.RunRecord(id="run-failed", session_id=manager.id, kind="manager_turn", backend="fake", model="fake-model"))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(manager.id, "run-failed")
   await tree.dispatch.finish_run(manager.id, "run-failed", outcome="failed", exit_code=1)
@@ -987,7 +985,7 @@ async def test_first_terminal_fact_wins_governs_followups(
   _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   root = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(tree, parent=root.id, request_id="w", profile="worker")
-  await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   # Two concurrent finishers: the recorded failed fact stands even though the
   # losing finisher passed outcome="success", so the worker never closes.
   await asyncio.gather(
@@ -1046,7 +1044,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
   install_scripted_backends(
       monkeypatch, [work_backend, review_backend, review_retry_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(
+  record = models.RunRecord(
       id="run-work",
       session_id=worker.id,
       kind="work",
@@ -1100,7 +1098,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
   # reviewer's landing work enabled — executes through the same launch path,
   # and its landing completes the delivery. The archived worker refuses a
   # retry (only an open task accepts one); the operator restore reopens it.
-  with pytest.raises(TaskConflictError, match="is archived"):
+  with pytest.raises(task_errors.TaskConflictError, match="is archived"):
     await tree.create_retry(worker.id, "review-retry-0", review_run.id)
   await tree.completion.restore_task(
       worker.id, request_id="restore-1", reason="retry the review with the push enabled", caller=OPERATOR)
@@ -1185,7 +1183,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
   review_backend = SpawningScriptedBackend([result_event("review ok")], gate=review_released.wait)
   install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(
+  record = models.RunRecord(
       id="run-work",
       session_id=worker.id,
       kind="work",
@@ -1262,7 +1260,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
   work_backend = SpawningScriptedBackend([result_event("never runs")])
   install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(
+  record = models.RunRecord(
       id="run-work",
       session_id=worker.id,
       kind="work",
@@ -1334,7 +1332,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
   review_backend = SpawningScriptedBackend([result_event("review ok")])
   install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")
 
@@ -1404,7 +1402,7 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
   review_backend = SpawningScriptedBackend([])
   install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")
 
@@ -1441,7 +1439,7 @@ async def test_a_failed_worker_run_reports_once_and_archives_the_worker(
       monkeypatch, [SpawningScriptedBackend([assistant_text_event("started")], exit_code=1)],
       WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")
 
@@ -1479,7 +1477,7 @@ async def test_an_interrupted_worker_run_reports_once_and_archives_the_worker(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("stop noted", pm_builds))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
-  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   await tree.dispatch.finish_run(worker.id, "run-work", outcome="interrupted", exit_code=-1)
   # The durable interrupted fact drives exactly the finish chain the live
@@ -1530,10 +1528,10 @@ async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_ope
   install_worker_launch_and_resume_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")], gate=gate.wait)])
 
-  work = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  work = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(work, task_spec_text=task_spec["goal"])
   await tree.dispatch.finish_run(worker.id, "run-work", outcome="success", exit_code=0)
-  review = RunRecord(
+  review = models.RunRecord(
       id="run-review-1",
       session_id=worker.id,
       kind="review",
@@ -1576,13 +1574,13 @@ async def test_an_improve_childs_failed_run_keeps_the_loop_controllers_close_pat
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   owner_ref = str(pathlib.Path(cfg.sessions_dir) / manager.id / "loops" / "1")
-  record = RunRecord(
+  record = models.RunRecord(
       id="run-iter",
       session_id=worker.id,
       kind="work",
       backend="fake",
       model="fake-model",
-      sequence_ref=SequenceRef(kind="improve", owner_ref=owner_ref, position=0))
+      sequence_ref=models.SequenceRef(kind="improve", owner_ref=owner_ref, position=0))
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   await tree.dispatch.finish_run(worker.id, "run-iter", outcome="failed", exit_code=1)
 
@@ -1610,7 +1608,7 @@ async def test_repo_less_quick_edit_closes_without_review(
   work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
   install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")
 
@@ -1659,7 +1657,8 @@ async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prom
     # The finalize scan reads the native session id from the run's raw log.
     work_run = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work"][-1]
     init = {"type": "system", "subtype": "init", "session_id": "native-1"}
-    (tree.runs.run_dir(worker.id, work_run.id) / RAW_LOG_NAME).write_text(json.dumps(init) + "\n", encoding="utf-8")
+    (tree.runs.run_dir(worker.id, work_run.id) / runs_mod.RAW_LOG_NAME).write_text(
+        json.dumps(init) + "\n", encoding="utf-8")
 
   first = SpawningScriptedBackend([result_event("did the work")], gate=hold_work_run, post_events=record_native_id)
   continuation = SpawningScriptedBackend([result_event("looked at the screenshot")])
@@ -1686,14 +1685,13 @@ async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prom
   assert upload["path"] in continuation.prompt
 
 
-def _task_spec(tree: TaskTreeManager, spec: dict):
-  from src.infra.models import TaskType
-  return TaskSpec(
+def _task_spec(tree: task_sessions.TaskTreeManager, spec: dict):
+  return models.TaskSpec(
       goal=spec["goal"],
       context_refs=[],
       repo_path=spec.get("repo_path"),
       base_branch=spec.get("base_branch"),
-      task_type=TaskType(spec.get("task_type", "implement")),
+      task_type=models.TaskType(spec.get("task_type", "implement")),
       keep_worktree=bool(spec.get("keep_worktree", False)),
   )
 
@@ -1748,7 +1746,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
               "task_type": "implement"
           }))
   await tree.runs.register_run(
-      RunRecord(
+      models.RunRecord(
           id="run-work",
           session_id=worker.id,
           kind="work",
@@ -1756,7 +1754,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
           model="fake-model",
           repo_path=str(repo),
           base_branch="main"))
-  review = RunRecord(
+  review = models.RunRecord(
       id="run-review",
       session_id=worker.id,
       kind="review",
@@ -1781,8 +1779,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
       result_refs=["run:run-work", f"landed:main@{unlanded}"],
       run_ids=["run-work"],
       review_run_ids=["run-review"])
-  from src.runtime.task_errors import TaskConflictError as TCE
-  with pytest.raises(TCE, match="landing evidence unverified"):
+  with pytest.raises(task_errors.TaskConflictError, match="landing evidence unverified"):
     await tree.completion.complete_task(worker.id, request_id="manual-1", evidence=evidence, caller="operator")
   assert tree.task_state(worker.id) == "open"
 
@@ -1793,7 +1790,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
 # ---------------------------------------------------------------------------
 
 
-def _snapshot_of(run: RunRecord) -> dict:
+def _snapshot_of(run: models.RunRecord) -> dict:
   assert run.prompt_snapshot_ref is not None, "the launched Run has no snapshot reference"
   return json.loads(pathlib.Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
 
@@ -1821,7 +1818,7 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(
     input, and the Run carries the snapshot/hash/char_count evidence."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the node rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="the node rule"), caller=OPERATOR)
   _backends, builds = _manager_backend(
       monkeypatch, tree, cfg, session_blocks, events=[result_event("manager turn done")])
 
@@ -1852,18 +1849,19 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(
 
 
 def test_the_voice_note_opens_a_dictated_user_input_only() -> None:
-  meta = SessionMetadata(id="node", name="node", profile="manager")
+  meta = models.SessionMetadata(id="node", name="node", profile="manager")
   dictated = {"type": ET.USER, "content": "said aloud", "input_mode": "voice"}
   typed = {"type": ET.USER, "content": "typed in"}
   relayed = {"type": ET.AGENT_MESSAGE, "content": "from a peer", "from_session_name": "peer"}
 
   prompt, _uploads = task_execution_module.compose_input_prompt(meta, [dictated, typed, relayed])
 
-  assert prompt == "\n\n".join([f"{VOICE_NOTE}\nsaid aloud", "typed in", "[Message from session peer] from a peer"])
+  assert prompt == "\n\n".join(
+      [f"{turn_contribution.VOICE_NOTE}\nsaid aloud", "typed in", "[Message from session peer] from a peer"])
 
 
 def test_compose_input_prompt_puts_the_attachment_block_after_the_text() -> None:
-  meta = SessionMetadata(id="node", name="node", profile="manager")
+  meta = models.SessionMetadata(id="node", name="node", profile="manager")
   first, second = "/sessions/node/uploads/one.png", "/sessions/node/uploads/two.png"
   event = {"type": ET.USER, "content": "look at these", "uploaded_files": [{"path": first}, {"path": second}]}
 
@@ -1876,7 +1874,7 @@ def test_compose_input_prompt_puts_the_attachment_block_after_the_text() -> None
 
 
 def test_compose_input_prompt_gives_an_upload_only_event_the_block_alone() -> None:
-  meta = SessionMetadata(id="node", name="node", profile="manager")
+  meta = models.SessionMetadata(id="node", name="node", profile="manager")
   path = "/sessions/node/uploads/shot.png"
   event = {"type": ET.USER, "content": "", "uploaded_files": [{"path": path}]}
 
@@ -1903,7 +1901,7 @@ async def test_a_dictated_message_launches_a_manager_turn_whose_prompt_opens_wit
   _run, outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
 
   assert outcome == "success"
-  assert backend.prompt == f"{VOICE_NOTE}\nopen the settings page"
+  assert backend.prompt == f"{turn_contribution.VOICE_NOTE}\nopen the settings page"
 
 
 class _UploadRecordingBackend(ScriptedRelayBackend):
@@ -1954,7 +1952,7 @@ async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
       parent=manager.id,
       profile="worker",
       request_id="w",
-      task=TaskSpec(goal="ship it", repo_path=str(repo), task_type="script-run"))
+      task=models.TaskSpec(goal="ship it", repo_path=str(repo), task_type="script-run"))
   builds: list[dict] = []
   scripted: list[SpawningScriptedBackend] = []
 
@@ -1993,7 +1991,11 @@ async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
 
   # Verify contract: the verify task's managed block is the verify contract.
   verify_task = await create_task(
-      tree, parent=manager.id, profile="worker", request_id="v", task=TaskSpec(goal="verify it", task_type="verify"))
+      tree,
+      parent=manager.id,
+      profile="worker",
+      request_id="v",
+      task=models.TaskSpec(goal="verify it", task_type="verify"))
   await tree.dispatch.admit_input(verify_task.id, event_type=ET.USER, content="verify the result", actor="user")
   decision = await tree.dispatch.dispatch_pending(verify_task.id)
   assert decision.get("launch") is True
@@ -2048,7 +2050,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
   assert "Context reset" not in launch2
 
   # Turn 3 (a rule changed): fresh native context, history retained elsewhere.
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="changed rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="changed rule"), caller=OPERATOR)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn three", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision.get("launch") is True
@@ -2070,7 +2072,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
   assert note == (
       "[Context reset: this task's managed instructions or sources changed since the "
       "previous turn, so this turn starts a fresh native conversation. "
-      f"The task is: {meta3.name}. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+      f"The task is: {meta3.name}. {session_fork.HISTORY_LOCATION_NOTE} {session_anchors.CONTEXT_RESET_INSTRUCTION}]")
   assert "turn three" in tail
 
 
@@ -2111,7 +2113,7 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
   assert note == (
       "[Context reset: this session switched from backend some-other-backend to fake, "
       f"which starts its own conversation. The task is: {meta.name}. "
-      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+      f"{session_fork.HISTORY_LOCATION_NOTE} {session_anchors.CONTEXT_RESET_INSTRUCTION}]")
   assert "two" in tail
 
 
@@ -2158,7 +2160,7 @@ async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
   body.unlink()  # the rule vanished before the launch
@@ -2195,7 +2197,7 @@ async def test_corrupt_rule_fails_before_launch_with_the_reason(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
   body.write_text("tampered bytes", encoding="utf-8")
@@ -2215,7 +2217,7 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
     recomposes from current memory/templates; an explicit retry uses current sources."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="original rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="original rule"), caller=OPERATOR)
   _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("turn")])
   run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
@@ -2244,7 +2246,7 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
     withheld verdict (no backend invocation, no Run process, input unconsumed)."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="the rule"), caller=OPERATOR)
   _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("never")])
   from src.infra import json_utils
   real_atomic = json_utils.atomic_write_text
@@ -2283,7 +2285,7 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=manager.id, request_id="child")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(subtree_prompt="program-wide rule"), caller=OPERATOR)
   _backends, _builds = _manager_backend(
       monkeypatch, tree, cfg, session_blocks, events=[result_event("manager turn done")])
 
@@ -2309,7 +2311,8 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
 
   # Editing the own subtree rule: the next-start preview changes for the node
   # itself and for its descendant, while the current Run's snapshot stays fixed.
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule v2"), caller=OPERATOR)
+  await tree.patch_task(
+      manager.id, models.PatchSessionTaskRequest(subtree_prompt="program-wide rule v2"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   index = await tree._get_index()
   chain, node_ref = capture_prompt_chain(tree, index, meta)
@@ -2346,10 +2349,11 @@ def _read_error_event(events_log: pathlib.Path) -> str:
   return ""
 
 
-def wait_for_terminal_run_sync(tree: TaskTreeManager,
-                               session_id: str,
-                               run_id: str,
-                               timeout: float = 20.0) -> tuple[RunRecord, str]:
+def wait_for_terminal_run_sync(
+    tree: task_sessions.TaskTreeManager,
+    session_id: str,
+    run_id: str,
+    timeout: float = 20.0) -> tuple[models.RunRecord, str]:
   """Poll one Run's durable state without touching the launch's event loop.
 
     The delegate endpoint schedules the Run on the API client's portal loop;
@@ -2368,7 +2372,7 @@ def wait_for_terminal_run_sync(tree: TaskTreeManager,
   pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
 
 
-async def _wait_for_parent_report(tree: TaskTreeManager, parent_id: str, timeout: float = 15.0) -> dict:
+async def _wait_for_parent_report(tree: task_sessions.TaskTreeManager, parent_id: str, timeout: float = 15.0) -> dict:
   """Poll the parent's fact history until a delivered child_report lands."""
   deadline = asyncio.get_event_loop().time() + timeout
   while asyncio.get_event_loop().time() < deadline:
@@ -2500,7 +2504,7 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
   assert [r.id for r in tree.runs.list_run_records_sync(manager.id)] == [run_id]
 
 
-def _turn_launch_notices(tree: TaskTreeManager, session_id: str) -> list[dict]:
+def _turn_launch_notices(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return [e for e in tree.fact_history(session_id) if e.get("source") == "turn_launch"]
 
 
@@ -2541,7 +2545,7 @@ async def test_a_withheld_manager_turn_shows_one_error_row_however_often_it_is_w
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
+  await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
   body.unlink()  # the rule vanished before the launch
@@ -2574,7 +2578,7 @@ async def test_a_worker_launch_failure_writes_no_turn_launch_error(
     raise ValueError(f"backend {backend!r} is not configured")
 
   monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
-  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")
 
@@ -2609,8 +2613,10 @@ def build_pooled_env(
   return cfg, session_blocks, build_task_tree(cfg, session_blocks)
 
 
-async def _register_work_run(tree: TaskTreeManager, worker_id: str, run_id: str, backend: str, model: str) -> None:
-  await tree.runs.register_run(RunRecord(id=run_id, session_id=worker_id, kind="work", backend=backend, model=model))
+async def _register_work_run(
+    tree: task_sessions.TaskTreeManager, worker_id: str, run_id: str, backend: str, model: str) -> None:
+  await tree.runs.register_run(
+      models.RunRecord(id=run_id, session_id=worker_id, kind="work", backend=backend, model=model))
 
 
 @pytest.mark.asyncio
@@ -2626,7 +2632,7 @@ async def test_pooled_fresh_worker_launches_build_on_the_selected_account(
   # An implement task: the work Run's success spawns its review, the second
   # fresh launch this test pins.
   worker = await create_task(
-      tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="implement"))
+      tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="implement"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_scripted_backends(
       monkeypatch, [
@@ -2668,7 +2674,7 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
           "beta": ["ext-1", "ext-2"]
       })
   worker = await create_task(
-      tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
+      tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -2699,7 +2705,7 @@ async def test_unpooled_fresh_worker_launch_carries_no_account(
     worker runs on its default login exactly as before this change."""
   cfg, session_blocks, tree = env_builder(tmp_path, monkeypatch)
   worker = await create_task(
-      tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
+      tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -2720,7 +2726,7 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
     improve quota classification reads that text as a quota blocker."""
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
-  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it"))
+  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # An empty build queue: any process spawn would pop from it and fail loudly.
   builds = install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -2758,7 +2764,7 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   worker = await create_task(
-      tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
+      tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "11111111-2222-3333-4444-555555555555"
   # The fresh launch binds a new Claude session id; pin it so the transcript
@@ -2823,7 +2829,7 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
   real_record_launch = tree.runs.record_launch
   launches: list[tuple[int, str, datetime.datetime | None]] = []
 
-  async def recording_launch(session_id: str, launch_run_id: str, *, pid: int, pid_start: str) -> RunRecord:
+  async def recording_launch(session_id: str, launch_run_id: str, *, pid: int, pid_start: str) -> models.RunRecord:
     run = await real_record_launch(session_id, launch_run_id, pid=pid, pid_start=pid_start)
     launches.append((pid, pid_start, run.started_at))
     return run
@@ -3003,7 +3009,7 @@ def write_raw_result(run_dir: pathlib.Path,
                      age_seconds: float = 0.0) -> tuple[pathlib.Path, datetime.datetime]:
   """The run's raw transport log with one successful result event, optionally
     mtime-stamped into the past — the drain's truth source. Returns (path, mtime)."""
-  raw = run_dir / RAW_LOG_NAME
+  raw = run_dir / runs_mod.RAW_LOG_NAME
   raw.parent.mkdir(parents=True, exist_ok=True)
   raw.write_text(
       json.dumps({
@@ -3041,7 +3047,7 @@ async def _manager_with_worker_child(
       parent=manager.id,
       request_id="child",
       profile="worker",
-      task=TaskSpec(goal="do the work", task_type=task_type))
+      task=models.TaskSpec(goal="do the work", task_type=task_type))
   return cfg, session_blocks, tree, manager, worker
 
 
@@ -3087,7 +3093,7 @@ async def poll_until(predicate, *, timeout: float = 5.0, poll: float = 0.02, wha
   pytest.fail(f"{what} never settled within {timeout}s")
 
 
-def child_reports(tree: TaskTreeManager, session_id: str) -> list[dict]:
+def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
 
 
@@ -3243,7 +3249,7 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
   # Drain: a launched run whose process died unseen, raw log stamped an hour ago.
   run_id = "run-drained"
   await tree.runs.register_run(
-      RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+      models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
   await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
   await tree.runs.record_launch(worker.id, run_id, pid=424901, pid_start="1-424000")
@@ -3258,7 +3264,7 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
   # A fresh child node: the drained node's trailing dispatch would race a
   # second input admitted on it.
   worker2 = await create_task(
-      tree, parent=manager.id, request_id="child-2", profile="worker", task=TaskSpec(goal="more work"))
+      tree, parent=manager.id, request_id="child-2", profile="worker", task=models.TaskSpec(goal="more work"))
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("live work")])])
   await tree.dispatch.admit_input(worker2.id, event_type=ET.USER, content="Start.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker2.id)
@@ -3328,11 +3334,11 @@ async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
   cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The worker's delivered run closed it completed; the queued run never launches.
-  await tree.runs.register_run(RunRecord(id="run-done", session_id=worker.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-done", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-done", outcome="success", exit_code=0)
   assert tree.task_state(worker.id) == "completed"
   await tree.runs.register_run(
-      RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+      models.RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
 
   verdict = await adapter.execute_run(worker.id, "run-queued", launch_prompt=None)
 
@@ -3412,9 +3418,9 @@ async def test_repeat_finish_fills_only_empty_end_metadata(
   """finish_run's repeat path fills empty ended_at/exit_code from the passed
     values and never moves values already written."""
   _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
-  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="g"))
+  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="g"))
   run_id = "run-half"
-  await tree.runs.register_run(RunRecord(id=run_id, session_id=worker.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=worker.id, kind="work"))
   # First finish with an empty-ended_at repeat (the half-written record's
   # shape): the fact lands, the metadata write is lost.
   await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
@@ -3457,13 +3463,14 @@ def _failover_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   return cfg, tree, adapter, launched
 
 
-async def _interrupted_worker_run(tree, manager, *, from_pool: bool, task_type: TaskType = TaskType.IMPLEMENT):
+async def _interrupted_worker_run(
+    tree, manager, *, from_pool: bool, task_type: models.TaskType = models.TaskType.IMPLEMENT):
   """A worker of *task_type* whose run on fake2 ended on quota exhaustion with its revision batch bound."""
   worker = await tree.create_task(
       request_id="worker",
       task_parent_id=manager.id,
       profile="worker",
-      task=TaskSpec(goal="do the work", task_type=task_type),
+      task=models.TaskSpec(goal="do the work", task_type=task_type),
       name=None,
       backend="fake2",
       caller=OPERATOR,
@@ -3471,7 +3478,7 @@ async def _interrupted_worker_run(tree, manager, *, from_pool: bool, task_type: 
   if from_pool:
     await tree.update_slot_fields(worker.id, backend_pool.METADATA_OWNER, backend_from_pool=True)
   feedback = await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content=REVIEW_FEEDBACK, actor="user")
-  run = RunRecord(
+  run = models.RunRecord(
       id="run-revision",
       session_id=worker.id,
       kind="work",
@@ -3495,9 +3502,11 @@ def _record_parent_reports(adapter, monkeypatch: pytest.MonkeyPatch) -> list[str
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN, TaskType.VERIFY])
+@pytest.mark.parametrize(
+    "task_type",
+    [models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN, models.TaskType.VERIFY])
 async def test_quota_failure_on_a_pool_node_fails_over_to_the_next_member(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, task_type: TaskType) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, task_type: models.TaskType) -> None:
   """A pool-chosen worker whose run ends on quota exhaustion cools that member, moves the node to the next
   member, and registers a retry run on it that binds the interrupted run's input batch."""
   cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
@@ -3551,12 +3560,12 @@ async def test_a_successful_worker_with_no_available_reviewer_reports_blocked(
       request_id="worker",
       task_parent_id=manager.id,
       profile="worker",
-      task=TaskSpec(goal="do the work", task_type=TaskType.IMPLEMENT),
+      task=models.TaskSpec(goal="do the work", task_type=models.TaskType.IMPLEMENT),
       name=None,
       backend="fake2",
       caller=OPERATOR,
   )
-  run = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake2", model="fake-model")
+  run = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake2", model="fake-model")
   await tree.runs.register_run(run)
   await tree.dispatch.finish_run(worker.id, run.id, outcome="success", exit_code=0)
   backend_pool.cool("fake3", datetime.datetime(2030, 1, 2, 3, 4, tzinfo=datetime.UTC))

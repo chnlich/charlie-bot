@@ -189,6 +189,9 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 - Python: `src/backends/claude_code/master_cc_relay.py:91-95` reads account labels from the other running manager turns.
 - Rust: `LaunchContext.running_turns: Option<RunningTurnsFn>`, where `RunningTurnsFn` returns metadata for every other running manager turn.
+- `LaunchContext.session_meta: Arc<Mutex<SessionMetadata>>` is shared by the master queue's running-turn entry and the turn's lifecycle calls.
+- Lifecycle account-label setters and the queue's anchor refresh write the shared metadata object.
+- No `std::sync::Mutex` guard crosses `.await`; `clippy::await_holding_lock`, denied by `-D warnings` in the acceptance command, enforces this rule.
 - A manager turn receives `Some`; a task receives `None`. A task path that reads this field fails with an error naming `running_turns`.
 - The callback reads the queue when called because Python probes transcript lineage before it reads the busy set.
 - Example: `running_turns: Some(Arc::new(|| queue.running_turns_except(session_id)))`.

@@ -52,7 +52,7 @@ struct QueueState {
   session_consumers: HashMap<String, JoinHandle<()>>,
   consumer_cancel: HashMap<String, watch::Sender<bool>>,
   current_items: HashMap<String, Vec<String>>,
-  running_turn_metadata: HashMap<String, SessionMetadata>,
+  running_turns: HashMap<String, Arc<Mutex<SessionMetadata>>>,
   active_procs: HashMap<String, Arc<AgentRunner>>,
   shutdown: bool,
 }
@@ -61,6 +61,11 @@ struct QueueState {
 pub struct MasterQueue {
   state: Mutex<QueueState>,
   backend_pool: Arc<BackendPool>,
+}
+
+struct PersistedAccountLabel {
+  label: String,
+  read_back: Option<Option<String>>,
 }
 
 impl MasterQueue {
@@ -166,7 +171,7 @@ impl MasterQueue {
     let (_cancel_sender, cancel) = watch::channel(false);
     let item = WorkItem {
       cfg,
-      session_meta,
+      session_meta: Arc::new(Mutex::new(session_meta)),
       user_content,
       callbacks,
       auto_trigger,
@@ -207,7 +212,7 @@ impl MasterQueue {
     let (_cancel_sender, cancel) = watch::channel(false);
     let item = WorkItem {
       cfg,
-      session_meta,
+      session_meta: Arc::new(Mutex::new(session_meta)),
       user_content: String::new(),
       callbacks,
       auto_trigger: false,
@@ -252,30 +257,19 @@ impl MasterQueue {
   }
 
   pub fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata> {
-    self
-      .state
-      .lock()
-      .expect("master queue mutex is not poisoned")
-      .running_turn_metadata
-      .iter()
-      .filter(|(running_id, _)| running_id.as_str() != session_id)
-      .map(|(_, metadata)| metadata.clone())
+    let metadata = {
+      let state = self.state.lock().expect("master queue mutex is not poisoned");
+      state
+        .running_turns
+        .iter()
+        .filter(|(running_id, _)| running_id.as_str() != session_id)
+        .map(|(_, metadata)| Arc::clone(metadata))
+        .collect::<Vec<_>>()
+    };
+    metadata
+      .into_iter()
+      .map(|metadata| metadata.lock().expect("running turn metadata mutex is not poisoned").clone())
       .collect()
-  }
-
-  pub fn record_running_account_label(
-    &self,
-    session_id: &str,
-    lifecycle: &dyn BackendLifecycle,
-    label: &str,
-  ) -> anyhow::Result<()> {
-    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-    let metadata = state
-      .running_turn_metadata
-      .get_mut(session_id)
-      .ok_or_else(|| anyhow!("running_turns has no metadata for running turn {session_id}"))?;
-    lifecycle.record_account_label(metadata, Some(label));
-    Ok(())
   }
 
   pub async fn terminate_active(&self, session_id: &str) -> anyhow::Result<()> {
@@ -311,7 +305,7 @@ impl MasterQueue {
   }
 
   async fn enqueue_and_notify(self: &Arc<Self>, item: WorkItem) -> anyhow::Result<()> {
-    let session_id = item.session_meta.id.clone();
+    let session_id = item.session_metadata().id;
     let auto_trigger = item.auto_trigger;
     let resumed_start = item.resume_record.as_ref().map(|record| record.started_at);
     let callbacks = item.callbacks.clone();
@@ -358,7 +352,7 @@ impl MasterQueue {
         let item = state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front);
         if let Some(item) = &item {
           state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
-          state.running_turn_metadata.insert(session_id.clone(), item.session_meta.clone());
+          state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
           teardown = Some((item.callbacks.clone(), item.auto_trigger));
         }
         item
@@ -381,7 +375,7 @@ impl MasterQueue {
       {
         let mut state = self.state.lock().expect("master queue mutex is not poisoned");
         state.current_items.remove(&session_id);
-        state.running_turn_metadata.remove(&session_id);
+        state.running_turns.remove(&session_id);
       }
       if let Err(error) = outcome {
         tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "session_consumer_item_error");
@@ -404,7 +398,7 @@ impl MasterQueue {
       state.session_consumers.remove(&session_id);
       state.consumer_cancel.remove(&session_id);
       state.current_items.remove(&session_id);
-      state.running_turn_metadata.remove(&session_id);
+      state.running_turns.remove(&session_id);
       let queued = state.session_queues.remove(&session_id).unwrap_or_default();
       state.session_notifies.remove(&session_id);
       for mut item in queued {
@@ -441,7 +435,7 @@ impl MasterQueue {
     last_cc_session_id: &mut Option<String>,
     last_account_label: &mut Option<String>,
   ) -> anyhow::Result<()> {
-    refresh_anchors_from_disk(item, last_cc_session_id, last_account_label).await?;
+    refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
     let mut result = if item.resume_record.is_some() {
       master_run::resume_cc(item).await?
     } else {
@@ -469,9 +463,12 @@ impl MasterQueue {
     }
     let ran_backend = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
     if let Some(cc_session_id) = result.cc_session_id.as_ref().filter(|id| !id.is_empty()) {
-      item.session_meta.cc_session_id = Some(cc_session_id.clone());
-      if let Some(backend) = &ran_backend {
-        item.session_meta.native_backend = Some(backend.clone());
+      {
+        let mut metadata = item.session_meta.lock().expect("work item metadata mutex is not poisoned");
+        metadata.cc_session_id = Some(cc_session_id.clone());
+        if let Some(backend) = &ran_backend {
+          metadata.native_backend = Some(backend.clone());
+        }
       }
       *last_cc_session_id = Some(cc_session_id.clone());
       let read_back =
@@ -481,18 +478,22 @@ impl MasterQueue {
         persist_mismatch(item, "resume_anchor", "Resume anchor", cc_session_id, read_back.as_deref()).await?;
       }
     }
-    if let Some(account_label) = result.account_label.take() {
-      *last_account_label = Some(account_label.clone());
-      if let Some(backend_id) = ran_backend.as_deref()
-        && let Some(lifecycle) = account_lifecycle(item, backend_id)
+    let metadata = item.session_metadata();
+    if let Some(backend_id) = metadata.native_backend.as_deref()
+      && let Some(lifecycle) = account_lifecycle(item, backend_id)
+      && let Some(account_label) = persist_shared_account_label(
+        &item.session_meta,
+        lifecycle.as_ref(),
+        session_id,
+        item.callbacks.persist_account_label.as_ref(),
+      )
+      .await?
+    {
+      *last_account_label = Some(account_label.label.clone());
+      if let Some(read_back) = account_label.read_back
+        && read_back.as_deref() != Some(account_label.label.as_str())
       {
-        lifecycle.record_account_label(&mut item.session_meta, Some(&account_label));
-      }
-      if let Some(persist) = &item.callbacks.persist_account_label {
-        let read_back = persist(session_id.to_string(), account_label.clone()).await?;
-        if read_back.as_deref() != Some(account_label.as_str()) {
-          persist_mismatch(item, "account", "Account label", &account_label, read_back.as_deref()).await?;
-        }
+        persist_mismatch(item, "account", "Account label", &account_label.label, read_back.as_deref()).await?;
       }
     }
 
@@ -556,37 +557,39 @@ pub fn queued_user_event_ids(features: &FeatureContext, session_id: &str) -> any
   Ok(queue.queued_user_event_ids(session_id))
 }
 
-async fn refresh_anchors_from_disk(
+fn refresh_anchors_from_disk(
   item: &mut WorkItem,
   last_cc_session_id: &Option<String>,
   last_account_label: &Option<String>,
 ) -> anyhow::Result<()> {
-  let fresh = item.callbacks.features.store.read_metadata_fresh(&item.session_meta.id)?;
+  let session_id = item.session_metadata().id;
+  let fresh = item.callbacks.features.store.read_metadata_fresh(&session_id)?;
+  let mut metadata = item.session_meta.lock().expect("work item metadata mutex is not poisoned");
   if let Some(fresh) = fresh {
-    if item.session_meta.cc_session_id.is_some() {
-      item.session_meta.cc_session_id = fresh.cc_session_id.clone();
+    if metadata.cc_session_id.is_some() {
+      metadata.cc_session_id = fresh.cc_session_id.clone();
     }
-    if item.session_meta.native_backend.is_some() {
-      item.session_meta.native_backend = fresh.native_backend.clone();
+    if metadata.native_backend.is_some() {
+      metadata.native_backend = fresh.native_backend.clone();
     }
-    if let Some(backend_id) = item.session_meta.native_backend.as_deref()
+    if let Some(backend_id) = metadata.native_backend.as_deref()
       && let Some(lifecycle) = account_lifecycle(item, backend_id)
       && let Some(label) = lifecycle.account_label(&fresh)
     {
-      lifecycle.record_account_label(&mut item.session_meta, Some(&label));
+      lifecycle.record_account_label(&mut metadata, Some(&label));
     }
   }
   if let Some(last) = last_cc_session_id.as_ref()
-    && item.session_meta.cc_session_id.is_none()
+    && metadata.cc_session_id.is_none()
   {
-    item.session_meta.cc_session_id = Some(last.clone());
+    metadata.cc_session_id = Some(last.clone());
   }
   if let Some(last) = last_account_label.as_deref()
-    && let Some(backend_id) = item.session_meta.native_backend.as_deref()
+    && let Some(backend_id) = metadata.native_backend.as_deref()
     && let Some(lifecycle) = account_lifecycle(item, backend_id)
-    && lifecycle.account_label(&item.session_meta).is_none()
+    && lifecycle.account_label(&metadata).is_none()
   {
-    lifecycle.record_account_label(&mut item.session_meta, Some(last));
+    lifecycle.record_account_label(&mut metadata, Some(last));
   }
   Ok(())
 }
@@ -600,6 +603,21 @@ fn account_lifecycle(item: &WorkItem, backend_id: &str) -> Option<Arc<dyn Backen
   item.callbacks.features.registry.lifecycle_for(backend_type).ok()
 }
 
+async fn persist_shared_account_label(
+  session_meta: &Arc<Mutex<SessionMetadata>>,
+  lifecycle: &dyn BackendLifecycle,
+  session_id: &str,
+  persist: Option<&PersistAccountLabelFn>,
+) -> anyhow::Result<Option<PersistedAccountLabel>> {
+  let metadata = session_meta.lock().expect("work item metadata mutex is not poisoned").clone();
+  let Some(label) = lifecycle.account_label(&metadata).filter(|label| !label.is_empty()) else {
+    return Ok(None);
+  };
+  let read_back =
+    if let Some(persist) = persist { Some(persist(session_id.to_string(), label.clone()).await?) } else { None };
+  Ok(Some(PersistedAccountLabel { label, read_back }))
+}
+
 async fn persist_mismatch(
   item: &WorkItem,
   source: &str,
@@ -607,10 +625,11 @@ async fn persist_mismatch(
   written: &str,
   read_back: Option<&str>,
 ) -> anyhow::Result<()> {
-  tracing::error!(target: "charliebot_tasks", session = %item.session_meta.id, written, read_back, "persist_mismatch");
+  let session_id = item.session_metadata().id;
+  tracing::error!(target: "charliebot_tasks", session = %session_id, written, read_back, "persist_mismatch");
   let message = format!("{subject} persist mismatch: wrote {written:?}, read back {read_back:?} from disk");
   (item.callbacks.persist_and_broadcast)(
-    item.session_meta.id.clone(),
+    session_id,
     json!({"type": event_types::ERROR, "source": source, "message": message}),
   )
   .await
@@ -643,23 +662,49 @@ mod tests {
   use super::*;
 
   #[test]
-  fn running_turn_snapshot_includes_labels_recorded_after_start() {
+  fn running_turn_snapshot_reads_the_shared_metadata_object() {
     let queue = MasterQueue::new(Arc::new(BackendPool::default()));
     let mut running = SessionMetadata::new("running", "Running", TaskProfile::Manager);
     running.native_backend = Some("fable".to_string());
+    let running = Arc::new(Mutex::new(running));
     queue
       .state
       .lock()
       .expect("master queue mutex is not poisoned")
-      .running_turn_metadata
-      .insert(running.id.clone(), running);
+      .running_turns
+      .insert("running".to_string(), Arc::clone(&running));
 
     let lifecycle = ClaudeCodeLifecycle::new();
-    queue.record_running_account_label("running", &lifecycle, "synthetic-a").unwrap();
+    lifecycle.record_account_label(&mut running.lock().unwrap(), Some("synthetic-a"));
 
     let other_turns = queue.running_turns_except("observer");
     assert_eq!(other_turns.len(), 1);
     assert_eq!(claude_metadata::account_of(&other_turns[0]).as_deref(), Some("synthetic-a"));
     assert!(queue.running_turns_except("running").is_empty());
+  }
+
+  #[tokio::test]
+  async fn post_turn_persists_the_lifecycle_label_from_shared_metadata() {
+    let lifecycle = ClaudeCodeLifecycle::new();
+    let session_meta = Arc::new(Mutex::new(SessionMetadata::new("running", "Running", TaskProfile::Manager)));
+    lifecycle.record_account_label(&mut session_meta.lock().unwrap(), Some("synthetic-a"));
+    let persisted = Arc::new(Mutex::new(Vec::new()));
+    let persist: PersistAccountLabelFn = {
+      let persisted = Arc::clone(&persisted);
+      Arc::new(move |session_id, label| {
+        let persisted = Arc::clone(&persisted);
+        Box::pin(async move {
+          persisted.lock().unwrap().push((session_id, label.clone()));
+          Ok(Some(label))
+        })
+      })
+    };
+
+    let account_label =
+      persist_shared_account_label(&session_meta, &lifecycle, "running", Some(&persist)).await.unwrap().unwrap();
+
+    assert_eq!(account_label.label, "synthetic-a");
+    assert_eq!(account_label.read_back, Some(Some("synthetic-a".to_string())));
+    assert_eq!(*persisted.lock().unwrap(), [("running".to_string(), "synthetic-a".to_string())]);
   }
 }

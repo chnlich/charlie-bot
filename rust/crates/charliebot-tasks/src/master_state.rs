@@ -1,7 +1,7 @@
 //! Per-session manager work items and exported run-state reads.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -71,7 +71,7 @@ pub struct MasterResumeRequest {
 
 pub(crate) struct WorkItem {
   pub cfg: Arc<CharlieBotConfig>,
-  pub session_meta: SessionMetadata,
+  pub session_meta: Arc<Mutex<SessionMetadata>>,
   pub user_content: String,
   pub callbacks: SessionCallbacks,
   pub auto_trigger: bool,
@@ -88,6 +88,12 @@ pub(crate) struct WorkItem {
   pub extra_env: Option<Env>,
   pub cancel: watch::Receiver<bool>,
   pub completion: Option<oneshot::Sender<anyhow::Result<Option<String>>>>,
+}
+
+impl WorkItem {
+  pub(crate) fn session_metadata(&self) -> SessionMetadata {
+    self.session_meta.lock().expect("work item metadata mutex is not poisoned").clone()
+  }
 }
 
 /// Return the current turn's input event ids from the startup-owned `MasterQueue`.

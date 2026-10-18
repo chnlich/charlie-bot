@@ -14,9 +14,7 @@ use charliebot_agents::runner::{AgentRunner, EventFn, RunRequest};
 use charliebot_agents::transport::{cursor, follow, identity, recovery};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
-use charliebot_registry::backend::{
-  BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle,
-};
+use charliebot_registry::backend::{Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
@@ -37,7 +35,6 @@ pub(crate) struct MasterRunOutcome {
   pub exit_code: i32,
   pub error_msg: Option<String>,
   pub finish_extras: Map<String, Value>,
-  pub account_label: Option<String>,
   pub cancelled: bool,
 }
 
@@ -332,11 +329,11 @@ async fn report_turn_error_and_salvage(
   error_msg: Option<&str>,
   quota_exhausted: Option<bool>,
 ) -> anyhow::Result<()> {
+  let metadata = item.session_metadata();
   if let Some(message) = error_msg {
-    (item.callbacks.persist_and_broadcast)(item.session_meta.id.clone(), agent_error_event(message, quota_exhausted))
-      .await?;
+    (item.callbacks.persist_and_broadcast)(metadata.id.clone(), agent_error_event(message, quota_exhausted)).await?;
   }
-  salvage_silent_turn(tracker, error_msg, &item.callbacks, &item.session_meta.id).await
+  salvage_silent_turn(tracker, error_msg, &item.callbacks, &metadata.id).await
 }
 
 async fn refuse_turn(
@@ -344,15 +341,14 @@ async fn refuse_turn(
   message: &str,
   quota_exhausted: Option<bool>,
 ) -> anyhow::Result<MasterRunOutcome> {
-  (item.callbacks.persist_and_broadcast)(item.session_meta.id.clone(), agent_error_event(message, quota_exhausted))
-    .await?;
-  (item.callbacks.mark_unread)(item.session_meta.id.clone()).await?;
+  let session_id = item.session_metadata().id;
+  (item.callbacks.persist_and_broadcast)(session_id.clone(), agent_error_event(message, quota_exhausted)).await?;
+  (item.callbacks.mark_unread)(session_id).await?;
   Ok(MasterRunOutcome {
     cc_session_id: None,
     exit_code: 1,
     error_msg: Some(message.to_string()),
     finish_extras: Map::new(),
-    account_label: None,
     cancelled: false,
   })
 }
@@ -366,18 +362,20 @@ async fn mark_turn_end_unread(
   let clean = error_msg.is_none()
     && exit_code == 0
     && !finish_extras.get("zero_output").and_then(Value::as_bool).unwrap_or(false);
-  if clean && item.callbacks.features.registry.turn_end_unread_claimed(&item.session_meta) {
+  let metadata = item.session_metadata();
+  if clean && item.callbacks.features.registry.turn_end_unread_claimed(&metadata) {
     return Ok(());
   }
-  (item.callbacks.mark_unread)(item.session_meta.id.clone()).await
+  (item.callbacks.mark_unread)(metadata.id).await
 }
 
 fn resolve_turn_option(item: &WorkItem) -> Option<BackendOption> {
   if let Some(option) = &item.backend_option {
     return Some(option.clone());
   }
-  if !item.session_meta.backend.is_empty() {
-    return item.cfg.get_backend_option(&item.session_meta.backend).cloned();
+  let metadata = item.session_metadata();
+  if !metadata.backend.is_empty() {
+    return item.cfg.get_backend_option(&metadata.backend).cloned();
   }
   None
 }
@@ -388,36 +386,24 @@ fn turn_launch_context(
   option: BackendOption,
   cwd: PathBuf,
   held_native_id: Option<String>,
-  account_label: Arc<Mutex<Option<String>>>,
-  lifecycle: Arc<dyn BackendLifecycle>,
 ) -> LaunchContext {
   let callbacks = item.callbacks.clone();
-  let session_id = item.session_meta.id.clone();
+  let session_id = item.session_metadata().id;
   let running_session_id = session_id.clone();
-  let shared_metadata = Arc::new(Mutex::new(item.session_meta.clone()));
-  let record_metadata = Arc::clone(&shared_metadata);
-  let record_queue = Arc::clone(&queue);
+  let shared_metadata = Arc::clone(&item.session_meta);
   let running_queue = Arc::clone(&queue);
   let record_account = Arc::new(move |label: String| {
     let callbacks = callbacks.clone();
     let session_id = session_id.clone();
-    let account_label = Arc::clone(&account_label);
-    let metadata = Arc::clone(&record_metadata);
-    let queue = Arc::clone(&record_queue);
-    let lifecycle = Arc::clone(&lifecycle);
     Box::pin(async move {
       if let Some(persist) = &callbacks.persist_account_label {
-        persist(session_id.clone(), label.clone()).await?;
+        persist(session_id, label).await?;
       }
-      lifecycle
-        .record_account_label(&mut metadata.lock().expect("launch metadata mutex is not poisoned"), Some(&label));
-      queue.record_running_account_label(&session_id, lifecycle.as_ref(), &label)?;
-      *account_label.lock().expect("account label mutex is not poisoned") = Some(label);
       Ok(())
     }) as BoxFuture<'static, anyhow::Result<()>>
   });
   let callbacks = item.callbacks.clone();
-  let session_id = item.session_meta.id.clone();
+  let session_id = item.session_metadata().id;
   let context_state = Arc::new(move || {
     let callbacks = callbacks.clone();
     let session_id = session_id.clone();
@@ -438,7 +424,7 @@ fn turn_launch_context(
     preassigned_native_id: None,
     emit: Arc::new({
       let callbacks = item.callbacks.clone();
-      let session_id = item.session_meta.id.clone();
+      let session_id = item.session_metadata().id;
       move |event| {
         let callbacks = callbacks.clone();
         let session_id = session_id.clone();
@@ -482,6 +468,7 @@ impl RunProcess for TurnProcess<'_> {
     relays: usize,
   ) -> BoxFuture<'a, anyhow::Result<ProcessResult>> {
     Box::pin(async move {
+      let metadata = self.item.session_metadata();
       self.relay_count.store(relays, Ordering::Release);
       if *self.item.cancel.borrow() {
         *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(false);
@@ -493,19 +480,16 @@ impl RunProcess for TurnProcess<'_> {
       let process_prompt = launch.prompt.as_deref().unwrap_or(&self.item.user_content);
       if relays == 0 {
         let resume_id = launch.resume_id.as_deref();
-        if resume_id.is_none()
-          && !self.item.task_run.fresh_native_context
-          && self.item.session_meta.cc_session_id.is_some()
-        {
+        if resume_id.is_none() && !self.item.task_run.fresh_native_context && metadata.cc_session_id.is_some() {
           tracing::error!(
             target: "charliebot_tasks",
-            session = %self.item.session_meta.id,
+            session = %metadata.id,
             backend = %self.option.backend_type,
             reason = event_types::RESUME_REASON_TRANSCRIPT_MISSING,
             "master_cc_resume_anchor_missing"
           );
           (self.item.callbacks.persist_and_broadcast)(
-            self.item.session_meta.id.clone(),
+            metadata.id.clone(),
             json!({
               "type": event_types::RESUME_CONTEXT_DROPPED,
               "reason": event_types::RESUME_REASON_TRANSCRIPT_MISSING
@@ -515,7 +499,7 @@ impl RunProcess for TurnProcess<'_> {
         }
         tracing::info!(
           target: "charliebot_tasks",
-          session = %self.item.session_meta.id,
+          session = %metadata.id,
           backend = %self.option.backend_type,
           model = %self.option.model,
           prompt_chars = process_prompt.chars().count(),
@@ -532,7 +516,7 @@ impl RunProcess for TurnProcess<'_> {
         instructions_content: self.item.task_instructions.clone(),
         resume_session_id,
         log_dir: Some(self.log_dir.clone()),
-        cgroup_session_id: Some(self.item.session_meta.id.clone()),
+        cgroup_session_id: Some(metadata.id.clone()),
         ..LaunchArgs::default()
       };
       launch_args.backend_kwargs = launch
@@ -548,7 +532,7 @@ impl RunProcess for TurnProcess<'_> {
         backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
       let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
       self.was_built = true;
-      let session_id = self.item.session_meta.id.clone();
+      let session_id = metadata.id.clone();
       let (sender, mut receiver) = mpsc::channel::<StreamEvent>(1);
       let on_event: EventFn = Arc::new(move |event| {
         let sender = sender.clone();
@@ -733,8 +717,9 @@ async fn emit_round_notices(
   events: &[Value],
 ) -> anyhow::Result<()> {
   let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
+  let session_id = item.session_metadata().id;
   for notice in lifecycle.round_notices(option, events) {
-    (item.callbacks.persist_and_broadcast)(item.session_meta.id.clone(), notice).await?;
+    (item.callbacks.persist_and_broadcast)(session_id.clone(), notice).await?;
   }
   Ok(())
 }
@@ -743,25 +728,26 @@ pub(crate) async fn run_cc(
   queue: Arc<crate::master_queue::MasterQueue>,
   item: &mut WorkItem,
 ) -> anyhow::Result<MasterRunOutcome> {
-  tokio::fs::create_dir_all(item.cfg.sessions_dir().join(&item.session_meta.id)).await?;
+  let metadata = item.session_metadata();
+  tokio::fs::create_dir_all(item.cfg.sessions_dir().join(&metadata.id)).await?;
   let option = match resolve_turn_option(item) {
     Some(option) => option,
     None => {
-      let message = if !item.session_meta.backend.is_empty() {
+      let message = if !metadata.backend.is_empty() {
         let fallback = item.cfg.backends.options.first().map(|option| option.id.as_str()).unwrap_or("(none)");
         tracing::error!(
           target: "charliebot_tasks",
-          session = %item.session_meta.id,
-          requested = %item.session_meta.backend,
+          session = %metadata.id,
+          requested = %metadata.backend,
           fallback,
           "master_cc_backend_unresolved"
         );
         format!(
           "backend {}; this run did not execute.",
-          crate::spawner_backends::unknown_backend_pin_refusal(&item.session_meta.backend, fallback)
+          crate::spawner_backends::unknown_backend_pin_refusal(&metadata.backend, fallback)
         )
       } else {
-        tracing::error!(target: "charliebot_tasks", session = %item.session_meta.id, requested = "(none)", "master_cc_backend_unresolved");
+        tracing::error!(target: "charliebot_tasks", session = %metadata.id, requested = "(none)", "master_cc_backend_unresolved");
         "no backend option was given and this session pins none — refusing to fall back to backends.options[0]; this run did not execute.".to_string()
       };
       return refuse_turn(item, &message, None).await;
@@ -775,29 +761,20 @@ pub(crate) async fn run_cc(
   let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
   let fresh_native = item.task_run.fresh_native_context;
   if fresh_native {
-    item.session_meta.cc_session_id = None;
+    item.session_meta.lock().expect("work item metadata mutex is not poisoned").cc_session_id = None;
   }
-  let held_native_id = (!fresh_native).then(|| item.session_meta.cc_session_id.clone()).flatten();
-  let cwd = item.cfg.sessions_dir().join(&item.session_meta.id);
-  let account_label = Arc::new(Mutex::new(None));
-  let context = turn_launch_context(
-    Arc::clone(&queue),
-    item,
-    option.clone(),
-    cwd.clone(),
-    held_native_id.clone(),
-    Arc::clone(&account_label),
-    Arc::clone(&lifecycle),
-  );
+  let metadata = item.session_metadata();
+  let held_native_id = (!fresh_native).then(|| metadata.cc_session_id.clone()).flatten();
+  let cwd = item.cfg.sessions_dir().join(&metadata.id);
+  let context = turn_launch_context(Arc::clone(&queue), item, option.clone(), cwd.clone(), held_native_id.clone());
   let env = build_master_env(item, &features)?;
-  let tracker =
-    Arc::new(Mutex::new(RunTimingTracker::new(&item.session_meta.id, &option.backend_type, Some(&option.model))));
+  let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, &option.backend_type, Some(&option.model))));
   let log_dir = item.task_run.transport_dir.clone();
   let cc_session_id = Arc::new(Mutex::new(held_native_id));
   let record_persisted = Arc::new(AtomicBool::new(false));
   let cancelled = Arc::new(Mutex::new(None));
   let relay_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-  let session_id = item.session_meta.id.clone();
+  let session_id = metadata.id.clone();
   let mut process = TurnProcess {
     queue: &queue,
     item,
@@ -868,8 +845,7 @@ pub(crate) async fn run_cc(
     tracing::info!(target: "charliebot_tasks", session = %session_id, exit_code, finish_extras = ?finish_extras, "master_cc_finished");
   }
   let cc_session_id = cc_session_id.lock().expect("session id mutex is not poisoned").clone();
-  let account_label = account_label.lock().expect("account label mutex is not poisoned").clone();
-  Ok(MasterRunOutcome { cc_session_id, exit_code, error_msg, finish_extras, account_label, cancelled: was_cancelled })
+  Ok(MasterRunOutcome { cc_session_id, exit_code, error_msg, finish_extras, cancelled: was_cancelled })
 }
 
 fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
@@ -886,11 +862,12 @@ fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
   if let Some(option) = &item.backend_option {
     return Some(option.clone());
   }
-  if !item.session_meta.backend.is_empty() {
-    if let Some(option) = item.cfg.get_backend_option(&item.session_meta.backend) {
+  let metadata = item.session_metadata();
+  if !metadata.backend.is_empty() {
+    if let Some(option) = item.cfg.get_backend_option(&metadata.backend) {
       return Some(option.clone());
     }
-    tracing::warn!(target: "charliebot_tasks", session = %item.session_meta.id, backend = %item.session_meta.backend, "master_cc_resume_backend_unresolved");
+    tracing::warn!(target: "charliebot_tasks", session = %metadata.id, backend = %metadata.backend, "master_cc_resume_backend_unresolved");
   }
   item.cfg.backends.options.first().cloned()
 }
@@ -916,6 +893,7 @@ fn build_fresh_translate(
 }
 
 pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
+  let metadata = item.session_metadata();
   let record = item.resume_record.as_ref().context("resume item has no recorded run")?.clone();
   let is_alive = item.resume_is_alive.clone().context("resume item has no liveness probe")?;
   let raw_path = record.raw_log.clone();
@@ -923,18 +901,18 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let cursor_path = log_dir.join(CURSOR_NAME);
   let stderr_path = log_dir.join(STDERR_LOG_NAME);
   let option = resolve_resume_option(item);
-  tracing::info!(target: "charliebot_tasks", session = %item.session_meta.id, pid = record.pid, raw_log = %raw_path.display(), "master_cc_resuming");
+  tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "master_cc_resuming");
   let backend_type = option.as_ref().map(|option| option.backend_type.as_str()).unwrap_or("unknown");
   let model = option.as_ref().map(|option| option.model.as_str());
-  let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&item.session_meta.id, backend_type, model)));
-  let callback_cc_session_id = Arc::new(Mutex::new(item.session_meta.cc_session_id.clone()));
+  let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, backend_type, model)));
+  let callback_cc_session_id = Arc::new(Mutex::new(metadata.cc_session_id.clone()));
   let mut exit_code = -1;
   let mut error_msg = None;
   let cancelled = Arc::new(Mutex::new(false));
   let features = Arc::clone(&item.callbacks.features);
   let callbacks = item.callbacks.clone();
   let cfg = Arc::clone(&item.cfg);
-  let session_id = item.session_meta.id.clone();
+  let session_id = metadata.id.clone();
   let buffer_limit = subprocess_buffer_bytes(&cfg)?;
   let translate = build_fresh_translate(&features, &cfg, option.as_ref());
   let translate_stream = translate;
@@ -1000,7 +978,7 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
     }
     let stderr = read_stderr_tail(&stderr_path)?;
     if !stderr.is_empty() {
-      tracing::warn!(target: "charliebot_tasks", session = %item.session_meta.id, stderr, "master_cc_stderr");
+      tracing::warn!(target: "charliebot_tasks", session = %metadata.id, stderr, "master_cc_stderr");
     }
     if exit_code != 0 && error_msg.is_none() {
       let messages = events
@@ -1022,12 +1000,12 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
         host_boot,
       );
       if alive() {
-        tracing::warn!(target: "charliebot_tasks", session = %item.session_meta.id, pid, "master_cc_resumed_run_hung_after_result");
+        tracing::warn!(target: "charliebot_tasks", session = %metadata.id, pid, "master_cc_resumed_run_hung_after_result");
         charliebot_agents::transport::kill::kill_group_escalating(pid, alive).await;
       }
     }
   } else {
-    tracing::warn!(target: "charliebot_tasks", session = %item.session_meta.id, "master_cc_resume_cancelled");
+    tracing::warn!(target: "charliebot_tasks", session = %metadata.id, "master_cc_resume_cancelled");
     error_msg = Some("manager turn cancelled".to_string());
   }
   if *item.cancel.borrow() {
@@ -1037,13 +1015,12 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
   report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
   mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;
-  tracing::info!(target: "charliebot_tasks", session = %item.session_meta.id, exit_code, finish_extras = ?finish_extras, "master_cc_resume_finished");
+  tracing::info!(target: "charliebot_tasks", session = %metadata.id, exit_code, finish_extras = ?finish_extras, "master_cc_resume_finished");
   Ok(MasterRunOutcome {
     cc_session_id: callback_cc_session_id.lock().expect("native session id mutex is not poisoned").clone(),
     exit_code,
     error_msg,
     finish_extras,
-    account_label: None,
     cancelled: *cancelled.lock().expect("resume cancellation mutex is not poisoned"),
   })
 }

@@ -1,0 +1,237 @@
+//! The codex usage resolver (`CodexUsageResolver`, `src/backends/codex/codex_usage.py`): one session's context reading
+//! from its rollout.
+//!
+//! The registry's resolver trait takes the session's metadata and events only. The two values the Python resolver
+//! also reads, the config that holds each codex option's compaction limit and the store that holds the chat-events
+//! file, come from [`UsageHost`]. The server binds it once at startup, in the codex package's pre-recovery step.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use anyhow::Context;
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types;
+use charliebot_core::hot_reload::HotReload;
+use charliebot_registry::FeatureContext;
+use charliebot_registry::backend::UsageResolver;
+use charliebot_store::Store;
+use charliebot_store::metadata::SessionMetadata;
+use futures_util::future::BoxFuture;
+use serde_json::{Map, Value, json};
+
+use super::options;
+use super::pricing;
+use super::rollout::{self, RolloutUsage, mtime_ns, walk_files};
+
+/// The two server values the resolver reads beyond the registry's arguments.
+pub trait CodexSessionHost: Send + Sync {
+  /// The `model_auto_compact_token_limit` of the backend option `backend_id`, or `None` when it is unset or absent.
+  fn auto_compact_limit(&self, backend_id: &str) -> anyhow::Result<Option<i64>>;
+  /// The chat-events file of `session_id`.
+  fn chat_events_path(&self, session_id: &str) -> PathBuf;
+}
+
+/// The running server's config and store. Bound once by [`bind_usage_host`].
+pub struct UsageHost {
+  config: Arc<HotReload<CharlieBotConfig>>,
+  store: Arc<Store>,
+}
+
+static USAGE_HOST: OnceLock<UsageHost> = OnceLock::new();
+
+impl CodexSessionHost for UsageHost {
+  fn auto_compact_limit(&self, backend_id: &str) -> anyhow::Result<Option<i64>> {
+    let config = self.config.get().context("loading config.yaml for the codex compaction limit")?;
+    match config.get_backend_option(backend_id) {
+      None => Ok(None),
+      Some(option) => {
+        let fields = options::parse(&option.type_fields).map_err(anyhow::Error::msg)?;
+        Ok(fields.model_auto_compact_token_limit)
+      }
+    }
+  }
+
+  fn chat_events_path(&self, session_id: &str) -> PathBuf {
+    self.store.chat_events_path(session_id)
+  }
+}
+
+/// Binds the server's config and store to the codex usage resolver. A lifespan step, run once before recovery.
+pub fn bind_usage_host(ctx: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
+  Box::pin(async move {
+    USAGE_HOST
+      .set(UsageHost { config: Arc::clone(&ctx.config), store: Arc::clone(&ctx.store) })
+      .map_err(|_| anyhow::anyhow!("the codex usage host is already bound"))
+  })
+}
+
+/// Reads one session's context and cost from its codex rollout.
+pub struct CodexUsageResolver {
+  codex_home: PathBuf,
+  rollout_paths: Mutex<HashMap<String, PathBuf>>,
+  usages: Mutex<HashMap<String, CachedUsage>>,
+}
+
+/// A rollout's usage as read at one (mtime, size), so a changed file is read again.
+#[derive(Clone)]
+struct CachedUsage {
+  mtime_ns: i128,
+  size: u64,
+  usage: Option<RolloutUsage>,
+}
+
+impl CodexUsageResolver {
+  pub fn new(codex_home: PathBuf) -> Self {
+    Self { codex_home, rollout_paths: Mutex::new(HashMap::new()), usages: Mutex::new(HashMap::new()) }
+  }
+
+  /// The resolver over the bound host. Fails when the server has not bound its host.
+  pub fn resolve_bound(
+    &self,
+    session_id: &str,
+    meta: &SessionMetadata,
+    events: &[Value],
+  ) -> anyhow::Result<Option<Map<String, Value>>> {
+    let host = USAGE_HOST.get().context("the codex usage resolver ran before the server bound its usage host")?;
+    self.resolve_with(host, session_id, meta, events)
+  }
+
+  /// The context reading of one session. The merged usage carries the rollout's context tokens and window, the
+  /// session backend's compaction limit, the cost of the cumulative totals, and the model.
+  pub fn resolve_with(
+    &self,
+    host: &dyn CodexSessionHost,
+    session_id: &str,
+    meta: &SessionMetadata,
+    events: &[Value],
+  ) -> anyhow::Result<Option<Map<String, Value>>> {
+    let Some(thread_id) = self.thread_id(host, session_id, meta.cc_session_id.as_deref(), events)? else {
+      return Ok(None);
+    };
+    let Some(native) = self.load_usage(&thread_id)? else {
+      return Ok(None);
+    };
+    let auto_compact_limit = match meta.backend.as_str() {
+      "" => None,
+      backend_id => host.auto_compact_limit(backend_id)?,
+    };
+    let cost = match &native.total_token_usage {
+      Some(totals) => pricing::calculate_codex_usage_cost_usd(&native.model, totals)?,
+      None => None,
+    };
+    Ok(Some(Map::from_iter([
+      ("context_tokens".to_string(), native.context_tokens),
+      ("context_full".to_string(), native.context_full),
+      (event_types::CONTEXT_COMPACT_AT.to_string(), json!(auto_compact_limit)),
+      (event_types::RESULT_TOTAL_COST_USD.to_string(), json!(cost)),
+      ("model".to_string(), json!(native.model)),
+    ])))
+  }
+
+  /// The codex thread id of a session: the persisted one, else the first event's, else the chat-events file's.
+  fn thread_id(
+    &self,
+    host: &dyn CodexSessionHost,
+    session_id: &str,
+    persisted: Option<&str>,
+    events: &[Value],
+  ) -> anyhow::Result<Option<String>> {
+    if let Some(id) = persisted.filter(|id| !id.is_empty()) {
+      return Ok(Some(id.to_string()));
+    }
+    if let Some(id) = events.iter().find_map(translated_session_id) {
+      return Ok(Some(id));
+    }
+    read_translated_session_id(&host.chat_events_path(session_id))
+  }
+
+  fn load_usage(&self, thread_id: &str) -> anyhow::Result<Option<RolloutUsage>> {
+    let Some(path) = self.rollout_path(thread_id)? else {
+      return Ok(None);
+    };
+    let metadata = fs::metadata(&path).with_context(|| format!("statting rollout {}", path.display()))?;
+    let (mtime_ns, size) = (mtime_ns(&metadata), metadata.len());
+    if let Some(cached) = self.usages.lock().expect("the codex usage cache is not poisoned").get(thread_id)
+      && cached.mtime_ns == mtime_ns
+      && cached.size == size
+    {
+      return Ok(cached.usage.clone());
+    }
+    let usage = rollout::extract_latest_rollout_usage(&path)?;
+    self
+      .usages
+      .lock()
+      .expect("the codex usage cache is not poisoned")
+      .insert(thread_id.to_string(), CachedUsage { mtime_ns, size, usage: usage.clone() });
+    Ok(usage)
+  }
+
+  /// The newest rollout whose name ends with the thread id, under the codex home's `sessions` tree.
+  fn rollout_path(&self, thread_id: &str) -> anyhow::Result<Option<PathBuf>> {
+    if let Some(cached) =
+      self.rollout_paths.lock().expect("the codex rollout path cache is not poisoned").get(thread_id)
+      && cached.exists()
+    {
+      return Ok(Some(cached.clone()));
+    }
+    let sessions = self.codex_home.join("sessions");
+    if !sessions.exists() {
+      return Ok(None);
+    }
+    let suffix = format!("{thread_id}.jsonl");
+    let matches = walk_files(&sessions, |name| name.starts_with("rollout-") && name.ends_with(&suffix))
+      .with_context(|| format!("listing rollouts under {}", sessions.display()))?;
+    let mut newest: Vec<(i128, PathBuf)> = matches
+      .into_iter()
+      .map(|path| {
+        let metadata = fs::metadata(&path).with_context(|| format!("statting rollout {}", path.display()))?;
+        Ok((mtime_ns(&metadata), path))
+      })
+      .collect::<anyhow::Result<_>>()?;
+    newest.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
+    let Some((_, path)) = newest.into_iter().next() else {
+      return Ok(None);
+    };
+    self
+      .rollout_paths
+      .lock()
+      .expect("the codex rollout path cache is not poisoned")
+      .insert(thread_id.to_string(), path.clone());
+    Ok(Some(path))
+  }
+}
+
+impl UsageResolver for CodexUsageResolver {
+  fn resolve(
+    &self,
+    session_id: &str,
+    meta: &SessionMetadata,
+    events: &[Value],
+  ) -> anyhow::Result<Option<Map<String, Value>>> {
+    self.resolve_bound(session_id, meta, events)
+  }
+}
+
+/// The first event's non-empty string session id.
+fn translated_session_id(event: &Value) -> Option<String> {
+  event.get("session_id").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string)
+}
+
+/// The first non-empty string session id in the chat-events file, or `None` when the file is absent or has none.
+fn read_translated_session_id(path: &Path) -> anyhow::Result<Option<String>> {
+  if !path.exists() {
+    return Ok(None);
+  }
+  let bytes = fs::read(path).with_context(|| format!("reading chat events {}", path.display()))?;
+  for line in bytes.split(|byte| *byte == b'\n') {
+    let Some(event) = rollout::parse_event_line(line, path)? else {
+      continue;
+    };
+    if let Some(id) = translated_session_id(&Value::Object(event)) {
+      return Ok(Some(id));
+    }
+  }
+  Ok(None)
+}

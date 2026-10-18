@@ -1,0 +1,220 @@
+//! The Codex usage source's log side (`src/backends/codex/usage_logs.py`): the rollouts, their records, and the session
+//! ids they register.
+//!
+//! Record id: `codex-total:<root session id>:<total input>:<total cached>:<total output>`, one per `token_count` event.
+//! The root is the rollout's first `session_meta` session id, which a whole fork tree shares. A forked copy of an
+//! event therefore lands on the original event's id and counts once.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, bail};
+use charliebot_core::pyfmt::python_str;
+use charliebot_registry::usage::{
+  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
+};
+use serde_json::{Map, Value};
+
+use super::rollout::{self, SESSION_META, TURN_CONTEXT, mtime_ns, token_count_payload, walk_files};
+use super::text::{EMPTY_OBJECT, count_or_zero, truthy, truthy_object};
+use super::usage_quota::CodexQuotaAccount;
+use super::usage_sweep;
+
+/// Codex has one account: its default home.
+const ACCOUNT: &str = "work (default)";
+
+/// The byte markers of the record types this reader parses. A line without one is never parsed.
+const MARKERS: [&[u8]; 3] = [b"\"session_meta\"", b"\"turn_context\"", b"\"token_count\""];
+
+/// The `Codex` usage source: the rollouts under one codex home, with its quota account and its sweep.
+pub struct CodexLogs {
+  codex_home: PathBuf,
+  quota: Arc<dyn QuotaAccount>,
+}
+
+impl CodexLogs {
+  pub fn new(codex_home: PathBuf) -> Self {
+    let quota: Arc<dyn QuotaAccount> = Arc::new(CodexQuotaAccount::new(&codex_home));
+    Self { codex_home, quota }
+  }
+}
+
+impl UsageSourceImpl for CodexLogs {
+  fn ops(&self) -> UsageOps {
+    UsageOps { logs: true, read: true, live_cli_sessions: true, quota_accounts: true, sweep: true }
+  }
+
+  fn logs(&self) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    let sessions = self.codex_home.join("sessions");
+    if !sessions.is_dir() {
+      return Ok(Vec::new());
+    }
+    let paths = walk_files(&sessions, |name| name.ends_with(".jsonl"))
+      .with_context(|| format!("listing codex logs under {}", sessions.display()))?;
+    Ok(paths.into_iter().map(|path| (path, ACCOUNT.to_string())).collect())
+  }
+
+  fn read(&self, path: &Path, account: &str, _previous: Option<&str>) -> anyhow::Result<(String, Vec<UsageRecord>)> {
+    read_rollout(&self.codex_home, path, account)
+  }
+
+  fn live_cli_sessions(&self) -> anyhow::Result<HashSet<String>> {
+    self.logs()?.iter().map(|(path, _)| session_id(path, &self.codex_home)).collect()
+  }
+
+  fn quota_accounts(&self, _cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<Arc<dyn QuotaAccount>> {
+    vec![Arc::clone(&self.quota)]
+  }
+
+  fn sweep(&self, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
+    usage_sweep::sweep(&self.codex_home, scope)
+  }
+}
+
+/// The session a rollout registers: the last five dash-separated segments of `rollout-*.jsonl`, or the path relative to
+/// the codex home for any other file name.
+pub fn session_id(path: &Path, codex_home: &Path) -> anyhow::Result<String> {
+  let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+  if let Some(stem) = rollout::rollout_stem(&name) {
+    let segments: Vec<&str> = stem.split('-').collect();
+    return Ok(segments[segments.len().saturating_sub(5)..].join("-"));
+  }
+  let relative = path
+    .strip_prefix(codex_home)
+    .with_context(|| format!("{} is not under the codex home {}", path.display(), codex_home.display()))?;
+  Ok(relative.to_string_lossy().into_owned())
+}
+
+/// One rollout's records and its `<mtime_ns>:<size>` signature, taken before the read.
+///
+/// A `token_count` event yields no record while its info is null or its `last_token_usage` is all zero: such an event
+/// restates the previous one. A `token_count` event with no `session_meta` session id above it, or one that carries a
+/// count without `total_token_usage`, is an error. The model in force comes from the `session_meta` and
+/// `turn_context` lines, and the file's first model also covers a `token_count` event that precedes it.
+fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result<(String, Vec<UsageRecord>)> {
+  let metadata = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
+  let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+  let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+  let lines = marker_lines(&bytes);
+  let session = session_id(path, codex_home)?;
+
+  let mut model = lines.iter().filter(|line| is_context(line)).find_map(payload_model);
+  let mut root = lines.iter().find(|line| rollout::text_of(line, "type") == Some(SESSION_META)).and_then(payload_root);
+  let mut seen = HashSet::new();
+  let mut records = Vec::new();
+  for line in &lines {
+    if is_context(line) {
+      if let Some(named) = payload_model(line) {
+        model = Some(named);
+      }
+      if root.is_none() && rollout::text_of(line, "type") == Some(SESSION_META) {
+        root = payload_root(line);
+      }
+      continue;
+    }
+    let Some(payload) = token_count_payload(line) else {
+      continue;
+    };
+    let root = root
+      .as_deref()
+      .with_context(|| format!("{}: token_count event with no session_meta session_id above it", path.display()))?;
+    let info = truthy_object(payload, "info").unwrap_or(&*EMPTY_OBJECT);
+    let last = truthy_object(info, "last_token_usage").unwrap_or(&*EMPTY_OBJECT);
+    let cached = count_or_zero(last, "cached_input_tokens")?;
+    let fresh = count_or_zero(last, "input_tokens")? - cached;
+    let output = count_or_zero(last, "output_tokens")?;
+    if fresh == 0 && cached == 0 && output == 0 {
+      continue;
+    }
+    let Some(total) = info.get("total_token_usage").and_then(Value::as_object) else {
+      bail!("{}: token_count event without total_token_usage", path.display());
+    };
+    let total_in = count_or_zero(total, "input_tokens")?;
+    let total_cached = count_or_zero(total, "cached_input_tokens")?;
+    let total_out = count_or_zero(total, "output_tokens")?;
+    // Within one file only the first record per id is kept.
+    let record_id = format!("codex-total:{root}:{total_in}:{total_cached}:{total_out}");
+    if !seen.insert(record_id.clone()) {
+      continue;
+    }
+    records.push(UsageRecord {
+      record_id,
+      kind: RecordKind::Native,
+      source: super::USAGE_SOURCE.to_string(),
+      model: model.clone().unwrap_or_else(|| "unknown".to_string()),
+      account: account.to_string(),
+      ts: timestamp_of(line),
+      in_fresh: fresh,
+      cache_write: 0,
+      cache_read: cached,
+      output,
+      in_unsplit: 0,
+      sessions: vec![session.clone()],
+    });
+  }
+  Ok((signature, records))
+}
+
+/// The complete lines of `bytes` that carry a marker, parsed. A trailing fragment without its newline waits for a
+/// later read. A line that does not parse, or parses to something other than an object, is dropped.
+fn marker_lines(bytes: &[u8]) -> Vec<Map<String, Value>> {
+  let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+    return Vec::new();
+  };
+  bytes[..=last_newline]
+    .split(|byte| *byte == b'\n')
+    .filter(|line| MARKERS.iter().any(|marker| line.windows(marker.len()).any(|window| window == *marker)))
+    .filter_map(|line| match serde_json::from_slice::<Value>(line) {
+      Ok(Value::Object(record)) => Some(record),
+      _ => None,
+    })
+    .collect()
+}
+
+fn is_context(line: &Map<String, Value>) -> bool {
+  matches!(rollout::text_of(line, "type"), Some(SESSION_META | TURN_CONTEXT))
+}
+
+/// The truthy `model` a record's payload names, as text.
+fn payload_model(line: &Map<String, Value>) -> Option<String> {
+  let model = truthy_object(line, "payload").unwrap_or(&*EMPTY_OBJECT).get("model")?;
+  truthy(model).then(|| python_str(model))
+}
+
+/// The `session_id` of a record's payload, as text, when it has one.
+fn payload_root(line: &Map<String, Value>) -> Option<String> {
+  let session_id = truthy_object(line, "payload").unwrap_or(&*EMPTY_OBJECT).get("session_id")?;
+  (!session_id.is_null()).then(|| python_str(session_id))
+}
+
+/// The record's timestamp, or the empty string when it has none.
+fn timestamp_of(line: &Map<String, Value>) -> String {
+  match line.get("timestamp") {
+    Some(timestamp) if truthy(timestamp) => python_str(timestamp),
+    _ => String::new(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn session_ids_come_from_the_rollout_name_or_the_relative_path() {
+    let home = Path::new("/synthetic/home/.codex");
+    let rollout =
+      home.join("sessions/2026/10/18/rollout-2026-10-18T10-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+    assert_eq!(session_id(&rollout, home).unwrap(), "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    assert_eq!(session_id(&home.join("sessions/other.jsonl"), home).unwrap(), "sessions/other.jsonl");
+  }
+
+  #[test]
+  fn marker_lines_skip_a_trailing_fragment_and_unmarked_lines() {
+    let bytes = b"{\"type\":\"token_count\"}\n{\"type\":\"token_count\"\n{\"a\":1}\n{\"type\":\"turn_context\"}";
+    let lines = marker_lines(bytes);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["type"], "token_count");
+  }
+}

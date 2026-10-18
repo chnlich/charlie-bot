@@ -76,7 +76,7 @@ async def _seed_one(root: pathlib.Path, operation: str) -> None:
       group="old-group",
       profile="manager",
   )
-  meta.left_by_deleted_package = {"text": "你好", "values": [1, 2.5]}
+  meta.left_by_deleted_package = {"text": "你好", "values": [1, 2.5, 1e16, 1e-5, -0.0]}
   metadata_slots.set_fields(meta, "backend_pool", backend_from_pool=True)
   metadata_slots.set_fields(meta, "cron", last_scheduled_cron="0 0 * * *")
   metadata_slots.set_fields(meta, "slack", slack_watermark_ts="old-slack-watermark")
@@ -157,15 +157,17 @@ def _verify(root: pathlib.Path) -> None:
     session_dir = rust_home / "sessions" / SESSION_ID
     raw = (session_dir / "metadata.json").read_text(encoding="utf-8")
     meta = models.validate_session_metadata(raw, str(session_dir / "metadata.json"))
-    assert meta.left_by_deleted_package == {"text": "你好", "values": [1, 2.5]}
+    assert meta.left_by_deleted_package == {"text": "你好", "values": [1, 2.5, 1e16, 1e-5, -0.0]}
     if operation == "event_append":
       events = ndjson.parse_ndjson_file(session_dir / "data" / "chat_events.jsonl")
-      assert events == [{
-          "type": "user",
-          "id": "synthetic-event-id",
-          "timestamp": "2025-02-03T04:05:06.123456+00:00",
-          "content": "你好",
-      }]
+      assert events == [
+          {
+              "type": "user",
+              "id": "synthetic-event-id",
+              "timestamp": "2025-02-03T04:05:06.123456+00:00",
+              "content": "你好",
+          }
+      ]
     rust_thread = session_dir / "threads" / THREAD_ID / "rust-written.json"
     if rust_thread.exists():
       thread = models.ThreadMetadata.model_validate_json(rust_thread.read_text(encoding="utf-8"))
@@ -175,6 +177,8 @@ def _verify(root: pathlib.Path) -> None:
 if __name__ == "__main__":
   mode, root_text = sys.argv[1:]
   root = pathlib.Path(root_text)
+  # Package registration reads the environment's home before any operation picks its own, so keep it off the live home.
+  os.environ["CHARLIEBOT_HOME"] = str(root / "bootstrap-home")
   if mode == "prepare":
     _prepare(root)
   elif mode == "verify":

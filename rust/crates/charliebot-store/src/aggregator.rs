@@ -543,7 +543,7 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
     }
     event_types::TASK_REOPENED => {
       let reason = event.get("reason").filter(|value| is_truthy(value)).cloned().unwrap_or_else(|| json!(""));
-      json!({"role": "system", "content": format!("Task reopened: {}", python_string(&reason).trim_end())})
+      json!({"role": "system", "content": format!("Task reopened: {}", python_string(&reason)).trim_end()})
     }
     event_types::TASK_INPUT_ACKNOWLEDGED => render_task_input_acknowledged(event)?,
     _ => return Ok(None),
@@ -1216,6 +1216,12 @@ mod tests {
       let deltas = MessageAggregator::new(0, false).feed(&event).unwrap();
       assert_eq!(deltas[0]["message"]["timestamp"], expected, "event {event}");
     }
+  }
+
+  #[test]
+  fn task_reopened_without_a_reason_drops_the_trailing_space() {
+    let deltas = MessageAggregator::new(0, false).feed(&json!({"type": "task_reopened"})).unwrap();
+    assert_eq!(deltas[0]["message"]["content"], "Task reopened:");
   }
 
   #[test]

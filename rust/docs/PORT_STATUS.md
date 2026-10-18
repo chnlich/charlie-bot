@@ -87,9 +87,9 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET | `/api/internal/web/dialog` | features/web_reply | todo |  |
 | POST | `/api/internal/web/status` | features/web_reply | todo |  |
 | GET | `/api/internal/web/status` | features/web_reply | todo |  |
-| GET | `/host-auth` | features/host_auth | todo |  |
-| GET | `/api/host-auth/status` | features/host_auth | todo |  |
-| POST | `/api/host-auth/probe` | features/host_auth | todo |  |
+| GET | `/host-auth` | features/host_auth | ported | renders the checkout's templates through charliebot-compat; reads `CHARLIEBOT_REPO_ROOT` |
+| GET | `/api/host-auth/status` | features/host_auth | ported |  |
+| POST | `/api/host-auth/probe` | features/host_auth | ported |  |
 | GET | `/api/git/branches` | features/diff_view | todo |  |
 | GET | `/api/git/repos` | features/diff_view | todo |  |
 | GET | `/api/git/diff/files` | features/diff_view | todo |  |
@@ -182,7 +182,7 @@ implemented.
 | service | `scheduler` | features/cron | todo | |
 | service | `slack` | features/slack | todo | |
 | service | `discord` | features/discord | todo | |
-| service | `host_auth` | features/host_auth | todo | |
+| service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
 | service | `merge_pool` | features/trace | todo | |
 | service | `usage_tally` | features/usage | todo | |
 | service | `ext_usage` | features/usage | todo | |
@@ -206,7 +206,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `state/cron_alert_fingerprint.json` | features/cron | todo | |
 | `cache/cli_base_url.json` | foundation | todo | |
 | `cache/perfetto_merge/<sha256>.json.gz` | features/trace | todo | |
-| `host_auth.json` | features/host_auth | todo | |
+| `host_auth.json` | features/host_auth | ported | written atomically with `json.dumps(indent=2)` and a newline |
 | `usage/ledger.sqlite3` | features/usage | todo | |
 | `prompt_bodies/<sha256>.md` | agent-runtime | todo | |
 | `memory/` | features/memory | ported | Git repository created by `ensure_store` on first use. |

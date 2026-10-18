@@ -1,7 +1,10 @@
 //! `src/features/discord`: registers the `discord:` config section, the Discord fields of each session and the turn
-//! contribution that renders `discord_reply` events. The rest of the package is not ported yet.
+//! contribution that carries the thread reply contract in manager runs and renders `discord_reply` events. The rest of
+//! the package is not ported yet.
 
 mod event_types;
+pub mod metadata;
+mod thread_contract;
 mod turn_contribution;
 
 use std::sync::Arc;

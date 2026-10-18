@@ -323,10 +323,15 @@ dependencies = [
 name = "charliebot-discord"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "charliebot-chat-threads",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
+ "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]

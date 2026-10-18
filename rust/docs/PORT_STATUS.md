@@ -267,8 +267,8 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/CLAUDE.md` instructions | agent-runtime | todo | |
 | `sessions/<sid>/AGENTS.md` instructions | agent-runtime | todo | |
 | session cgroup directories | agent-runtime | todo | Outside the home. |
-| Claude `.credentials.json` | backends/claude-code | todo | Outside the home. |
-| Claude and Codex transcript files | backends/claude-code, backends/codex | todo | Outside the home. |
+| Claude `.credentials.json` | backends/claude-code | ported | Read for the panel and renewed by `claude_code/usage_quota.rs` (atomic write, mode 0600); account health reads in `claude_code/claude_accounts.rs`. Outside the home. |
+| Claude and Codex transcript files | backends/claude-code, backends/codex | ported | Read by `claude_code/usage_logs.rs` and `codex/usage_logs.rs`; swept by `claude_code/usage_sweep.rs` and `codex/usage_sweep.rs`; live pool copies trimmed by `claude_accounts::retire_transcript_copies`. Outside the home. |
 | worktree directories | agent-runtime | todo | Outside the home. |
 | worktree trash | agent-runtime | todo | Outside the home. |
 | sibling backup archives | features/backup | todo | Outside the home. |

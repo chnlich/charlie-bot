@@ -1,6 +1,8 @@
-//! `src/features/web_reply`: registers the turn contribution that renders the reply chat lines and the web-reply status
-//! field of each session. The rest of the package is not ported yet.
+//! `src/features/web_reply`: registers the turn contribution that carries the reply rules into a web session's manager
+//! runs and renders the reply chat lines, and the web-reply status field of each session. The rest of the package is
+//! not ported yet.
 
+mod reply;
 mod turn_contribution;
 
 use std::sync::Arc;

@@ -13,12 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use charliebot_compat::jinja;
-use charliebot_core::pyfmt;
+use charliebot_core::{git, pyfmt};
 use charliebot_registry::pages::{self, package_directory};
 use minijinja::{Environment, Error, ErrorKind, Value};
 use sha1::{Digest, Sha1};
-
-use crate::git;
 
 /// A zero-argument template global: the name and the value the call returns.
 pub type TemplateGlobal = (&'static str, Value);

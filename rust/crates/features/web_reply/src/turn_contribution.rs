@@ -1,6 +1,6 @@
-//! The web-reply package's turn contribution (`src/features/web_reply/turn_contribution.py`). It carries the reply rules
-//! in a web session's manager runs, renders the `web_reply`, `web_reply_notice` and `web_status` events as chat lines,
-//! and claims turn-end unread state for web sessions.
+//! The web-reply package's turn contribution (`src/features/web_reply/turn_contribution.py`). It carries the reply
+//! rules in a web session's manager runs, renders the `web_reply`, `web_reply_notice` and `web_status` events as chat
+//! lines, and claims turn-end unread state for web sessions.
 
 use std::fs;
 use std::path::Path;

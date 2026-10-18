@@ -13,8 +13,8 @@ pub struct DiscordOrigin {
   pub thread_id: String,
 }
 
-/// The session's Discord origin, or `None` when the field is absent or null (`fields_of(meta, "discord").discord_origin`).
-/// A stored value that is not a Discord origin fails.
+/// The session's Discord origin, or `None` when the field is absent or null
+/// (`fields_of(meta, "discord").discord_origin`). A stored value that is not a Discord origin fails.
 pub fn discord_origin(meta: &SessionMetadata) -> anyhow::Result<Option<DiscordOrigin>> {
   match meta.extra.get("discord_origin") {
     None | Some(Value::Null) => Ok(None),

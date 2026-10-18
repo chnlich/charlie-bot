@@ -1,6 +1,6 @@
-//! The Slack package's turn contribution (`src/features/slack/turn_contribution.py`). It carries the thread reply contract
-//! in a manager run of a Slack thread session, and renders `slack_reply` events as chat lines. The round-end audit and
-//! the other turn steps are not ported yet.
+//! The Slack package's turn contribution (`src/features/slack/turn_contribution.py`). It carries the thread reply
+//! contract in a manager run of a Slack thread session, and renders `slack_reply` events as chat lines. The round-end
+//! audit and the other turn steps are not ported yet.
 
 use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;

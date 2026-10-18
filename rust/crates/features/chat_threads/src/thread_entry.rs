@@ -1,6 +1,6 @@
-//! The shared thread's reply contract (`src/features/chat_threads/thread_entry.py`): the prompt-doc loader, the contract
-//! join and its rule segment. Each platform's turn contribution states its platform part and reuses these. The rest of
-//! `thread_entry.py` (summons, replies, follow wakes) is not ported yet.
+//! The shared thread's reply contract (`src/features/chat_threads/thread_entry.py`): the prompt-doc loader, the
+//! contract join and its rule segment. Each platform's turn contribution states its platform part and reuses these.
+//! The rest of `thread_entry.py` (summons, replies, follow wakes) is not ported yet.
 
 use std::fs;
 

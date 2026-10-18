@@ -270,6 +270,57 @@ async def test_delivery_card_timestamp_is_the_task_close_time(
 
 
 @pytest.mark.asyncio
+async def test_summary_and_delivery_read_only_the_current_close(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A reopen clears the close the summary and the delivery card read; a later
+  close with no refs carries no landed commit from the earlier one."""
+  _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="run-1",
+          session_id=worker.id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          started_at=models.utc_now()))
+  await tree.runs.record_launch(worker.id, "run-1", pid=424302, pid_start="1-424302")
+  await tree.runs.record_finish(worker.id, "run-1", "success")
+
+  async def close(request_id: str, outcome: str, result_refs: list[str]) -> None:
+    meta = await tree.load_meta(worker.id)
+    assert meta is not None
+    async with tree.control_lock:
+      await tree.completion._append_closed(
+          worker.id,
+          meta,
+          request_id=request_id,
+          outcome=outcome,
+          summary=outcome,
+          result_refs=result_refs,
+          run_ids=["run-1"],
+          actor=control_events.ACTOR_SYSTEM)
+
+  await close("close-1", "completed", ["run:run-1", f"{task_completion.LANDING_REF_PREFIX}origin/main@aaa111"])
+  assert worker_transcript.load_worker_transcript(tree, worker.id).summary["landed"] == "origin/main@aaa111"
+
+  await tree.completion.restore_task(worker.id, request_id="reopen-1", reason="test", caller=conftest.OPERATOR)
+  reopened = worker_transcript.load_worker_transcript(tree, worker.id)
+  assert reopened.summary["task_state"] == "open"
+  assert [reopened.summary["closed_at"], reopened.summary["landed"], reopened.summary["delivery"]] == [None, None, None]
+  assert [m for m in reopened.projection.committed if m.get("role") == ET.RUN_DELIVERY] == []
+
+  await close("close-2", "cancelled", [])
+  second_close_at = _last_close_timestamp(tree, worker.id)
+  closed = worker_transcript.load_worker_transcript(tree, worker.id)
+  assert closed.summary["landed"] is None
+  assert closed.summary["closed_at"] == second_close_at
+  assert closed.summary["delivery"]["run_id"] == "run-1"
+  delivery = _delivery_message(closed)
+  assert delivery["result_refs"] == []
+  assert delivery["timestamp"] == second_close_at
+
+
+@pytest.mark.asyncio
 async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A running Run's error event is an ordinary row; once the Run finishes

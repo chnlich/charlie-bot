@@ -154,34 +154,45 @@ def _run_end_event(run: models.RunRecord) -> dict:
   }
 
 
-def _delivery_event(task_state: str, facts_events: list[dict], run_records: list[models.RunRecord]) -> dict | None:
-  """The closing delivery summary once the task stands resolved (not open).
+def _current_close(facts_events: list[dict]) -> dict | None:
+  """The task_closed fact the task stands closed by, or None while it is open.
 
-  The summary, result refs and timestamp ride the node's task_closed fact
-  (the last one when the task closed more than once); the four
-  evidence links ride the delivered Run's record (newest successful run, else
-  the newest run when a resolved task never recorded a success).
+  That is the last task_closed fact, unless a task_reopened fact follows it.
+  The delivery card and the summary card both read the task's close from
+  here.
   """
-  if task_state == "open" or not run_records:
-    return None
-  summary = ""
-  close_refs: list[str] = []
-  close_at = ""
-  outcomes: dict[str, str] = {}
+  close = None
   for event in facts_events:
     kind = event.get("type")
     if kind == ET.TASK_CLOSED:
-      summary = str(event.get("summary") or "")
-      close_refs = [str(ref) for ref in (event.get("result_refs") or [])]
-      close_at = str(event["timestamp"])
-    elif kind == ET.RUN_FINISHED:
-      outcomes[str(event.get("run_id"))] = str(event.get("outcome") or "")
+      close = event
+    elif kind == ET.TASK_REOPENED:
+      close = None
+  return close
+
+
+def _delivery_event(
+    task_state: str, close: dict | None, facts_events: list[dict], run_records: list[models.RunRecord]) -> dict | None:
+  """The closing delivery summary while the task stands closed.
+
+  The summary, result refs and timestamp ride the current close
+  (:func:`_current_close`); the four evidence links ride the delivered Run's
+  record (newest successful run, else the newest run when a resolved task
+  never recorded a success).
+  """
+  if close is None or not run_records:
+    return None
+  outcomes = {
+      str(event.get("run_id")): str(event.get("outcome") or "")
+      for event in facts_events
+      if event.get("type") == ET.RUN_FINISHED
+  }
   delivered = next((run for run in reversed(run_records) if outcomes.get(run.id) == "success"), run_records[-1])
   return {
       "type": ET.RUN_DELIVERY,
       "task_state": task_state,
-      "summary": summary,
-      "result_refs": close_refs,
+      "summary": str(close.get("summary") or ""),
+      "result_refs": [str(ref) for ref in (close.get("result_refs") or [])],
       "raw_log_ref": delivered.raw_log_ref or "",
       "events_ref": delivered.events_ref or "",
       "result_ref": delivered.result_ref or "",
@@ -189,12 +200,13 @@ def _delivery_event(task_state: str, facts_events: list[dict], run_records: list
       "base_branch": delivered.base_branch or "",
       "branch_name": delivered.branch_name or "",
       "run_id": delivered.id,
-      "timestamp": close_at,
+      "timestamp": str(close["timestamp"]),
   }
 
 
 def _revision(signature: tuple, states: dict[str, str], task_state: str) -> str:
-  """The client-facing revision: moves exactly when a re-render (reset) is due."""
+  """The memo rebuild key: the full stat signature with every Run state and the
+  task state, so any file move or state change rebuilds the projection."""
   payload = json.dumps(
       [[*item] if isinstance(item, tuple) else item for item in signature] + [sorted(states.items()), task_state],
       sort_keys=True,
@@ -234,23 +246,22 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
   return tuple(parts)
 
 
-def _closed_facts(facts_events: list[dict]) -> tuple[str, str, dict[str, str]]:
-  """The last task_closed fact's three readings: its time, the landed value
-  after the ``landed:`` result ref, and each Run's outcome by id."""
-  closed_at = ""
-  landed = ""
-  outcomes: dict[str, str] = {}
-  for event in facts_events:
-    kind = event.get("type")
-    if kind == ET.TASK_CLOSED:
-      closed_at = str(event.get("timestamp") or "")
-      for ref in (event.get("result_refs") or []):
-        ref = str(ref)
-        if ref.startswith(task_completion.LANDING_REF_PREFIX):
-          landed = ref[len(task_completion.LANDING_REF_PREFIX):]
-    elif kind == ET.RUN_FINISHED:
-      outcomes[str(event.get("run_id"))] = str(event.get("outcome") or "")
-  return closed_at, landed, outcomes
+def _landed(close: dict | None) -> str | None:
+  """The value after the ``landed:`` result ref of the current close, or None."""
+  if close is None:
+    return None
+  landed = None
+  for ref in close.get("result_refs") or []:
+    ref = str(ref)
+    if ref.startswith(task_completion.LANDING_REF_PREFIX):
+      landed = ref[len(task_completion.LANDING_REF_PREFIX):]
+  return landed
+
+
+# The run_delivery fields the summary's ``delivery`` carries: the delivered
+# Run and the evidence the Diff link reads.
+_SUMMARY_DELIVERY_FIELDS = (
+    "run_id", "raw_log_ref", "events_ref", "result_ref", "repo_path", "base_branch", "branch_name")
 
 
 def _summary_links(tree, session_id: str, run: models.RunRecord | None) -> dict:
@@ -271,6 +282,8 @@ def _build_summary(
     tree,
     session_id: str,
     task_state: str,
+    close: dict | None,
+    delivery: dict | None,
     facts_events: list[dict],
     run_records: list[models.RunRecord],
     states: dict[str, str],
@@ -284,12 +297,13 @@ def _build_summary(
   ``running`` state — ``last_text``/``last_tool`` carry their own
   timestamps, so the card never needs a clock read from this side. ``runs``
   is one row per Run in record order. ``closing`` holds each role's newest
-  Run's own words (the
-  review._worker_summary_from_events_log rule over the parsed list). ``cause``
+  Run's own words (message_aggregator.closing_text, the rule the reviewer's
+  worker summary also reads). ``cause``
   is the newest failed Run's first cause line; ``stop`` the newest stop
-  request fact. Everything reads what the transcript build already parsed.
+  request fact. ``closed_at``, ``landed`` and ``delivery`` read the current
+  close and the delivery card built from it, so all three are None while the
+  task is open. Everything reads what the transcript build already parsed.
   """
-  closed_at, landed, outcomes = _closed_facts(facts_events)
   runs_rows = [
       {
           "run_id": run.id,
@@ -335,23 +349,14 @@ def _build_summary(
           "timestamp": str(event.get("timestamp") or ""),
       }
       break
-  delivery = None
-  if task_state != "open" and run_records:
-    delivered = next((run for run in reversed(run_records) if outcomes.get(run.id) == "success"), run_records[-1])
-    delivery = {
-        "run_id": delivered.id,
-        "raw_log_ref": delivered.raw_log_ref or "",
-        "events_ref": delivered.events_ref or "",
-        "result_ref": delivered.result_ref or "",
-        "repo_path": delivered.repo_path or "",
-        "base_branch": delivered.base_branch or "",
-        "branch_name": delivered.branch_name or "",
-    }
+  summary_delivery = None
+  if delivery is not None:
+    summary_delivery = {field: delivery[field] for field in _SUMMARY_DELIVERY_FIELDS}
   return {
       "task_state": task_state,
-      "closed_at": closed_at or None,
-      "landed": landed or None,
-      "delivery": delivery,
+      "closed_at": str(close["timestamp"]) if close is not None else None,
+      "landed": _landed(close),
+      "delivery": summary_delivery,
       "runs": runs_rows,
       "active": active,
       "closing": closing,
@@ -387,7 +392,7 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
     error = ""
     if state in _FAILED_STATES:
       cause = message_aggregator.run_cause(run_events)
-      if cause is not None and cause[0]:
+      if cause is not None:
         text, first_line, error_index, cause_at = cause
         error = text
         run_causes[run.id] = {"first_line": first_line, "timestamp": cause_at}
@@ -421,7 +426,8 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
     if state not in _SIGNALLABLE_STATES:
       transcript.append(_run_end_event(run))
   task_state = tree.task_state(session_id)
-  delivery = _delivery_event(task_state, facts_events, run_records)
+  close = _current_close(facts_events)
+  delivery = _delivery_event(task_state, close, facts_events, run_records)
   if delivery is not None:
     transcript.append(delivery)
   active_run_id = next((run.id for run in reversed(run_records) if states.get(run.id) in _SIGNALLABLE_STATES), None)
@@ -430,6 +436,8 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
       tree=tree,
       session_id=session_id,
       task_state=task_state,
+      close=close,
+      delivery=delivery,
       facts_events=facts_events,
       run_records=run_records,
       states=states,
@@ -465,7 +473,7 @@ def _client_revision_input(
   meta_stats: dict[str, object] = {}
   event_stats: dict[str, object] = {}
   for run in run_records:
-    meta_sig, events_sig = stats.get(run.id, (None, None))
+    meta_sig, events_sig = stats[run.id]
     meta_stats[run.id] = meta_sig
     event_stats[run.id] = events_sig
   event_stats_for_revision = [
@@ -485,6 +493,8 @@ def _client_revision_input(
 
 def _client_revision(
     signature: tuple, run_records: list[models.RunRecord], states: dict[str, str], task_state: str) -> str:
+  """The client revision: moves exactly when a re-render (an API ``reset``) is
+  due, over the inputs :func:`_client_revision_input` names."""
   payload = json.dumps(_client_revision_input(signature, run_records, states, task_state), sort_keys=True, default=str)
   return hashlib.sha256(payload.encode()).hexdigest()[:24]
 

@@ -13,6 +13,7 @@ use anyhow::{Context, bail};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, TransportKind};
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
@@ -28,8 +29,6 @@ use crate::transport::kill::{self, python_exit_code};
 use crate::transport::rotation::rotate_stale_transport;
 use crate::transport::spawn::{self, RawStdin, SpawnSpec};
 
-pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
-pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
 pub const DEFAULT_POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 pub const DEFAULT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const STDERR_TAIL_BYTES: u64 = 64 * 1024;
@@ -153,7 +152,7 @@ impl AgentRunner {
     tokio::fs::create_dir_all(&log_dir).await?;
     let raw_path = log_dir.join(RAW_LOG_NAME);
     let stderr_path = log_dir.join(STDERR_LOG_NAME);
-    let cursor_path = log_dir.join(crate::transport::cursor::CURSOR_NAME);
+    let cursor_path = log_dir.join(charliebot_store::run_records::CURSOR_NAME);
     rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
 
     let mut backend = self.backend.lock().await;

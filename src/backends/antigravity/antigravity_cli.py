@@ -11,6 +11,7 @@ from src.infra import event_types as ET
 from src.runtime.agent_process import base
 
 _SYSTEM_MESSAGE_BLOCK_RE = re.compile(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*", re.DOTALL)
+_PRINT_TIMEOUT_RE = re.compile(r"\[agy\] print timeout after (\S+) with turn in progress")
 
 
 def _strip_platform_notifications(text: str) -> str:
@@ -107,15 +108,10 @@ class AntigravityCliBackend(base.AgentBackend):
 
     stdout_text = bytes(stdout_bytes).decode("utf-8", errors="replace").strip()
     if self.exit_code != 0:
-      # A print-timeout kill arrives as exit!=0 with a JSON envelope; name the
-      # cause instead of pasting the raw envelope. Any other failure keeps the
-      # raw stdout as the message.
       envelope = self._parse_envelope(stdout_text)
       envelope_error = envelope.get("error") if envelope is not None else None
       if isinstance(envelope_error, str):
-        message = (
-            "agy turn budget exhausted (print-timeout fired); a known cause is an in-process "
-            f"timer/daemon wait keeping the process alive past its turn. agy error: {envelope_error}")
+        message = f"agy exited {self.exit_code}: {envelope_error}"
       else:
         message = stdout_text or f"Antigravity CLI exited with code {self.exit_code}"
       yield base.make_error_event(message)
@@ -128,9 +124,19 @@ class AntigravityCliBackend(base.AgentBackend):
       yield base.make_error_event(f"agy exited 0 with non-envelope stdout: {stdout_text[:200]}")
       raise AgentGuardError(f"antigravity envelope guard: non-json stdout (exit 0): {stdout_text[:200]}")
 
+    timeout_match = _PRINT_TIMEOUT_RE.search(self.stderr_text)
+    if timeout_match is not None:
+      self.exit_code = 1
+      message = (
+          f"agy print timeout after {timeout_match.group(1)}: the turn was still running; "
+          "agy returned partial output")
+      yield base.make_error_event(message)
+      return
+
     status = envelope.get("status")
     if status != "SUCCESS":
       message = envelope.get("error") or envelope.get("response") or f"Antigravity status {status}"
+      self.exit_code = 1
       yield base.make_error_event(str(message))
       return
 

@@ -153,8 +153,12 @@ impl Store {
       } else if event_type == "system" {
         match event.get("subtype").and_then(Value::as_str) {
           Some("compact_boundary") if reading_kind == "assistant" => {
-            post_compact_tokens =
-              event.get("compact_metadata").and_then(|value| value.get("post_tokens")).and_then(Value::as_i64);
+            // A boundary without an integer post_tokens leaves the earlier boundary's count in place.
+            if let Some(tokens) =
+              event.get("compact_metadata").and_then(|value| value.get("post_tokens")).and_then(Value::as_i64)
+            {
+              post_compact_tokens = Some(tokens);
+            }
           }
           Some("context_reading") => {
             if let Some(reading) = event.get("context_reading").and_then(Value::as_object) {

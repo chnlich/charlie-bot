@@ -5,6 +5,7 @@ import pathlib
 import signal
 import sys
 import time
+from collections.abc import AsyncIterator
 from unittest import mock
 
 import pytest
@@ -328,7 +329,48 @@ async def test_turn_end_steps_drop_the_claim_once_even_when_the_turn_steps_fail(
     await backend._turn_end_steps()
   shared.release_claim.assert_awaited_once_with("/w/a")
   await backend._turn_end_steps()
+  backend._turn.finish.assert_awaited_once()
   shared.release_claim.assert_awaited_once_with("/w/a")
+
+
+@pytest.mark.asyncio
+async def test_failed_release_is_reported_as_a_turn_error_event(monkeypatch) -> None:
+  backend = opencode.OpenCodeBackend(model=MODEL)
+  turn = mock.Mock()
+  turn.finish = mock.AsyncMock()
+  turn.drop_earlier_interrupts = mock.Mock()
+  shared = mock.Mock()
+  shared.ensure_running = mock.AsyncMock()
+  shared.claim = mock.AsyncMock()
+  shared.release_claim = mock.AsyncMock(
+      side_effect=RuntimeError("opencode release of directory /w/a returned HTTP 500"))
+  shared.register = mock.Mock(return_value=turn)
+  shared.wait_interrupts_settled = mock.AsyncMock()
+  monkeypatch.setattr(server, "server_for", lambda _proxy_url: shared)
+  monkeypatch.setattr(backend, "_prepare_cwd", mock.Mock())
+
+  async def spawn_turn_process(_cwd: str, _env: dict) -> None:
+    backend._exit_task = asyncio.get_running_loop().create_future()
+
+  async def consume_turn(_turn: server.Turn) -> AsyncIterator[dict]:
+    yield {"type": ET.RESULT}
+
+  async def end_turn_process() -> None:
+    backend._exit_task.cancel()
+
+  monkeypatch.setattr(backend, "_spawn_turn_process", spawn_turn_process)
+  monkeypatch.setattr(backend, "_open_session", mock.AsyncMock(return_value="ses"))
+  monkeypatch.setattr(backend, "_fetch_model_limit", mock.AsyncMock(return_value=None))
+  monkeypatch.setattr(backend, "_put_environment", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_send_prompt", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_consume_turn", consume_turn)
+  monkeypatch.setattr(backend, "_end_turn_process", end_turn_process)
+
+  events = [event async for event in backend.run("prompt", "/w/a", BASE_ENV)]
+
+  assert events[-1]["type"] == ET.ERROR
+  assert "directory /w/a" in events[-1]["message"]
+  assert "HTTP 500" in events[-1]["message"]
 
 
 @pytest.mark.asyncio

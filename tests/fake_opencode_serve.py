@@ -108,8 +108,10 @@ class FakeServer:
       return 200, [{"directory": directory} for directory in sorted(self.loaded)]
     if method == "DELETE" and path == "/api/debug/location":
       directory = params.get("location[directory]", [""])[0]
-      self.loaded.discard(directory)
-      return SCRIPT.get("release_status", 204), None
+      status = SCRIPT.get("release_status", 204)
+      if 200 <= status < 300:
+        self.loaded.discard(directory)
+      return status, None
     if method == "GET" and path == "/api/model":
       self.loaded.add(params.get("location[directory]", [""])[0])
       return 200, {

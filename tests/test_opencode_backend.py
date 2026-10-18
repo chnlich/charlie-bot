@@ -5,6 +5,7 @@ import pathlib
 import signal
 import sys
 import time
+from unittest import mock
 
 import httpx
 import pytest
@@ -110,6 +111,9 @@ def test_headless_config_denies_the_three_tools_and_pins_bash():
 def test_server_env_drops_the_run_identity_and_points_xdg_at_the_store(fake_oc, monkeypatch):
   monkeypatch.setenv("CHARLIEBOT_RUN_TOKEN", "turn-token")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "session-x")
+  # The no-proxy case must be hermetic: a host shell (or CI) may carry its own proxy variables.
+  for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
+    monkeypatch.delenv(name, raising=False)
   env = server.OpenCodeServer(None).server_env("pw")
   assert "CHARLIEBOT_RUN_TOKEN" not in env
   assert "CHARLIEBOT_SESSION_ID" not in env
@@ -260,6 +264,31 @@ async def test_dispatch_routes_to_the_claimed_turn_and_settles_pending_interrupt
   assert turn.events.qsize() == 2
   with pytest.raises(RuntimeError, match="already has a running turn"):
     shared.register("ses_1", str(fake_oc))
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_execution_is_interrupted(fake_oc):
+  """An execution that starts with no turn registered earns an interrupt, which stays pending."""
+  shared = server.OpenCodeServer(None)
+  response = mock.MagicMock()
+  response.json.return_value = {"interrupted": True}
+  shared._client = mock.AsyncMock()
+  shared._client.post.return_value = response
+  shared._dispatch({"type": "session.execution.started", "data": {"sessionID": "ses_x"}})
+  for task in list(shared._tasks):
+    await task
+  shared._client.post.assert_awaited_once_with("/api/session/ses_x/interrupt")
+  assert shared._pending["ses_x"] == 1
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_earlier_interrupts_times_out(fake_oc, monkeypatch):
+  """A pending earlier interrupt that never settles fails the wait, naming the session."""
+  monkeypatch.setattr(opencode_limits, "OPENCODE_INTERRUPT_SETTLE_TIMEOUT", 0.1)
+  shared = server.OpenCodeServer(None)
+  shared._add_pending("ses_x")
+  with pytest.raises(RuntimeError, match="ses_x"):
+    await shared.wait_interrupts_settled("ses_x")
 
 
 # ---- Integration tests: real processes, the fake 2.0 program, and the shared server's HTTP surface.
@@ -436,6 +465,36 @@ async def test_cancel_signals_only_its_turn_and_the_other_turn_completes(fake_oc
   cancelled_interrupt = f"/api/session/{cancelled._session_id}/interrupt"
   assert any(
       r.get("path") == cancelled_interrupt and r.get("body") is None for r in _read_log(fake_oc / "requests.jsonl"))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_permission_request_fails_only_its_turn(fake_oc, monkeypatch, stop_servers):
+  _script(
+      fake_oc, monkeypatch, {
+          "prompts":
+              {
+                  "risky":
+                      {
+                          "events":
+                              [{
+                                  "type": "permission.asked",
+                                  "data": {
+                                      "permission": "shell",
+                                      "patterns": ["rm -rf *"]
+                                  }
+                              }]
+                      },
+                  "calm": {
+                      "events": _text_events("fine")
+                  },
+              }
+      })
+  risky_events, calm_events = await asyncio.gather(
+      _run_turn(opencode.OpenCodeBackend(model=MODEL), "risky", fake_oc / "a"),
+      _run_turn(opencode.OpenCodeBackend(model=MODEL), "calm", fake_oc / "b"))
+  assert risky_events[-1]["type"] == ET.ERROR and "interactive permission" in risky_events[-1]["message"]
+  assert calm_events[-1]["type"] == "result"
 
 
 @pytest.mark.integration

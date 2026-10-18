@@ -23,6 +23,10 @@ minijinja-contrib = { version = "2", features = ["pycompat"] }
 nix = { version = "0.30", features = ["fs", "process", "hostname", "user", "signal"] }
 percent-encoding = "2"
 regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 serde_path_to_error = "0.1"

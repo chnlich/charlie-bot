@@ -244,6 +244,9 @@ class OpenCodeServer:
       self._claims[directory] -= 1
       if self._claims[directory] == 0:
         del self._claims[directory]
+      if (not self._claims and not self._turns and not self._stopping and self._client is not None and
+          self.process_alive and self._idle is not None and self._idle.done()):
+        self._arm_idle()
       # A stopping, exited or still starting server has no loaded directories to release.
       if self._stopping or self._client is None or not self.process_alive:
         return
@@ -421,7 +424,7 @@ class OpenCodeServer:
     rest = opencode_limits.OPENCODE_SERVER_IDLE_EXIT_SECONDS - opencode_limits.OPENCODE_SERVER_HEAVY_CHECK_SECONDS
     await asyncio.sleep(rest)
     async with self._lock:
-      if self._turns or self._claims or self._proc is None:
+      if self._turns or self._claims or not self.process_alive:
         return
       log.info("opencode_server_idle_exit", pid=self._proc.pid)
       self._stopping = True

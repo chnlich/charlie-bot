@@ -19,7 +19,6 @@ futures-util.workspace = true
 http.workspace = true
 http-body.workspace = true
 http-body-util.workspace = true
-md-5.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
 nix.workspace = true

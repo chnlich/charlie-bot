@@ -20,7 +20,6 @@ use minijinja::{AutoEscape, Environment, Error, ErrorKind, Output, State, Value}
 use sha1::{Digest, Sha1};
 
 use crate::git;
-use crate::static_files::package_directory;
 
 /// `page_render.PAGE_SLOTS`: the places a page leaves for package parts.
 pub const PAGE_SLOTS: &[&str] = &[
@@ -60,8 +59,9 @@ struct AssetDigestState {
 impl Templating {
   pub fn new(repo_root: &Path) -> Templating {
     let mut directories = vec![repo_root.join("web").join("templates")];
-    directories
-      .extend(registry::PACKAGES.iter().map(|package| package_directory(repo_root, package).join("templates")));
+    directories.extend(
+      registry::PACKAGES.iter().map(|package| registry::package_directory(repo_root, package).join("templates")),
+    );
     Templating {
       repo_root: repo_root.to_path_buf(),
       directories,
@@ -103,7 +103,7 @@ impl Templating {
     let mut paths: HashMap<String, PathBuf> = HashMap::new();
     walk_static_tree(&static_root, "", &mut pairs, &mut paths)?;
     for package in registry::PACKAGES {
-      let directory = package_directory(&self.repo_root, package).join("static");
+      let directory = registry::package_directory(&self.repo_root, package).join("static");
       if directory.is_dir() {
         let url_path = package.trim_start_matches("src.").replace('.', "/");
         walk_static_tree(&directory, &format!("{url_path}/"), &mut pairs, &mut paths)?;
@@ -184,7 +184,7 @@ pub fn page_parts(repo_root: &Path, slot: &str) -> Result<Vec<String>, String> {
       .filter_map(|package| {
         let name =
           format!("{}/page_{slot}.html", package.rsplit('.').next().expect("rsplit yields at least one piece"));
-        package_directory(repo_root, package).join("templates").join(&name).is_file().then_some(name)
+        registry::package_directory(repo_root, package).join("templates").join(&name).is_file().then_some(name)
       })
       .collect(),
   )

@@ -9,7 +9,9 @@ publish.workspace = true
 axum.workspace = true
 bytes.workspace = true
 charliebot-core.workspace = true
+futures-util.workspace = true
 http.workspace = true
+md-5.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 

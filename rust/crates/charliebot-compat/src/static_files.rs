@@ -1,12 +1,10 @@
-//! The `/static` mounts: starlette `StaticFiles` and `FileResponse` as the Python app runs them.
+//! Starlette's `StaticFiles` and `FileResponse`, as the Python app serves a directory of files.
 //!
-//! Each page package's `static/` serves under `/static/<kind>/<name>/`, ahead of `web/static` at
-//! `/static/`, in registration order. A package mount checks its directory per request until the check
-//! first passes, so a `static/` directory a fast-forward creates serves without a restart, and a
-//! request under a package without one fails with a 500 as the Python mount's `RuntimeError` does.
 //! A served file carries the content type `mimetypes` guesses, `accept-ranges`, `content-length`,
-//! `last-modified` and an `etag` of `md5("<st_mtime>-<st_size>")`; a matching `If-None-Match` or a
-//! newer `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416.
+//! `last-modified` and an `etag` of `md5("<st_mtime>-<st_size>")`; a matching `If-None-Match` or a newer
+//! `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked
+//! per request until the check first passes, so a directory that appears later serves without a restart,
+//! and a missing one answers 500 as the Python mount's `RuntimeError` does.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -15,82 +13,52 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_compat::responses;
-use charliebot_core::{paths, pyfmt, registry, timefmt};
+use charliebot_core::{paths, pyfmt, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
 
-use crate::auth::header_text;
+use crate::headers::header_text;
 use crate::mimetypes::MimeTypes;
+use crate::responses;
 
 /// `FileResponse.chunk_size`: a body at least this long goes out in more than one message.
 const CHUNK_SIZE: usize = 64 * 1024;
 
-/// One `app.mount(prefix, StaticFiles(directory=...))`.
-pub struct StaticMount {
-  /// The URL prefix without a trailing slash: `/static/features/voice` or `/static`.
-  pub prefix: String,
+/// One served directory: the `StaticFiles(directory=...)` a Python mount holds.
+pub struct StaticDirectory {
   /// The served directory as the Python app names it (unresolved).
-  pub directory: PathBuf,
+  path: PathBuf,
   /// Whether the directory check has passed once (`StaticFiles.config_checked`).
   checked: AtomicBool,
 }
 
-impl StaticMount {
-  /// The Python app's `/static` mounts in its route order: one per page package, then `web/static`
-  /// when it exists at startup.
-  pub fn python_app_mounts(repo_root: &Path) -> Vec<StaticMount> {
-    let mut mounts: Vec<StaticMount> = registry::PACKAGES
-      .iter()
-      .map(|package| StaticMount {
-        prefix: format!("/static/{}", package.trim_start_matches("src.").replace('.', "/")),
-        directory: package_directory(repo_root, package).join("static"),
-        checked: AtomicBool::new(false),
-      })
-      .collect();
-    let web_static = repo_root.join("web").join("static");
-    if web_static.exists() {
-      mounts.push(StaticMount {
-        prefix: "/static".to_string(),
-        directory: web_static,
-        checked: AtomicBool::new(false),
-      });
-    }
-    mounts
-  }
-
-  /// The path below this mount when `path` falls under it (starlette `Mount` matching), else `None`.
-  pub fn route_path<'a>(&self, path: &'a str) -> Option<&'a str> {
-    path.strip_prefix(&self.prefix).filter(|rest| rest.starts_with('/'))
+impl StaticDirectory {
+  pub fn new(path: PathBuf) -> StaticDirectory {
+    StaticDirectory { path, checked: AtomicBool::new(false) }
   }
 }
 
-/// `src/<kind>/<name>` for the package `src.<kind>.<name>`.
-pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
-  package.split('.').fold(repo_root.to_path_buf(), |path, part| path.join(part))
-}
-
-/// Serve `route_path` (the decoded path below the mount, starting with `/`) from `mount`.
+/// Serve `route_path` (the decoded path below the directory, starting with `/`).
 pub fn serve(
-  mount: &StaticMount,
+  served: &StaticDirectory,
   mime_types: &MimeTypes,
   route_path: &str,
   method: &Method,
   headers: &HeaderMap,
 ) -> Response {
-  if !mount.checked.load(Ordering::Acquire) {
-    if let Some(failure) = directory_failure(&mount.directory) {
+  if !served.checked.load(Ordering::Acquire) {
+    if let Some(failure) = directory_failure(&served.path) {
       return failure;
     }
-    mount.checked.store(true, Ordering::Release);
+    served.checked.store(true, Ordering::Release);
   }
   if method != Method::GET && method != Method::HEAD {
     return responses::http_exception(StatusCode::METHOD_NOT_ALLOWED);
   }
   let relative = normpath(route_path.trim_start_matches('/'));
-  let directory = paths::realpath(&mount.directory);
-  let full_path = paths::realpath(&mount.directory.join(&relative));
+  let directory = paths::realpath(&served.path);
+  let full_path = paths::realpath(&served.path.join(&relative));
   if !paths::is_within(&full_path, &directory) {
     return responses::http_exception(StatusCode::NOT_FOUND);
   }

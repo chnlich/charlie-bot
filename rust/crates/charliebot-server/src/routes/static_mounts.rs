@@ -1,18 +1,52 @@
 //! The `/static` mounts: each page package's `static/`, then `web/static`.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::response::Response;
 use axum::routing::any;
+use charliebot_compat::static_files::{self, StaticDirectory};
+use charliebot_core::registry;
 
 use super::Family;
+use crate::request_path;
 use crate::state::AppState;
-use crate::{request_path, static_files};
 
 pub const FAMILY: Family =
   Family { routes, matches: |state, path| state.static_mounts.iter().any(|mount| mount.route_path(path).is_some()) };
+
+/// One `app.mount(prefix, StaticFiles(directory=...))`.
+pub struct StaticMount {
+  /// The URL prefix without a trailing slash: `/static/features/voice` or `/static`.
+  pub prefix: String,
+  pub directory: StaticDirectory,
+}
+
+impl StaticMount {
+  /// The Python app's `/static` mounts in its route order: one per page package, then `web/static` when it
+  /// exists at startup.
+  pub fn python_app_mounts(repo_root: &Path) -> Vec<StaticMount> {
+    let mut mounts: Vec<StaticMount> = registry::PACKAGES
+      .iter()
+      .map(|package| StaticMount {
+        prefix: format!("/static/{}", package.trim_start_matches("src.").replace('.', "/")),
+        directory: StaticDirectory::new(registry::package_directory(repo_root, package).join("static")),
+      })
+      .collect();
+    let web_static = repo_root.join("web").join("static");
+    if web_static.exists() {
+      mounts.push(StaticMount { prefix: "/static".to_string(), directory: StaticDirectory::new(web_static) });
+    }
+    mounts
+  }
+
+  /// The path below this mount when `path` falls under it (starlette `Mount` matching), else `None`.
+  pub fn route_path<'a>(&self, path: &'a str) -> Option<&'a str> {
+    path.strip_prefix(&self.prefix).filter(|rest| rest.starts_with('/'))
+  }
+}
 
 fn routes() -> Router<Arc<AppState>> {
   Router::new().route("/static/", any(serve)).route("/static/{*rest}", any(serve))
@@ -30,7 +64,7 @@ async fn serve(State(state): State<Arc<AppState>>, request: Request) -> Response
   tokio::task::spawn_blocking(move || {
     let mount = &state.static_mounts[index];
     let below = mount.route_path(&path).expect("the mount matched this path above");
-    static_files::serve(mount, &state.mime_types, below, &method, &headers)
+    static_files::serve(&mount.directory, &state.mime_types, below, &method, &headers)
   })
   .await
   .expect("serving a static file does not panic")

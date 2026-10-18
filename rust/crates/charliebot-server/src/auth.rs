@@ -13,9 +13,10 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
+use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
 use charliebot_core::run_token;
-use http::{HeaderMap, HeaderName, Method, StatusCode, header};
+use http::{HeaderMap, Method, StatusCode, header};
 use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
@@ -54,11 +55,6 @@ pub fn credential_matches(candidate: &str, key: &str) -> Result<bool, NonAsciiCr
     return Err(NonAsciiCredential);
   }
   Ok(bool::from(candidate.as_bytes().ct_eq(key.as_bytes())))
-}
-
-/// The first value of header `name`, decoded as latin-1, or `""` (starlette `Headers.get` parity).
-pub fn header_text(headers: &HeaderMap, name: &HeaderName) -> String {
-  headers.get(name).map(|value| value.as_bytes().iter().map(|b| *b as char).collect()).unwrap_or_default()
 }
 
 /// The gate's decision for an HTTP request with this method, decoded path and headers.
@@ -165,9 +161,10 @@ fn unauthorized(content_type: &'static str, body: &'static str) -> Response {
 
 #[cfg(test)]
 mod tests {
+  use http::{HeaderName, HeaderValue};
+
   use super::*;
   use charliebot_core::run_token::RunTokenClaims;
-  use http::HeaderValue;
 
   const KEY: &str = "k-1";
 

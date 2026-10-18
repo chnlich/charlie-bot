@@ -22,7 +22,7 @@ use http::{HeaderMap, HeaderValue, header};
 use http_body::{Body as _, Frame};
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 
-use crate::auth::header_text;
+use charliebot_compat::headers::header_text;
 
 /// `GZipMiddleware(minimum_size=1000)`.
 pub const MINIMUM_SIZE: usize = 1000;

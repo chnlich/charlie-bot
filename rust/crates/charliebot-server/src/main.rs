@@ -17,13 +17,10 @@ mod cookies;
 mod git;
 mod gzip;
 mod home_init;
-mod mimetypes;
-mod mimetypes_table;
 mod request_log;
 mod request_path;
 mod routes;
 mod state;
-mod static_files;
 mod templating;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -32,6 +29,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::{config, home, logging, paths};
 use nix::sys::signal::{SigHandler, Signal};
@@ -40,10 +38,9 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::app::ConnectionInfo;
 use crate::buildinfo::BuildInfo;
-use crate::mimetypes::MimeTypes;
 use crate::routes::pages::VoiceSettings;
+use crate::routes::static_mounts::StaticMount;
 use crate::state::AppState;
-use crate::static_files::StaticMount;
 use crate::templating::Templating;
 
 /// The environment variable naming the charlie-bot checkout.

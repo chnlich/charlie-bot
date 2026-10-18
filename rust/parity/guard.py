@@ -30,7 +30,7 @@ EXEMPT_PREFIXES = ("/dev/pts/",)
 REFUSED_ERRNOS = frozenset({"EACCES", "EPERM", "EROFS"})
 _WRITE_OPEN_FLAGS = ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC")
 
-_LINE = re.compile(r"^(?P<pid>\d+) (?P<rest>.*)$")
+_LINE = re.compile(r"^(?P<pid>\d+)\s+(?P<rest>.*)$")
 _SHARED_MEMORY_SEMAPHORE = re.compile(r"/dev/shm/sem\.[^/]+")
 _UNFINISHED = re.compile(r"^(?P<call>.*) <unfinished \.\.\.>$")
 _RESUMED = re.compile(r"^<\.\.\. (?P<name>\w+|\?\?\?) resumed>(?P<tail>.*)$")

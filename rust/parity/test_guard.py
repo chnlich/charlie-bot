@@ -31,3 +31,11 @@ def test_unparsed_line_raises_and_names_the_trace(tmp_path: pathlib.Path, line: 
   trace.write_text(line + "\n", encoding="utf-8")
   with pytest.raises(ValueError, match=re.escape(str(trace))):
     guard.scan(trace, (tmp_path / "tree",), tmp_path, guard.Report())
+
+
+def test_pid_alignment_whitespace_is_accepted(tmp_path: pathlib.Path) -> None:
+  trace = tmp_path / "cand.server-1.strace"
+  trace.write_text('2434   unlink("/srv/outside/state.json") = 0\n', encoding="utf-8")
+  report = guard.Report()
+  guard.scan(trace, (tmp_path / "tree",), tmp_path, report)
+  assert [change.path for change in report.violations] == ["/srv/outside/state.json"]

@@ -60,8 +60,13 @@ pub fn truthy(value: &Value) -> bool {
 }
 
 /// `value.get(key)` of a Python dict where a missing or falsy value reads as absent: `value.get(key) or {}`.
-pub fn truthy_object<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a Map<String, Value>> {
-  map.get(key).filter(|value| truthy(value)).and_then(Value::as_object)
+pub fn object_or_empty<'a>(map: &'a Map<String, Value>, key: &str) -> anyhow::Result<&'a Map<String, Value>> {
+  match map.get(key) {
+    None => Ok(&EMPTY_OBJECT),
+    Some(value) if !truthy(value) => Ok(&EMPTY_OBJECT),
+    Some(Value::Object(object)) => Ok(object),
+    Some(other) => anyhow::bail!("codex {key} must be a JSON object, got {other}"),
+  }
 }
 
 /// A count field read the way Python's `value.get(key) or 0` reads it: absent or falsy is 0, an integer is itself.

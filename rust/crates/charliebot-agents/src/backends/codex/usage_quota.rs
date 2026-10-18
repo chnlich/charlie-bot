@@ -20,7 +20,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
 use super::rollout::{self, mtime_ns, mtime_secs, token_count_payload, walk_files};
-use super::text::{EMPTY_OBJECT, py_splitlines, py_strip, truthy, truthy_object};
+use super::text::{EMPTY_OBJECT, object_or_empty, py_splitlines, py_strip, truthy};
 
 const PROVIDER: &str = "codex";
 const PROVIDER_LABEL: &str = "Codex";
@@ -258,13 +258,11 @@ fn list_rollout_files(sessions_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// Whether a `token_count` event reports the plan quota pool: `rate_limits.limit_id` is `codex`, or it names no pool.
-fn is_plan_pool_event(event: &Map<String, Value>) -> bool {
-  let rate_limits = truthy_object(event, "payload")
-    .and_then(|payload| payload.get("rate_limits"))
-    .filter(|value| truthy(value))
-    .and_then(Value::as_object);
-  let limit_id = rate_limits.and_then(|limits| limits.get("limit_id"));
-  limit_id == Some(&json!("codex")) || !rate_limits.and_then(|limits| limits.get("limit_name")).is_some_and(truthy)
+fn is_plan_pool_event(event: &Map<String, Value>) -> anyhow::Result<bool> {
+  let payload = object_or_empty(event, "payload")?;
+  let rate_limits = object_or_empty(payload, "rate_limits")?;
+  let limit_id = rate_limits.get("limit_id");
+  Ok(limit_id == Some(&json!("codex")) || !rate_limits.get("limit_name").is_some_and(truthy))
 }
 
 /// The newest `token_count` event of a rollout that `matches` accepts. The tail window is read first, and a miss falls
@@ -272,7 +270,7 @@ fn is_plan_pool_event(event: &Map<String, Value>) -> bool {
 fn read_latest_token_count(
   path: &Path,
   size: u64,
-  matches: fn(&Map<String, Value>) -> bool,
+  matches: fn(&Map<String, Value>) -> anyhow::Result<bool>,
 ) -> anyhow::Result<Option<Map<String, Value>>> {
   let offset = size.saturating_sub(USAGE_TAIL_BYTES);
   let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
@@ -299,7 +297,7 @@ fn read_latest_token_count(
 
 fn latest_token_count(
   lines: Vec<&str>,
-  matches: fn(&Map<String, Value>) -> bool,
+  matches: fn(&Map<String, Value>) -> anyhow::Result<bool>,
 ) -> anyhow::Result<Option<Map<String, Value>>> {
   for raw_line in lines.iter().rev() {
     let line = py_strip(raw_line);
@@ -314,7 +312,7 @@ fn latest_token_count(
         continue;
       }
     };
-    if token_count_payload(&event).is_none() || !matches(&event) {
+    if token_count_payload(&event)?.is_none() || !matches(&event)? {
       continue;
     }
     return Ok(Some(event));
@@ -331,12 +329,18 @@ fn parse_codex_timestamp(value: Option<&Value>) -> anyhow::Result<OffsetDateTime
 }
 
 /// An ISO 8601 timestamp as a UTC instant, or `None` when it is empty or unparseable. A timestamp without an offset is
-/// unparseable here, where Python reads it as UTC.
+/// read as UTC, as `datetime.fromisoformat` does in the Python usage source.
 pub fn parse_iso_utc(value: &str) -> Option<OffsetDateTime> {
   if value.is_empty() {
     return None;
   }
-  OffsetDateTime::parse(value, &Rfc3339).ok().map(|parsed| parsed.to_offset(UtcOffset::UTC))
+  OffsetDateTime::parse(value, &Rfc3339)
+    .or_else(|_| {
+      let local = value.replacen(' ', "T", 1);
+      OffsetDateTime::parse(&format!("{local}+00:00"), &Rfc3339)
+    })
+    .ok()
+    .map(|parsed| parsed.to_offset(UtcOffset::UTC))
 }
 
 /// The utilization a limit reports as a percentage, or `None` when it reports none or a non-number.
@@ -465,8 +469,8 @@ fn transform_response(
   fetched_at: &str,
   account: &str,
 ) -> anyhow::Result<Map<String, Value>> {
-  let payload = truthy_object(event, "payload").unwrap_or(&*EMPTY_OBJECT);
-  let rate_limits = truthy_object(payload, "rate_limits").unwrap_or(&*EMPTY_OBJECT);
+  let payload = object_or_empty(event, "payload")?;
+  let rate_limits = object_or_empty(payload, "rate_limits")?;
   let credits = rate_limits.get("credits").and_then(|raw| codex_credits(raw, account));
   let mut usage = Map::new();
   usage.insert(PANEL_WINDOWS.to_string(), Value::Array(codex_windows(rate_limits, account)?));
@@ -646,7 +650,7 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
     }
     return Ok(None);
   }
-  if token_count_payload(&event).is_none() {
+  if token_count_payload(&event)?.is_none() {
     return Ok(None);
   }
   let info = match payload.get("info") {
@@ -736,11 +740,17 @@ mod tests {
   }
 
   #[test]
+  fn naive_iso_timestamps_are_read_as_utc() {
+    assert_eq!(parse_iso_utc("2026-10-18T09:00:00").unwrap().unix_timestamp(), 1_792_314_000);
+    assert_eq!(parse_iso_utc("2026-10-18 09:00:00").unwrap().unix_timestamp(), 1_792_314_000);
+  }
+
+  #[test]
   fn plan_pool_events_exclude_named_model_pools() {
     let plan = json!({"payload": {"rate_limits": {"limit_id": "codex"}}});
     let model_pool = json!({"payload": {"rate_limits": {"limit_id": "o3", "limit_name": "o3"}}});
-    assert!(is_plan_pool_event(plan.as_object().unwrap()));
-    assert!(!is_plan_pool_event(model_pool.as_object().unwrap()));
+    assert!(is_plan_pool_event(plan.as_object().unwrap()).unwrap());
+    assert!(!is_plan_pool_event(model_pool.as_object().unwrap()).unwrap());
   }
 
   #[test]

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
 
-use super::text::{EMPTY_OBJECT, truthy_object};
+use super::text::object_or_empty;
 
 /// The rollout record-type names: `session_meta` opens a file, `turn_context` carries the model in force, and
 /// `event_msg` wraps the `token_count` payload the readers read.
@@ -29,12 +29,12 @@ pub struct RolloutUsage {
 
 /// The `token_count` payload an `event_msg` record wraps, or `None` for any other record. A payload that is not an
 /// object is not read as a token count.
-pub fn token_count_payload(event: &Map<String, Value>) -> Option<&Map<String, Value>> {
+pub fn token_count_payload(event: &Map<String, Value>) -> anyhow::Result<Option<&Map<String, Value>>> {
   if text_of(event, "type") != Some(EVENT_MSG) {
-    return None;
+    return Ok(None);
   }
-  let payload = truthy_object(event, "payload")?;
-  (text_of(payload, "type") == Some(TOKEN_COUNT)).then_some(payload)
+  let payload = object_or_empty(event, "payload")?;
+  Ok((text_of(payload, "type") == Some(TOKEN_COUNT)).then_some(payload))
 }
 
 /// A rollout line's context tokens, context window and cumulative totals.
@@ -46,14 +46,14 @@ pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<Rollou
   let mut usage: Option<UsageParts> = None;
   let mut model: Option<String> = None;
   for line in bytes.rsplit(|byte| *byte == b'\n') {
-    let Some(event) = parse_event_line(line, path)? else {
+    let Some(event) = parse_event_line(line, path, "codex_rollout_parse_skip")? else {
       continue;
     };
     if usage.is_none() {
-      usage = usage_of_event(&event);
+      usage = usage_of_event(&event)?;
     }
     if model.is_none() {
-      model = model_of_event(&event);
+      model = model_of_event(&event)?;
     }
     if usage.is_some() && model.is_some() {
       break;
@@ -68,14 +68,20 @@ pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<Rollou
 }
 
 /// The context tokens, the context window and the totals of a `token_count` event, or `None` when a count is missing.
-fn usage_of_event(event: &Map<String, Value>) -> Option<UsageParts> {
-  let payload = token_count_payload(event)?;
-  let info = truthy_object(payload, "info").unwrap_or(&*EMPTY_OBJECT);
-  let last = truthy_object(info, "last_token_usage").unwrap_or(&*EMPTY_OBJECT);
+fn usage_of_event(event: &Map<String, Value>) -> anyhow::Result<Option<UsageParts>> {
+  let Some(payload) = token_count_payload(event)? else {
+    return Ok(None);
+  };
+  let info = object_or_empty(payload, "info")?;
+  let last = object_or_empty(info, "last_token_usage")?;
   // Codex reports the active prompt window in last_token_usage.input_tokens. total_token_usage is cumulative for the
   // session, and cached_input_tokens is a subset of the input, not an extra component of the window.
-  let input_tokens = last.get("input_tokens").filter(|value| !value.is_null())?;
-  let context_full = info.get("model_context_window").filter(|value| !value.is_null())?;
+  let Some(input_tokens) = last.get("input_tokens").filter(|value| !value.is_null()) else {
+    return Ok(None);
+  };
+  let Some(context_full) = info.get("model_context_window").filter(|value| !value.is_null()) else {
+    return Ok(None);
+  };
   let total = info.get("total_token_usage").and_then(Value::as_object).map(|total| {
     let mut totals = Map::new();
     for key in ["input_tokens", "cached_input_tokens", "output_tokens"] {
@@ -83,21 +89,21 @@ fn usage_of_event(event: &Map<String, Value>) -> Option<UsageParts> {
     }
     totals
   });
-  Some((input_tokens.clone(), context_full.clone(), total))
+  Ok(Some((input_tokens.clone(), context_full.clone(), total)))
 }
 
 /// The model a `session_meta` or `turn_context` record names, when it names a non-empty one.
-fn model_of_event(event: &Map<String, Value>) -> Option<String> {
+fn model_of_event(event: &Map<String, Value>) -> anyhow::Result<Option<String>> {
   if text_of(event, "type") != Some(TURN_CONTEXT) {
-    return None;
+    return Ok(None);
   }
-  let payload = truthy_object(event, "payload").unwrap_or(&*EMPTY_OBJECT);
-  payload.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).map(str::to_string)
+  let payload = object_or_empty(event, "payload")?;
+  Ok(payload.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).map(str::to_string))
 }
 
 /// One line parsed as a record. A blank line and a line that is not JSON read as `None`; the latter is logged, as the
 /// Python reader does. A line that is JSON but not an object is an error, as Python's attribute read on it is.
-pub fn parse_event_line(line: &[u8], path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
+pub fn parse_event_line(line: &[u8], path: &Path, log_event: &str) -> anyhow::Result<Option<Map<String, Value>>> {
   if line.iter().all(u8::is_ascii_whitespace) {
     return Ok(None);
   }
@@ -105,7 +111,7 @@ pub fn parse_event_line(line: &[u8], path: &Path) -> anyhow::Result<Option<Map<S
     Ok(Value::Object(event)) => Ok(Some(event)),
     Ok(other) => bail!("{}: rollout line is not a JSON object: {other}", path.display()),
     Err(error) => {
-      tracing::debug!(target: "charliebot_agents", path = %path.display(), error = %error, "codex_rollout_parse_skip");
+      tracing::debug!(target: "charliebot_agents", path = %path.display(), error = %error, "{log_event}");
       Ok(None)
     }
   }
@@ -174,5 +180,14 @@ mod tests {
     assert_eq!(usage.context_full, json!(1000));
     assert_eq!(usage.model, "gpt-5.5");
     assert_eq!(usage.total_token_usage.unwrap()["cached_input_tokens"], json!(400));
+  }
+
+  #[test]
+  fn truthy_non_object_payload_and_info_fail_instead_of_being_skipped() {
+    let payload = json!({"type": EVENT_MSG, "payload": ["truthy"]});
+    assert!(token_count_payload(payload.as_object().unwrap()).is_err());
+
+    let info = json!({"type": EVENT_MSG, "payload": {"type": TOKEN_COUNT, "info": ["truthy"]}});
+    assert!(usage_of_event(info.as_object().unwrap()).is_err());
   }
 }

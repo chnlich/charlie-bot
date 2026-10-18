@@ -18,7 +18,7 @@ use charliebot_registry::usage::{
 use serde_json::{Map, Value};
 
 use super::rollout::{self, SESSION_META, TURN_CONTEXT, mtime_ns, token_count_payload, walk_files};
-use super::text::{EMPTY_OBJECT, count_or_zero, truthy, truthy_object};
+use super::text::{count_or_zero, object_or_empty, truthy};
 use super::usage_quota::CodexQuotaAccount;
 use super::usage_sweep;
 
@@ -97,31 +97,40 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
   let metadata = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
   let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
   let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-  let lines = marker_lines(&bytes);
+  let lines = marker_lines(&bytes)?;
   let session = session_id(path, codex_home)?;
 
-  let mut model = lines.iter().filter(|line| is_context(line)).find_map(payload_model);
-  let mut root = lines.iter().find(|line| rollout::text_of(line, "type") == Some(SESSION_META)).and_then(payload_root);
+  let mut model = None;
+  for line in lines.iter().filter(|line| is_context(line)) {
+    if let Some(named) = payload_model(line)? {
+      model = Some(named);
+      break;
+    }
+  }
+  let mut root = None;
+  if let Some(line) = lines.iter().find(|line| rollout::text_of(line, "type") == Some(SESSION_META)) {
+    root = payload_root(line)?;
+  }
   let mut seen = HashSet::new();
   let mut records = Vec::new();
   for line in &lines {
     if is_context(line) {
-      if let Some(named) = payload_model(line) {
+      if let Some(named) = payload_model(line)? {
         model = Some(named);
       }
       if root.is_none() && rollout::text_of(line, "type") == Some(SESSION_META) {
-        root = payload_root(line);
+        root = payload_root(line)?;
       }
       continue;
     }
-    let Some(payload) = token_count_payload(line) else {
+    let Some(payload) = token_count_payload(line)? else {
       continue;
     };
     let root = root
       .as_deref()
       .with_context(|| format!("{}: token_count event with no session_meta session_id above it", path.display()))?;
-    let info = truthy_object(payload, "info").unwrap_or(&*EMPTY_OBJECT);
-    let last = truthy_object(info, "last_token_usage").unwrap_or(&*EMPTY_OBJECT);
+    let info = object_or_empty(payload, "info")?;
+    let last = object_or_empty(info, "last_token_usage")?;
     let cached = count_or_zero(last, "cached_input_tokens")?;
     let fresh = count_or_zero(last, "input_tokens")? - cached;
     let output = count_or_zero(last, "output_tokens")?;
@@ -158,19 +167,23 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
 }
 
 /// The complete lines of `bytes` that carry a marker, parsed. A trailing fragment without its newline waits for a
-/// later read. A line that does not parse, or parses to something other than an object, is dropped.
-fn marker_lines(bytes: &[u8]) -> Vec<Map<String, Value>> {
+/// later read. A line that does not parse is dropped; a valid JSON value that is not an object fails when read.
+fn marker_lines(bytes: &[u8]) -> anyhow::Result<Vec<Map<String, Value>>> {
   let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
-    return Vec::new();
+    return Ok(Vec::new());
   };
-  bytes[..=last_newline]
+  let mut records = Vec::new();
+  for line in bytes[..=last_newline]
     .split(|byte| *byte == b'\n')
     .filter(|line| MARKERS.iter().any(|marker| line.windows(marker.len()).any(|window| window == *marker)))
-    .filter_map(|line| match serde_json::from_slice::<Value>(line) {
-      Ok(Value::Object(record)) => Some(record),
-      _ => None,
-    })
-    .collect()
+  {
+    match serde_json::from_slice::<Value>(line) {
+      Ok(Value::Object(record)) => records.push(record),
+      Ok(other) => anyhow::bail!("codex rollout marker line is not a JSON object: {other}"),
+      Err(_) => {}
+    }
+  }
+  Ok(records)
 }
 
 fn is_context(line: &Map<String, Value>) -> bool {
@@ -178,15 +191,15 @@ fn is_context(line: &Map<String, Value>) -> bool {
 }
 
 /// The truthy `model` a record's payload names, as text.
-fn payload_model(line: &Map<String, Value>) -> Option<String> {
-  let model = truthy_object(line, "payload").unwrap_or(&*EMPTY_OBJECT).get("model")?;
-  truthy(model).then(|| python_str(model))
+fn payload_model(line: &Map<String, Value>) -> anyhow::Result<Option<String>> {
+  let payload = object_or_empty(line, "payload")?;
+  Ok(payload.get("model").filter(|model| truthy(model)).map(python_str))
 }
 
 /// The `session_id` of a record's payload, as text, when it has one.
-fn payload_root(line: &Map<String, Value>) -> Option<String> {
-  let session_id = truthy_object(line, "payload").unwrap_or(&*EMPTY_OBJECT).get("session_id")?;
-  (!session_id.is_null()).then(|| python_str(session_id))
+fn payload_root(line: &Map<String, Value>) -> anyhow::Result<Option<String>> {
+  let payload = object_or_empty(line, "payload")?;
+  Ok(payload.get("session_id").filter(|session_id| !session_id.is_null()).map(python_str))
 }
 
 /// The record's timestamp, or the empty string when it has none.
@@ -213,8 +226,13 @@ mod tests {
   #[test]
   fn marker_lines_skip_a_trailing_fragment_and_unmarked_lines() {
     let bytes = b"{\"type\":\"token_count\"}\n{\"type\":\"token_count\"\n{\"a\":1}\n{\"type\":\"turn_context\"}";
-    let lines = marker_lines(bytes);
+    let lines = marker_lines(bytes).unwrap();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["type"], "token_count");
+  }
+
+  #[test]
+  fn a_marked_non_object_record_fails() {
+    assert!(marker_lines(b"[\"token_count\"]\n").is_err());
   }
 }

@@ -87,7 +87,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET | `/api/internal/web/dialog` | features/web_reply | todo |  |
 | POST | `/api/internal/web/status` | features/web_reply | todo |  |
 | GET | `/api/internal/web/status` | features/web_reply | todo |  |
-| GET | `/host-auth` | features/host_auth | ported | renders the checkout's templates through charliebot-compat; reads `CHARLIEBOT_REPO_ROOT` |
+| GET | `/host-auth` | features/host_auth | ported | renders through the shared `Templating` handle |
 | GET | `/api/host-auth/status` | features/host_auth | ported |  |
 | POST | `/api/host-auth/probe` | features/host_auth | ported |  |
 | GET | `/api/git/branches` | features/diff_view | todo |  |

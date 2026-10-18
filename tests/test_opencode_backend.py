@@ -7,7 +7,6 @@ import sys
 import time
 from unittest import mock
 
-import httpx
 import pytest
 import pytest_asyncio
 
@@ -67,10 +66,7 @@ async def _run_turn(backend: opencode.OpenCodeBackend,
                     prompt: str,
                     cwd: pathlib.Path,
                     env: dict | None = None) -> list[dict]:
-  events = []
-  async for event in backend.run(prompt, str(cwd), env or BASE_ENV):
-    events.append(event)
-  return events
+  return [event async for event in backend.run(prompt, str(cwd), env or BASE_ENV)]
 
 
 def _text_events(text: str, message: str = "m1", ordinal: int = 0) -> list[dict]:
@@ -448,8 +444,7 @@ async def test_cancel_signals_only_its_turn_and_the_other_turn_completes(fake_oc
   cancelled_events: list[dict] = []
 
   async def drive_cancelled() -> None:
-    async for event in cancelled.run("held", str(fake_oc / "a"), BASE_ENV):
-      cancelled_events.append(event)
+    cancelled_events.extend([event async for event in cancelled.run("held", str(fake_oc / "a"), BASE_ENV)])
 
   task = asyncio.create_task(drive_cancelled())
   while not any(r.get("prompt_text") == "held" for r in _read_log(fake_oc / "requests.jsonl")):
@@ -533,8 +528,9 @@ async def test_stream_loss_ends_running_turns_before_the_server_stops(fake_oc, m
   events: list[dict] = []
 
   async def drive() -> None:
+    # Per-item append is load-bearing: the wait loop below reads events while the turn is still running.
     async for event in backend.run("stuck", str(fake_oc / "dir"), BASE_ENV):
-      events.append(event)
+      events.append(event)  # noqa: PERF401  (see comment above)
 
   task = asyncio.create_task(drive())
   while not any(e["type"] == ET.SESSION_ATTACHED for e in events) or not _requests(fake_oc, "POST", "/api/session/"):
@@ -570,8 +566,7 @@ async def test_server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_
   events: list[dict] = []
 
   async def drive() -> None:
-    async for event in backend.run("crash", str(fake_oc / "dir"), BASE_ENV):
-      events.append(event)
+    events.extend([event async for event in backend.run("crash", str(fake_oc / "dir"), BASE_ENV)])
 
   task = asyncio.create_task(drive())
   while not any(r.get("path", "").endswith("/prompt") for r in _read_log(fake_oc / "requests.jsonl")):

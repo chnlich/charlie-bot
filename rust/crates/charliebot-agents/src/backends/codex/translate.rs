@@ -29,9 +29,19 @@ const TOOL_ITEM_SPECS: &[(&str, (&str, &str, bool))] =
 /// Translates one codex run's events. A fresh translator starts a run, as `_build_command` resets the Python state.
 pub struct CodexTranslator {
   model: String,
-  last_agent_text: HashMap<String, String>,
-  last_reasoning_text: HashMap<String, String>,
-  last_todo_text: HashMap<String, String>,
+  last_agent_text: HashMap<ItemKey, String>,
+  last_reasoning_text: HashMap<ItemKey, String>,
+  last_todo_text: HashMap<ItemKey, String>,
+}
+
+/// Hashable Python dictionary keys accepted from a JSON item's `id` field. JSON arrays and objects are unhashable in
+/// Python and fail at the corresponding cache access.
+#[derive(Eq, Hash, PartialEq)]
+enum ItemKey {
+  Null,
+  Integer(i128),
+  Float(u64),
+  String(String),
 }
 
 impl CodexTranslator {
@@ -91,7 +101,7 @@ impl CodexTranslator {
     results.extend(self.tool_item(event, item));
     results.extend(file_change(event, item)?);
     results.extend(mcp_tool_call(event, item));
-    results.extend(self.todo_list(item));
+    results.extend(self.todo_list(item)?);
     results.extend(error_item(event, item));
     Ok(results)
   }
@@ -100,7 +110,7 @@ impl CodexTranslator {
     if text_of(item, "type") != Some("agent_message") {
       return Ok(Vec::new());
     }
-    let item_id = item_key(item);
+    let item_id = item_key(item)?;
     // Newer codex emits `text`; the older schema carried `content[].text`.
     let full_text = match item.get("text") {
       Some(value) if truthy(value) => value.as_str().context("codex agent_message text must be a string")?.to_string(),
@@ -139,7 +149,7 @@ impl CodexTranslator {
     if text.is_empty() {
       return Ok(Vec::new());
     }
-    let item_id = item_key(item);
+    let item_id = item_key(item)?;
     let previous_len = self.last_reasoning_text.get(&item_id).map_or(0, |previous| py_len(previous));
     let delta = py_slice_from(&text, previous_len);
     self.last_reasoning_text.insert(item_id, text);
@@ -176,14 +186,14 @@ impl CodexTranslator {
     }
   }
 
-  fn todo_list(&mut self, item: &Map<String, Value>) -> Vec<Value> {
+  fn todo_list(&mut self, item: &Map<String, Value>) -> anyhow::Result<Vec<Value>> {
     if text_of(item, "type") != Some("todo_list") {
-      return Vec::new();
+      return Ok(Vec::new());
     }
     let todos: &[Value] = match item.get("items") {
       None => &[],
       Some(Value::Array(todos)) => todos,
-      Some(_) => return Vec::new(),
+      Some(_) => return Ok(Vec::new()),
     };
     let mut lines = Vec::new();
     for todo in todos.iter().filter_map(Value::as_object) {
@@ -192,21 +202,22 @@ impl CodexTranslator {
         lines.push(format!("- {} {label}", todo_marker(todo)));
       }
     }
-    let item_id = item_key(item);
+    let item_id_is_truthy = item.get("id").is_some_and(truthy);
     if lines.is_empty() {
-      if !item_id.is_empty() {
-        self.last_todo_text.remove(&item_id);
+      if item_id_is_truthy {
+        self.last_todo_text.remove(&item_key(item)?);
       }
-      return Vec::new();
+      return Ok(Vec::new());
     }
     let text = lines.join("\n");
-    if !item_id.is_empty() {
+    if item_id_is_truthy {
+      let item_id = item_key(item)?;
       if self.last_todo_text.get(&item_id) == Some(&text) {
-        return Vec::new();
+        return Ok(Vec::new());
       }
       self.last_todo_text.insert(item_id, text.clone());
     }
-    vec![make_text_event(&text)]
+    Ok(vec![make_text_event(&text)])
   }
 }
 
@@ -220,9 +231,32 @@ fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
   map.get(key).and_then(Value::as_str)
 }
 
-/// The item's key in the delta caches. An item without a string id shares the empty key.
-fn item_key(item: &Map<String, Value>) -> String {
-  text_of(item, "id").unwrap_or("").to_string()
+/// The item's Python dictionary key in the delta caches. An item without an id shares the empty-string key.
+fn item_key(item: &Map<String, Value>) -> anyhow::Result<ItemKey> {
+  match item.get("id") {
+    None => Ok(ItemKey::String(String::new())),
+    Some(Value::Null) => Ok(ItemKey::Null),
+    Some(Value::Bool(value)) => Ok(ItemKey::Integer(i128::from(u8::from(*value)))),
+    Some(Value::Number(number)) => {
+      if let Some(value) = number.as_i64() {
+        return Ok(ItemKey::Integer(i128::from(value)));
+      }
+      if let Some(value) = number.as_u64() {
+        return Ok(ItemKey::Integer(i128::from(value)));
+      }
+      let value = number.as_f64().context("codex item id number is not finite")?;
+      if value.fract() == 0.0 && value >= i128::MIN as f64 && value < i128::MAX as f64 {
+        Ok(ItemKey::Integer(value as i128))
+      } else {
+        let normalized = if value == 0.0 { 0.0 } else { value };
+        Ok(ItemKey::Float(normalized.to_bits()))
+      }
+    }
+    Some(Value::String(value)) => Ok(ItemKey::String(value.clone())),
+    Some(value @ (Value::Array(_) | Value::Object(_))) => {
+      bail!("codex item id is not a hashable Python dictionary key: {value}")
+    }
+  }
 }
 
 fn item_of(event: &Map<String, Value>) -> anyhow::Result<&Map<String, Value>> {
@@ -382,6 +416,25 @@ mod tests {
       .unwrap();
     assert_eq!(first, [make_text_event("héllo")]);
     assert_eq!(second, [make_text_event(" wörld")]);
+  }
+
+  #[test]
+  fn non_string_item_ids_keep_distinct_python_dictionary_keys() {
+    let mut translator = CodexTranslator::new("gpt-5.5");
+    let integer =
+      |text: &str| json!({"type": "item.updated", "item": {"id": 7, "type": "agent_message", "text": text}});
+    let string =
+      |text: &str| json!({"type": "item.updated", "item": {"id": "7", "type": "agent_message", "text": text}});
+
+    assert_eq!(translator.translate_event(&integer("integer")).unwrap(), [make_text_event("integer")]);
+    assert_eq!(translator.translate_event(&string("string")).unwrap(), [make_text_event("string")]);
+    assert_eq!(translator.translate_event(&integer("integer updated")).unwrap(), [make_text_event(" updated")]);
+    assert_eq!(translator.translate_event(&string("string updated")).unwrap(), [make_text_event(" updated")]);
+    assert!(
+      translator
+        .translate_event(&json!({"type": "item.updated", "item": {"id": [], "type": "agent_message", "text": "x"}}))
+        .is_err()
+    );
   }
 
   #[test]

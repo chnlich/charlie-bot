@@ -84,13 +84,10 @@ impl CodexBackend {
     if self.instructions_file.is_none() {
       return Ok(Vec::new());
     }
-    let content = self
-      .instructions_content
-      .as_deref()
-      .context("a codex run with an instructions file needs its instructions content")?;
+    let content = self.instructions_content.as_deref().map(toml_basic_string).unwrap_or_else(|| "null".to_string());
     Ok(vec![
       "--config".to_string(),
-      format!("developer_instructions={}", toml_basic_string(content)),
+      format!("developer_instructions={content}"),
       "--config".to_string(),
       r#"project_doc_fallback_filenames=["CLAUDE.md"]"#.to_string(),
     ])
@@ -177,7 +174,16 @@ impl CodexBackend {
         Ok(result) => result,
         Err(elapsed) => {
           kill_process_group(pid, Signal::SIGKILL);
+          let wait_result = child.wait().await.context("reaping the timed-out codex one-shot");
           stderr_task.abort();
+          let stderr_result = match stderr_task.await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(error).context("reading the timed-out codex one-shot stderr"),
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(error).context("waiting for the timed-out codex one-shot stderr reader"),
+          };
+          wait_result?;
+          stderr_result?;
           return Err(elapsed.into());
         }
       },
@@ -332,5 +338,20 @@ mod tests {
     assert_eq!(env["PATH"], "/usr/bin:/home/a/.local/bin");
     prepend_path_dir(&mut env, "/home/a/bin");
     assert_eq!(env["PATH"], "/home/a/bin:/usr/bin:/home/a/.local/bin");
+  }
+
+  #[test]
+  fn instructions_file_without_content_serializes_python_none_as_toml_null() {
+    let mut launch = LaunchArgs::default();
+    launch.instructions_file = Some(PathBuf::from("/synthetic/instructions.md"));
+    let backend = CodexBackend::from_launch(
+      PathBuf::from("/synthetic/bin/codex"),
+      Path::new("/synthetic/home/.local/bin"),
+      "gpt-5.5",
+      &CodexOptions::default(),
+      launch,
+    )
+    .unwrap();
+    assert!(backend.build_command("prompt").unwrap().contains(&"developer_instructions=null".to_string()));
   }
 }

@@ -226,7 +226,7 @@ fn read_translated_session_id(path: &Path) -> anyhow::Result<Option<String>> {
   }
   let bytes = fs::read(path).with_context(|| format!("reading chat events {}", path.display()))?;
   for line in bytes.split(|byte| *byte == b'\n') {
-    let Some(event) = rollout::parse_event_line(line, path)? else {
+    let Some(event) = rollout::parse_event_line(line, path, "translated_session_id_parse_skip")? else {
       continue;
     };
     if let Some(id) = translated_session_id(&Value::Object(event)) {

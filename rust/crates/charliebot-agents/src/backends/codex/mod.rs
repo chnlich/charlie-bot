@@ -100,11 +100,53 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_registry::backend::{BackendTraits, ResumeStyle};
+  use charliebot_registry::usage::UsageOps;
 
   #[test]
   fn host_paths_follow_the_home_directory() {
     let host = CodexHost { path: "/bin".to_string(), home: PathBuf::from("/synthetic/home") };
     assert_eq!(host.user_local_bin(), PathBuf::from("/synthetic/home/.local/bin"));
     assert_eq!(host.codex_home(), PathBuf::from("/synthetic/home/.codex"));
+  }
+
+  fn register_synthetic_host(registry: &mut Registry) -> Result<(), RegistryError> {
+    register_with_host(
+      registry,
+      &CodexHost { path: "/synthetic/bin".to_string(), home: PathBuf::from("/synthetic/home") },
+    )
+  }
+
+  #[test]
+  fn registration_matches_the_python_backend_and_usage_source() {
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.codex", register_synthetic_host).unwrap();
+
+    let backend = registry.backend_type_of("codex").unwrap();
+    assert_eq!(
+      backend.traits,
+      BackendTraits {
+        resume: ResumeStyle::NativeId,
+        restart_reattach: true,
+        preassigned_session_id: false,
+        family_prefix: Some("codex"),
+        manual_compact: false,
+        compact_hint: Some("codex only compacts automatically — tune model_auto_compact_token_limit"),
+      }
+    );
+    let fields = serde_yaml::from_str("model_auto_compact_token_limit: 150000").unwrap();
+    (backend.option_model)(&fields).unwrap();
+    let unknown = serde_yaml::from_str("effort: high").unwrap();
+    assert!((backend.option_model)(&unknown).is_err());
+
+    assert!(registry.usage_resolver_for("codex").is_some());
+    let source = registry.usage_source_for("codex").unwrap().unwrap();
+    assert_eq!(source.name, USAGE_SOURCE);
+    assert_eq!(source.id_prefixes, &["codex-"]);
+    assert!(!source.run_logs_only);
+    assert_eq!(
+      source.implementation.as_ref().unwrap().ops(),
+      UsageOps { logs: true, read: true, live_cli_sessions: true, quota_accounts: true, sweep: true }
+    );
   }
 }

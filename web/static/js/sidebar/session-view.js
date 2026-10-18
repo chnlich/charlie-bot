@@ -232,7 +232,7 @@ async function pollTranscript(opts) {
 }
 
 function applyTranscriptUpdate(data) {
-  if (typeof Chat.applyWorkerSummary === 'function') Chat.applyWorkerSummary(data.summary);
+  Chat.applyWorkerSummary(data.summary);
   const container = document.getElementById('messages');
   if (container) {
     if (data.reset) {
@@ -687,11 +687,10 @@ function renderSessionView(data) {
   updateBackendHeaderControls(backendType);
 
   // For-you rules and the summary card need this open's session before the
-  // engine mounts: the worker's default view and its card depend on it.
-  if (typeof Chat.ForYou.setSession === 'function') Chat.ForYou.setSession(session);
-  if (typeof Chat.applyWorkerSummary === 'function') {
-    Chat.applyWorkerSummary(data.worker_summary || null);
-  }
+  // engine mounts: the worker's default view and its card depend on it. Only
+  // a worker's bootstrap carries worker_summary.
+  Chat.ForYou.setSession(session);
+  Chat.mountWorkerSummary(data.worker_summary || null);
 
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;

@@ -7,7 +7,6 @@
 
 mod backends;
 mod features;
-mod voice;
 
 use std::sync::Arc;
 
@@ -16,11 +15,11 @@ use charliebot_registry::{RegisterFn, Registry, RegistryError};
 
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
-  ("src.features.artifacts", features::artifacts), // stub: src.features.artifacts
+  ("src.features.artifacts", charliebot_artifacts::register), // stub: src.features.artifacts
   ("src.features.backup", charliebot_backup::register), // stub: src.features.backup
   ("src.features.backend_pool", features::backend_pool), // stub: src.features.backend_pool
   ("src.features.chat_threads", charliebot_chat_threads::register), // stub: src.features.chat_threads
-  ("src.features.code_server", features::code_server), // stub: src.features.code_server
+  ("src.features.code_server", charliebot_code_server::register), // stub: src.features.code_server
   ("src.features.cron", features::cron),           // stub: src.features.cron
   ("src.features.diag", charliebot_diag::register), // stub: src.features.diag
   ("src.features.slack", features::slack),         // stub: src.features.slack
@@ -35,7 +34,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.terminal", charliebot_terminal::register), // stub: src.features.terminal
   ("src.features.trace", charliebot_trace::register), // stub: src.features.trace
   ("src.features.usage", charliebot_usage::register), // stub: src.features.usage
-  ("src.features.voice", voice::register),         // stub: src.features.voice
+  ("src.features.voice", charliebot_voice::register), // stub: src.features.voice
   ("src.backends.openai_compatible", backends::openai_compatible), // stub: src.backends.openai_compatible
   ("src.backends.antigravity", backends::antigravity), // stub: src.backends.antigravity
   ("src.backends.charlie_code", backends::charlie_code), // stub: src.backends.charlie_code

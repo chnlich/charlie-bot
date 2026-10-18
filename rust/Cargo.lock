@@ -175,6 +175,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-artifacts"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_yaml",
+]
+
+[[package]]
 name = "charliebot-backup"
 version = "0.1.0"
 dependencies = [
@@ -186,6 +195,15 @@ name = "charliebot-chat-threads"
 version = "0.1.0"
 dependencies = [
  "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-code-server"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -313,8 +331,10 @@ dependencies = [
  "anyhow",
  "axum",
  "bytes",
+ "charliebot-artifacts",
  "charliebot-backup",
  "charliebot-chat-threads",
+ "charliebot-code-server",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-diag",
@@ -329,6 +349,7 @@ dependencies = [
  "charliebot-terminal",
  "charliebot-trace",
  "charliebot-usage",
+ "charliebot-voice",
  "flate2",
  "futures-util",
  "http",
@@ -382,6 +403,18 @@ name = "charliebot-usage"
 version = "0.1.0"
 dependencies = [
  "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-voice"
+version = "0.1.0"
+dependencies = [
+ "charliebot-core",
+ "charliebot-registry",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

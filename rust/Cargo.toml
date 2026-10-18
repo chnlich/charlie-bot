@@ -40,6 +40,7 @@ publish = false
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
+bzip2 = "0.5"
 bytes = "1"
 libc = "0.2"
 flate2 = "1"
@@ -67,6 +68,7 @@ serde_yaml = "0.9"
 sha1 = "0.10"
 sha2 = "0.10"
 subtle = "2"
+tar = "0.4"
 tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "time", "process", "sync", "io-util"] }

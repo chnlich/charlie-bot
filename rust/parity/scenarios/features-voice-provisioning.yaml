@@ -1,0 +1,7 @@
+stage: features
+name: features-voice-provisioning
+steps:
+  - name: confirm server remains available after speech model provisioning
+    method: GET
+    path: /api/auth/status
+    expect_status: 200

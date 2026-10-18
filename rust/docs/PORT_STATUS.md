@@ -187,7 +187,7 @@ implemented.
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
 | service | `usage_tally` | features/usage | todo | |
 | service | `ext_usage` | features/usage | todo | |
-| service | `speech` | features/voice | todo | |
+| service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf provisioning is not ported`; warm-up events are deferred. |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
@@ -223,7 +223,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `memory/staging/` | features/memory | ported | Created by `ensure_store`; never read by a selection. |
 | `memory/staging/<stamp>-<sess8>-<slug>.md` | features/memory | not applicable | Written by `charliebot memory add`: the Python CLI stays (Trade-off 2). |
 | `memory-proposal/` | features/memory | not applicable | Created by `charliebot memory proposal open`: the Python CLI stays (Trade-off 2). |
-| `models/` speech assets | features/voice | todo | |
+| `models/` speech assets | features/voice | ported | Sherpa assets are verified and cached; `qwen3_hf` snapshot provisioning is not ported. |
 | `vendor/katex/katex.min.js` | foundation | todo | |
 | `voice_eval/<ts>/results.json` | features/voice | todo | |
 | `voice_eval/<ts>/summary.md` | features/voice | todo | |

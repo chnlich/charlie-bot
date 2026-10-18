@@ -17,11 +17,12 @@ use axum::extract::{Request, State};
 use axum::handler::Handler;
 use axum::response::Response;
 use axum::routing::{MethodRouter, get};
+use charliebot_compat::responses;
 use http::{StatusCode, header};
 
 use crate::app::ConnectionInfo;
+use crate::request_path;
 use crate::state::AppState;
-use crate::{request_path, responses};
 
 /// One route family.
 pub struct Family {

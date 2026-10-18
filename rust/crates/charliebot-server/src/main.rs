@@ -21,7 +21,6 @@ mod mimetypes;
 mod mimetypes_table;
 mod request_log;
 mod request_path;
-mod responses;
 mod routes;
 mod state;
 mod static_files;

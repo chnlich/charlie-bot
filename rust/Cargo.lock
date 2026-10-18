@@ -127,8 +127,12 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 name = "charliebot-compat"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "bytes",
  "charliebot-core",
+ "http",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -157,6 +161,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "charliebot-compat",
  "charliebot-core",
  "flate2",
  "futures-util",

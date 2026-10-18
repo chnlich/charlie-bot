@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_compat::responses;
 use charliebot_core::{paths, pyfmt, registry, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -22,7 +23,6 @@ use md5::{Digest, Md5};
 
 use crate::auth::header_text;
 use crate::mimetypes::MimeTypes;
-use crate::responses;
 
 /// `FileResponse.chunk_size`: a body at least this long goes out in more than one message.
 const CHUNK_SIZE: usize = 64 * 1024;

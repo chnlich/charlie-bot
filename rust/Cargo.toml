@@ -39,4 +39,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 uuid = { version = "1", features = ["v4"] }
 
+charliebot-compat = { path = "crates/charliebot-compat" }
 charliebot-core = { path = "crates/charliebot-core" }

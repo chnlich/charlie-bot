@@ -102,8 +102,8 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | POST | `/api/internal/improve` | features/improve | todo |  |
 | GET | `/ncu` | features/ncu | todo |  |
 | WS | `/ws/terminal` | features/terminal | ported |  |
-| GET | `/perfetto` | features/trace | todo |  |
-| GET | `/perfetto/merged` | features/trace | todo |  |
+| GET | `/perfetto` | features/trace | ported |  |
+| GET | `/perfetto/merged` | features/trace | ported |  |
 | GET | `/api/ext-usage` | features/usage | todo |  |
 | GET | `/token-usage` | features/usage | todo |  |
 | POST | `/api/voice/{session_id}/confirm` | features/voice | todo |  |
@@ -183,7 +183,7 @@ implemented.
 | service | `slack` | features/slack | todo | |
 | service | `discord` | features/discord | todo | |
 | service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
-| service | `merge_pool` | features/trace | todo | |
+| service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
 | service | `usage_tally` | features/usage | todo | |
 | service | `ext_usage` | features/usage | todo | |
 | service | `speech` | features/voice | todo | |
@@ -205,7 +205,10 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `state/writer_identity.json` | foundation | ported | |
 | `state/cron_alert_fingerprint.json` | features/cron | todo | |
 | `cache/cli_base_url.json` | foundation | todo | |
-| `cache/perfetto_merge/<sha256>.json.gz` | features/trace | todo | |
+| `cache/perfetto_merge/` | features/trace | ported | Cache directory for merged Perfetto traces. |
+| `cache/perfetto_merge/<sha256>.json.gz` | features/trace | ported | |
+| `/tmp/merge-chunks-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
+| `/tmp/merge-members-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `host_auth.json` | features/host_auth | ported | written atomically with `json.dumps(indent=2)` and a newline |
 | `usage/ledger.sqlite3` | features/usage | todo | |
 | `prompt_bodies/<sha256>.md` | agent-runtime | todo | |

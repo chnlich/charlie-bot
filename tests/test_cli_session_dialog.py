@@ -1,6 +1,8 @@
 """Tests for src/runtime/cli/session.py's dialog verb — block format, backward paging, bootstrap cursor."""
 
 import contextlib
+import json
+import sys
 from collections.abc import Iterator
 from unittest import mock
 
@@ -157,6 +159,29 @@ def test_dialog_ordinary_session_prints_history_without_events_call(
   out = capsys.readouterr().out
   assert "the whole ask" in out
   assert "the whole answer" in out
+
+
+def test_cancel_with_unobserved_run_prints_pid_and_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  response = {"id": "worker-1", "stopped_runs": [{"run_id": "run-1", "outcome": None}]}
+  monkeypatch.setattr(sys, "argv", ["charliebot", "cancel", "worker-1", "--reason", "stop", "--request-id", "cancel-1"])
+  monkeypatch.setattr(session.common, "post_internal_api", lambda *args, **kwargs: response)
+  monkeypatch.setattr(
+      session.common, "get_api", lambda endpoint, params: {
+          "items": [{
+              "id": "run-1",
+              "pid": 12345
+          }],
+          "next_cursor": None
+      })
+
+  with pytest.raises(SystemExit) as exit_info:
+    session.main()
+
+  captured = capsys.readouterr()
+  assert exit_info.value.code == 1
+  assert json.loads(captured.out) == response
+  assert "run run-1 pid 12345" in captured.err
 
 
 def test_dialog_archived_session_starts_from_bootstrap_cursor(

@@ -1156,7 +1156,7 @@ async def create_scheduled_node(tree: task_sessions.TaskTreeManager, *, name: st
 
 def live_subprocess() -> subprocess.Popen:
   """An owned, isolated sleeper: the only process identity any test here signals."""
-  return subprocess.Popen(["/bin/sleep", "30"])
+  return subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
 
 
 def run_git(cwd: Path | str, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:

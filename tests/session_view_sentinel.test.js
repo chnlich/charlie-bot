@@ -171,10 +171,10 @@ test('programmatic scroll restore does not trigger another fetch', async () => {
   assert.equal(fetchCount, 1, 'programmatic scroll must not trigger another fetch');
 });
 
-test('viewport fill stops at 5 consecutive auto-loads', async () => {
+test('viewport fill keeps loading while the list is short, until the history ends', async () => {
   const messages = makeMessages({scrollTop: 0, scrollHeight: 100, clientHeight: 100});
   let fetchCount = 0;
-  const {context} = buildContext({
+  const {context, elements} = buildContext({
     elements: new Map([['messages', messages]]),
     fetch: async (url) => {
       fetchCount++;
@@ -202,8 +202,66 @@ test('viewport fill stops at 5 consecutive auto-loads', async () => {
   // renderSessionViewWith resets scrollTop to 0.
 
   await context.Sidebar.loadOlderIfNeeded(messages);
-  // 1 initial fetch + 5 viewport fills = 6 total.
-  assert.equal(fetchCount, 6, `expected 6 fetches (1 initial + 5 fills), got ${fetchCount}`);
+  // The container stays shorter than its viewport, so no count bounds the chain:
+  // one fetch per cursor step from 100 to the history's first event.
+  assert.equal(fetchCount, 100, `expected a fetch for each of the 100 cursor steps, got ${fetchCount}`);
+  assert.ok(!findSentinel(elements), 'the last page ended the history and removed the sentinel');
+});
+
+test('first paint loads nothing into a hidden list', async () => {
+  // A hidden (display: none) container reports no height at all, so it also reads as shorter than its viewport.
+  const messages = makeMessages({scrollTop: 0, scrollHeight: 0, clientHeight: 0});
+  const fetched = [];
+  const {context, elements} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async (url) => {
+      fetched.push(url);
+      return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+    },
+  });
+
+  renderStaleBootstrap(context, messages, {oldest_message_ordinal: 4});
+
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(fetched.length, 0, 'a hidden list has no viewport to fill');
+  assert.equal(findSentinel(elements).getAttribute('data-state'), 'idle');
+});
+
+test('viewport fill stops when the list is hidden in the middle of the chain', async () => {
+  const messages = makeMessages({scrollTop: 0, scrollHeight: 100, clientHeight: 100});
+  const fetched = [];
+  const {context} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async (url) => {
+      fetched.push(url);
+      const before = parseInt(url.match(/before=(\d+)/)[1], 10);
+      // The third page's answer finds the list hidden: display: none reports no height.
+      if (fetched.length === 3) {
+        messages.clientHeight = 0;
+        messages.scrollHeight = 0;
+      }
+      return {
+        ok: true,
+        async json() {
+          return {
+            has_more: before - 1 > 0,
+            next_before: before - 1,
+            messages: [{id: `msg-${before}`, role: 'user', content: `m${before}`, event_index: before}],
+          };
+        },
+      };
+    },
+    autoTimeout: true,
+  });
+
+  renderSessionViewWith(context, new Map([['messages', messages]]), true, {
+    oldestOrdinal: 100, eventCount: 101,
+  });
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+
+  assert.equal(fetched.length, 3, 'the chain asked for no page once the list was hidden');
 });
 
 test('successful page with no more messages removes the sentinel', async () => {

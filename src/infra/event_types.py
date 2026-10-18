@@ -183,6 +183,8 @@ TASK_IMPORTED = "task_imported"
 # close after the last one. They exist only in the projected event list and on
 # the wire — never appended to any events file on disk.
 RUN_HEADER = "run_header"
+RUN_END = "run_end"
+RUN_ERROR = "run_error"
 RUN_DELIVERY = "run_delivery"
 # An operator's durable confirmation that specific task inputs were actually
 # handled out-of-band. The event names the exact input ids; the fold treats

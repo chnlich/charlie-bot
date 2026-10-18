@@ -5,7 +5,7 @@ import datetime
 import json
 import pathlib
 import uuid
-from typing import get_args
+from typing import Literal, get_args
 
 import fastapi
 import pydantic
@@ -61,11 +61,23 @@ def _default_backend_id(cfg: config.CharlieBotConfig) -> str:
   return cfg.backends.options[0].id if cfg.backends.options else "claude"
 
 
+def displayed_backend_id(meta: models.SessionMetadata) -> str:
+  """The backend id a session displays: the one rule every backend reader routes through.
+
+  A worker session displays its newest Run's backend from thinking_state's display map (the delegation's
+  target model, never the inherited creation value), or its configured backend when no Run is known. Every
+  other session displays its configured backend. The map keeps recording the newest Run's backend for every
+  session; only this function decides which one a session shows.
+  """
+  if meta.profile == "worker":
+    return thinking_state.run_backend(meta.id) or meta.backend
+  return meta.backend
+
+
 def _active_backend_payload(meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> dict:
-  # A worker node displays its newest Run's backend (the delegation's target
-  # model), never the inherited creation value the persisted field carries.
+  # The displayed-backend rule lives in displayed_backend_id.
   binding = sequence_controllers.binding_for(meta.id)
-  active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
+  active_backend = displayed_backend_id(meta) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
       "active_backend":
@@ -113,6 +125,10 @@ def _bootstrap_payload(bootstrap: message_utils.SessionBootstrapData, cfg: confi
       "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
       "has_more": bootstrap.has_more,
   }
+  # A worker node's summary card rides the first paint; the same object the
+  # transcript poll serves as ``summary``.
+  if bootstrap.worker_summary is not None:
+    payload["worker_summary"] = bootstrap.worker_summary
   payload.update(_active_backend_payload(bootstrap.session, cfg))
   return payload
 
@@ -316,11 +332,10 @@ async def _sessions_list_response(
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
-    # A worker row displays its newest Run's backend (the delegation's target
-    # model), never the inherited creation value; every other row keeps its
-    # own persisted backend. The in-memory read rides the overlay tuple so a
-    # backend change re-renders the memoized body.
-    display_backend = (thinking_state.run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
+    # The row's displayed backend follows the rule in displayed_backend_id. The
+    # in-memory read rides the overlay tuple so a backend change re-renders the
+    # memoized body.
+    display_backend = displayed_backend_id(row)
     # Both datetimes ride the model's JSON scheme (pydantic-core renders datetime.UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(
@@ -767,6 +782,19 @@ class SessionDetailResponse(models.SessionMetadata):
   prompt_rules: dict = {}
 
 
+class StoppedRunResponse(pydantic.BaseModel):
+  """One Run stopped by POST /api/sessions/{id}/cancel."""
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  run_id: str
+  outcome: Literal["interrupted", "never_launched"] | None
+
+
+class CancelSessionResponse(SessionDetailResponse):
+  """POST /api/sessions/{id}/cancel response."""
+  stopped_runs: list[StoppedRunResponse]
+
+
 class TreePageResponse(pydantic.BaseModel):
   """GET /api/sessions/tree response."""
   items: list[models.SessionRow]
@@ -1132,6 +1160,7 @@ async def get_session_transcript(
           "revision": entry.revision,
           "reset": reset,
           "active_run_id": entry.active_run_id,
+          "summary": entry.summary,
           "thinking_since": thinking_since.isoformat() if thinking_since else None,
       })
 
@@ -1803,27 +1832,28 @@ async def _completed_session_detail(task_mgr: task_sessions.TaskTreeManager, ses
     raise _task_http_error(e) from e
 
 
-@router.post("/{session_id}/cancel", response_model=SessionDetailResponse)
+@router.post("/{session_id}/cancel", response_model=CancelSessionResponse)
 async def cancel_session_task(
     session_id: str,
     req: models.CancelTaskRequest,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
     caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
-) -> SessionDetailResponse:
+) -> CancelSessionResponse:
   """Explicit cancellation with reason, preserving evidence.
 
   An operator cancels any open task; a run-token agent cancels only a direct
-  child of its own task (403 otherwise). Active/unresolved execution or open
-  children return 409; the subtree is not recursively stopped (Run cancel
-  stays the separate operation).
+  child of its own task (403 otherwise). A worker target stops its non-terminal
+  Runs and ends the delegation. A manager target keeps its current blockers.
   """
   try:
-    await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)
+    result = await task_mgr.completion.cancel_task(
+        session_id, request_id=req.request_id, reason=req.reason, caller=caller)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
-          task_errors.TaskConflictError) as e:
+          task_errors.TaskConflictError, runs.RunIdentityConflictError) as e:
     raise _task_http_error(e) from e
-  return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
+  detail = await _completed_session_detail(task_mgr, session_id)
+  return CancelSessionResponse.model_validate({**detail, "stopped_runs": result.get("stopped_runs", [])})
 
 
 def _require_own_run_scope(caller: run_token.CallerIdentity, session_id: str, run_id: str) -> None:

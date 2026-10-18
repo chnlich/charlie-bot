@@ -59,6 +59,10 @@ function loadSessionContext({elements, BACKEND_OPTIONS, SESSION_ID, fetchImpl}) 
     JSON_HEADERS: {'Content-Type': 'application/json'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     fetch: fetchImpl || (() => Promise.resolve({ ok: true, async json() { return { id: SESSION_ID, backend: SESSION_ID }; } })),
+    // session-view.js registers its stream-draft mode with usage.js and its
+    // projection check with the turn engine at load; this harness loads neither
+    // usage.js nor the chat modules.
+    Chat: { setStreamDraftModeSupplier() {}, registerProjectionCheck() {} },
   };
   vm.createContext(context);
   vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });

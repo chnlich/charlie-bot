@@ -1325,6 +1325,10 @@ video {
   border-color: rgb(239 68 68 / var(--tw-border-opacity, 1));
 }
 
+.border-red-700\/30 {
+  border-color: rgb(185 28 28 / 0.3);
+}
+
 .border-red-700\/50 {
   border-color: rgb(185 28 28 / 0.5);
 }
@@ -1558,6 +1562,10 @@ video {
 .bg-red-800 {
   --tw-bg-opacity: 1;
   background-color: rgb(153 27 27 / var(--tw-bg-opacity, 1));
+}
+
+.bg-red-900\/20 {
+  background-color: rgb(127 29 29 / 0.2);
 }
 
 .bg-red-900\/40 {

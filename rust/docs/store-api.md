@@ -184,6 +184,11 @@ variant carries no list. A refusal from `check_task_authorization` is `forbidden
 `create_task` without a name takes `Session N` from `sessions/.counter`. An unreadable or unparsable counter takes
 the session-directory count and is then rewritten with the next number, as Python's `_next_session_name` does.
 
+Each control fact notifies the sidebar with its type after it is durable: `append_control_fact` sends
+`task_tree_changed` with the fact's type, and `create_task` sends `task_created` after its publish and index
+invalidation. A replayed create notifies nothing. A failed notification logs `task_tree_changed_broadcast_failed` and
+the write still succeeds.
+
 ## Runtime event bus, message model, and busy state (S4, implemented)
 
 | Rust API | Python source |
@@ -193,6 +198,7 @@ the session-directory count and is then rewritten with the next number, as Pytho
 | `subscribe(&self, channel: &str) -> Subscription`; `unsubscribe(&self, subscription: &mut Subscription)`; `broadcast(&self, channel: &str, frame: Value) -> StoreResult<()>` | `src/runtime/streaming.py::StreamingManager.subscribe`, `unsubscribe`, `broadcast` |
 | `session_channel(session_id: &str) -> String`; `SIDEBAR_CHANNEL`; `STREAM_COALESCE_INTERVAL` | `src/runtime/streaming.py` session/sidebar channels and `_STREAM_COALESCE_INTERVAL` |
 | `broadcast_only(&self, session_id: &str, frame: Value) -> StoreResult<()>`; `broadcast_sidebar(&self, session_id: &str, event_type: &str, fields: Map<String, Value>) -> StoreResult<()>`; `broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()>` | `src/runtime/session_events.py::broadcast_only`, `broadcast_sidebar`, `broadcast_task_tree_changed` |
+| `notify_task_tree_changed(&self, session_id: &str, event_type: Option<&str>)` (best effort, no result) | `src/runtime/control_sink.py::ControlEventSink.notify_tree_changed` |
 | `load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)>`; `load_chat_events_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<(Vec<ChatEvent>, bool)>`; `get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize>` | `src/runtime/session_events.py` event count, tail, and range reads; `src/runtime/chat_events.py` |
 | `get_message_projection(&self, session_id: &str) -> StoreResult<Option<Arc<MessageProjection>>>`; `projection_memo_hit(&self, session_id: &str) -> Option<Arc<MessageProjection>>` | `src/runtime/session_events.py` message projection memo |
 | `MessageAggregator::{new, with_renderers, feed, feed_indexed, flush_pending, pending_draft_message}` | `src/runtime/message_aggregator.py::MessageAggregator` |
@@ -231,5 +237,7 @@ exposed as `raw_metadata_scan`.
   window.
 - The session counter parses a signed 64-bit integer. Python's `int()` also accepts digit underscores and larger
   values; here such a counter takes the session-directory count.
-- The task-tree writes (`create_task`, `archive_unsuccessful_worker`, `archive_subtree`) do not send Python's
-  best-effort task-tree-changed notification after each control fact. The sidebar task owns that wiring.
+- Three explicit Python task-tree notifications have no sender in this crate. The metadata patch
+  (`task_sessions.py:1424`) has no Rust operation yet. A run's first launch (`runs.py:891`) is not sent by
+  `record_launch`. A fork (`session_fork.py:435`) belongs to the fork port. Each will send through
+  `notify_task_tree_changed`.

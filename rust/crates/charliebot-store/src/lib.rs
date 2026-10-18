@@ -44,33 +44,86 @@ use std::fmt;
 /// Store operation result.
 pub type StoreResult<T> = Result<T, StoreError>;
 
-/// An input, serialization, filesystem, or hook error from the store.
+/// A store refusal or failure. The refusal variants name the Python class they answer, and `status_code` gives the
+/// HTTP status the routes map it to (`src/runtime/api/sessions.py::_task_http_error`). `Failure` covers I/O,
+/// serialization, corrupt-state and hook errors, which carry no status.
 #[derive(Debug)]
-pub struct StoreError {
-  message: String,
-  status_code: Option<u16>,
+pub enum StoreError {
+  /// An input, serialization, filesystem, or hook error.
+  Failure(String),
+  /// A missing task, session, or run: `TaskNotFoundError` and `RunNotFoundError` (404).
+  NotFound(String),
+  /// A malformed request: `TaskInvalidError` (400).
+  Invalid(String),
+  /// A refused caller identity or role: `TaskForbiddenError` and `DelegationBlockedError` (403).
+  Forbidden(String),
+  /// Machine input to the archived node with this session id: `TaskArchivedError` (409). Its detail is the sentence
+  /// alone, so it carries no blocker list.
+  Archived(String),
+  /// A lifecycle conflict with its blockers: `TaskConflictError` and `RunIdentityConflictError` (409).
+  Conflict(Vec<String>),
 }
 
 impl StoreError {
-  /// Construct an error with its public message.
+  /// Construct a failure with its public message.
   pub fn new(message: impl Into<String>) -> Self {
-    Self { message: message.into(), status_code: None }
+    Self::Failure(message.into())
   }
 
   /// Construct a client-visible not-found error.
   pub fn not_found(detail: impl Into<String>) -> Self {
-    Self { message: detail.into(), status_code: Some(404) }
+    Self::NotFound(detail.into())
+  }
+
+  /// Construct a client-visible invalid-request error.
+  pub fn invalid(detail: impl Into<String>) -> Self {
+    Self::Invalid(detail.into())
+  }
+
+  /// Construct a client-visible refusal of the caller's identity or role.
+  pub fn forbidden(detail: impl Into<String>) -> Self {
+    Self::Forbidden(detail.into())
+  }
+
+  /// Construct the refusal for machine input to the archived node `session_id`.
+  pub fn archived(session_id: impl Into<String>) -> Self {
+    Self::Archived(session_id.into())
+  }
+
+  /// Construct a conflict with its blockers; its detail joins them with `; `.
+  pub fn conflict(blockers: Vec<String>) -> Self {
+    Self::Conflict(blockers)
   }
 
   /// Return the HTTP status associated with this error, when one exists.
   pub fn status_code(&self) -> Option<u16> {
-    self.status_code
+    match self {
+      Self::Failure(_) => None,
+      Self::NotFound(_) => Some(404),
+      Self::Invalid(_) => Some(400),
+      Self::Forbidden(_) => Some(403),
+      Self::Archived(_) | Self::Conflict(_) => Some(409),
+    }
+  }
+
+  /// Return a conflict's blockers, the list its 409 body carries.
+  pub fn blockers(&self) -> Option<&[String]> {
+    match self {
+      Self::Conflict(blockers) => Some(blockers),
+      _ => None,
+    }
   }
 }
 
 impl fmt::Display for StoreError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str(&self.message)
+    match self {
+      Self::Failure(message) | Self::NotFound(message) | Self::Invalid(message) | Self::Forbidden(message) => {
+        f.write_str(message)
+      }
+      Self::Archived(session_id) => write!(f, "task {session_id} is archived"),
+      Self::Conflict(blockers) => f.write_str(&blockers.join("; ")),
+    }
   }
 }
 

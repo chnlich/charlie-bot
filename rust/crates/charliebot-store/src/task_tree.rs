@@ -17,6 +17,8 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
 const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
+/// The refusal for an agent create outside its own open manager task (`task_sessions.AGENT_CREATE_SCOPE_REFUSAL`).
+const AGENT_CREATE_SCOPE_REFUSAL: &str = "an agent may only create a task directly under its own open manager task";
 
 /// One create request, including its stable identity inputs.
 #[derive(Clone, Debug)]
@@ -134,7 +136,7 @@ impl Store {
 
   /// Read one required task node through the metadata cache.
   pub async fn load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata> {
-    self.load_meta(session_id).await?.ok_or_else(|| StoreError::new(format!("task {session_id} not found")))
+    self.load_meta(session_id).await?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
   }
 
   /// Return the selected home’s immutable prompt body directory.
@@ -169,7 +171,7 @@ impl Store {
   pub fn child_ids(&self, session_id: &str) -> StoreResult<Vec<String>> {
     let index = self.tree_index()?;
     if !index.metas.contains_key(session_id) {
-      return Err(StoreError::new(format!("task {session_id} not found")));
+      return Err(StoreError::not_found(format!("task {session_id} not found")));
     }
     Ok(index.children.get(&Some(session_id.to_string())).cloned().unwrap_or_default())
   }
@@ -209,12 +211,13 @@ impl Store {
       }
     }
     if !closed.is_empty() {
-      return Err(StoreError::new(format!("closed ancestor task(s): {}", closed.join(", "))));
+      return Err(StoreError::conflict(vec![format!("closed ancestor task(s): {}", closed.join(", "))]));
     }
     Ok(ancestors)
   }
 
-  /// Return the nearest node on the open manager chain that holds a real user message.
+  /// Return the nearest node on the open manager chain that holds a real user message. A refusal is
+  /// `forbidden`: `takeoff_gate.DelegationBlockedError` is a 403 on every route.
   pub fn check_task_authorization(&self, session_id: &str) -> StoreResult<String> {
     let index = self.tree_index()?;
     let mut current = session_id.to_string();
@@ -225,14 +228,14 @@ impl Store {
         metadata.map_or((None, None), |meta| (meta.task_parent_id.as_deref(), Some(meta.profile)));
       let is_start = current == session_id;
       if is_start && profile != Some(TaskProfile::Manager) {
-        return Err(StoreError::new(format!(
+        return Err(StoreError::forbidden(format!(
           "task {current} is not a manager; agent calls run only under a manager task"
         )));
       }
       let state = if metadata.is_some() { self.task_state(&current)? } else { "open".to_string() };
       if state != "open" {
         let kind = if is_start { "task" } else { "ancestor task" };
-        return Err(StoreError::new(format!("Delegation blocked: {kind} {current} is {state}; open it first")));
+        return Err(StoreError::forbidden(format!("Delegation blocked: {kind} {current} is {state}; open it first")));
       }
       if user_node.is_none() && holds_real_user_message(&self.load_all_facts(&current)?) {
         user_node = Some(current.clone());
@@ -242,7 +245,7 @@ impl Store {
       };
       current = parent_id.to_string();
     }
-    Err(StoreError::new(format!(
+    Err(StoreError::forbidden(format!(
       "Delegation blocked: the task chain from task {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} hops without reaching a root"
     )))
   }
@@ -251,14 +254,14 @@ impl Store {
   pub fn runtime_gate(&self, request: &CreateTask, caller: &TaskCaller) -> StoreResult<()> {
     let TaskCaller::Agent { session_id } = caller else { return Ok(()) };
     if request.session_id.is_some() {
-      return Err(StoreError::new("an agent may only create a task directly under its own open manager task"));
+      return Err(StoreError::forbidden(AGENT_CREATE_SCOPE_REFUSAL));
     }
     if request.task_parent_id.as_deref() != Some(session_id.as_str()) {
-      return Err(StoreError::new("an agent may only create a task directly under its own open manager task"));
+      return Err(StoreError::forbidden(AGENT_CREATE_SCOPE_REFUSAL));
     }
     let parent = self.read_metadata_fresh(session_id)?;
     if parent.as_ref().is_none_or(|meta| meta.profile != TaskProfile::Manager) {
-      return Err(StoreError::new("an agent may only create a task directly under its own open manager task"));
+      return Err(StoreError::forbidden(AGENT_CREATE_SCOPE_REFUSAL));
     }
     if request.profile == TaskProfile::Worker && !is_read_only_exempt(request.task.as_ref()) {
       self.check_task_authorization(session_id)?;
@@ -274,10 +277,10 @@ impl Store {
     slot_values: Map<String, Value>,
   ) -> StoreResult<SessionMetadata> {
     if request.request_id.is_empty() {
-      return Err(StoreError::new("request_id is required for task creation"));
+      return Err(StoreError::invalid("request_id is required for task creation"));
     }
     if !matches!(request.profile, TaskProfile::Manager | TaskProfile::Worker) {
-      return Err(StoreError::new("profile must be 'manager' or 'worker'"));
+      return Err(StoreError::invalid("profile must be 'manager' or 'worker'"));
     }
     let task_id = request
       .session_id
@@ -298,14 +301,15 @@ impl Store {
     let parent_meta = match request.task_parent_id.as_deref() {
       None => None,
       Some(parent_id) => {
-        let parent =
-          self.read_metadata_fresh(parent_id)?.ok_or_else(|| StoreError::new(format!("task {parent_id} not found")))?;
+        let parent = self
+          .read_metadata_fresh(parent_id)?
+          .ok_or_else(|| StoreError::not_found(format!("task {parent_id} not found")))?;
         if parent.profile == TaskProfile::Worker {
-          return Err(StoreError::new(format!("parent task {parent_id} is not a manager")));
+          return Err(StoreError::invalid(format!("parent task {parent_id} is not a manager")));
         }
         let parent_state = self.task_state(parent_id)?;
         if parent_state != "open" {
-          return Err(StoreError::new(format!("parent task {parent_id} is {parent_state}")));
+          return Err(StoreError::conflict(vec![format!("parent task {parent_id} is {parent_state}")]));
         }
         self.require_open_ancestry(parent_id)?;
         Some(parent)
@@ -362,7 +366,7 @@ impl Store {
     let metadata = self
       .update_slot_fields_locked(guard, session_id, owner, values)
       .await?
-      .ok_or_else(|| StoreError::new(format!("session {session_id} not found")))?;
+      .ok_or_else(|| StoreError::not_found(format!("session {session_id} not found")))?;
     self.invalidate_tree_index();
     Ok(metadata)
   }
@@ -383,7 +387,7 @@ impl Store {
       })
       .await?;
     if updated.is_none() {
-      return Err(StoreError::new(format!("session {session_id} not found")));
+      return Err(StoreError::not_found(format!("session {session_id} not found")));
     }
     self.invalidate_tree_index();
     Ok(())
@@ -432,7 +436,7 @@ impl Store {
         Ok(true)
       })
       .await?
-      .ok_or_else(|| StoreError::new(format!("session {session_id} not found")))?;
+      .ok_or_else(|| StoreError::not_found(format!("session {session_id} not found")))?;
     self.invalidate_tree_index();
     Ok(result)
   }
@@ -551,7 +555,8 @@ impl Store {
   ) -> StoreResult<bool> {
     self.require_control_guard(guard)?;
     let index = self.tree_index()?;
-    let meta = index.metas.get(session_id).ok_or_else(|| StoreError::new(format!("task {session_id} not found")))?;
+    let meta =
+      index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
     if meta.profile != TaskProfile::Worker || self.task_state(session_id)? != "open" {
       return Ok(false);
     }
@@ -592,14 +597,14 @@ impl Store {
   /// archived node's sequence binding then runs its archive duty, in the same order.
   pub async fn archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>> {
     if caller != TaskCaller::Operator {
-      return Err(StoreError::new("archiving a task requires operator credentials"));
+      return Err(StoreError::forbidden("archiving a task requires operator credentials"));
     }
     let guard = self.control_lock().await;
     // Rebuild from disk under the lock: the cache can predate writes that another process made.
     self.invalidate_tree_index();
     let index = self.tree_index()?;
     if !index.metas.contains_key(session_id) {
-      return Err(StoreError::new(format!("task {session_id} not found")));
+      return Err(StoreError::not_found(format!("task {session_id} not found")));
     }
     if self.task_state(session_id)? != "open" {
       return Ok(Vec::new());
@@ -614,7 +619,7 @@ impl Store {
     }
     if !blocked.is_empty() {
       blocked.sort();
-      return Err(StoreError::new(blocked.join("; ")));
+      return Err(StoreError::conflict(blocked));
     }
     let request_id = format!("archive-{}", uuid::Uuid::new_v4());
     let mut archived = Vec::new();
@@ -649,7 +654,7 @@ impl Store {
     }
     let source = self
       .read_metadata_fresh(source_session_id)?
-      .ok_or_else(|| StoreError::new(format!("session {source_session_id} not found")))?;
+      .ok_or_else(|| StoreError::not_found(format!("session {source_session_id} not found")))?;
     let slot = self
       .slots
       .iter()
@@ -677,7 +682,7 @@ impl Store {
       })
       .await?;
     if updated.is_none() {
-      return Err(StoreError::new(format!("session {new_session_id} not found")));
+      return Err(StoreError::not_found(format!("session {new_session_id} not found")));
     }
     self.invalidate_tree_index();
     Ok(true)
@@ -935,15 +940,17 @@ fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>>
   let mut chain = Vec::new();
   let mut seen = HashSet::from([session_id.to_string()]);
   let mut current =
-    index.metas.get(session_id).ok_or_else(|| StoreError::new(format!("task {session_id} not found")))?;
+    index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
   while let Some(parent_id) = current.task_parent_id.as_deref() {
     if !seen.insert(parent_id.to_string()) {
-      return Err(StoreError::new(format!("task relation cycle through {parent_id}")));
+      return Err(StoreError::conflict(vec![format!("task relation cycle through {parent_id}")]));
     }
-    current = index.metas.get(parent_id).ok_or_else(|| StoreError::new(format!("task {parent_id} not found")))?;
+    current = index.metas.get(parent_id).ok_or_else(|| StoreError::not_found(format!("task {parent_id} not found")))?;
     chain.push(parent_id.to_string());
     if chain.len() > TASK_ANCESTOR_HOP_LIMIT {
-      return Err(StoreError::new(format!("ancestor chain of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} hops")));
+      return Err(StoreError::conflict(vec![format!(
+        "ancestor chain of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} hops"
+      )]));
     }
   }
   Ok(chain)
@@ -951,7 +958,7 @@ fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>>
 
 fn descendant_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
   if !index.metas.contains_key(session_id) {
-    return Err(StoreError::new(format!("task {session_id} not found")));
+    return Err(StoreError::not_found(format!("task {session_id} not found")));
   }
   let children_of = |parent: &str| index.children.get(&Some(parent.to_string())).cloned().unwrap_or_default();
   let mut output = Vec::new();
@@ -959,12 +966,14 @@ fn descendant_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String
   let mut seen = HashSet::from([session_id.to_string()]);
   while let Some(next) = stack.pop() {
     if !seen.insert(next.clone()) {
-      return Err(StoreError::new(format!("task relation cycle through {next}")));
+      return Err(StoreError::conflict(vec![format!("task relation cycle through {next}")]));
     }
     output.push(next.clone());
     stack.extend(children_of(&next));
     if output.len() > TASK_ANCESTOR_HOP_LIMIT {
-      return Err(StoreError::new(format!("subtree of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} nodes")));
+      return Err(StoreError::conflict(vec![format!(
+        "subtree of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} nodes"
+      )]));
     }
   }
   Ok(output)
@@ -975,9 +984,10 @@ fn archived_of(store: &Store, index: &TreeIndex, session_id: &str) -> StoreResul
   let mut seen = HashSet::new();
   loop {
     if !seen.insert(current_id.to_string()) || seen.len() > TASK_ANCESTOR_HOP_LIMIT + 1 {
-      return Err(StoreError::new(format!("task relation cycle through {current_id}")));
+      return Err(StoreError::conflict(vec![format!("task relation cycle through {current_id}")]));
     }
-    let meta = index.metas.get(current_id).ok_or_else(|| StoreError::new(format!("task {current_id} not found")))?;
+    let meta =
+      index.metas.get(current_id).ok_or_else(|| StoreError::not_found(format!("task {current_id} not found")))?;
     if store.task_state(current_id)? != "open" {
       return Ok(true);
     }
@@ -1127,7 +1137,7 @@ fn holds_real_user_message(events: &[Value]) -> bool {
 }
 
 fn no_user_message_error(session_id: &str) -> StoreError {
-  StoreError::new(format!(
+  StoreError::forbidden(format!(
     "Delegation blocked: no user request on the task chain from task {session_id} to its root. A delegation serves a line that a real user message started; agent messages, scheduled triggers and child reports do not count."
   ))
 }
@@ -1896,7 +1906,10 @@ mod tests {
 
     let error = store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap_err();
 
-    assert_eq!(error.to_string(), format!("{}: run queued-run is queued (pending dispatch)", leaf.id));
+    let blocker = format!("{}: run queued-run is queued (pending dispatch)", leaf.id);
+    assert_eq!(error.to_string(), blocker);
+    assert_eq!(error.status_code(), Some(409));
+    assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
     for node in [&root.id, &mid.id, &leaf.id] {
       assert_eq!(store.task_state(node).unwrap(), "open");
       assert!(store.load_chat_events_sync(node).unwrap().iter().all(|event| event["type"] != "task_closed"));
@@ -1913,9 +1926,133 @@ mod tests {
     for caller in [TaskCaller::System, TaskCaller::Agent { session_id: root.id.clone() }] {
       let error = store.archive_subtree(&root.id, caller).await.unwrap_err();
       assert_eq!(error.to_string(), "archiving a task requires operator credentials");
+      assert_eq!(error.status_code(), Some(403));
     }
     assert_eq!(store.task_state(&root.id).unwrap(), "open");
     assert!(store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"] != "task_closed"));
+  }
+
+  #[tokio::test]
+  async fn agent_create_refusals_are_forbidden_with_python_text() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "agent-root", None, TaskProfile::Manager).await;
+    let other = create_node(&store, "other-root", None, TaskProfile::Manager).await;
+    let caller = TaskCaller::Agent { session_id: root.id.clone() };
+
+    // `task_sessions.AGENT_CREATE_SCOPE_REFUSAL`: a create outside the caller's own manager task.
+    let foreign = CreateTask {
+      request_id: "foreign-child".to_string(),
+      task_parent_id: Some(other.id.clone()),
+      profile: TaskProfile::Manager,
+      task: None,
+      name: None,
+      backend: Some("synthetic".to_string()),
+      group: None,
+      session_id: None,
+    };
+    let error = store.create_task(foreign, caller.clone(), Map::new()).await.unwrap_err();
+    assert_eq!(error.to_string(), "an agent may only create a task directly under its own open manager task");
+    assert_eq!(error.status_code(), Some(403));
+
+    // `takeoff_gate.DelegationBlockedError`: an implementation worker with no user request on its chain.
+    let gated = CreateTask {
+      request_id: "gated-worker".to_string(),
+      task_parent_id: Some(root.id.clone()),
+      profile: TaskProfile::Worker,
+      task: None,
+      name: None,
+      backend: Some("synthetic".to_string()),
+      group: None,
+      session_id: None,
+    };
+    let error = store.create_task(gated, caller, Map::new()).await.unwrap_err();
+    assert!(error.to_string().starts_with("Delegation blocked: no user request on the task chain"));
+    assert_eq!(error.status_code(), Some(403));
+  }
+
+  #[tokio::test]
+  async fn create_under_an_archived_parent_is_a_conflict_naming_the_parent() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+
+    // `task_sessions.create_task`: a closed parent is a `TaskConflictError` whose one blocker names the state.
+    let late = CreateTask {
+      request_id: "late-child".to_string(),
+      task_parent_id: Some(root.id.clone()),
+      profile: TaskProfile::Worker,
+      task: None,
+      name: None,
+      backend: Some("synthetic".to_string()),
+      group: None,
+      session_id: None,
+    };
+    let error = store.create_task(late, TaskCaller::System, Map::new()).await.unwrap_err();
+
+    let blocker = format!("parent task {} is archived", root.id);
+    assert_eq!(error.to_string(), blocker);
+    assert_eq!(error.status_code(), Some(409));
+    assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
+  }
+
+  #[test]
+  fn archived_refusal_is_python_s_plain_sentence_without_blockers() {
+    // `task_errors.TaskArchivedError`, raised for machine input to an archived node such as a report to an
+    // archived parent: the 409 detail is this sentence alone.
+    let error = StoreError::archived("node-a");
+
+    assert_eq!(error.to_string(), "task node-a is archived");
+    assert_eq!(error.status_code(), Some(409));
+    assert_eq!(error.blockers(), None);
+  }
+
+  #[tokio::test]
+  async fn invalid_create_requests_are_400_with_python_text() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let worker = create_node(&store, "worker", None, TaskProfile::Worker).await;
+
+    let empty_id = CreateTask {
+      request_id: String::new(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: None,
+      backend: Some("synthetic".to_string()),
+      group: None,
+      session_id: None,
+    };
+    let error = store.create_task(empty_id, TaskCaller::System, Map::new()).await.unwrap_err();
+    assert_eq!(error.to_string(), "request_id is required for task creation");
+    assert_eq!(error.status_code(), Some(400));
+
+    // `TaskInvalidError("parent task <id> is not a manager")`: a worker cannot parent a task.
+    let under_worker = CreateTask {
+      request_id: "under-worker".to_string(),
+      task_parent_id: Some(worker.id.clone()),
+      profile: TaskProfile::Worker,
+      task: None,
+      name: None,
+      backend: Some("synthetic".to_string()),
+      group: None,
+      session_id: None,
+    };
+    let error = store.create_task(under_worker, TaskCaller::System, Map::new()).await.unwrap_err();
+    assert_eq!(error.to_string(), format!("parent task {} is not a manager", worker.id));
+    assert_eq!(error.status_code(), Some(400));
+  }
+
+  #[tokio::test]
+  async fn absent_task_is_a_404_with_python_text() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+
+    let error = store.load_task_meta("missing").await.unwrap_err();
+
+    assert_eq!(error.to_string(), "task missing not found");
+    assert_eq!(error.status_code(), Some(404));
   }
 
   #[tokio::test]

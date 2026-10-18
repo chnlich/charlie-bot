@@ -198,6 +198,13 @@ FILE_RULES: tuple[FieldRule, ...] = (
         reason="duration: process startup and event polling differ between independent runs",
     ),
     FieldRule(
+        name="master-done-thinking-seconds",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="thinking_seconds",
+        when=(("type", "master_done"),),
+        reason="duration: whole seconds of the busy interval, timed on each server's clock, differ between runs",
+    ),
+    FieldRule(
         name="session-updated-time",
         target="home/sessions/*/metadata.json",
         field="updated_at",

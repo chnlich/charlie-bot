@@ -383,7 +383,7 @@ async def test_task_refusal_writes_an_error_event_carrying_quota_exhausted(
   cfg, session_blocks, tree = tte.build_pooled_env(tmp_path, monkeypatch, labels=labels)
   for label in failed_login_labels:
     conftest.write_pool_credentials(tmp_path / f"claude-{label}", access_token="")
-  task_session = await tte.create_task(
+  task_session = await conftest.create_task(
       tree,
       parent=None,
       request_id="w",

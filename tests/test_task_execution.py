@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 
+import conftest
 import fastapi
 import pytest
 from conftest import (
@@ -35,14 +36,11 @@ from conftest import (
     build_execution_adapter,
     build_session_blocks,
     build_task_tree,
-    create_task,
     init_repo_with_origin,
-    install_scripted_backends,
     make_transcript,
     override_session_blocks,
     pool_cfg,
     rate_limit_event,
-    run_git,
     stub_credentials,
     user_tool_result_event,
 )
@@ -289,8 +287,8 @@ def implement_marker_commit(tree: task_sessions.TaskTreeManager, worker_id: str)
   """The implement backend's side effect: commit marker.txt on the work branch."""
   wt = work_run_worktree(tree, worker_id)
   (wt / "marker.txt").write_text("implemented\n")
-  run_git(wt, "add", "-A")
-  run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+  conftest.run_git(wt, "add", "-A")
+  conftest.run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +301,7 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-  builds = install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   admitted = await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
@@ -313,7 +311,6 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   assert run_id is not None
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-  import conftest
   await conftest.drain_session_consumer(manager.id, timeout=5)
 
   runs = tree.runs.list_run_records_sync(manager.id)
@@ -405,7 +402,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
     is admitted, one manager_turn Run claims exactly that batch, and the turn
     executes — no Goal-required obstacle anywhere in the dispatch."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(
+  manager = await conftest.create_task(
       tree,
       parent=None,
       request_id="one-click-root",
@@ -415,7 +412,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
   assert manager.task is not None and manager.task.goal == ""
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   admitted = await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="First message on a brand-new task.", actor="user")
@@ -437,7 +434,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
 async def test_concurrent_dispatch_starts_one_process(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("one")])
-  builds = install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First message.", actor="user")
   # Two dispatch calls race the same pending batch: the reservation serializes
@@ -483,7 +480,7 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
   gate_release = asyncio.Event()
   first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
   second = _SpawnFirstBackend([result_event("second")])
-  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
@@ -535,13 +532,13 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   pm_builds = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
   backend = SpawningScriptedBackend([result_event("phrase")])
-  builds = install_scripted_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch,
       [backend,
        SpawningScriptedBackend([result_event("phrase")]),
@@ -661,10 +658,10 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 async def test_repo_review_context_carries_the_delegated_spec(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   repo, _origin = init_repo_with_origin(tmp_path / "review-spec-work")
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   spec = "## Goal\n\nrename the config key\n\n## Reviewer Checklist\n- the legacy key still loads\n"
@@ -696,7 +693,7 @@ async def test_repo_review_context_refuses_a_task_with_an_empty_goal(
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path / "empty-goal-work")
   empty_spec = {"goal": "", "repo_path": str(repo), "base_branch": "main", "task_type": "implement"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, empty_spec))
   work_run = models.RunRecord(
       id="run-work",
@@ -735,10 +732,10 @@ async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import review as review_module
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root", name="Root manager")
+  manager = await conftest.create_task(tree, parent=None, request_id="root", name="Root manager")
   repo, _origin = init_repo_with_origin(tmp_path / "review-later-message")
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([assistant_text_event("started")], exit_code=1),
           SpawningScriptedBackend([result_event("adjusted")]),
@@ -809,10 +806,10 @@ async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import review as review_module
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   repo, _origin = init_repo_with_origin(tmp_path / "review-no-later-message")
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
@@ -845,10 +842,10 @@ async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
 async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root", name="Root manager")
+  manager = await conftest.create_task(tree, parent=None, request_id="root", name="Root manager")
   repo, _origin = init_repo_with_origin(tmp_path / "review-claim-order")
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([assistant_text_event("started")], exit_code=1),
           SpawningScriptedBackend([assistant_text_event("retrying")], exit_code=1),
@@ -939,7 +936,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
   assert tree.dispatch.pending_inputs(manager.id) == []
   admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Next.", actor="user")
   backend = SpawningScriptedBackend([result_event("next round")])
-  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
   next_run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
@@ -952,7 +949,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
   retry_run = await tree.runs.get_run(manager.id, retry["run_id"])
   assert retry_run is not None and retry_run.input_event_ids == [str(first_in["id"])]
   backend2 = SpawningScriptedBackend([result_event("retried")])
-  install_scripted_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
   retried, _retried_outcome = await wait_for_terminal_run(tree, manager.id, retry["run_id"])
@@ -982,8 +979,8 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
 async def test_first_terminal_fact_wins_governs_followups(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
-  root = await create_task(tree, parent=None, request_id="root")
-  worker = await create_task(tree, parent=root.id, request_id="w", profile="worker")
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w", profile="worker")
   await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   # Two concurrent finishers: the recorded failed fact stands even though the
   # losing finisher passed outcome="success", so the worker never closes.
@@ -1007,7 +1004,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, _origin = init_repo_with_origin(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nadd a marker file\n",
       "repo_path": str(repo),
@@ -1015,7 +1012,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
       "task_type": "implement",
       "keep_worktree": False,
   }
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   pm_builds = await _launch_manager_turn(
       cfg, session_blocks, tree, monkeypatch, manager, "Take off and implement the marker file.")
@@ -1036,11 +1033,11 @@ async def test_implement_delivery_requires_review_and_real_landing(
     work_wt = pathlib.Path(record.worktree_path)
     for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
                                                                               f"{record.branch_name}:main")):
-      run_git(work_wt, *args)
+      conftest.run_git(work_wt, *args)
 
   review_backend = SpawningScriptedBackend([result_event("review ok")], pre_run=reviewer_push)
   review_retry_backend = SpawningScriptedBackend([result_event("review ok again")], pre_run=reviewer_push)
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [work_backend, review_backend, review_retry_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = models.RunRecord(
@@ -1059,8 +1056,8 @@ async def test_implement_delivery_requires_review_and_real_landing(
   wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
   assert wt.is_dir()
   (wt / "marker.txt").write_text("implemented\n")
-  run_git(wt, "add", "-A")
-  run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+  conftest.run_git(wt, "add", "-A")
+  conftest.run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
   work_committed.set()
 
   await wait_for_review_terminal(tree, worker.id, timeout=10.0, what="the review chain")
@@ -1138,13 +1135,13 @@ def _advance_origin_from_second_clone(tmp_path: pathlib.Path, origin: pathlib.Pa
   """Push one commit to the bare origin from a second clone; returns the new tip."""
   second = tmp_path / "second-clone"
   subprocess.run(["git", "clone", "-q", str(origin), str(second)], check=True)
-  run_git(second, "config", "user.email", "t@example.com")
-  run_git(second, "config", "user.name", "t")
+  conftest.run_git(second, "config", "user.email", "t@example.com")
+  conftest.run_git(second, "config", "user.name", "t")
   (second / filename).write_text("advance\n")
-  run_git(second, "add", "-A")
-  run_git(second, "commit", "-q", "-m", f"advance origin via {filename}")
-  run_git(second, "push", "-q", "origin", "main")
-  return run_git(second, "rev-parse", "refs/heads/main")
+  conftest.run_git(second, "add", "-A")
+  conftest.run_git(second, "commit", "-q", "-m", f"advance origin via {filename}")
+  conftest.run_git(second, "push", "-q", "origin", "main")
+  return conftest.run_git(second, "rev-parse", "refs/heads/main")
 
 
 @pytest.mark.integration
@@ -1156,7 +1153,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
     work branch starts at the origin tip, and the local main ref is untouched."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
   repo, origin = init_repo_with_origin(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nadd a marker file\n",
       "repo_path": str(repo),
@@ -1164,14 +1161,14 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
       "task_type": "implement",
       "keep_worktree": False,
   }
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
   # Origin gains a commit from a second clone while the fixture repo's local
   # main stays put: local main is strictly behind origin/main.
   origin_tip = _advance_origin_from_second_clone(tmp_path, origin, "ahead.txt")
-  local_main = run_git(repo, "rev-parse", "main")
+  local_main = conftest.run_git(repo, "rev-parse", "main")
   assert local_main != origin_tip
 
   # The review lands the work and removes the work worktree. It runs on the
@@ -1180,7 +1177,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
   work_backend = SpawningScriptedBackend([result_event("implemented")])
   review_released: asyncio.Event = asyncio.Event()
   review_backend = SpawningScriptedBackend([result_event("review ok")], gate=review_released.wait)
-  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = models.RunRecord(
       id="run-work",
@@ -1200,8 +1197,8 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
   # A repository work Run starts in its worktree root, where the CLI finds the repo guide.
   assert work_backend.cwd == work_run.worktree_path
   # The work branch started at the new origin tip, never at the stale local main.
-  assert run_git(work_wt, "rev-parse", "HEAD") == origin_tip
-  assert run_git(repo, "rev-parse", "main") == local_main
+  assert conftest.run_git(work_wt, "rev-parse", "HEAD") == origin_tip
+  assert conftest.run_git(repo, "rev-parse", "main") == local_main
   review_released.set()
 
   # The header the worker page projects for the launched Run: plain success,
@@ -1237,7 +1234,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
     exactly once, a recorded task spec, and no launch prompt."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nadd a marker file\n",
       "repo_path": str(repo),
@@ -1245,19 +1242,20 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
       "task_type": "implement",
       "keep_worktree": False,
   }
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
   # One unpushed commit on the fixture repo's local main: origin does not
   # have it, so the base check fails closed.
   (repo / "local_only.txt").write_text("local work\n")
-  run_git(repo, "add", "-A")
-  run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unpushed local commit")
-  local_tip = run_git(repo, "rev-parse", "main")
+  conftest.run_git(repo, "add", "-A")
+  conftest.run_git(
+      repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unpushed local commit")
+  local_tip = conftest.run_git(repo, "rev-parse", "main")
 
   work_backend = SpawningScriptedBackend([result_event("never runs")])
-  install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = models.RunRecord(
       id="run-work",
@@ -1313,12 +1311,12 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
 async def test_repo_less_implement_delivers_after_review_passes(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n",
       "task_type": "implement",
   }
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   pm_builds = await _launch_manager_turn(
       cfg, session_blocks, tree, monkeypatch, manager, "Take off and refresh the host lint config.")
@@ -1329,7 +1327,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
       "Acceptance tests: config parses — pass")
   work_backend = SpawningScriptedBackend([result_event(report)])
   review_backend = SpawningScriptedBackend([result_event("review ok")])
-  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -1385,9 +1383,9 @@ async def test_repo_less_implement_delivers_after_review_passes(
 async def test_repo_less_implement_review_failure_takes_the_failure_report(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "fix the host script", "task_type": "implement"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
@@ -1399,7 +1397,7 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
   # outcome is failed); no untried member remains, so the retry policy
   # exhausts and the existing blocked-report path reports to the parent.
   review_backend = SpawningScriptedBackend([])
-  install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -1425,16 +1423,16 @@ async def test_a_failed_worker_run_reports_once_and_archives_the_worker(
   """A run that fails while running: one failed report wakes the parent once,
     and the report's delivery archives the worker with the system archive fact."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "say the phrase", "task_type": "quick-edit"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   pm_builds: list = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted", pm_builds))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and say it.", actor="user")
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([assistant_text_event("started")], exit_code=1)],
       WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -1467,9 +1465,9 @@ async def test_an_interrupted_worker_run_reports_once_and_archives_the_worker(
     (the report used to wait for the next restart's replay), and the report's
     delivery archives the worker."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "say the phrase", "task_type": "quick-edit"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   pm_builds: list = []
@@ -1506,7 +1504,7 @@ async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_ope
   """A failed review whose next-backend retry is already queued reports
     nothing and archives nothing: the retry's own finish drives the chain."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   # Two reviewer entries beyond the worker's own backend: the failed first
   # attempt leaves a second one to retry on.
   import conftest as conftest_module
@@ -1517,7 +1515,7 @@ async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_ope
       ])
   cfg.backends.pool = ["fake2", "fake3"]
   task_spec = {"goal": "say the phrase", "task_type": "implement"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The settled retry's completion close reports and wakes the parent; script
@@ -1567,9 +1565,9 @@ async def test_an_improve_childs_failed_run_keeps_the_loop_controllers_close_pat
     reports and archives through its controller alone: the worker failure
     entry never fires for it."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "tighten the loop", "task_type": "implement"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   owner_ref = str(pathlib.Path(cfg.sessions_dir) / manager.id / "loops" / "1")
@@ -1598,14 +1596,14 @@ async def test_an_improve_childs_failed_run_keeps_the_loop_controllers_close_pat
 async def test_repo_less_quick_edit_closes_without_review(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   pm_builds = await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
 
   work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
-  install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
@@ -1639,9 +1637,9 @@ async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prom
     continuation resumes the run's native conversation, and its prompt names the
     upload's path."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "## Goal\n\nbump the host cron schedule line\n", "task_type": "quick-edit"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
 
@@ -1661,7 +1659,7 @@ async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prom
 
   first = SpawningScriptedBackend([result_event("did the work")], gate=hold_work_run, post_events=record_native_id)
   continuation = SpawningScriptedBackend([result_event("looked at the screenshot")])
-  builds = install_scripted_backends(monkeypatch, [first, continuation], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [first, continuation], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
@@ -1705,7 +1703,7 @@ async def test_landing_verification_negative_cases(tmp_path: pathlib.Path) -> No
   from src.infra import git
 
   repo, _origin = init_repo_with_origin(tmp_path)
-  base_sha = run_git(repo, "rev-parse", "HEAD")
+  base_sha = conftest.run_git(repo, "rev-parse", "HEAD")
   # The base commit IS landed on origin/main.
   landed, _ = await git.git_verify_commit_landed(repo, "origin/main", base_sha)
   assert landed is True
@@ -1713,11 +1711,11 @@ async def test_landing_verification_negative_cases(tmp_path: pathlib.Path) -> No
   landed, reason = await git.git_verify_commit_landed(repo, "origin/main", "f" * 40)
   assert landed is False and "existence" in reason
   # A real but unmerged commit fails ancestry.
-  run_git(repo, "checkout", "-q", "-b", "feature")
+  conftest.run_git(repo, "checkout", "-q", "-b", "feature")
   (repo / "unmerged.txt").write_text("x\n")
-  run_git(repo, "add", ".")
-  run_git(repo, "commit", "-q", "-m", "unmerged")
-  unmerged = run_git(repo, "rev-parse", "HEAD")
+  conftest.run_git(repo, "add", ".")
+  conftest.run_git(repo, "commit", "-q", "-m", "unmerged")
+  unmerged = conftest.run_git(repo, "rev-parse", "HEAD")
   landed, reason = await git.git_verify_commit_landed(repo, "origin/main", unmerged)
   assert landed is False and "ancestry" in reason
   # A commit on a different branch target fails.
@@ -1732,7 +1730,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
 
   _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree,
       parent=None,
       request_id="w",
@@ -1767,12 +1765,12 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
   await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
   # A real commit that exists but is NOT on the target branch: ancestry must
   # reject it just as strictly as a nonexistent hash.
-  run_git(repo, "checkout", "-q", "-b", "side-work")
+  conftest.run_git(repo, "checkout", "-q", "-b", "side-work")
   (repo / "unlanded.txt").write_text("x\n")
-  run_git(repo, "add", "-A")
-  run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
-  unlanded = run_git(repo, "rev-parse", "HEAD")
-  run_git(repo, "checkout", "-q", "main")
+  conftest.run_git(repo, "add", "-A")
+  conftest.run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
+  unlanded = conftest.run_git(repo, "rev-parse", "HEAD")
+  conftest.run_git(repo, "checkout", "-q", "main")
   evidence = task_completion.CompletionEvidence(
       summary="forged",
       result_refs=["run:run-work", f"landed:main@{unlanded}"],
@@ -1798,7 +1796,7 @@ def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_blocks,
                      events: list[dict]) -> tuple[list[SpawningScriptedBackend], list[dict]]:
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend(events)
-  builds = install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
   return [backend], builds
 
 
@@ -1816,7 +1814,7 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(
     exactly the committed snapshot's joined instruction bytes and the composed
     input, and the Run carries the snapshot/hash/char_count evidence."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="the node rule"), caller=OPERATOR)
   _backends, builds = _manager_backend(
       monkeypatch, tree, cfg, session_blocks, events=[result_event("manager turn done")])
@@ -1888,10 +1886,10 @@ def test_compose_input_prompt_gives_an_upload_only_event_the_block_alone() -> No
 async def test_a_dictated_message_launches_a_manager_turn_whose_prompt_opens_with_the_voice_note(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = ScriptedRelayBackend([result_event("heard")], exit_code=0)
-  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="open the settings page", actor="user", input_mode="voice")
@@ -1925,7 +1923,7 @@ async def test_an_upload_only_message_launches_a_manager_turn_that_names_every_u
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = _UploadRecordingBackend([result_event("saw both screenshots")], exit_code=0)
-  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
   uploads = [{"filename": f"shot-{i}.png", "path": str(tmp_path / "uploads" / f"shot-{i}.png")} for i in (1, 2)]
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="", actor="user", uploaded_files=uploads)
@@ -1946,7 +1944,7 @@ async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
     assembler with their applicable contracts and separate task/input context."""
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree,
       parent=manager.id,
       profile="worker",
@@ -1989,7 +1987,7 @@ async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
   assert run.branch_name is not None
 
   # Verify contract: the verify task's managed block is the verify contract.
-  verify_task = await create_task(
+  verify_task = await conftest.create_task(
       tree,
       parent=manager.id,
       profile="worker",
@@ -2017,7 +2015,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
   first = SpawningScriptedBackend([result_event("turn one")])
   second = SpawningScriptedBackend([result_event("turn two")])
   third = SpawningScriptedBackend([result_event("turn three")])
-  install_scripted_backends(monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
 
   # Turn 1: no anchor — a fresh native context, identity recorded at spawn.
   run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
@@ -2081,7 +2079,7 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
   _cfg, session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   first = SpawningScriptedBackend([result_event("one")])
   second = SpawningScriptedBackend([result_event("two")])
-  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
   run1 = await _admit_and_dispatch(tree, manager.id, "one", "in-1")
   await wait_for_terminal_run(tree, manager.id, run1)
   snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
@@ -2124,11 +2122,11 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
     current backend, so turn 2 continues turn 1's native conversation and the
     launch prompt carries no reset note."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake-2"])
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   first = SpawningScriptedBackend([result_event("turn one")])
   second = SpawningScriptedBackend([result_event("turn two")])
-  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
   run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
   await wait_for_terminal_run(tree, manager.id, run1)
@@ -2158,7 +2156,7 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
 async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
@@ -2195,7 +2193,7 @@ async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
 async def test_corrupt_rule_fails_before_launch_with_the_reason(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
@@ -2215,7 +2213,7 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
   """Process recovery replays the Run's own saved snapshot/anchor — it never
     recomposes from current memory/templates; an explicit retry uses current sources."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="original rule"), caller=OPERATOR)
   _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("turn")])
   run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
@@ -2244,7 +2242,7 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
   """The snapshot's durable write is part of preparation: a failure there is a
     withheld verdict (no backend invocation, no Run process, input unconsumed)."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="the rule"), caller=OPERATOR)
   _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("never")])
   from src.infra import json_utils
@@ -2282,8 +2280,8 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     preview while the current Run's stored snapshot stays fixed.
     """
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
-  child = await create_task(tree, parent=manager.id, request_id="child")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
+  child = await conftest.create_task(tree, parent=manager.id, request_id="child")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(subtree_prompt="program-wide rule"), caller=OPERATOR)
   _backends, _builds = _manager_backend(
       monkeypatch, tree, cfg, session_blocks, events=[result_event("manager turn done")])
@@ -2391,20 +2389,20 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     error as readable evidence in its own events log, and the worker's parent
     receives a failure report naming the error and is woken."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted"))
-  install_scripted_backends(
+  conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("phrase")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
 
   repo, _origin = init_repo_with_origin(tmp_path / "prep-fail")
   # The failure's exact shape: the local base branch diverges from origin.
   (repo / "local.txt").write_text("local work\n")
-  run_git(repo, "add", ".")
-  run_git(repo, "commit", "-q", "-m", "local-only")
+  conftest.run_git(repo, "add", ".")
+  conftest.run_git(repo, "commit", "-q", "-m", "local-only")
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
@@ -2543,7 +2541,7 @@ async def test_a_manager_turn_that_fails_to_launch_shows_one_error_row_on_the_pa
 async def test_a_withheld_manager_turn_shows_one_error_row_however_often_it_is_withheld(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, models.PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
@@ -2567,9 +2565,9 @@ async def test_a_withheld_manager_turn_shows_one_error_row_however_often_it_is_w
 async def test_a_worker_launch_failure_writes_no_turn_launch_error(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
 
@@ -2630,10 +2628,10 @@ async def test_pooled_fresh_worker_launches_build_on_the_selected_account(
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   # An implement task: the work Run's success spawns its review, the second
   # fresh launch this test pins.
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="implement"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_scripted_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("work done; modified /tmp/x.sh")]),
           SpawningScriptedBackend([result_event("review ok")])
@@ -2672,10 +2670,10 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
           "alpha": ["main"],
           "beta": ["ext-1", "ext-2"]
       })
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_scripted_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # main sits at half a window; across all accounts an untouched beta account wins.
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"])
@@ -2703,10 +2701,10 @@ async def test_unpooled_fresh_worker_launch_carries_no_account(
   """An empty pool and a non-Claude backend both build with no claude_account key: the
     worker runs on its default login exactly as before this change."""
   cfg, session_blocks, tree = env_builder(tmp_path, monkeypatch)
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  builds = install_scripted_backends(
+  builds = conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await _register_work_run(tree, worker.id, "run-work", backend_id, FABLE_MODEL)
@@ -2725,10 +2723,11 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
     improve quota classification reads that text as a quota blocker."""
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
-  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it"))
+  worker = await conftest.create_task(
+      tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # An empty build queue: any process spawn would pop from it and fail loudly.
-  builds = install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
     claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
   assert claude_accounts.select(cfg, FABLE_MODEL) is None
@@ -2762,7 +2761,7 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
     ends success."""
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "11111111-2222-3333-4444-555555555555"
@@ -2772,7 +2771,7 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
   make_transcript(tmp_path / "claude-main", cc_id)
   first = ScriptedRelayBackend([assistant_text_event("halfway"), rate_limit_event("rejected", 1.0)], exit_code=1)
   second = ScriptedRelayBackend([result_event("done after relay")], exit_code=0)
-  builds = install_scripted_backends(monkeypatch, [first, second], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [first, second], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await _register_work_run(tree, worker.id, "run-relay", POOLED_FABLE_ID, FABLE_MODEL)
   tree.dispatch.executor.launch(worker.id, "run-relay")
@@ -2804,7 +2803,7 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
     holds the second process's reply."""
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "8b6fd8ac-6f0e-4af2-9d0e-1c2f47ab5311"
   make_transcript(tmp_path / "claude-main", cc_id)
@@ -2820,7 +2819,7 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
       ],
       exit_code=0)
   second = ScriptedRelayBackend([result_event("reply after relay")], exit_code=0)
-  builds = install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  builds = conftest.install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
   # record_launch is the registration seam: snapshot each launch's (pid,
   # pid_start, started_at) so the second launch's overwrite — and started_at's
@@ -2843,7 +2842,6 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
   assert run_id is not None
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-  import conftest
   await conftest.drain_session_consumer(manager.id, timeout=5)
 
   assert outcome == "success"
@@ -2873,7 +2871,7 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
     identity under an interrupted outcome."""
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "9c7fe9bd-7f1e-5f3a-be1f-2d3f58bc6422"
   make_transcript(tmp_path / "claude-main", cc_id)
@@ -2885,7 +2883,7 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
           rate_limit_event("rejected", 1.0),
       ], exit_code=1)
   second = ScriptedRelayBackend([result_event("must never land")], exit_code=0)
-  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  conftest.install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
   # The stop rides the relay seam: prepare_relay runs after the first process's
   # stream ended (its rejected reading is the relay reason) and before the
@@ -2909,7 +2907,6 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   relay_run_id = run_id
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-  import conftest
   await conftest.drain_session_consumer(manager.id, timeout=5)
 
   assert outcome == "interrupted"
@@ -3029,7 +3026,7 @@ async def _wired_root_manager(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
     dispatch wired to the silent-broadcast adapter — the rig prefix the manager-turn tests
     share. Each site unpacks the names it uses."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   return cfg, session_blocks, tree, manager
 
@@ -3039,8 +3036,8 @@ async def _manager_with_worker_child(
   """(cfg, session_blocks, tree, manager, worker): a manager node with one
     worker child, the shape the end-landing tests report against."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
-  worker = await create_task(
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(
       tree,
       parent=manager.id,
       request_id="child",
@@ -3167,7 +3164,7 @@ async def test_manager_turn_master_done_enospc_retries_through_master_queue(
     with the raw log's last write time."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("turn reply"))
@@ -3260,7 +3257,7 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
   # Live exit: the observed-exit write time, never a staged raw-log mtime.
   # A fresh child node: the drained node's trailing dispatch would race a
   # second input admitted on it.
-  worker2 = await create_task(
+  worker2 = await conftest.create_task(
       tree, parent=manager.id, request_id="child-2", profile="worker", task=models.TaskSpec(goal="more work"))
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("live work")])])
   await tree.dispatch.admit_input(worker2.id, event_type=ET.USER, content="Start.", actor="user")
@@ -3363,7 +3360,7 @@ async def test_startup_recovery_stops_a_launched_run_on_a_closed_worker(
   from src.runtime import task_recovery
   monkeypatch.setattr(runs_mod, "STOP_EXIT_WAIT_SECONDS", 0.2)
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  worker = await create_task(
+  worker = await conftest.create_task(
       tree, parent=None, request_id="closed-live-worker", profile="worker", task=models.TaskSpec(goal="long work"))
   proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
   pair = runs_mod.read_pid_stat(proc.pid)
@@ -3462,7 +3459,8 @@ async def test_repeat_finish_fills_only_empty_end_metadata(
   """finish_run's repeat path fills empty ended_at/exit_code from the passed
     values and never moves values already written."""
   _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
-  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="g"))
+  worker = await conftest.create_task(
+      tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="g"))
   run_id = "run-half"
   await tree.runs.register_run(models.RunRecord(id=run_id, session_id=worker.id, kind="work"))
   # First finish with an empty-ended_at repeat (the half-written record's
@@ -3554,7 +3552,7 @@ async def test_quota_failure_on_a_pool_node_fails_over_to_the_next_member(
   """A pool-chosen worker whose run ends on quota exhaustion cools that member, moves the node to the next
   member, and registers a retry run on it that binds the interrupted run's input batch."""
   cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   worker, run = await _interrupted_worker_run(tree, manager, from_pool=True, task_type=task_type)
   summaries = _record_parent_reports(adapter, monkeypatch)
   adapter._quota_failures[(worker.id, run.id)] = None
@@ -3580,7 +3578,7 @@ async def test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled(
   """A node whose delegation named its backend keeps today's quota behavior: the failure is reported, nothing
   retries, and the pool is untouched."""
   cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   worker, run = await _interrupted_worker_run(tree, manager, from_pool=False)
   summaries = _record_parent_reports(adapter, monkeypatch)
   adapter._quota_failures[(worker.id, run.id)] = None
@@ -3599,7 +3597,7 @@ async def test_a_successful_worker_with_no_available_reviewer_reports_blocked(
   """The reviewer never runs on a member the worker node used: with the only other pool member
     cooling, no review spawns and the parent's blocked report names each member's recovery time."""
   _cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   worker = await tree.create_task(
       request_id="worker",
       task_parent_id=manager.id,
@@ -3631,7 +3629,7 @@ async def test_failover_with_every_member_cooling_reports_each_recovery_time(
   """With the next member cooling too, the worker does not start a retry; the parent's report names each
   member's recovery time."""
   _cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
   worker, run = await _interrupted_worker_run(tree, manager, from_pool=True)
   backend_pool.cool("fake3", datetime.datetime(2030, 1, 2, 3, 4, tzinfo=datetime.UTC))
   summaries = _record_parent_reports(adapter, monkeypatch)

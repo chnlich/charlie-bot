@@ -1,133 +1,40 @@
 //! Session naming after a finished manager round.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::SessionMetadata;
 use serde_json::Value;
-use time::OffsetDateTime;
 
 const LIGHT_ONESHOT_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_COOLDOWN: time::Duration = time::Duration::minutes(30);
-
-/// Select backend pool members for light one-shot work.
-pub trait LightBackendPool: Send + Sync {
-  fn select(&self, cfg: &CharlieBotConfig, exclude: &[String]) -> Option<BackendOption>;
-  fn cool(&self, backend_id: &str, resets_at: Option<UtcDateTime>);
-  fn is_quota_error(&self, text: &str) -> bool;
-}
-
-/// Round-robin light backend selector owned by one `MasterQueue`.
-#[derive(Default)]
-pub struct RotatingLightBackendPool {
-  state: Mutex<PoolState>,
-}
-
-#[derive(Default)]
-struct PoolState {
-  position: usize,
-  cooling_until: HashMap<String, OffsetDateTime>,
-}
-
-impl LightBackendPool for RotatingLightBackendPool {
-  fn select(&self, cfg: &CharlieBotConfig, exclude: &[String]) -> Option<BackendOption> {
-    let members = &cfg.backends.pool;
-    let now = OffsetDateTime::now_utc();
-    let mut state = self.state.lock().expect("light backend pool mutex is not poisoned");
-    for offset in 0..members.len() {
-      let index = (state.position + offset) % members.len();
-      let member = &members[index];
-      if exclude.iter().any(|excluded| excluded == member) {
-        tracing::info!(target: "charliebot_tasks", caller = "light_oneshot", member, reason = "excluded by caller", "backend_pool_skipped");
-        continue;
-      }
-      if let Some(until) = state.cooling_until.get(member)
-        && *until > now
-      {
-        tracing::info!(
-          target: "charliebot_tasks",
-          caller = "light_oneshot",
-          member,
-          reason = %format!("cooling until {}", until.format(&time::format_description::well_known::Rfc3339).expect("UTC timestamp formats")),
-          "backend_pool_skipped"
-        );
-        continue;
-      }
-      state.position = (index + 1) % members.len();
-      tracing::info!(target: "charliebot_tasks", caller = "light_oneshot", member, position = index, "backend_pool_selected");
-      return Some(
-        cfg.get_backend_option(member).expect("backends.pool members resolve to configured options").clone(),
-      );
-    }
-    tracing::warn!(target: "charliebot_tasks", caller = "light_oneshot", members = ?members, excluded = ?exclude, "backend_pool_exhausted");
-    None
-  }
-
-  fn cool(&self, backend_id: &str, resets_at: Option<UtcDateTime>) {
-    let now = OffsetDateTime::now_utc();
-    let until = resets_at.map(UtcDateTime::into_inner).unwrap_or(now + DEFAULT_COOLDOWN);
-    self
-      .state
-      .lock()
-      .expect("light backend pool mutex is not poisoned")
-      .cooling_until
-      .insert(backend_id.to_string(), until);
-    tracing::warn!(
-      target: "charliebot_tasks",
-      member = backend_id,
-      until = %until.format(&time::format_description::well_known::Rfc3339).expect("UTC timestamp formats"),
-      reset_known = resets_at.is_some(),
-      "backend_pool_cooled"
-    );
-  }
-
-  fn is_quota_error(&self, text: &str) -> bool {
-    const PATTERNS: &[&str] = &[
-      "quota exhausted",
-      "quota exceeded",
-      "insufficient quota",
-      "over quota",
-      "rate limit exceeded",
-      "rate limit reached",
-      "rate limit rejected",
-      "rate-limit exceeded",
-      "rate-limit reached",
-      "rate-limit rejected",
-      "rate_limited",
-      "rate_limit_error",
-      "rate limited",
-      "too many requests",
-      "resource_exhausted",
-      "429",
-      "out of token",
-      "out-of-token",
-      "insufficient tokens",
-      "tokens exhausted",
-      "quota",
-      "rate limit",
-      "usage limit",
-      "budget has been exceeded",
-    ];
-    let lowered = text.to_lowercase();
-    PATTERNS.iter().any(|pattern| lowered.contains(pattern))
-  }
-}
 
 pub fn iter_light_backends<'a>(
   cfg: &'a CharlieBotConfig,
-  pool: &'a dyn LightBackendPool,
-) -> impl Iterator<Item = BackendOption> + 'a {
+  pool: Arc<BackendPool>,
+) -> impl Iterator<Item = anyhow::Result<BackendOption>> + 'a {
   let mut tried = Vec::new();
+  let mut failed = false;
   std::iter::from_fn(move || {
-    let option = pool.select(cfg, &tried)?;
-    tried.push(option.id.clone());
-    Some(option)
+    if failed {
+      return None;
+    }
+    match pool.select(cfg, "light_oneshot", &tried) {
+      Ok(Some(option)) => {
+        tried.push(option.id.clone());
+        Some(Ok(option))
+      }
+      Ok(None) => None,
+      Err(error) => {
+        failed = true;
+        Some(Err(error))
+      }
+    }
   })
 }
 
@@ -135,7 +42,7 @@ pub async fn name_after_round(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   session_id: &str,
-  pool: &dyn LightBackendPool,
+  pool: Arc<BackendPool>,
 ) -> anyhow::Result<()> {
   let Some(meta) = features.store.get_session(session_id).await? else {
     return Ok(());
@@ -173,7 +80,7 @@ pub async fn maybe_auto_name(
   user_message: &str,
   assistant_response: &str,
   existing_groups: &[String],
-  pool: &dyn LightBackendPool,
+  pool: Arc<BackendPool>,
 ) -> anyhow::Result<()> {
   if !is_default_session_name(&session_meta.name) {
     return Ok(());
@@ -203,13 +110,14 @@ pub async fn maybe_auto_name(
   }
 
   let mut generated = None;
-  for option in iter_light_backends(cfg, pool) {
+  for option in iter_light_backends(cfg, Arc::clone(&pool)) {
+    let option = option?;
     let attempt = generate_name(features, cfg, &option, &prompt, &system_prompt, &session_meta.id).await;
     let raw = match attempt {
       Ok(raw) => raw,
       Err(error) => {
         tracing::warn!(target: "charliebot_tasks", session_id = %session_meta.id, error = %error, "autonamer_failed");
-        if pool.is_quota_error(&error.to_string()) {
+        if backend_pool::is_quota_error(&error.to_string()) {
           pool.cool(&option.id, None);
         }
         continue;

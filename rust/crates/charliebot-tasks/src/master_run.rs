@@ -841,9 +841,7 @@ pub(crate) async fn run_cc(
   let covered = cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
   if !was_cancelled || !covered {
     mark_turn_end_unread(process.item, error_msg.as_deref(), exit_code, &finish_extras).await?;
-    if !was_cancelled || !covered {
-      tracing::info!(target: "charliebot_tasks", session = %session_id, exit_code, finish_extras = ?finish_extras, "master_cc_finished");
-    }
+    tracing::info!(target: "charliebot_tasks", session = %session_id, exit_code, finish_extras = ?finish_extras, "master_cc_finished");
   }
   let cc_session_id = cc_session_id.lock().expect("session id mutex is not poisoned").clone();
   let account_label = account_label.lock().expect("account label mutex is not poisoned").clone();

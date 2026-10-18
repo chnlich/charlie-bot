@@ -17,32 +17,32 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[("runtime.agents", charliebot_agent
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.artifacts", charliebot_artifacts::register), // stub: src.features.artifacts
   ("src.features.backup", charliebot_backup::register),       // stub: src.features.backup
-  ("src.features.backend_pool", features::backend_pool),      // stub: src.features.backend_pool
+  ("src.features.backend_pool", charliebot_agents::backend_pool::register),
   ("src.features.chat_threads", charliebot_chat_threads::register), // stub: src.features.chat_threads
-  ("src.features.code_server", charliebot_code_server::register), // stub: src.features.code_server
-  ("src.features.cron", features::cron),                      // stub: src.features.cron
-  ("src.features.diag", charliebot_diag::register),           // stub: src.features.diag
-  ("src.features.slack", charliebot_slack::register),         // stub: src.features.slack
-  ("src.features.discord", charliebot_discord::register),     // stub: src.features.discord
-  ("src.features.web_reply", charliebot_web_reply::register), // stub: src.features.web_reply
-  ("src.features.host_auth", charliebot_host_auth::register), // stub: src.features.host_auth
-  ("src.features.diff_view", charliebot_diff_view::register), // stub: src.features.diff_view
-  ("src.features.explain", charliebot_explain::register),     // stub: src.features.explain
-  ("src.features.improve", stub),                             // stub: src.features.improve
-  ("src.features.memory", charliebot_memory::register),       // stub: src.features.memory
-  ("src.features.ncu", charliebot_ncu::register),             // stub: src.features.ncu
-  ("src.features.terminal", charliebot_terminal::register),   // stub: src.features.terminal
-  ("src.features.trace", charliebot_trace::register),         // stub: src.features.trace
-  ("src.features.usage", charliebot_usage::register),         // stub: src.features.usage
-  ("src.features.voice", charliebot_voice::register),         // stub: src.features.voice
-  ("src.backends.openai_compatible", backends::openai_compatible), // stub: src.backends.openai_compatible
-  ("src.backends.antigravity", backends::antigravity),        // stub: src.backends.antigravity
-  ("src.backends.charlie_code", backends::charlie_code),      // stub: src.backends.charlie_code
-  ("src.backends.claude_code", backends::claude_code),        // stub: src.backends.claude_code
-  ("src.backends.codex", backends::codex),                    // stub: src.backends.codex
-  ("src.backends.gemini", backends::gemini),                  // stub: src.backends.gemini
-  ("src.backends.kimi", backends::kimi),                      // stub: src.backends.kimi
-  ("src.backends.opencode", backends::opencode),              // stub: src.backends.opencode
+  ("src.features.code_server", charliebot_code_server::register),   // stub: src.features.code_server
+  ("src.features.cron", features::cron),                            // stub: src.features.cron
+  ("src.features.diag", charliebot_diag::register),                 // stub: src.features.diag
+  ("src.features.slack", charliebot_slack::register),               // stub: src.features.slack
+  ("src.features.discord", charliebot_discord::register),           // stub: src.features.discord
+  ("src.features.web_reply", charliebot_web_reply::register),       // stub: src.features.web_reply
+  ("src.features.host_auth", charliebot_host_auth::register),       // stub: src.features.host_auth
+  ("src.features.diff_view", charliebot_diff_view::register),       // stub: src.features.diff_view
+  ("src.features.explain", charliebot_explain::register),           // stub: src.features.explain
+  ("src.features.improve", stub),                                   // stub: src.features.improve
+  ("src.features.memory", charliebot_memory::register),             // stub: src.features.memory
+  ("src.features.ncu", charliebot_ncu::register),                   // stub: src.features.ncu
+  ("src.features.terminal", charliebot_terminal::register),         // stub: src.features.terminal
+  ("src.features.trace", charliebot_trace::register),               // stub: src.features.trace
+  ("src.features.usage", charliebot_usage::register),               // stub: src.features.usage
+  ("src.features.voice", charliebot_voice::register),               // stub: src.features.voice
+  ("src.backends.openai_compatible", backends::openai_compatible),  // stub: src.backends.openai_compatible
+  ("src.backends.antigravity", backends::antigravity),              // stub: src.backends.antigravity
+  ("src.backends.charlie_code", backends::charlie_code),            // stub: src.backends.charlie_code
+  ("src.backends.claude_code", backends::claude_code),              // stub: src.backends.claude_code
+  ("src.backends.codex", backends::codex),                          // stub: src.backends.codex
+  ("src.backends.gemini", backends::gemini),                        // stub: src.backends.gemini
+  ("src.backends.kimi", backends::kimi),                            // stub: src.backends.kimi
+  ("src.backends.opencode", backends::opencode),                    // stub: src.backends.opencode
   ("src.features.files", charliebot_files::register),
 ];
 

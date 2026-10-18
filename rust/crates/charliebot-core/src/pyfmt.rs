@@ -217,7 +217,9 @@ fn write_closing_indent(out: &mut String, style: &JsonStyle, level: usize) {
   }
 }
 
-fn write_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
+/// Appends one JSON string literal as `json.dumps` writes it: the same escapes for every renderer, with
+/// characters above `~` as `\uXXXX` pairs when `ensure_ascii`.
+pub fn write_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
   out.push('"');
   for c in text.chars() {
     match c {

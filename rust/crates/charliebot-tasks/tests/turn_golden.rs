@@ -21,6 +21,7 @@ use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, SequenceListingFields, Store, StoreHooks,
   StoreResult,
 };
+use charliebot_tasks::autonamer::LightBackendPool;
 use charliebot_tasks::master_queue::{
   MarkUnreadFn, PersistAccountLabelFn, PersistAndBroadcastFn, PersistNativeIdFn, SessionCallbacks,
 };
@@ -788,6 +789,42 @@ async fn after_round_names_default_session_and_reuses_group_case() -> anyhow::Re
   })
   .await??;
   queue.shutdown().await?;
+  Ok(())
+}
+
+struct FixedLightBackendPool {
+  options: Vec<BackendOption>,
+  exclusions: Mutex<Vec<Vec<String>>>,
+}
+
+impl LightBackendPool for FixedLightBackendPool {
+  fn select(&self, _cfg: &CharlieBotConfig, exclude: &[String]) -> Option<BackendOption> {
+    self.exclusions.lock().expect("fake backend pool mutex is not poisoned").push(exclude.to_vec());
+    self.options.iter().find(|option| !exclude.contains(&option.id)).cloned()
+  }
+
+  fn cool(&self, _backend_id: &str, _resets_at: Option<UtcDateTime>) {}
+
+  fn is_quota_error(&self, text: &str) -> bool {
+    text.to_lowercase().contains("quota")
+  }
+}
+
+#[test]
+fn injected_light_backend_pool_excludes_each_selected_member() -> anyhow::Result<()> {
+  let first = backend_option_for("light-a", "codex", String::new(), None);
+  let second = backend_option_for("light-b", "codex", String::new(), None);
+  let cfg = config(Path::new("/synthetic/home"), Some(first.clone()));
+  let pool = FixedLightBackendPool { options: vec![first, second], exclusions: Mutex::new(Vec::new()) };
+
+  let selected =
+    charliebot_tasks::autonamer::iter_light_backends(&cfg, &pool).map(|option| option.id).collect::<Vec<_>>();
+
+  assert_eq!(selected, ["light-a", "light-b"]);
+  assert_eq!(
+    *pool.exclusions.lock().expect("fake backend pool mutex is not poisoned"),
+    [vec![], vec!["light-a".to_string()], vec!["light-a".to_string(), "light-b".to_string()]]
+  );
   Ok(())
 }
 

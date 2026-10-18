@@ -49,6 +49,7 @@ steps:
     name: malformed control frame
     path: /ws/voice/${sessions.atlas}
     query: {backend: gemini}
+    wait_for_fake_handshake: gemini
     send:
       - text: "{bad"
     until: {frames: 1}
@@ -57,6 +58,7 @@ steps:
     name: unsupported control frame
     path: /ws/voice/${sessions.atlas}
     query: {backend: muse}
+    wait_for_fake_handshake: muse
     send:
       - json: {type: continue}
     until: {frames: 1}
@@ -65,6 +67,7 @@ steps:
     name: end frame devices omit a key
     path: /ws/voice/${sessions.atlas}
     query: {backend: gemini}
+    wait_for_fake_handshake: gemini
     send:
       - json:
           type: end

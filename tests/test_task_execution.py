@@ -81,12 +81,13 @@ def build_spawning_env(
   """(cfg, session blocks, TaskTreeManager) over one synthetic home under tmp_path:
     the given backend options, worktree_dir inside the home, and the seeded access
     key every child environment signs against (seed_signing_home)."""
-  from src.infra.config import CharlieBotConfig
+  from src.infra import config
   home = tmp_path / "charliebot-home"
   backends: dict = {"options": options}
   if pool is not None:
     backends["pool"] = pool
-  cfg = CharlieBotConfig(charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
+  cfg = config.CharlieBotConfig(
+      charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
   seed_signing_home(home, monkeypatch)
   session_blocks = build_session_blocks(cfg)
   return cfg, session_blocks, build_task_tree(cfg, session_blocks)
@@ -204,19 +205,19 @@ def make_pm_build(text: str, pm_builds: list | None = None):
 def make_api_client(cfg, session_blocks, task_mgr) -> testclient.TestClient:
   from src.features.improve import api as improve_api
   from src.infra import config
+  from src.runtime.api import deps
   from src.runtime.api import internal as internal_api
   from src.runtime.api import sessions as sessions_api
-  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_task_manager
 
   app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
   app.include_router(internal_api.router, prefix="/api/internal")
   app.include_router(improve_api.router, prefix="/api/internal")
   app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
   override_session_blocks(app, session_blocks)
-  app.dependency_overrides[get_task_manager] = lambda: task_mgr
-  app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
+  app.dependency_overrides[deps.get_task_manager] = lambda: task_mgr
+  app.dependency_overrides[deps.get_run_store] = lambda: task_mgr.runs
   return testclient.TestClient(app)
 
 
@@ -312,8 +313,8 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   assert run_id is not None
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-  from conftest import drain_session_consumer
-  await drain_session_consumer(manager.id, timeout=5)
+  import conftest
+  await conftest.drain_session_consumer(manager.id, timeout=5)
 
   runs = tree.runs.list_run_records_sync(manager.id)
   assert [r.id for r in runs] == [run_id]
@@ -335,22 +336,20 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   # The launched process identity is the precondition of a run credential:
   # a queued run's token is rejected, a launched run's is accepted, and a
   # finished run's is not.
-  from fastapi import HTTPException
-
-  from src.runtime.api.deps import require_caller
-  from src.runtime.run_token import RunTokenClaims
-  queued_claims = RunTokenClaims(session_id=manager.id, run_id="run-queued", agent=manager.name or "m")
+  from src.runtime import run_token
+  from src.runtime.api import deps
+  queued_claims = run_token.RunTokenClaims(session_id=manager.id, run_id="run-queued", agent=manager.name or "m")
   await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=manager.id, kind="manager_turn"))
-  with pytest.raises(HTTPException, match="has not launched"):
-    await require_caller(_bearer(queued_claims), tree.runs)
-  launched_claims = RunTokenClaims(session_id=manager.id, run_id="run-launched", agent=manager.name or "m")
+  with pytest.raises(fastapi.HTTPException, match="has not launched"):
+    await deps.require_caller(_bearer(queued_claims), tree.runs)
+  launched_claims = run_token.RunTokenClaims(session_id=manager.id, run_id="run-launched", agent=manager.name or "m")
   await tree.runs.register_run(models.RunRecord(id="run-launched", session_id=manager.id, kind="manager_turn"))
   await tree.runs.record_launch(manager.id, "run-launched", pid=424900, pid_start="ps-900")
-  identity = await require_caller(_bearer(launched_claims), tree.runs)
+  identity = await deps.require_caller(_bearer(launched_claims), tree.runs)
   assert identity.claims.run_id == "run-launched"
-  finished_claims = RunTokenClaims(session_id=manager.id, run_id=run_id, agent=manager.name or "m")
-  with pytest.raises(HTTPException, match="active run"):
-    await require_caller(_bearer(finished_claims), tree.runs)
+  finished_claims = run_token.RunTokenClaims(session_id=manager.id, run_id=run_id, agent=manager.name or "m")
+  with pytest.raises(fastapi.HTTPException, match="active run"):
+    await deps.require_caller(_bearer(finished_claims), tree.runs)
   assert len(builds) == 1
   assert builds[0]["kwargs"].get("on_spawn") is not None
   captured_env = builds[0]["backend"].env or {}
@@ -361,9 +360,9 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
 def _bearer(claims):
   """A signed run-token request against the synthetic home's seeded key."""
   import src.infra.config as core_config
-  from src.runtime.run_token import sign_run_token
+  from src.runtime import run_token
   key = str(core_config.get_credentials().get("charliebot", "access_key") or "")
-  token = sign_run_token(claims, key)
+  token = run_token.sign_run_token(claims, key)
   # Lowercase key: the real Header object is case-insensitive; the plain
   # dict double must match the exact key require_caller reads.
   return type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
@@ -1703,15 +1702,15 @@ def _task_spec(tree: task_sessions.TaskTreeManager, spec: dict):
 
 @pytest.mark.asyncio
 async def test_landing_verification_negative_cases(tmp_path: pathlib.Path) -> None:
-  from src.infra.git import git_verify_commit_landed
+  from src.infra import git
 
   repo, _origin = init_repo_with_origin(tmp_path)
   base_sha = run_git(repo, "rev-parse", "HEAD")
   # The base commit IS landed on origin/main.
-  landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
+  landed, _ = await git.git_verify_commit_landed(repo, "origin/main", base_sha)
   assert landed is True
   # A fake hash fails existence.
-  landed, reason = await git_verify_commit_landed(repo, "origin/main", "f" * 40)
+  landed, reason = await git.git_verify_commit_landed(repo, "origin/main", "f" * 40)
   assert landed is False and "existence" in reason
   # A real but unmerged commit fails ancestry.
   run_git(repo, "checkout", "-q", "-b", "feature")
@@ -1719,17 +1718,17 @@ async def test_landing_verification_negative_cases(tmp_path: pathlib.Path) -> No
   run_git(repo, "add", ".")
   run_git(repo, "commit", "-q", "-m", "unmerged")
   unmerged = run_git(repo, "rev-parse", "HEAD")
-  landed, reason = await git_verify_commit_landed(repo, "origin/main", unmerged)
+  landed, reason = await git.git_verify_commit_landed(repo, "origin/main", unmerged)
   assert landed is False and "ancestry" in reason
   # A commit on a different branch target fails.
-  landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
+  landed, _ = await git.git_verify_commit_landed(repo, "origin/main", base_sha)
   assert landed is True
 
 
 @pytest.mark.asyncio
 async def test_manual_complete_with_forged_landing_ref_stays_open(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.runtime.task_completion import CompletionEvidence
+  from src.runtime import task_completion
 
   _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
@@ -1774,7 +1773,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
   run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
   unlanded = run_git(repo, "rev-parse", "HEAD")
   run_git(repo, "checkout", "-q", "main")
-  evidence = CompletionEvidence(
+  evidence = task_completion.CompletionEvidence(
       summary="forged",
       result_refs=["run:run-work", f"landed:main@{unlanded}"],
       run_ids=["run-work"],
@@ -2229,8 +2228,8 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
   ctx_resp_snapshot = _snapshot_of(run)
   assert ctx_resp_snapshot == stored
   # The history endpoint serves the stored object without touching live sources.
-  from src.runtime.task_prompts import PromptSnapshot
-  restored = PromptSnapshot.from_json_dict(stored)
+  from src.runtime import task_prompts
+  restored = task_prompts.PromptSnapshot.from_json_dict(stored)
   assert "original rule" in restored.instructions_text
   # An explicit retry is a new Run with current sources: restoring the body
   # first, then retrying, assembles fresh (hash changes with the new body).
@@ -2300,13 +2299,12 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
   assert "program-wide rule" in joined
 
   # Hash/snapshot parity: the preview API's assembly equals the committed bytes.
-  from src.runtime.task_execution import capture_prompt_chain
-  from src.runtime.task_prompts import assemble_snapshot, build_segments
+  from src.runtime import task_prompts
   meta = await tree.load_meta(manager.id)
   index = await tree._get_index()
-  chain, node_ref = capture_prompt_chain(tree, index, meta)
-  segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
-  preview = assemble_snapshot(segments)
+  chain, node_ref = task_execution_module.capture_prompt_chain(tree, index, meta)
+  segments, _err = task_prompts.build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  preview = task_prompts.assemble_snapshot(segments)
   assert preview.to_json_dict() == stored
 
   # Editing the own subtree rule: the next-start preview changes for the node
@@ -2315,16 +2313,17 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
       manager.id, models.PatchSessionTaskRequest(subtree_prompt="program-wide rule v2"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   index = await tree._get_index()
-  chain, node_ref = capture_prompt_chain(tree, index, meta)
-  segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
-  next_preview = assemble_snapshot(segments)
+  chain, node_ref = task_execution_module.capture_prompt_chain(tree, index, meta)
+  segments, _err = task_prompts.build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  next_preview = task_prompts.assemble_snapshot(segments)
   assert next_preview.prompt_hash != stored["prompt_hash"]
   assert "program-wide rule v2" in "\n\n".join(b.text for b in next_preview.blocks)
 
   child_meta = await tree.load_meta(child.id)
-  chain, node_ref = capture_prompt_chain(tree, index, child_meta)
-  segments, _err = build_segments(cfg, child_meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
-  child_preview = assemble_snapshot(segments)
+  chain, node_ref = task_execution_module.capture_prompt_chain(tree, index, child_meta)
+  segments, _err = task_prompts.build_segments(
+      cfg, child_meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  child_preview = task_prompts.assemble_snapshot(segments)
   assert "program-wide rule v2" in "\n\n".join(b.text for b in child_preview.blocks)
   # The finished Run's evidence is immutable history.
   assert _snapshot_of(run) == stored
@@ -2844,8 +2843,8 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
   assert run_id is not None
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-  from conftest import drain_session_consumer
-  await drain_session_consumer(manager.id, timeout=5)
+  import conftest
+  await conftest.drain_session_consumer(manager.id, timeout=5)
 
   assert outcome == "success"
   assert len(builds) == 2
@@ -2910,8 +2909,8 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   relay_run_id = run_id
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-  from conftest import drain_session_consumer
-  await drain_session_consumer(manager.id, timeout=5)
+  import conftest
+  await conftest.drain_session_consumer(manager.id, timeout=5)
 
   assert outcome == "interrupted"
   # The second process never registered: the Run keeps the first process's
@@ -2983,8 +2982,7 @@ def inject_run_record_write_fault(
     write, the one that carries ``ended_at``. Returns one bool per matching
     write — True when that write raised — in order.
     """
-  from src.runtime.runs import RunStore
-  real = RunStore.write_record
+  real = runs_mod.RunStore.write_record
   state = {"raised": 0}
   hits: list[bool] = []
 
@@ -2999,7 +2997,7 @@ def inject_run_record_write_fault(
       hits.append(False)
     return await real(self, session_id, run)
 
-  monkeypatch.setattr(RunStore, "write_record", flaky)
+  monkeypatch.setattr(runs_mod.RunStore, "write_record", flaky)
   return hits
 
 
@@ -3099,30 +3097,29 @@ def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[
 
 def test_is_out_of_space_error_walks_cause_and_context_chain() -> None:
   """Only ENOSPC/EDQUOT enter the retry, wherever they sit on the chain."""
-  from src.runtime.task_execution import is_out_of_space_error
   enospc = OSError(errno.ENOSPC, "No space left on device")
   edquot = OSError(errno.EDQUOT, "Disk quota exceeded")
-  assert is_out_of_space_error(enospc)
-  assert is_out_of_space_error(edquot)
-  assert is_out_of_space_error(RuntimeError("landing failed")) is False
-  assert is_out_of_space_error(PermissionError("raw log locked")) is False
+  assert task_execution_module.is_out_of_space_error(enospc)
+  assert task_execution_module.is_out_of_space_error(edquot)
+  assert task_execution_module.is_out_of_space_error(RuntimeError("landing failed")) is False
+  assert task_execution_module.is_out_of_space_error(PermissionError("raw log locked")) is False
   # Both chain links: an explicit cause and an implicit context.
   wrapped_cause = RuntimeError("wrap")
   wrapped_cause.__cause__ = enospc
-  assert is_out_of_space_error(wrapped_cause)
+  assert task_execution_module.is_out_of_space_error(wrapped_cause)
   wrapped_context = RuntimeError("wrap")
   wrapped_context.__context__ = edquot
-  assert is_out_of_space_error(wrapped_context)
+  assert task_execution_module.is_out_of_space_error(wrapped_context)
   # A cycle on the context chain must not spin.
   a: BaseException = RuntimeError("a")
   b: BaseException = RuntimeError("b")
   b.__context__ = a
   a.__context__ = b
-  assert is_out_of_space_error(a) is False
+  assert task_execution_module.is_out_of_space_error(a) is False
   # A cause nested behind a non-OSError wrapper is still found.
   deep: BaseException = ValueError("outer")
   deep.__cause__ = wrapped_cause
-  assert is_out_of_space_error(deep)
+  assert task_execution_module.is_out_of_space_error(deep)
 
 
 @pytest.mark.asyncio
@@ -3131,7 +3128,7 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
   """(a) The run_finished write raises ENOSPC, the retry drains the dead run
     from its raw log and lands the end record; the parent gets exactly one
     report and no second process ever starts."""
-  from src.runtime.thinking_state import busy_since
+  from src.runtime import thinking_state
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -3148,7 +3145,7 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
   assert fault_hits == [True, False]  # one failed write; the retry's write landed
   # The worker header timer the failed finish could not close is closed by
   # the hook-1 handover (the process is dead): the node shows idle again.
-  await poll_until(lambda: busy_since(worker.id) is None, what="the worker header timer")
+  await poll_until(lambda: thinking_state.busy_since(worker.id) is None, what="the worker header timer")
   # The retried landing delivered the success-based report exactly once, and
   # the parent's report turn settles without a restart. The report rides the
   # retry task's async delivery chain, so wait for the report itself: an
@@ -3240,7 +3237,7 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(d) A drained run's ended_at is the raw log's last write time; a live
     exit's ended_at stays the observed-exit write time."""
-  from src.runtime.task_recovery import reconcile_task_tree
+  from src.runtime import task_recovery
   cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
@@ -3254,7 +3251,7 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
   await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
   await tree.runs.record_launch(worker.id, run_id, pid=424901, pid_start="1-424000")
   _raw, raw_mtime = write_raw_result(tree.runs.run_dir(worker.id, run_id), "drained result", age_seconds=3600)
-  await reconcile_task_tree(cfg, tree, adapter)
+  await task_recovery.reconcile_task_tree(cfg, tree, adapter)
   run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
   assert outcome == "success"
   assert run.exit_code == 0
@@ -3363,7 +3360,7 @@ async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
 async def test_startup_recovery_stops_a_launched_run_on_a_closed_worker(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Recovery stops a launched Run when cancellation closed before its stop fact landed."""
-  from src.runtime.task_recovery import reconcile_task_tree
+  from src.runtime import task_recovery
   monkeypatch.setattr(runs_mod, "STOP_EXIT_WAIT_SECONDS", 0.2)
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   worker = await create_task(
@@ -3393,7 +3390,7 @@ async def test_startup_recovery_stops_a_launched_run_on_a_closed_worker(
     monkeypatch.setattr(tree.runs, "append_stop_request_locked", append_stop)
 
     adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-    await reconcile_task_tree(cfg, tree, adapter)
+    await task_recovery.reconcile_task_tree(cfg, tree, adapter)
 
     events = tree.runs.load_events_sync(worker.id)
     stops = [event for event in events if event.get("type") == ET.RUN_STOP_REQUESTED]

@@ -1,6 +1,7 @@
 """Scenario loader tests for the parity harness's asynchronous step forms."""
 
 import pathlib
+import re
 from typing import Any
 
 import pytest
@@ -176,7 +177,7 @@ def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any
 
 
 @pytest.mark.parametrize(
-    "steps,fields", [
+    "steps,fields,message", [
         (
             [{
                 "kind": "handover",
@@ -185,7 +186,7 @@ def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any
             }], {
                 "fake_agent": _fake_agent(),
                 "expect_starts": 0,
-            }),
+            }, "step 'handover' is a handover, so directions are required"),
         (
             [{
                 "name": "http",
@@ -195,7 +196,7 @@ def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any
                 "fake_agent": _fake_agent(),
                 "expect_starts": 0,
                 "directions": ["python-to-candidate"],
-            }),
+            }, "directions are refused when no handover step is present"),
         (
             [{
                 "kind": "handover",
@@ -205,7 +206,7 @@ def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any
                 "fake_agent": _fake_agent(),
                 "expect_starts": 0,
                 "directions": ["both"],
-            }),
+            }, "directions must be a subset of"),
         (
             [{
                 "kind": "handover",
@@ -215,9 +216,131 @@ def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any
                 "fake_agent": _fake_agent(),
                 "expect_starts": 0,
                 "directions": None,
-            }),
+            }, "directions must be a non-empty list"),
     ])
 def test_invalid_directions_fail_loading(
-    tmp_path: pathlib.Path, steps: list[dict[str, Any]], fields: dict[str, Any]) -> None:
-  with pytest.raises(scenario_file.ScenarioError, match="scenario.yaml"):
+    tmp_path: pathlib.Path, steps: list[dict[str, Any]], fields: dict[str, Any], message: str) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
+    _load(tmp_path, steps, **fields)
+
+
+@pytest.mark.parametrize(
+    "steps,fields,message", [
+        ([{
+            "kind": "gate",
+            "name": "gate step",
+            "open": "ready"
+        }], {}, "step 'gate step' needs a fake_agent script"),
+        (
+            [{
+                "kind": "wait",
+                "name": "gate wait",
+                "timeout_seconds": 1,
+                "until": {
+                    "at_gate": "ready"
+                }
+            }], {}, "step 'gate wait' needs a fake_agent script"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "expect_starts": 0
+            }, "fake_agent and expect_starts must be provided together"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": _fake_agent()
+            }, "fake_agent and expect_starts must be provided together"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": _fake_agent(),
+                "expect_starts": -1
+            }, "expect_starts must be a non-negative integer"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": {
+                    "starts": "claude"
+                },
+                "expect_starts": 0
+            }, "fake_agent must contain a starts list"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": {
+                    "starts": [{
+                        "name": "claude",
+                        "steps": []
+                    }]
+                },
+                "expect_starts": 0
+            }, "fake_agent start 1: requires name, steps and exit_code"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": {
+                    "starts": [{
+                        "name": "claude",
+                        "steps": [],
+                        "exit_code": 256
+                    }]
+                },
+                "expect_starts": 0
+            }, "fake_agent start 1: exit_code must be an integer from 0 to 255"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": {
+                    "starts": [{
+                        "name": "claude",
+                        "steps": [{
+                            "emit": "text"
+                        }],
+                        "exit_code": 0
+                    }]
+                },
+                "expect_starts": 0
+            }, "fake_agent start 1 step 1: emit must be an object"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": {
+                    "starts": [{
+                        "name": "claude",
+                        "steps": [{
+                            "gate": ""
+                        }],
+                        "exit_code": 0
+                    }]
+                },
+                "expect_starts": 0
+            }, "fake_agent start 1 step 1: emit must be an object or gate must be a non-empty string"),
+    ])
+def test_invalid_script_fails_loading(
+    tmp_path: pathlib.Path, steps: list[dict[str, Any]], fields: dict[str, Any], message: str) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
     _load(tmp_path, steps, **fields)

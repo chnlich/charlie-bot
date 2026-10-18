@@ -938,12 +938,16 @@ def main() -> int:
       shutil.rmtree(scratch)
 
   emit(["", "Routes:", *_route_summary(results)])
+  # Each trace path once, in the order the guard met it.
+  undecodable_traces = dict.fromkeys(guard_report.undecodable)
+  undecodable_where = f" in {', '.join(undecodable_traces)}" if undecodable_traces else ""
   emit(
       [
           "",
           (
               f"Outside-write guard: {len(guard_report.violations)} file changes outside the trees "
-              f"({guard_report.traces} traces); {len(guard_report.refused)} writes refused by the sandbox"),
+              f"({guard_report.traces} traces); {len(guard_report.refused)} writes refused by the sandbox; "
+              f"{len(guard_report.undecodable)} undecodable calls (strace printed ???){undecodable_where}"),
           *(f"  VIOLATION {change.describe()}" for change in guard_report.violations),
       ])
   if guard_report.refused:

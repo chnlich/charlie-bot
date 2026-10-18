@@ -7,6 +7,10 @@ calls, or the calling thread's working directory for the plain calls, tracked th
 clone, fork and vfork. A completed change outside the allowed roots is a violation and fails the run. A change
 the sandbox refused (EACCES or EPERM) changed nothing; the guard lists it as refused, for the record.
 
+A call strace prints as ``???`` (its syscall number was unreadable, typically a thread that died inside the call)
+names no path, so the guard counts it as undecodable and judges nothing about it. The sandbox refuses every write
+outside the tree, so such a call cannot have changed a file there.
+
 Why a syscall trace and not a filesystem scan: the host is shared, so a before-and-after scan of HOME or /tmp
 sees every other process's writes (the live server, other worktrees, editors) and cannot attribute them, while
 inotify cannot watch a whole filesystem and fanotify needs CAP_SYS_ADMIN. The trace attributes every change to
@@ -29,8 +33,8 @@ _WRITE_OPEN_FLAGS = ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC")
 _LINE = re.compile(r"^(?P<pid>\d+) (?P<rest>.*)$")
 _SHARED_MEMORY_SEMAPHORE = re.compile(r"/dev/shm/sem\.[^/]+")
 _UNFINISHED = re.compile(r"^(?P<call>.*) <unfinished \.\.\.>$")
-_RESUMED = re.compile(r"^<\.\.\. (?P<name>\w+) resumed>(?P<tail>.*)$")
-_CALL = re.compile(r"^(?P<name>\w+)\((?P<args>.*)\)\s+= (?P<ret>.*)$", re.DOTALL)
+_RESUMED = re.compile(r"^<\.\.\. (?P<name>\w+|\?\?\?) resumed>(?P<tail>.*)$")
+_CALL = re.compile(r"^(?P<name>\w+|\?\?\?)\((?P<args>.*)\)\s+= (?P<ret>.*)$", re.DOTALL)
 _ANNOTATED_FD = re.compile(r"^(?P<fd>-?\d+|AT_FDCWD)<(?P<path>.*)>$", re.DOTALL)
 _RETURN_FD_PATH = re.compile(r"^\d+<(?P<path>.*)>$", re.DOTALL)
 _RETURN_ERROR = re.compile(r"^-1 (?P<errno>E[A-Z0-9]+)\b")
@@ -96,10 +100,12 @@ class Change:
 class Report:
   violations: list[Change] = dataclasses.field(default_factory=list)
   refused: list[Change] = dataclasses.field(default_factory=list)
+  # The trace file path of each undecodable call, one entry per call.
+  undecodable: list[str] = dataclasses.field(default_factory=list)
   traces: int = 0
 
 
-def _merged_calls(lines: list[str]) -> list[tuple[int, str]]:
+def _merged_calls(lines: list[str], trace_log: pathlib.Path) -> list[tuple[int, str]]:
   """(pid, "name(args) = ret") per completed syscall, in the order the calls started.
 
   A call another thread interrupted prints as ``<unfinished ...>`` and later ``<... name resumed>``; the halves
@@ -111,7 +117,7 @@ def _merged_calls(lines: list[str]) -> list[tuple[int, str]]:
   for line in lines:
     match = _LINE.match(line)
     if not match:
-      raise ValueError(f"unparsed strace line: {line!r}")
+      raise ValueError(f"unparsed strace line in {trace_log}: {line!r}")
     pid, rest = int(match["pid"]), match["rest"]
     if rest.startswith(("---", "+++")):
       continue
@@ -123,7 +129,7 @@ def _merged_calls(lines: list[str]) -> list[tuple[int, str]]:
     resumed = _RESUMED.match(rest)
     if resumed:
       if pid not in pending:
-        raise ValueError(f"resumed call without its start: {line!r}")
+        raise ValueError(f"resumed call without its start in {trace_log}: {line!r}")
       slot, head = pending.pop(pid)
       calls[slot] = (pid, head + resumed["tail"])
       continue
@@ -260,7 +266,7 @@ def scan(trace_log: pathlib.Path, roots: tuple[pathlib.Path, ...], start_cwd: pa
   """
   report.traces += 1
   root_strings = tuple(os.path.realpath(root) for root in roots)
-  calls = _merged_calls(trace_log.read_text(encoding="utf-8", errors="surrogateescape").splitlines())
+  calls = _merged_calls(trace_log.read_text(encoding="utf-8", errors="surrogateescape").splitlines(), trace_log)
   if not calls:
     raise ValueError(f"empty trace: {trace_log}")
   parsed: list[tuple[int, re.Match]] = []
@@ -276,6 +282,9 @@ def scan(trace_log: pathlib.Path, roots: tuple[pathlib.Path, ...], start_cwd: pa
   cwds = _Cwds(calls[0][0], str(start_cwd), parents)
   for pid, match in parsed:
     name, ret = match["name"], match["ret"]
+    if name == "???":
+      report.undecodable.append(str(trace_log))
+      continue
     if name in ("clone", "clone3", "fork", "vfork"):
       continue
     outcome = _outcome(ret)

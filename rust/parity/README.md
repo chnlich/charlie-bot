@@ -169,6 +169,9 @@ Every process under test runs as `strace -f -y ... -- python sandbox.py --allow-
   path that `-y` prints, a directory descriptor plus a relative path, or the thread's working directory, which
   it tracks through `chdir`, `fchdir` and every clone, fork and vfork.
 - A change outside the tree that completed is a violation and fails the run.
+- A call strace prints as `???` (its syscall number was unreadable) names no path. The guard counts it as undecodable
+  and prints the count with each trace file path on the guard line. It is not a violation: the sandbox refuses every
+  write outside the tree, so such a call cannot have changed a file there.
 - A change the sandbox refused changed nothing. The report lists it as refused. The Python startup sweep targets
   empty `charliebot-sess-*` cgroups for the current uid. Landlock refuses the sweep inside the harness.
 - Outside the harness, that sweep removes every empty `charliebot-sess-*` cgroup for the uid, including cgroups

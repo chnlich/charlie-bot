@@ -74,7 +74,9 @@ uv run python rust/parity/parity.py --python-vs-python --stage features
 - `--voice-models DIR` selects the read-only model source for scenarios with `voice_models: true`. Its default is
   `~/.charliebot/models`. Before starting any server, the harness checks for the VAD file, sherpa archive and
   extracted model directory, then links those entries into each synthetic home.
-- `--keep` keeps the trees and logs. A run that fails keeps them anyway and prints their path.
+- `--keep` keeps the trees and logs. A run that fails keeps them anyway and prints their path. Each run's directory
+  is named `NN-RR` (scenario index, run number), so the socket path under its tree stays within 107 bytes;
+  `runs.json` in the scratch root maps each name to its scenario, direction and the two tree paths.
 
 Needs `/usr/bin/strace` and a kernel with Landlock ABI 4 or newer (Linux 6.7 or newer, enabled in the LSM list).
 

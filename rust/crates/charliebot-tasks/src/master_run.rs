@@ -19,6 +19,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -683,7 +684,7 @@ impl RunProcess for TurnProcess<'_> {
       }
       let lifecycle = self.features.registry.lifecycle_for(&self.option.backend_type)?;
       if launch_loop::has_round_notices(lifecycle.as_ref()) {
-        let raw_path = self.log_dir.join(charliebot_agents::runner::RAW_LOG_NAME);
+        let raw_path = self.log_dir.join(RAW_LOG_NAME);
         if !raw_path.is_file() {
           tracing::warn!(target: "charliebot_tasks", session = %session_id, raw_log = %raw_path.display(), "master_cc_fallback_notice_raw_log_missing");
         } else {
@@ -847,7 +848,7 @@ pub(crate) async fn run_cc(
   } else {
     exit_code = process.last_exit_code.unwrap_or(1);
     if exit_code != 0 {
-      let stderr = read_stderr_tail(&log_dir.join(charliebot_agents::runner::STDERR_LOG_NAME))?;
+      let stderr = read_stderr_tail(&log_dir.join(STDERR_LOG_NAME))?;
       error_msg = charliebot_agents::runs::select_error_hint(&process.error_event_messages, &stderr);
     }
   }
@@ -919,8 +920,8 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let is_alive = item.resume_is_alive.clone().context("resume item has no liveness probe")?;
   let raw_path = record.raw_log.clone();
   let log_dir = raw_path.parent().context("resume raw log has no parent directory")?.to_path_buf();
-  let cursor_path = log_dir.join(cursor::CURSOR_NAME);
-  let stderr_path = log_dir.join(charliebot_agents::runner::STDERR_LOG_NAME);
+  let cursor_path = log_dir.join(CURSOR_NAME);
+  let stderr_path = log_dir.join(STDERR_LOG_NAME);
   let option = resolve_resume_option(item);
   tracing::info!(target: "charliebot_tasks", session = %item.session_meta.id, pid = record.pid, raw_log = %raw_path.display(), "master_cc_resuming");
   let backend_type = option.as_ref().map(|option| option.backend_type.as_str()).unwrap_or("unknown");

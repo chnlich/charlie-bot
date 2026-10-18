@@ -6,7 +6,6 @@ use std::os::fd::IntoRawFd;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
-pub const CURSOR_NAME: &str = "agent.raw.cursor";
 pub const CURSOR_FIELD_BYTES: usize = 20;
 
 /// Read a consumed byte offset; a missing or malformed file requests replay from zero.
@@ -55,6 +54,7 @@ impl RawCursorWriter {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_store::run_records::CURSOR_NAME;
 
   #[test]
   fn cursor_wire_format_is_shared_with_python() {

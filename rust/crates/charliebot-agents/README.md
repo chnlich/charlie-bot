@@ -12,7 +12,6 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `cgroup::ensure_session_cgroup`, `read_memory_events`, `classify_cgroup_exit`, `prepare_session_cgroup` | `src/infra/process.py:110`, `:144`, `:244`, `:272` |
 | `cgroup::move_process_to_cgroup` | `src/runtime/agent_process/base.py:878` |
 | `cgroup::cleanup_session_cgroup`, `sweep_stale_session_cgroups`, `log_session_cgroup_startup` | `src/infra/process.py:288`, `:307`, `:334` |
-| `cursor::CURSOR_NAME` | `src/runtime/runs.py:49` |
 | `cursor::read_raw_cursor`, `CURSOR_FIELD_BYTES` | `src/runtime/runs.py:324`, `:332` |
 | `cursor::RawCursorWriter`, `RawCursorWriter::new`, `write`, and `close` | `src/runtime/runs.py:335`, `:347`, `:351`, `:357` |
 | `follow::DEFAULT_BUFFER_LIMIT`, `TAIL_POLL_INTERVAL`, `SilenceCallback`, `FollowSummary`, and its fields | `src/runtime/agent_process/base.py:36`, `:95`, `:398` |
@@ -56,7 +55,7 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `launch_loop::SESSION_ID_ENV`, `ProcessResult`, `RunProcess`, `run_launches`, `child_env`, and `has_round_notices` | `src/runtime/launch_loop.py:19-65` |
 | `event_builders` and its `make_text_event`, `make_error_event`, `make_master_done_event`, `make_result_event`, `make_tool_use_event`, `make_tool_result_event`, `make_context_reading_event`, `make_compact_boundary_event`, `make_context_compacted_event`, and `make_context_compact_failed_event` | `src/runtime/agent_process/base.py:220-350` |
 | `runs::clean_control_characters`, `runs::select_error_hint`, and `runs::run_alive_probe` | `src/runtime/runs.py:148`, `:247` |
-| `runner::{RAW_LOG_NAME, STDERR_LOG_NAME, DEFAULT_POST_RESULT_TIMEOUT, DEFAULT_CLEANUP_TIMEOUT, OnSpawnFn, EventFn}` | `src/runtime/runs.py:49`, `src/runtime/agent_process/base.py:37`, `:660-661`, `:919`, `:936` |
+| `runner::{DEFAULT_POST_RESULT_TIMEOUT, DEFAULT_CLEANUP_TIMEOUT, OnSpawnFn, EventFn}` | `src/runtime/agent_process/base.py:37`, `:660-661`, `:919`, `:936` |
 | `RunRequest`, its fields, `RunRequest::new`, and `RunRequest::from_features` | `src/runtime/agent_process/base.py:653-708`, `:936-1033` |
 | `RunOutcome` and its fields, including post-result hang diagnostics | `src/runtime/agent_process/base.py:98-120`, `:703`, `:1000-1050`, `:1110` |
 | `AgentRunner`, `AgentRunner::new`, `run`, `terminate`, and `detach` | `src/runtime/agent_process/base.py:936-1050`, `:1180-1205` |

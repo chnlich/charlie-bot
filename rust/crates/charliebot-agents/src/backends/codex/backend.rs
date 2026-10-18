@@ -342,10 +342,8 @@ mod tests {
 
   #[test]
   fn instructions_file_without_content_serializes_python_none_as_toml_null() {
-    let launch = LaunchArgs {
-      instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
-      ..LaunchArgs::default()
-    };
+    let launch =
+      LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
     let backend = CodexBackend::from_launch(
       PathBuf::from("/synthetic/bin/codex"),
       Path::new("/synthetic/home/.local/bin"),

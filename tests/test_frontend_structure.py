@@ -39,6 +39,8 @@ package's script registers a handler with it at load time. The core registration
     Chat.registerInputMode      web/static/js/chat/attachments.js (an input mode and its user-bubble badge)
     Chat.registerMessagePostProcessor
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)
+    Chat.registerProjectionCheck
+                                web/static/js/chat/turn-engine.js (the page's check, run after each projection that ran)
     Chat.registerSeparatorButton
                                 web/static/js/chat/rendering.js (a button on each separator line)
     Chat.registerSeparatorPanel web/static/js/chat/turn-engine.js (a panel under a separator line that the engine reopens)

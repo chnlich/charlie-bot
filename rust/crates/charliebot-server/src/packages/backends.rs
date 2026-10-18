@@ -75,15 +75,6 @@ pub fn claude_code(registry: &mut Registry) -> Result<(), RegistryError> {
   charliebot_agents::backends::claude_code::register(registry)
 }
 
-pub fn codex(registry: &mut Registry) -> Result<(), RegistryError> {
-  let traits = BackendTraits {
-    family_prefix: Some("codex"),
-    compact_hint: Some("codex only compacts automatically — tune model_auto_compact_token_limit"),
-    ..plain(ResumeStyle::NativeId, true)
-  };
-  register_type(registry, "codex", traits, None, false)
-}
-
 /// `src/backends/gemini`: the type, then its two retired secret keys.
 pub fn gemini(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "gemini", plain(ResumeStyle::NativeId, true), None, false)?;

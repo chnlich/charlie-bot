@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::metadata::SessionMetadata;
-use crate::projection;
+use crate::projection::{self, MessageProjection};
 use crate::{ChatEvent, Store, StoreResult};
 
 /// Public detail for a missing session lookup.
@@ -75,9 +75,32 @@ impl Store {
     projection::events_to_messages(events, 0, self.event_renderers.clone())
   }
 
+  /// Convert events with this store's feature renderers in the global event-index space.
+  pub fn events_to_messages_at(&self, events: &[ChatEvent], event_index_offset: usize) -> StoreResult<Vec<Value>> {
+    projection::events_to_messages(events, event_index_offset, self.event_renderers.clone())
+  }
+
   /// Convert events with this store's feature renderers and preserve a live draft.
   pub fn events_to_view(&self, events: &[ChatEvent]) -> StoreResult<(Vec<Value>, Option<Value>)> {
     projection::events_to_view(events, 0, self.event_renderers.clone())
+  }
+
+  /// Convert events to a message view with the supplied global event-index offset.
+  pub fn events_to_view_at(
+    &self,
+    events: &[ChatEvent],
+    event_index_offset: usize,
+  ) -> StoreResult<(Vec<Value>, Option<Value>)> {
+    projection::events_to_view(events, event_index_offset, self.event_renderers.clone())
+  }
+
+  /// Build a message projection over derived events with this store's feature renderers.
+  pub fn build_message_projection(
+    &self,
+    events: &[ChatEvent],
+    event_index_offset: usize,
+  ) -> StoreResult<MessageProjection> {
+    MessageProjection::new(events, event_index_offset, self.event_renderers.clone())
   }
 
   /// Return one session or an error carrying the route's 404 detail.

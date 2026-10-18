@@ -42,6 +42,7 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/sessions/status", get(session_status).fallback(method_not_allowed))
     .route("/api/sessions/tree", get(session_tree).fallback(method_not_allowed))
     .route("/api/sessions/search", get(session_search).fallback(method_not_allowed))
+    .merge(crate::detail::routes())
     .with_state(Arc::clone(features))
 }
 
@@ -475,12 +476,12 @@ fn json_bytes_response(body: Vec<u8>, encoding: Option<&'static str>) -> Respons
   builder.body(Body::from(body)).expect("a JSON response builds")
 }
 
-struct Query {
+pub(crate) struct Query {
   values: Vec<(String, String)>,
 }
 
 impl Query {
-  fn new(request: &Request<Body>) -> Result<Self, Box<Response>> {
+  pub(crate) fn new(request: &Request<Body>) -> Result<Self, Box<Response>> {
     let mut values = Vec::new();
     for part in request.uri().query().unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
       let (key, value) = part.split_once('=').unwrap_or((part, ""));
@@ -496,11 +497,11 @@ impl Query {
     Ok(Query { values })
   }
 
-  fn get(&self, key: &str) -> Option<&str> {
+  pub(crate) fn get(&self, key: &str) -> Option<&str> {
     self.values.iter().find(|(name, _)| name == key).map(|(_, value)| value.as_str())
   }
 
-  fn parse_int(
+  pub(crate) fn parse_int(
     &self,
     name: &str,
     default: Option<i64>,

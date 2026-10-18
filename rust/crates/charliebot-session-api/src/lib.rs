@@ -1,11 +1,14 @@
 //! Session listing routes and the shared listing helpers.
 
+pub mod detail;
 pub mod listing;
 mod prompt_routes;
 mod routes;
 mod search;
 mod sidebar;
 mod tree;
+mod usage;
+mod worker_transcript;
 
 use std::sync::Arc;
 

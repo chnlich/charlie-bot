@@ -740,9 +740,8 @@ fn model_note(event: &Value) -> String {
     return String::new();
   };
   let lower = model.to_lowercase();
-  let mut parts = lower.split('-').map(str::to_string);
-  let first = parts.next().unwrap_or_default();
-  let family = if first == "claude" { parts.next().unwrap_or_default() } else { first };
+  let parts: Vec<&str> = lower.split('-').collect();
+  let family = if parts.len() > 1 && parts[0] == "claude" { parts[1] } else { parts[0] };
   let mut chars = family.chars();
   let family = chars.next().map_or_else(String::new, |first| first.to_uppercase().collect::<String>() + chars.as_str());
   format!("by {family}")
@@ -1202,5 +1201,17 @@ mod tests {
       serialized.push(serde_json::to_string(&draft).unwrap().len());
     }
     assert!(serialized.iter().all(|len| *len < 100_000));
+  }
+
+  #[test]
+  fn compaction_model_note_names_the_family_as_model_family_does() {
+    for (model, note) in [
+      ("claude", "by Claude"),
+      ("claude-opus-5", "by Opus"),
+      ("Sonnet-X", "by Sonnet"),
+      ("CLAUDE-haiku-5", "by Haiku"),
+    ] {
+      assert_eq!(model_note(&json!({"model": model})), note, "model {model}");
+    }
   }
 }

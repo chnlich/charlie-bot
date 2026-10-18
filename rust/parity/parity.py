@@ -549,6 +549,23 @@ def _run_handover_step(
   return result, after
 
 
+def _unresolved_result(
+    scenario: scenario_file.Scenario, sides: list[Side], step: scenario_file.Step, manifest: dict) -> StepResult | None:
+  """A failed result when a step's references do not resolve on some side, else None.
+
+  The check runs before the step touches any server or fake, so a missing capture never leaves one side changed.
+  """
+  lines = []
+  for side in sides:
+    message = scenario_file.unresolved_reference(
+        step, manifest, side.captures, str(side.tree.root), str(side.tree.home))
+    if message is not None:
+      lines.append(f"{side.label}: {message}")
+  if not lines:
+    return None
+  return StepResult(scenario.name, step.name, step.route, (None, None), lines, "", [])
+
+
 def _run_step(
     scenario: scenario_file.Scenario, sides: list[Side], step: scenario_file.Step, manifest: dict,
     before: list[compare.Snapshot], handover_argv: list[list[str]]) -> tuple[StepResult, list[compare.Snapshot]]:
@@ -562,9 +579,6 @@ def _run_step(
     for side in sides:
       try:
         responses.append(_request(side, step, manifest))
-      except scenario_file.ScenarioError as error:
-        lines.append(f"request not sent to {side.label}: {error}")
-        responses.append(None)
       except (OSError, http.client.HTTPException) as error:
         # A failed request fails this step. The exit check after the step names the status of a server that died.
         lines.append(f"request to {side.label} failed: {error}")
@@ -784,6 +798,10 @@ def _run_scenario(
     before = after
     for number, step in enumerate(scenario.steps, start=1):
       handover_argv = [python_argv, candidate_handover_argv]
+      unresolved = _unresolved_result(scenario, sides, step, manifest)
+      if unresolved is not None:
+        results.append(unresolved)
+        continue
       result, before = _run_step(scenario, sides, step, manifest, before, handover_argv)
       results.append(result)
       if not result.passed and result.responses:

@@ -8,9 +8,8 @@
 //! on resume and fork, so a response dedupes on its id within a file. The record's session is the transcript's file
 //! stem.
 //!
-//! The registry's `logs` takes no config, so the source learns the login directories from the config that
-//! `quota_accounts` and `sweep` receive ([`ClaudeLogs::observe_config`]). Until one of them has run, `logs` fails rather
-//! than capture the default login directory alone.
+//! The registry's `logs` takes no config, so this source reads `accounts.claude` from the current profile config each
+//! time it lists transcripts.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -18,7 +17,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::CharlieBotConfig;
@@ -43,30 +42,34 @@ const MARKER: &[u8] = b"\"usage\"";
 pub struct ClaudeLogs {
   host: ClaudeHost,
   quota: QuotaAccounts,
-  login_dirs: Mutex<Option<Vec<PathBuf>>>,
 }
 
 impl ClaudeLogs {
   pub fn new(host: ClaudeHost, state: Arc<ClaudeAccountState>, http: Arc<QuotaHttp>) -> Self {
-    Self { host, quota: QuotaAccounts::new(state, http), login_dirs: Mutex::new(None) }
+    Self { host, quota: QuotaAccounts::new(state, http) }
   }
 
-  /// Record the login directories of `cfg`: the default one and every `accounts.claude` entry, sorted and deduplicated.
-  pub fn observe_config(&self, cfg: &CharlieBotConfig) {
+  /// The current config's login directories: the default one and every `accounts.claude` entry, sorted and deduplicated.
+  fn login_dirs(&self) -> anyhow::Result<Vec<PathBuf>> {
+    let config_path = self.host.charliebot_home.join(charliebot_core::config::CONFIG_FILENAME);
+    let document = charliebot_core::config::read_yaml_document(&config_path)
+      .with_context(|| format!("reading Claude account config from {}", config_path.display()))?;
+    let document = match document {
+      serde_yaml::Value::Null => return Ok(vec![self.host.default_dir()]),
+      serde_yaml::Value::Mapping(mapping) => mapping,
+      other => bail!("{}: the document must be a mapping of sections, got {other:?}", config_path.display()),
+    };
+    let key = serde_yaml::Value::String("accounts".to_string());
+    let accounts = match document.get(&key) {
+      Some(value) => serde_yaml::from_value::<AccountsConfig>(value.clone())
+        .with_context(|| format!("{}: invalid config key accounts", config_path.display()))?,
+      None => AccountsConfig::default(),
+    };
     let mut dirs = BTreeSet::from([self.host.default_dir()]);
-    for account in &cfg.section::<AccountsConfig>("accounts").claude {
+    for account in &accounts.claude {
       dirs.insert(self.host.expand(&account.config_dir));
     }
-    *self.login_dirs.lock().expect("the Claude login directories are not poisoned") = Some(dirs.into_iter().collect());
-  }
-
-  fn known_login_dirs(&self) -> anyhow::Result<Vec<PathBuf>> {
-    self
-      .login_dirs
-      .lock()
-      .expect("the Claude login directories are not poisoned")
-      .clone()
-      .context("the Claude login directories are not known yet: quota_accounts or sweep must see the config first")
+    Ok(dirs.into_iter().collect())
   }
 }
 
@@ -77,7 +80,7 @@ impl UsageSourceImpl for ClaudeLogs {
 
   fn logs(&self) -> anyhow::Result<Vec<(PathBuf, String)>> {
     let mut logs = Vec::new();
-    for (label, login_dir) in labeled_login_dirs(&self.known_login_dirs()?) {
+    for (label, login_dir) in labeled_login_dirs(&self.login_dirs()?) {
       for path in walk_jsonl(&login_dir.join("projects"))? {
         logs.push((path, label.clone()));
       }
@@ -90,7 +93,6 @@ impl UsageSourceImpl for ClaudeLogs {
   }
 
   fn quota_accounts(&self, cfg: &CharlieBotConfig) -> Vec<Arc<dyn QuotaAccount>> {
-    self.observe_config(cfg);
     match self.quota.derive(&self.host, cfg) {
       Ok(accounts) => accounts,
       Err(error) => {
@@ -106,7 +108,6 @@ impl UsageSourceImpl for ClaudeLogs {
   }
 
   fn sweep(&self, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
-    self.observe_config(&scope.cfg);
     usage_sweep::sweep(&self.host, scope)
   }
 }
@@ -194,7 +195,7 @@ pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Ve
     let Some(model) = message.get("model").filter(|model| json_truthy(model)) else {
       continue;
     };
-    let model = model.as_str().with_context(|| format!("{}: message.model is not a string", path.display()))?;
+    let model = python_str(model);
     if model == "<synthetic>" {
       continue;
     }
@@ -206,7 +207,7 @@ pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Ve
       record_id: format!("claude:{key}"),
       kind: RecordKind::Native,
       source: USAGE_SOURCE.to_string(),
-      model: model.to_string(),
+      model,
       account: account.to_string(),
       ts: timestamp_of(&line),
       in_fresh: usage_count(usage, USAGE_INPUT_TOKENS)?,
@@ -368,9 +369,23 @@ mod tests {
   }
 
   #[test]
-  fn logs_need_the_login_directories_from_a_config_first() {
+  fn logs_read_current_login_directories_without_a_quota_or_sweep_call() {
     let root = tempfile::tempdir().unwrap();
-    let host = ClaudeHost { home: root.path().to_path_buf(), claude_config_dir: root.path().join(".claude") };
+    let profile = root.path().join("profile");
+    let worktrees = root.path().join("worktrees");
+    let default_dir = root.path().join(".claude");
+    let first_dir = root.path().join(".claude-ext-1");
+    let second_dir = root.path().join(".claude-ext-2");
+    for dir in [&default_dir, &first_dir, &second_dir] {
+      fs::create_dir_all(dir.join("projects")).unwrap();
+      fs::write(dir.join("projects/session.jsonl"), "synthetic\n").unwrap();
+    }
+    super::super::test_support::load_config(&profile, &[("ext-1", &first_dir)], &worktrees);
+    let host = ClaudeHost {
+      home: root.path().to_path_buf(),
+      claude_config_dir: default_dir.clone(),
+      charliebot_home: profile.clone(),
+    };
     let source = ClaudeLogs::new(
       host,
       Arc::new(ClaudeAccountState::new()),
@@ -380,7 +395,17 @@ mod tests {
         "http://127.0.0.1:9/token",
       )),
     );
-    assert!(source.logs().is_err());
+
+    let initial = source.logs().unwrap();
+    assert_eq!(initial.len(), 2);
+    assert!(initial.contains(&(default_dir.join("projects/session.jsonl"), "work (default)".to_string())));
+    assert!(initial.contains(&(first_dir.join("projects/session.jsonl"), "ext-1".to_string())));
+
+    super::super::test_support::load_config(&profile, &[("ext-2", &second_dir)], &worktrees);
+    let refreshed = source.logs().unwrap();
+    assert_eq!(refreshed.len(), 2);
+    assert!(refreshed.contains(&(default_dir.join("projects/session.jsonl"), "work (default)".to_string())));
+    assert!(refreshed.contains(&(second_dir.join("projects/session.jsonl"), "ext-2".to_string())));
   }
 
   #[test]

@@ -130,7 +130,11 @@ fn read_matches_the_python_usage_log_on_synthetic_transcripts() {
   let resumed = projects.join("resumed.jsonl");
   fs::write(&resumed, transcript_text(&[ASSISTANT_A, REQUEST_ONLY])).unwrap();
   let source = ClaudeLogs::new(
-    ClaudeHost { home: root.path().to_path_buf(), claude_config_dir: root.path().join("claude") },
+    ClaudeHost {
+      home: root.path().to_path_buf(),
+      claude_config_dir: root.path().join("claude"),
+      charliebot_home: root.path().join("home"),
+    },
     Arc::new(ClaudeAccountState::default()),
     Arc::new(quota_http()),
   );
@@ -356,8 +360,11 @@ fn sweep_summary(sweep: &SourceSweep, directories: &BTreeMap<String, PathBuf>) -
 fn sweep_matches_the_python_sweep_dry_and_real_on_the_same_spec() {
   let spec = sweep_spec();
   let rust_root = TempDir::new().unwrap();
-  let host =
-    ClaudeHost { home: rust_root.path().to_path_buf(), claude_config_dir: rust_root.path().join("claude-home") };
+  let host = ClaudeHost {
+    home: rust_root.path().to_path_buf(),
+    claude_config_dir: rust_root.path().join("claude-home"),
+    charliebot_home: rust_root.path().join("home"),
+  };
   let directories = build_sweep_tree(rust_root.path(), &spec);
   let cfg = Arc::new(load_config(rust_root.path()));
 

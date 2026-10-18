@@ -1,51 +1,29 @@
-"""OpenCodeBackend wrapping the `opencode serve` HTTP/SSE API."""
+"""OpenCodeBackend: one turn on the shared opencode 2.0 server, and the standalone one-shot generation."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import pathlib
-import re
-import ssl
-from collections.abc import AsyncIterator
+import shutil
+import tempfile
+from collections.abc import AsyncIterator, Awaitable
+from typing import TypeVar
 
 import httpx
-import orjson
 
-from src.backends.opencode import opencode_limits
+from src.backends.opencode import opencode_limits, server
 from src.infra import event_types as ET
-from src.infra import http, log_once, process, sse
-from src.runtime import message_aggregator
+from src.infra import home, log_once, process
 from src.runtime.agent_process import base
 
 log = log_once.LazyStructlogLogger()
 
-# The serve URL is plain localhost HTTP, so no TLS ever rides these clients;
-# the context exists only because httpx builds a fresh default SSL context per
-# AsyncClient when `verify` is left at its default, and that build costs ~20 ms
-# of event-loop CPU per call here (create_default_context loads the system CA
-# set). One process-wide context makes every construction pay it once.
-_SERVE_SSL_CONTEXT = ssl.create_default_context()
+T = TypeVar("T")
 
-_SERVER_URL_RE = re.compile(r"opencode server listening on (http://127\.0\.0\.1:\d+)")
-# Handled `opencode serve` SSE event types: each frame's "type" value, fixed by the
-# opencode binary's event stream. Ignored types live in _IGNORED_SSE_EVENT_TYPES.
-SSE_EVENT_SERVER_CONNECTED = "server.connected"
-SSE_EVENT_PERMISSION_ASKED = "permission.asked"
-SSE_EVENT_SESSION_ERROR = "session.error"
-SSE_EVENT_SESSION_IDLE = "session.idle"
-SSE_EVENT_MESSAGE_UPDATED = "message.updated"
-SSE_EVENT_MESSAGE_PART_UPDATED = "message.part.updated"
-_IGNORED_SSE_EVENT_TYPES = {
-    "message.part.delta",
-    "session.diff",
-    "session.next.agent.switched",
-    "session.next.model.switched",
-    "session.status",
-    "session.updated",
-}
 # opencode's compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
 # `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`) single-homes in
@@ -53,41 +31,68 @@ _IGNORED_SSE_EVENT_TYPES = {
 # (src.runtime.session_usage) — importing it here would drag this module onto the
 # usage chain (the M99 server import floor).
 
-# opencode's SQLite store locking (e.g. the boot-time `insert into "project"`
-# collision observed in production) surfaces as an HTTP 500 or session.error
-# from an otherwise healthy serve process. A failed attempt whose drained
-# stderr tail carries this signature is retried once on the same session.
-_LOCK_SIGNATURE_RE = re.compile(r"database is locked|LockTimeoutError")
-_LOCK_RETRY_MAX_ATTEMPTS = 2
-_LOCK_RETRY_BACKOFF_SECONDS = 10.0
-
+# Session events a turn does not translate. Any other type unknown to this module is logged once.
+_IGNORED_SESSION_EVENT_TYPES = {
+    "permission.replied",
+    "session.agent.selected",
+    "session.created",
+    "session.deleted",
+    "session.execution.started",
+    "session.forked",
+    "session.inbox.cancelled",
+    "session.inbox.delivered",
+    "session.inbox.delivery.changed",
+    "session.inbox.enqueued",
+    "session.instructions.updated",
+    "session.message.content.updated",
+    "session.metadata.updated",
+    "session.model.selected",
+    "session.permissions",
+    "session.renamed",
+    "session.retry.scheduled",
+    "session.reasoning.started",
+    "session.shell.ended",
+    "session.shell.started",
+    "session.skill.activated",
+    "session.step.failed",
+    "session.step.streamed",
+    "session.synthetic",
+    "session.text.started",
+    "session.tool.input.delta",
+    "session.tool.input.ended",
+    "session.tool.progress",
+    "session.usage.recorded",
+    "session.usage.updated",
+    "session.viewed",
+    "session.compaction.delta",
+}
 # Both registries sit on the translator's unhandled paths only, so a key that
 # grows a branch or an ignore entry stops reaching them at all; one sighting
 # carries the whole signal because the set of mapped keys is code, fixed for
 # the process.
-_UNHANDLED_PART_TYPES = log_once.WarnOnceRegistry()
+_UNHANDLED_SESSION_EVENT_TYPES = log_once.WarnOnceRegistry()
 
-# opencode emits todo.updated on every todo write, so an unmapped SSE event
-# type re-fires once per unhandled frame.
-_UNHANDLED_SSE_EVENT_TYPES = log_once.WarnOnceRegistry()
-
-# The install dir the opencode installer targets, USER_LOCAL_BIN's sibling for
-# this binary. base.resolve_binary's fallback dir and the child-PATH prepend both
-# point at it, and the two must stay the same dir: a binary the resolver finds
-# there must also be on the spawned CLI's PATH.
-OPENCODE_BIN_DIR = str(pathlib.Path.home() / ".opencode" / "bin")
+# The turn process: it only waits for a signal. Absolute path, because the spawn execs without a PATH search.
+TURN_PROCESS_CMD = ("/usr/bin/sleep", "infinity")
 
 
-def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
-  """One OpenCode file part per readable image attachment, in reference order.
+class OpenCodeSseSilenceError(RuntimeError):
+  """The turn's session produced no event within opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT."""
 
-  The mime comes from the filename extension via ``base.IMAGE_MIME_BY_EXT``; the
-  payload is the file's bytes as a ``data:`` URL. A non-image reference is
-  skipped silently and keeps riding the task text's [Attached files] path
-  list, and a missing or unreadable image file is skipped with one
-  ``log.warning`` — a broken attachment never fails the turn.
+
+class _TurnProcessExited(Exception):
+  """The turn's own process ended (a chat cancel signals it), so the turn ends as cancelled."""
+
+
+def _image_file_attachments(uploaded_files: list[dict] | None) -> list[dict]:
+  """One 2.0 file attachment per readable image, in reference order.
+
+  The mime comes from the filename extension via ``base.IMAGE_MIME_BY_EXT``; the attachment's
+  uri is the file's bytes as a ``data:`` URL. A non-image reference is skipped silently and keeps
+  riding the task text's [Attached files] path list, and a missing or unreadable image file is
+  skipped with one ``log.warning`` — a broken attachment never fails the turn.
   """
-  parts: list[dict] = []
+  attachments: list[dict] = []
   for ref in uploaded_files or []:
     filename = str(ref.get("filename", ""))
     mime = base.IMAGE_MIME_BY_EXT.get(filename.rsplit(".", 1)[-1].lower())
@@ -99,27 +104,32 @@ def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
     except OSError as e:
       log.warning("opencode_attachment_unreadable", path=path, filename=filename, error=str(e))
       continue
-    parts.append({"type": "file", "mime": mime, "url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"})
-  return parts
+    attachments.append({"uri": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}", "name": filename})
+  return attachments
 
 
-class OpenCodeSseSilenceError(RuntimeError):
-  """The SSE stream carried no session-id-bearing event within opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT."""
+def _error_text(error: object) -> str:
+  if isinstance(error, dict):
+    message = error.get("message") or (error.get("data") or {}).get("message")
+    return str(message) if message else json.dumps(error, default=str)
+  return str(error)
 
 
 class OpenCodeBackend(base.AgentBackend):
-  """Runs an `opencode serve` subprocess and translates SSE events to CC-compatible format."""
-
-  def __init__(self, *, proxy_url: str | None = None, **kwargs: object) -> None:
-    super().__init__(**kwargs)
-    self._opencode_bin = base.resolve_binary("opencode", OPENCODE_BIN_DIR)
-    self._proxy_url = proxy_url
-    # Injectable seam so lock-retry tests never sleep real seconds.
-    self._sleep = asyncio.sleep
-    self._reset_run_state()
+  """Runs one turn on the shared opencode server and translates its session events to CharlieBot's."""
 
   # A manager turn's session cwd holds this AGENTS.md, which opencode auto-detects.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "opencode_wrote_agents_md")
+
+  def __init__(self, *, proxy_url: str | None = None, **kwargs: object) -> None:
+    super().__init__(**kwargs)
+    self._proxy_url = proxy_url
+    self._reset_run_state()
+
+  def _build_command(self, prompt: str) -> list[str]:
+    # The turn's own process: the Run's pinned identity, not the opencode server.
+    del prompt
+    return list(TURN_PROCESS_CMD)
 
   def _effective_prompt(self, prompt: str) -> str:
     # opencode reads the instructions from the cwd's AGENTS.md, which a worker or review run
@@ -128,203 +138,14 @@ class OpenCodeBackend(base.AgentBackend):
       return prompt
     return super()._effective_prompt(prompt)
 
-  def _build_command(self, prompt: str) -> list[str]:
-    del prompt
-    cmd = [self._opencode_bin, "serve", "--port", "0", "--print-logs"]
-    cmd.extend(self._extra_flags)
-    return cmd
-
-  def _prepare_env(self, env: dict, *, opencode_config: dict | None = None) -> dict:
-    oc_env = {**env}
-    base.prepend_path_dir(oc_env, OPENCODE_BIN_DIR)
-    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
-        self._headless_config() if opencode_config is None else opencode_config)
-    if self._proxy_url is not None:
-      base.apply_proxy_env(oc_env, self._proxy_url)
-    return oc_env
-
-  def _headless_config(self) -> dict:
-    """Injected opencode policy for headless master runs.
-
-    Headless runs have no human approver, so the injected policy keeps broad
-    auto-approval for all tool calls, including OpenCode's internal subagents.
-    This broad auto-approval is deliberate. The explicit ``question`` deny restores
-    OpenCode's built-in default, which a bare top-level ``permission: "allow"``
-    overrides; headless runs have no UI to answer interactive questions.
-    """
-    return {
-        "permission": {
-            "*": "allow",
-            "question": "deny"
-        },
-        "default_agent": "charliebot",
-        "agent": {
-            "charliebot": {
-                "mode": "primary"
-            },
-        },
-    }
-
-  async def run(self,
-                prompt: str,
-                cwd: str,
-                env: dict,
-                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    """Drive OpenCode through its per-run HTTP server and SSE event stream.
-
-    A failed attempt whose drained stderr tail carries the SQLite lock
-    signature (`database is locked` / `LockTimeoutError`) is retried once
-    after a backoff: the next attempt resumes the SAME opencode session id
-    via ``_resume_session_id`` and re-sends the original prompt argument
-    byte-identically. The failed attempt's terminal error event is held back
-    and only emitted when the failure is final, so a retried failure never
-    appears in the run's event stream.
-
-    uploaded_files are the user message's image attachments; each readable
-    image rides the prompt as a file part (see ``_image_file_parts``).
-    """
-    self._reset_run_state()
-    attempt = 0
-    while True:
-      attempt += 1
-      held_error: dict | None = None
-      try:
-        await asyncio.to_thread(self._prepare_cwd, cwd)
-        cmd = self._build_command(prompt)
-        final_env = self._prepare_env(env)
-        stdout_log_path, stderr_log_path = self._log_paths()
-        self._stdout_fd = self._open_stdout_log(stdout_log_path)
-
-        await self._spawn_piped_and_pin_identity(cmd, cwd, final_env)
-
-        self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
-        self._server_url = await self._read_server_url()
-        self._stdout_task = asyncio.create_task(self._stream_stdout())
-
-        async with httpx.AsyncClient(base_url=self._server_url, timeout=opencode_limits.OPENCODE_HTTP_API_TIMEOUT,
-                                     verify=_SERVE_SSL_CONTEXT) as client:
-          await self._check_health(client)
-          self._model_limit = await self._fetch_model_limit(client)
-          self._session_id = self._resume_session_id or await self._create_session(client)
-          yield {"type": ET.SESSION_ATTACHED, "session_id": self._session_id}
-
-          async with client.stream("GET", "/event", timeout=None) as response:
-            response.raise_for_status()
-            sse_events = self._with_sse_progress_watchdog(self._iter_sse_events(response))
-            await self._wait_for_server_connected(sse_events)
-            await self._send_prompt(
-                client, self._session_id, self._effective_prompt(prompt), uploaded_files=uploaded_files)
-
-            async for translated in self._consume_sse_events(sse_events):
-              if self._failed and translated.get("type") == ET.ERROR:
-                # The attempt's terminal error event: held back until the
-                # failure is final, so a retried attempt never emits it.
-                held_error = translated
-                continue
-              yield translated
-      except Exception as e:
-        if self._is_cancellation_disconnect(e):
-          # terminate() killed the server, which closes the /event stream mid-read. That
-          # transport error is cancellation cleanup, not the root failure — do not report it.
-          log.info("opencode_sse_closed_after_terminate", error=str(e))
-        else:
-          self._failed = True
-          log.exception("opencode_backend_failed", error=str(e))
-          detail = str(e) or e.__class__.__name__
-          held_error = base.make_error_event(f"OpenCode backend failed: {detail}")
-      finally:
-        await self._cleanup_server()
-
-      if self._should_retry_lock_failure(attempt):
-        log.info("opencode_lock_retry", session_id=self._session_id, attempt=attempt)
-        self._resume_session_id = self._session_id or self._resume_session_id
-        self._reset_run_state()
-        await self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)
-        if self.terminated:
-          # Cancelled during the backoff: never start the retry attempt.
-          return
-        continue
-      if held_error is not None:
-        yield held_error
-      return
-
-  async def _consume_sse_events(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
-    """Translate parent-session SSE events until the turn ends.
-
-    A ``permission.asked`` event is a terminal backend error: headless runs have no human
-    to approve it, and this opencode server is dedicated to a single run, so an ask from
-    ANY session (parent or a subagent child) means the run cannot proceed. It is detected
-    before the parent-session filter so child-session asks — which carry a different
-    ``sessionID`` — are not silently dropped.
-    """
-    async for event in sse_events:
-      properties = event.get("properties", {})
-      event_type = event.get("type")
-
-      if event_type == SSE_EVENT_PERMISSION_ASKED:
-        self._failed = True
-        yield base.make_error_event(self._format_permission_error(properties))
-        return
-
-      if properties.get("sessionID") != self._session_id:
-        continue
-
-      if event_type == SSE_EVENT_SESSION_ERROR:
-        # Flag before the translated error is yielded: run()'s retry wrapper
-        # reads `_failed` to hold the terminal event back while the failure
-        # is still retryable. Direct consumers see identical yields.
-        self._failed = True
-
-      for translated in self._translate_sse_event(event):
-        yield translated
-
-      if event_type == SSE_EVENT_SESSION_ERROR:
-        return
-
-      if event_type == SSE_EVENT_SESSION_IDLE:
-        yield self._make_accumulated_result()
-        return
-    raise RuntimeError("OpenCode SSE stream closed before session.idle")
-
-  def _is_cancellation_disconnect(self, error: Exception) -> bool:
-    """True when an SSE stream error is the expected fallout of a deliberate terminate().
-
-    A genuine unexpected disconnect (terminate() not called) stays a visible backend error.
-    """
-    return self.terminated and isinstance(error, httpx.RemoteProtocolError)
-
-  def _should_retry_lock_failure(self, attempt: int) -> bool:
-    """True when the just-failed attempt is retryable as an opencode SQLite lock timeout.
-
-    Called after ``_cleanup_server()`` for the attempt, which has already awaited
-    the stderr streamer — the bounded tail therefore holds every byte the
-    attempt's serve process logged before it was shut down. A deliberate
-    ``terminate()`` never retries.
-    """
-    if not self._failed or self.terminated or attempt >= _LOCK_RETRY_MAX_ATTEMPTS:
-      return False
-    stderr_tail = bytes(self._stderr_tail).decode("utf-8", errors="replace")
-    return _LOCK_SIGNATURE_RE.search(stderr_tail) is not None
-
-  def _format_permission_error(self, properties: dict) -> str:
-    return (
-        f"OpenCode requested interactive permission '{properties.get('permission')}' "
-        f"(patterns={properties.get('patterns')}, session={properties.get('sessionID')}) "
-        "but CharlieBot runs headless with no approval path; aborting run.")
-
   def _reset_run_state(self) -> None:
     # __init__ delegates here, so every per-run field is assigned fresh;
     # in-place .clear() would hit missing attributes on a fresh instance.
-    self._server_url: str | None = None
     self._session_id: str | None = None
-    self._stdout_task: asyncio.Task | None = None
-    self._stdout_fd: int | None = None
-    self._message_roles: dict[str, str] = {}
-    self._pending_parts: dict[str, list[dict]] = {}
-    self._last_part_text: dict[str, str] = {}
-    self._tool_use_emitted: set[str] = set()
-    self._tool_result_emitted: set[str] = set()
-    self._compaction_message_ids: set[str] = set()
+    self._turn: server.Turn | None = None
+    self._exit_task: asyncio.Task | None = None
+    self._streamed_parts: set[tuple[str, int]] = set()
+    self._tool_names: dict[str, str] = {}
     self._usage_input = 0
     self._usage_output = 0
     self._usage_cache_read = 0
@@ -332,345 +153,273 @@ class OpenCodeBackend(base.AgentBackend):
     self._usage_cost = 0.0
     self._model_limit: dict | None = None
     self._last_step_tokens: dict | None = None
+    # Epoch milliseconds at which the turn's first model request started (session.step.started).
+    self.model_request_started_ms: int | None = None
     self._failed = False
+    self._succeeded = False
 
-  def _log_paths(self) -> tuple[pathlib.Path | None, pathlib.Path | None]:
-    if self._log_dir is None:
-      return None, None
-    self._log_dir.mkdir(parents=True, exist_ok=True)
-    return self._log_dir / "stdout.log", self._log_dir / "stderr.log"
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    """Run one turn: its own process, a session on the shared server, the prompt, then the events.
 
-  def _open_stdout_log(self, stdout_log_path: pathlib.Path | None) -> int | None:
-    # O_APPEND, never O_TRUNC: the lock-retry attempts append to the one run
-    # log the way the per-line "ab" opens they replace did.
-    if stdout_log_path is None:
-      return None
-    return os.open(str(stdout_log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
-
-  def _close_stdout_log(self) -> None:
-    if self._stdout_fd is not None:
-      os.close(self._stdout_fd)
-      self._stdout_fd = None
-
-  async def _read_server_url(self) -> str:
-    assert self._proc is not None and self._proc.stdout is not None
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + opencode_limits.OPENCODE_SERVER_START_TIMEOUT
-    while True:
-      remaining = deadline - loop.time()
-      if remaining <= 0:
-        raise TimeoutError("OpenCode serve did not print its server URL")
-      try:
-        raw_line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=remaining)
-      except TimeoutError as e:
-        raise TimeoutError("OpenCode serve did not print its server URL") from e
-      if not raw_line:
-        raise RuntimeError("OpenCode serve exited before printing its server URL")
-      if self._stdout_fd is not None:
-        await base._write_chunk(self._stdout_fd, raw_line)
-      line = raw_line.decode("utf-8", errors="replace").strip()
-      match = _SERVER_URL_RE.search(line)
-      if match:
-        return match.group(1)
-
-  async def _stream_stdout(self) -> None:
-    assert self._proc is not None and self._proc.stdout is not None
-    await base._tee_stream(self._proc.stdout.read, self._stdout_fd)
-
-  async def _check_health(self, client: httpx.AsyncClient) -> None:
-    response = await client.get("/global/health")
-    response.raise_for_status()
-
-  async def _fetch_model_limit(self, client: httpx.AsyncClient) -> dict | None:
-    """Fetch this run's model limit dict from ``/config/providers`` once per turn.
-
-    Splits ``self._model`` on the first ``/`` (same split ``_send_prompt`` does),
-    finds the provider's model entry, and returns its ``limit`` dict
-    (``{"context": int, "input": int | None, "output": int}``). Any failure —
-    request error, provider or model absent, malformed payload — is contained:
-    one ``log.warning`` is emitted and ``None`` is returned so the turn proceeds
-    normally (the usage resolver then reports ``unknown`` for this session).
+    The turn process is the Run's pinned identity: a chat cancel signals it, and this method ends the
+    turn as cancelled. The turn-end steps run on every exit path.
     """
-    if not self._model:
-      return None
-    provider_id, model_id = self._model.split("/", 1)
+    self._reset_run_state()
     try:
-      response = await client.get("/config/providers")
+      await asyncio.to_thread(self._prepare_cwd, cwd)
+      await self._spawn_turn_process(cwd, env)
+      shared = server.server_for(self._proxy_url)
+      await self._until_exit(shared.ensure_running())
+      self._session_id = await self._until_exit(self._open_session(shared, cwd))
+      self._turn = shared.register(self._session_id, cwd)
+      yield {"type": ET.SESSION_ATTACHED, "session_id": self._session_id}
+      self._model_limit = await self._until_exit(self._fetch_model_limit(shared, cwd))
+      await self._until_exit(shared.wait_interrupts_settled(self._session_id))
+      self._turn.drop_earlier_interrupts()
+      await self._until_exit(self._put_environment(shared, env))
+      await self._until_exit(
+          self._send_prompt(shared, self._session_id, self._effective_prompt(prompt), uploaded_files))
+      async for translated in self._consume_turn(self._turn):
+        yield translated
+    except _TurnProcessExited:
+      log.info("opencode_turn_cancelled", session_id=self._session_id)
+    except server.ServerLost as e:
+      self._failed = True
+      yield base.make_error_event(f"OpenCode backend failed: {e}")
+    except Exception as e:
+      self._failed = True
+      log.exception("opencode_backend_failed", error=str(e))
+      detail = str(e) or e.__class__.__name__
+      yield base.make_error_event(f"OpenCode backend failed: {detail}")
+    finally:
+      if self._turn is not None:
+        await self._turn.finish()
+      await self._end_turn_process()
+
+  async def terminate(self) -> None:
+    if self._turn is not None:
+      await self._turn.finish()
+    await super().terminate()
+
+  async def _spawn_turn_process(self, cwd: str, env: dict) -> None:
+    """Start this turn's /usr/bin/sleep, pinned as the Run's process identity and placed in the session cgroup."""
+    await self._spawn_piped_and_pin_identity(self._build_command(""), cwd, env)
+    assert self._proc is not None
+    self._exit_task = asyncio.ensure_future(self._proc.wait())
+
+  async def _until_exit(self, awaitable: Awaitable[T]) -> T:
+    """Await *awaitable*, unless the turn process exits first: then the awaitable is cancelled and the turn ends."""
+    task = asyncio.ensure_future(awaitable)
+    try:
+      done, _ = await asyncio.wait({task, self._exit_task}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+      task.cancel()
+      raise
+    if task in done:
+      return task.result()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    raise _TurnProcessExited()
+
+  async def _open_session(self, shared: server.OpenCodeServer, cwd: str) -> str:
+    """Resume the recorded session, or create one at the turn's directory.
+
+    A recorded id the store lacks fails the turn: the turn never creates a replacement session.
+    """
+    if self._resume_session_id is not None:
+      response = await shared.client.get(f"/api/session/{self._resume_session_id}")
+      if response.status_code == httpx.codes.NOT_FOUND:
+        raise RuntimeError(
+            f"OpenCode session {self._resume_session_id} is not in the opencode store at "
+            f"{home.opencode_data_dir()}; the turn does not create a replacement session")
       response.raise_for_status()
-      providers = response.json()
+      return self._resume_session_id
+    provider_id, model_id = self._split_model()
+    response = await shared.client.post(
+        "/api/session", json={
+            "location": {
+                "directory": cwd
+            },
+            "model": {
+                "id": model_id,
+                "providerID": provider_id
+            },
+        })
+    response.raise_for_status()
+    return response.json()["data"]["id"]
+
+  async def _fetch_model_limit(self, shared: server.OpenCodeServer, cwd: str) -> dict | None:
+    """The model's limit dict from the 2.0 model list, read once per turn.
+
+    Any failure — request error, provider or model absent, malformed payload — is contained:
+    one ``log.warning`` is emitted and ``None`` is returned so the turn proceeds normally (the
+    usage resolver then reports ``unknown`` for this session).
+    """
+    provider_id, model_id = self._split_model()
+    try:
+      response = await shared.client.get("/api/model", params={"location[directory]": cwd})
+      response.raise_for_status()
+      payload = response.json()
     except Exception as e:
       log.warning("opencode_context_catalog_unavailable", provider_id=provider_id, model_id=model_id, error=str(e))
       return None
-    limit = self._extract_model_limit(providers, provider_id, model_id)
+    limit = self._extract_model_limit(payload, provider_id, model_id)
     if limit is None:
       log.warning("opencode_context_catalog_unavailable", provider_id=provider_id, model_id=model_id)
     return limit
 
   @staticmethod
-  def _extract_model_limit(providers_payload: object, provider_id: str, model_id: str) -> dict | None:
-    """Find ``provider_id``/``model_id`` in a ``/config/providers`` payload.
-
-    opencode returns ``{"providers": [...]}`` where each provider's ``models`` is
-    a dict keyed by model id; a bare top-level list and list-shaped ``models`` are
-    also accepted for robustness. Returns the model's ``limit`` dict, or ``None``
-    when the provider or model is absent or the payload shape is not recognised.
-    """
-    providers = providers_payload.get("providers") if isinstance(providers_payload, dict) else providers_payload
-    if not isinstance(providers, list):
+  def _extract_model_limit(payload: object, provider_id: str, model_id: str) -> dict | None:
+    """Find ``provider_id``/``model_id`` in the 2.0 model list and return its ``limit`` dict, or None."""
+    models = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
       return None
-    for provider in providers:
-      if not isinstance(provider, dict) or provider.get("id") != provider_id:
-        continue
-      models = provider.get("models")
-      if isinstance(models, dict):
-        model = models.get(model_id)
-        if isinstance(model, dict):
-          limit = model.get("limit")
-          return limit if isinstance(limit, dict) else None
-        return None
-      if isinstance(models, list):
-        for model in models:
-          if isinstance(model, dict) and model.get("id") == model_id:
-            limit = model.get("limit")
-            return limit if isinstance(limit, dict) else None
-        return None
-      return None
+    for model in models:
+      if isinstance(model, dict) and model.get("providerID") == provider_id and model.get("id") == model_id:
+        limit = model.get("limit")
+        return limit if isinstance(limit, dict) else None
     return None
 
-  async def _create_session(self, client: httpx.AsyncClient) -> str:
-    response = await client.post("/session", json={})
+  async def _put_environment(self, shared: server.OpenCodeServer, env: dict) -> None:
+    """Replace the session's shell environment with the turn's, plus the join script when the cgroup exists."""
+    if not server.JOIN_SCRIPT.is_file():
+      raise RuntimeError(f"opencode join script is missing at {server.JOIN_SCRIPT}")
+    variables = dict(env)
+    if self._proxy_url is not None:
+      base.apply_proxy_env(variables, self._proxy_url)
+    cgroup = self._active_session_cgroup
+    if cgroup is not None:
+      variables["BASH_ENV"] = str(server.JOIN_SCRIPT)
+      variables["CHARLIEBOT_SESSION_CGROUP"] = str(cgroup.path)
+    response = await shared.client.put(f"/api/session/{self._session_id}/environment", json={"variables": variables})
     response.raise_for_status()
-    return response.json()["id"]
-
-  async def _wait_for_server_connected(self, events: AsyncIterator[dict]) -> None:
-    async for event in events:
-      if event.get("type") == SSE_EVENT_SERVER_CONNECTED:
-        return
-    raise RuntimeError("OpenCode SSE stream closed before server.connected")
 
   async def _send_prompt(
-      self, client: httpx.AsyncClient, session_id: str, prompt: str, uploaded_files: list[dict] | None) -> None:
-    if not self._model:
-      raise ValueError("opencode backend requires a model")
-    provider_id, model_id = self._model.split("/", 1)
-    response = await client.post(
-        f"/session/{session_id}/prompt_async",
-        json={
-            "model": {
-                "providerID": provider_id,
-                "modelID": model_id,
-            },
-            # Text part first (the prompt string, unchanged), then one file
-            # part per readable image attachment in reference order.
-            "parts": [{
-                "type": "text",
-                "text": prompt
-            }, *_image_file_parts(uploaded_files)],
-        },
-    )
-    if response.status_code != 204:
-      raise RuntimeError(f"OpenCode prompt_async returned HTTP {response.status_code}: {response.text}")
+      self, shared: server.OpenCodeServer, session_id: str, prompt: str, uploaded_files: list[dict] | None) -> None:
+    body: dict = {"text": prompt}
+    attachments = _image_file_attachments(uploaded_files)
+    if attachments:
+      body["files"] = attachments
+    response = await shared.client.post(f"/api/session/{session_id}/prompt", json=body)
+    if response.status_code != httpx.codes.OK:
+      raise RuntimeError(f"OpenCode prompt returned HTTP {response.status_code}: {response.text}")
 
-  async def _iter_sse_events(self, response: httpx.Response) -> AsyncIterator[dict]:
-    data_lines: list[bytes] = []
-    # Byte-mode lines: orjson parses the wire's UTF-8 bytes natively, so the
-    # per-line decode the default mode pays never runs on this hot funnel.
-    async for line in sse.iter_sse_lines(
-        response, lines_as_bytes=True):
-      if line == b"":
-        if not data_lines:
-          continue
-        payload = b"\n".join(data_lines)
-        data_lines = []
-        yield orjson.loads(payload)
-        continue
-      if line.startswith(b"data:"):
-        data_lines.append(line[len(b"data:"):].lstrip())
-        continue
-      if line.startswith(b":"):
-        continue
-      if b":" in line:
-        log.debug("opencode_sse_field_ignored", field=line.split(b":", 1)[0].decode("utf-8", errors="replace"))
-        continue
-      log.debug("opencode_sse_line_ignored", line=line.decode("utf-8", errors="replace"))
-    if data_lines:
-      yield orjson.loads(b"\n".join(data_lines))
-
-  async def _with_sse_progress_watchdog(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
-    """Fail the turn when no session progress arrives within opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT.
-
-    Every upstream event is awaited under ``asyncio.wait_for`` with a monotonic
-    deadline. An event carrying a session id (top-level ``properties.sessionID``
-    or nested ``info.sessionID``; a subagent child's id counts) resets the
-    deadline; server-level events (``server.heartbeat``, ``server.connected``)
-    pass through without resetting it. Heartbeats since the last progress event
-    are counted so the expiry error can distinguish "stream dead" (no events at
-    all) from "session stalled" (heartbeats but no progress). This single
-    wrapper sits upstream of both consumers, so coverage spans stream-open
-    (including the ``server.connected`` wait) through turn end.
-    """
-    loop = asyncio.get_running_loop()
-    last_progress_at = loop.time()
-    deadline = last_progress_at + opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT
-    silent_heartbeats = 0
-    events_iter = aiter(sse_events)
+  async def _consume_turn(self, turn: server.Turn) -> AsyncIterator[dict]:
+    """Translate the session's events until one of them ends the turn."""
     while True:
       try:
-        event = await asyncio.wait_for(anext(events_iter), timeout=deadline - loop.time())
-      except StopAsyncIteration:
-        return
+        item = await self._until_exit(
+            asyncio.wait_for(turn.events.get(), timeout=opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT))
       except TimeoutError as e:
-        silent_seconds = loop.time() - last_progress_at
-        log.error(
-            "opencode_sse_silence_timeout",
-            silent_seconds=round(silent_seconds, 3),
-            session_id=self._session_id,
-            heartbeat_count=silent_heartbeats)
+        log.error("opencode_sse_silence_timeout", session_id=turn.session_id)
         raise OpenCodeSseSilenceError(
-            f"OpenCode SSE stream carried no session progress for {silent_seconds:.1f} s "
-            f"(heartbeats during silence: {silent_heartbeats})") from e
-      if event.get("type") == "server.heartbeat":
-        silent_heartbeats += 1
-      if self._event_carries_session_id(event):
-        last_progress_at = loop.time()
-        deadline = last_progress_at + opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT
-        silent_heartbeats = 0
-      yield event
+            f"OpenCode session {turn.session_id} produced no event for "
+            f"{opencode_limits.OPENCODE_SSE_PROGRESS_TIMEOUT:g} s") from e
+      if isinstance(item, server.ServerLost):
+        raise item
+      event_type = item["type"]
+      data = item.get("data", {})
+      if event_type == "permission.asked":
+        self._failed = True
+        yield base.make_error_event(
+            f"OpenCode requested interactive permission '{data.get('permission')}' "
+            f"(patterns={data.get('patterns')}) but CharlieBot runs headless with no approval path; aborting run.")
+        return
+      if event_type == "session.execution.succeeded":
+        self._succeeded = True
+        yield self._make_accumulated_result()
+        return
+      if event_type == "session.execution.failed":
+        self._failed = True
+        yield base.make_error_event(_error_text(data.get("error")))
+        return
+      if event_type == "session.execution.interrupted":
+        self._failed = True
+        yield base.make_error_event(f"OpenCode execution interrupted (reason: {data.get('reason')})")
+        return
+      for translated in self._translate_event(item):
+        yield translated
 
-  @staticmethod
-  def _event_carries_session_id(event: dict) -> bool:
-    """Progress predicate: the event carries a session id, top-level or nested under ``info``."""
-    properties = event.get("properties", {})
-    return bool(properties.get("sessionID") or properties.get("info", {}).get("sessionID"))
+  def _translate_event(self, event: dict) -> list[dict]:
+    """Map one session event to CharlieBot's event dicts, updating the turn's usage and text state."""
+    event_type = event["type"]
+    data = event.get("data", {})
 
-  def _translate_sse_event(self, ev: dict) -> list[dict]:
-    ev_type = ev.get("type", "")
-    properties = ev.get("properties", {})
-
-    if ev_type == SSE_EVENT_MESSAGE_UPDATED:
-      info = properties["info"]
-      self._message_roles[info["id"]] = info["role"]
-      pending_parts = self._pending_parts.pop(info["id"], [])
-      if info["role"] == "assistant" and bool(info.get("summary")):
-        already_registered = info["id"] in self._compaction_message_ids
-        self._compaction_message_ids.add(info["id"])
-        if already_registered:
-          return []
-        pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
-        return [base.make_compact_boundary_event("auto", pre_tokens)]
-      if info["role"] != "assistant":
-        return []
-      translated: list[dict] = []
-      for part in pending_parts:
-        translated.extend(self._translate_part(part))
-      return translated
-
-    if ev_type == SSE_EVENT_MESSAGE_PART_UPDATED:
-      part = properties["part"]
-      if part["messageID"] in self._compaction_message_ids:
-        if part.get("type") == "step-finish":
-          self._accumulate_step_finish(part)
-        return []
-      role = self._message_roles.get(part["messageID"])
-      if role is None:
-        self._pending_parts.setdefault(part["messageID"], []).append(part)
-        return []
-      if role != "assistant":
-        return []
-      return self._translate_part(part)
-
-    if ev_type == SSE_EVENT_SESSION_ERROR:
-      return [base.make_error_event(self._format_session_error(ev))]
-
-    if ev_type == SSE_EVENT_SESSION_IDLE:
-      if self._pending_parts:
-        log.warning(
-            "opencode_pending_parts_discarded",
-            message_ids=list(self._pending_parts),
-            count=sum(len(parts) for parts in self._pending_parts.values()),
-        )
-        self._pending_parts.clear()
+    if event_type == "session.step.started":
+      if self.model_request_started_ms is None:
+        self.model_request_started_ms = data["started"]
       return []
 
-    if ev_type in _IGNORED_SSE_EVENT_TYPES:
+    if event_type == "session.text.delta":
+      self._streamed_parts.add((data["assistantMessageID"], data["ordinal"]))
+      return [base.make_text_event(data["delta"])]
+    if event_type == "session.text.ended":
+      if (data["assistantMessageID"], data["ordinal"]) in self._streamed_parts or not data["text"]:
+        return []
+      return [base.make_text_event(data["text"])]
+
+    if event_type == "session.reasoning.delta":
+      self._streamed_parts.add((data["assistantMessageID"], data["ordinal"]))
+      return [{"type": ET.THINKING, "content": data["delta"]}]
+    if event_type == "session.reasoning.ended":
+      if (data["assistantMessageID"], data["ordinal"]) in self._streamed_parts or not data["text"]:
+        return []
+      return [{"type": ET.THINKING, "content": data["text"]}]
+
+    if event_type == "session.tool.input.started":
+      self._tool_names[data["id"]] = data["name"]
       return []
-
-    _UNHANDLED_SSE_EVENT_TYPES.log(log.debug, "opencode_sse_event_unhandled", ev_type, type=ev_type)
-    return []
-
-  def _translate_part(self, part: dict) -> list[dict]:
-    part_type = part.get("type", "")
-    if part_type == "text":
-      delta = self._part_delta(part["id"], part["text"])
-      return [base.make_text_event(delta)] if delta else []
-    if part_type == "reasoning":
-      delta = self._part_delta(part["id"], part["text"])
-      return [{"type": ET.THINKING, "content": delta}] if delta else []
-    if part_type == "tool":
-      return self._translate_tool_part(part)
-    if part_type == "step-finish":
-      self._accumulate_step_finish(part)
-      return []
-    if part_type == "step-start":
-      return []
-    _UNHANDLED_PART_TYPES.log(log.debug, "opencode_part_unhandled", part_type, type=part_type)
-    return []
-
-  def _part_delta(self, part_id: str, full_text: str) -> str:
-    previous = self._last_part_text.get(part_id, "")
-    if previous and not full_text.startswith(previous):
-      raise RuntimeError(f"OpenCode part text is not cumulative: {part_id}")
-    self._last_part_text[part_id] = full_text
-    return full_text[len(previous):]
-
-  def _translate_tool_part(self, part: dict) -> list[dict]:
-    call_id = part["callID"]
-    tool_name = part["tool"]
-    state = part["state"]
-    events: list[dict] = []
-
-    if call_id not in self._tool_use_emitted and state.get("status") != "pending":
-      events.append(
+    if event_type == "session.tool.called":
+      name = self._tool_names.get(data["id"])
+      if name is None:
+        raise RuntimeError(f"OpenCode tool call {data['id']} arrived without a tool name")
+      return [
           {
               "type": ET.ASSISTANT,
-              "message":
-                  {
-                      "content": [{
-                          "type": ET.TOOL_USE,
-                          "name": tool_name,
-                          "id": call_id,
-                          "input": state["input"],
-                      }]
-                  },
-          })
-      self._tool_use_emitted.add(call_id)
+              "message": {
+                  "content": [{
+                      "type": ET.TOOL_USE,
+                      "name": name,
+                      "id": data["id"],
+                      "input": data["input"],
+                  }]
+              },
+          }
+      ]
+    if event_type == "session.tool.success":
+      content = "\n".join(
+          part["text"] if part["type"] == "text" else part.get("name", part["mime"]) for part in data["content"])
+      return [{"type": ET.TOOL_RESULT, "tool_use_id": data["id"], "content": content}]
+    if event_type == "session.tool.failed":
+      return [{"type": ET.TOOL_RESULT, "tool_use_id": data["id"], "content": _error_text(data.get("error"))}]
 
-    if call_id not in self._tool_result_emitted:
-      if "output" in state:
-        events.append({
-            "type": ET.TOOL_RESULT,
-            "tool_use_id": call_id,
-            "content": state["output"],
-        })
-        self._tool_result_emitted.add(call_id)
-      elif "error" in state:
-        events.append({
-            "type": ET.TOOL_RESULT,
-            "tool_use_id": call_id,
-            "content": state["error"],
-        })
-        self._tool_result_emitted.add(call_id)
+    if event_type == "session.step.ended":
+      self._accumulate_usage(data["tokens"], data["cost"])
+      return []
+    if event_type == "session.compaction.started":
+      pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
+      return [base.make_compact_boundary_event(data["reason"], pre_tokens)]
+    if event_type == "session.compaction.ended":
+      self._accumulate_usage(data["tokens"], data["cost"])
+      return []
 
-    return events
+    if event_type in _IGNORED_SESSION_EVENT_TYPES:
+      return []
+    _UNHANDLED_SESSION_EVENT_TYPES.log(log.debug, "opencode_session_event_unhandled", event_type, type=event_type)
+    return []
 
-  def _accumulate_step_finish(self, part: dict) -> None:
-    tokens = part["tokens"]
+  def _accumulate_usage(self, tokens: dict, cost: float) -> None:
     cache = tokens["cache"]
     self._usage_input += tokens["input"]
     self._usage_output += tokens["output"]
     self._usage_cache_read += cache["read"]
     self._usage_cache_write += cache["write"]
-    self._usage_cost += part["cost"]
+    self._usage_cost += cost
     # Remember the *last* step's tokens (raw, not the turn's sum) so the result
     # event's context_snapshot reflects the live per-turn window. reasoning is
     # otherwise discarded from the streamed events, so capture it here.
@@ -699,118 +448,66 @@ class OpenCodeBackend(base.AgentBackend):
         context_snapshot=snapshot,
     )
 
-  def _format_session_error(self, ev: dict) -> str:
-    error = ev.get("properties", {}).get("error")
-    if isinstance(error, dict):
-      data = error.get("data")
-      if isinstance(data, dict) and data.get("message"):
-        return data["message"]
-      if error.get("message"):
-        return error["message"]
-      return json.dumps(error, default=str)
-    if error:
-      return str(error)
-    return f"OpenCode session.error with no error payload: {json.dumps(ev, default=str)}"
+  async def _end_turn_process(self) -> None:
+    """Stop this turn's process and set the exit code: 1 failed, 0 succeeded, else the process's own code."""
+    if self._proc is not None and self._proc.returncode is None:
+      await self._graceful_shutdown(
+          opencode_limits.OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_turn_process_sigkill")
+    if self._exit_task is not None:
+      self._exit_task.cancel()
+    if self._failed:
+      self.exit_code = 1
+    elif self._succeeded:
+      self.exit_code = 0
+    else:
+      self.exit_code = self._proc.returncode if self._proc is not None and self._proc.returncode is not None else -1
 
-  async def _abort_session(self) -> None:
-    if self._server_url is None or self._session_id is None:
-      return
-
-    try:
-      # The shared client skips the per-call AsyncClient construction
-      # (~260 us measured); _SERVER_URL_RE pins the serve URL to plain
-      # http://localhost, so the singleton's default verify never engages here.
-      response = await http.get_http_client().post(
-          f"{self._server_url}/session/{self._session_id}/abort", timeout=opencode_limits.OPENCODE_ABORT_TIMEOUT)
-      response.raise_for_status()
-    except Exception as e:
-      log.warning("opencode_abort_failed", session_id=self._session_id, error=str(e), exc_info=True)
-
-  async def _finish_stdout_task(self) -> None:
-    if self._stdout_task is None:
-      return
-    try:
-      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=opencode_limits.OPENCODE_STDOUT_DRAIN_TIMEOUT)
-    except TimeoutError:
-      self._stdout_task.cancel()
-      try:
-        await self._stdout_task
-      except asyncio.CancelledError:
-        log.debug("opencode_stdout_stream_cancelled")
-      except Exception as e:
-        log.warning("opencode_stdout_stream_cancel_failed", error=str(e), exc_info=True)
-    except Exception as e:
-      log.warning("opencode_stdout_stream_failed", error=str(e), exc_info=True)
-
-  async def _cleanup_server(self) -> None:
-    try:
-      await self._abort_session()
-      if self._proc is not None and self._proc.returncode is None:
-        await self._graceful_shutdown(
-            opencode_limits.OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
-      await self._finish_stdout_task()
-      self._close_stdout_log()
-      if self._proc is not None:
-        await self._drain_and_cleanup(self._CLEANUP_TIMEOUT)
-        if self._failed and self.exit_code == 0:
-          self.exit_code = 1
-        elif not self._failed:
-          self.exit_code = 0
-    except Exception as e:
-      log.warning("opencode_cleanup_failed", error=str(e), exc_info=True)
-      if self._failed and self.exit_code == 0:
-        self.exit_code = 1
-
-  async def terminate(self) -> None:
-    await self._abort_session()
-    await super().terminate()
+  def _split_model(self) -> tuple[str, str]:
+    if not self._model:
+      raise ValueError("opencode backend requires a model")
+    provider_id, model_id = self._model.split("/", 1)
+    return provider_id, model_id
 
   async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
-    """Generate text via `opencode run --format json` with all tools denied.
+    """Generate text with ``opencode run --standalone`` in a private store, every tool denied.
 
-    Uses the one-shot ``run`` command (not the ``serve`` server the agent loop
-    drives) and injects a deny-all permission policy so the one-shot
-    cannot call tools. opencode run has no system-prompt flag, so the system
-    prompt is framed into the user prompt.
-
-    ``opencode run --format json`` emits flat part-shaped NDJSON events (one per
-    line) with the part dict at the top level — e.g. ``{"type": "text", "part":
-    {"type": "text", "text": "..."}}`` — NOT the SSE-bus events that ``serve``
-    uses (which nest the part under ``properties``). The parser therefore feeds
-    the top-level ``part`` directly to ``_translate_part`` so ``_part_delta``'s
-    cumulative logic applies to ``text``-type parts. The process group is killed
-    on timeout; ``None`` waits without a limit.
+    The run gets its own server and a fresh XDG root, so it never touches the shared server's store;
+    the root is deleted when the call returns. ``--format json`` emits one event per line: a text event
+    per completed text part, and an error event that fails the call.
     """
-    self._reset_run_state()
+    if not pathlib.Path(server.OPENCODE_BIN).is_file():
+      raise RuntimeError(f"opencode 2.0 binary not found at {server.OPENCODE_BIN}")
     framed = self._frame_system_prompt(system_prompt, prompt)
-    cmd = [
-        self._opencode_bin,
-        "run",
-        "--format",
-        "json",
-        "-m",
-        self._model,
-        base.SKIP_PERMISSIONS_FLAG,
-        "--",
-        framed,
-    ]
-    env = self._prepare_env(dict(os.environ), opencode_config={"permission": {"*": "deny"}})
+    root = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-opencode-oneshot-"))
+    try:
+      env = {
+          **os.environ,
+          "XDG_DATA_HOME": str(root / "data"),
+          "XDG_STATE_HOME": str(root / "state"),
+          "XDG_CACHE_HOME": str(root / "cache"),
+          "OPENCODE_CONFIG_CONTENT": json.dumps({"permission": {
+              "*": "deny"
+          }}),
+      }
+      if self._proxy_url is not None:
+        base.apply_proxy_env(env, self._proxy_url)
+      cmd = [server.OPENCODE_BIN, "run", "--standalone", "--format", "json", "-m", self._model, "--", framed]
+      proc = await self._spawn_one_shot_subprocess(cmd, env, pdeathsig=True)
 
-    proc = await self._spawn_one_shot_subprocess(cmd, env, pdeathsig=True)
+      async def _collect() -> str:
+        parts: list[str] = []
+        assert proc.stdout is not None
+        try:
+          async for event in base.iter_ndjson_events(proc.stdout):
+            if event.get("type") == "error":
+              raise RuntimeError(f"opencode run failed: {_error_text(event.get('error'))}")
+            if event.get("type") == "text":
+              parts.append(event["part"]["text"])
+        finally:
+          await proc.wait()
+        return "".join(parts).strip()
 
-    async def _collect() -> str:
-      parts: list[str] = []
-      assert proc.stdout is not None
-      async for event in base.iter_ndjson_events(proc.stdout):
-        part = event.get("part")
-        if not isinstance(part, dict):
-          continue
-        parts.extend(
-            message_aggregator.extract_text_from_message(translated.get("message"))
-            for translated in self._translate_part(part)
-            if translated.get("type") == ET.ASSISTANT)
-      await proc.wait()
-      return "".join(parts).strip()
-
-    stderr_task = asyncio.create_task(proc.stderr.read())
-    return await process.wait_or_kill_group(_collect(), timeout, proc.pid, stderr_task)
+      stderr_task = asyncio.create_task(proc.stderr.read())
+      return await process.wait_or_kill_group(_collect(), timeout, proc.pid, stderr_task)
+    finally:
+      shutil.rmtree(root, ignore_errors=True)

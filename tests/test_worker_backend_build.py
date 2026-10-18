@@ -24,7 +24,7 @@ from src.runtime.hooks import backend_lifecycle
 
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
 # other four never do and therefore never raise FileNotFoundError on build.
-BINARY_RESOLVING_TYPES = ["opencode", "antigravity", "codex", "gemini", "charlie-code"]
+BINARY_RESOLVING_TYPES = ["antigravity", "codex", "gemini", "charlie-code"]
 
 # Every binary-resolving backend reads resolve_binary as base.resolve_binary at
 # call time, so hiding a binary means patching that one shared attribute.

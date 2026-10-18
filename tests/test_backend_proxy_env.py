@@ -1,9 +1,8 @@
 """The per-entry ``proxy_url`` env contract, single-homed across the CLI backends.
 
-Both ``charlie-code`` and ``opencode`` inject the proxy through the shared
-``apply_proxy_env`` (src/runtime/agent_process/base.py); each parametrized case drives
-that backend's own ``_prepare_env`` call site, so both wirings stay covered while
-the assertions live in one place.
+``charlie-code`` injects the proxy through the shared ``apply_proxy_env``
+(src/runtime/agent_process/base.py) in its ``_prepare_env``; the opencode server's proxy is
+covered where the shared server builds its environment (tests/test_opencode_backend.py).
 """
 
 from typing import Any
@@ -22,7 +21,6 @@ BackendDescriptor = tuple[type[base.AgentBackend], str, str, dict[str, Any]]
 _CLI_BACKENDS: list[pytest.param] = [
     pytest.param((cls, *conftest.CLI_BACKEND_RIGS[cls]), id=rig_id) for cls, rig_id in [
         (charlie_code.CharlieCodeBackend, "charlie-code"),
-        (opencode.OpenCodeBackend, "opencode"),
     ]
 ]
 

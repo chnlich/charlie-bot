@@ -6,6 +6,18 @@ members = [
     "crates/charliebot-compat",
     "crates/charliebot-server",
     "crates/features/pyhtml",
+    "crates/features/backup",
+    "crates/features/chat_threads",
+    "crates/features/diag",
+    "crates/features/diff_view",
+    "crates/features/explain",
+    "crates/features/files",
+    "crates/features/host_auth",
+    "crates/features/memory",
+    "crates/features/ncu",
+    "crates/features/terminal",
+    "crates/features/trace",
+    "crates/features/usage",
     "crates/charliebot-store",
     "crates/charliebot-registry",
 ]
@@ -53,7 +65,19 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 uuid = { version = "1", features = ["v4"] }
 
+charliebot-backup = { path = "crates/features/backup" }
+charliebot-chat-threads = { path = "crates/features/chat_threads" }
 charliebot-compat = { path = "crates/charliebot-compat" }
 charliebot-core = { path = "crates/charliebot-core" }
+charliebot-diag = { path = "crates/features/diag" }
+charliebot-diff-view = { path = "crates/features/diff_view" }
+charliebot-explain = { path = "crates/features/explain" }
+charliebot-files = { path = "crates/features/files" }
+charliebot-host-auth = { path = "crates/features/host_auth" }
+charliebot-memory = { path = "crates/features/memory" }
+charliebot-ncu = { path = "crates/features/ncu" }
 charliebot-registry = { path = "crates/charliebot-registry" }
 charliebot-store = { path = "crates/charliebot-store" }
+charliebot-terminal = { path = "crates/features/terminal" }
+charliebot-trace = { path = "crates/features/trace" }
+charliebot-usage = { path = "crates/features/usage" }

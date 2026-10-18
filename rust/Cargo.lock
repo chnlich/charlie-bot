@@ -175,6 +175,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-backup"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-chat-threads"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
 name = "charliebot-compat"
 version = "0.1.0"
 dependencies = [
@@ -217,6 +231,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-diag"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-diff-view"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-explain"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-files"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-host-auth"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-memory"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-ncu"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
 name = "charliebot-pyhtml"
 version = "0.1.0"
 dependencies = [
@@ -250,10 +313,22 @@ dependencies = [
  "anyhow",
  "axum",
  "bytes",
+ "charliebot-backup",
+ "charliebot-chat-threads",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-diag",
+ "charliebot-diff-view",
+ "charliebot-explain",
+ "charliebot-files",
+ "charliebot-host-auth",
+ "charliebot-memory",
+ "charliebot-ncu",
  "charliebot-registry",
  "charliebot-store",
+ "charliebot-terminal",
+ "charliebot-trace",
+ "charliebot-usage",
  "flate2",
  "futures-util",
  "http",
@@ -286,6 +361,27 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "charliebot-terminal"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-trace"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
+]
+
+[[package]]
+name = "charliebot-usage"
+version = "0.1.0"
+dependencies = [
+ "charliebot-registry",
 ]
 
 [[package]]

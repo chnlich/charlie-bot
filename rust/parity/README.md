@@ -319,7 +319,8 @@ requests, WebSocket handshakes and client text or binary messages. HTTP requests
 step because listener and boot-backfill requests interleave; WebSocket messages compare in order within each
 connection. Each recorded HTTP request and WebSocket handshake keeps only the headers that its fake's feature
 code sets explicitly (`normalize.EXPLICIT_REQUEST_HEADERS`), so library defaults such as the `python-httpx` or
-`websockets` user agent do not count as behavior. Discord op 1 heartbeats are excluded because the client's
+`websockets` user agent do not count as behavior. A request's `content-type` compares as its media type
+(`normalize.MEDIA_TYPE_REQUEST_HEADERS`), so a form body sent where Python sends JSON is a difference. Discord op 1 heartbeats are excluded because the client's
 first beat includes an unseeded random delay. Refused proxy hosts are written to each tree's `logs/fakes.jsonl` and listed in the report, outside step
 comparison.
 
@@ -381,7 +382,8 @@ field one side omits still shows as a difference:
   file times, while the cache artifact bytes still compare.
 - `EXPLICIT_REQUEST_HEADERS` lists the headers each fake's feature code sets on its REST requests (Slack and
   Discord `authorization`, Discord `user-agent`); WebSocket handshakes compare no header. The fake recorder
-  keeps every header in `logs/fakes.jsonl`. `IGNORED_REQUEST_HEADERS` names each other header that comes from
+  keeps every header in `logs/fakes.jsonl`. `MEDIA_TYPE_REQUEST_HEADERS` names `content-type`, which compares as
+  its media type: lowercased, without parameters. `IGNORED_REQUEST_HEADERS` names each other header that comes from
   a library or the transport, with its reason. A header that is neither listed fails the comparison.
 - the voice archive stem rule masks `YYYY-MM-DDTHHMMSS.mmmZ_<8 hex>` in paths because the write clock and uuid4
   draw are independent on each side;

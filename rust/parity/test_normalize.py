@@ -12,12 +12,20 @@ def _context() -> normalize.Context:
 def test_library_default_headers_are_left_out_of_slack_requests() -> None:
   headers = {
       "authorization": ["Bearer xoxb-parity-synthetic-token"],
-      "content-type": ["application/json"],
       "host": ["slack.com"],
       "user-agent": ["python-httpx/0.28.1"],
   }
   compared = normalize.request_headers("slack", headers, _context(), websocket=False)
   assert compared == {"authorization": ["Bearer xoxb-parity-synthetic-token"]}
+
+
+def test_content_type_compares_media_type_so_a_form_body_differs_from_json() -> None:
+  json_request = normalize.request_headers(
+      "slack", {"content-type": ["Application/JSON; charset=utf-8"]}, _context(), websocket=False)
+  form_request = normalize.request_headers(
+      "slack", {"content-type": ["application/x-www-form-urlencoded"]}, _context(), websocket=False)
+  assert json_request == {"content-type": ["application/json"]}
+  assert form_request != json_request
 
 
 def test_discord_user_agent_is_compared_on_rest_only() -> None:

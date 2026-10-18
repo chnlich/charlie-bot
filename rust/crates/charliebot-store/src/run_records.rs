@@ -507,10 +507,12 @@ impl Store {
     }
   }
 
-  /// Return the first structural-change blocker in chronological run order.
-  pub fn run_blocker(&self, session_id: &str) -> StoreResult<Option<RunBlocker>> {
+  /// Return every structural-change blocker in chronological run order; an empty list means none.
+  /// Callers collect all of them, as Python's `_structural_blockers` does.
+  pub fn run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>> {
     let events = self.load_all_facts(session_id)?;
     let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
+    let mut blockers = Vec::new();
     for run in self.list_run_records_sync(session_id)? {
       if terminal_outcome(&events, &run.id)?.is_some() {
         continue;
@@ -519,22 +521,22 @@ impl Store {
         if stop_requested(&events, &run.id, None) {
           continue;
         }
-        return Ok(Some(RunBlocker { reason: format!("run {} is queued (pending dispatch)", run.id), run_id: run.id }));
+        blockers.push(RunBlocker { reason: format!("run {} is queued (pending dispatch)", run.id), run_id: run.id });
+        continue;
       }
-      if proc_identity::is_run_alive(
+      let reason = if proc_identity::is_run_alive(
         run.pid,
         run.pid_start.as_deref(),
         run.started_at.map(UtcDateTime::into_inner),
         boot,
       ) {
-        return Ok(Some(RunBlocker { reason: format!("run {} is active", run.id), run_id: run.id }));
-      }
-      return Ok(Some(RunBlocker {
-        reason: format!("run {} has an unresolved process identity (needs recovery)", run.id),
-        run_id: run.id,
-      }));
+        format!("run {} is active", run.id)
+      } else {
+        format!("run {} has an unresolved process identity (needs recovery)", run.id)
+      };
+      blockers.push(RunBlocker { reason, run_id: run.id });
     }
-    Ok(None)
+    Ok(blockers)
   }
 
   /// Return the generation after every committed run-record write.

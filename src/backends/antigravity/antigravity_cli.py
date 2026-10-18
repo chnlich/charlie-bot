@@ -24,7 +24,9 @@ class AgentGuardError(ValueError):
 class AntigravityCliBackend(base.AgentBackend):
   """Runs `agy --print` and translates the JSON envelope into CC events."""
 
-  def __init__(self, *, model: str | None = None, print_timeout: str | None = None, **kwargs: object) -> None:
+  def __init__(self, *, model: str, print_timeout: str | None = None, **kwargs: object) -> None:
+    if not model:
+      raise ValueError("antigravity backend requires a model")
     super().__init__(model=model, **kwargs)
     # agy --print turn budget: explicit config wins, otherwise the 1h default.
     self._print_timeout = print_timeout if print_timeout is not None else "1h"
@@ -40,6 +42,8 @@ class AntigravityCliBackend(base.AgentBackend):
         base.SKIP_PERMISSIONS_FLAG,
         "--output-format",
         "json",
+        "--model",
+        self._model,
     ]
     if self._resume_session_id:
       cmd.extend(["--conversation", self._resume_session_id])

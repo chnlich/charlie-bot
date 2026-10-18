@@ -8,7 +8,7 @@ registers it with ``src.runtime.hooks.backend_types``; ``src.infra.config_regist
 """
 
 from collections.abc import Mapping
-from typing import Any, ClassVar
+from typing import Any
 
 import pydantic
 
@@ -20,11 +20,8 @@ class BackendOption(pydantic.BaseModel):
 
   A subclass narrows ``type`` to ``Literal[<its backend type>]``. A config entry validates against
   the subclass its ``type`` names, so illegal field/type combinations are unconstructable.
-  ``model_optional`` is True for a type whose entries may omit ``model``.
   """
   model_config = pydantic.ConfigDict(extra='forbid')
-
-  model_optional: ClassVar[bool] = False
 
   id: str
   label: str
@@ -39,7 +36,7 @@ class BackendOption(pydantic.BaseModel):
 
   @pydantic.model_validator(mode='after')
   def require_model(self) -> BackendOption:
-    if self.model is None and not self.model_optional:
+    if self.model is None:
       raise ValueError(f"backend '{self.id}' (type '{self.type}') requires 'model'")
     return self
 
@@ -54,21 +51,13 @@ def parse_option(entry: Any) -> Any:
   return config_registry.option_model(entry.get("type")).model_validate(entry)
 
 
-def backend_type_allows_missing_model(backend_type: str) -> bool:
-  return config_registry.option_model(backend_type).model_optional
+def option_default_model(option: BackendOption, *, subject: str) -> str:
+  """Return the option's configured model.
 
-
-def option_default_model(option: BackendOption, *, subject: str) -> str | None:
-  """Return the option's default model, or None when its type routes without one.
-
-  Raises ValueError when the type requires a model and the option carries none —
-  an empty string counts as none, which the load-time ``require_model`` validator
-  does not catch (it rejects only a None model). *subject* prefixes the raise's
-  frame with the caller's role and carries its own trailing space, the same
-  convention as ``require_backend_option`` ("backend ", "session backend ").
+  Raise ValueError when the model is empty, which the load-time ``require_model`` validator does
+  not catch because it rejects only a None model. *subject* prefixes the raise with the caller's
+  role and carries its own trailing space, the same convention as ``require_backend_option``.
   """
-  if backend_type_allows_missing_model(option.type):
-    return None
   if not option.model:
     raise ValueError(f"{subject}'{option.id}' has no default model")
   return option.model

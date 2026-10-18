@@ -43,19 +43,6 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
     spawner.spawner_backends.resolve_backend_option(cfg, "codex-o3", "")
 
 
-def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
-  cfg = config.CharlieBotConfig(
-      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
-      paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": [conftest.AGY_BACKEND_OPTION,]},
-  )
-
-  opt = spawner.spawner_backends.resolve_backend_option(cfg, "agy", None)
-
-  assert opt.id == "agy"
-  assert opt.model is None
-
-
 @pytest.mark.parametrize(
     "backend_type, entry_kwargs",
     [
@@ -70,6 +57,7 @@ def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
         ("charlie-code", {}),
         ("gemini", {}),
         ("opencode", {}),
+        ("antigravity", {}),
     ],
 )
 def test_resolve_backend_option_rejects_missing_model_for_model_required_backends(
@@ -89,5 +77,5 @@ def test_resolve_backend_option_rejects_missing_model_for_model_required_backend
       },
   )
 
-  with pytest.raises(ValueError, match="model is required"):
-    spawner.spawner_backends.resolve_backend_option(cfg, backend_type, None)
+  with pytest.raises(ValueError, match="resolved model is required"):
+    spawner.spawner_backends.resolve_backend_option(cfg, backend_type, "")

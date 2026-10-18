@@ -16,8 +16,7 @@ from src.runtime.hooks import backend_types
 
 def build_antigravity_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for antigravity-routing tests: the .charliebot home lives under tmp_path so each
-  test owns its own tree, and the backend list registers the model-less antigravity option the
-  resume-id routing resolves against."""
+  test owns its own tree, and the backend list registers the Antigravity model used for resume-id routing."""
   return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [conftest.AGY_BACKEND_OPTION]},

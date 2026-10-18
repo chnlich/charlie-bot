@@ -520,8 +520,7 @@ def distinct_backend_conflict(
 
   Load time validated only the written ids (an unset effective backend loads);
   this resolves each pair exactly as a launch would and compares the option's
-  routing type with its default model — an Antigravity-style backend that picks
-  its own model is told apart by type alone.
+  routing type with its configured model.
   """
   steps = task_cfg.steps or []
   positions = {step.name: i for i, step in enumerate(steps)}

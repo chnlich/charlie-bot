@@ -177,9 +177,9 @@ class OpenCodeBackend(base.AgentBackend):
       await asyncio.to_thread(self._prepare_cwd, cwd)
       await self._spawn_turn_process(cwd, env)
       shared = server.server_for(self._proxy_url)
-      await self._until_exit(shared.ensure_running())
       await shared.claim(cwd)
       self._claim = (shared, cwd)
+      await self._until_exit(shared.ensure_running())
       self._session_id = await self._until_exit(self._open_session(shared, cwd))
       self._turn = shared.register(self._session_id, cwd)
       yield {"type": ET.SESSION_ATTACHED, "session_id": self._session_id}

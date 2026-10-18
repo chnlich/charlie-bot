@@ -89,7 +89,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::store::test_support::make_test_store;
+  use crate::store::test_support::{assistant_text_event, make_test_store, queued_user_reorder_events};
 
   #[test]
   fn agent_message_event_carries_only_the_cross_session_provenance() {
@@ -137,5 +137,52 @@ mod tests {
     };
     assert_eq!(error.status_code(), Some(404));
     assert_eq!(error.to_string(), SESSION_NOT_FOUND_DETAIL);
+  }
+
+  fn timed(mut event: Value, timestamp: &str) -> Value {
+    event["timestamp"] = json!(timestamp);
+    event
+  }
+
+  #[test]
+  fn queued_input_renders_inside_the_turn_that_answers_it() {
+    let events = vec![
+      json!({"type": "user", "content": "first question", "timestamp": "t1"}),
+      timed(assistant_text_event("first answer"), "t2"),
+      json!({"type": "user", "content": "second question", "timestamp": "t3"}),
+      timed(assistant_text_event("mid-round answer"), "t4"),
+      json!({"type": "master_done", "still_thinking": true, "timestamp": "t5"}),
+      timed(assistant_text_event("second answer"), "t6"),
+      json!({"type": "master_done", "thinking_seconds": 7, "timestamp": "t7"}),
+    ];
+
+    let messages = events_to_messages(&events).unwrap();
+    let (view_messages, pending) = events_to_view(&events).unwrap();
+
+    let roles: Vec<&str> = messages.iter().map(|message| message["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["user", "assistant", "user", "assistant", "separator", "assistant", "separator"]);
+    let ids: Vec<&str> = messages.iter().map(|message| message["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["legacy:0", "legacy:1", "legacy:2", "legacy:3", "legacy:4", "legacy:5", "legacy:6"]);
+    assert!(messages[4]["thinking_seconds"].is_null());
+    assert_eq!(messages[6]["thinking_seconds"], 7);
+    assert_eq!(view_messages, messages);
+    assert!(pending.is_none());
+  }
+
+  #[test]
+  fn stable_history_orders_queued_user_between_completed_runs() {
+    let events = queued_user_reorder_events();
+
+    let messages = events_to_messages(&events).unwrap();
+    let (view_messages, pending) = events_to_view(&events).unwrap();
+
+    assert_eq!(view_messages, messages);
+    assert!(pending.is_none());
+    let roles: Vec<&str> = messages.iter().map(|message| message["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["assistant", "separator", "user", "assistant", "separator"]);
+    let ids: Vec<&str> = messages.iter().map(|message| message["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["assistant-1", "done-1", "queued-user", "assistant-2", "done-2"]);
+    assert_eq!(messages[0]["thinking"], "final thought");
+    assert_eq!(messages[0]["tools"][0]["output"], "report contents");
   }
 }

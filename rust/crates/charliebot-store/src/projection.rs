@@ -254,6 +254,7 @@ fn fold_messages(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::store::test_support::{assistant_event, queued_user_reorder_events};
   use serde_json::json;
 
   #[test]
@@ -270,6 +271,96 @@ mod tests {
     let (tail, _, _) = projection.tail(40);
     assert!(!tail.iter().any(|message| message["content"] == "draft"));
     assert_eq!(projection.pending_draft().unwrap()["content"], "draft");
+  }
+
+  fn pending_draft_events() -> Vec<Value> {
+    vec![
+      json!({"id": "user-1", "type": "user", "content": "hi", "timestamp": "t1"}),
+      json!({
+        "id": "assistant-1",
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "draft response"}]},
+        "timestamp": "t2",
+      }),
+    ]
+  }
+
+  fn many_messages_events(count: usize) -> Vec<Value> {
+    (0..count)
+      .map(|i| {
+        json!({
+          "id": format!("u{i}"),
+          "type": "user",
+          "content": format!("msg-{i}"),
+          "timestamp": format!("2026-01-01T00:{i:02}:00Z"),
+        })
+      })
+      .collect()
+  }
+
+  /// One separator-terminated turn per entry: a user, `length - 1` assistant texts, a master_done.
+  fn turned_messages_events(turn_lengths: &[usize]) -> Vec<Value> {
+    let mut events = Vec::new();
+    for (turn, length) in turn_lengths.iter().enumerate() {
+      events.push(json!({"id": format!("u{turn}"), "type": "user", "content": format!("q{turn}")}));
+      for step in 0..length - 1 {
+        events.push(assistant_event(&format!("a{turn}-{step}"), &format!("a{turn}-{step}")));
+      }
+      events.push(json!({"id": format!("done{turn}"), "type": "master_done", "thinking_seconds": 1}));
+    }
+    events
+  }
+
+  #[test]
+  fn projection_history_equals_events_to_messages_for_each_fixture() {
+    let fixtures = [
+      ("reorder", queued_user_reorder_events()),
+      ("pending_draft", pending_draft_events()),
+      ("many_messages", many_messages_events(60)),
+      ("empty", Vec::new()),
+    ];
+    for (name, events) in fixtures {
+      let projection = MessageProjection::new(&events, 0, HashMap::new()).unwrap();
+      assert_eq!(
+        projection.history(),
+        events_to_messages(&events, 0, HashMap::new()).unwrap(),
+        "projection history differs from events_to_messages for {name}"
+      );
+    }
+  }
+
+  #[test]
+  fn lossless_backwards_walk_returns_full_id_set_for_each_limit() {
+    let projection =
+      MessageProjection::new(&turned_messages_events(&[3, 1, 6, 2].repeat(60)), 0, HashMap::new()).unwrap();
+    let committed = projection.committed();
+    let full_ids: Vec<&str> = committed.iter().map(|message| message["id"].as_str().unwrap()).collect();
+    assert_eq!(committed.len(), 960);
+
+    for limit in [1, 7, 40, 100] {
+      let mut collected_ids: Vec<String> = Vec::new();
+      let mut before = committed.len();
+      while before > 0 {
+        let (page, next, more) = projection.slice_before(before, limit);
+        assert!(next == 0 || committed[next - 1]["role"] == "separator", "page start must be a turn start");
+        assert!(
+          page.len() >= limit || next == 0,
+          "page must hold at least `limit` messages unless history is exhausted"
+        );
+        assert!(next < before, "next_before must be strictly < before for a non-empty page");
+        assert_eq!(more, next > 0);
+        collected_ids.extend(page.iter().map(|message| message["id"].as_str().unwrap().to_string()));
+        before = next;
+      }
+      assert_eq!(collected_ids.len(), full_ids.len(), "limit {limit} collected a different count");
+      let mut sorted_collected = collected_ids.clone();
+      sorted_collected.sort();
+      sorted_collected.dedup();
+      assert_eq!(sorted_collected.len(), collected_ids.len(), "limit {limit} repeated an id");
+      for id in &full_ids {
+        assert!(collected_ids.iter().any(|collected| collected == id), "limit {limit} dropped {id}");
+      }
+    }
   }
 
   #[test]

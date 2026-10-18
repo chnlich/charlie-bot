@@ -153,14 +153,16 @@ def _run_text_blocks(msg: dict | None) -> list[dict]:
   return blocks if isinstance(blocks, list) else []
 
 
-def is_tool_call(item: dict) -> bool:
+def is_tool_call(item: dict, *, standalone_event: bool = False) -> bool:
   """Whether an assistant content block or a standalone event opens a tool row.
 
   A ``tool_use`` block and a standalone ``tool_use`` event (the codex/gemini
-  flat form) share one shape, so one test serves both. ExitPlanMode renders
-  as a plan, never a tool row.
+  flat form) share one test. ExitPlanMode blocks render as plans, while every
+  standalone ``tool_use`` event opens a tool row.
   """
-  return isinstance(item, dict) and item.get("type") == ET.TOOL_USE and item.get("name") != "ExitPlanMode"
+  return (
+      isinstance(item, dict) and item.get("type") == ET.TOOL_USE and
+      (standalone_event or item.get("name") != "ExitPlanMode"))
 
 
 def _assistant_tool_calls(ev: dict) -> list[dict]:
@@ -180,7 +182,7 @@ def run_tool_call_count(events: list[dict]) -> int:
   for ev in events:
     if ev.get("type") == ET.ASSISTANT:
       count += len(_assistant_tool_calls(ev))
-    elif is_tool_call(ev):
+    elif is_tool_call(ev, standalone_event=True):
       count += 1
   return count
 
@@ -197,7 +199,7 @@ def run_last_tool(events: list[dict]) -> dict | None:
       if not calls:
         continue
       call = calls[-1]
-    elif is_tool_call(ev):
+    elif is_tool_call(ev, standalone_event=True):
       call = ev
     else:
       continue
@@ -879,7 +881,7 @@ class MessageAggregator:
       yield from self._stream_delta()
       return
 
-    if is_tool_call(ev):
+    if is_tool_call(ev, standalone_event=True):
       self._buffer_tool(ev.get('name', ''), ev.get('input', {}))
       self._last_event_idx = idx
       self._last_event_id = ev_id

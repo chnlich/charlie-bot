@@ -79,4 +79,30 @@ mod tests {
     append(&path, &serde_json::json!({"text": "你好", "id": "a"})).unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), "{\"text\": \"你好\", \"id\": \"a\"}\n");
   }
+
+  /// `core/test_ndjson.py::test_parse_ndjson_line_applies_the_skip_contract_per_line`.
+  #[test]
+  fn parse_line_applies_the_skip_contract_per_line() {
+    assert_eq!(parse_line(br#"{"i": 1}"#), Some(serde_json::json!({"i": 1})));
+    assert_eq!(parse_line(b"  {\"i\": 1}  "), Some(serde_json::json!({"i": 1})));
+    assert_eq!(parse_line(b""), None);
+    assert_eq!(parse_line(b"   \n"), None);
+    assert_eq!(parse_line(b"{not json"), None);
+    assert_eq!(parse_line(br#"{"a": NaN}"#), None);
+  }
+
+  /// `core/test_ndjson.py::test_parse_ndjson_line_bytes_torn_multibyte_parses_as_replacement_char`.
+  #[test]
+  fn parse_line_repairs_a_torn_multibyte_char_to_the_replacement_char() {
+    assert_eq!(parse_line(b"{\"text\": \"ok\xff\"}"), Some(serde_json::json!({"text": "ok\u{fffd}"})));
+  }
+
+  /// `core/test_ndjson.py::test_parse_ndjson_file_multi_megabyte_lines_parse_whole`.
+  #[test]
+  fn read_file_parses_a_multi_megabyte_line_whole() {
+    let path = tempfile::NamedTempFile::new().unwrap();
+    let payload = serde_json::json!({"blob": "x".repeat(8 * 1024 * 1024)});
+    fs::write(path.path(), format!("{payload}\n{{\"i\": 1}}")).unwrap();
+    assert_eq!(read_file(path.path()).unwrap(), vec![payload, serde_json::json!({"i": 1})]);
+  }
 }

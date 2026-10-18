@@ -998,11 +998,9 @@ async fn listing_and_raw_scan_skip_a_malformed_metadata_file_like_python() {
     assert_eq!(expected["listed"][meta.id.as_str()]["status"], serde_json::to_value(meta.status).unwrap());
   }
 
-  let mut raw = serde_json::Map::new();
-  for row in store.raw_metadata_scan().unwrap() {
-    raw.insert(row.session_id, row.value["name"].clone());
-  }
-  assert_eq!(Value::Object(raw), expected["raw"]);
+  let mut raw: Vec<String> = store.raw_metadata_scan().unwrap().into_iter().map(|row| row.session_id).collect();
+  raw.sort();
+  assert_eq!(json!(raw), expected["raw"]);
 }
 
 #[tokio::test]

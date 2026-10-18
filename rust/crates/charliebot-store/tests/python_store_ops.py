@@ -9,10 +9,11 @@ import sys
 from datetime import datetime, timezone
 
 from src.app import registrations
+from src.features.usage import storage_cool
 from src.infra import config, json_utils, metadata_slots, models
 from src.infra import ndjson
 from src.runtime import chat_events, session_anchors, session_events, session_lifecycle, session_store
-from src.runtime import control_events, control_sink, runs
+from src.runtime import control_events, control_sink, runs, task_sessions
 
 SESSION_ID = "00000000-0000-4000-8000-000000000001"
 THREAD_ID = "00000000-0000-4000-8000-000000000002"
@@ -398,7 +399,6 @@ def _verify_runs(root: pathlib.Path) -> None:
       assert len(facts) == 1 and facts[0]["request_id"] == "stop-request"
 
 
-
 # ---------------------------------------------------------------------------
 # Cross-implementation read-parity cases: each computes the Python answer for a
 # fixture home the Rust test builds and copies, as JSON for the Rust side.
@@ -406,6 +406,7 @@ def _verify_runs(root: pathlib.Path) -> None:
 
 
 def _events_store(home: pathlib.Path) -> chat_events.ChatEventStore:
+
   def session_dir(session_id: str) -> pathlib.Path:
     return home / "sessions" / session_id
 
@@ -416,13 +417,10 @@ def _events_store(home: pathlib.Path) -> chat_events.ChatEventStore:
 
 
 def _fact_history(store: chat_events.ChatEventStore, session_id: str) -> list[dict]:
-  """task_sessions.fact_history's composition over the chat-events store primitives."""
-  live = store.load_chat_events_sync(session_id)
-  archived_count = max(0, store.get_chat_event_count_sync(session_id) - len(live))
-  if not archived_count:
-    return live
-  archived, _has_more = store.load_chat_events_range(session_id, 0, archived_count)
-  return [*archived, *live]
+  """task_sessions.fact_history over the event store, with only session_events set on the manager."""
+  manager = task_sessions.TaskTreeManager.__new__(task_sessions.TaskTreeManager)
+  manager.session_events = store
+  return manager.fact_history(session_id)
 
 
 def _range_read(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
@@ -436,21 +434,13 @@ def _range_read(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None
 
 
 def _listing_raw_scan(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
-  from src.infra import json_utils
-
   os.environ["CHARLIEBOT_HOME"] = str(home)
   cfg = config.load_config()
   store = session_store.SessionStore(cfg)
   metas = asyncio.run(store.load_session_metas())
   listed = {meta.id: meta.model_dump(mode="json") for meta in metas}
-  raw = {}
-  for session_dir in sorted(cfg.sessions_dir.iterdir()):
-    if not session_dir.is_dir():
-      continue
-    # The scan consumer skips a missing or malformed file after load_json_meta logs it.
-    meta = json_utils.load_json_meta(session_dir / "metadata.json", "storage_cool_meta_read_failed")
-    if isinstance(meta, dict):
-      raw[session_dir.name] = meta.get("name")
+  # The storage sweep's own scan: a missing or malformed metadata file drops out after load_json_meta logs it.
+  raw = sorted(storage_cool._scan_sessions(cfg, datetime.now(timezone.utc), 0))
   (root / "expected.json").write_text(json.dumps({"listed": listed, "raw": raw}), encoding="utf-8")
 
 

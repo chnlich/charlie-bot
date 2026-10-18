@@ -76,6 +76,8 @@ impl Store {
                 });
               Some(meta)
             }
+            // A directory without metadata.json drops out silently, as `load_session_metas` skips a missing file.
+            Ok(None) if !metadata_path.exists() => continue,
             Ok(None) => {
               tracing::warn!(path = %metadata_path.display(), "session_metadata_empty");
               continue;
@@ -378,7 +380,7 @@ mod tests {
   }
 
   fn test_store(home: &std::path::Path) -> Store {
-    let cfg = charliebot_core::config::load_config(home).unwrap();
+    let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
     Store::new(
       cfg,
       slots(),
@@ -386,6 +388,7 @@ mod tests {
         account_labels: Some(Arc::new(Labels)),
         anchor_reconciler: Some(Arc::new(Anchors)),
         sequence_listing: Some(Arc::new(Sequence)),
+        runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
       },
     )
     .unwrap()
@@ -519,5 +522,51 @@ mod tests {
     archived.sort();
     assert_eq!(archived.iter().map(String::as_str).collect::<Vec<_>>(), ["archived-a", "archived-b"]);
     assert_eq!(store.list_group_names().unwrap(), ["Alpha", "Beta"]);
+  }
+
+  /// `test_session_archive_empty.py::test_archive_non_empty_session_keeps_files_and_marks_archived`
+  /// at store level: archiving a session with events keeps its directory and event log, and the
+  /// session lists as archived.
+  #[tokio::test]
+  async fn archiving_a_session_with_events_keeps_its_files_and_lists_it_as_archived() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "non-empty", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    store.append_chat_event("non-empty", json!({"type": "user", "content": "hello"})).await.unwrap();
+    let session_dir = store.session_dir("non-empty");
+    let events_path = store.chat_events_path("non-empty");
+
+    let archived = store.archive_session("non-empty").await.unwrap().unwrap();
+    assert_eq!(archived.status, SessionStatus::Archived);
+    assert!(session_dir.exists());
+    assert!(events_path.exists());
+    assert_eq!(store.get_session("non-empty").await.unwrap().unwrap().status, SessionStatus::Archived);
+    let archived_ids: Vec<String> =
+      store.load_session_metas(Some(SessionStatus::Archived)).unwrap().into_iter().map(|meta| meta.id).collect();
+    assert_eq!(archived_ids, ["non-empty"]);
+  }
+
+  /// `test_sessions_batch_metadata_read.py`:
+  /// `test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_lists_and_refuses_a_new_run`
+  /// at store level: a session pinned to a backend the config no longer defines still loads, lists,
+  /// and reads its events. The refusal of a new run belongs to the backend resolver.
+  #[tokio::test]
+  async fn a_session_pinned_to_an_undefined_backend_still_loads_lists_and_reads_its_events() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let mut meta = SessionMetadata::new("pinned", "stored", TaskProfile::Manager);
+    meta.backend = "claude-fable-sub".to_string();
+    let path = store.metadata_path("pinned");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, meta.to_json_string(&store.slots, true)).unwrap();
+    store.append_chat_event("pinned", json!({"type": "user", "content": "hello"})).await.unwrap();
+
+    let loaded = store.get_session("pinned").await.unwrap().unwrap();
+    assert_eq!(loaded.backend, "claude-fable-sub");
+    let listed: Vec<String> = store.load_session_metas(None).unwrap().into_iter().map(|meta| meta.id).collect();
+    assert_eq!(listed, ["pinned"]);
+    let events = store.load_chat_events_sync("pinned").unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["content"], "hello");
   }
 }

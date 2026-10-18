@@ -568,7 +568,7 @@ mod tests {
     }
 
     fn test_store(home: &std::path::Path) -> Store {
-      let cfg = charliebot_core::config::load_config(home).unwrap();
+      let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
       Store::new(
         cfg,
         vec![MetadataSlot {
@@ -581,6 +581,7 @@ mod tests {
           account_labels: Some(Arc::new(Labels)),
           anchor_reconciler: Some(Arc::new(Anchors)),
           sequence_listing: Some(Arc::new(Listing)),
+          runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
         },
       )
       .unwrap()
@@ -774,6 +775,23 @@ mod tests {
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 4);
     }
 
+    /// `core/test_ndjson.py::test_count_ndjson_lines_memo_recounts_after_append` at store level: the
+    /// count follows a line appended outside the store.
+    #[tokio::test]
+    async fn event_count_recounts_after_an_external_append() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, "{\"i\": 0}\n{\"i\": 1}\n{\"i\": 2}\n{\"i\": 3}\n{\"i\": 4}\n").unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 5);
+      let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+      std::io::Write::write_all(&mut file, b"{\"i\": 5}\n").unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 6);
+    }
+
     /// `test_session_usage.py::test_claude_tier_uses_assistant_event_tokens_not_result_cumulative`
     /// and `test_claude_tier_ignores_subagent_and_synthetic_assistant_events`, read through
     /// `context_state`: assistant prompt tokens decide the reading, subagent and usage-less
@@ -811,8 +829,8 @@ mod tests {
     }
 
     /// `test_session_usage.py::test_context_reading_tier_beats_cumulative_result_usage`, read
-    /// through `context_state`: the newest persisted context_reading event decides the readout,
-    /// and a compact boundary refines it only while the reading kind is claude.
+    /// through `context_state`: cumulative result usage without a context snapshot never reaches
+    /// the readout, and the newest persisted context_reading event decides it.
     #[tokio::test]
     async fn context_state_prefers_the_newest_context_reading_event() {
       let home = tempfile::tempdir().unwrap();
@@ -820,13 +838,16 @@ mod tests {
       let session_id = "synthetic-session";
       seed_metadata(&store, session_id);
       let events = vec![
+        json!({"type": "result", "total_cost_usd": 0.10, "usage": {"input_tokens": 1_000_000}}),
+        json!({"type": "result", "total_cost_usd": 0.20, "usage": {"input_tokens": 2_000_000}}),
         json!({
-          "type": "assistant", "timestamp": "2025-02-03T00:00:01+00:00",
-          "message": {"usage": {"input_tokens": 400}},
+          "type": "system", "subtype": "context_reading",
+          "context_reading": {"model": "old/model", "context_tokens": 10_000, "context_full": 100_000},
         }),
-        json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"post_tokens": 90}}),
-        json!({"type": "result", "context_snapshot": {"tokens": {"input": 1, "output": 2, "reasoning": 3, "cache_read": 4, "cache_write": 5}}}),
-        json!({"type": "system", "subtype": "context_reading", "context_reading": {"context_tokens": 118_234}}),
+        json!({
+          "type": "system", "subtype": "context_reading",
+          "context_reading": {"model": "k3/model", "context_tokens": 118_234, "context_full": 262_144},
+        }),
       ];
       for event in events {
         store.append_chat_event(session_id, event).await.unwrap();
@@ -836,7 +857,8 @@ mod tests {
     }
 
     /// `test_session_usage.py::test_empty_slot_keeps_context_unknown`, read through
-    /// `context_state`: no usage-bearing event leaves the reading unknown.
+    /// `context_state`: no usage-bearing event leaves the reading unknown, and cumulative result
+    /// usage does not fill it.
     #[tokio::test]
     async fn context_state_without_usage_bearing_events_stays_unknown() {
       let home = tempfile::tempdir().unwrap();
@@ -856,7 +878,10 @@ mod tests {
       store
         .append_chat_event(
           session_id,
-          json!({"type": "result", "total_cost_usd": 0.5, "timestamp": "2025-02-03T00:00:02+00:00"}),
+          json!({
+            "type": "result", "total_cost_usd": 0.5, "usage": {"input_tokens": 999_999},
+            "timestamp": "2025-02-03T00:00:02+00:00",
+          }),
         )
         .await
         .unwrap();

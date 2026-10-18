@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "charliebot-registry",
  "charliebot-store",
+ "serde_json",
 ]
 
 [[package]]

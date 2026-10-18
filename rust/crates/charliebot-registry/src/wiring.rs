@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_core::config::CharlieBotConfig;
@@ -20,6 +21,29 @@ pub type RouterBuilder = fn(&Arc<FeatureContext>) -> Router;
 /// Whether a request path falls under one of a router's routes, whatever the method. The trailing-slash redirect
 /// asks it of every router, as it asks the server's own route families.
 pub type PathMatch = fn(&str) -> bool;
+
+/// The request data a registered WebSocket route receives after the gate authorizes its upgrade.
+pub struct WebSocketRequest {
+  /// The decoded request path.
+  pub path: String,
+  /// The decoded path segments captured by `*`, in pattern order.
+  pub segments: Vec<String>,
+  /// The raw query string, or an empty string when the request has no query.
+  pub query: String,
+  /// The upgrade that the route accepts to start its WebSocket connection.
+  pub upgrade: WebSocketUpgrade,
+}
+
+/// One WebSocket handler. The gate supplies the same feature context used to build package routers.
+pub type WebSocketHandler = fn(Arc<FeatureContext>, WebSocketRequest) -> BoxFuture<'static, Response>;
+
+/// A matching WebSocket registration and the path segments captured by its `*` wildcards.
+pub struct WebSocketMatch {
+  /// The registered handler.
+  pub handler: WebSocketHandler,
+  /// The decoded segments captured by `*`, in pattern order.
+  pub segments: Vec<String>,
+}
 
 /// One registered router.
 #[derive(Clone, Copy)]
@@ -76,6 +100,35 @@ impl Registry {
     let package = self.owner()?;
     self.routers.push(RouterRegistration { package, build, matches });
     Ok(())
+  }
+
+  /// Register an authenticated WebSocket route. Each `*` matches one non-empty path segment.
+  pub fn websocket(&mut self, pattern: &'static str, handler: WebSocketHandler) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.websocket_routes.insert(package, pattern, handler)
+  }
+
+  /// The first registered handler whose pattern matches `path`, with captured segments in pattern order.
+  pub fn websocket_match(&self, path: &str) -> Option<WebSocketMatch> {
+    let path_segments: Vec<&str> = path.split('/').collect();
+    self.websocket_routes.pairs().find_map(|(pattern, handler)| {
+      let pattern_segments: Vec<&str> = pattern.split('/').collect();
+      if pattern_segments.len() != path_segments.len() {
+        return None;
+      }
+      let mut segments = Vec::new();
+      for (expected, actual) in pattern_segments.iter().zip(&path_segments) {
+        if *expected == "*" {
+          if actual.is_empty() {
+            return None;
+          }
+          segments.push((*actual).to_string());
+        } else if expected != actual {
+          return None;
+        }
+      }
+      Some(WebSocketMatch { handler: *handler, segments })
+    })
   }
 
   /// Register a service under its own name (`wiring.register_service`).

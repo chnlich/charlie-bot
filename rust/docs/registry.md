@@ -54,6 +54,14 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   The redirect for a trailing slash asks each `matches`.
 - Example: `registry.router(notes_routes, is_notes_path)?;`
 
+### WebSocket routes
+
+- Python: `server.py:358` `@app.websocket`, `src/features/terminal/api.py:13`, and `src/features/voice/__init__.py:15` `ws_router`
+- Rust: `websocket(pattern: &'static str, handler: WebSocketHandler)`. A `*` matches one non-empty decoded path segment.
+  `WebSocketRequest` carries the decoded path, captured segments, raw query string, and axum upgrade. The server checks
+  WebSocket auth before it calls the handler. A repeated pattern fails and names both packages.
+- Example: `registry.websocket("/ws/voice/*", preview)?;`
+
 ### Services
 
 - Python: `wiring.py:66` `register_service`
@@ -266,4 +274,4 @@ Not registered yet:
 - `code_server`'s template global for the diff page, which the Rust page does not port yet.
 - Usage attributions and usage sources. The usage package is not ported.
 - `cc-openai-compatible` and `cc-kimi` lifecycles. They use the default lifecycle, not the Python `ClaudeCliLifecycle`.
-- Routers, services, file views, cards, startup checks and diff roots. No stub makes them yet.
+- WebSocket routes, routers, services, file views, cards, startup checks and diff roots. No stub makes them yet.

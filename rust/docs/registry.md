@@ -149,7 +149,7 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 - Python: `page_render.py:35` `register_template_global`
 - Rust: `template_global(name: &'static str, global: TemplateGlobalFn)`, where
   `TemplateGlobalFn = fn(&FeatureContext) -> Result<minijinja::Value, String>`. The global reads the live config through the
-  context. An `Err` fails the page render.
+  context. An `Err` fails the page render. `Templating::render_page` calls every global once per render.
 - Example: `registry.template_global("voice_default_backend", voice_default_backend)?;`
 
 ### Home cards
@@ -244,6 +244,39 @@ methods above.
 `StartupState`. The state holds one value per Rust type: a lifespan step or service inserts its value with `insert`, a
 second value of one type fails, and a route handler reads it with `get` or `require`. A pre-recovery step that
 fills a value makes it visible to a ready service, which reads it at start.
+
+## Rendering pages
+
+Two values in the startup state serve pages. `run()` inserts both before the lifespan starts, so a lifespan step or
+a service reads them at start, and a route handler reads them per request.
+
+- `RepoRoot` (`charliebot_core::repo_root`) is the checkout the server serves. `main.rs` reads the repo root variable
+  once and validates it. Read it with `startup.require::<RepoRoot>()?` and `.path()` when a file lives in the checkout.
+  A template needs no path: `render_page` searches `web/templates` and each page package's `templates/`.
+- `Templating` (`charliebot_registry::templating`) is the page engine, built once at startup. Read it with
+  `startup.require::<Templating>()?`, then call `render_page(features, name, context, request)`. It evaluates the
+  registry's template globals, renders the template with `request` added to the context (the method, the raw path and
+  the raw query), and returns the response: status 200 with `text/html; charset=utf-8`. `RenderError::kind()` names the
+  Python exception class for the request log.
+
+A feature page whose template is `src/features/notes/templates/notes.html`:
+
+```rust
+use axum::http::request::Parts;
+use axum::response::Response;
+use charliebot_registry::FeatureContext;
+use charliebot_registry::templating::Templating;
+use serde_json::json;
+
+fn notes_page(features: &FeatureContext, request: &Parts) -> anyhow::Result<Response> {
+  let templating = features.startup.require::<Templating>()?;
+  let context = json!({"title": "Notes"});
+  Ok(templating.render_page(features, "notes.html", &context, request)?)
+}
+```
+
+The package registers `src.features.notes` and its template name must be unique across the search path, since a name
+in two directories fails the first render.
 
 ## Store hooks
 

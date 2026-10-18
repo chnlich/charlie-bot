@@ -1,10 +1,13 @@
 //! The request-time template engine (`src/runtime/templating.py` over Jinja2 as starlette configures it).
 //!
+//! The server builds one `Templating` at startup and inserts it into the startup state. A feature reads it with
+//! `startup.require::<Templating>()` and renders a page with `render_page`, as Starlette's `TemplateResponse` does.
+//!
 //! Each render builds a fresh minijinja environment, so a template, a page part or a template directory
 //! that changes on disk takes effect at the next render without a restart, as Jinja2's auto-reload does.
-//! The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with this page's
-//! globals and `page_parts` added. The search path is `web/templates`, then each page package's
-//! `templates/`, in registration order.
+//! The environment is charliebot-compat's Jinja2 environment (`jinja::environment`), with the registry's template
+//! globals and `page_parts` added. The search path is `web/templates`, then each page package's `templates/`, in
+//! registration order.
 
 use std::collections::HashMap;
 use std::io;
@@ -12,11 +15,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use charliebot_compat::jinja;
+use axum::http::request::Parts;
+use axum::response::Response;
+use charliebot_compat::{jinja, responses};
 use charliebot_core::{git, pyfmt};
-use charliebot_registry::pages::{self, package_directory};
 use minijinja::{Environment, Error, ErrorKind, Value};
+use serde_json::json;
 use sha1::{Digest, Sha1};
+
+use crate::context::FeatureContext;
+use crate::pages::{self, package_directory};
 
 /// A zero-argument template global: the name and the value the call returns.
 pub type TemplateGlobal = (&'static str, Value);
@@ -121,8 +129,31 @@ impl Templating {
     Ok(value)
   }
 
+  /// `TemplateResponse(request, name, context)`: render `name` with `context`, the request under `request`, the
+  /// template globals of `features.registry` and the page parts. A failing global fails the render.
+  pub fn render_page(
+    &self,
+    features: &FeatureContext,
+    name: &str,
+    context: &serde_json::Value,
+    request: &Parts,
+  ) -> Result<Response, RenderError> {
+    let globals = features
+      .registry
+      .template_globals()
+      .map(|(global_name, global)| global(features).map(|value| (global_name, value)).map_err(RenderError::Global))
+      .collect::<Result<Vec<_>, _>>()?;
+    let mut context = context.clone();
+    context
+      .as_object_mut()
+      .expect("a page context is a JSON object")
+      .insert("request".to_string(), request_context(request));
+    let html = self.render(name, &context, globals)?;
+    Ok(responses::html(html))
+  }
+
   /// Render template `name` with `context` and the zero-argument `globals`.
-  pub fn render(
+  fn render(
     &self,
     name: &str,
     context: &serde_json::Value,
@@ -157,6 +188,8 @@ impl Templating {
 pub enum RenderError {
   /// Two template directories hold one template name (`_assert_unique_template_names`).
   DuplicateName(String),
+  /// A template global raised; the page fails with its message.
+  Global(String),
   Template(Error),
 }
 
@@ -164,7 +197,7 @@ impl RenderError {
   /// The Python exception class the same failure raises, for the request log.
   pub fn kind(&self) -> &'static str {
     match self {
-      RenderError::DuplicateName(_) => "ValueError",
+      RenderError::DuplicateName(_) | RenderError::Global(_) => "ValueError",
       RenderError::Template(error) if error.kind() == ErrorKind::TemplateNotFound => "TemplateNotFound",
       RenderError::Template(error) if error.kind() == ErrorKind::UndefinedError => "UndefinedError",
       RenderError::Template(_) => "TemplateError",
@@ -175,10 +208,16 @@ impl RenderError {
 impl std::fmt::Display for RenderError {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      RenderError::DuplicateName(message) => formatter.write_str(message),
+      RenderError::DuplicateName(message) | RenderError::Global(message) => formatter.write_str(message),
       RenderError::Template(error) => write!(formatter, "{error:#}"),
     }
   }
+}
+
+/// The `request` a page template sees: the method, the raw path and the raw query string, a subset of Starlette's
+/// `Request`.
+fn request_context(request: &Parts) -> serde_json::Value {
+  json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
 }
 
 fn walk_static_tree(
@@ -247,5 +286,52 @@ fn collect_html_names(directory: &Path, prefix: &str, names: &mut Vec<String>) {
     if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
       collect_html_names(&entry.path(), &format!("{rel}/"), names);
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fs;
+  use std::sync::Arc;
+
+  use axum::http::header::CONTENT_TYPE;
+  use axum::http::{Request, StatusCode};
+
+  use super::*;
+  use crate::context::features_over;
+  use crate::registry::{Registry, RegistryError};
+
+  fn notes_label(_features: &FeatureContext) -> Result<Value, String> {
+    Ok(Value::from("synthetic-label"))
+  }
+
+  fn register_notes(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.template_global("notes_label", notes_label)
+  }
+
+  #[tokio::test]
+  async fn render_page_renders_a_package_template_with_request_and_a_global() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "src.features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(
+      templates.join("notes.html"),
+      "{{ notes_label() }} {{ request.method }} {{ request.path }}?{{ request.query }}",
+    )
+    .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/notes?page=2").body(()).unwrap().into_parts();
+
+    let templating = features.startup.require::<Templating>().unwrap();
+    let response = templating.render_page(&features, "notes.html", &json!({}), &parts).unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body, "synthetic-label GET /notes?page=2");
   }
 }

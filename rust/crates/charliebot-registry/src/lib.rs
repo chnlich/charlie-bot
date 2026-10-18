@@ -14,6 +14,7 @@ pub mod registry;
 pub mod sequence;
 pub mod sidebar;
 pub mod store_hooks;
+pub mod templating;
 pub mod turn;
 pub mod usage;
 pub mod wiring;

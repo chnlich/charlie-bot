@@ -118,7 +118,6 @@ mod tests {
   use crate::app::ConnectionInfo;
   use crate::buildinfo::BuildInfo;
   use crate::state::AppState;
-  use crate::templating::Templating;
   use http::HeaderValue;
 
   struct ContextMarker;
@@ -202,7 +201,6 @@ mod tests {
     let state = Arc::new(AppState {
       features,
       build_info: BuildInfo { sha: "synthetic".to_string(), started_at: "synthetic".to_string() },
-      templating: Templating::new(Path::new(env!("CARGO_MANIFEST_DIR")), &[]),
       static_mounts: Vec::new(),
       mime_types: charliebot_compat::mimetypes::MimeTypes::builtin(),
     });

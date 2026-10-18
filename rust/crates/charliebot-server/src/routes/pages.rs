@@ -11,10 +11,12 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::State;
+use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_registry::Registry;
+use charliebot_registry::templating::Templating;
 use serde_json::{Map, Value, json};
 
 use super::{Family, get_only};
@@ -27,11 +29,12 @@ fn routes() -> Router<Arc<AppState>> {
   Router::new().route("/", get_only(index))
 }
 
-async fn index(State(state): State<Arc<AppState>>) -> Response {
-  let rendered =
-    tokio::task::spawn_blocking(move || render_index(&state)).await.expect("rendering the index does not panic");
+async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
+  let rendered = tokio::task::spawn_blocking(move || render_index(&state, &request))
+    .await
+    .expect("rendering the index does not panic");
   match rendered {
-    Ok(html) => responses::html(html),
+    Ok(response) => response,
     Err(failure) => responses::internal_error(&failure.kind, failure.detail),
   }
 }
@@ -40,10 +43,12 @@ fn failure(kind: &str, detail: impl ToString) -> Failure {
   Failure { kind: kind.to_string(), detail: detail.to_string() }
 }
 
-fn render_index(state: &AppState) -> Result<String, Failure> {
+fn render_index(state: &AppState, request: &Parts) -> Result<Response, Failure> {
   let cfg = state.config().map_err(|error| failure("ValueError", error))?;
   let credentials = state.credentials().map_err(|error| failure("ValueError", error))?;
   require_no_sessions(&cfg.sessions_dir())?;
+  let templating =
+    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
   let options = &cfg.backends.options;
   let default_backend_id = options.first().map_or("claude", |option| option.id.as_str());
   let active_option = cfg.get_backend_option(default_backend_id);
@@ -70,18 +75,12 @@ fn render_index(state: &AppState) -> Result<String, Failure> {
     "auth_enabled": credentials.access_key().is_some(),
     "hostname": hostname,
     "sessions_root": paths::display(&cfg.sessions_dir()),
-    "version": state.templating.git_version(),
-    "static_asset_version": state.templating.static_asset_version().map_err(|error| failure("OSError", error))?,
+    "version": templating.git_version(),
+    "static_asset_version": templating.static_asset_version().map_err(|error| failure("OSError", error))?,
   });
-  let globals = state
-    .features
-    .registry
-    .template_globals()
-    .map(|(name, global)| {
-      global(&state.features).map(|value| (name, value)).map_err(|message| failure("ValueError", message))
-    })
-    .collect::<Result<Vec<_>, _>>()?;
-  state.templating.render("index.html", &context, globals).map_err(|error| failure(error.kind(), &error))
+  templating
+    .render_page(&state.features, "index.html", &context, request)
+    .map_err(|error| failure(error.kind(), &error))
 }
 
 /// The session listing is not ported: a home with anything under `sessions/` fails the request.

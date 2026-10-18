@@ -1,5 +1,5 @@
 //! What every request handler reads: the feature context (the profile's live config and credentials, the store, the
-//! registry), the build identity, the template engine and the static mounts.
+//! registry, the startup state with the template engine), the build identity and the static mounts.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,13 +12,11 @@ use charliebot_registry::{FeatureContext, Registry};
 
 use crate::buildinfo::BuildInfo;
 use crate::routes::static_mounts::StaticMount;
-use crate::templating::Templating;
 
 pub struct AppState {
   /// The handles the registered features share: the live config and credentials, the store, the registry.
   pub features: Arc<FeatureContext>,
   pub build_info: BuildInfo,
-  pub templating: Templating,
   /// The `/static` mounts in the Python app's route order.
   pub static_mounts: Vec<StaticMount>,
   pub mime_types: MimeTypes,

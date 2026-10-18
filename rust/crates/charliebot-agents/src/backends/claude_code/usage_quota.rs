@@ -518,11 +518,12 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
 fn raise_for_status(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
   let status = response.status();
   let category = match status.as_u16() {
+    200..=299 => return Ok(response),
     100..=199 => "Informational response",
     300..=399 => "Redirect response",
     400..=499 => "Client error",
     500..=599 => "Server error",
-    _ => return Ok(response),
+    _ => "Invalid status code",
   };
   let reason = status.canonical_reason().context("the HTTP status has no canonical reason")?;
   bail!(

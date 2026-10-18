@@ -200,11 +200,12 @@ def pick_ports(count: int) -> Iterator[list[int]]:
       descriptor = _lock_port(port)
       if descriptor is None:
         continue
+      descriptors.append(descriptor)
       if not _port_binds(port):
         os.close(descriptor)
+        descriptors.remove(descriptor)
         continue
       ports.append(port)
-      descriptors.append(descriptor)
     if len(ports) < count:
       raise RuntimeError(f"fewer than {count} free ports in {PORT_RANGE.start}-{PORT_RANGE.stop - 1}")
     yield ports
@@ -225,6 +226,9 @@ def _lock_port(port: int) -> int | None:
   except BlockingIOError:
     os.close(descriptor)
     return None
+  except BaseException:
+    os.close(descriptor)
+    raise
   return descriptor
 
 

@@ -263,6 +263,98 @@ test('Everything is unchanged after a For you round trip', () => {
   assert.equal(registry(), registryBefore, 'the turn-fold state is the same');
 });
 
+// One synthetic turn: a user message, its reply and the separator that closes it.
+function userTurn(tag) {
+  return [
+    eMsg('user', `${tag}-u`, `question ${tag}`),
+    eMsg('assistant', `${tag}-a`, `answer ${tag}`),
+    eMsg('separator', `${tag}-s`, '', {thinking_seconds: 4}),
+  ];
+}
+
+// The user messages a projection shows, in document order.
+function userIdsIn(el) {
+  const ids = [];
+  (function walk(node) {
+    node.children.forEach((child) => {
+      if (child.dataset && child.dataset.messageRole === 'user') ids.push(child.dataset.messageId);
+      walk(child);
+    });
+  })(el);
+  return ids;
+}
+
+// The full message stream and visible user rows must read in server order.
+// Everything shows messages inside turns, so every turn opens before that read.
+function assertTimeOrder(rig, expected) {
+  if (rig.engine.view === 'everything') {
+    rig.engine.segments.forEach((seg) => {
+      if (seg.kind === 'turn') rig.engine.setOverride(seg.key, true);
+    });
+    settle(rig.timers);
+  }
+  // The engine's arrays come from the vm context; the spread makes this realm's
+  // array, which strict deepEqual compares against.
+  const displayOrder = [...rig.engine.displayEntries()].map((entry) => entry.msg.id);
+  const expectedUsers = expected.filter((id) => id.endsWith('-u'));
+  assert.deepEqual(displayOrder, expected, `displayEntries reads ${rig.engine.view} in time order`);
+  assert.deepEqual(userIdsIn(rig.root), expectedUsers, `the ${rig.engine.view} rows read in time order`);
+}
+
+function turnMessageIds(tags) {
+  return tags.flatMap((tag) => [`${tag}-u`, `${tag}-a`, `${tag}-s`]);
+}
+
+test('one older page prepended in For you keeps user rows in time order across a round trip', () => {
+  const rig = forYouRig([...userTurn('n1'), ...userTurn('n2')]);
+  rig.engine.prependMessages(userTurn('p1'));
+  settle(rig.timers);
+  const order = turnMessageIds(['p1', 'n1', 'n2']);
+  assertTimeOrder(rig, order);
+
+  rig.engine.setView('everything');
+  settle(rig.timers);
+  assertTimeOrder(rig, order);
+
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  assertTimeOrder(rig, order);
+});
+
+test('three older pages prepended in For you leave the newest messages last in Everything', () => {
+  const rig = forYouRig([...userTurn('n1'), ...userTurn('n2')]);
+  rig.engine.prependMessages(userTurn('p1'));
+  rig.engine.prependMessages(userTurn('p2'));
+  rig.engine.prependMessages(userTurn('p3'));
+  settle(rig.timers);
+  const order = turnMessageIds(['p3', 'p2', 'p1', 'n1', 'n2']);
+  assertTimeOrder(rig, order);
+
+  rig.engine.setView('everything');
+  settle(rig.timers);
+  assertTimeOrder(rig, order);
+
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  assertTimeOrder(rig, order);
+});
+
+test('a live turn appended after the view switches lands last in both views', () => {
+  const rig = forYouRig([...userTurn('n1'), ...userTurn('n2')]);
+  rig.engine.prependMessages(userTurn('p1'));
+  rig.engine.setView('everything');
+  rig.engine.setView('foryou');
+  settle(rig.timers);
+  userTurn('live').forEach((msg) => rig.context.appendMessageObject(msg, 'sess-fy', false));
+  settle(rig.timers);
+  const order = turnMessageIds(['p1', 'n1', 'n2', 'live']);
+  assertTimeOrder(rig, order);
+
+  rig.engine.setView('everything');
+  settle(rig.timers);
+  assertTimeOrder(rig, order);
+});
+
 // The subtree's tags, classes, data attributes, text and spacer heights in order:
 // two equal snapshots mean two equal DOMs for the cases above.
 function domSnapshot(el) {

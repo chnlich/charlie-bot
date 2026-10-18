@@ -681,6 +681,14 @@ def test_run_tool_count_matches_aggregator_rows_and_last_tool_preview() -> None:
           "timestamp": "tool-time"
       },
       {
+          "type": ET.TOOL_USE,
+          "name": "ExitPlanMode",
+          "input": {
+              "plan": "standalone event"
+          },
+          "timestamp": "standalone-plan-time"
+      },
+      {
           "type": ET.ASSISTANT,
           "message": {
               "content": [{
@@ -701,13 +709,13 @@ def test_run_tool_count_matches_aggregator_rows_and_last_tool_preview() -> None:
   messages.extend(delta["message"] for delta in aggregator.flush_pending())
   rendered_tool_rows = sum(len(message.get("tools", [])) for message in messages)
 
-  assert message_aggregator.run_tool_call_count(events) == rendered_tool_rows == 2
+  assert message_aggregator.run_tool_call_count(events) == rendered_tool_rows == 3
   assert message_aggregator.run_last_tool(events) == {
-      "name": "Read",
+      "name": "ExitPlanMode",
       "input": {
-          "file_path": "/tmp/file"
+          "plan": "standalone event"
       },
-      "timestamp": "tool-time",
+      "timestamp": "standalone-plan-time",
   }
   last_bash = message_aggregator.run_last_tool(events[:1])
   assert last_bash["name"] == "Bash"

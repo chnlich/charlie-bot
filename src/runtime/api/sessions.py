@@ -23,6 +23,7 @@ from src.runtime import (
     scheduled_sessions,
     session_anchors,
     session_dispatch,
+    session_events,
     session_fork,
     session_lifecycle,
     session_listing,
@@ -38,12 +39,11 @@ from src.runtime import (
     task_prompts,
     task_sessions,
     thinking_state,
+    triggers,
     worker_transcript,
 )
 from src.runtime.api import deps, message_utils
 from src.runtime.hooks import backend_types, sequence_controllers
-from src.runtime.session_events import SessionEvents
-from src.runtime.triggers import TriggerManager
 
 log = log_once.LazyStructlogLogger()
 router = fastapi.APIRouter()
@@ -965,7 +965,7 @@ async def _switch_payload_response(request: fastapi.Request, payload: dict | lis
 async def get_pending_triggers(
     session_id: str,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
-    trigger_mgr: TriggerManager = fastapi.Depends(deps.get_trigger_manager),
+    trigger_mgr: triggers.TriggerManager = fastapi.Depends(deps.get_trigger_manager),
 ) -> list[dict]:
   """Return the session's pending delayed triggers, fire_at ascending.
 
@@ -975,9 +975,9 @@ async def get_pending_triggers(
   cancelled records stay out — the transcript shows fired triggers, and the
   cancel endpoint (src/runtime/api/internal.py) owns removal.
   """
-  triggers = await trigger_mgr.list_triggers(session_id)
+  records = await trigger_mgr.list_triggers(session_id)
   pending = sorted(
-      (tr for tr in triggers if tr.status is models.TriggerStatus.PENDING),
+      (tr for tr in records if tr.status is models.TriggerStatus.PENDING),
       key=lambda tr: tr.fire_at,
   )
   return [tr.model_dump(mode="json") for tr in pending]
@@ -989,12 +989,12 @@ async def get_session_bootstrap(
     request: fastapi.Request,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> responses.Response:
   """Return the minimal data needed to make one chat session usable."""
-  bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
+  bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, events, tree=task_mgr)
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
@@ -1047,7 +1047,7 @@ async def get_session_events_page(
     before: int,
     limit: int = 40,
     meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> responses.Response:
   """Paginate backwards through session messages by message ordinal.
@@ -1076,7 +1076,7 @@ async def get_session_events_page(
   # plain json.dumps, and every field is already a plain parsed-JSON type so
   # the dumped body is unchanged.
   if meta.archive_offset == 0:
-    projection = await message_utils.get_message_projection_fast(session_events, session_id)
+    projection = await message_utils.get_message_projection_fast(events, session_id)
     if projection is not None:
       # The chat UI re-fetches a page whenever it re-enters the viewport or the
       # session is revisited, and the published projection is immutable, so a
@@ -1097,8 +1097,8 @@ async def get_session_events_page(
         return infra_responses.PreencodedJSONResponse(gz, headers=infra_responses.GZIP_RESPONSE_HEADERS)
       return infra_responses.PreencodedJSONResponse(body)
   start = max(0, before - limit)
-  events, has_more = await asyncio.to_thread(session_events.load_chat_events_range, session_id, start, before)
-  messages = message_utils.events_to_messages(events, event_index_offset=start)
+  page_events, has_more = await asyncio.to_thread(events.load_chat_events_range, session_id, start, before)
+  messages = message_utils.events_to_messages(page_events, event_index_offset=start)
   return infra_responses.FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
 
 
@@ -1262,7 +1262,7 @@ async def switch_session_backend(
     anchors: session_anchors.SessionAnchors = fastapi.Depends(deps.get_session_anchors),
     lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> models.SessionMetadata:
   """Switch a session's backend in place, across model families.
@@ -1316,7 +1316,7 @@ async def switch_session_backend(
       "previous_native_backend": durable.native_backend if durable is not None and durable.cc_session_id else None,
       "previous_native_session_id": durable.cc_session_id if durable is not None else None,
   }
-  await session_events.persist_and_broadcast(session_id, audit_event)
+  await events.persist_and_broadcast(session_id, audit_event)
   return meta
 
 

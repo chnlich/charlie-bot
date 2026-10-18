@@ -135,11 +135,7 @@ def _normalize(value: object, root: pathlib.Path) -> object:
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:
-  events = []
-  for line in path.read_text(encoding="utf-8").splitlines():
-    if line.strip():
-      events.append(json.loads(line))
-  return events
+  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _python_frames(events: list[dict], event_index_offset: int) -> list[dict]:
@@ -172,8 +168,9 @@ def _session_cases(home: pathlib.Path) -> list[dict]:
 def main() -> None:
   sys.path.insert(0, str(REPO_ROOT))
   sys.path.insert(0, str(PARITY_DIR))
-  from src.app import registrations
   from servers import make_tree, pick_ports, run_traced, write_home_config
+
+  from src.app import registrations
 
   registrations.register_all()
   parity_out = PARITY_DIR / "out"

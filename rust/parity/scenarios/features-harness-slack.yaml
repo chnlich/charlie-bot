@@ -1,0 +1,30 @@
+stage: features
+name: features-harness-slack
+config:
+  slack:
+    allowed_user_ids: [U0PARITY]
+credentials:
+  slack:
+    bot_token: xoxb-parity-synthetic-token
+    app_token: xapp-parity-synthetic-token
+fakes:
+  slack: {}
+steps:
+  - kind: fake
+    name: acknowledged message subtype is dropped
+    fake: slack
+    action: socket_event
+    payload:
+      type: message
+      subtype: message_changed
+      channel: C0PARITY
+      user: U0PARITY
+      ts: 1767600000.000200
+      thread_ts: 1767600000.000100
+  - name: reply to the fixture Slack thread
+    method: POST
+    path: /api/internal/slack/reply
+    json:
+      session_id: ${sessions.delta}
+      text: Synthetic Slack parity reply.
+    expect_status: 200

@@ -20,6 +20,7 @@ script runs the real reconcile pass at the end and fails when that pass would wr
 import argparse
 import asyncio
 import datetime
+import importlib
 import json
 import os
 import pathlib
@@ -885,7 +886,26 @@ def pin_times(home: pathlib.Path, instant: datetime.datetime) -> None:
   os.utime(home, ns=(stamp, stamp))
 
 
-async def build(manifest_path: pathlib.Path) -> None:
+def pin_times_outside_home(home: pathlib.Path, instant: datetime.datetime) -> None:
+  """Pin fixture-created tree entries outside home, leaving harness-owned top-level entries alone."""
+  from servers import HARNESS_ENTRIES
+
+  tree_root = home.parent
+  stamp = int(instant.timestamp()) * 1_000_000_000
+  for dirpath, dirnames, filenames in os.walk(tree_root, topdown=False):
+    current = pathlib.Path(dirpath)
+    if current == tree_root:
+      dirnames[:] = [name for name in dirnames if name not in HARNESS_ENTRIES and name != home.name]
+      filenames = [name for name in filenames if name not in HARNESS_ENTRIES]
+    for name in [*filenames, *dirnames]:
+      os.utime(current / name, ns=(stamp, stamp), follow_symlinks=False)
+  for name in os.listdir(tree_root):
+    path = tree_root / name
+    if name not in HARNESS_ENTRIES and name != home.name and path.is_dir():
+      os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
+
+
+async def build(manifest_path: pathlib.Path, extras: tuple[str, ...]) -> None:
   from src.infra import models
 
   models.utc_now = CLOCK.now
@@ -897,23 +917,54 @@ async def build(manifest_path: pathlib.Path) -> None:
   await build_ember(b)
   await build_fable(b)
   await build_garnet(b)
+  if extras:
+    b.manifest["extras"] = {}
+    for name in extras:
+      module = importlib.import_module(f"rust.parity.fixture_extras.{name}")
+      values = await module.build(b)
+      if not isinstance(values, dict):
+        raise RuntimeError(f"fixture extra {name} must return a mapping")
+      for key, value in values.items():
+        if not isinstance(key, str) or not key:
+          raise RuntimeError(f"fixture extra {name} returned a non-string key: {key!r}")
+        _check_extra_value(name, key, value)
+      b.manifest["extras"][name] = values
   check_event_coverage(b)
   await check_recovery_fixed_point(b)
   pin_times(b.cfg.charliebot_home, CLOCK.now())
+  if extras:
+    pin_times_outside_home(b.cfg.charliebot_home, CLOCK.now())
   manifest_path.write_text(json.dumps(b.manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _check_extra_value(name: str, key: str, value: object) -> None:
+  if isinstance(value, dict):
+    for child_key, child in value.items():
+      _check_extra_value(name, f"{key}.{child_key}", child)
+  elif isinstance(value, list):
+    for index, child in enumerate(value):
+      _check_extra_value(name, f"{key}[{index}]", child)
+  elif isinstance(value, str):
+    path = pathlib.PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts:
+      raise RuntimeError(f"fixture extra {name} returned non-tree-relative value {key}={value!r}")
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   parser.add_argument("--manifest", required=True, type=pathlib.Path)
+  parser.add_argument("--extras", default="", help="comma-separated fixture-extra module names")
   args = parser.parse_args()
+  extras = tuple(name for name in args.extras.split(",") if name)
+  if len(extras) != len(set(extras)):
+    parser.error("--extras must not repeat a module name")
   # Seed uuid4 before any server module draws one.
   uuid.uuid4 = _seeded_uuid4
   sys.path.insert(0, str(REPO_ROOT))
   from src.app import registrations
 
   registrations.register_all()
-  asyncio.run(build(args.manifest))
+  asyncio.run(build(args.manifest, extras))
 
 
 if __name__ == "__main__":

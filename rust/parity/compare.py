@@ -5,6 +5,8 @@ difference. JSON compares structurally (key order is free, value types are not);
 compares as bytes.
 """
 
+import base64
+import collections
 import dataclasses
 import difflib
 import gzip
@@ -235,7 +237,7 @@ def _content_diff(
 
 
 def _normalized_path_map(paths: Any, ctx: normalize.Context) -> dict[str, str]:
-  return {normalize.normalize_text(path, ctx): path for path in paths}
+  return {normalize.normalize_path(path, ctx): path for path in paths}
 
 
 def tree_diff(left: Snapshot, right: Snapshot, left_ctx: normalize.Context, right_ctx: normalize.Context) -> list[str]:
@@ -261,7 +263,7 @@ def delta_diff(left: Delta, right: Delta, left_ctx: normalize.Context, right_ctx
   lines: list[str] = []
   for label, left_paths, right_paths in (
       ("added", left.added, right.added),
-      ("removed", {path: None for path in left.removed}, {path: None for path in right.removed}),
+      ("removed", dict.fromkeys(left.removed), dict.fromkeys(right.removed)),
       ("changed", left.changed, right.changed),
   ):
     left_names = _normalized_path_map(left_paths, left_ctx)
@@ -284,6 +286,69 @@ def describe_delta(change: Delta) -> str:
   if not (change.added or change.removed or change.changed):
     return ""
   return f"files +{len(change.added)} -{len(change.removed)} ~{len(change.changed)}"
+
+
+def _record_value(value: Any, ctx: normalize.Context) -> Any:
+  if isinstance(value, bytes):
+    return {"$bytes_base64": base64.b64encode(value).decode("ascii")}
+  if isinstance(value, list):
+    return [_record_value(item, ctx) for item in value]
+  if isinstance(value, dict):
+    return {key: _record_value(item, ctx) for key, item in value.items()}
+  if isinstance(value, str):
+    return normalize.normalize_text(value, ctx)
+  return value
+
+
+def _normalized_record(record: dict, route: str, ctx: normalize.Context) -> dict:
+  clean = {key: value for key, value in record.items() if key != "_index"}
+  if "headers" in clean:
+    clean["headers"] = {
+        name: [normalize.normalize_text(value, ctx) for value in values]
+        for name, values in clean["headers"].items()
+    }
+  if "message" in clean and isinstance(clean["message"], dict):
+    clean["message"] = normalize.normalize_json(clean["message"], normalize.ws_frame_rules(route), ctx)
+  return _record_value(clean, ctx)
+
+
+def recording_diff(
+    left: list[dict],
+    right: list[dict],
+    route: str,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+) -> list[str]:
+  """Compare fake HTTP requests as a multiset and each WebSocket connection's traffic in order."""
+  def compared(records: list[dict], ctx: normalize.Context) -> tuple[list[dict], dict[tuple[str, str], list[dict]]]:
+    http_records = []
+    websocket: dict[tuple[str, str], list[dict]] = {}
+    for record in records:
+      if record.get("kind") == "refused":
+        continue
+      normalized = _normalized_record(record, route, ctx)
+      if normalized.get("kind") == "http":
+        http_records.append(normalized)
+      elif normalized.get("kind") in ("ws_handshake", "ws_message"):
+        if normalized.get("kind") == "ws_message" and normalize.ignored_fake_message(normalized):
+          continue
+        key = (str(normalized.get("fake")), str(normalized.get("connection")))
+        websocket.setdefault(key, []).append(normalized)
+    return http_records, websocket
+
+  left_http, left_ws = compared(left, left_ctx)
+  right_http, right_ws = compared(right, right_ctx)
+  left_counts = collections.Counter(json.dumps(record, sort_keys=True, ensure_ascii=False) for record in left_http)
+  right_counts = collections.Counter(json.dumps(record, sort_keys=True, ensure_ascii=False) for record in right_http)
+  lines = []
+  for record in sorted(left_counts.keys() | right_counts.keys()):
+    left_count, right_count = left_counts[record], right_counts[record]
+    if left_count != right_count:
+      lines.append(f"fake HTTP request count {left_count} != {right_count}: {record}")
+  for key in sorted(left_ws.keys() | right_ws.keys()):
+    left_frames, right_frames = left_ws.get(key, []), right_ws.get(key, [])
+    lines.extend(f"fake WebSocket {key[0]} connection {key[1]} {line}" for line in json_diff(left_frames, right_frames))
+  return lines
 
 
 # -- responses --------------------------------------------------------------
@@ -321,6 +386,8 @@ def _is_json(response: Response) -> bool:
 
 def _normalized_body(response: Response, route: str, ctx: normalize.Context) -> Any:
   body = response.decoded_body()
+  if not body:
+    return body
   if _is_json(response):
     return normalize.normalize_json(json.loads(body), normalize.response_rules(route), ctx)
   return normalize.normalize_body_bytes(body, route, ctx)
@@ -333,8 +400,8 @@ def response_diff(
   lines: list[str] = []
   if left.status != right.status:
     lines.append(f"status: {left.status} != {right.status}")
-  left_headers = normalize.normalize_headers(left.headers, left_ctx)
-  right_headers = normalize.normalize_headers(right.headers, right_ctx)
+  left_headers = normalize.normalize_headers(left.headers, left_ctx, route)
+  right_headers = normalize.normalize_headers(right.headers, right_ctx, route)
   lines.extend(
       f"header {name}: {left_headers.get(name)} != {right_headers.get(name)}"
       for name in sorted(left_headers.keys() | right_headers.keys())

@@ -38,6 +38,8 @@ _TRUNCATE = 1 << 14  # ABI 3
 # Device nodes a process may open for writing: writes to them change no file.
 _WRITABLE_DEVICES = ("/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", "/dev/ptmx")
 _WRITABLE_DEVICE_DIRS = ("/dev/pts",)
+# ProcessPoolExecutor's spawn context creates POSIX semaphores here; guard.py checks every other shared-memory path.
+_WRITABLE_PROCESS_POOL_DIRS = ("/dev/shm",)
 
 
 def _syscall(libc: ctypes.CDLL, number: int, *args: object) -> int:
@@ -83,6 +85,9 @@ def restrict_writes(allowed_dirs: list[pathlib.Path]) -> None:
     for device_dir in _WRITABLE_DEVICE_DIRS:
       if os.path.isdir(device_dir):
         _add_rule(libc, ruleset_fd, device_dir, file_access)
+    for process_pool_dir in _WRITABLE_PROCESS_POOL_DIRS:
+      if os.path.isdir(process_pool_dir):
+        _add_rule(libc, ruleset_fd, process_pool_dir, dir_access)
     if libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
       errno = ctypes.get_errno()
       raise OSError(errno, f"prctl(PR_SET_NO_NEW_PRIVS) failed: {os.strerror(errno)}")

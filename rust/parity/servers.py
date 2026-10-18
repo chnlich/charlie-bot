@@ -8,11 +8,12 @@ and each server) runs inside sandbox.py's Landlock ruleset and under ``strace``;
 writes outside each tree.
 """
 
+import contextlib
 import dataclasses
 import os
 import pathlib
-import signal
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -42,6 +43,7 @@ TRACED_SYSCALLS = (
     "clone3", "fork", "vfork")
 READY_TIMEOUT_SECONDS = 60.0
 STOP_TIMEOUT_SECONDS = 20.0
+PROCESS_POOL_STOP_TIMEOUT_SECONDS = 5.0
 POLL_INTERVAL_SECONDS = 0.02
 
 
@@ -79,6 +81,9 @@ def make_tree(label: str, root: pathlib.Path) -> Tree:
   for path in (tree.home, tree.tmp, tree.fake_bin, tree.workspace, tree.worktrees, tree.root / "logs",
                tree.root / "fake-agent"):
     path.mkdir(parents=True)
+  socket_path = tree.tmp / f"tmux-{os.getuid()}" / "charliebot"
+  if len(os.fsencode(socket_path)) > 107:
+    raise RuntimeError(f"tmux socket path exceeds 107 bytes: {socket_path}")
   for name in STAND_IN_NAMES:
     wrapper = tree.fake_bin / name
     command = f"exec /usr/bin/python3 -I {shlex.quote(str(FAKE_AGENT))} {shlex.quote(name)} \"$@\""
@@ -87,7 +92,7 @@ def make_tree(label: str, root: pathlib.Path) -> Tree:
   return tree
 
 
-def write_home_config(tree: Tree, port: int) -> None:
+def write_home_config(tree: Tree, port: int, config_overlay: dict | None = None, credentials_overlay: dict | None = None) -> None:
   """Write the synthetic config.yaml and credentials.yaml into the tree's home.
 
   One backend option, no integration, the session cgroups and the worker disk-headroom check off, and both
@@ -118,20 +123,40 @@ def write_home_config(tree: Tree, port: int) -> None:
                   }],
           },
   }
+  config = _deep_merge(config, config_overlay or {})
   (tree.home / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
   credentials = tree.home / "credentials.yaml"
-  credentials.write_text(yaml.safe_dump({"charliebot": {"access_key": ACCESS_KEY}}), encoding="utf-8")
+  credential_data = _deep_merge({"charliebot": {"access_key": ACCESS_KEY}}, credentials_overlay or {})
+  credentials.write_text(yaml.safe_dump(credential_data, sort_keys=False), encoding="utf-8")
   credentials.chmod(0o600)
 
 
-def server_env(tree: Tree, repo_root: pathlib.Path) -> dict[str, str]:
+def _deep_merge(base: dict, overlay: dict) -> dict:
+  merged = dict(base)
+  for key, value in overlay.items():
+    if isinstance(merged.get(key), dict) and isinstance(value, dict):
+      merged[key] = _deep_merge(merged[key], value)
+    else:
+      merged[key] = value
+  return merged
+
+
+def server_env(
+    tree: Tree,
+    repo_root: pathlib.Path,
+    proxy_url: str | None = None,
+    ca_file: pathlib.Path | None = None,
+) -> dict[str, str]:
   """The whole environment of a process under test: nothing is inherited from the harness."""
   proxies = dict.fromkeys(("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"), CLOSED_PROXY)
+  if proxy_url is not None:
+    proxies["HTTPS_PROXY"] = proxy_url
   proxies.update({name.lower(): value for name, value in proxies.items()})
-  return {
+  environment = {
       "HOME": str(tree.root),
       "CHARLIEBOT_HOME": str(tree.home),
       "TMPDIR": str(tree.tmp),
+      "TMUX_TMPDIR": str(tree.tmp),
       "PATH": f"{tree.fake_bin}:/usr/bin:/bin",
       "CHARLIEBOT_VENV_BIN": str(repo_root / ".venv" / "bin"),
       "CHARLIEBOT_REPO_ROOT": str(repo_root),
@@ -145,6 +170,9 @@ def server_env(tree: Tree, repo_root: pathlib.Path) -> dict[str, str]:
       "no_proxy": f"{HOST},localhost",
       **proxies,
   }
+  if ca_file is not None:
+    environment["SSL_CERT_FILE"] = str(ca_file)
+  return environment
 
 
 def pick_ports(count: int) -> list[int]:
@@ -201,12 +229,23 @@ class ServerProcess:
   """One traced server process bound to one tree and port."""
 
   def __init__(
-      self, label: str, argv: list[str], tree: Tree, port: int, repo_root: pathlib.Path, process_number: int) -> None:
+      self,
+      label: str,
+      argv: list[str],
+      tree: Tree,
+      port: int,
+      repo_root: pathlib.Path,
+      process_number: int,
+      proxy_url: str | None = None,
+      ca_file: pathlib.Path | None = None,
+  ) -> None:
     self.label = label
     self.argv = argv
     self.tree = tree
     self.port = port
     self.repo_root = repo_root
+    self.proxy_url = proxy_url
+    self.ca_file = ca_file
     self.trace_log = tree.root / "logs" / f"{tree.label}.server-{process_number}.strace"
     self.log_path = tree.root / "logs" / f"{tree.label}.server-{process_number}.log"
     self._proc: subprocess.Popen | None = None
@@ -221,7 +260,7 @@ class ServerProcess:
     try:
       self._proc = subprocess.Popen(
           traced_argv(self.argv, self.tree, self.trace_log),
-          env=server_env(self.tree, self.repo_root),
+          env=server_env(self.tree, self.repo_root, self.proxy_url, self.ca_file),
           cwd=self.repo_root,
           stdin=subprocess.DEVNULL,
           stdout=log_file,
@@ -271,7 +310,8 @@ class ServerProcess:
     return server_pid, identity[1]
 
   def stop_server(self) -> None:
-    """SIGTERM the server and wait for its pid to exit, without waiting for traced children."""
+    """Stop tmux, SIGTERM the server, then stop any idle spawn-pool workers it leaves behind."""
+    self._kill_tmux_server()
     if self._proc is None or self._proc.poll() is not None:
       return
     if self._server_identity is None:
@@ -279,20 +319,67 @@ class ServerProcess:
     server_pid, pid_start = self._server_identity
     identity = process_identity(server_pid)
     if identity is not None and identity[1] == pid_start and identity[0] != "Z":
-      try:
+      with contextlib.suppress(ProcessLookupError):
         os.kill(server_pid, signal.SIGTERM)
-      except ProcessLookupError:
-        pass
     deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
       identity = process_identity(server_pid)
       if identity is None or identity[0] == "Z" or identity[1] != pid_start:
+        self._stop_spawn_pool_workers()
         return
       time.sleep(POLL_INTERVAL_SECONDS)
     if self._proc.poll() is None:
       os.killpg(self._proc.pid, signal.SIGKILL)
       self._proc.wait()
     raise RuntimeError(f"{self.label} server ignored SIGTERM for {STOP_TIMEOUT_SECONDS}s and was killed")
+
+  def _stop_spawn_pool_workers(self) -> None:
+    """Stop Python spawn workers left alive by the server's non-blocking executor shutdown."""
+    if self._proc is None:
+      return
+    identities = {}
+    for process in pathlib.Path("/proc").iterdir():
+      if not process.name.isdecimal():
+        continue
+      pid = int(process.name)
+      try:
+        if os.getpgid(pid) != self._proc.pid:
+          continue
+        command = (process / "cmdline").read_bytes()
+      except (FileNotFoundError, ProcessLookupError):
+        continue
+      if b"multiprocessing.spawn" not in command or b"--multiprocessing-fork" not in command:
+        continue
+      identity = process_identity(pid)
+      if identity is not None and identity[0] != "Z":
+        identities[pid] = identity[1]
+    for pid, start_time in identities.items():
+      identity = process_identity(pid)
+      if identity is not None and identity[0] != "Z" and identity[1] == start_time:
+        with contextlib.suppress(ProcessLookupError):
+          os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + PROCESS_POOL_STOP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+      active = [
+          pid for pid, start_time in identities.items()
+          if (identity := process_identity(pid)) is not None and identity[0] != "Z" and identity[1] == start_time
+      ]
+      if not active:
+        return
+      time.sleep(POLL_INTERVAL_SECONDS)
+    for pid in active:
+      with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + PROCESS_POOL_STOP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+      active = [
+          pid for pid, start_time in identities.items()
+          if (identity := process_identity(pid)) is not None and identity[0] != "Z" and identity[1] == start_time
+      ]
+      if not active:
+        return
+      time.sleep(POLL_INTERVAL_SECONDS)
+    raise RuntimeError(f"{self.label} process-pool workers remained after SIGKILL: {active}")
 
   def wait_trace(self) -> None:
     """Wait for this server's strace process after its traced children have exited."""
@@ -312,16 +399,35 @@ class ServerProcess:
 
   def kill(self) -> None:
     """Kill the whole process group (the cleanup path after a harness error)."""
+    self._kill_tmux_server()
     if self._proc is not None and self._proc.poll() is None:
       os.killpg(self._proc.pid, signal.SIGKILL)
       self._proc.wait()
+
+  def _kill_tmux_server(self) -> None:
+    socket_path = self.tree.tmp / f"tmux-{os.getuid()}" / "charliebot"
+    if not socket_path.exists():
+      return
+    environment = dict(os.environ)
+    environment["TMUX_TMPDIR"] = str(self.tree.tmp)
+    result = subprocess.run(
+        ["tmux", "-L", "charliebot", "kill-server"],
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode and "no server running" not in result.stderr.lower() and socket_path.exists():
+      raise RuntimeError(f"{self.label} tmux cleanup failed: {result.stderr.strip() or result.stdout.strip()}")
 
 
 def process_identity(pid: int) -> tuple[str, str] | None:
   """Read process state and field 22 of ``/proc/<pid>/stat``; return None after the process exits."""
   try:
     stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-  except FileNotFoundError:
+  except (FileNotFoundError, ProcessLookupError):
     return None
   fields = stat.rsplit(")", 1)[1].split()
   return fields[0], fields[19]

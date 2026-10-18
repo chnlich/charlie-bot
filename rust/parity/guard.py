@@ -249,8 +249,8 @@ def _outcome(ret: str) -> str | None:
 
 def _inside(path: str, roots: tuple[str, ...]) -> bool:
   # POSIX semaphores are process-pool coordination files, not application data.
-  return path in EXEMPT_PATHS or path.startswith(EXEMPT_PREFIXES) or _SHARED_MEMORY_SEMAPHORE.fullmatch(path) is not None or any(
-      path == root or path.startswith(root + "/") for root in roots)
+  return path in EXEMPT_PATHS or path.startswith(EXEMPT_PREFIXES) or _SHARED_MEMORY_SEMAPHORE.fullmatch(
+      path) is not None or any(path == root or path.startswith(root + "/") for root in roots)
 
 
 def scan(trace_log: pathlib.Path, roots: tuple[pathlib.Path, ...], start_cwd: pathlib.Path, report: Report) -> None:

@@ -46,7 +46,9 @@ def _validate_failures(failures: Any) -> None:
 
 
 def _json_response(value: Any, status: int = 200) -> proxy.HTTPResponse:
-  return proxy.HTTPResponse(status, {"Content-Type": "application/json"}, json.dumps(value, separators=(",", ":")).encode())
+  return proxy.HTTPResponse(
+      status, {"Content-Type": "application/json"},
+      json.dumps(value, separators=(",", ":")).encode())
 
 
 class Fake:
@@ -81,12 +83,13 @@ class Fake:
     if request.method == "GET" and channel_id is not None and request.path.endswith("/messages"):
       return _json_response(self.messages.get(channel_id, []))
     if request.method == "GET" and channel_id is not None and request.path == f"/api/v10/channels/{channel_id}":
-      return _json_response(self.channels.get(channel_id, {
-          "id": channel_id,
-          "type": 0,
-          "name": "parity-room",
-          "parent_id": None,
-      }))
+      return _json_response(
+          self.channels.get(channel_id, {
+              "id": channel_id,
+              "type": 0,
+              "name": "parity-room",
+              "parent_id": None,
+          }))
     if request.method in ("PUT", "DELETE") and "/reactions/" in request.path:
       return proxy.HTTPResponse(204, {}, b"")
     if request.path.endswith("/threads") and request.method == "POST":
@@ -114,7 +117,13 @@ class Fake:
               "op": 0,
               "s": self._sequence,
               "t": "READY",
-              "d": {"user": {"id": self.bot_user_id, "username": "parity-bot", "bot": True}},
+              "d": {
+                  "user": {
+                      "id": self.bot_user_id,
+                      "username": "parity-bot",
+                      "bot": True
+                  }
+              },
           }
           await connection.send_text(json.dumps(ready, separators=(",", ":")))
           self.mark_ready()

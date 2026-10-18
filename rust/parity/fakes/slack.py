@@ -9,6 +9,7 @@ from . import proxy, recorder
 
 _FIRST_REPLY_COUNTER = 200
 _SOCKET_MODE_URL = "wss://wss-primary.slack.com/link/00000000000000000000000000000000"
+_ACK_TIMEOUT_SECONDS = 5.0
 
 
 def validate_seed(seed: dict) -> None:
@@ -34,7 +35,9 @@ def _validate_failures(failures: Any) -> None:
 
 
 def _response(value: dict, status: int = 200) -> proxy.HTTPResponse:
-  return proxy.HTTPResponse(status, {"Content-Type": "application/json"}, json.dumps(value, separators=(",", ":")).encode())
+  return proxy.HTTPResponse(
+      status, {"Content-Type": "application/json"},
+      json.dumps(value, separators=(",", ":")).encode())
 
 
 class Fake:
@@ -65,7 +68,11 @@ class Fake:
           "ok": True,
           "channel": body.get("channel", "C0PARITY"),
           "ts": timestamp,
-          "message": {"channel": body.get("channel", "C0PARITY"), "ts": timestamp, "text": body.get("text", "")},
+          "message": {
+              "channel": body.get("channel", "C0PARITY"),
+              "ts": timestamp,
+              "text": body.get("text", "")
+          },
       }
     elif request.path == "/api/conversations.replies":
       value = {"ok": True, "messages": self.thread_messages}
@@ -104,7 +111,7 @@ class Fake:
     acknowledged = self._acks[envelope_id] = asyncio.Event()
     envelope = {"envelope_id": envelope_id, "type": "events_api", "payload": {"event": payload}}
     await connection.send_text(json.dumps(envelope, separators=(",", ":")))
-    await asyncio.wait_for(acknowledged.wait(), 5.0)
+    await asyncio.wait_for(acknowledged.wait(), _ACK_TIMEOUT_SECONDS)
     del self._acks[envelope_id]
 
 

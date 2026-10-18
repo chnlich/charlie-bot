@@ -36,6 +36,8 @@ import normalize
 import scenario_file
 import servers
 from fakes import authority
+from websockets import exceptions
+from websockets.sync import client
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PARITY_DIR = pathlib.Path(__file__).resolve().parent
@@ -117,8 +119,11 @@ def _build_fixtures(sides: list[Side], extras: tuple[str, ...]) -> dict:
 
   def build(side: Side) -> None:
     servers.run_traced(
-        [str(PYTHON), str(FIXTURE), "--manifest", str(side.tree.root / "fixture-manifest.json"),
-         *(["--extras", ",".join(extras)] if extras else [])],
+        [
+            str(PYTHON),
+            str(FIXTURE), "--manifest",
+            str(side.tree.root / "fixture-manifest.json"), *(["--extras", ",".join(extras)] if extras else [])
+        ],
         tree=side.tree,
         repo_root=REPO_ROOT,
         trace_log=side.tree.root / "logs" / f"{side.tree.label}.fixture.strace",
@@ -305,18 +310,21 @@ def _multipart_body(fields: dict) -> bytes:
   for name, value in fields.items():
     if isinstance(value, dict):
       file_path = scenario_file.DATA_DIR / value["file"]
-      parts.extend((
-          f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{file_path.name}\"\r\n".encode(),
-          f"Content-Type: {value['content_type']}\r\n\r\n".encode(),
-          file_path.read_bytes(),
-          b"\r\n",
-      ))
+      parts.extend(
+          (
+              f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{file_path.name}\"\r\n".
+              encode(),
+              f"Content-Type: {value['content_type']}\r\n\r\n".encode(),
+              file_path.read_bytes(),
+              b"\r\n",
+          ))
     else:
-      parts.extend((
-          f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n".encode(),
-          str(value).encode("utf-8"),
-          b"\r\n",
-      ))
+      parts.extend(
+          (
+              f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n".encode(),
+              str(value).encode("utf-8"),
+              b"\r\n",
+          ))
   parts.append(f"--{boundary}--\r\n".encode())
   return b"".join(parts)
 
@@ -394,9 +402,6 @@ def _websocket_request(
 ) -> tuple[int | None, list[dict], str, list[str]]:
   if side.server is None:
     raise RuntimeError(f"{side.label} has no running server")
-  from websockets import exceptions
-  from websockets.sync import client
-
   path = _substitute(side, step.path, manifest)
   query = _substitute(side, step.query, manifest)
   if step.auth == "token":
@@ -460,7 +465,8 @@ def _websocket_request(
       frames.append(frame)
       if step.collect is not None and "json" in frame:
         document = frame["json"]
-        if isinstance(document, dict) and all(document.get(key) == value for key, value in step.collect["where"].items()):
+        if isinstance(document, dict) and all(
+            document.get(key) == value for key, value in step.collect["where"].items()):
           try:
             value = scenario_file.extract(document, step.collect["field"])
           except scenario_file.ScenarioError:
@@ -568,8 +574,8 @@ def _run_step(
       required = step.compare["collected_contains"]
       for side, outcome in zip(sides, outcomes, strict=True):
         lines.extend(
-            f"{side.label} collected WebSocket text does not contain {text!r}"
-            for text in required if text not in outcome[2])
+            f"{side.label} collected WebSocket text does not contain {text!r}" for text in required
+            if text not in outcome[2])
     else:
       left_frames = [_normalize_ws_frame(frame, step.route, sides[0].ctx) for frame in outcomes[0][1]]
       right_frames = [_normalize_ws_frame(frame, step.route, sides[1].ctx) for frame in outcomes[1][1]]
@@ -738,9 +744,8 @@ def _run_scenario(
     startup_lines.extend(_recording_diff_since(sides, startup_marks, "(startup)"))
     results.append(
         StepResult(
-            scenario.name, "server startup", "(startup)", (None, None),
-            startup_lines, compare.describe_delta(deltas[0]),
-            []))
+            scenario.name, "server startup", "(startup)", (None, None), startup_lines,
+            compare.describe_delta(deltas[0]), []))
     before = after
     for number, step in enumerate(scenario.steps, start=1):
       handover_argv = [python_argv, candidate_handover_argv]
@@ -758,9 +763,12 @@ def _run_scenario(
     cleanup_lines.extend(_spawns_diff(sides, scenario.expect_starts))
     results.append(
         StepResult(
-            scenario.name, "server shutdown and fake-agent cleanup", "(shutdown)", (None, None),
+            scenario.name,
+            "server shutdown and fake-agent cleanup",
+            "(shutdown)", (None, None),
             [*cleanup_lines, *compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx)],
-            compare.describe_delta(deltas[0]), [], notes=refusal_notes))
+            compare.describe_delta(deltas[0]), [],
+            notes=refusal_notes))
   for side in sides:
     trace_logs = [side.tree.root / "logs" / f"{side.tree.label}.fixture.strace"]
     trace_logs.extend(server.trace_log for server in side.server_processes)

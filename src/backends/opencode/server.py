@@ -147,6 +147,8 @@ class OpenCodeServer:
             "XDG_CACHE_HOME": str(home.opencode_cache_dir()),
             "OPENCODE_SERVER_PASSWORD": password,
             "OPENCODE_CONFIG_CONTENT": json.dumps(headless_config()),
+            # Read only from the environment. The file index costs ~62 MiB per git directory; no turn uses it.
+            "OPENCODE_DISABLE_FFF": "1",
         })
     if self._proxy_url is not None:
       base.apply_proxy_env(env, self._proxy_url)

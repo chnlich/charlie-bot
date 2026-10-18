@@ -232,9 +232,18 @@ dependencies = [
 name = "charliebot-chat-threads"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-discord",
  "charliebot-registry",
+ "charliebot-session-api",
+ "charliebot-slack",
  "charliebot-store",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

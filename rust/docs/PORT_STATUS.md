@@ -14,7 +14,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET, HEAD | `/docs` | api-docs | todo |  |
 | GET, HEAD | `/docs/oauth2-redirect` | api-docs | todo |  |
 | GET, HEAD | `/redoc` | api-docs | todo |  |
-| GET | `/api/sessions/chat-threads` | features/chat_threads | todo |  |
+| GET | `/api/sessions/chat-threads` | features/chat_threads | ported |  |
 | GET | `/api/auth/status` | foundation | ported |  |
 | GET | `/sessions/{session_id}/events` | pages | todo |  |
 | GET | `/home` | pages | todo |  |
@@ -151,6 +151,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | template global | `voice_backends` | features/voice | ported | backend availability in dropdown order |
 | template global | `voice_default_backend` | features/voice | ported | |
 | turn contribution | `voice` | features/voice | ported | dictated input preamble |
+| turn contribution | `chat_threads` | features/chat_threads | ported | names `thread_session.md` for a Slack or Discord thread session |
 
 ## Services and lifespan
 

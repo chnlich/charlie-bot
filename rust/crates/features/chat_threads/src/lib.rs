@@ -1,5 +1,7 @@
-//! `src/features/chat_threads`: the Threads sidebar subtree and the thread brief of a thread session.
+//! `src/features/chat_threads`: the Slack and Discord thread sessions. Their turn contribution names the thread brief,
+//! their sidebar subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view.
 
+mod api;
 mod sidebar;
 mod thread_sessions;
 mod turn_contribution;
@@ -8,10 +10,11 @@ use std::sync::Arc;
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// Register in the order of `src/features/chat_threads/__init__.py`: the turn contribution, then the sidebar
-/// contribution.
+/// Register in the order of `src/features/chat_threads/__init__.py`: the turn contribution, the router, then the
+/// sidebar contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.turn_contribution("chat_threads", Arc::new(turn_contribution::ChatThreadsTurn))?;
+  registry.router(api::routes, api::matches)?;
   registry.sidebar_contribution("chat_threads", Arc::new(sidebar::ChatThreadsSidebar))
 }
 
@@ -22,9 +25,10 @@ mod tests {
   use serde_json::json;
 
   #[test]
-  fn register_names_the_thread_brief_and_roots_the_threads_view() {
+  fn register_adds_the_turn_contribution_the_router_and_the_sidebar_view() {
     let mut registry = Registry::new();
     registry.register_package("src.features.chat_threads", super::register).expect("the package registers");
+    assert_eq!(registry.routers().len(), 1);
     assert_eq!(registry.sidebar_contributions().count(), 1);
 
     let mut thread = SessionMetadata::new("synthetic", "Synthetic", TaskProfile::Manager);

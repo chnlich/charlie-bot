@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
+use charliebot_core::run_token;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind, RunOrder,
@@ -911,10 +912,18 @@ fn read_pages(store: &Store) -> Value {
   let descending = store.list_runs_page_sync(RUN_SESSION_ID, None, 2, RunOrder::Descending).unwrap();
   let descending_next =
     store.list_runs_page_sync(RUN_SESSION_ID, descending.next_cursor.as_deref(), 2, RunOrder::Descending).unwrap();
+  let empty_started_at_cursor = raw_run_cursor(&json!({ "s": "", "i": "queued-0" }));
+  let empty_started_at =
+    store.list_runs_page_sync(RUN_SESSION_ID, Some(&empty_started_at_cursor), 2, RunOrder::Ascending).unwrap();
+  let truthy_order_cursor = raw_run_cursor(&json!({ "s": "2026-01-01T00:04:00+00:00", "i": "run-4", "d": "false" }));
+  let truthy_order_flag =
+    store.list_runs_page_sync(RUN_SESSION_ID, Some(&truthy_order_cursor), 2, RunOrder::Descending).unwrap();
   json!({
     "ascending": page_json(&ascending),
     "descending": page_json(&descending),
     "descending_next": page_json(&descending_next),
+    "empty_started_at": page_json(&empty_started_at),
+    "truthy_order_flag": page_json(&truthy_order_flag),
     "refused_ascending_cursor": refusal(store.list_runs_page_sync(
       RUN_SESSION_ID,
       ascending.next_cursor.as_deref(),
@@ -928,6 +937,10 @@ fn read_pages(store: &Store) -> Value {
       RunOrder::Ascending,
     )),
   })
+}
+
+fn raw_run_cursor(payload: &Value) -> String {
+  run_token::b64url_encode(serde_json::to_string(payload).unwrap().as_bytes())
 }
 
 fn page_json(page: &RunPage) -> Value {

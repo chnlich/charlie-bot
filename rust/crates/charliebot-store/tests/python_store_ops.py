@@ -13,7 +13,7 @@ from src.app import registrations
 from src.features.usage import storage_cool
 from src.infra import config, json_utils, metadata_slots, models
 from src.infra import ndjson
-from src.runtime import chat_events, session_anchors, session_events, session_lifecycle, session_store
+from src.runtime import chat_events, run_token, session_anchors, session_events, session_lifecycle, session_store
 from src.runtime import control_events, control_sink, runs, task_sessions
 
 SESSION_ID = "00000000-0000-4000-8000-000000000001"
@@ -468,6 +468,10 @@ def _page_json(page: runs.RunPageSlice) -> dict[str, object]:
   return {"ids": [run.id for run in page.items], "next_cursor": page.next_cursor}
 
 
+def _run_cursor(payload: dict[str, object]) -> str:
+  return run_token.b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
 def _refusal(read: Callable[[], object]) -> str:
   try:
     read()
@@ -484,6 +488,20 @@ def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
     ascending = store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=None)
     descending = store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=None, descending=True)
     descending_next = store.list_runs_page_sync(RUN_SESSION_ID, limit=2, cursor=descending.next_cursor, descending=True)
+    empty_started_at = store.list_runs_page_sync(
+        RUN_SESSION_ID, limit=2, cursor=_run_cursor({
+            "s": "",
+            "i": "queued-0"
+        }))
+    truthy_order_flag = store.list_runs_page_sync(
+        RUN_SESSION_ID,
+        limit=2,
+        cursor=_run_cursor({
+            "s": "2026-01-01T00:04:00+00:00",
+            "i": "run-4",
+            "d": "false"
+        }),
+        descending=True)
     return {
         "ascending":
             _page_json(ascending),
@@ -491,6 +509,10 @@ def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
             _page_json(descending),
         "descending_next":
             _page_json(descending_next),
+        "empty_started_at":
+            _page_json(empty_started_at),
+        "truthy_order_flag":
+            _page_json(truthy_order_flag),
         "refused_ascending_cursor":
             _refusal(
                 lambda: store.list_runs_page_sync(

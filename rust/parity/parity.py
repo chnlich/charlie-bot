@@ -415,8 +415,13 @@ def _wait_for_fake_handshake(side: Side, fake: str, mark: int, deadline: float) 
   if side.fake_set is None:
     raise RuntimeError(f"{side.label} has no fake services")
   while time.monotonic() < deadline:
-    if any(record.get("kind") == "ws_handshake" and record.get("fake") == fake
-           for record in side.fake_set.records_since(mark)):
+    records = side.fake_set.records_since(mark)
+    connections = set()
+    for record in records:
+      if record.get("kind") == "ws_handshake" and record.get("fake") == fake:
+        connections.add(record["connection"])
+    messages = [record for record in records if record.get("kind") == "ws_message" and record.get("fake") == fake]
+    if any(message["connection"] in connections for message in messages):
       return True
     time.sleep(0.02)
   return False

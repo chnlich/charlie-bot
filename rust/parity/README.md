@@ -308,8 +308,9 @@ Step fields:
 - `ws` targets any `/ws/...` path. It accepts `query`, `auth` (`token` or `none`), an ordered `send` list of
   `{json: ...}`, `{text: ...}` or `{binary_file: PATH}` frames, an optional `collect` rule, a required `until`
   condition and a required `timeout_seconds`. `wait_for_fake_handshake: FAKE` holds outgoing frames until the proxy
-  records a new upstream WebSocket handshake with that declared fake. `collect` selects JSON frames by exact `where`
-  fields, reads a dotted `field`, and concatenates it as text or decoded base64. `until` is `{frames: N}`, `{close: true}` or
+  records a new upstream WebSocket handshake and its first message with that declared fake. `collect` selects JSON
+  frames by exact `where` fields, reads a dotted `field`, and concatenates it as text or decoded base64. `until` is
+  `{frames: N}`, `{close: true}` or
   `{collected_contains: TEXT}`. The default `compare: frames` compares received frames in order; JSON frames
   compare structurally. `compare: {collected_contains: [TEXT, ...]}` checks each string in both collected results
   for endpoints whose frame timing varies. `expect_reject: STATUS` expects an HTTP rejection of the upgrade and

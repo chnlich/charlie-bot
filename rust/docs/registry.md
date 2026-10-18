@@ -228,6 +228,11 @@ executor is optional because startup and recovery can run before the execution a
 registered by the registry crate. Its controllers receive the combined tree and implement the five run lifecycle
 methods above.
 
+`SequenceCompletion::restore_chain_locked` returns Python's `(restored, announcements)` pair
+(`task_completion.py::restore_chain_locked`): the restored ids, topmost first, and one `(node, event, epoch)` triple per
+`task_reopened` fact the call wrote. The caller sends each announcement with its epoch after it releases the control
+lock. `restore_chain` takes the lock itself and returns the restored ids.
+
 ### Lifespan steps
 
 - Python: `server.py:229` `lifespan`

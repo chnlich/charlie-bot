@@ -35,7 +35,98 @@ shutdown and re-attachment into server lifespan.
 | `autonamer::parse_name_and_group` and `fuzzy_match_group` | `src/runtime/autonamer.py:108`, `:141` |
 | `spawner_backends::unknown_backend_pin_refusal` | `src/runtime/spawner_backends.py:32` |
 
+## Prompt assembly
+
+`prompts` assembles the managed instructions of every agent run. For the same sources it produces the same blocks,
+`prompt_hash` and `char_count` as the Python server. The two exports below are the entry points for the launch path and
+the run-context read. On this branch neither has a caller outside `tests/task_prompts.rs`.
+
+| Export | Signature |
+| --- | --- |
+| `prompts::assemble_coherent_snapshot` | `async fn(store: &Store, env: &PromptEnv<'_>, meta: &SessionMetadata, kind: &str, option: &BackendOption) -> anyhow::Result<CoherentSnapshot>`, where `CoherentSnapshot { snapshot, overlay_error, declared }` |
+| `prompts::read_run_context` | `fn(store: &Store, session_id: &str, run_id: &str) -> Result<serde_json::Value, ContextReadError>`, where `ContextReadError { status: u16, detail: String }` carries 404 or 500 |
+
+`PromptEnv { cfg, registry, checkout }` gathers the inputs of one assembly. `checkout` is the `CheckoutRoot` trait,
+the charlie-bot checkout whose `prompts/` the rules read. The Rust config does not carry that root yet. The server reads
+the same path from `CHARLIEBOT_REPO_ROOT`, and this crate does not read the variable itself. `PathBuf` implements the
+trait for tests and for callers that already hold the path.
+
+| Rust item | Python source |
+| --- | --- |
+| `prompts::SNAPSHOT_FILENAME`, `prompts::LAUNCH_TEXT_FILENAME` | `src/runtime/task_prompts.py:75-76` |
+| `prompts::SCOPE_BASE`, `SCOPE_MEMORY`, `SCOPE_SUBTREE`, `SCOPE_NODE`, `DELIVERY_FULL` | `src/runtime/task_prompts.py:78-82` |
+| `prompts::MANAGER_KINDS`, `prompts::WORKER_KINDS` | `src/runtime/task_prompts.py:86`, `:91` |
+| `prompts::COHERENCE_PASSES` | `src/runtime/task_prompts.py:96` (`_COHERENCE_PASSES`) |
+| `prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS` | `src/infra/constants.py:56` |
+| `prompts::HOST_SUPPLEMENT_FILENAME` | `src/infra/config.py:287` (`claude_md_file`) |
+| `prompts::PROMPT_BODIES_DIR` | `src/runtime/task_prompts.py:462` (`charliebot_home / "prompt_bodies"`) |
+| `prompts::TaskPromptError` | `src/runtime/task_prompts.py:99` |
+| `prompts::CheckoutRoot` (new trait) | `src/infra/config.py:291-293` (`charlie_bot_repo`) |
+| `prompts::PromptEnv` (new struct) | the `cfg` argument of `src/runtime/task_prompts.py:436` |
+| `prompts::PromptSource`, `prompts::RuleSegment` (re-exported, not redefined) | `src/runtime/task_prompts.py:109`, `:206` |
+| `prompts::PromptBlock` | `src/runtime/task_prompts.py:117` |
+| `PromptSnapshot::instructions_text`, `char_count`, `prompt_hash`, `to_json_dict`, `from_json_dict` | `src/runtime/task_prompts.py:131`, `:136`, `:140`, `:158`, `:174` |
+| `prompts::assemble_snapshot` | `src/runtime/task_prompts.py:403` |
+| `prompts::build_segments`, `prompts::RuleInputs` | `src/runtime/task_prompts.py:436` (the `overlay`, `chain` and `node_ref` arguments) |
+| `prompts::ChainLink { session_id, subtree_ref }` | the `(session_id, subtree_prompt_ref)` pairs of `src/runtime/task_execution.py:294-313` |
+| `prompts::OverlayError::python_class_name` | `src/runtime/task_prompts.py:241` (`_overlay_segment`) |
+| `prompts::prompt_task_type` | `src/runtime/task_prompts.py:312` |
+| `prompts::read_local_rule_body` | `src/runtime/task_prompts.py:258` |
+| `prompts::resolve_launch_overlay` | `src/runtime/task_execution.py:279` |
+| `prompts::capture_prompt_chain` | `src/runtime/task_execution.py:294` |
+| `prompts::assemble_coherent_snapshot`, `prompts::CoherentSnapshot` | `src/runtime/task_execution.py:336` |
+| `prompts::read_run_context`, `prompts::ContextReadError` | `src/runtime/api/sessions.py:1620` (`get_run_context`), `:1604` (`_legacy_prompt_payload`) |
+| `prompts::render_session_info` | `src/runtime/task_prompts.py:477` |
+| `prompts::binding_intro` | `src/runtime/task_prompts.py:483` |
+| `prompts::render_worktree_bindings` | `src/runtime/task_prompts.py:490` |
+| `prompts::render_task_body` | `src/runtime/task_prompts.py:515` |
+| `prompts::render_worktree_persistence` | `src/runtime/task_prompts.py:521` |
+| `prompts::review_task_context` | `src/runtime/task_prompts.py:527` |
+| `prompts::repo_less_review_task_context` | `src/runtime/task_prompts.py:548` |
+| `spawner_prompt::workflow_prompt_sections`, `repo_less_workflow_sections` | `src/runtime/spawner_prompt.py:19`, `:30` (`WORKFLOW_PROMPT_SECTION`, `REPO_LESS_WORKFLOW_SECTION`) |
+| `spawner_prompt::REPO_LESS_SOURCE_FILES_SECTION` | `src/runtime/spawner_prompt.py:35` |
+| `spawner_prompt::workflow_rule_section_ids` | `src/runtime/spawner_prompt.py:38` |
+| `spawner_prompt::load_marker_sections` | `src/runtime/spawner_prompt.py:107` |
+| `spawner_prompt::load_worker_prompt_sections` | `src/runtime/spawner_prompt.py:112` |
+| `spawner_prompt::substitute_tokens`, `spawner_prompt::Tokens` | `src/runtime/spawner_prompt.py:133` |
+| `spawner_prompt::verify_contract_tokens` | `src/runtime/spawner_prompt.py:143` |
+| `spawner_prompt::worktree_binding_tokens` | `src/runtime/spawner_prompt.py:154` |
+| `spawner_prompt::read_text`, `spawner_prompt::TextReadError` | `src/runtime/task_prompts.py:218` (`Path.read_text`, its error texts) |
+| `verify_trailer::VERIFY_RESULT_TRAILER_PATTERN`, `verify_result_trailer_re`, `verify_result_trailer_expected` | `src/runtime/verify_trailer.py:14-15` |
+| `review_text::review_rules_text` | `src/runtime/review.py:65` |
+| `review_text::review_numbered_steps` | `src/runtime/review.py:77` |
+| `review_text::review_published_branch` | `src/runtime/review.py:107` |
+| `review_text::review_landing_target` | `src/runtime/review.py:115` |
+| `review_text::review_spec_text` | `src/runtime/review.py:125` |
+| `review_text::review_context_lines` | `src/runtime/review.py:139` |
+| `review_text::review_log_pointer` | `src/runtime/review.py:156` |
+| `review_text::review_git_venue` | `src/runtime/review.py:163` |
+| `cold_read::PROMPT_FILENAME`, `TRIGGER_PLACEHOLDER`, `EVIDENCE_FILENAME` | `src/runtime/cold_read.py:21`, `:24`, `:29` |
+| `cold_read::load_texts` | `src/runtime/cold_read.py:32` |
+| `cold_read::probe_input` | `src/runtime/cold_read.py:43` |
+| `cold_read::format_report`, `cold_read::ColdReadOutcome` | `src/runtime/cold_read.py:49` (`ColdReadOutcome` has no Python class; `Answered` and `AllFailed` are the two branches of `format_report`) |
+
+Known divergences from Python:
+
+- A stored snapshot that is not valid JSON reports serde_json's parse message in the run-context `unreadable` detail,
+  where Python reports `JSONDecodeError`'s.
+- A snapshot field with the wrong type reports the Rust message, not Python's `TypeError` text.
+- Decode errors of some multi-byte invalid UTF-8 sequences cover a different byte range from CPython's. Overlay and
+  template read errors reproduce the common `OSError` and `UnicodeDecodeError` texts.
+- `canonical_template_path` fails when `prompts/plan_template.html` is missing, where Python's `resolve()` returns the
+  unresolved path.
+- Assembly reads its files on the calling thread, where Python uses `asyncio.to_thread`.
+- The Rust `Store` replaces Python's `TaskTreeManager`.
+- The memory contribution (`src/features/memory/turn_contribution.py`) is not ported, so no rule source here emits
+  `SCOPE_MEMORY`.
+
 ## Tests
+
+`tests/prompt_snapshot_golden.rs` runs `tests/python_prompt_snapshot_golden.py` through `uv run python` over an 18-case
+matrix. It compares the snapshot JSON byte for byte, with each `prompt_hash` and `char_count`, and the damaged-snapshot
+error texts. `tests/task_prompts.rs` ports the task-tree and run-context cases of the Python tests over a temporary
+store; the staged-memory case is not ported. Unit tests cover the verify trailer, the worker prompt loader, the review
+steps and the snapshot dedup and hash.
 
 `tests/turn_golden.rs` runs `tests/python_turn_golden.py` through `uv run python`, then compares the same twelve
 scripted streams through the Rust queue after normalizing event ids, timestamps, and elapsed timing fields. It starts

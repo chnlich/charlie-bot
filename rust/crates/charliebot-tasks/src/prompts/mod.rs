@@ -89,7 +89,8 @@ impl std::fmt::Display for TaskPromptError {
 impl std::error::Error for TaskPromptError {}
 
 /// The charlie-bot checkout whose `prompts/` the managed rules read. Python reads `CharlieBotConfig.charlie_bot_repo`;
-/// the Rust config does not carry the checkout yet, so the server answers this trait from `CHARLIEBOT_REPO_ROOT`.
+/// the Rust config does not carry the checkout yet, so the caller passes it in through this trait. The server reads
+/// the same path from `CHARLIEBOT_REPO_ROOT`.
 pub trait CheckoutRoot: Sync {
   fn charlie_bot_repo(&self) -> &Path;
 }

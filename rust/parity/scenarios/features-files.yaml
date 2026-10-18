@@ -62,12 +62,24 @@ steps:
     method: GET
     path: /absolute_filepath${tree.root}/${extras.files_tree.spaced}
     expect_status: 200
+  - name: head file with a space in its name
+    method: HEAD
+    path: /absolute_filepath${tree.root}/${extras.files_tree.spaced}
+    expect_status: 200
   - name: get file with a non-ASCII name
     method: GET
     path: /absolute_filepath${tree.root}/${extras.files_tree.unicode}
     expect_status: 200
+  - name: head file with a non-ASCII name
+    method: HEAD
+    path: /absolute_filepath${tree.root}/${extras.files_tree.unicode}
+    expect_status: 200
   - name: get file in a nested directory
     method: GET
+    path: /absolute_filepath${tree.root}/${extras.files_tree.nested_file}
+    expect_status: 200
+  - name: head file in a nested directory
+    method: HEAD
     path: /absolute_filepath${tree.root}/${extras.files_tree.nested_file}
     expect_status: 200
   - name: get listing of the files directory

@@ -335,6 +335,34 @@ async def test_turn_end_steps_drop_the_claim_once_even_when_the_turn_steps_fail(
 
 
 @pytest.mark.asyncio
+async def test_claim_is_held_before_the_server_starts_and_dropped_when_the_start_fails(fake_oc, monkeypatch):
+  backend = opencode.OpenCodeBackend(model=MODEL)
+  shared = server.OpenCodeServer(None)
+  directory = str(fake_oc / "dir")
+  claims_at_start: list[int] = []
+
+  async def failing_start() -> None:
+    claims_at_start.append(shared._claims[directory])
+    raise RuntimeError("opencode 2.0 binary not found")
+
+  shared.ensure_running = failing_start
+  monkeypatch.setattr(server, "server_for", lambda _proxy_url: shared)
+  monkeypatch.setattr(backend, "_prepare_cwd", mock.Mock())
+  monkeypatch.setattr(backend, "_end_turn_process", mock.AsyncMock())
+
+  async def spawn_turn_process(_cwd: str, _env: dict) -> None:
+    backend._exit_task = asyncio.get_running_loop().create_future()
+
+  monkeypatch.setattr(backend, "_spawn_turn_process", spawn_turn_process)
+
+  events = await _run_turn(backend, "x", fake_oc / "dir")
+
+  assert claims_at_start == [1]
+  assert events[-1]["type"] == ET.ERROR and "binary not found" in events[-1]["message"]
+  assert shared._claims[directory] == 0
+
+
+@pytest.mark.asyncio
 async def test_failed_release_is_reported_as_a_turn_error_event(monkeypatch) -> None:
   backend = opencode.OpenCodeBackend(model=MODEL)
   turn = mock.Mock()
@@ -773,6 +801,7 @@ async def test_wrong_major_version_fails_the_turn_naming_the_binary(fake_oc, mon
   assert events[-1]["type"] == ET.ERROR
   assert "1.18.18" in events[-1]["message"] and str(server.OPENCODE_BIN) in events[-1]["message"]
   assert not server.server_for(None).process_alive
+  assert not server.server_for(None)._claims
 
 
 @pytest.mark.integration

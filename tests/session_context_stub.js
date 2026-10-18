@@ -122,7 +122,15 @@ function createChatSidebarContext(context) {
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   runStaticModules(context, chatModules());
+  standInForUsageJs(context);
   runStaticModules(context, sidebarModules());
+}
+
+// usage.js loads between the chat and the sidebar modules on the page. These
+// harnesses stub its paint globals (showStreaming, hideStreaming), and this
+// stands in for the registration session-view.js makes at load.
+function standInForUsageJs(context) {
+  context.Chat.setStreamDraftModeSupplier = () => {};
 }
 
 // The cron script: a harness whose rows, menus or Workspace badge show the
@@ -333,6 +341,7 @@ module.exports = {
   baseSessionContext,
   buildSidebarIndicatorContext,
   createChatSidebarContext,
+  standInForUsageJs,
   loadCronPackage,
   buildSidebarFilterElements,
   buildUsageElements,

@@ -125,6 +125,13 @@ fn terminal_ids_follow_the_profile_home() {
   _env.set(home::CHARLIEBOT_HOME_ENV, Some(OsStr::new(&format!("{}/", profile.display()))));
   assert_eq!(terminal::terminal_session_id().unwrap(), profile_id);
 
+  let second_profile = root.path().join("second-profile");
+  _env.set(home::CHARLIEBOT_HOME_ENV, Some(second_profile.as_os_str()));
+  let second_profile_id = terminal::terminal_session_id().unwrap();
+  assert_ne!(profile_id, second_profile_id);
+  assert_ne!(terminal::terminal_tmux_name(&profile_id), terminal::terminal_tmux_name(&second_profile_id));
+  assert!(terminal::terminal_tmux_name(&second_profile_id).starts_with("charliebot-terminal-"));
+
   _env.set(home::CHARLIEBOT_HOME_ENV, Some(OsStr::new("~/debug-profile")));
   assert_eq!(terminal::terminal_session_id().unwrap(), expected_terminal_id(&home_dir.join("debug-profile")));
   _env.set(home::CHARLIEBOT_HOME_ENV, Some(OsStr::new("relative-profile")));

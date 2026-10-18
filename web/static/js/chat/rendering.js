@@ -312,7 +312,11 @@ function buildTurnRowFromSpec(spec) {
   row.setAttribute('title', 'Open this turn');
   row.onclick = function() { setTurnOverride(this.parentNode, true); };
 
-  const label = TURN_TYPE_LABELS[spec.headRole] || 'Turn';
+  // A Run's turn (stimulus-free, headed by its header line) reads Run; every
+  // other head normalizes through the role table.
+  const label = spec.headRole === 'system' && spec.headKind === 'run_header'
+    ? 'Run'
+    : (TURN_TYPE_LABELS[spec.headRole] || 'Turn');
   row.appendChild(turnRowField('turn-row-tag turn-row-tag-' + label.toLowerCase(), label));
   const title = turnRowTitleFromText(spec.headRole, spec.headText);
   row.appendChild(turnRowField('turn-row-title', title));
@@ -337,6 +341,7 @@ function buildTurnRowFromSpec(spec) {
 function buildTurnRow(turn) {
   return buildTurnRowFromSpec({
     headRole: renderedMessageRole(turn.head),
+    headKind: turn.head.dataset.messageKind || null,
     headText: messageSourceText(turn.head),
     headTs: turn.head.dataset.messageTs || null,
     conclusionText: turn.conclusion ? messageSourceText(turn.conclusion) : null,
@@ -502,6 +507,11 @@ function registerDeliveryLink(link) {
   deliveryLinks.push(link);
 }
 
+// The package delivery links, exposed for the worker summary card's Diff link.
+function deliveryLinksHtml(msg, sessionId) {
+  return deliveryLinks.map((link) => evidenceLinkHtml(link.label, link.href(msg, sessionId))).join('');
+}
+
 // A worker transcript's per-Run header (a system line of kind run_header):
 // kind · backend · state, with the state dot in the colors the retired leaf
 // card used — a queued Run amber, a failed one red — and beneath it a failed
@@ -518,6 +528,25 @@ function runHeaderNoteHtml(msg, runId) {
   if (!msg.launch_failed) return '';
   return '<div id="run-note-' + runId + '" class="text-slate-400 text-xs max-w-[85%]">'
     + 'Worker never started, so this Run has no output log.</div>';
+}
+
+// A run's error text renders its first line; the remaining lines fold behind
+// one "N more lines" button that swaps the hidden block in — a dead process's
+// hundred-line stderr stays one line until the reader opens it.
+function errorLinesToggleHtml(text) {
+  var full = String(text || '');
+  if (!full.includes('\n')) return wrapWideChars(escapeHtml(full));
+  var head = full.slice(0, full.indexOf('\n'));
+  var rest = full.slice(head.length + 1);
+  var restLines = rest.split('\n').length;
+  var id = 'errl-' + Math.random().toString(36).slice(2);
+  return wrapWideChars(escapeHtml(head))
+    + '<span id="' + id + '-short"> &hellip; <button type="button"'
+    + ' onclick="document.getElementById(\'' + id + '-short\').style.display=\'none\';'
+    + 'document.getElementById(\'' + id + '-full\').style.display=\'inline\'"'
+    + ' class="text-blue-400 hover:underline text-xs">' + restLines + ' more lines</button></span>'
+    + '<span id="' + id + '-full" style="display:none"'
+    + ' class="whitespace-pre-wrap break-words">' + wrapWideChars(escapeHtml(rest)) + '</span>';
 }
 
 function runHeaderLinksHtml(msg, runId) {
@@ -538,8 +567,8 @@ function runHeaderHtml(msg) {
   const dot = RUN_HEADER_DOT_COLORS[state] || 'bg-slate-500';
   const titleAttr = msg.timestamp ? ' title="' + formatBubbleTime(msg.timestamp) + '"' : '';
   const error = msg.error
-    ? '<div id="run-error-' + runId + '" class="text-red-400 text-xs whitespace-pre-wrap break-words max-w-[85%]">'
-      + escapeHtml(String(msg.error)) + '</div>'
+    ? '<div id="run-error-' + runId + '" class="text-red-400 text-xs max-w-[85%]">'
+      + '<span class="whitespace-pre-wrap break-words">' + errorLinesToggleHtml(msg.error) + '</span></div>'
     : '';
   return openMessageWrapper('flex flex-col items-center gap-1', msg)
     + '<div id="run-header-' + runId + '" data-run-state="' + escapeHtmlAttr(state) + '"'
@@ -692,6 +721,14 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "system" && msg.kind === "run_header") {
     return runHeaderHtml(msg);
   }
+  if (msg.role === "system" && msg.kind === "run_error") {
+    // A Run's failed-event line: first line visible, the rest behind one
+    // "N more lines" button, the full text always in the markup.
+    return openMessageWrapper("flex justify-start", msg)
+      + "<div class=\"max-w-[90%] overflow-hidden bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-1.5 text-xs text-red-400\">"
+      + "<span class=\"whitespace-pre-wrap break-words\">" + errorLinesToggleHtml(msg.content) + "</span>"
+      + "</div></div>";
+  }
   // A web_status change reads as a system line; the For you view folds it instead.
   if (msg.role === "system" || msg.role === "web_status") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
@@ -821,8 +858,13 @@ function renderMessage(msg, sessionId) {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
     var secondsAttr = msg.thinking_seconds != null
       ? " data-thinking-seconds=\"" + escapeHtmlAttr(msg.thinking_seconds) + "\"" : "";
+    var sepLabel = "response complete" + timeStr;
     var buttons = "";
-    if (sessionId) {
+    if (msg.kind === "run_end") {
+      // The end of one Run: its duration, no rating and no clone buttons.
+      sepLabel = "run ended" + (msg.thinking_seconds != null
+        ? " &middot; " + formatTurnDuration(Number(msg.thinking_seconds)) : "");
+    } else if (sessionId) {
       if (msg.event_index != null) {
         buttons = separatorButtons.map(function(render) { return render(sessionId, msg.event_index); }).join("");
       }
@@ -834,7 +876,7 @@ function renderMessage(msg, sessionId) {
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
       + messageIdentityAttrs(msg) + eventIndexAttr + secondsAttr + ">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
-      + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">response complete" + timeStr + "</span>"
+      + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">" + sepLabel + "</span>"
       + buttons
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div></div>";
   }
@@ -916,6 +958,10 @@ const CHAT_ONLY = {
   installTurnCollapseControl,
   setTurnFoldExpanded,
   toggleTurnFold,
+  evidenceLinkHtml,
+  evidenceHref,
+  deliveryLinksHtml,
+  formatTurnDuration,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

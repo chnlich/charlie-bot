@@ -113,6 +113,10 @@ def _bootstrap_payload(bootstrap: message_utils.SessionBootstrapData, cfg: confi
       "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
       "has_more": bootstrap.has_more,
   }
+  # A worker node's summary card rides the first paint; the same object the
+  # transcript poll serves as ``summary``.
+  if bootstrap.worker_summary is not None:
+    payload["worker_summary"] = bootstrap.worker_summary
   payload.update(_active_backend_payload(bootstrap.session, cfg))
   return payload
 
@@ -1132,6 +1136,7 @@ async def get_session_transcript(
           "revision": entry.revision,
           "reset": reset,
           "active_run_id": entry.active_run_id,
+          "summary": entry.summary,
           "thinking_since": thinking_since.isoformat() if thinking_since else None,
       })
 

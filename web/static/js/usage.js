@@ -18,6 +18,17 @@ let streamRenderedAt = -STREAM_RENDER_MS;
 let streamRenderTimer = null;
 let streamPendingDraft = null;
 
+// session-view.js (loaded after this file) registers whether the streaming
+// node paints a worker transcript's tool activity; before that, any draft
+// paints the plain text path.
+let streamDraftTranscriptMode = null;
+
+function setStreamDraftModeSupplier(fn) {
+  streamDraftTranscriptMode = fn;
+}
+
+Chat.wire({setStreamDraftModeSupplier}, {});
+
 function paintStreamDraft(draft) {
   const el = document.getElementById('streaming-msg');
   const inner = document.getElementById('streaming-content');
@@ -30,6 +41,7 @@ function paintStreamDraft(draft) {
   el.classList.remove('hidden');
   const content = (draft && draft.content) || '';
   const thinking = (draft && draft.thinking) || '';
+  const transcriptMode = streamDraftTranscriptMode ? streamDraftTranscriptMode() : null;
   var html = '';
   if (thinking) {
     html += thinkingToggleHtml('streaming-thinking', thinking);
@@ -41,6 +53,19 @@ function paintStreamDraft(draft) {
     html += parseStreamDraft(fixNestedFences(content));
   } finally {
     streamPaintCodeTokens = null;
+  }
+  if (transcriptMode) {
+    // Each worker tool call is one flat row: its chip and one-line input
+    // summary, with neither output nor a toggle. Text and thinking retain the
+    // usual draft presentation above the tool rows.
+    const tools = (draft && draft.tools) || [];
+    html += tools.map(function(tool) {
+      const summary = Chat.toolInputSummary(tool.name, tool.input);
+      return '<div class="flex items-center gap-2 py-1">'
+        + toolNameChipHtml(tool.name || '')
+        + '<span class="text-xs text-slate-400 truncate flex-1 min-w-0">'
+        + escapeHtml(String(summary.text || '')) + '</span></div>';
+    }).join('');
   }
   inner.innerHTML = html;
   // The draft text is the walk's source; renderChatMath skips its full-text

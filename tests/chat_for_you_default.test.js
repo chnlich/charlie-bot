@@ -88,15 +88,16 @@ function pageRig() {
 }
 
 function sessionPayload(session, messages = fixtureMessages()) {
-  return {
-    session: Object.assign({
+  const payloadSession = Object.assign({
       id: 'session-a',
       name: 'Session a',
       profile: 'manager',
       backend: 'claude-opus-4.6',
       round_ratings: {},
       task_parent_id: null,
-    }, session),
+    }, session);
+  const payload = {
+    session: payloadSession,
     messages,
     pending_draft: null,
     event_count: 40,
@@ -106,6 +107,10 @@ function sessionPayload(session, messages = fixtureMessages()) {
     switchable_backends: [],
     has_more: false,
   };
+  if (payloadSession.profile === 'worker') {
+    payload.worker_summary = {task_state: 'open', runs: [], closing: {}};
+  }
+  return payload;
 }
 
 function fixtureMessages() {
@@ -150,10 +155,10 @@ test('a Discord thread session opens in Everything', () => {
   assert.equal(openedView(rig, {discord_origin: DISCORD_ORIGIN}), 'everything');
 });
 
-test('a worker session opens in Everything, root or child', () => {
+test('a worker session opens in For you, root or child', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {profile: 'worker'}), 'everything');
-  assert.equal(openedView(rig, {profile: 'worker', task_parent_id: 'parent-1'}), 'everything');
+  assert.equal(openedView(rig, {profile: 'worker'}), 'foryou');
+  assert.equal(openedView(rig, {profile: 'worker', task_parent_id: 'parent-1'}), 'foryou');
 });
 
 test('a web session shows the status panel in both views', () => {
@@ -221,4 +226,3 @@ test('a second open of a For you session keeps the stream element on the page', 
   assert.equal(openedView(rig, {}), 'foryou', 'the re-open renders without throwing in hideStreaming');
   assert.ok(under(rig.stream, rig.root), 'the stream element is still in the messages container');
 });
-

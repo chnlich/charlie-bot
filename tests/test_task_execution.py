@@ -1289,7 +1289,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
   header = messages[0]
   assert header["kind"] == ET.RUN_HEADER
   assert header["state"] == "failed"
-  assert header["content"].endswith("launch failed")
+  assert header["content"].endswith("launch failed · 0 tool calls")
   assert header["launched"] is False and header["launch_failed"] is True
   assert header["error"] == error_text
   # The error text appears exactly once across the projection: only in the

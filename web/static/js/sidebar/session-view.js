@@ -179,6 +179,12 @@ function setWorkerTranscriptMode(mode) {
   if (mode) startTranscriptPolling();
 }
 
+// usage.js (loaded first) paints the streaming node through this registration:
+// a worker transcript's draft paints tool rows instead of parsed text.
+if (typeof Chat !== 'undefined' && typeof Chat.setStreamDraftModeSupplier === 'function') {
+  Chat.setStreamDraftModeSupplier(transcriptTarget);
+}
+
 function setInputAreaVisible(visible) {
   const area = document.getElementById('input-area');
   if (area) area.classList.toggle('hidden', !visible);
@@ -226,6 +232,7 @@ async function pollTranscript(opts) {
 }
 
 function applyTranscriptUpdate(data) {
+  if (typeof Chat.applyWorkerSummary === 'function') Chat.applyWorkerSummary(data.summary);
   const container = document.getElementById('messages');
   if (container) {
     if (data.reset) {
@@ -271,7 +278,8 @@ function applyTranscriptUpdate(data) {
     : transcriptMessageCount + (data.messages ? data.messages.length : 0);
   transcriptRevision = data.revision || transcriptRevision;
   transcriptActiveRunId = data.active_run_id || null;
-  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) {
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
+      || (data.pending_draft.tools || []).length)) {
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();
@@ -678,6 +686,13 @@ function renderSessionView(data) {
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
   updateBackendHeaderControls(backendType);
 
+  // For-you rules and the summary card need this open's session before the
+  // engine mounts: the worker's default view and its card depend on it.
+  if (typeof Chat.ForYou.setSession === 'function') Chat.ForYou.setSession(session);
+  if (typeof Chat.applyWorkerSummary === 'function') {
+    Chat.applyWorkerSummary(data.worker_summary || null);
+  }
+
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;
   sessionOlderBeforeCursor = data.oldest_message_ordinal;
@@ -717,9 +732,20 @@ function renderSessionView(data) {
 
   if (sessionHasMore) ensureSentinel(container, 'idle');
 
+  // A worker node renders its Run transcript through the main chat column
+  // (this file's transcript poll keeps it live) and takes no message input.
+  // Set the transcript mode before the streaming paint: the draft's paint
+  // renders worker tool rows when the mode is on.
+  const isWorker = session.profile === 'worker';
+  setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
+  setInputAreaVisible(!isWorker);
+
   // Initialize streaming preview from pending draft (in-progress assistant
-  // response carried over from a tail-loaded session).
-  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) {
+  // response carried over from a tail-loaded session). A worker transcript
+  // streams tool activity only, so a draft carrying buffered tools shows even
+  // without text — the paint renders those rows.
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
+      || (isWorker && (data.pending_draft.tools || []).length))) {
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();
@@ -728,12 +754,6 @@ function renderSessionView(data) {
   // Scroll to bottom — the engine positions itself at mount (bottom pin, or
   // reading anchor); only the legacy render still needs this write.
   if (!turnEngine) container.scrollTop = container.scrollHeight;
-
-  // A worker node renders its Run transcript through the main chat column
-  // (this file's transcript poll keeps it live) and takes no message input.
-  const isWorker = session.profile === 'worker';
-  setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
-  setInputAreaVisible(!isWorker);
 
   // The pending-triggers tray opens for this session (a worker session's
   // hidden input area does not hide it). The tray owns its endpoint fetch;
@@ -805,6 +825,8 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     viewportFillCount = 0;
     triggerZoneFillCount = 0;
   }
+  const engine = Chat.activeTurnEngineFor(container);
+  if (engine && engine.view === 'foryou' && Chat.ForYou.isWorker()) return;
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
@@ -848,8 +870,6 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       sessionHasMore = false;
     }
 
-    const engine = Chat.activeTurnEngineFor(container);
-
     const sentinel = document.getElementById('load-more-sentinel');
 
     if (engine) {
@@ -861,6 +881,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       if (!sessionHasMore && sentinel) {
         const heightBeforeSentinelRemoval = container.scrollHeight;
         sentinel.remove();
+        if (Chat.ForYou.isWorker()) engine.clearWorkerPaginationSentinel(sentinel);
         const removedHeight = heightBeforeSentinelRemoval - container.scrollHeight;
         if (removedHeight) {
           engine.writeScrollTop(Math.max(0, container.scrollTop - removedHeight));

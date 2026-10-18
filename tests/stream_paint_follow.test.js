@@ -16,7 +16,15 @@ function makeStreamDocument(container) {
   const streamingMsg = { classList: { add() {}, remove() {} } };
   const streamingContent = { innerHTML: '' };
   return {
+    streamingContent,
     addEventListener() {},
+    createElement() {
+      const element = {innerHTML: ''};
+      Object.defineProperty(element, 'textContent', {
+        set(value) { element.innerHTML = String(value); },
+      });
+      return element;
+    },
     querySelectorAll: () => [],
     getElementById(id) {
       if (id === 'streaming-msg') return streamingMsg;
@@ -64,4 +72,39 @@ test('a stream paint does not follow when neither the pin nor the deferred follo
 
   assert.equal(engine.jumpCalls, 0, 'the paint left the reader where they parked');
   assert.equal(container.scrollTop, 100, 'the scroll position is unchanged');
+});
+
+test('a worker draft keeps text and lists tool rows without their output', async () => {
+  const container = { scrollTop: 100, scrollHeight: 1000, clientHeight: 300 };
+  const document = makeStreamDocument(container);
+  const context = await loadStreamPaintContext({ document });
+  installFakeEngine(context, container, { pinnedIntent: false, followNextTurn: false });
+  context.Chat.setStreamDraftModeSupplier(() => ({sessionId: 'worker-1'}));
+
+  context.paintStreamDraft({
+    content: 'A live update.',
+    thinking: '',
+    tools: [{name: 'Bash', input: {command: 'uv run pytest'}, output: 'hidden tool output'}],
+  });
+
+  assert.match(document.streamingContent.innerHTML, /A live update/);
+  assert.match(document.streamingContent.innerHTML, /Bash/);
+  assert.match(document.streamingContent.innerHTML, /uv run pytest/);
+  assert.doesNotMatch(document.streamingContent.innerHTML, /hidden tool output|tool call/);
+});
+
+test('a manager draft does not paint tool rows', async () => {
+  const container = { scrollTop: 100, scrollHeight: 1000, clientHeight: 300 };
+  const document = makeStreamDocument(container);
+  const context = await loadStreamPaintContext({ document });
+  installFakeEngine(context, container, { pinnedIntent: false, followNextTurn: false });
+
+  context.paintStreamDraft({
+    content: 'Manager update.',
+    thinking: '',
+    tools: [{name: 'Bash', input: {command: 'hidden command'}, output: 'hidden tool output'}],
+  });
+
+  assert.match(document.streamingContent.innerHTML, /Manager update/);
+  assert.doesNotMatch(document.streamingContent.innerHTML, /Bash|hidden command|hidden tool output/);
 });

@@ -61,11 +61,23 @@ def _default_backend_id(cfg: config.CharlieBotConfig) -> str:
   return cfg.backends.options[0].id if cfg.backends.options else "claude"
 
 
+def displayed_backend_id(meta: models.SessionMetadata) -> str:
+  """The backend id a session displays: the one rule every backend reader routes through.
+
+  A worker session displays its newest Run's backend from thinking_state's display map (the delegation's
+  target model, never the inherited creation value), or its configured backend when no Run is known. Every
+  other session displays its configured backend. The map keeps recording the newest Run's backend for every
+  session; only this function decides which one a session shows.
+  """
+  if meta.profile == "worker":
+    return thinking_state.run_backend(meta.id) or meta.backend
+  return meta.backend
+
+
 def _active_backend_payload(meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> dict:
-  # A worker node displays its newest Run's backend (the delegation's target
-  # model), never the inherited creation value the persisted field carries.
+  # The displayed-backend rule lives in displayed_backend_id.
   binding = sequence_controllers.binding_for(meta.id)
-  active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
+  active_backend = displayed_backend_id(meta) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
       "active_backend":
@@ -320,11 +332,10 @@ async def _sessions_list_response(
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
-    # A worker row displays its newest Run's backend (the delegation's target
-    # model), never the inherited creation value; every other row keeps its
-    # own persisted backend. The in-memory read rides the overlay tuple so a
-    # backend change re-renders the memoized body.
-    display_backend = (thinking_state.run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
+    # The row's displayed backend follows the rule in displayed_backend_id. The
+    # in-memory read rides the overlay tuple so a backend change re-renders the
+    # memoized body.
+    display_backend = displayed_backend_id(row)
     # Both datetimes ride the model's JSON scheme (pydantic-core renders datetime.UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(

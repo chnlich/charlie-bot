@@ -195,8 +195,9 @@ async def index(
       sessions.apply_listing_fields(s.model_dump(mode="json"), listing_fields[s.id]) for s in sidebar_sessions
   ]
 
+  # The displayed-backend rule lives in sessions.displayed_backend_id.
   active_backend = (
-      (active_session.run_backend or active_session.backend) if active_session else sessions._default_backend_id(cfg))
+      sessions.displayed_backend_id(active_session) if active_session else sessions._default_backend_id(cfg))
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""

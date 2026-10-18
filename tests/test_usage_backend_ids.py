@@ -24,8 +24,7 @@ def _cfg(tmp_path: pathlib.Path, *entries: dict[str, Any]) -> config.CharlieBotC
 
 
 def test_an_id_per_source_passes_whatever_prefix_spelling_it_uses(tmp_path: pathlib.Path) -> None:
-  """One option per source: the long or short prefix both count, and a model-less antigravity
-  entry passes like the rest."""
+  """One option per source uses the long or short prefix and includes the configured model."""
   cfg = _cfg(
       tmp_path,
       {
@@ -55,7 +54,8 @@ def test_an_id_per_source_passes_whatever_prefix_spelling_it_uses(tmp_path: path
       {
           "id": "agy-antigravity",
           "label": "Antigravity",
-          "type": "antigravity"
+          "type": "antigravity",
+          "model": "gemini-2.5-pro"
       },
   )
   backend_ids.check_backend_ids(cfg)

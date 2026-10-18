@@ -8,4 +8,8 @@ from src.runtime.agent_process import base
 
 
 def build(option: models.BackendOption, cfg: config.CharlieBotConfig, **kwargs: Any) -> base.AgentBackend:
-  return antigravity_cli.AntigravityCliBackend(print_timeout=option.print_timeout, **kwargs)
+  return antigravity_cli.AntigravityCliBackend(
+      model=models.option_default_model(option, subject="backend "),
+      print_timeout=option.print_timeout,
+      **kwargs,
+  )

@@ -36,7 +36,8 @@ async def _consume(backend: antigravity_cli.AntigravityCliBackend, cwd: pathlib.
 
 
 def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.MonkeyPatch) -> None:
-  backend = _build_backend(monkeypatch, extra_flags=["--sandbox"])
+  model = "Gemini Pro (test)"
+  backend = _build_backend(monkeypatch, model=model, extra_flags=["--sandbox"])
 
   cmd = backend._build_command("--dash-prefixed prompt")
 
@@ -48,9 +49,35 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.Mon
       "--dangerously-skip-permissions",
       "--output-format",
       "json",
+      "--model",
+      model,
       "--sandbox",
   ]
-  assert "--model" not in cmd
+
+
+def test_build_command_places_model_before_resume_id(monkeypatch: pytest.MonkeyPatch) -> None:
+  model = "Gemini Pro (test)"
+  backend = _build_backend(monkeypatch, model=model, resume_session_id="conv-abc", extra_flags=["--sandbox"])
+
+  assert backend._build_command("continue") == [
+      "/usr/bin/agy",
+      "--print=continue",
+      "--print-timeout",
+      "1h",
+      "--dangerously-skip-permissions",
+      "--output-format",
+      "json",
+      "--model",
+      model,
+      "--conversation",
+      "conv-abc",
+      "--sandbox",
+  ]
+
+
+def test_constructor_rejects_an_empty_model(monkeypatch: pytest.MonkeyPatch) -> None:
+  with pytest.raises(ValueError, match="antigravity backend requires a model"):
+    _build_backend(monkeypatch, model="")
 
 
 def test_build_command_prepends_instructions_to_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,7 +105,7 @@ JSON
 """,
   )
   log_dir = tmp_path / "logs"
-  backend = antigravity_cli.AntigravityCliBackend(log_dir=log_dir)
+  backend = antigravity_cli.AntigravityCliBackend(model="agy-test-model", log_dir=log_dir)
 
   events = await _consume(backend, tmp_path)
 
@@ -128,7 +155,7 @@ def test_backend_types_builds_antigravity_backend(monkeypatch: pytest.MonkeyPatc
   backend = backend_types.build_backend(option, config.CharlieBotConfig(), extra_flags=["--sandbox"])
 
   assert isinstance(backend, antigravity_cli.AntigravityCliBackend)
-  assert backend._model is None
+  assert backend._model == option.model
   assert backend._build_command("hi") == [
       "/usr/bin/agy",
       "--print=hi",
@@ -137,8 +164,23 @@ def test_backend_types_builds_antigravity_backend(monkeypatch: pytest.MonkeyPatc
       "--dangerously-skip-permissions",
       "--output-format",
       "json",
+      "--model",
+      option.model,
       "--sandbox",
   ]
+
+
+def test_config_load_rejects_antigravity_entry_without_model(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(tmp_path))
+  (tmp_path / "config.yaml").write_text(
+      "backends:\n  options:\n    - id: agy-no-model\n      label: Antigravity\n      type: antigravity\n",
+      encoding="utf-8")
+
+  with pytest.raises(ValueError) as exc_info:
+    config.load_config()
+
+  assert "backend 'agy-no-model' (type 'antigravity') requires 'model'" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -151,7 +193,7 @@ async def test_typed_session_attach_event_is_adopted_as_anchor_by_handle_event(
 printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","usage":{}}'
 """,
   )
-  backend = antigravity_cli.AntigravityCliBackend()
+  backend = antigravity_cli.AntigravityCliBackend(model="agy-test-model")
 
   from src.runtime import master_cc_run
 

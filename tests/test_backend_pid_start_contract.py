@@ -185,7 +185,7 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pat
   async def on_spawn(pid: int) -> None:
     observed.append((pid, backend.pid_start))
 
-  backend = cls(on_spawn=on_spawn)
+  backend = cls(model="agy-test-model", on_spawn=on_spawn)
 
   async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
     pass

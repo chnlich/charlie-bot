@@ -446,9 +446,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           requested="(none)",
       )
     return await _refuse_turn(item, msg, None)
-  if models.backend_type_allows_missing_model(option.type) and option.model is not None:
-    option = option.model_copy(update={"model": None})
-
   assert item.task_run is not None
   assert item.task_instructions is not None
   instructions_content = item.task_instructions

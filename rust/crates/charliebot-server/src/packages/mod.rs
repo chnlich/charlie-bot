@@ -33,8 +33,8 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.diff_view", charliebot_diff_view::register), // stub: src.features.diff_view
   ("src.features.explain", charliebot_explain::register),     // stub: src.features.explain
   ("src.features.improve", stub),                             // stub: src.features.improve
-  ("src.features.memory", charliebot_memory::register),       // stub: src.features.memory
-  ("src.features.ncu", charliebot_ncu::register),             // stub: src.features.ncu
+  ("src.features.memory", charliebot_memory::register),
+  ("src.features.ncu", charliebot_ncu::register), // stub: src.features.ncu
   ("src.features.terminal", charliebot_terminal::register),
   ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage_page::register), // stub: src.features.usage

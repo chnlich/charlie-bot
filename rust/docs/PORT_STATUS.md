@@ -108,7 +108,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET | `/token-usage` | features/usage | todo |  |
 | POST | `/api/voice/{session_id}/confirm` | features/voice | todo |  |
 | POST | `/api/voice/{session_id}` | features/voice | todo |  |
-| WS | `/ws/voice/{session_id}` | features/voice | todo | the token check is ported; every upgrade answers 403 |
+| WS | `/ws/voice/{session_id}` | features/voice | ported | live preview relay and recording archive |
 | POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | todo |  |
 | GET, HEAD | `/absolute_filepath/{path:path}` | features/files | ported |  |
 | GET, HEAD | `/static/features/artifacts/{path:path}` | foundation | ported |  |
@@ -141,6 +141,16 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET, HEAD | `/static/backends/opencode/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/features/files/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/{path:path}` | foundation | ported |  |
+
+## Feature hooks
+
+| Kind | Name | Stage | Status | Note |
+| --- | --- | --- | --- | --- |
+| config section | `voice` | features/voice | ported | five fields, legacy keys and unknown-key refusal |
+| config check | `check_default_backend` | features/voice | ported | validates against local, gemini and muse |
+| template global | `voice_backends` | features/voice | ported | backend availability in dropdown order |
+| template global | `voice_default_backend` | features/voice | ported | |
+| turn contribution | `voice` | features/voice | ported | dictated input preamble |
 
 ## Services and lifespan
 
@@ -244,8 +254,8 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/plans.json` | features/artifacts | todo | |
 | session artifact pages | features/artifacts | todo | |
 | `sessions/<sid>/uploads/<filename>` | chat | todo | |
-| `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | todo | |
-| `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | todo | |
+| `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | ported | 16 kHz mono PCM16 WAV |
+| `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | ported | final transcript |
 | `sessions/<sid>/loops/active.lock` | features/improve | todo | |
 | `sessions/<sid>/loops/<n>/state.json` | features/improve | todo | |
 | `sessions/<sid>/loops/<n>/goal.md` | features/improve | todo | |

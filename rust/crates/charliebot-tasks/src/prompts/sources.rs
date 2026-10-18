@@ -63,7 +63,7 @@ pub fn build_segments(
   kind: &str,
   inputs: &RuleInputs<'_>,
 ) -> anyhow::Result<(Vec<RuleSegment>, Option<OverlayError>)> {
-  let repo = env.checkout.charlie_bot_repo();
+  let repo = env.checkout.path();
   let mut segments = if MANAGER_KINDS.contains(&kind) {
     manager_rule_segments(env, meta)?
   } else if WORKER_KINDS.contains(&kind) {
@@ -146,7 +146,7 @@ fn sections_text(repo: &Path, filename: &str, section_ids: &[&str]) -> anyhow::R
 /// The manager contract at any depth: the shared base, the shared manager rules, the workflow rules file a contribution
 /// names (default `manager_workflows.md`), the manager template, and the host supplement.
 fn manager_rule_segments(env: &PromptEnv<'_>, meta: &SessionMetadata) -> anyhow::Result<Vec<RuleSegment>> {
-  let repo = env.checkout.charlie_bot_repo();
+  let repo = env.checkout.path();
   let base = sections_text(repo, "task_base.md", &COMMON_SECTIONS)?;
   let shared =
     read_source_file(&repo.join("prompts/master.md"), "shared manager rules")?.replace("{{session_id}}", &meta.id);
@@ -175,7 +175,7 @@ fn worker_kind_rule_segments(
   kind: &str,
   task_type: TaskType,
 ) -> anyhow::Result<Vec<RuleSegment>> {
-  let repo = env.checkout.charlie_bot_repo();
+  let repo = env.checkout.path();
   let base = sections_text(repo, "task_base.md", &COMMON_SECTIONS)?;
   let mut segments = vec![segment(base, vec![base_source("prompts/task_base.md")])];
   if kind == "review" {

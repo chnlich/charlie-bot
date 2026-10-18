@@ -4,17 +4,17 @@
 use std::path::Path;
 
 use anyhow::anyhow;
+use charliebot_core::RepoRoot;
 use charliebot_store::RunRecord;
 use charliebot_store::metadata::TaskType;
 
-use super::CheckoutRoot;
 use crate::review_text;
 use crate::spawner_prompt::{self, Tokens};
 
 /// The session-info line with the session's name filled in.
-pub fn render_session_info(checkout: &dyn CheckoutRoot, session_name: &str) -> anyhow::Result<String> {
+pub fn render_session_info(checkout: &RepoRoot, session_name: &str) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
-    &checkout.charlie_bot_repo().join("prompts/worker.md"),
+    &checkout.path().join("prompts/worker.md"),
     &["session_info"],
     "worker-prompt",
   )?;
@@ -22,8 +22,8 @@ pub fn render_session_info(checkout: &dyn CheckoutRoot, session_name: &str) -> a
 }
 
 /// The bindings intro line: a retry that continues the worktree says so (`binding_intro`).
-pub fn binding_intro(checkout: &dyn CheckoutRoot, run: &RunRecord) -> anyhow::Result<String> {
-  let sections = spawner_prompt::load_worker_prompt_sections(checkout.charlie_bot_repo())?;
+pub fn binding_intro(checkout: &RepoRoot, run: &RunRecord) -> anyhow::Result<String> {
+  let sections = spawner_prompt::load_worker_prompt_sections(checkout.path())?;
   let key =
     if run.retry_of_run_id.is_some() && run.worktree_path.is_some() { "intro_continuation" } else { "intro_new" };
   Ok(sections[key].trim().to_string())
@@ -31,7 +31,7 @@ pub fn binding_intro(checkout: &dyn CheckoutRoot, run: &RunRecord) -> anyhow::Re
 
 /// The workflow's binding header with the intro line, branch, worktree and repo filled in (`render_worktree_bindings`).
 pub fn render_worktree_bindings(
-  checkout: &dyn CheckoutRoot,
+  checkout: &RepoRoot,
   task_type: TaskType,
   intro_line: &str,
   branch_name: &str,
@@ -42,31 +42,25 @@ pub fn render_worktree_bindings(
   // Element 0 of the task type's section list is its bindings section.
   let section = spawner_prompt::workflow_prompt_sections(task_type)
     .ok_or_else(|| anyhow!("no workflow sections for task type {task_type:?}"))?[0];
-  let sections = spawner_prompt::load_marker_sections(
-    &checkout.charlie_bot_repo().join("prompts/worker.md"),
-    &[section],
-    "worker-prompt",
-  )?;
+  let sections =
+    spawner_prompt::load_marker_sections(&checkout.path().join("prompts/worker.md"), &[section], "worker-prompt")?;
   let tokens: Tokens =
     spawner_prompt::worktree_binding_tokens(intro_line, branch_name, base_branch_origin, wt_path, repo_path);
   Ok(spawner_prompt::substitute_tokens(&sections[section], &tokens))
 }
 
 /// The task section with the description filled in (`render_task_body`).
-pub fn render_task_body(checkout: &dyn CheckoutRoot, description: &str) -> anyhow::Result<String> {
-  let sections = spawner_prompt::load_marker_sections(
-    &checkout.charlie_bot_repo().join("prompts/worker.md"),
-    &["task"],
-    "worker-prompt",
-  )?;
+pub fn render_task_body(checkout: &RepoRoot, description: &str) -> anyhow::Result<String> {
+  let sections =
+    spawner_prompt::load_marker_sections(&checkout.path().join("prompts/worker.md"), &["task"], "worker-prompt")?;
   let tokens: Tokens = vec![("{{description}}", description.to_string())];
   Ok(spawner_prompt::substitute_tokens(&sections["task"], &tokens))
 }
 
 /// The worktree persistence section, as the template states it (`render_worktree_persistence`).
-pub fn render_worktree_persistence(checkout: &dyn CheckoutRoot) -> anyhow::Result<String> {
+pub fn render_worktree_persistence(checkout: &RepoRoot) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
-    &checkout.charlie_bot_repo().join("prompts/worker.md"),
+    &checkout.path().join("prompts/worker.md"),
     &["worktree_persistence"],
     "worker-prompt",
   )?;

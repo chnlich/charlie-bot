@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use charliebot_core::RepoRoot;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
@@ -383,7 +384,7 @@ fn prepare(case: &Case) -> Prepared {
 }
 
 /// The Rust side of one case: the snapshot the same inputs assemble to, and its `to_json_dict` entry.
-fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &PathBuf) -> (Value, PromptSnapshot) {
+fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot) -> (Value, PromptSnapshot) {
   let cfg = config(home);
   let mut meta = SessionMetadata::new(case.meta.id, case.meta.name, profile(case.meta.profile));
   meta.task = case.meta.task.map(|task| TaskSpec {
@@ -506,7 +507,7 @@ fn snapshots_match_the_python_server_byte_for_byte() {
   let python = python_output(&request);
 
   let registry = registry();
-  let checkout = repo_root();
+  let checkout = RepoRoot::new(Some(repo_root().into_os_string())).expect("repo root is valid");
   let mut results = Vec::new();
   let mut damaged = None;
   for (case, prepared) in cases.iter().zip(&prepared) {

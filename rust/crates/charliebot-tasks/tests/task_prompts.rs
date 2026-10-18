@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use charliebot_core::RepoRoot;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
@@ -19,7 +20,7 @@ use charliebot_store::{
   SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult, TaskCaller,
 };
 use charliebot_tasks::prompts::{
-  CheckoutRoot, CoherentSnapshot, PromptEnv, PromptSnapshot, RuleInputs, SNAPSHOT_FILENAME, assemble_coherent_snapshot,
+  CoherentSnapshot, PromptEnv, PromptSnapshot, RuleInputs, SNAPSHOT_FILENAME, assemble_coherent_snapshot,
   assemble_snapshot, build_segments, capture_prompt_chain, prompt_task_type, read_run_context, resolve_launch_overlay,
 };
 use serde_json::{Map, Value, json};
@@ -121,6 +122,7 @@ struct Harness {
   registry: Registry,
   store: Store,
   checkout: PathBuf,
+  repo_root: RepoRoot,
 }
 
 /// The ids of the three-level tree every tree test builds.
@@ -146,7 +148,8 @@ impl Harness {
     };
     let store = Store::new(cfg.clone(), registry.metadata_slots(), hooks).expect("store opens over the temp home");
     let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).expect("repo root").to_path_buf();
-    Self { _home: home, cfg, registry, store, checkout }
+    let repo_root = RepoRoot::new(Some(checkout.as_os_str().to_os_string())).expect("repo root is valid");
+    Self { _home: home, cfg, registry, store, checkout, repo_root }
   }
 
   /// Opens a store over the same home. Its metadata cache starts empty, so it reads the files this harness wrote.
@@ -163,7 +166,7 @@ impl Harness {
   }
 
   fn env(&self) -> PromptEnv<'_> {
-    PromptEnv { cfg: &self.cfg, registry: &self.registry, checkout: &self.checkout as &dyn CheckoutRoot }
+    PromptEnv { cfg: &self.cfg, registry: &self.registry, checkout: &self.repo_root }
   }
 
   async fn node(

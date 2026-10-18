@@ -17,24 +17,24 @@ use charliebot_registry::{RegisterFn, Registry, RegistryError};
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.artifacts", features::artifacts), // stub: src.features.artifacts
-  ("src.features.backup", stub),                   // stub: src.features.backup
+  ("src.features.backup", charliebot_backup::register), // stub: src.features.backup
   ("src.features.backend_pool", features::backend_pool), // stub: src.features.backend_pool
-  ("src.features.chat_threads", stub),             // stub: src.features.chat_threads
+  ("src.features.chat_threads", charliebot_chat_threads::register), // stub: src.features.chat_threads
   ("src.features.code_server", features::code_server), // stub: src.features.code_server
   ("src.features.cron", features::cron),           // stub: src.features.cron
-  ("src.features.diag", stub),                     // stub: src.features.diag
+  ("src.features.diag", charliebot_diag::register), // stub: src.features.diag
   ("src.features.slack", features::slack),         // stub: src.features.slack
   ("src.features.discord", features::discord),     // stub: src.features.discord
   ("src.features.web_reply", features::web_reply), // stub: src.features.web_reply
-  ("src.features.host_auth", stub),                // stub: src.features.host_auth
-  ("src.features.diff_view", stub),                // stub: src.features.diff_view
-  ("src.features.explain", stub),                  // stub: src.features.explain
+  ("src.features.host_auth", charliebot_host_auth::register), // stub: src.features.host_auth
+  ("src.features.diff_view", charliebot_diff_view::register), // stub: src.features.diff_view
+  ("src.features.explain", charliebot_explain::register), // stub: src.features.explain
   ("src.features.improve", stub),                  // stub: src.features.improve
-  ("src.features.memory", stub),                   // stub: src.features.memory
-  ("src.features.ncu", stub),                      // stub: src.features.ncu
-  ("src.features.terminal", stub),                 // stub: src.features.terminal
-  ("src.features.trace", stub),                    // stub: src.features.trace
-  ("src.features.usage", stub),                    // stub: src.features.usage
+  ("src.features.memory", charliebot_memory::register), // stub: src.features.memory
+  ("src.features.ncu", charliebot_ncu::register),  // stub: src.features.ncu
+  ("src.features.terminal", charliebot_terminal::register), // stub: src.features.terminal
+  ("src.features.trace", charliebot_trace::register), // stub: src.features.trace
+  ("src.features.usage", charliebot_usage::register), // stub: src.features.usage
   ("src.features.voice", voice::register),         // stub: src.features.voice
   ("src.backends.openai_compatible", backends::openai_compatible), // stub: src.backends.openai_compatible
   ("src.backends.antigravity", backends::antigravity), // stub: src.backends.antigravity
@@ -44,7 +44,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.backends.gemini", backends::gemini),       // stub: src.backends.gemini
   ("src.backends.kimi", backends::kimi),           // stub: src.backends.kimi
   ("src.backends.opencode", backends::opencode),   // stub: src.backends.opencode
-  ("src.features.files", stub),                    // stub: src.features.files
+  ("src.features.files", charliebot_files::register), // stub: src.features.files
 ];
 
 /// The registry of every listed package, registered in list order. A failing registration fails the server's startup.

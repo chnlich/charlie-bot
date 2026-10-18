@@ -101,11 +101,34 @@ def test_new_step_kinds_and_keys_load(tmp_path: pathlib.Path, step: dict[str, An
 
 @pytest.mark.parametrize(
     "fields", [
-        {"config": {"paths": {"workspace_dirs": ["${tree.root}/workspace"]}}},
-        {"credentials": {"synthetic": {"home": "${tree.home}"}}},
-        {"fakes": {"slack": {}, "discord": {}, "gemini": {}, "muse": {}}},
-        {"fixture_extras": ["sample_files"]},
-        {"voice_models": True},
+        {
+            "config": {
+                "paths": {
+                    "workspace_dirs": ["${tree.root}/workspace"]
+                }
+            }
+        },
+        {
+            "credentials": {
+                "synthetic": {
+                    "home": "${tree.home}"
+                }
+            }
+        },
+        {
+            "fakes": {
+                "slack": {},
+                "discord": {},
+                "gemini": {},
+                "muse": {}
+            }
+        },
+        {
+            "fixture_extras": ["sample_files"]
+        },
+        {
+            "voice_models": True
+        },
     ])
 def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}], **fields)
@@ -114,47 +137,79 @@ def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) 
 
 @pytest.mark.parametrize(
     "step,fields", [
-        ({
-            "name": "raw body file",
-            "method": "POST",
-            "path": "/api/voice/${sessions.atlas}/confirm",
-            "body_file": "audio/not-wave.bin",
-        }, {}),
-        ({
-            "name": "multipart body",
-            "method": "POST",
-            "path": "/api/voice/${sessions.atlas}",
-            "multipart": {
-                "audio": {"file": "audio/silence.wav", "content_type": "audio/wav"},
-                "backend": "gemini",
-            },
-        }, {}),
-        ({
-            "kind": "ws",
-            "name": "websocket frame forms",
-            "path": "/ws/anything",
-            "send": [{"json": {"type": "hello"}}, {"text": "plain"}, {"binary_file": "audio/silence.pcm"}],
-            "collect": {"where": {"type": "partial"}, "field": "text", "decode": "none"},
-            "until": {"frames": 1},
-            "timeout_seconds": 1,
-        }, {}),
-        ({
-            "kind": "ws",
-            "name": "websocket rejected upgrade",
-            "path": "/ws/anything",
-            "auth": "none",
-            "send": [],
-            "until": {"frames": 0},
-            "timeout_seconds": 1,
-            "expect_reject": 403,
-        }, {}),
-        ({
-            "kind": "fake",
-            "name": "fake inbound message",
-            "fake": "slack",
-            "action": "socket_event",
-            "payload": {"type": "message"},
-        }, {"fakes": {"slack": {}}}),
+        (
+            {
+                "name": "raw body file",
+                "method": "POST",
+                "path": "/api/voice/${sessions.atlas}/confirm",
+                "body_file": "audio/not-wave.bin",
+            }, {}),
+        (
+            {
+                "name": "multipart body",
+                "method": "POST",
+                "path": "/api/voice/${sessions.atlas}",
+                "multipart": {
+                    "audio": {
+                        "file": "audio/silence.wav",
+                        "content_type": "audio/wav"
+                    },
+                    "backend": "gemini",
+                },
+            }, {}),
+        (
+            {
+                "kind": "ws",
+                "name": "websocket frame forms",
+                "path": "/ws/anything",
+                "send": [{
+                    "json": {
+                        "type": "hello"
+                    }
+                }, {
+                    "text": "plain"
+                }, {
+                    "binary_file": "audio/silence.pcm"
+                }],
+                "collect": {
+                    "where": {
+                        "type": "partial"
+                    },
+                    "field": "text",
+                    "decode": "none"
+                },
+                "until": {
+                    "frames": 1
+                },
+                "timeout_seconds": 1,
+            }, {}),
+        (
+            {
+                "kind": "ws",
+                "name": "websocket rejected upgrade",
+                "path": "/ws/anything",
+                "auth": "none",
+                "send": [],
+                "until": {
+                    "frames": 0
+                },
+                "timeout_seconds": 1,
+                "expect_reject": 403,
+            }, {}),
+        (
+            {
+                "kind": "fake",
+                "name": "fake inbound message",
+                "fake": "slack",
+                "action": "socket_event",
+                "payload": {
+                    "type": "message"
+                },
+            }, {
+                "fakes": {
+                    "slack": {}
+                }
+            }),
     ])
 def test_new_http_websocket_and_fake_forms_load(
     tmp_path: pathlib.Path, step: dict[str, Any], fields: dict[str, Any]) -> None:
@@ -245,13 +300,19 @@ def test_new_http_websocket_and_fake_forms_load(
             "name": "invalid multipart file fields",
             "method": "POST",
             "path": "/api/auth/status",
-            "multipart": {"audio": {"file": "audio/not-wave.bin"}},
+            "multipart": {
+                "audio": {
+                    "file": "audio/not-wave.bin"
+                }
+            },
         },
         {
             "kind": "ws",
             "name": "bad websocket path",
             "path": "/terminal",
-            "until": {"frames": 0},
+            "until": {
+                "frames": 0
+            },
             "timeout_seconds": 1,
         },
         {
@@ -264,24 +325,37 @@ def test_new_http_websocket_and_fake_forms_load(
             "kind": "ws",
             "name": "bad websocket send frame",
             "path": "/ws/anything",
-            "send": [{"json": {}, "text": "two forms"}],
-            "until": {"frames": 0},
+            "send": [{
+                "json": {},
+                "text": "two forms"
+            }],
+            "until": {
+                "frames": 0
+            },
             "timeout_seconds": 1,
         },
         {
             "kind": "ws",
             "name": "collected compare needs collect",
             "path": "/ws/anything",
-            "until": {"frames": 0},
+            "until": {
+                "frames": 0
+            },
             "timeout_seconds": 1,
-            "compare": {"collected_contains": ["ready"]},
+            "compare": {
+                "collected_contains": ["ready"]
+            },
         },
         {
             "kind": "ws",
             "name": "reject cannot send frames",
             "path": "/ws/anything",
-            "send": [{"text": "unexpected"}],
-            "until": {"frames": 0},
+            "send": [{
+                "text": "unexpected"
+            }],
+            "until": {
+                "frames": 0
+            },
             "timeout_seconds": 1,
             "expect_reject": 403,
         },
@@ -478,3 +552,76 @@ def test_invalid_script_fails_loading(
     tmp_path: pathlib.Path, steps: list[dict[str, Any]], fields: dict[str, Any], message: str) -> None:
   with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
     _load(tmp_path, steps, **fields)
+
+
+def test_tree_references_use_route_placeholders(tmp_path: pathlib.Path) -> None:
+  scenario = _load(
+      tmp_path, [{
+          "name": "tree paths",
+          "method": "GET",
+          "path": "/absolute_filepath${tree.root}/${tree.home}",
+      }])
+  assert scenario.steps[0].route == "GET /absolute_filepath{tree}/{home}"
+
+
+@pytest.mark.parametrize(
+    "fields,message", [
+        (
+            {
+                "credentials": {
+                    "charliebot": {
+                        "access_key": "replaced"
+                    }
+                }
+            }, "scenario.yaml.credentials refuses the charliebot key"),
+        (
+            {
+                "config": {
+                    "paths": "${sessions.atlas}"
+                }
+            }, "scenario.yaml.config only accepts ${tree.root} and ${tree.home} references"),
+        ({
+            "fakes": {
+                "twitter": {}
+            }
+        }, "scenario.yaml.fakes has unknown fake 'twitter'"),
+        ({
+            "fakes": {
+                "slack": {
+                    "tokens": 1
+                }
+            }
+        }, "scenario.yaml.fakes.slack: unknown seed keys ['tokens']"),
+        ({
+            "fixture_extras": ["missing_extra"]
+        }, "scenario.yaml.fixture_extras names missing module 'missing_extra'"),
+        ({
+            "voice_models": "yes"
+        }, "scenario.yaml.voice_models must be a boolean"),
+    ])
+def test_invalid_scenario_overlay_keys_name_the_file(
+    tmp_path: pathlib.Path, fields: dict[str, Any], message: str) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
+    _load(tmp_path, [{"name": "http", "method": "GET", "path": "/api/auth/status"}], **fields)
+
+
+def test_websocket_send_references_are_checked(tmp_path: pathlib.Path) -> None:
+  scenario = _load(
+      tmp_path, [
+          {
+              "kind": "ws",
+              "name": "send reference",
+              "path": "/ws/anything",
+              "send": [{
+                  "json": {
+                      "session": "${sessions.missing}"
+                  }
+              }],
+              "until": {
+                  "frames": 0
+              },
+              "timeout_seconds": 1,
+          }
+      ])
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape("unresolved reference ${sessions.missing}")):
+    scenario_file.check_references(scenario, {"sessions": {"atlas": "synthetic-session"}})

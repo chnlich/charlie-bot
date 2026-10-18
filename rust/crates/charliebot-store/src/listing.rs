@@ -62,18 +62,31 @@ impl Store {
         Some(meta) => Some(meta.clone()),
         None => {
           let signature = stat_signature(&metadata_path);
-          let Some(meta) = self.read_metadata_path(&metadata_path)? else { continue };
-          self
-            .metadata_cache
-            .lock()
-            .expect("metadata cache mutex is not poisoned")
-            .entry(session_id.clone())
-            .or_insert_with(|| super::store::CachedMetadata {
-              value: meta.clone(),
-              at: std::time::Instant::now(),
-              signature,
-            });
-          Some(meta)
+          match self.read_metadata_path(&metadata_path) {
+            Ok(Some(meta)) => {
+              self
+                .metadata_cache
+                .lock()
+                .expect("metadata cache mutex is not poisoned")
+                .entry(session_id.clone())
+                .or_insert_with(|| super::store::CachedMetadata {
+                  value: meta.clone(),
+                  at: std::time::Instant::now(),
+                  signature,
+                });
+              Some(meta)
+            }
+            Ok(None) => {
+              tracing::warn!(path = %metadata_path.display(), "session_metadata_empty");
+              continue;
+            }
+            // A malformed file logs at warning level and drops out of the listing, the way
+            // `session_store.load_session_metas` reports `session_load_failed` and skips.
+            Err(error) => {
+              tracing::warn!(session_id = %session_id, error = %error, "session_load_failed");
+              continue;
+            }
+          }
         }
       };
       let Some(meta) = meta else { continue };
@@ -152,13 +165,20 @@ impl Store {
       let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-        Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+        // A missing or unreadable or malformed file logs at debug level and drops out of the
+        // scan, the way `json_utils.load_json_meta` reports its log event and answers None.
+        Err(error) => {
+          tracing::debug!(path = %path.display(), error = %error, "metadata_raw_scan_read_failed");
+          continue;
+        }
       };
-      if raw.trim().is_empty() {
-        continue;
-      }
-      let value =
-        serde_json::from_str(&raw).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      let value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+          tracing::debug!(path = %path.display(), error = %error, "metadata_raw_scan_parse_skip");
+          continue;
+        }
+      };
       rows.push(RawMetadata { session_id, value });
     }
     Ok(rows)
@@ -286,4 +306,218 @@ fn stat_signature(path: &std::path::Path) -> Option<(i64, i64)> {
 fn has_timezone(value: &str) -> bool {
   let time = value.split_once('T').map_or("", |(_, time)| time);
   time.ends_with('Z') || time.contains('+') || time.rfind('-').is_some()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::StoreHooks;
+  use crate::metadata::TaskProfile;
+  use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+  use serde_json::json;
+  use std::sync::Arc;
+
+  struct Labels;
+  impl crate::AccountLabelKeeper for Labels {
+    fn record_account_label(&self, meta: &mut SessionMetadata, label: Option<&str>) -> StoreResult<bool> {
+      let value = label.map_or(Value::Null, |label| Value::String(label.to_string()));
+      if meta.extra("claude_account") == Some(&value) {
+        return Ok(false);
+      }
+      meta.set_extra("claude_account", value);
+      Ok(true)
+    }
+
+    fn account_label(&self, meta: &SessionMetadata) -> Option<String> {
+      meta.extra("claude_account").and_then(Value::as_str).map(str::to_string)
+    }
+  }
+
+  struct Anchors;
+  impl crate::AnchorFieldReconciler for Anchors {
+    fn reconcile(&self, disk: &SessionMetadata, attempted: &mut SessionMetadata) -> StoreResult<()> {
+      attempted.cc_session_id.clone_from(&disk.cc_session_id);
+      attempted.native_backend.clone_from(&disk.native_backend);
+      Ok(())
+    }
+  }
+
+  struct Sequence;
+  impl crate::SequenceListingFields for Sequence {
+    fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+      false
+    }
+    fn listing_fields(
+      &self,
+      _: &[String],
+      _: UtcDateTime,
+    ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
+      Ok(HashMap::new())
+    }
+    fn sequence_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+      Ok(HashMap::new())
+    }
+    fn view_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+      Ok(HashMap::new())
+    }
+    fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
+      Ok(Vec::new())
+    }
+  }
+
+  fn slots() -> Vec<MetadataSlot> {
+    vec![MetadataSlot {
+      owner: "probe",
+      on: MetadataFile::Session,
+      after: Some("group"),
+      fields: vec![
+        SlotField { name: "probe_note", default: Value::Null },
+        SlotField { name: "probe_count", default: json!(0) },
+      ],
+    }]
+  }
+
+  fn test_store(home: &std::path::Path) -> Store {
+    let cfg = charliebot_core::config::load_config(home).unwrap();
+    Store::new(
+      cfg,
+      slots(),
+      StoreHooks {
+        account_labels: Some(Arc::new(Labels)),
+        anchor_reconciler: Some(Arc::new(Anchors)),
+        sequence_listing: Some(Arc::new(Sequence)),
+      },
+    )
+    .unwrap()
+  }
+
+  fn write_metadata(store: &Store, id: &str, status: SessionStatus, updated_at: &str, group: Option<&str>) {
+    let mut meta = SessionMetadata::new(id, id, TaskProfile::Manager);
+    meta.status = status;
+    meta.updated_at = UtcDateTime::parse(updated_at).unwrap();
+    meta.group = group.map(str::to_string);
+    let path = store.metadata_path(id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, meta.to_json_string(&store.slots, true)).unwrap();
+  }
+
+  /// `test_sessions_batch_metadata_read.py::test_batch_output_matches_sequential_get_session_for_mixed_fixture`:
+  /// the listing skips the malformed file while a single-session read keeps Python's behavior and
+  /// fails loudly with the file's path.
+  #[tokio::test]
+  async fn listing_skips_a_malformed_metadata_file_and_a_single_session_read_fails_loudly() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "good-a", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    write_metadata(&store, "good-b", SessionStatus::Archived, "2025-02-02T00:00:00Z", None);
+    let corrupt_path = store.metadata_path("corrupt");
+    std::fs::create_dir_all(corrupt_path.parent().unwrap()).unwrap();
+    std::fs::write(&corrupt_path, "{corrupt").unwrap();
+    let empty_path = store.metadata_path("empty");
+    std::fs::create_dir_all(empty_path.parent().unwrap()).unwrap();
+    std::fs::write(&empty_path, "   ").unwrap();
+
+    let mut ids: Vec<String> = store.load_session_metas(None).unwrap().into_iter().map(|meta| meta.id).collect();
+    ids.sort();
+    assert_eq!(ids.iter().map(String::as_str).collect::<Vec<_>>(), ["good-a", "good-b"]);
+    let archived: Vec<String> =
+      store.load_session_metas(Some(SessionStatus::Archived)).unwrap().into_iter().map(|meta| meta.id).collect();
+    assert_eq!(archived.iter().map(String::as_str).collect::<Vec<_>>(), ["good-b"]);
+
+    let error = store.get_session("corrupt").await.unwrap_err().to_string();
+    assert!(error.contains(corrupt_path.to_str().unwrap()), "{error}");
+    assert!(store.read_metadata_fresh("corrupt").is_err());
+
+    let mut raw: Vec<(String, String)> = store
+      .raw_metadata_scan()
+      .unwrap()
+      .into_iter()
+      .map(|row| (row.session_id, row.value["name"].as_str().unwrap().to_string()))
+      .collect();
+    raw.sort();
+    assert_eq!(raw, [("good-a".to_string(), "good-a".to_string()), ("good-b".to_string(), "good-b".to_string())]);
+  }
+
+  /// `test_sessions_batch_metadata_read.py::test_metadata_without_profile_names_the_file_and_conversion_tool`:
+  /// a single-session read of a profile-less metadata file fails loudly, naming the file and the
+  /// conversion tool.
+  #[tokio::test]
+  async fn a_metadata_file_without_a_profile_fails_loudly_naming_the_file_and_the_conversion_tool() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let path = store.metadata_path("missing-profile");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, r#"{"id": "missing-profile", "name": "old session", "schema_version": 1}"#).unwrap();
+    let error = store.get_session("missing-profile").await.unwrap_err().to_string();
+    assert!(error.contains(path.to_str().unwrap()), "{error}");
+    assert!(error.contains("scripts/v1_session_conversion.py"), "{error}");
+  }
+
+  /// `test_archived_pagination.py::test_keyset_pages_walk_newest_first`.
+  #[test]
+  fn archived_keyset_pages_walk_newest_first() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let ids: Vec<String> = (0..5)
+      .map(|index| {
+        let id = format!("s{index}");
+        write_metadata(&store, &id, SessionStatus::Archived, &format!("2026-08-01T12:{:02}:00Z", index), None);
+        id
+      })
+      .collect();
+
+    let first = store.list_archived_page(None, 2, None, None).unwrap();
+    assert_eq!(first.sessions.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), [&ids[4], &ids[3]]);
+    assert!(first.has_more);
+    assert_eq!(first.next_before.as_deref(), Some("2026-08-01T12:03:00+00:00"));
+    assert_eq!(first.next_before_id.as_deref(), Some(ids[3].as_str()));
+
+    let second =
+      store.list_archived_page(None, 2, first.next_before.as_deref(), first.next_before_id.as_deref()).unwrap();
+    assert_eq!(second.sessions.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), [&ids[2], &ids[1]]);
+    assert!(second.has_more);
+
+    let third =
+      store.list_archived_page(None, 2, second.next_before.as_deref(), second.next_before_id.as_deref()).unwrap();
+    assert_eq!(third.sessions.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), [&ids[0]]);
+    assert!(!third.has_more);
+    assert_eq!(third.next_before, None);
+    assert_eq!(third.next_before_id, None);
+  }
+
+  /// `test_archived_pagination.py::test_bad_cursor_fails_loudly`.
+  #[test]
+  fn archived_page_cursor_fails_loudly() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "s0", SessionStatus::Archived, "2026-08-01T12:00:00Z", None);
+    assert!(store.list_archived_page(None, 2, Some("not-a-timestamp"), Some("x")).is_err());
+    assert!(store.list_archived_page(None, 2, Some("2026-08-01T12:00:00"), Some("x")).is_err());
+    let error = store
+      .list_archived_page(None, 2, Some("2026-08-01T12:00:00+00:00"), None)
+      .expect_err("half a cursor must refuse");
+    assert!(error.to_string().contains("both or neither"), "{error}");
+  }
+
+  /// `test_sessions_status_scope.py::test_status_returns_exactly_the_requested_ids`, at the store
+  /// level: each status listing returns exactly that status's sessions.
+  #[test]
+  fn status_listings_return_exactly_the_requested_status() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "live-a", SessionStatus::Active, "2025-02-04T00:00:00Z", None);
+    write_metadata(&store, "live-b", SessionStatus::Active, "2025-02-05T00:00:00Z", Some("Alpha"));
+    write_metadata(&store, "archived-a", SessionStatus::Archived, "2025-02-01T00:00:00Z", None);
+    write_metadata(&store, "archived-b", SessionStatus::Archived, "2025-02-02T00:00:00Z", Some("Beta"));
+
+    let mut active: Vec<String> =
+      store.load_session_metas(Some(SessionStatus::Active)).unwrap().into_iter().map(|meta| meta.id).collect();
+    active.sort();
+    assert_eq!(active.iter().map(String::as_str).collect::<Vec<_>>(), ["live-a", "live-b"]);
+    let mut archived: Vec<String> =
+      store.load_session_metas(Some(SessionStatus::Archived)).unwrap().into_iter().map(|meta| meta.id).collect();
+    archived.sort();
+    assert_eq!(archived.iter().map(String::as_str).collect::<Vec<_>>(), ["archived-a", "archived-b"]);
+    assert_eq!(store.list_group_names().unwrap(), ["Alpha", "Beta"]);
+  }
 }

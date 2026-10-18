@@ -50,7 +50,7 @@ const OPS: &[&str] = &[
 #[tokio::test]
 async fn python_and_rust_store_operations_write_identical_files_and_read_each_others_output() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare", root.path());
+  run_python_helper("prepare", root.path(), &[]);
   let fixed = UtcDateTime::parse(FIXED_TIME).unwrap();
 
   for operation in OPS {
@@ -171,7 +171,7 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
         .unwrap();
     }
   }
-  run_python_helper("verify", root.path());
+  run_python_helper("verify", root.path(), &[]);
 }
 
 #[tokio::test]
@@ -263,8 +263,8 @@ fn listing_filters_status_and_builds_stable_archived_pages() {
 #[tokio::test]
 async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
-  run_python_helper("prepare_runs", root.path());
-  run_python_helper("apply_runs", root.path());
+  run_python_helper("prepare_runs", root.path(), &[]);
+  run_python_helper("apply_runs", root.path(), &[]);
   let fixed = UtcDateTime::parse(FIXED_TIME).unwrap();
 
   for operation in RUN_OPS.iter().copied() {
@@ -388,7 +388,7 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
     assert_eq!(store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap().id, run_id);
   }
 
-  run_python_helper("verify_runs", root.path());
+  run_python_helper("verify_runs", root.path(), &[]);
 }
 
 #[tokio::test]
@@ -789,11 +789,12 @@ impl SequenceListingFields for TestSequenceListing {
   }
 }
 
-fn run_python_helper(mode: &str, root: &Path) {
+fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {
   let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf();
   let helper = "rust/crates/charliebot-store/tests/python_store_ops.py";
   let output = Command::new("uv")
     .args(["run", "python", helper, mode, &root.to_string_lossy()])
+    .args(extra)
     .current_dir(repo_root)
     .output()
     .unwrap();
@@ -897,4 +898,142 @@ fn normalize_facts(path: &Path) -> Vec<String> {
       normalized
     })
     .collect()
+}
+
+fn write_session_metadata(home: &Path, session_id: &str, archive_offset: i64) {
+  let mut meta = SessionMetadata::new(session_id, "seed", charliebot_store::metadata::TaskProfile::Manager);
+  meta.archive_offset = archive_offset;
+  let path = home.join("sessions").join(session_id).join("metadata.json");
+  fs::create_dir_all(path.parent().unwrap()).unwrap();
+  fs::write(path, meta.to_json_string(&slots(), true)).unwrap();
+}
+
+/// Run one read-parity case: the Rust test builds one fixture home, copies it for Python and Rust,
+/// asks the Python helper for its answer, and compares the store's results against it.
+fn parity_case_dir(root: &Path, case: &str) -> PathBuf {
+  let case_dir = root.join(case);
+  fs::create_dir_all(&case_dir).unwrap();
+  case_dir
+}
+
+#[tokio::test]
+async fn range_read_matches_python_when_archive_offset_is_positive_and_lines_are_blank_or_malformed() {
+  let root = tempfile::tempdir().unwrap();
+  let case_dir = parity_case_dir(root.path(), "range_read");
+  let base = case_dir.join("base-home");
+  let session_dir = base.join("sessions").join(SESSION_ID);
+  let archive_dir = session_dir.join("data").join("archives");
+  fs::create_dir_all(&archive_dir).unwrap();
+  let mut archive_body = String::new();
+  for index in 0..6 {
+    archive_body.push_str(&format!("{{\"id\": \"old-{index}\", \"timestamp\": \"2025-02-01T00:00:00+00:00\"}}\n"));
+  }
+  fs::write(archive_dir.join("chat_events.2025-W06.jsonl"), archive_body).unwrap();
+  fs::write(
+    session_dir.join("data").join("chat_events.jsonl"),
+    b"{\"id\": \"a0\"}\n\n{bad json\n{\"id\": \"a1\"}\r\n{\"id\": \"a2\"}\n{\"id\": \"a3\"}",
+  )
+  .unwrap();
+  write_session_metadata(&base, SESSION_ID, 6);
+
+  copy_tree(&base, &case_dir.join("python-home"));
+  copy_tree(&base, &case_dir.join("rust-home"));
+  run_python_helper("parity:range_read", &case_dir, &[SESSION_ID]);
+  let expected: Vec<Value> =
+    serde_json::from_str(&fs::read_to_string(case_dir.join("expected.json")).unwrap()).unwrap();
+
+  let store = make_store(&case_dir.join("rust-home"));
+  for window in &expected {
+    let (events, has_more) = store
+      .load_chat_events_range(
+        SESSION_ID,
+        window["start"].as_u64().unwrap() as usize,
+        window["end"].as_u64().unwrap() as usize,
+      )
+      .unwrap();
+    assert_eq!(has_more, window["has_more"].as_bool().unwrap(), "window {window}");
+    assert_eq!(serde_json::to_value(&events).unwrap(), window["events"], "window {window}");
+  }
+}
+
+#[tokio::test]
+async fn listing_and_raw_scan_skip_a_malformed_metadata_file_like_python() {
+  let root = tempfile::tempdir().unwrap();
+  let case_dir = parity_case_dir(root.path(), "listing_raw_scan");
+  let base = case_dir.join("base-home");
+  for (id, status, updated_at) in
+    [("good-a", "active", "2025-02-01T00:00:00Z"), ("good-b", "archived", "2025-02-02T00:00:00Z")]
+  {
+    let mut meta = SessionMetadata::new(id, id, charliebot_store::metadata::TaskProfile::Manager);
+    meta.status = if status == "archived" {
+      charliebot_store::metadata::SessionStatus::Archived
+    } else {
+      charliebot_store::metadata::SessionStatus::Active
+    };
+    meta.updated_at = UtcDateTime::parse(updated_at).unwrap();
+    let path = base.join("sessions").join(id).join("metadata.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, meta.to_json_string(&slots(), true)).unwrap();
+  }
+  let corrupt = base.join("sessions").join("corrupt").join("metadata.json");
+  fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+  fs::write(&corrupt, "{corrupt").unwrap();
+  let empty = base.join("sessions").join("empty").join("metadata.json");
+  fs::create_dir_all(empty.parent().unwrap()).unwrap();
+  fs::write(&empty, "   ").unwrap();
+
+  copy_tree(&base, &case_dir.join("python-home"));
+  copy_tree(&base, &case_dir.join("rust-home"));
+  run_python_helper("parity:listing_raw_scan", &case_dir, &[SESSION_ID]);
+  let expected: Value = serde_json::from_str(&fs::read_to_string(case_dir.join("expected.json")).unwrap()).unwrap();
+
+  let store = make_store(&case_dir.join("rust-home"));
+  let mut listed_ids: Vec<String> = store.load_session_metas(None).unwrap().into_iter().map(|meta| meta.id).collect();
+  listed_ids.sort();
+  let mut python_ids: Vec<&str> = expected["listed"].as_object().unwrap().keys().map(String::as_str).collect();
+  python_ids.sort();
+  assert_eq!(listed_ids.iter().map(String::as_str).collect::<Vec<_>>(), python_ids);
+  for meta in store.load_session_metas(None).unwrap() {
+    assert_eq!(expected["listed"][meta.id.as_str()]["name"], meta.name.as_str());
+    assert_eq!(expected["listed"][meta.id.as_str()]["status"], serde_json::to_value(meta.status).unwrap());
+  }
+
+  let mut raw = serde_json::Map::new();
+  for row in store.raw_metadata_scan().unwrap() {
+    raw.insert(row.session_id, row.value["name"].clone());
+  }
+  assert_eq!(Value::Object(raw), expected["raw"]);
+}
+
+#[tokio::test]
+async fn load_all_facts_matches_python_fact_history_over_a_stale_archive_file() {
+  let root = tempfile::tempdir().unwrap();
+  let case_dir = parity_case_dir(root.path(), "facts");
+  let base = case_dir.join("base-home");
+  let session_dir = base.join("sessions").join(SESSION_ID);
+  let archive_dir = session_dir.join("data").join("archives");
+  fs::create_dir_all(&archive_dir).unwrap();
+  // One stale row beyond the archive offset: the offset says 2 archived rows, the archive file
+  // holds 4, and the count composition reads only through the offset.
+  let mut archive_body = String::new();
+  for index in 0..4 {
+    archive_body.push_str(&format!("{{\"id\": \"archived-{index}\"}}\n"));
+  }
+  fs::write(archive_dir.join("chat_events.2025-W06.jsonl"), archive_body).unwrap();
+  fs::write(
+    session_dir.join("data").join("chat_events.jsonl"),
+    b"{\"id\": \"live-0\"}\n{\"id\": \"live-1\"}\n{\"id\": \"live-2\"}\n",
+  )
+  .unwrap();
+  write_session_metadata(&base, SESSION_ID, 2);
+
+  copy_tree(&base, &case_dir.join("python-home"));
+  copy_tree(&base, &case_dir.join("rust-home"));
+  run_python_helper("parity:facts", &case_dir, &[SESSION_ID]);
+  let expected: Vec<Value> =
+    serde_json::from_str(&fs::read_to_string(case_dir.join("expected.json")).unwrap()).unwrap();
+
+  let store = make_store(&case_dir.join("rust-home"));
+  let facts = store.load_all_facts(SESSION_ID).unwrap();
+  assert_eq!(serde_json::to_value(&facts).unwrap(), Value::Array(expected));
 }

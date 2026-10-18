@@ -999,7 +999,8 @@ def main() -> None:
   with tempfile.TemporaryDirectory(prefix="aggregator-fixture-") as temp_dir:
     temp_root = pathlib.Path(temp_dir)
     tree = make_tree("aggregator", temp_root / "tree")
-    write_home_config(tree, pick_ports(1)[0])
+    with pick_ports(1) as ports:
+      write_home_config(tree, ports[0])
     run_traced(
         [sys.executable,
          str(PARITY_DIR / "fixture.py"), "--manifest",

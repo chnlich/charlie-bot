@@ -685,6 +685,7 @@ def _link_voice_models(sides: list[Side], model_dir: pathlib.Path) -> None:
 def _run_scenario(
     scenario: scenario_file.Scenario,
     work_dir: pathlib.Path,
+    ports: list[int],
     candidate_first_argv: list[str],
     candidate_handover_argv: list[str],
     direction: str | None,
@@ -695,7 +696,6 @@ def _run_scenario(
 ) -> list[StepResult]:
   log_dir = work_dir / "logs"
   log_dir.mkdir(parents=True)
-  ports = servers.pick_ports(2)
   python_argv = [str(PYTHON), "server.py"]
   sides = []
   for label, port in (("baseline", ports[0]), ("candidate", ports[1])):
@@ -861,9 +861,11 @@ def main() -> int:
         emit([heading])
         suffix = f"-{direction}" if direction is not None else ""
         scenario_dir = scratch / f"{index:02d}-{scenario.name}-{run_number:02d}{suffix}"
-        scenario_results = _run_scenario(
-            scenario, scenario_dir, candidate_first, candidate_handover, direction, args.tamper, guard_report,
-            certificates, voice_model_dir)
+        # The ports stay reserved until both servers of this run have stopped.
+        with servers.pick_ports(2) as ports:
+          scenario_results = _run_scenario(
+              scenario, scenario_dir, ports, candidate_first, candidate_handover, direction, args.tamper, guard_report,
+              certificates, voice_model_dir)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

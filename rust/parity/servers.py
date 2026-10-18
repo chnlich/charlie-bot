@@ -10,8 +10,10 @@ writes outside each tree.
 
 import contextlib
 import dataclasses
+import fcntl
 import os
 import pathlib
+import random
 import shlex
 import signal
 import socket
@@ -20,12 +22,15 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 
 import yaml
 
 # The fixed synthetic access key both servers accept. It guards nothing but the two temporary servers.
 ACCESS_KEY = "parity-access-key-7c1e4b"
 PORT_RANGE = range(18600, 18700)
+# One lock file per port in PORT_RANGE; a run holds a port's flock while its server uses the port.
+PORT_LOCK_DIR = pathlib.Path("/tmp/charliebot-parity-ports")
 HOST = "127.0.0.1"
 # The agent CLI names a server could launch. Each stand-in prints one line and exits 1.
 STAND_IN_NAMES = ("claude", "codex", "opencode", "charlie-code", "gemini", "agy")
@@ -176,19 +181,60 @@ def server_env(
   return environment
 
 
-def pick_ports(count: int) -> list[int]:
-  """Pick *count* distinct ports in PORT_RANGE that accept a bind right now."""
+@contextlib.contextmanager
+def pick_ports(count: int) -> Iterator[list[int]]:
+  """Reserve *count* ports of PORT_RANGE for the with block and yield them.
+
+  A reserved port stays locked until the block exits, so a concurrent run skips it. The scan starts at a random
+  offset, so concurrent runs try different ports first. A port whose lock is held, or that does not bind, is skipped.
+  """
+  PORT_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+  start = random.randrange(len(PORT_RANGE))
   ports: list[int] = []
-  for port in PORT_RANGE:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-      try:
-        probe.bind((HOST, port))
-      except OSError:
+  descriptors: list[int] = []
+  try:
+    for offset in range(len(PORT_RANGE)):
+      if len(ports) == count:
+        break
+      port = PORT_RANGE[(start + offset) % len(PORT_RANGE)]
+      descriptor = _lock_port(port)
+      if descriptor is None:
         continue
-    ports.append(port)
-    if len(ports) == count:
-      return ports
-  raise RuntimeError(f"fewer than {count} free ports in {PORT_RANGE.start}-{PORT_RANGE.stop - 1}")
+      if not _port_binds(port):
+        os.close(descriptor)
+        continue
+      ports.append(port)
+      descriptors.append(descriptor)
+    if len(ports) < count:
+      raise RuntimeError(f"fewer than {count} free ports in {PORT_RANGE.start}-{PORT_RANGE.stop - 1}")
+    yield ports
+  finally:
+    for descriptor in descriptors:
+      os.close(descriptor)
+
+
+def _lock_port(port: int) -> int | None:
+  """The open descriptor holding the port's exclusive flock, or None while another run holds it.
+
+  The lock file is never deleted: a run that unlinked it could leave another run holding a lock on the old inode
+  while a third run locks a new file for the same port.
+  """
+  descriptor = os.open(PORT_LOCK_DIR / f"{port}.lock", os.O_RDWR | os.O_CREAT, 0o644)
+  try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+  except BlockingIOError:
+    os.close(descriptor)
+    return None
+  return descriptor
+
+
+def _port_binds(port: int) -> bool:
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    try:
+      probe.bind((HOST, port))
+    except OSError:
+      return False
+  return True
 
 
 SANDBOX = pathlib.Path(__file__).resolve().parent / "sandbox.py"

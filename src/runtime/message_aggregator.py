@@ -142,9 +142,9 @@ def extract_tool_result_text(block: dict) -> str:
 # Run-level readers over one Run's already-parsed events.
 #
 # The worker-transcript extension reads these in src/runtime/worker_transcript.py
-# (a Run's summary rows, its cause); the conditions are the aggregator's own
-# ingestion conditions restated over the same event dicts, so the counts and
-# rows a page renders match what these helpers report.
+# (a Run's summary rows, its cause). The tool test is the one ``_feed`` ingests
+# by (is_tool_call), so the counts and rows a page renders match what these
+# helpers report.
 # ---------------------------------------------------------------------------
 
 
@@ -153,29 +153,34 @@ def _run_text_blocks(msg: dict | None) -> list[dict]:
   return blocks if isinstance(blocks, list) else []
 
 
-def _assistant_tool_uses(ev: dict) -> list[dict]:
-  return [
-      block for block in _run_text_blocks(ev.get("message"))
-      if isinstance(block, dict) and block.get("type") == "tool_use"
-  ]
+def is_tool_call(item: dict) -> bool:
+  """Whether an assistant content block or a standalone event opens a tool row.
+
+  A ``tool_use`` block and a standalone ``tool_use`` event (the codex/gemini
+  flat form) share one shape, so one test serves both. ExitPlanMode renders
+  as a plan, never a tool row.
+  """
+  return isinstance(item, dict) and item.get("type") == ET.TOOL_USE and item.get("name") != "ExitPlanMode"
+
+
+def _assistant_tool_calls(ev: dict) -> list[dict]:
+  return [block for block in _run_text_blocks(ev.get("message")) if is_tool_call(block)]
 
 
 def run_tool_call_count(events: list[dict]) -> int:
   """How many tool rows the aggregator buffers for these Run events.
 
-  The count walks the two places ``_feed`` opens a tool slot from: a rendered
-  assistant event's ``tool_use`` blocks (each except ExitPlanMode, which never
-  becomes a tool row) and each standalone ``tool_use`` event. everything else
-  (tool_result user events attach output, thinking/text carried content) opens
-  no row, so the count is exactly the tool-call rows a page can show for the
-  Run.
+  ``_feed`` opens a tool slot for each :func:`is_tool_call` block of an
+  assistant event and for each :func:`is_tool_call` standalone event; nothing
+  else opens one (tool_result user events attach output, thinking and text
+  carry content), so the count is exactly the tool-call rows a page can show
+  for the Run.
   """
   count = 0
   for ev in events:
-    event_type = ev.get("type")
-    if event_type == ET.ASSISTANT:
-      count += sum(1 for block in _assistant_tool_uses(ev) if block.get("name") != "ExitPlanMode")
-    elif event_type == ET.TOOL_USE:
+    if ev.get("type") == ET.ASSISTANT:
+      count += len(_assistant_tool_calls(ev))
+    elif is_tool_call(ev):
       count += 1
   return count
 
@@ -183,19 +188,21 @@ def run_tool_call_count(events: list[dict]) -> int:
 def run_last_tool(events: list[dict]) -> dict | None:
   """The Run's newest tool row: {name, input, timestamp}, or None.
 
-  Same sources as :func:`run_tool_call_count` (assistant tool_use blocks,
-  standalone tool_use events), walked newest first; the timestamp is the
-  event's own.
+  Same sources as :func:`run_tool_call_count`, walked newest first; the
+  timestamp is the event's own.
   """
   for ev in reversed(events):
     if ev.get("type") == ET.ASSISTANT:
-      blocks = [block for block in _assistant_tool_uses(ev) if block.get("name") != "ExitPlanMode"]
-      if blocks:
-        tool = tool_preview({"name": blocks[-1].get("name", ""), "input": blocks[-1].get("input")})
-        return {"name": tool.get("name", ""), "input": tool.get("input"), "timestamp": ev.get("timestamp")}
-    elif ev.get("type") == ET.TOOL_USE:
-      tool = tool_preview({"name": ev.get("name", ""), "input": ev.get("input")})
-      return {"name": tool.get("name", ""), "input": tool.get("input"), "timestamp": ev.get("timestamp")}
+      calls = _assistant_tool_calls(ev)
+      if not calls:
+        continue
+      call = calls[-1]
+    elif is_tool_call(ev):
+      call = ev
+    else:
+      continue
+    tool = tool_preview({"name": call.get("name", ""), "input": call.get("input")})
+    return {"name": tool.get("name", ""), "input": tool.get("input"), "timestamp": ev.get("timestamp")}
   return None
 
 
@@ -214,25 +221,34 @@ def run_last_assistant_text(events: list[dict]) -> dict | None:
   return None
 
 
-def run_last_text(events: list[dict]) -> dict | None:
-  """Newest non-empty result-or-assistant text, whichever kind is newer.
+# The event types :func:`closing_text` can settle on; a log walk parses only
+# these lines.
+CLOSING_TEXT_TYPES = frozenset({ET.RESULT, ET.ASSISTANT})
 
-  Matches review._worker_summary_from_events_log over these already-parsed
-  events: {text, timestamp}, or None.
+
+def closing_text(ev: dict) -> str | None:
+  """The worker's closing words one event carries, or None.
+
+  A result event speaks through its non-empty ``result`` string, an assistant
+  event through its non-empty text. A walk from the newest event that stops
+  at the first answer reads a Run's closing words, whichever kind is newer.
   """
+  event_type = ev.get("type")
+  if event_type == ET.RESULT:
+    val = ev.get("result")
+    return (val.strip() or None) if isinstance(val, str) else None
+  if event_type == ET.ASSISTANT:
+    return _assistant_event_text(ev) or None
+  return None
+
+
+def run_last_text(events: list[dict]) -> dict | None:
+  """The Run's closing words (:func:`closing_text`) with their event
+  timestamp, or None."""
   for ev in reversed(events):
-    event_type = ev.get("type")
-    if event_type == ET.RESULT:
-      val = ev.get("result")
-      if isinstance(val, str):
-        stripped = val.strip()
-        if stripped:
-          return {"text": stripped, "timestamp": ev.get("timestamp")}
-      continue
-    if event_type == ET.ASSISTANT:
-      text = _assistant_event_text(ev)
-      if text:
-        return {"text": text, "timestamp": ev.get("timestamp")}
+    text = closing_text(ev)
+    if text is not None:
+      return {"text": text, "timestamp": ev.get("timestamp")}
   return None
 
 
@@ -845,7 +861,7 @@ class MessageAggregator:
             yield {"type": "message", "message": plan_msg}
 
       for b in blocks:
-        if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
+        if is_tool_call(b):
           self._buffer_tool(b.get('name', ''), b.get('input', {}))
 
       thinking_snapshot = extract_thinking_from_message(msg)
@@ -863,7 +879,7 @@ class MessageAggregator:
       yield from self._stream_delta()
       return
 
-    if t == ET.TOOL_USE:
+    if is_tool_call(ev):
       self._buffer_tool(ev.get('name', ''), ev.get('input', {}))
       self._last_event_idx = idx
       self._last_event_id = ev_id

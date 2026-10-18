@@ -661,15 +661,16 @@ impl Store {
     let events = self.load_all_facts(session_id)?;
     let mut run = require_run(self, session_id, run_id)?;
     if let Some(existing) = first_finish_event(&events, run_id) {
+      // The first fact and its payload never move. An empty `ended_at` is the half-written end record: the caller's
+      // `ended_at` and `exit_code` fill it, and values already written stay.
       let input_event_ids = event_input_ids(existing);
       let mut changed = run.input_event_ids != input_event_ids;
       run.input_event_ids = input_event_ids;
       if run.ended_at.is_none() {
         run.ended_at = Some(outcome.ended_at.unwrap_or_else(UtcDateTime::now));
-        changed = true;
-      }
-      if run.exit_code.is_none() && outcome.exit_code.is_some() {
-        run.exit_code = outcome.exit_code;
+        if outcome.exit_code.is_some() {
+          run.exit_code = outcome.exit_code;
+        }
         changed = true;
       }
       if changed {

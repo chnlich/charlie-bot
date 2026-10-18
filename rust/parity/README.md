@@ -285,8 +285,10 @@ The harness waits for each declared Slack fake to send `hello` and each Discord 
 and send READY before the first step. Gemini and Muse become ready with their fake set. The proxy records HTTP
 requests, WebSocket handshakes and client text or binary messages. HTTP requests compare as a multiset within a
 step because listener and boot-backfill requests interleave; WebSocket messages compare in order within each
-connection. Discord op 1 heartbeats are excluded because the client's first beat includes an unseeded random
-delay. Refused proxy hosts are written to each tree's `logs/fakes.jsonl` and listed in the report, outside step
+connection. Each recorded HTTP request and WebSocket handshake keeps only the headers that its fake's feature
+code sets explicitly (`normalize.EXPLICIT_REQUEST_HEADERS`), so library defaults such as the `python-httpx` or
+`websockets` user agent do not count as behavior. Discord op 1 heartbeats are excluded because the client's
+first beat includes an unseeded random delay. Refused proxy hosts are written to each tree's `logs/fakes.jsonl` and listed in the report, outside step
 comparison.
 
 `features-harness-trace-merge` sends two synthetic traces through `/perfetto/merged`. Python's spawned process
@@ -345,8 +347,10 @@ field one side omits still shows as a difference:
   `Last-Modified` come from a cache artifact created at each server's wall-clock time; their body bytes still
   compare. `MERGED_TRACE_CACHE_PATH_RULE` masks the SHA-256 key derived from each tree's absolute trace paths and
   file times, while the cache artifact bytes still compare.
-- `IGNORED_REQUEST_HEADERS` names generated request-framing headers the fake recorder leaves out, each with its
-  reason. Explicit feature headers, including authorization and Discord's user-agent, remain compared.
+- `EXPLICIT_REQUEST_HEADERS` lists the headers each fake's feature code sets on its REST requests (Slack and
+  Discord `authorization`, Discord `user-agent`); WebSocket handshakes compare no header. The fake recorder
+  keeps every header in `logs/fakes.jsonl`. `IGNORED_REQUEST_HEADERS` names each other header that comes from
+  a library or the transport, with its reason. A header that is neither listed fails the comparison.
 - the voice archive stem rule masks `YYYY-MM-DDTHHMMSS.mmmZ_<8 hex>` in paths because the write clock and uuid4
   draw are independent on each side;
 - the named Discord heartbeat rule omits only op 1 messages the gateway client sends, because its first interval

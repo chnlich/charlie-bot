@@ -319,9 +319,20 @@ RESPONSE_HEADER_RULES: tuple[ResponseHeaderRule, ...] = (
     ),
 )
 
+# The headers each fake's feature code sets explicitly on its REST requests. No feature client sets a header on a
+# WebSocket connect, so WebSocket handshakes compare none.
+EXPLICIT_REQUEST_HEADERS: dict[str, tuple[str, ...]] = {
+    "slack": ("authorization",),
+    "discord": ("authorization", "user-agent"),
+    "gemini": (),
+    "muse": (),
+}
+
 IGNORED_REQUEST_HEADERS: dict[str, str] = {
     "host": "transport routing: CONNECT already chooses the fake host; it carries no request behavior",
     "accept": "HTTP client default: the feature request does not set this header",
+    "content-type": "httpx sets it from a json= body; the parsed JSON body is compared structurally",
+    "user-agent": "library default on Slack REST calls and on every WebSocket handshake; only Discord REST sets it",
     "accept-encoding": "HTTP client default: automatic response decoding is outside the feature request",
     "content-length": "framing: the parsed request body is compared structurally",
     "connection": "framing: HTTP connection reuse is independent of the feature request",
@@ -333,6 +344,7 @@ IGNORED_REQUEST_HEADERS: dict[str, str] = {
     "sec-websocket-version": "WebSocket protocol version: fixed negotiation metadata",
     "sec-websocket-extensions": "WebSocket extension negotiation: library-generated framing metadata",
 }
+
 
 @dataclasses.dataclass(frozen=True)
 class IgnoredMessageRule:
@@ -352,8 +364,7 @@ IGNORED_MESSAGE_RULES: tuple[IgnoredMessageRule, ...] = (
         "op",
         1,
         "Discord op 1 heartbeat timing includes an unseeded random first interval",
-    ),
-)
+    ),)
 
 
 def ignored_fake_message(record: dict) -> bool:
@@ -529,11 +540,18 @@ def normalize_headers(headers: list[tuple[str, str]], ctx: Context, route: str) 
   return compared
 
 
-def request_headers(headers: list[tuple[str, str]]) -> dict[str, list[str]]:
-  """The explicit feature request headers; generated transport headers are named in IGNORED_HEADERS."""
+def request_headers(
+    fake: str,
+    headers: dict[str, list[str]],
+    ctx: Context,
+    websocket: bool,
+) -> dict[str, list[str]]:
+  """The headers the feature code sets explicitly; every other header must be named in IGNORED_REQUEST_HEADERS."""
+  explicit = () if websocket else EXPLICIT_REQUEST_HEADERS[fake]
   compared: dict[str, list[str]] = {}
-  for name, value in headers:
-    lowered = name.lower()
-    if lowered not in IGNORED_REQUEST_HEADERS:
-      compared.setdefault(lowered, []).append(value)
+  for name, values in headers.items():
+    if name in explicit:
+      compared[name] = [normalize_text(value, ctx) for value in values]
+    elif name not in IGNORED_REQUEST_HEADERS:
+      raise ValueError(f"{fake} request header {name!r} is neither set explicitly nor named in IGNORED_REQUEST_HEADERS")
   return compared

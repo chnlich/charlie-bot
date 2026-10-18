@@ -303,10 +303,8 @@ def _record_value(value: Any, ctx: normalize.Context) -> Any:
 def _normalized_record(record: dict, route: str, ctx: normalize.Context) -> dict:
   clean = {key: value for key, value in record.items() if key != "_index"}
   if "headers" in clean:
-    clean["headers"] = {
-        name: [normalize.normalize_text(value, ctx) for value in values]
-        for name, values in clean["headers"].items()
-    }
+    clean["headers"] = normalize.request_headers(
+        clean["fake"], clean["headers"], ctx, websocket=clean["kind"] == "ws_handshake")
   if "message" in clean and isinstance(clean["message"], dict):
     clean["message"] = normalize.normalize_json(clean["message"], normalize.ws_frame_rules(route), ctx)
   return _record_value(clean, ctx)
@@ -320,6 +318,7 @@ def recording_diff(
     right_ctx: normalize.Context,
 ) -> list[str]:
   """Compare fake HTTP requests as a multiset and each WebSocket connection's traffic in order."""
+
   def compared(records: list[dict], ctx: normalize.Context) -> tuple[list[dict], dict[tuple[str, str], list[dict]]]:
     http_records = []
     websocket: dict[tuple[str, str], list[dict]] = {}

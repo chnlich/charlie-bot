@@ -419,15 +419,11 @@ impl Store {
     };
     let mut paths = Vec::new();
     for entry in entries {
-      let entry = match entry {
-        Ok(entry) => entry,
-        Err(error) => {
-          tracing::debug!(path = %dir.display(), error = %error, "archive_dir_scan_failed");
-          return Ok(Vec::new());
-        }
-      };
+      let entry = entry.map_err(|error| StoreError::new(format!("{}: {error}", dir.display())))?;
       let name = entry.file_name();
-      if name.to_string_lossy().starts_with("chat_events.") && name.to_string_lossy().ends_with(".jsonl") {
+      // The archive glob `chat_events.*.jsonl`: a bare `chat_events.jsonl` is not an archive.
+      let name = name.to_string_lossy();
+      if name.strip_prefix("chat_events.").and_then(|rest| rest.strip_suffix(".jsonl")).is_some() {
         paths.push(entry.path());
       }
     }

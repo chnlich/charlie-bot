@@ -630,8 +630,7 @@ fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
 }
 
 /// A JSON number as the value Python binds for it: an integer within the signed 64-bit range, else a real.
-/// serde_json reads an integer literal past u64 as an f64, so such a literal lands here as a real. Python keeps it an
-/// int, which fails the bind when the count is stored unchanged.
+/// serde_json reads an integer literal past u64 as an f64, matching orjson's float for the same literal.
 fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
   if let Some(integer) = number.as_i64() {
     return Ok(Count::Int(integer));

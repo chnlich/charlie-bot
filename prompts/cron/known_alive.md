@@ -539,3 +539,19 @@ Known-alive symbols:
   (`f"{__name__}:{name}"`), and the registry imports the class from that string on the first
   metadata_slots call, same class as the `PoolNodeMetadata` entry above. Vulture flags each class
   as unused at 60% confidence.
+- `CronSequenceController` (`src/features/cron/sequence_controller.py`) and
+  `ImproveSequenceController` (`src/features/improve/sequence_controller.py`) — reached by
+  string: each package's `register()` passes `"src.features.<package>.sequence_controller:<class>"`
+  to `sequence_controllers.register_sequence_controller`, and the registry imports and instantiates
+  the class from that string on first use. Tests import both classes directly, so only a reference
+  scan that excludes `tests/` flags them; vulture reads each as an unused class at 60% confidence.
+  Same string-registration class as the `AccountsConfig` entry above.
+- `SlackConfig` (`src/features/slack/config.py`), `VoiceConfig`
+  (`src/features/voice/config.py`), `CodeServerConfig` (`src/features/code_server/config.py`) and
+  `DiscordConfig` (`src/features/discord/config.py`) — reached by string: each package's
+  `register()` passes `"src.features.<package>.config:<class>"` to
+  `config_registry.register_config_section`, and the registry imports the class from that string on
+  the first `section_models()` call. The names have no whole-repo matches outside their definitions
+  and those registration strings, so vulture flags each as an unused class at 60% confidence. Same
+  string-registration class as the `AccountsConfig` entry above; `DiscordConfig` is the class the
+  `_reject_legacy_allow_list` entry's validator lives on.

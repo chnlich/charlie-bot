@@ -147,6 +147,11 @@ pub trait AgentBackend: Send {
   fn stdin_prompt(&self, prompt: &str) -> Option<String>;
   fn translator(&self) -> Box<dyn Translate>;
   fn transport(&self) -> TransportKind;
+  /// Checks the run's uploaded files before any process starts (`base.py` `run` ignores them). `Err` ends the run
+  /// with exactly one error event and no process.
+  fn accept_uploads(&mut self, _uploaded_files: &[Value]) -> Result<(), String> {
+    Ok(())
+  }
   /// The CLI-native one-shot, tool-less, or `None` when the backend has none. The dispatcher
   /// `charliebot_agents::one_shot_text` runs the tool-capable one-shot for `None`.
   fn one_shot_text<'a>(

@@ -539,9 +539,6 @@ impl RunProcess for TurnProcess<'_> {
         .filter(|(key, _)| key.as_str() != "extra_flags")
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-      if let Some(uploaded_files) = &self.item.uploaded_files {
-        launch_args.backend_kwargs.insert("uploaded_files".to_string(), json!(uploaded_files));
-      }
       let built =
         backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
       let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
@@ -574,6 +571,7 @@ impl RunProcess for TurnProcess<'_> {
         Arc::clone(&self.features.registry),
       );
       request.environment_overlay = self.env.clone();
+      request.uploaded_files = self.item.uploaded_files.clone().unwrap_or_default();
       request.session_id = Some(task_session_id);
       request.memory_max_mb =
         u64::try_from(self.item.cfg.server.session_memory_max_mb).context("negative session memory limit")?;

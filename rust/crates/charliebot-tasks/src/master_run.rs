@@ -1016,11 +1016,9 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
     }
   } else {
     tracing::warn!(target: "charliebot_tasks", session = %metadata.id, "master_cc_resume_cancelled");
-    error_msg = Some("manager turn cancelled".to_string());
   }
   if *item.cancel.borrow() {
     *cancelled.lock().expect("resume cancellation mutex is not poisoned") = true;
-    error_msg = Some("manager turn cancelled".to_string());
   }
   let finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
   report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;

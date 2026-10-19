@@ -483,7 +483,18 @@ impl Store {
     owner: &str,
     values: Map<String, Value>,
   ) -> StoreResult<Option<SessionMetadata>> {
-    self.update_slot_fields_fresh(session_id, owner, values).await
+    self.update_slot_fields_fresh(session_id, owner, values, None).await
+  }
+
+  /// Change one registered slot's fields and activity timestamp in one fresh metadata write.
+  pub async fn update_slot_fields_at(
+    &self,
+    session_id: &str,
+    owner: &str,
+    values: Map<String, Value>,
+    updated_at: UtcDateTime,
+  ) -> StoreResult<Option<SessionMetadata>> {
+    self.update_slot_fields_fresh(session_id, owner, values, Some(updated_at)).await
   }
 
   /// Change one registered slot's fields under the tree-wide control lock and session lock.
@@ -495,7 +506,7 @@ impl Store {
     values: Map<String, Value>,
   ) -> StoreResult<Option<SessionMetadata>> {
     self.require_control_guard(guard)?;
-    self.update_slot_fields_fresh(session_id, owner, values).await
+    self.update_slot_fields_fresh(session_id, owner, values, None).await
   }
 
   async fn update_slot_fields_fresh(
@@ -503,6 +514,7 @@ impl Store {
     session_id: &str,
     owner: &str,
     values: Map<String, Value>,
+    updated_at: Option<UtcDateTime>,
   ) -> StoreResult<Option<SessionMetadata>> {
     if values.is_empty() {
       return Err(StoreError::new("update_slot_fields requires at least one field"));
@@ -521,6 +533,9 @@ impl Store {
       .mutate_fresh(session_id, false, true, move |meta| {
         for (key, value) in values {
           meta.set_extra(key, value);
+        }
+        if let Some(updated_at) = updated_at {
+          meta.updated_at = updated_at;
         }
         Ok(true)
       })
@@ -1093,6 +1108,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
 
   struct TestAccountLabels;
 
@@ -1179,6 +1195,49 @@ mod tests {
       charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
     let error = Store::new(cfg, Vec::new(), StoreHooks::default()).err().unwrap();
     assert!(error.to_string().contains("account label keeper"));
+  }
+
+  #[tokio::test]
+  async fn slot_fields_at_writes_fields_and_timestamp_together_and_keeps_a_concurrent_field() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
+    let slots = vec![MetadataSlot {
+      owner: "slack",
+      on: MetadataFile::Session,
+      after: None,
+      fields: vec![
+        charliebot_core::metadata_slot::SlotField { name: "slack_origin", default: Value::Null },
+        charliebot_core::metadata_slot::SlotField { name: "slack_watermark_ts", default: Value::Null },
+      ],
+    }];
+    let store = Store::new(cfg, slots.clone(), explicit_test_hooks()).unwrap();
+    let meta = SessionMetadata::new("synthetic-thread", "Synthetic thread", crate::metadata::TaskProfile::Manager);
+    let path = store.metadata_path(&meta.id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, meta.to_json_string(&slots, true)).unwrap();
+
+    let updated_at = UtcDateTime::parse("2026-10-19T12:34:56Z").unwrap();
+    let (watermark_update, origin_update) = tokio::join!(
+      store.update_slot_fields_at(
+        "synthetic-thread",
+        "slack",
+        Map::from_iter([("slack_watermark_ts".to_string(), json!("123.456"))]),
+        updated_at,
+      ),
+      store.update_slot_fields(
+        "synthetic-thread",
+        "slack",
+        Map::from_iter([("slack_origin".to_string(), json!({"channel_id": "C0SYNTHETIC"}))]),
+      ),
+    );
+    watermark_update.unwrap().unwrap();
+    origin_update.unwrap().unwrap();
+
+    let saved = store.read_metadata_fresh("synthetic-thread").unwrap().unwrap();
+    assert_eq!(saved.extra("slack_watermark_ts"), Some(&json!("123.456")));
+    assert_eq!(saved.extra("slack_origin"), Some(&json!({"channel_id": "C0SYNTHETIC"})));
+    assert_eq!(saved.updated_at, updated_at);
   }
 
   #[tokio::test]

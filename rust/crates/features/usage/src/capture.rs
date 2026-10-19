@@ -312,7 +312,7 @@ fn thread_records(
       source: CHARLIE_BOT_SOURCE.to_string(),
       model: model.clone(),
       account: backend.clone(),
-      ts: SqlValue::Text(truthy_string(result, "timestamp")?.unwrap_or_default()),
+      ts: text_value(result, "timestamp")?,
       in_fresh,
       cache_write,
       cache_read,
@@ -453,7 +453,7 @@ fn run_record(
     source: CHARLIE_BOT_SOURCE.to_string(),
     model,
     account: backend.to_string(),
-    ts: SqlValue::Text(truthy_string(metadata, "started_at")?.unwrap_or_default()),
+    ts: text_value(metadata, "started_at")?,
     in_fresh,
     cache_write,
     cache_read,
@@ -647,6 +647,19 @@ fn is_falsy(value: &Value) -> bool {
     Value::String(text) => text.is_empty(),
     Value::Array(items) => items.is_empty(),
     Value::Object(entries) => entries.is_empty(),
+  }
+}
+
+/// The TEXT column's value under `key`, bound as Python binds `value or ""`: a falsy value is "", a string is itself,
+/// and `true` or a number binds as the INTEGER or REAL that the column stores as text. A list or map fails the bind.
+fn text_value(object: &Map<String, Value>, key: &str) -> anyhow::Result<SqlValue> {
+  match object.get(key) {
+    None => Ok(SqlValue::Text(String::new())),
+    Some(value) if is_falsy(value) => Ok(SqlValue::Text(String::new())),
+    Some(Value::String(text)) => Ok(SqlValue::Text(text.clone())),
+    Some(Value::Bool(_)) => Ok(SqlValue::Integer(1)),
+    Some(Value::Number(number)) => Ok(number_count(number).with_context(|| format!("field {key}"))?.into()),
+    Some(_) => bail!("field {key} is neither a string nor a number"),
   }
 }
 

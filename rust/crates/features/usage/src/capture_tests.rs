@@ -2011,4 +2011,91 @@ fn malformed_count_shapes_capture_the_rows_python_writes() {
   }
 }
 
+/// The stored timestamp of one row, as the TEXT column holds it.
+fn stored_ts(ledger: &UsageLedger, record_id: &str) -> SqlValue {
+  ledger.connection().query_row("SELECT ts FROM usage WHERE record_id = ?", [record_id], |row| row.get(0)).unwrap()
+}
+
+#[test]
+fn malformed_timestamp_shapes_capture_the_rows_python_writes() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  write_thread(
+    &home,
+    "s-ts",
+    "stamps",
+    Some(("claude-main", Some("vendor/claude-model"))),
+    &events(&[
+      r#"{"type": "result", "timestamp": 7, "usage": {"input_tokens": 10, "output_tokens": 4}}"#,
+      r#"{"type": "result", "timestamp": 1.5, "usage": {"input_tokens": 10, "output_tokens": 4}}"#,
+      r#"{"type": "result", "timestamp": true, "usage": {"input_tokens": 10, "output_tokens": 4}}"#,
+      r#"{"type": "result", "timestamp": 2.0, "usage": {"input_tokens": 10, "output_tokens": 4}}"#,
+      r#"{"type": "result", "timestamp": 0, "usage": {"input_tokens": 10, "output_tokens": 4}}"#,
+      r#"{"type": "result", "timestamp": false, "usage": {"input_tokens": 10, "output_tokens": 4}}"#,
+      r#"{"session_id": "ts-kept"}"#,
+    ]),
+  );
+  let run_usage = events(&[
+    r#"{"session_id": "claude-run-ts"}"#,
+    r#"{"type": "result", "usage": {"input_tokens": 13, "output_tokens": 6}}"#,
+  ]);
+  let clc_usage =
+    events(&[r#"{"type": "result", "usage": {"input_tokens": 18, "cached_tokens": 4, "output_tokens": 7}}"#]);
+  write_run_json(
+    &home,
+    "run-session",
+    "run-int",
+    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": 7}"#,
+    &run_usage,
+  );
+  write_run_json(
+    &home,
+    "run-session",
+    "run-float",
+    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": 1.5}"#,
+    &run_usage,
+  );
+  write_run_json(
+    &home,
+    "run-session",
+    "run-bool",
+    r#"{"backend": "charlie-code-native", "model": "vendor/native-run-ts", "started_at": true}"#,
+    &clc_usage,
+  );
+  write_run_json(
+    &home,
+    "run-session",
+    "run-zero",
+    r#"{"backend": "charlie-code-native", "model": "vendor/native-run-ts", "started_at": 0}"#,
+    &clc_usage,
+  );
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 10);
+  assert_eq!(stored_ts(&ledger, "thread:s-ts/stamps/0"), SqlValue::Text("7".to_string()));
+  assert_eq!(stored_ts(&ledger, "thread:s-ts/stamps/1"), SqlValue::Text("1.5".to_string()));
+  assert_eq!(stored_ts(&ledger, "thread:s-ts/stamps/2"), SqlValue::Text("1".to_string()));
+  assert_eq!(stored_ts(&ledger, "thread:s-ts/stamps/3"), SqlValue::Text("2.0".to_string()));
+  assert_eq!(stored_ts(&ledger, "thread:s-ts/stamps/4"), SqlValue::Text(String::new()));
+  assert_eq!(stored_ts(&ledger, "thread:s-ts/stamps/5"), SqlValue::Text(String::new()));
+  assert_eq!(stored_ts(&ledger, "run:run-int"), SqlValue::Text("7".to_string()));
+  assert_eq!(stored_ts(&ledger, "run:run-float"), SqlValue::Text("1.5".to_string()));
+  assert_eq!(stored_ts(&ledger, "run:run-bool"), SqlValue::Text("1".to_string()));
+  assert_eq!(stored_ts(&ledger, "run:run-zero"), SqlValue::Text(String::new()));
+  // A list or map timestamp fails Python's bind, so the capture raises.
+  let raising = [
+    r#"{"type": "result", "timestamp": [1], "usage": {"input_tokens": 1}}"#,
+    r#"{"type": "result", "timestamp": {"a": 1}, "usage": {"input_tokens": 1}}"#,
+  ];
+  for line in raising {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (config, registry) = fixture(&home);
+    let session = r#"{"session_id": "raise-kept"}"#;
+    write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
+    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+  }
+}
+
 const TS_A: &str = "2026-01-10T08:00:00+00:00";

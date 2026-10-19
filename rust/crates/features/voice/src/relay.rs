@@ -8,17 +8,15 @@ use charliebot_registry::{FeatureContext, WebSocketRequest};
 use futures_util::future::BoxFuture;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
+use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed, python_repr};
 use crate::archive;
 use crate::audio::{AudioQueue, PREVIEW_QUEUE_SECONDS};
 use crate::config::VoiceSettings;
 use crate::transcription::{self, Backend, TranscriptEvent, TranscriptKind};
-
-const DEVICE_FIELDS: &[&str] =
-  &["input_device", "capture_settings", "output_device", "communications_output_device", "device_error"];
 
 type SocketWriter = Arc<Mutex<SplitSink<WebSocket, Message>>>;
 
@@ -276,53 +274,18 @@ async fn archive_final(
     }
   };
   let end_to_final_s = queue.seconds_since_end().await;
-  log_voice_transcribed(
-    &session_id,
-    &audio_path,
+  let devices = queue.devices().await;
+  log_voice_transcribed(&Transcribed {
+    session_id: &session_id,
+    audio_path: &audio_path,
     audio_bytes_size,
-    &event.text,
-    backend_id,
-    queue.devices().await,
-    end_to_final_s,
-  );
-  send_frame(writer, json!({ "type": "final", "text": event.text })).await
-}
-
-fn log_voice_transcribed(
-  session_id: &str,
-  audio_path: &std::path::Path,
-  audio_bytes_size: usize,
-  text: &str,
-  backend_id: &str,
-  devices: Option<Value>,
-  end_to_final_s: f64,
-) {
-  let devices = devices.unwrap_or_else(|| {
-    let mut values = Map::new();
-    for field in DEVICE_FIELDS {
-      values.insert((*field).to_string(), Value::Null);
-    }
-    Value::Object(values)
+    text: &event.text,
+    produced_by: backend_id,
+    selected_backend: Some(backend_id),
+    devices: devices.as_ref(),
+    end_to_final_s: Some(end_to_final_s),
   });
-  let device = |field: &str| devices.get(field).map(python_repr).unwrap_or_else(|| "None".to_string());
-  let preview: String = text.chars().take(80).collect();
-  tracing::info!(
-    target: "charliebot_voice",
-    session_id,
-    audio_path = %audio_path.display(),
-    audio_bytes_size,
-    transcription_length = text.chars().count(),
-    transcription_preview = %preview,
-    backend = backend_id,
-    selected_backend = backend_id,
-    input_device = %device("input_device"),
-    capture_settings = %device("capture_settings"),
-    output_device = %device("output_device"),
-    communications_output_device = %device("communications_output_device"),
-    device_error = %device("device_error"),
-    end_to_final_s,
-    "voice_transcribed"
-  );
+  send_frame(writer, json!({ "type": "final", "text": event.text })).await
 }
 
 async fn settle_sealed_socket(
@@ -484,25 +447,6 @@ fn query_value(query: &str, target: &str) -> Option<String> {
       })
     })
     .next_back()
-}
-
-fn python_repr(value: &Value) -> String {
-  match value {
-    Value::Null => "None".to_string(),
-    Value::Bool(true) => "True".to_string(),
-    Value::Bool(false) => "False".to_string(),
-    Value::Number(number) => number.to_string(),
-    Value::String(text) => pyfmt::str_repr(text),
-    Value::Array(values) => format!("[{}]", values.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
-    Value::Object(values) => format!(
-      "{{{}}}",
-      values
-        .iter()
-        .map(|(key, value)| format!("{}: {}", pyfmt::str_repr(key), python_repr(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
-    ),
-  }
 }
 
 fn log_socket_lost(session_id: &str, backend_id: &str, reason: &str) {

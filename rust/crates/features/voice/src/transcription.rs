@@ -752,7 +752,8 @@ fn is_cjk(char: char) -> bool {
   .any(|(low, high)| (*low..=*high).contains(&code))
 }
 
-fn python_whitespace(char: char) -> bool {
+/// Python's `str.isspace` for one character, the set `str.split()` and `str.strip()` cut at.
+pub(crate) fn python_whitespace(char: char) -> bool {
   matches!(char as u32, 0x09..=0x0d | 0x1c..=0x1f) || char.is_whitespace()
 }
 

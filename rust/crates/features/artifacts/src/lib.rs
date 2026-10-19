@@ -4,6 +4,8 @@ pub mod artifact_check;
 mod artifact_view;
 mod headless_render;
 pub mod plan_diff;
+#[cfg(test)]
+mod test_support;
 
 use std::fs;
 use std::path::Path;

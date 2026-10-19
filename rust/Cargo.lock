@@ -234,12 +234,21 @@ dependencies = [
 name = "charliebot-artifacts"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "charliebot-compat",
  "charliebot-core",
+ "charliebot-pyhtml",
  "charliebot-registry",
  "charliebot-store",
+ "futures-util",
+ "http",
+ "regex",
  "serde_json",
  "serde_yaml",
+ "tempfile",
+ "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -419,6 +428,7 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
  "futures-util",
  "http",
  "nix",

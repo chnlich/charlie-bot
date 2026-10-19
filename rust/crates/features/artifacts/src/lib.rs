@@ -1,5 +1,8 @@
 //! `src/features/artifacts`: registers the `publish:` config section. The rest of the package is not ported yet.
 
+mod artifact_view;
+pub mod plan_diff;
+
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,6 +13,7 @@ use serde_json::Value;
 
 /// `src/features/artifacts`: the `publish:` section.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.file_view("artifacts", Arc::new(artifact_view::ArtifactView))?;
   registry.config_section(ConfigSection {
     key: "publish",
     legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],

@@ -79,6 +79,7 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
+url = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
 
 charliebot-artifacts = { path = "crates/features/artifacts" }
@@ -96,6 +97,7 @@ charliebot-files = { path = "crates/features/files" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
 charliebot-ncu = { path = "crates/features/ncu" }
+charliebot-pyhtml = { path = "crates/features/pyhtml" }
 charliebot-registry = { path = "crates/charliebot-registry" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/charliebot-store" }

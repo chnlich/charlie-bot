@@ -552,7 +552,7 @@ fn session_metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<
   listing::metadata_value(&response_metadata(store, meta)?)
 }
 
-fn response_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<SessionMetadata> {
+pub(crate) fn response_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<SessionMetadata> {
   let mut response_meta = meta.clone();
   response_meta.run_backend = listing::run_backend(store, &meta.id)?;
   response_meta.thinking_since = store.busy_since(&meta.id);
@@ -690,14 +690,11 @@ fn path_error(path: &Path, error: std::io::Error) -> StoreError {
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::config::CREDENTIALS_FILENAME;
-  use charliebot_core::credentials::load_credentials;
-  use charliebot_core::hot_reload::HotReload;
-  use charliebot_registry::context::StartupState;
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::run_records::RunKind;
 
   use super::*;
+  use crate::test_support::feature_context;
 
   fn run(id: &str, inputs: &[&str], pid: Option<u32>) -> RunRecord {
     RunRecord {
@@ -757,32 +754,6 @@ mod tests {
   }
 
   const TRIGGER_SESSION_ID: &str = "synthetic-trigger-session";
-
-  fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
-    let home = tempfile::tempdir().expect("temporary home");
-    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
-    let registry = Arc::new(Registry::new());
-    let config_value = registry.load_config(home.path()).expect("test config");
-    let store = Arc::new(
-      Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
-        .expect("test store"),
-    );
-    let config_registry = Arc::clone(&registry);
-    let config_home = home.path().to_path_buf();
-    let config = Arc::new(HotReload::new(
-      config_value.config_file(),
-      "session_api_test_config_reload_failed",
-      Box::new(move || config_registry.load_config(&config_home)),
-    ));
-    let credential_home = home.path().to_path_buf();
-    let credentials = Arc::new(HotReload::new(
-      home.path().join(CREDENTIALS_FILENAME),
-      "session_api_test_credentials_reload_failed",
-      Box::new(move || load_credentials(&credential_home)),
-    ));
-    let startup = Arc::new(StartupState::default());
-    (home, Arc::new(FeatureContext { config, credentials, store, registry, startup }))
-  }
 
   fn add_trigger_session(features: &FeatureContext) {
     let metadata = SessionMetadata::new(TRIGGER_SESSION_ID, "Synthetic trigger session", TaskProfile::Manager);

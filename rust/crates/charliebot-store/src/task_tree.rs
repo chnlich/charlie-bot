@@ -679,7 +679,6 @@ impl Store {
     Ok(archived)
   }
 
-<<<<<<< HEAD
   /// Permanently delete an empty, unreferenced task while holding the tree control lock.
   pub async fn delete_permanently(&self, session_id: &str, caller: TaskCaller) -> StoreResult<bool> {
     if caller != TaskCaller::Operator {

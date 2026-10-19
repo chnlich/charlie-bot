@@ -375,7 +375,7 @@ FILE_RULES: tuple[FieldRule, ...] = (
     FieldRule(
         name="run-event-time",
         target="home/sessions/*/data/runs/*/events.jsonl",
-      field="timestamp",
+        field="timestamp",
         when=(),
         reason="wall-clock time: each worker event is stamped by its own server",
     ),

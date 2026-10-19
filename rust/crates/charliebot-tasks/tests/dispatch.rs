@@ -1,7 +1,11 @@
 mod dispatch_support;
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::event_builders::make_master_done_event;
+use charliebot_core::config::BackendOption;
 use charliebot_core::event_types;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::StoreError;
@@ -12,9 +16,11 @@ use charliebot_tasks::dispatch::{
   DispatchExecutor, child_report_text, dispatcher, inputs_not_pending_conflict, note_run_liveness,
   unprocessed_input_blocker,
 };
+use charliebot_tasks::execution::TaskExecutionAdapter;
+use charliebot_tasks::master_queue::{MasterQueue, PersistAndBroadcastFn};
 use charliebot_tasks::master_trigger::{TriggerMasterRequest, trigger_master};
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use dispatch_support::{Harness, claim, input_fields, new_run, register_run};
 
@@ -572,6 +578,59 @@ async fn user_message_lifts_a_node_ahead_of_one_that_only_received_a_scheduled_t
   let listing = harness.store.list_sessions_readonly(charliebot_store::metadata::SessionStatus::Active).unwrap();
   assert_eq!(listing[0].id, messaged.id);
   assert_eq!(listing[1].id, scheduled.id);
+}
+
+#[tokio::test]
+async fn a_finished_manager_turn_persists_master_done_before_its_observation_and_run_finished() {
+  let harness = Harness::new();
+  let task = harness.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  register_run(&harness, &task.id, "run-turn").await;
+  let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+  let adapter = TaskExecutionAdapter::new(Arc::clone(&harness.features), queue, Arc::clone(&harness.dispatcher));
+  let option = BackendOption {
+    id: "synthetic-backend".to_string(),
+    label: "Synthetic backend".to_string(),
+    model: "synthetic-model".to_string(),
+    prompt_overlay: None,
+    backend_type: "synthetic".to_string(),
+    type_fields: serde_yaml::Mapping::new(),
+  };
+  // The run's raw log is unset until the observation is written, so each master_done records whether it came first.
+  let raw_log_at_master_done = Arc::new(Mutex::new(Vec::new()));
+  let persist_done: PersistAndBroadcastFn = {
+    let store = Arc::clone(&harness.store);
+    let raw_log_at_master_done = Arc::clone(&raw_log_at_master_done);
+    Arc::new(move |session_id: String, event: Value| {
+      let store = Arc::clone(&store);
+      let raw_log_at_master_done = Arc::clone(&raw_log_at_master_done);
+      Box::pin(async move {
+        let run = store.read_run_sync(&session_id, "run-turn")?.expect("the run is registered");
+        raw_log_at_master_done.lock().unwrap().push(run.raw_log_ref);
+        store.persist_and_broadcast(&session_id, event).await?;
+        Ok(())
+      })
+    })
+  };
+  let on_finish =
+    adapter.manager_finish_recorder(&task.id, "run-turn", &option, PathBuf::from("raw-log.jsonl"), None, persist_done);
+
+  let handled =
+    on_finish(Some("native-session".to_string()), 0, Map::new(), make_master_done_event(0, false)).await.unwrap();
+
+  assert!(handled);
+  assert_eq!(*raw_log_at_master_done.lock().unwrap(), [None]);
+  let order = harness
+    .store
+    .load_all_facts(&task.id)
+    .unwrap()
+    .iter()
+    .filter_map(|event| event["type"].as_str())
+    .filter(|kind| *kind == "master_done" || *kind == "run_finished")
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+  assert_eq!(order, ["master_done", "run_finished"]);
+  let run = harness.store.read_run_sync(&task.id, "run-turn").unwrap().expect("the run is registered");
+  assert_eq!(run.raw_log_ref.as_deref(), Some("raw-log.jsonl"));
 }
 
 #[test]

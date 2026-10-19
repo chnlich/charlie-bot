@@ -58,12 +58,7 @@ impl TurnContribution for WebReplyTurnContribution {
 /// missing or unreadable doc fails.
 fn rules_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-  Ok(py_strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
-}
-
-/// Python's `str.strip()`: trims what `char::is_whitespace` trims, plus the information separators U+001C to U+001F.
-fn py_strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+  Ok(reply::py_strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
 }
 
 /// `_web_reply_message`: the chat line of a `web_reply` event.

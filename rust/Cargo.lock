@@ -761,11 +761,18 @@ name = "charliebot-web-reply"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "http",
+ "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

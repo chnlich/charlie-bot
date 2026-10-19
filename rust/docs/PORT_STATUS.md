@@ -87,10 +87,10 @@ for such input set `compare: status_and_shape`.
 | POST | `/api/internal/discord/reply` | features/discord | todo |  |
 | POST | `/api/internal/discord/read` | features/discord | todo |  |
 | POST | `/api/internal/discord/check` | features/discord | todo |  |
-| POST | `/api/internal/web/reply` | features/web_reply | todo |  |
-| GET | `/api/internal/web/dialog` | features/web_reply | todo |  |
-| POST | `/api/internal/web/status` | features/web_reply | todo |  |
-| GET | `/api/internal/web/status` | features/web_reply | todo |  |
+| POST | `/api/internal/web/reply` | features/web_reply | ported |  |
+| GET | `/api/internal/web/dialog` | features/web_reply | ported |  |
+| POST | `/api/internal/web/status` | features/web_reply | ported |  |
+| GET | `/api/internal/web/status` | features/web_reply | ported |  |
 | GET | `/host-auth` | features/host_auth | ported | renders through the shared `Templating` handle |
 | GET | `/api/host-auth/status` | features/host_auth | ported |  |
 | POST | `/api/host-auth/probe` | features/host_auth | ported |  |
@@ -196,6 +196,7 @@ implemented.
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
+| registration | router `/api/internal` (`web_reply`) | features/web_reply | ported | The four web reply routes above. The round-end audit (`audit.py`) and the turn contribution's `after_turn` are not ported: the thread-core task owns them. |
 | registration | turn contribution `slack`: instruction segments | features/slack | ported | Adds the thread reply contract to a manager run of a Slack thread session. The round-end audit and the rest of `thread_entry.py` are not ported yet. |
 | registration | turn contribution `discord`: instruction segments | features/discord | ported | Adds the thread reply contract to a manager run of a Discord thread session. The round-end audit and the rest of `thread_entry.py` are not ported yet. |
 

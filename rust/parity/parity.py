@@ -18,6 +18,8 @@ import collections
 import concurrent.futures
 import contextlib
 import dataclasses
+import hashlib
+import hmac
 import http.client
 import json
 import os
@@ -323,6 +325,21 @@ def _tamper(side: Side, manifest: dict) -> None:
   os.utime(metadata_path, ns=(times.st_atime_ns, times.st_mtime_ns))
 
 
+def _agent_run_token(claims: dict) -> str:
+  """A run token for *claims*, signed with the synthetic access key the server verifies it against."""
+  payload = json.dumps(
+      {
+          "session_id": claims["session"],
+          "run_id": claims["run"],
+          "agent": "claude"
+      },
+      sort_keys=True,
+      separators=(",", ":")).encode()
+  payload_b64 = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+  signature = hmac.new(servers.ACCESS_KEY.encode(), payload_b64.encode(), hashlib.sha256).digest()
+  return f"{payload_b64}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+
+
 def _request(side: Side, step: scenario_file.Step, manifest: dict) -> compare.Response:
   if side.server is None:
     raise RuntimeError(f"{side.label} has no running server")
@@ -333,6 +350,8 @@ def _request(side: Side, step: scenario_file.Step, manifest: dict) -> compare.Re
     headers["Authorization"] = f"Bearer {servers.ACCESS_KEY}"
   elif step.auth == "cookie":
     headers["Cookie"] = f"charliebot_access_key={servers.ACCESS_KEY}"
+  elif step.auth == "agent":
+    headers["Authorization"] = f"Bearer {_agent_run_token(_substitute(side, step.agent, manifest))}"
   elif step.auth != "none":
     raise ValueError(f"unknown auth mode {step.auth!r}")
   body = None

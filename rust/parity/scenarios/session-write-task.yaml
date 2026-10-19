@@ -1,0 +1,117 @@
+# The session write routes against the operator: the legacy and v2 creates and their refusals, a backend switch that
+# refuses an unknown id, keeps the held id, and moves to a second option, a rename and its refusals, and task-field
+# PATCHes where the structural guard refuses a demotion and a missing reparent target.
+stage: session-write
+name: session-write-task
+config:
+  backends:
+    options:
+      - {id: claude-sonnet, label: "CC · Sonnet 5", type: cc-claude, model: claude-sonnet-5}
+      - {id: claude-opus, label: "CC · Opus 5", type: cc-claude, model: claude-opus-5-5}
+steps:
+  - name: legacy create opens a manager root
+    method: POST
+    path: /api/sessions/
+    json: {name: Parity legacy root}
+    expect_status: 200
+  - name: legacy create with an unknown backend
+    method: POST
+    path: /api/sessions/
+    json: {name: Parity refused root, backend: missing-backend}
+    expect_status: 400
+  - name: legacy create with an undeclared key
+    method: POST
+    path: /api/sessions/
+    json: {name: Parity refused key, presentation: wide}
+    expect_status: 422
+    compare: status_and_shape
+  - name: v2 create without a request id
+    method: POST
+    path: /api/sessions/
+    json: {task_parent_id: "${sessions.atlas}", profile: worker, name: Parity refused worker}
+    expect_status: 400
+  - name: v2 create under the manager root
+    method: POST
+    path: /api/sessions/
+    json:
+      request_id: parity-worker-create
+      task_parent_id: "${sessions.atlas}"
+      profile: worker
+      name: Parity worker
+      task: {goal: Collect the synthetic parity notes., task_type: verify}
+    expect_status: 200
+  - name: PUT is refused by the create route
+    method: PUT
+    path: /api/sessions/
+    expect_status: 405
+  - name: PUT is refused by the session detail route
+    method: PUT
+    path: /api/sessions/${sessions.atlas}
+    expect_status: 405
+  - name: switch to an unknown backend
+    method: POST
+    path: /api/sessions/${sessions.atlas}/backend
+    json: {backend: missing-backend}
+    expect_status: 400
+  - name: switch to the held backend
+    method: POST
+    path: /api/sessions/${sessions.atlas}/backend
+    json: {backend: claude-sonnet}
+    expect_status: 200
+  - name: switch to a second option of the same continuation domain
+    method: POST
+    path: /api/sessions/${sessions.atlas}/backend
+    json: {backend: claude-opus}
+    expect_status: 200
+  - name: switch a missing session
+    method: POST
+    path: /api/sessions/${missing_session}/backend
+    json: {backend: claude-opus}
+    expect_status: 404
+  - name: switch with a body that names no backend
+    method: POST
+    path: /api/sessions/${sessions.atlas}/backend
+    json: {}
+    expect_status: 422
+    compare: status_and_shape
+  - name: rename a session
+    method: PATCH
+    path: /api/sessions/${sessions.atlas}
+    json: {name: Atlas renamed}
+    expect_status: 200
+  - name: rename with an empty name
+    method: PATCH
+    path: /api/sessions/${sessions.atlas}
+    json: {name: ""}
+    expect_status: 400
+  - name: rename a missing session
+    method: PATCH
+    path: /api/sessions/${missing_session}
+    json: {name: Ghost}
+    expect_status: 404
+  - name: PATCH with an undeclared field
+    method: PATCH
+    path: /api/sessions/${sessions.atlas}
+    json: {presentation: wide}
+    expect_status: 422
+    compare: status_and_shape
+  - name: demote a manager that has a child task
+    method: PATCH
+    path: /api/sessions/${sessions.atlas}
+    json: {profile: worker}
+    expect_status: 409
+  - name: reparent under a task that does not exist
+    method: PATCH
+    path: /api/sessions/${sessions.atlas_notes}
+    json: {task_parent_id: ghost-task}
+    expect_status: 404
+  - name: set a worker's prompt rule
+    method: PATCH
+    path: /api/sessions/${sessions.atlas_notes}
+    json: {node_prompt: "Keep the synthetic notes short.\n"}
+    expect_status: 200
+  - name: clear that prompt rule
+    method: PATCH
+    path: /api/sessions/${sessions.atlas_notes}
+    json: {node_prompt: null}
+    expect_status: 200

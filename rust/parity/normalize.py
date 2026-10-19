@@ -114,6 +114,12 @@ _EXPLAIN_STAMP = (
 # so each ended state gets its own rule.
 _ENDED_STATES = ("ready", "error")
 _WEB_STATUS_STAMP = "wall-clock time of the write"
+_SESSION_WRITE_STAMP = "wall-clock time of the write: each server stamps the session with its own clock"
+_SESSION_WRITE_ROUTES = (
+    "POST /api/sessions/",
+    "POST /api/sessions/{session_id}/backend",
+    "PATCH /api/sessions/{session_id}",
+)
 
 RESPONSE_RULES: tuple[FieldRule, ...] = (
     FieldRule(
@@ -209,6 +215,42 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         field="descendants[*].updated_at",
         when=(),
         reason=_WEB_STATUS_STAMP,
+    ),
+    *(
+        FieldRule(
+            name=f"session-write-{field.replace('_', '-')}",
+            target=target,
+            field=field,
+            when=(),
+            reason=_SESSION_WRITE_STAMP,
+        ) for target in _SESSION_WRITE_ROUTES for field in ("created_at", "updated_at")),
+    FieldRule(
+        name="session-runs-pid",
+        target="GET /api/sessions/{session_id}/runs",
+        field="items[*].pid",
+        when=(),
+        reason="pid: each server launches its own agent process",
+    ),
+    FieldRule(
+        name="session-runs-pid-start",
+        target="GET /api/sessions/{session_id}/runs",
+        field="items[*].pid_start",
+        when=(),
+        reason="pid: the agent's /proc start time in clock ticks differs between processes",
+    ),
+    FieldRule(
+        name="session-runs-started-at",
+        target="GET /api/sessions/{session_id}/runs",
+        field="items[*].started_at",
+        when=(),
+        reason="wall-clock time: each server records its agent launch on its own clock",
+    ),
+    FieldRule(
+        name="session-runs-next-cursor",
+        target="GET /api/sessions/{session_id}/runs",
+        field="next_cursor",
+        when=(),
+        reason="opaque cursor: it encodes the run's start time and run id, which each server draws on its own",
     ),
 )
 
@@ -329,6 +371,13 @@ FILE_RULES: tuple[FieldRule, ...] = (
         field="updated_at",
         when=(),
         reason="wall-clock time: the session records each server's latest event write",
+    ),
+    FieldRule(
+        name="session-created-time",
+        target="home/sessions/*/metadata.json",
+        field="created_at",
+        when=(),
+        reason="wall-clock time: the session records its creation on each server's clock",
     ),
     FieldRule(
         name="web-status-file-time",

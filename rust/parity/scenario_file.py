@@ -19,7 +19,7 @@ SCENARIO_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
 DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 FIXTURE_EXTRAS_DIR = pathlib.Path(__file__).resolve().parent / "fixture_extras"
 STEP_KINDS = ("http", "ws", "fake", "wait", "log_event", "gate", "handover", "process")
-AUTH_MODES = ("bearer", "cookie", "none")
+AUTH_MODES = ("bearer", "cookie", "none", "agent")
 WS_AUTH_MODES = ("token", "none")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 HANDOVER_DIRECTIONS = ("python-to-candidate", "candidate-to-python")
@@ -35,8 +35,8 @@ _SCENARIO_KEYS = {
     "fakes", "fixture_extras", "voice_models", "comparison_rules"
 }
 _HTTP_STEP_KEYS = {
-    "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "expect_status",
-    "compare", "capture", "defer_files"
+    "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "agent",
+    "expect_status", "compare", "capture", "defer_files"
 }
 _WS_STEP_KEYS = {
     "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare", "expect_reject",
@@ -75,6 +75,7 @@ class Step:
   body_file: str | None
   multipart: dict | None
   auth: str
+  agent: dict | None
   expect_status: int | None
   http_compare: str | None
   capture: dict[str, str]
@@ -395,6 +396,7 @@ def _step(raw: Any, where: str) -> Step:
   timeout_seconds = None
   until = None
   open_name = None
+  agent = None
   agent_after_stop = None
   send: tuple[dict, ...] = ()
   collect = None
@@ -419,6 +421,9 @@ def _step(raw: Any, where: str) -> Step:
     auth = raw.get("auth", "bearer")
     if auth not in AUTH_MODES:
       raise ScenarioError(f"{where}: auth must be one of {AUTH_MODES}")
+    agent = _agent_claims(raw["agent"], where) if "agent" in raw else None
+    if (auth == "agent") != (agent is not None):
+      raise ScenarioError(f"{where}: agent is required with auth: agent, and only then")
     expect_status = raw.get("expect_status")
     if expect_status is not None and (not isinstance(expect_status, int) or isinstance(expect_status, bool)):
       raise ScenarioError(f"{where}: expect_status must be an integer")
@@ -551,6 +556,7 @@ def _step(raw: Any, where: str) -> Step:
       body_file=body_file,
       multipart=multipart_fields,
       auth=auth,
+      agent=agent,
       expect_status=expect_status,
       http_compare=http_compare,
       capture=capture,
@@ -795,6 +801,16 @@ def substitute(value: Any, manifest: dict, captures: dict[str, Any], tree_root: 
   return value
 
 
+def _agent_claims(raw: Any, where: str) -> dict:
+  """The run an agent token is signed for: its session and run ids, each a literal or a reference."""
+  if not isinstance(raw, dict) or set(raw) != {"session", "run"}:
+    raise ScenarioError(f"{where}: agent needs exactly the keys session and run")
+  for key in ("session", "run"):
+    if not isinstance(raw[key], str) or not raw[key]:
+      raise ScenarioError(f"{where}.agent.{key} must be a non-empty string")
+  return dict(raw)
+
+
 def unresolved_reference(
     scenario: Scenario, step: Step, manifest: dict, captures: dict[str, Any], tree_root: str,
     tree_home: str) -> str | None:
@@ -804,8 +820,16 @@ def unresolved_reference(
   it on this side. The inputs are the values a step's runner substitutes. Any other reference error still raises.
   """
   inputs = [
-      step.path, step.query, step.headers, step.json_body, step.multipart,
-      list(step.send), step.collect, step.until, step.payload
+      step.path,
+      step.query,
+      step.headers,
+      step.json_body,
+      step.multipart,
+      list(step.send),
+      step.collect,
+      step.until,
+      step.payload,
+      step.agent,
   ]
   try:
     substitute(inputs, manifest, captures, tree_root, tree_home)

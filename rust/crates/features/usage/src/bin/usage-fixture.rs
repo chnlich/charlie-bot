@@ -155,23 +155,28 @@ fn rows_value(
         .accounts
         .into_iter()
         .map(|account| {
-          json!({"name": account.name, "calls": account.calls, "output": account.output, "total": account.total})
+          json!({
+            "name": account.name,
+            "calls": account.calls,
+            "output": Value::from(account.output),
+            "total": Value::from(account.total),
+          })
         })
         .collect::<Vec<_>>();
       json!({
         "source": row.source,
         "model": row.model,
-        "in_fresh": row.in_fresh,
-        "cache_write": row.cache_write,
-        "cache_read": row.cache_read,
-        "in_unsplit": row.in_unsplit,
-        "output": row.output,
+        "in_fresh": Value::from(row.in_fresh),
+        "cache_write": Value::from(row.cache_write),
+        "cache_read": Value::from(row.cache_read),
+        "in_unsplit": Value::from(row.in_unsplit),
+        "output": Value::from(row.output),
         "calls": row.calls,
-        "total": row.total,
+        "total": Value::from(row.total),
         "first": row.first,
         "last": row.last,
         "fallback_calls": row.fallback_calls,
-        "fallback_output": row.fallback_output,
+        "fallback_output": Value::from(row.fallback_output),
         "accounts": accounts,
       })
     })

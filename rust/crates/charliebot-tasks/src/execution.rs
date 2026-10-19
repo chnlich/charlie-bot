@@ -722,7 +722,7 @@ impl TaskExecutionAdapter {
       return Ok(());
     };
     let events = self.features.store.load_all_facts(&meta.id)?;
-    if events.iter().any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED)) {
+    if !self.features.store.facts_of(&meta.id)?.close_events.is_empty() {
       return Ok(());
     }
     run.repo_path = latest.repo_path.clone();
@@ -781,13 +781,7 @@ impl TaskExecutionAdapter {
         return Ok(None);
       }
     } else if run.kind == RunKind::Work {
-      if self
-        .features
-        .store
-        .load_all_facts(&meta.id)?
-        .iter()
-        .any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED))
-      {
+      if !self.features.store.facts_of(&meta.id)?.close_events.is_empty() {
         return Ok(None);
       }
     } else {

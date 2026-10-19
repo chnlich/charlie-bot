@@ -165,7 +165,7 @@ implemented.
 
 | Kind | Service or step | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
-| pre-loop | `agent_environment.apply_agent_environment` | foundation | todo | The agent snapshot is built (`charliebot-agents/src/agent_environment.rs:30`, registered at `charliebot-agents/src/lib.rs:23`). Python also replaces the server's own `os.environ` (`src/runtime/agent_environment.py:61-63`), so the web terminal's tmux server inherits the stripped activation and PATH; Rust leaves the process environment unchanged (`features/terminal/src/pty.rs:55-56`). Rust takes the venv bin from `CHARLIEBOT_VENV_BIN` (`charliebot-server/src/main.rs:210`), Python from `sys.prefix`. |
+| pre-loop | `agent_environment.apply_agent_environment` | foundation | ported | `main` replaces the server's process environment with the agent environment before any thread starts and before the config load (`charliebot-server/src/main.rs:232`, `charliebot-agents/src/agent_environment.rs:63`). The web terminal's tmux server and the usage panel's `claude --version` probe inherit it, and the typed `AgentBaseEnvironment` equals the rewritten environment. Python: `server.py:582`, `src/runtime/agent_environment.py:53-63`. Deviation: Rust takes the venv bin from `CHARLIEBOT_VENV_BIN` (`charliebot-core/src/venv.rs`), Python from `sys.prefix`. |
 | pre-loop | `config.get_config` | foundation | ported | |
 | pre-loop | `config.require_backends` | foundation | ported | |
 | pre-loop | `v1_sessions.require_no_v1_sessions` | foundation | ported | Runs before bind. |
@@ -175,14 +175,14 @@ implemented.
 | lifespan | 2. Acquire home writer fence | foundation | ported | |
 | lifespan | 3. Capture build information | foundation | ported | |
 | lifespan | 4. Initialize the home | foundation | ported | |
-| lifespan | 5. Log and sweep session cgroups | foundation | todo | The `session_cgroups` pre-recovery step logs availability and sweeps empty stale cgroups (`charliebot-agents/src/agent_environment.rs:93-94`, `transport/cgroup.rs:182`, `:211`; Python `server.py:266-268`, `src/infra/process.py:307`, `:334`). It refuses startup on a negative `session_memory_max_mb`, `session_swap_max_mb` or `session_tasks_max` (`charliebot-agents/src/agent_environment.rs:90-92`); Python starts with them. |
+| lifespan | 5. Log and sweep session cgroups | foundation | ported | The `session_cgroups` pre-recovery step logs the cgroup startup line and sweeps empty stale cgroups (`charliebot-agents/src/agent_environment.rs:95`, `transport/cgroup.rs:184`, `:214`; Python `server.py:266-268`, `src/infra/process.py:307`, `:334`). Negative `session_memory_max_mb`, `session_swap_max_mb` and `session_tasks_max` start as in Python, and each spawn applies them as `transport/cgroup.rs:143` and `:52` do (Python `src/infra/process.py:272`, `:110`). |
 | lifespan | 6. Start task-tree recovery | agent-runtime | todo | The runner spawns a registered recovery step (`charliebot-registry/src/lifespan.rs:79`); no package registers one. |
 | lifespan | 7. Start early services | services | ported | Starts the early services in registration order after the recovery task starts (`charliebot-registry/src/lifespan.rs:91`, `:102-114`; Python `server.py:270-273`). |
 | lifespan | 8. Await task-tree recovery | agent-runtime | todo | The runner awaits it (`charliebot-registry/src/lifespan.rs:92`); no package registers one. |
 | lifespan | 9. Recover pending triggers | agent-runtime | ported | |
 | lifespan | 10. Start ready services | services | ported | Starts the ready services in registration order after the trigger step (`charliebot-registry/src/lifespan.rs:99`, `:102-114`; Python `server.py:284-285`). |
 | lifespan | 11. Log ready and serve | foundation | ported | |
-| lifespan | 12. Stop services and close shared clients | services | todo | Signal shutdown, service teardown in reverse registration order (`charliebot-registry/src/lifespan.rs:126`) and writer-fence release are implemented; closing shared clients is not. |
+| lifespan | 12. Stop services and close shared clients | services | todo | Services stop in reverse registration order, then the let-go steps run (`charliebot-registry/src/lifespan.rs:142`). The shared HTTP client then closes and is timed as `http_client_ms` on the `charliebot_shutdown` line (`charliebot-compat/src/http_client.rs:34`, `charliebot-server/src/main.rs:208`; Python `server.py:305`). The writer-fence release is implemented. The WebSocket close (`ws_close_ms`, `server.py:306`) is not ported: task W4 adds it. The usage quota builds its own client, so it is not closed here. |
 | lifespan | 13. Release home writer fence | foundation | ported | |
 | service | `scheduler` | features/cron | todo | |
 | service | `slack` | features/slack | todo | |
@@ -263,9 +263,9 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | legacy `sessions/<sid>/data/master_runs/<started_at>/` | agent-runtime | todo | Read-only baseline layout. |
 | legacy `sessions/<sid>/threads/<tid>/data/` | agent-runtime | todo | Read-only baseline layout. |
 | `sessions/<sid>/triggers/<trigger_id>.json` | agent-runtime | ported | |
-| `sessions/<sid>/launches/<launch_id>/metadata.json` | foundation | todo | |
-| `sessions/<sid>/launches/<launch_id>/log` | foundation | todo | |
-| `sessions/<sid>/launches/<launch_id>/exit` | foundation | todo | |
+| `sessions/<sid>/launches/<launch_id>/metadata.json` | foundation | not applicable | Written by the Python CLI (`src/runtime/cli/schedule_trigger.py:309`), which stays (Trade-off 2). |
+| `sessions/<sid>/launches/<launch_id>/log` | foundation | not applicable | Written by the Python CLI's local launch (`src/runtime/cli/schedule_trigger.py:326`), which stays (Trade-off 2). |
+| `sessions/<sid>/launches/<launch_id>/exit` | foundation | not applicable | Written by the Python CLI's local launch (`src/runtime/cli/schedule_trigger.py:326`), which stays (Trade-off 2). |
 | `sessions/<sid>/plans.json` | features/artifacts | todo | |
 | session artifact pages | features/artifacts | ported | |
 | `sessions/<sid>/uploads/<filename>` | chat | ported | |
@@ -290,7 +290,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | headless-render temporary directories | features/artifacts | todo | Outside the home. |
 | trace-merge temporary directories | features/trace | todo | Outside the home. |
 | memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |
-| SSH ControlMaster sockets | foundation | todo | Outside the home. |
+| SSH ControlMaster sockets | foundation | ported | Outside the home. The control directory (mode 0700), `ControlPath`, `ControlPersist`, `ConnectTimeout` and `BatchMode` match Python (`charliebot-core/src/ssh.rs:17`, `:23`, `:35`; Python `src/infra/ssh.py:17-24`, `:27-53`). The host-auth probe and the sched launcher build their argv through it (`features/host_auth/src/probe.rs:57`, `charliebot-sched/src/triggers.rs:624`). |
 | artifact page-height probe files | features/artifacts | todo | Beside an artifact. |
 | tmux socket `charliebot` | features/terminal | ported | Outside the home. |
 | tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |

@@ -1,17 +1,19 @@
-//! FastAPI's multipart body parsing and `File`/`Form` validation.
+//! FastAPI's form body parsing and `File`/`Form` validation.
 //!
-//! `read` runs before route dependencies and streams file parts into temporary files. `FormBody::validate` runs after
+//! `read` runs before route dependencies. A multipart body is parsed by a port of python-multipart's state machine, so
+//! that every truncated or malformed body reaches the same error as Starlette does, and file parts stream into
+//! temporary files. A urlencoded body is parsed the way Starlette's `FormParser` does. `FormBody::validate` runs after
 //! dependencies and reports required or mistyped fields at `body.<field>`, like `fastapi_body::RequestBody`.
 
 use crate::responses;
 use crate::validation::{self, FieldError, Kind, Loc};
-use axum::body::{Body, BodyDataStream, Bytes};
+use axum::body::Body;
 use axum::response::Response;
-use futures_util::{StreamExt, stream};
+use futures_util::StreamExt;
 use http::{HeaderMap, StatusCode, header};
 use serde_json::{Value, json};
-use tempfile::TempPath;
-use tokio::io::AsyncWriteExt;
+use std::io::Write;
+use tempfile::{NamedTempFile, TempPath};
 
 const MAX_FILES: usize = 1000;
 const MAX_FIELDS: usize = 1000;
@@ -85,10 +87,16 @@ impl UploadedFile {
     &self.path
   }
 
-  /// The number of bytes written to the temporary file.
+  /// The number of body bytes written into the temporary file.
   pub fn size(&self) -> u64 {
     self.size
   }
+}
+
+/// One parsed part: a streamed file or a decoded text field.
+struct Part {
+  name: String,
+  value: PartValue,
 }
 
 enum PartValue {
@@ -96,12 +104,7 @@ enum PartValue {
   Form(String),
 }
 
-struct Part {
-  name: String,
-  value: PartValue,
-}
-
-/// A parsed multipart form, with file parts held in temporary files.
+/// A parsed form, with file parts held in temporary files.
 #[derive(Default)]
 pub struct FormBody {
   parts: Vec<Part>,
@@ -115,11 +118,20 @@ impl FormBody {
       match (field.field_type, self.value(field.name)) {
         (_, None) if field.required => errors.push(field_error(field.name, Value::Null, Kind::Missing)),
         (FieldType::File, Some(PartValue::File(_))) | (FieldType::Form, Some(PartValue::Form(_))) => {}
-        (FieldType::File, Some(PartValue::Form(value))) => errors.push(field_error(
-          field.name,
-          Value::String(value.clone()),
-          Kind::ValueError { message: "Expected UploadFile, received: <class 'str'>".to_string() },
-        )),
+        (FieldType::File, Some(PartValue::Form(value))) => {
+          // FastAPI's `_get_multidict_value` reads an empty string as an absent value before validation.
+          if value.is_empty() {
+            if field.required {
+              errors.push(field_error(field.name, Value::Null, Kind::Missing));
+            }
+          } else {
+            errors.push(field_error(
+              field.name,
+              Value::String(value.clone()),
+              Kind::ValueError { message: "Expected UploadFile, received: <class 'str'>".to_string() },
+            ));
+          }
+        }
         (FieldType::Form, Some(PartValue::File(_))) => {
           errors.push(field_error(field.name, json!({}), Kind::StringType));
         }
@@ -150,141 +162,497 @@ impl FormBody {
   }
 }
 
-/// Read a multipart request before dependencies, returning an empty form for other content types.
-///
-/// A body whose opening does not match its boundary is a parse error, as python-multipart reports it.
+/// Read a form request before dependencies, returning an empty form for other content types.
 pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Response>> {
   let Some(content_type) = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()) else {
     return Ok(FormBody::default());
   };
-  if !is_multipart_form(content_type) {
-    return Ok(FormBody::default());
+  let (media_type, params) = parse_options_header(content_type);
+  if media_type == "multipart/form-data" {
+    let boundary = last_param(&params, "boundary").ok_or_else(|| starlette_error("Missing boundary in multipart."))?;
+    let charset = last_param(&params, "charset").unwrap_or_else(|| "utf-8".to_string());
+    read_multipart(&boundary, &charset, body).await
+  } else if media_type == "application/x-www-form-urlencoded" {
+    read_urlencoded(body).await
+  } else {
+    Ok(FormBody::default())
   }
-  let boundary = match multer::parse_boundary(content_type) {
-    Ok(boundary) => boundary.to_string(),
-    Err(_) => return Err(multipart_error("Missing boundary in multipart.")),
-  };
+}
 
-  let (opening, rest) = read_opening(body.into_data_stream(), &boundary).await?;
-  let stream = stream::iter([Ok::<_, axum::Error>(Bytes::from(opening))]).chain(rest);
-  let mut multipart = multer::Multipart::new(stream, boundary);
+/// Read a urlencoded body the way Starlette's `FormParser` does: each name and value is latin-1 decoded, then
+/// percent-decoded with `urllib.parse.unquote_plus`.
+async fn read_urlencoded(body: Body) -> Result<FormBody, Box<Response>> {
+  let mut bytes = Vec::new();
+  let mut stream = body.into_data_stream();
+  while let Some(chunk) = stream.next().await {
+    let chunk = chunk.map_err(|_| multipart_error())?;
+    bytes.extend_from_slice(&chunk);
+  }
   let mut form = FormBody::default();
-  let mut file_count = 0;
-  let mut field_count = 0;
-  'parts: loop {
-    let next_field = match multipart.next_field().await {
-      Ok(next_field) => next_field,
-      Err(error) if is_incomplete(&error) => break,
-      Err(_) => return Err(multipart_error("There was an error parsing the body")),
+  for pair in bytes.split(|byte| *byte == b'&') {
+    let (name, value) = match pair.iter().position(|byte| *byte == b'=') {
+      Some(position) => (&pair[..position], &pair[position + 1..]),
+      None => (pair, &pair[pair.len()..]),
     };
-    let Some(mut field) = next_field else {
-      break;
-    };
-    let name = field
-      .name()
-      .ok_or_else(|| multipart_error("The Content-Disposition header field \"name\" must be provided."))?
-      .to_string();
-    if let Some(filename) = field.file_name().map(str::to_string) {
-      file_count += 1;
-      if file_count > MAX_FILES {
-        return Err(multipart_error("Too many files. Maximum number of files is 1000."));
-      }
-      let named_file =
-        tempfile::NamedTempFile::new().map_err(|_| multipart_error("There was an error parsing the body"))?;
-      let (file, path) = named_file.into_parts();
-      let mut output = tokio::fs::File::from_std(file);
-      let mut size = 0_u64;
-      while let Some(chunk) = match field.chunk().await {
-        Ok(chunk) => chunk,
-        Err(error) if is_incomplete(&error) => break 'parts,
-        Err(_) => return Err(multipart_error("There was an error parsing the body")),
-      } {
-        output.write_all(&chunk).await.map_err(|_| multipart_error("There was an error parsing the body"))?;
-        size += chunk.len() as u64;
-      }
-      output.flush().await.map_err(|_| multipart_error("There was an error parsing the body"))?;
-      drop(output);
-      form.parts.push(Part { name, value: PartValue::File(UploadedFile { filename: Some(filename), path, size }) });
-    } else {
-      field_count += 1;
-      if field_count > MAX_FIELDS {
-        return Err(multipart_error("Too many fields. Maximum number of fields is 1000."));
-      }
-      let mut data = Vec::new();
-      while let Some(chunk) = match field.chunk().await {
-        Ok(chunk) => chunk,
-        Err(error) if is_incomplete(&error) => break 'parts,
-        Err(_) => return Err(multipart_error("There was an error parsing the body")),
-      } {
-        if data.len().saturating_add(chunk.len()) > MAX_PART_SIZE {
-          return Err(multipart_error("Part exceeded maximum size of 1024KB."));
-        }
-        data.extend_from_slice(&chunk);
-      }
-      form.parts.push(Part { name, value: PartValue::Form(decode_text(&data)) });
-    }
+    form.parts.push(Part { name: unquote_plus(name), value: PartValue::Form(unquote_plus(value)) });
   }
   Ok(form)
 }
 
-fn is_multipart_form(content_type: &str) -> bool {
-  content_type.split(';').next().is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("multipart/form-data"))
+/// Decode `urllib.parse.unquote_plus`: `+` becomes a space, `%XX` pairs become bytes, and the bytes decode as UTF-8
+/// with replacement characters for invalid sequences.
+fn unquote_plus(bytes: &[u8]) -> String {
+  let mut decoded = Vec::with_capacity(bytes.len());
+  let mut index = 0;
+  while index < bytes.len() {
+    match bytes[index] {
+      b'+' => decoded.push(b' '),
+      b'%' if index + 2 < bytes.len() => {
+        let hex = bytes.get(index + 1..index + 3).and_then(|pair| {
+          let high = (pair[0] as char).to_digit(16)?;
+          let low = (pair[1] as char).to_digit(16)?;
+          Some((high * 16 + low) as u8)
+        });
+        match hex {
+          Some(byte) => {
+            decoded.push(byte);
+            index += 2;
+          }
+          None => decoded.push(b'%'),
+        }
+      }
+      byte => decoded.push(byte),
+    }
+    index += 1;
+  }
+  String::from_utf8_lossy(&decoded).into_owned()
 }
 
-fn is_incomplete(error: &multer::Error) -> bool {
-  matches!(
-    error,
-    multer::Error::IncompleteFieldData { .. } | multer::Error::IncompleteHeaders | multer::Error::IncompleteStream
-  )
+/// Decode a string with Starlette's `_user_safe_decode`: an unknown codec or an invalid sequence falls back to
+/// latin-1, which never fails.
+fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
+  let decoded = match charset {
+    "utf-8" | "utf8" => std::str::from_utf8(bytes).ok().map(str::to_string),
+    "ascii" | "us-ascii" => bytes.is_ascii().then(|| String::from_utf8_lossy(bytes).into_owned()),
+    "latin-1" | "iso-8859-1" | "iso8859-1" => Some(latin1(bytes)),
+    _ => None,
+  };
+  decoded.unwrap_or_else(|| latin1(bytes))
 }
 
-/// Read the bytes python-multipart checks before the first part, and return them with the rest of the body.
-///
-/// python-multipart skips leading CR and LF bytes, then requires `--<boundary>` followed by CRLF or `--`. A body that
-/// ends inside that opening is not an error for python-multipart, so it goes on to multer, which reads it as truncated.
-async fn read_opening(mut stream: BodyDataStream, boundary: &str) -> Result<(Vec<u8>, BodyDataStream), Box<Response>> {
-  let marker = format!("--{boundary}");
-  let mut opening = Vec::new();
-  while opening.len() < marker.len() + 2 && !opening_mismatch(&opening, marker.as_bytes()) {
-    let Some(chunk) = stream.next().await else {
-      break;
-    };
-    let chunk = chunk.map_err(|_| multipart_error("There was an error parsing the body"))?;
-    let skipped =
-      if opening.is_empty() { chunk.iter().take_while(|byte| matches!(byte, b'\r' | b'\n')).count() } else { 0 };
-    opening.extend_from_slice(&chunk[skipped..]);
-  }
-  if opening_mismatch(&opening, marker.as_bytes()) {
-    return Err(multipart_error("There was an error parsing the body"));
-  }
-  Ok((opening, stream))
+fn latin1(bytes: &[u8]) -> String {
+  bytes.iter().map(|byte| char::from(*byte)).collect()
 }
 
-/// Whether `opening` already differs from `marker` followed by CRLF or `--`. Bytes not read yet never differ.
-fn opening_mismatch(opening: &[u8], marker: &[u8]) -> bool {
-  if opening.len() <= marker.len() {
-    return opening != &marker[..opening.len()];
-  }
-  if &opening[..marker.len()] != marker {
-    return true;
-  }
-  !matches!(
-    (opening[marker.len()], opening.get(marker.len() + 1)),
-    (b'\r', Some(b'\n')) | (b'-', Some(b'-')) | (b'\r' | b'-', None)
-  )
+fn latin1_bytes(value: &str) -> Vec<u8> {
+  value.chars().map(|character| character as u32 as u8).collect()
 }
 
-fn decode_text(bytes: &[u8]) -> String {
-  match std::str::from_utf8(bytes) {
-    Ok(value) => value.to_string(),
-    Err(_) => bytes.iter().map(|byte| char::from(*byte)).collect(),
+/// Parse a header the way `python_multipart.parse_options_header` does through `email.message.Message.get_params`:
+/// a lowered media type and a list of lower-cased parameter names with their values, where a later parameter with
+/// the same name wins.
+fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
+  if !value.contains(';') {
+    return (value.trim().to_lowercase(), Vec::new());
   }
+  let mut parts = value.split(';');
+  let media_type = parts.next().unwrap_or_default().trim().to_lowercase();
+  let mut params: Vec<(String, String)> = Vec::new();
+  for parameter in parts {
+    let Some((raw_key, raw_value)) = parameter.split_once('=') else { continue };
+    let key = raw_key.trim().to_lowercase();
+    let mut value = unquote_header_value(raw_value.trim());
+    // python-multipart fixes the IE6 bug of sending the full file path as the filename.
+    if key == "filename"
+      && (value.as_bytes().get(1) == Some(&b':') && value.as_bytes().get(2) == Some(&b'\\')
+        || value.starts_with("\\\\"))
+    {
+      value = value.rsplit('\\').next().unwrap_or_default().to_string();
+    }
+    params.retain(|(name, _)| *name != key);
+    params.push((key, value));
+  }
+  (media_type, params)
+}
+
+/// Read a header parameter value the way `email.message.Message.get_params` reports it: a quoted value loses its
+/// quotes, and inside a quoted value an escaped quote or backslash keeps the escaped character only, while any other
+/// backslash sequence stays as written. An unquoted value is kept as written.
+fn unquote_header_value(value: &str) -> String {
+  if !(value.len() >= 2 && value.starts_with('"') && value.ends_with('"')) {
+    return value.to_string();
+  }
+  let inner = &value[1..value.len() - 1];
+  inner.replace("\\\\", "\u{0}").replace("\\\"", "\"").replace('\u{0}', "\\")
+}
+
+/// Return the value of the last parameter named `key`, the way a Python dict of parameters does.
+fn last_param(params: &[(String, String)], key: &str) -> Option<String> {
+  params.iter().rev().find(|(name, _)| name == key).map(|(_, value)| value.clone())
 }
 
 fn field_error(name: &str, input: Value, kind: Kind) -> FieldError {
   FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(name.to_string())], input, kind }
 }
 
-fn multipart_error(detail: &str) -> Box<Response> {
+/// A Starlette `MultiPartException` becomes a 400 whose detail is the message.
+fn starlette_error(message: &str) -> Box<Response> {
+  multipart_error_with(message)
+}
+
+/// A python-multipart `MultipartParseError` becomes FastAPI's catch-all body parsing error.
+fn multipart_error() -> Box<Response> {
+  multipart_error_with("There was an error parsing the body")
+}
+
+fn multipart_error_with(detail: &str) -> Box<Response> {
   Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail })))
+}
+
+/// The states of python-multipart's `MultipartParser`, ported byte for byte so that every malformed body reaches the
+/// same error and every truncated body leaves the same parts behind.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MultipartState {
+  Start,
+  StartBoundary,
+  HeaderFieldStart,
+  HeaderField,
+  HeaderValueStart,
+  HeaderValue,
+  HeaderValueAlmostDone,
+  HeadersAlmostDone,
+  PartDataStart,
+  PartData,
+  PartBoundaryMatched,
+  PartBoundaryCr,
+  PartBoundaryHyphen,
+  OpeningHyphen,
+  End,
+}
+
+/// Where the bytes of the part being read go.
+enum Sink {
+  None,
+  Field(Vec<u8>),
+  File { filename: Option<String>, writer: std::io::BufWriter<std::fs::File>, path: TempPath, size: u64 },
+}
+
+struct MultipartMachine {
+  opening: Vec<u8>,
+  boundary: Vec<u8>,
+  charset: String,
+  state: MultipartState,
+  opening_index: usize,
+  match_len: usize,
+  header_name: Vec<u8>,
+  header_value: Vec<u8>,
+  content_disposition: Option<Vec<u8>>,
+  part_name: Option<String>,
+  sink: Sink,
+  file_count: usize,
+  field_count: usize,
+  parts: Vec<Part>,
+}
+
+impl MultipartMachine {
+  fn new(boundary: &str, charset: &str) -> Self {
+    Self {
+      opening: format!("--{boundary}").into_bytes(),
+      boundary: format!("\r\n--{boundary}").into_bytes(),
+      charset: charset.to_string(),
+      state: MultipartState::Start,
+      opening_index: 0,
+      match_len: 0,
+      header_name: Vec::new(),
+      header_value: Vec::new(),
+      content_disposition: None,
+      part_name: None,
+      sink: Sink::None,
+      file_count: 0,
+      field_count: 0,
+      parts: Vec::new(),
+    }
+  }
+
+  fn step(&mut self, byte: u8) -> Result<(), Box<Response>> {
+    match self.state {
+      MultipartState::Start => {
+        if byte == b'\r' || byte == b'\n' {
+          return Ok(());
+        }
+        self.state = MultipartState::StartBoundary;
+        self.step(byte)
+      }
+      MultipartState::StartBoundary => {
+        // `opening_index` counts comparison steps against `boundary[index + 2]`, so the name ends at `opening.len()`
+        // and the CRLF that must follow it sits at `opening.len()` and `opening.len() + 1`.
+        if self.opening_index == self.opening.len() {
+          if byte == b'-' {
+            self.opening_index += 1;
+            self.state = MultipartState::OpeningHyphen;
+          } else if byte != b'\r' {
+            return Err(multipart_error());
+          } else {
+            self.opening_index += 1;
+          }
+        } else if self.opening_index == self.opening.len() + 1 {
+          if byte != b'\n' {
+            return Err(multipart_error());
+          }
+          self.opening_index = 0;
+          self.begin_part();
+          self.state = MultipartState::HeaderFieldStart;
+        } else if byte != self.opening[self.opening_index] {
+          return Err(multipart_error());
+        } else {
+          self.opening_index += 1;
+        }
+        Ok(())
+      }
+      MultipartState::OpeningHyphen => {
+        if byte != b'-' {
+          return Err(multipart_error());
+        }
+        self.state = MultipartState::End;
+        Ok(())
+      }
+      MultipartState::HeaderFieldStart => {
+        self.header_name.clear();
+        self.state = MultipartState::HeaderField;
+        self.step(byte)
+      }
+      MultipartState::HeaderField => {
+        if byte == b'\r' && self.header_name.is_empty() {
+          self.state = MultipartState::HeadersAlmostDone;
+          return Ok(());
+        }
+        if byte == b':' {
+          if self.header_name.is_empty() {
+            return Err(multipart_error());
+          }
+          self.state = MultipartState::HeaderValueStart;
+          return Ok(());
+        }
+        if !is_token_byte(byte) {
+          return Err(multipart_error());
+        }
+        self.header_name.push(byte);
+        Ok(())
+      }
+      MultipartState::HeaderValueStart => {
+        if byte == b' ' {
+          return Ok(());
+        }
+        self.header_value.clear();
+        self.state = MultipartState::HeaderValue;
+        self.step(byte)
+      }
+      MultipartState::HeaderValue => {
+        if byte == b'\r' {
+          self.header_end();
+          self.state = MultipartState::HeaderValueAlmostDone;
+          return Ok(());
+        }
+        self.header_value.push(byte);
+        Ok(())
+      }
+      MultipartState::HeaderValueAlmostDone => {
+        if byte != b'\n' {
+          return Err(multipart_error());
+        }
+        self.state = MultipartState::HeaderFieldStart;
+        Ok(())
+      }
+      MultipartState::HeadersAlmostDone => {
+        if byte != b'\n' {
+          return Err(multipart_error());
+        }
+        self.headers_finished()?;
+        self.state = MultipartState::PartDataStart;
+        Ok(())
+      }
+      MultipartState::PartDataStart => {
+        self.state = MultipartState::PartData;
+        self.step(byte)
+      }
+      MultipartState::PartData => self.part_data_byte(byte),
+      MultipartState::PartBoundaryMatched => {
+        if byte == b'\r' {
+          self.state = MultipartState::PartBoundaryCr;
+        } else if byte == b'-' {
+          self.state = MultipartState::PartBoundaryHyphen;
+        } else {
+          self.discard_boundary_match()?;
+          self.state = MultipartState::PartData;
+          self.part_data_byte(byte)?;
+        }
+        Ok(())
+      }
+      MultipartState::PartBoundaryCr => {
+        if byte == b'\n' {
+          self.end_part()?;
+          self.begin_part();
+          self.match_len = 0;
+          self.state = MultipartState::HeaderFieldStart;
+        } else {
+          self.match_len = self.boundary.len();
+          self.discard_boundary_match()?;
+          self.push_part_byte(b'\r')?;
+          self.state = MultipartState::PartData;
+          self.part_data_byte(byte)?;
+        }
+        Ok(())
+      }
+      MultipartState::PartBoundaryHyphen => {
+        if byte == b'-' {
+          self.end_part()?;
+          self.match_len = 0;
+          self.state = MultipartState::End;
+        } else {
+          self.match_len = self.boundary.len();
+          self.discard_boundary_match()?;
+          self.push_part_byte(b'-')?;
+          self.state = MultipartState::PartData;
+          self.part_data_byte(byte)?;
+        }
+        Ok(())
+      }
+      MultipartState::End => Ok(()),
+    }
+  }
+
+  /// Match part data against the boundary, byte for byte, the way python-multipart does: a byte that starts a
+  /// potential boundary is withheld in `match_len` until the match fails or a part boundary confirms.
+  fn part_data_byte(&mut self, byte: u8) -> Result<(), Box<Response>> {
+    if self.match_len == 0 {
+      if byte == self.boundary[0] {
+        self.match_len = 1;
+      } else {
+        self.push_part_byte(byte)?;
+      }
+      return Ok(());
+    }
+    if byte == self.boundary[self.match_len] {
+      self.match_len += 1;
+      if self.match_len == self.boundary.len() {
+        self.state = MultipartState::PartBoundaryMatched;
+      }
+      return Ok(());
+    }
+    self.discard_boundary_match()?;
+    self.part_data_byte(byte)
+  }
+
+  /// Turn the withheld bytes of a failed boundary match back into part data, then restart the match.
+  fn discard_boundary_match(&mut self) -> Result<(), Box<Response>> {
+    let matched = self.match_len;
+    self.match_len = 0;
+    for index in 0..matched {
+      self.push_part_byte(self.boundary[index])?;
+    }
+    Ok(())
+  }
+
+  fn push_part_byte(&mut self, byte: u8) -> Result<(), Box<Response>> {
+    match &mut self.sink {
+      Sink::Field(data) => {
+        if data.len() + 1 > MAX_PART_SIZE {
+          return Err(starlette_error("Part exceeded maximum size of 1024KB."));
+        }
+        data.push(byte);
+      }
+      Sink::File { writer, size, .. } => {
+        writer.write_all(&[byte]).map_err(|_| multipart_error())?;
+        *size += 1;
+      }
+      Sink::None => unreachable!("part data arrives only after the part headers finished"),
+    }
+    Ok(())
+  }
+
+  fn begin_part(&mut self) {
+    self.sink = Sink::None;
+    self.part_name = None;
+    self.content_disposition = None;
+    self.header_name.clear();
+    self.header_value.clear();
+  }
+
+  fn header_end(&mut self) {
+    let name = latin1(&self.header_name).to_lowercase();
+    if name == "content-disposition" {
+      self.content_disposition = Some(std::mem::take(&mut self.header_value));
+    }
+    self.header_value.clear();
+  }
+
+  /// Finish the headers of a part the way Starlette's `on_headers_finished` does: read the disposition, count the
+  /// part, and open the temporary file for a file part.
+  fn headers_finished(&mut self) -> Result<(), Box<Response>> {
+    let disposition = self.content_disposition.take().unwrap_or_default();
+    let (_, options) = parse_options_header(&latin1(&disposition));
+    let Some(name) = last_param(&options, "name") else {
+      return Err(starlette_error("The Content-Disposition header field \"name\" must be provided."));
+    };
+    self.part_name = Some(user_safe_decode(&latin1_bytes(&name), &self.charset));
+    if let Some(filename) = last_param(&options, "filename") {
+      self.file_count += 1;
+      if self.file_count > MAX_FILES {
+        return Err(starlette_error("Too many files. Maximum number of files is 1000."));
+      }
+      let named_file = NamedTempFile::new().map_err(|_| multipart_error())?;
+      let (file, path) = named_file.into_parts();
+      self.sink = Sink::File {
+        filename: Some(user_safe_decode(&latin1_bytes(&filename), &self.charset)),
+        writer: std::io::BufWriter::new(file),
+        path,
+        size: 0,
+      };
+    } else {
+      self.field_count += 1;
+      if self.field_count > MAX_FIELDS {
+        return Err(starlette_error("Too many fields. Maximum number of fields is 1000."));
+      }
+      self.sink = Sink::Field(Vec::new());
+    }
+    Ok(())
+  }
+
+  /// Close the part being read, the way Starlette's `on_part_end` does.
+  fn end_part(&mut self) -> Result<(), Box<Response>> {
+    let name = self.part_name.take().unwrap_or_default();
+    match std::mem::replace(&mut self.sink, Sink::None) {
+      Sink::Field(data) => {
+        self.parts.push(Part { name, value: PartValue::Form(user_safe_decode(&data, &self.charset)) });
+      }
+      Sink::File { filename, mut writer, path, size } => {
+        writer.flush().map_err(|_| multipart_error())?;
+        self.parts.push(Part { name, value: PartValue::File(UploadedFile { filename, path, size }) });
+      }
+      Sink::None => unreachable!("part data arrives only after the part headers finished"),
+    }
+    Ok(())
+  }
+}
+
+fn is_token_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric()
+    || matches!(
+      byte,
+      b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+    )
+}
+
+/// Read a multipart body with the ported python-multipart state machine.
+async fn read_multipart(boundary: &str, charset: &str, body: Body) -> Result<FormBody, Box<Response>> {
+  let mut machine = MultipartMachine::new(boundary, charset);
+  let mut stream = body.into_data_stream();
+  while let Some(chunk) = stream.next().await {
+    let chunk = chunk.map_err(|_| multipart_error())?;
+    for byte in chunk.iter() {
+      machine.step(*byte)?;
+    }
+  }
+  // A body that ends before the current part closes leaves that part behind, as Starlette does when the stream ends.
+  Ok(FormBody { parts: std::mem::take(&mut machine.parts) })
 }

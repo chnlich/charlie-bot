@@ -274,6 +274,10 @@ fn matrix() -> Vec<Case> {
 struct GoldenContribution;
 
 impl TurnContribution for GoldenContribution {
+  fn class_name(&self) -> &'static str {
+    "GoldenContribution"
+  }
+
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,

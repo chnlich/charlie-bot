@@ -21,6 +21,10 @@ const MANAGER_KIND: &str = "manager_turn";
 pub struct DiscordTurnContribution;
 
 impl TurnContribution for DiscordTurnContribution {
+  fn class_name(&self) -> &'static str {
+    "DiscordTurnContribution"
+  }
+
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,

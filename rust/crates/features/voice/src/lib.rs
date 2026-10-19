@@ -30,6 +30,10 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 struct VoiceTurnContribution;
 
 impl TurnContribution for VoiceTurnContribution {
+  fn class_name(&self) -> &'static str {
+    "VoiceTurnContribution"
+  }
+
   fn input_preamble(&self, _meta: &SessionMetadata, input_event: &Value) -> Option<String> {
     (input_event.get("input_mode").and_then(Value::as_str) == Some(VOICE_INPUT_MODE)).then(|| VOICE_NOTE.to_string())
   }

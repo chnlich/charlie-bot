@@ -60,6 +60,11 @@ VOICE_MODEL_ENTRIES = (
     "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
     "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
 )
+# The two events a server logs when its background speech-model provisioning ends, ready or failed.
+PROVISIONING_EVENTS = ("speech_models_ready", "speech_model_provisioning_failed")
+# The sherpa engine downloads two artifacts, and each download is bounded by the 60 s model download timeout on both
+# servers (src/infra/timeouts.py and rust/crates/features/voice/src/provisioning.rs).
+PROVISIONING_TIMEOUT_SECONDS = 120.0
 
 
 @dataclasses.dataclass
@@ -257,6 +262,19 @@ def _wait_for_sides(sides: list[Side], step: scenario_file.Step, manifest: dict)
       break
     time.sleep(0.02)
   return [f"{side} did not meet the wait condition within {step.timeout_seconds}s" for side in sorted(pending)]
+
+
+def _server_logs(sides: list[Side]) -> dict[str, pathlib.Path]:
+  """Each side's log for the server process the harness last started on that side."""
+  for side in sides:
+    if side.server is None:
+      raise RuntimeError(f"{side.label} has no running server")
+  return {side.label: side.server.log_path for side in sides}
+
+
+def _wait_for_provisioning(sides: list[Side]) -> list[str]:
+  """Wait until each side logs the end of its background speech-model provisioning, ready or failed."""
+  return servers.wait_for_log_events(_server_logs(sides), PROVISIONING_EVENTS, {}, PROVISIONING_TIMEOUT_SECONDS)
 
 
 def _write_fake_agent_script(sides: list[Side], script: dict | None) -> None:
@@ -562,6 +580,7 @@ def _run_handover_step(
     side.start_server(argv)
   for side in sides:
     side.wait_ready()
+  lines.extend(_wait_for_provisioning(sides))
   after = _settle_sides(sides)
   _prepare_contexts(sides, after)
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
@@ -843,7 +862,7 @@ def _run_scenario(
     sides[1].start_server(candidate_first_argv)
     for side in sides:
       side.wait_ready()
-    startup_lines = []
+    startup_lines = _wait_for_provisioning(sides)
     for side in sides:
       if side.fake_set is not None:
         missing = side.fake_set.wait_ready(tuple(scenario.fakes), fakes.FAKE_READY_TIMEOUT_SECONDS)

@@ -6,6 +6,7 @@ messages, the replies and the notices, in log order.
 """
 
 import asyncio
+import re
 
 from src.infra import event_types as ET
 from src.infra import log_once, metadata_slots, models
@@ -16,6 +17,27 @@ logger = log_once.LazyStructlogLogger()
 
 # The reply budget the readback's over_budget flag measures; an over-budget reply still posts.
 REPLY_BUDGET_CHARS = 500
+
+# The language check holds a reply when the user's last message has at least this many Han characters and the
+# reply's Han share is below the maximum. The Han share is defined in language_check_holds.
+LANGUAGE_CHECK_MIN_USER_HAN = 5
+LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE = 0.05
+# The 409 detail of a held reply. The agent reads it: it rewrites the reply in Chinese, or passes --keep-language.
+LANGUAGE_HOLD_DETAIL = (
+    "Language check: the user's last message is in Chinese.\n"
+    "This reply has almost no Chinese.\n"
+    "The command posted nothing.\n"
+    "Rewrite the reply in Chinese.\n"
+    "Then post the reply again.\n"
+    "To post the reply as written, add --keep-language \"<reason>\" to the command.")
+# The spans the Han share does not count: fenced and inline code, URLs and paths.
+_CODE_FENCE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE = re.compile(r"`[^`]*`")
+_URL = re.compile(r"\(?https?://\S+\)?")
+_PATH = re.compile(r"(?<![\w])[~/][\w.\-/]+")
+# CJK Unified Ideographs (U+4E00-U+9FFF) and Extension A (U+3400-U+4DBF); Latin letters are the ASCII letters.
+_HAN = re.compile(r"[㐀-䶿一-鿿]")
+_LATIN = re.compile(r"[A-Za-z]")
 
 # The rule file under prompts/ that a web session's manager turn carries.
 RULES_FILE = "web_reply.md"
@@ -89,6 +111,37 @@ def answered_input(events: list[dict], input_event_ids: list[str]) -> tuple[dict
   return bound
 
 
+def newest_user_text(events: list[dict]) -> str | None:
+  """The text of the newest user message in *events*, which is in log order; None when the log holds none."""
+  for ev in reversed(events):
+    if ev.get("type") == ET.USER and ev.get("actor") == "user" and isinstance(ev.get("content"), str):
+      return ev["content"]
+  return None
+
+
+def _han_and_latin(text: str) -> tuple[int, int]:
+  """The Han and Latin-letter counts of *text*, leaving out code, URLs and paths."""
+  body = text
+  for pattern in (_CODE_FENCE, _INLINE_CODE, _URL, _PATH):
+    body = pattern.sub(" ", body)
+  return len(_HAN.findall(body)), len(_LATIN.findall(body))
+
+
+def language_check_holds(user_text: str | None, reply_text: str) -> bool:
+  """Whether the language check holds *reply_text* after the user message *user_text*; None means no user message.
+
+  The check holds when the user message has at least LANGUAGE_CHECK_MIN_USER_HAN Han characters and the reply's Han
+  share, Han / (Han + Latin letters), is below LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE. A reply with no Han characters
+  and no Latin letters is not held.
+  """
+  if user_text is None or _han_and_latin(user_text)[0] < LANGUAGE_CHECK_MIN_USER_HAN:
+    return False
+  reply_han, reply_latin = _han_and_latin(reply_text)
+  if reply_han + reply_latin == 0:
+    return False
+  return reply_han / (reply_han + reply_latin) < LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE
+
+
 def replied(events: list[dict], user_event_id: str) -> bool:
   """Whether the log holds a web reply that answers *user_event_id*."""
   return any(
@@ -108,28 +161,38 @@ def noticed(events: list[dict], user_event_id: str) -> bool:
 
 
 async def post_web_reply(
-    session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents,
-    lifecycle: session_lifecycle.SessionLifecycle) -> dict:
+    session_id: str,
+    text: str,
+    store: session_store.SessionStore,
+    events: session_events.SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    keep_language: str | None = None) -> dict:
   """Record *text* as the session's web reply and return the readback the CLI prints.
 
   The text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
-  nothing when the running turn has neither. Refusals raise WebReplyError before anything is recorded.
+  nothing when the running turn has neither. Refusals raise WebReplyError before anything is recorded. The language
+  check holds the text unless *keep_language*, the agent's reason for posting it as written, is given; the reason is
+  then recorded on the reply.
   """
   await require_web_session(store, session_id)
   if not text.strip():
     raise WebReplyError(422, "Reply text is empty")
+  if keep_language is not None and not keep_language.strip():
+    raise WebReplyError(422, "Keep-language reason is empty")
   loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
+  if keep_language is None and language_check_holds(newest_user_text(loaded), text):
+    logger.info("web_reply_held", session=session_id, chars=len(text))
+    raise WebReplyError(409, LANGUAGE_HOLD_DETAIL)
   bound = answered_input(loaded, master_cc_state.running_user_event_ids(session_id))
   answers = bound[1] if bound is not None else None
-  await events.persist_and_broadcast(
-      session_id, {
-          "type": ET.WEB_REPLY,
-          "content": text,
-          ET.WEB_REPLY: {
-              "answers": answers,
-              "chars": len(text)
-          },
-      })
+  web_reply = {"answers": answers, "chars": len(text)}
+  if keep_language is not None:
+    web_reply["keep_language"] = keep_language
+  await events.persist_and_broadcast(session_id, {
+      "type": ET.WEB_REPLY,
+      "content": text,
+      ET.WEB_REPLY: web_reply,
+  })
   await lifecycle.mark_unread(session_id)
   over_budget = len(text) > REPLY_BUDGET_CHARS
   logger.info("web_reply_posted", session=session_id, chars=len(text), over_budget=over_budget, answers=answers)

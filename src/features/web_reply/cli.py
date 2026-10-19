@@ -1,6 +1,6 @@
 """CLI verbs for a web session's For-you layer and status, callable from the session's own shell.
 
-  charliebot web reply --file <path>            (``-`` reads the reply from stdin)
+  charliebot web reply --file <path> [--keep-language <reason>]   (``-`` reads the reply from stdin)
   charliebot web dialog [--session ID]
   charliebot web status set --file <path>       (``-`` reads the JSON from stdin)
   charliebot web status show [--session ID]
@@ -8,7 +8,10 @@
 ``reply`` records the file's text as the session's web reply through the internal web/reply endpoint and prints the
 readback as one JSON line: ``posted``, ``chars``, ``over_budget`` (past the 500-character reply budget) and
 ``answers`` (the user message id the reply answers, or null). A refusal (unknown session, a thread session or a
-worker, blank text) exits non-zero with a JSON error on stderr and records nothing.
+worker, blank text, an empty reason) exits non-zero with a JSON error on stderr and records nothing. The language
+check holds a reply when the user's last message is Chinese and the reply has almost no Chinese; a held reply takes
+the same refusal path, and its error says how to continue. ``--keep-language <reason>`` posts the reply as written,
+skips the check, and records the reason on the reply.
 
 ``dialog`` prints the session's For-you layer as plain text in log order: each user message as ``You:``, each reply
 as ``Reply:`` and each notice as ``Notice:``. The session resolves per ``resolve_session_id``; the reply rules are
@@ -39,6 +42,8 @@ def _build_parser() -> argparse.ArgumentParser:
   reply = sub.add_parser(
       "reply", help="Record a web reply for this session", formatter_class=help_formatter.CliHelpFormatter)
   reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
+  reply.add_argument(
+      "--keep-language", metavar="REASON", help="Post the reply as written and record REASON; skips the language check")
   common.add_session_arg(reply)
 
   dialog = sub.add_parser(
@@ -65,7 +70,10 @@ def _build_parser() -> argparse.ArgumentParser:
 def _cmd_reply(args: argparse.Namespace) -> None:
   session_id = common.resolve_session_id(args.session)
   text = common.read_reply_text(args.file)
-  result = common.post_internal_api("/api/internal/web/reply", {"session_id": session_id, "text": text})
+  payload = {"session_id": session_id, "text": text}
+  if args.keep_language is not None:
+    payload["keep_language"] = args.keep_language
+  result = common.post_internal_api("/api/internal/web/reply", payload)
   print(json.dumps(result))
 
 

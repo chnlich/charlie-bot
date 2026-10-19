@@ -5,8 +5,9 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 - **Stage** is the port stage that owns the route: `foundation` for the routes this workspace
   serves, otherwise the route family a later stage ports, named by the Python package that registers
   it (`sessions` is `src/runtime/api/sessions.py`, `features/cron` is `src/features/cron/`).
-- **Status** is `ported` when `charliebot-server` answers the route as the Python server does, else
-  `todo`. A `todo` route answers as an unknown path: 404 with the key, 401 without it.
+- **Status** is `ported` when `charliebot-server` answers the route as the Python server does, `todo` while the
+  port still owes it, or `not ported` for a route that the port leaves out by decision. A `todo` or `not ported`
+  route answers as an unknown path: 404 with the key, 401 without it.
 
 Malformed input (a request that no client sends, such as invalid JSON or a wrong field type) keeps Python's
 status code, and for a 422 answer the `type` and `loc` of each error; the error text may differ. Parity steps
@@ -14,10 +15,10 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 
 | Method | Path | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
-| GET, HEAD | `/openapi.json` | api-docs | todo |  |
-| GET, HEAD | `/docs` | api-docs | todo |  |
-| GET, HEAD | `/docs/oauth2-redirect` | api-docs | todo |  |
-| GET, HEAD | `/redoc` | api-docs | todo |  |
+| GET, HEAD | `/openapi.json` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |
+| GET, HEAD | `/docs` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |
+| GET, HEAD | `/docs/oauth2-redirect` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |
+| GET, HEAD | `/redoc` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |
 | GET | `/api/sessions/chat-threads` | features/chat_threads | ported |  |
 | GET | `/api/auth/status` | foundation | ported |  |
 | GET | `/sessions/{session_id}/events` | pages | ported |  |

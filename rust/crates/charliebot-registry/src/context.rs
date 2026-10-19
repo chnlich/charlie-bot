@@ -70,6 +70,27 @@ impl StartupState {
   }
 }
 
+/// The reader of a session's running-turn input ids.
+type UserEventIdsFn = dyn Fn(&str) -> Vec<String> + Send + Sync;
+
+/// The input event ids that a session's running turn answers, read live from the master queue
+/// (`src/runtime/master_cc_state.py::running_user_event_ids`). The task runtime inserts it at startup.
+pub struct RunningTurnInputs {
+  user_event_ids: Arc<UserEventIdsFn>,
+}
+
+impl RunningTurnInputs {
+  /// Wrap the reader that answers the running turn's input ids for a session.
+  pub fn new(user_event_ids: impl Fn(&str) -> Vec<String> + Send + Sync + 'static) -> Self {
+    Self { user_event_ids: Arc::new(user_event_ids) }
+  }
+
+  /// The input event ids of the session's running turn, in arrival order; empty when no turn runs.
+  pub fn user_event_ids(&self, session_id: &str) -> Vec<String> {
+    (self.user_event_ids)(session_id)
+  }
+}
+
 /// The feature context over the tempdir `home`: the config and credentials reload from it, and the store runs with the
 /// registry's hooks.
 #[cfg(test)]

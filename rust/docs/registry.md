@@ -317,6 +317,11 @@ fills a value makes it visible to a ready service, which reads it at start.
 `AgentBaseEnvironment` is the startup state's one owner of the base agent environment. Code with a `FeatureContext`
 reads it through `features.startup.require::<AgentBaseEnvironment>()?`; one-shot calls and launch contexts carry the
 environment explicitly.
+`RunningTurnInputs` (`charliebot_registry::RunningTurnInputs`) answers the input event ids of a session's running turn,
+as `src/runtime/master_cc_state.py::running_user_event_ids` does. The task runtime inserts it in the pre-recovery step
+that inserts `MasterQueue`, and it reads the same queue. Its one method is `user_event_ids(&self, session_id: &str) ->
+Vec<String>`, which is empty when no turn runs. The web reply package reads it with
+`features.startup.require::<RunningTurnInputs>()?`; a missing entry is an error.
 
 ## Rendering pages
 

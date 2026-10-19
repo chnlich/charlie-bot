@@ -1053,6 +1053,10 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     let pool = backend_pool::backend_pool(&features)?;
     features.startup.insert(MasterQueue::new(pool))?;
     let queue = features.startup.require::<MasterQueue>()?;
+    let running_queue = Arc::clone(&queue);
+    features.startup.insert(charliebot_registry::RunningTurnInputs::new(move |session_id| {
+      running_queue.running_user_event_ids(session_id)
+    }))?;
     let sequence_completion: Arc<dyn SequenceCompletion> = Arc::new(CompletionTaskPending);
     let run_completion: Arc<dyn RunFinishedCompletion> = Arc::new(CompletionTaskPending);
     features.startup.insert(Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion))?;
@@ -1120,7 +1124,7 @@ fn completion_task_error() -> StoreError {
 
 #[cfg(test)]
 mod tests {
-  use super::{free_disk_gib, is_out_of_space_error, native_continuation_matches};
+  use super::{free_disk_gib, is_out_of_space_error, native_continuation_matches, pre_recovery_step};
   use charliebot_core::config::BackendOption;
   use std::os::unix::ffi::OsStrExt;
 
@@ -1185,5 +1189,47 @@ mod tests {
       "snapshot-hash",
       &option,
     ));
+  }
+
+  #[tokio::test]
+  async fn the_startup_step_answers_running_turn_inputs_as_the_master_state_reader_does() {
+    use std::sync::Arc;
+
+    use charliebot_agents::backend_pool::BackendPool;
+    use charliebot_core::credentials::load_credentials;
+    use charliebot_core::hot_reload::HotReload;
+    use charliebot_registry::store_hooks::store_hooks;
+    use charliebot_registry::{FeatureContext, Registry, RunningTurnInputs, StartupState};
+    use charliebot_store::Store;
+
+    let home = tempfile::tempdir().expect("temporary directory exists");
+    let registry = Arc::new(Registry::new());
+    let loaded = registry.load_config(home.path()).expect("an empty home loads with the defaults");
+    let reload_config = loaded.clone();
+    let config = Arc::new(HotReload::new(
+      loaded.config_file(),
+      "execution_test_config_reload_failed",
+      Box::new(move || Ok(reload_config.clone())),
+    ));
+    let store = Arc::new(
+      Store::new(loaded, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("the store opens"),
+    );
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join("credentials.yaml"),
+      "execution_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let startup = Arc::new(StartupState::default());
+    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
+
+    pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
+
+    let inputs = features.startup.require::<RunningTurnInputs>().expect("the startup step inserts the inputs");
+    let session_id = "synthetic-session";
+    let reader = crate::master_state::running_user_event_ids(&features, session_id).expect("the queue is in startup");
+    assert_eq!(inputs.user_event_ids(session_id), reader);
+    assert!(reader.is_empty(), "no turn runs in an idle queue");
   }
 }

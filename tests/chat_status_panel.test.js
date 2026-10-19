@@ -546,6 +546,22 @@ test('a link inside an item context becomes an anchor through safeLink', async (
   assert.deepEqual(anchors.map((el) => el.href), ['https://example.com/plan', '/absolute_filepath/tmp/page.html']);
 });
 
+test('slashes inside prose and punctuation after a URL are not links in a context', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{
+      text: 'Decide the size',
+      context: 'Keep and/or drop 1/2 of it. See https://example.com/plan.',
+      link: null,
+    }],
+  }});
+  const body = waitingItems(rig.panel)[0].querySelector('[data-context-body]');
+  const anchors = allElements(body).filter((el) => el.tagName === 'A');
+  assert.deepEqual(anchors.map((el) => el.href), ['https://example.com/plan']);
+  assert.equal(body.textContent, 'Keep and/or drop 1/2 of it. See https://example.com/plan.');
+});
+
 test('an item without context renders no fold', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Approve the deploy', link: null}]}});

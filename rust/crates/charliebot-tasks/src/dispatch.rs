@@ -9,7 +9,8 @@ use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
-use charliebot_store::{ControlGuard, Store, StoreError, StoreResult, StructuralBlockers};
+use charliebot_store::session_fork::CloseReportRedelivery;
+use charliebot_store::{ControlGuard, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -665,6 +666,16 @@ impl StructuralBlockers for Dispatcher {
 
   fn undelivered_report_blockers(&self, session_id: &str) -> StoreResult<Vec<String>> {
     Dispatcher::undelivered_report_blockers(self, session_id)
+  }
+}
+
+impl CloseReportRedelivery for Dispatcher {
+  fn redeliver_close_reports_locked<'a>(
+    &'a self,
+    guard: &'a ControlGuard,
+    session_id: &'a str,
+  ) -> StoreHookFuture<'a, ()> {
+    Box::pin(async move { Dispatcher::recover_pending_reports_locked(self, guard, session_id).await.map(|_| ()) })
   }
 }
 

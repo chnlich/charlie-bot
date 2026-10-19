@@ -389,6 +389,10 @@ mod tests {
   struct RendererHook(Vec<&'static str>);
 
   impl RuntimeEventHooks for RendererHook {
+    fn copy_on_fork(&self, _parent_dir: &std::path::Path, _child_dir: &std::path::Path) -> StoreResult<()> {
+      Ok(())
+    }
+
     fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn EventRenderer>)>> {
       Ok(
         self
@@ -455,6 +459,10 @@ mod tests {
   struct FeatureEventHook;
 
   impl RuntimeEventHooks for FeatureEventHook {
+    fn copy_on_fork(&self, _parent_dir: &std::path::Path, _child_dir: &std::path::Path) -> StoreResult<()> {
+      Ok(())
+    }
+
     fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
       let renderer: Arc<dyn crate::hooks::EventRenderer> =
         Arc::new(|event: &Value| Ok(Some(json!({"role": "feature", "content": event["content"].clone()}))));
@@ -476,6 +484,10 @@ mod tests {
   }
 
   impl RuntimeEventHooks for AfterTurnHook {
+    fn copy_on_fork(&self, _parent_dir: &std::path::Path, _child_dir: &std::path::Path) -> StoreResult<()> {
+      Ok(())
+    }
+
     fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
       Ok(Vec::new())
     }
@@ -574,6 +586,10 @@ mod tests {
     fn after_turn(&self, _meta: SessionMetadata, _event: Value, _cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
       self.requests.fetch_add(1, Ordering::SeqCst);
       Vec::new()
+    }
+
+    fn copy_on_fork(&self, _parent_dir: &std::path::Path, _child_dir: &std::path::Path) -> StoreResult<()> {
+      Ok(())
     }
 
     fn mark_sidebar_dirty(&self, _session_id: &str) {}

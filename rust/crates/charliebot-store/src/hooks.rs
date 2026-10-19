@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -44,6 +45,9 @@ pub trait RuntimeEventHooks: Send + Sync {
 
   /// Drop feature-owned state for the session.
   fn drop_session_runtime_state(&self, session_id: &str);
+
+  /// Copy each feature's files from a parent session directory into the fork's directory.
+  fn copy_on_fork(&self, parent_dir: &Path, child_dir: &Path) -> StoreResult<()>;
 }
 
 /// Explicit hook set for a server with no registered event contributions.
@@ -61,4 +65,8 @@ impl RuntimeEventHooks for EmptyRuntimeEventHooks {
   fn mark_sidebar_dirty(&self, _session_id: &str) {}
 
   fn drop_session_runtime_state(&self, _session_id: &str) {}
+
+  fn copy_on_fork(&self, _parent_dir: &Path, _child_dir: &Path) -> StoreResult<()> {
+    Ok(())
+  }
 }

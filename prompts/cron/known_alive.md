@@ -489,7 +489,7 @@ Known-alive symbols:
   definition, so vulture flags each as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
 - `content_type_is_excluded` (the `_IsalGZipResponder` write in `server.py`), `row_factory` (the
-  `UsageCapture` connection write in `src/features/usage/usage_ledger.py`), `should_exit` (the
+  `UsageLedger` connection write in `src/features/usage/usage_ledger.py`), `should_exit` (the
   uvicorn `Server` writes in `tools/chat_scroll_regression.py` and
   `tools/live_smoke_task_tree.py`) and `longrepr` (the pytest `TestReport` writes in
   `tests/conftest.py`) — attribute writes on library objects the library itself reads back:
@@ -498,7 +498,7 @@ Known-alive symbols:
   serve loop polls `should_exit`, and pytest renders `longrepr` when a test fails. Nothing in the
   repo reads the attributes back, so vulture flags each write as an unused attribute. Same
   library-attribute class as the `_theme`/`_decolor` entry above.
-- `exc_type`, `tb` (the `UsageCapture.__exit__` signature in
+- `exc_type`, `tb` (the `UsageLedger.__exit__` signature in
   `src/features/usage/usage_ledger.py`) and `exitstatus` (`pytest_terminal_summary` in
   `tests/conftest.py`) — protocol-mandated parameters the body does not read: the `with`
   statement passes the exception triple to `__exit__`, and pluggy passes the exit status to the

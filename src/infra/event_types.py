@@ -90,6 +90,10 @@ WEB_REPLY_NOTICE = "web_reply_notice"
 # A set of the web session's status through ``charliebot web status set``. The payload keys ``web_status`` (the status
 # after the set) and ``web_status_changed`` (the items the set named) carry the record; the status itself is metadata.
 WEB_STATUS = "web_status"
+# One cold read of a Waiting on you item, recorded through ``POST /api/internal/web/ask-check``. The item's digest, the
+# answering backend and the answer are top-level wire keys; a later unread query matches the digest, and the For-you
+# view hides the event. The digest is the only thing that ties the record to the item: the server does not attest it.
+WEB_ASK_CHECK = "web_ask_check"
 
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"

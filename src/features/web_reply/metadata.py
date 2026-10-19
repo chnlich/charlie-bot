@@ -18,10 +18,13 @@ Text = Annotated[str, pydantic.AfterValidator(_reject_blank)]
 
 
 class WaitingItem(pydantic.BaseModel):
-  """One Waiting on you item: a decision or an action, and the link to the place where the user answers it."""
+  """One Waiting on you item: a decision or an action, its context, and the link to where the user answers it."""
   model_config = pydantic.ConfigDict(extra="forbid")
 
   text: Text
+  # The line's state, why the decision comes now, the options and their consequences, and the evidence links. An
+  # item stored before the field existed serializes without it, so the stored shape stays as it was.
+  context: Text | None = pydantic.Field(default=None, exclude_if=lambda value: value is None)
   link: str | None = None
 
 

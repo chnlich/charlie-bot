@@ -57,6 +57,55 @@
     return a;
   }
 
+  // A link run inside an item's context: a web URL or a host path. safeLink still decides
+  // whether it becomes an anchor, so the context cannot introduce a scheme the item's link
+  // could not.
+  const CONTEXT_LINK = /https?:\/\/[^\s<>"']+|\/[^\s<>"']+/g;
+
+  // The context text, with each link run rendered through safeLink.
+  function appendContextText(parent, text) {
+    let cursor = 0;
+    for (const match of text.matchAll(CONTEXT_LINK)) {
+      if (match.index > cursor) parent.appendChild(textSpan('', text.slice(cursor, match.index)));
+      const anchor = document.createElement('a');
+      anchor.className = 'break-all text-blue-400 hover:text-blue-300';
+      anchor.href = safeLink(match[0]);
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = match[0];
+      parent.appendChild(anchor);
+      cursor = match.index + match[0].length;
+    }
+    if (cursor < text.length) parent.appendChild(textSpan('', text.slice(cursor)));
+  }
+
+  // An item's context: one fold under the item's line, closed until the operator clicks it.
+  function contextFold(context) {
+    const block = document.createElement('div');
+    block.className = 'mt-1';
+    block.dataset.context = 'true';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors';
+    toggle.dataset.contextToggle = 'true';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.appendChild(textSpan('w-3 text-center', '▸'));
+    toggle.appendChild(textSpan('', 'Context'));
+    const body = document.createElement('div');
+    body.className = 'hidden mt-1 whitespace-pre-wrap text-xs text-slate-300';
+    body.dataset.contextBody = 'true';
+    appendContextText(body, context);
+    toggle.onclick = () => {
+      const open = body.classList.contains('hidden');
+      body.classList.toggle('hidden', !open);
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.children[0].textContent = open ? '▾' : '▸';
+    };
+    block.appendChild(toggle);
+    block.appendChild(body);
+    return block;
+  }
+
   // A phone stacks each label above its value at full width; the desktop keeps a label column.
   function statusRow(kind) {
     const row = document.createElement('div');
@@ -91,11 +140,15 @@
 
   function waitingItem(item) {
     const el = document.createElement('div');
-    el.className = 'flex gap-2 break-words text-amber-200';
+    el.className = 'break-words text-amber-200';
     el.dataset.waitingItem = 'true';
-    el.appendChild(textSpan('min-w-0', item.text));
+    const line = document.createElement('div');
+    line.className = 'flex gap-2';
+    line.appendChild(textSpan('min-w-0', item.text));
     const href = safeLink(item.link);
-    if (href) el.appendChild(openLink(href));
+    if (href) line.appendChild(openLink(href));
+    el.appendChild(line);
+    if (item.context) el.appendChild(contextFold(item.context));
     return el;
   }
 
@@ -116,10 +169,14 @@
 
   function childItem(prefix, item, sessionId) {
     const el = document.createElement('div');
-    el.className = 'flex gap-2 pl-6 break-words text-amber-200';
+    el.className = 'pl-6 break-words text-amber-200';
     el.dataset.childItem = 'true';
-    el.appendChild(textSpan('min-w-0', prefix + item.text));
-    el.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
+    const line = document.createElement('div');
+    line.className = 'flex gap-2';
+    line.appendChild(textSpan('min-w-0', prefix + item.text));
+    line.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
+    el.appendChild(line);
+    if (item.context) el.appendChild(contextFold(item.context));
     return el;
   }
 

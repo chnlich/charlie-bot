@@ -3,7 +3,6 @@
 //! Port of `src/features/voice/transcriber.py` for the CPU sherpa engine. The qwen3_hf engine is not ported.
 
 use std::cmp::Reverse;
-use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -72,7 +71,8 @@ impl WindowDecoder for OfflineRecognizer {
 
 fn logical_cpus() -> usize {
   // Python's `os.cpu_count() or 1`.
-  std::thread::available_parallelism().map_or(1, NonZeroUsize::get)
+  let cpus = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+  usize::try_from(cpus).ok().filter(|cpus| *cpus > 0).unwrap_or(1)
 }
 
 /// The pool's worker count: one recognizer per two logical CPUs, capped.

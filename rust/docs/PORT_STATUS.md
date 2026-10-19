@@ -68,7 +68,7 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/chat/{session_id}/message` | chat | ported |  |
 | POST | `/api/chat/{session_id}/cancel` | chat | ported |  |
 | GET | `/api/internal/version` | foundation | ported |  |
-| POST | `/api/internal/delegate` | internal | todo |  |
+| POST | `/api/internal/delegate` | internal | ported | `charliebot-tasks::routes::delegate_task`; creates a worker child and first work Run. |
 | POST | `/api/internal/schedule-trigger` | internal | ported |  |
 | POST | `/api/internal/triggers/{session_id}/{trigger_id}/cancel` | internal | ported |  |
 | POST | `/api/internal/session-message` | internal | todo |  |
@@ -264,11 +264,11 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/data/runs/<run>/stdout.log` | backends/antigravity | ported | Written by the final-stdout run, truncated at each run's start (`charliebot-agents/src/runner.rs`). |
 | `sessions/<sid>/data/runs/<run>/stderr.log` | backends/antigravity | ported | Written by the final-stdout run (`charliebot-agents/src/runner.rs`). |
 | `sessions/<sid>/data/runs/<run>/task.md` | backends/charlie-code | ported | Written by the charlie-code command builder (`charliebot-agents/src/backends/charlie_code/charlie_code_cli.rs`). |
-| `sessions/<sid>/data/runs/<run>/harness_instructions.md` | agent-runtime | todo | The writer accepts an `instructions_file` (`charliebot-agents/src/runner.rs:605`), but no run path sets one. |
+| `sessions/<sid>/data/runs/<run>/harness_instructions.md` | agent-runtime | ported | Written by worker launches when the backend supplies managed instructions. |
 | `sessions/<sid>/data/runs/<run>/prompt_snapshot.json` | agent-runtime | ported | Written atomically before launch (`charliebot-tasks/src/execution.rs:319-321`); Python `src/runtime/task_execution.py:1195-1197`. |
 | `sessions/<sid>/data/runs/<run>/launch_prompt.md` | agent-runtime | ported | Written atomically by `persist_launch_text` (`charliebot-tasks/src/execution.rs:584-587`, called at `:402`); Python `src/runtime/task_execution.py:1871-1880`. |
 | `sessions/<sid>/data/runs/<run>/cold_read.json` | agent-runtime | todo | The evidence-file name exists (`charliebot-tasks/src/cold_read.rs:21`); nothing writes it. |
-| `sessions/<sid>/data/runs/<run>/hang_diagnostics.json` | agent-runtime | todo | Diagnostics are captured into the run outcome (`charliebot-agents/src/runner.rs:328`); the file is not written. |
+| `sessions/<sid>/data/runs/<run>/hang_diagnostics.json` | agent-runtime | ported | Written when a worker launch ends with captured hang diagnostics. |
 | legacy `sessions/<sid>/data/master_runs/<started_at>/` | agent-runtime | todo | Read-only baseline layout. |
 | legacy `sessions/<sid>/threads/<tid>/data/` | agent-runtime | todo | Read-only baseline layout. |
 | `sessions/<sid>/triggers/<trigger_id>.json` | agent-runtime | ported | |
@@ -290,7 +290,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | session cgroup directories | agent-runtime | ported | Created or refreshed per spawn by `prepare_session_cgroup` (`charliebot-agents/src/transport/cgroup.rs:141-154`, called from `charliebot-agents/src/transport/spawn.rs:68`); Python `src/infra/process.py:110`, `:272`. Outside the home. |
 | Claude `.credentials.json` | backends/claude-code | ported | Read for the panel and renewed by `claude_code/usage_quota.rs` (atomic write, mode 0600); account health reads in `claude_code/claude_accounts.rs`. Outside the home. |
 | Claude and Codex transcript files | backends/claude-code, backends/codex | ported | Read by `claude_code/usage_logs.rs` and `codex/usage_logs.rs`; swept by `claude_code/usage_sweep.rs` and `codex/usage_sweep.rs`; live pool copies trimmed by `claude_accounts::retire_transcript_copies`. Outside the home. |
-| worktree directories | agent-runtime | todo | Outside the home. |
+| worktree directories | agent-runtime | ported | Worker work runs create isolated worktrees under `paths.worktree_dir`. |
 | worktree trash | agent-runtime | todo | Outside the home. |
 | sibling backup archives | features/backup | ported | `create_backup` writes `charliebot-<YYYYMMDD-HHMMSS>.tar.gz` (local time) into the sibling `<home name>_backup` directory, and `apply_retention` prunes it by the tiered policy: under 7 days keep all, 7-30 days keep Sundays, 30-90 days keep the 1st of the month, older delete. The handler fires through the cron scheduler, which the agent-runtime line ports. Deviation: `strptime` also reads one-digit date fields (`charliebot-2026111-120000` is 2026-11-01); here only the 15-character form parses, so such a name is kept. |
 | `<publish.dir>/<token>/<basename>` | CLI publish | todo | Outside the home. |

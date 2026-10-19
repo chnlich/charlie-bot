@@ -15,13 +15,16 @@ use charliebot_compat::routing::post_only;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::metadata::SessionMetadata;
+use charliebot_store::control_events;
+use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunOutcomeKind};
+use charliebot_store::{CreateTask, TaskCaller};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
+use crate::execution::TaskExecutionAdapter;
 use crate::task_sessions;
 
 struct RequiredTaskSession(SessionMetadata);
@@ -48,6 +51,7 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/sessions/{session_id}/cancel", post_only(cancel_task))
     .route("/api/sessions/{session_id}/task-inputs/acknowledge", post_only(acknowledge_task_inputs))
     .route("/api/sessions/{session_id}/unarchive", post_only(unarchive_task))
+    .route("/api/internal/delegate", post_only(delegate_task))
     .with_state(Arc::clone(features))
 }
 
@@ -60,6 +64,7 @@ pub fn matches(path: &str) -> bool {
     ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
     ["", "api", "sessions", session_id, "complete" | "cancel" | "unarchive"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "task-inputs", "acknowledge"] => !session_id.is_empty(),
+    ["", "api", "internal", "delegate"] => true,
     _ => false,
   }
 }
@@ -95,6 +100,380 @@ const RETRY_RUN_BODY: BodyModel = BodyModel::required(RETRY_RUN_BODY_FIELDS).for
 
 const CANCEL_RUN_BODY_FIELDS: &[Field] = &[Field::required("request_id", FieldType::String)];
 const CANCEL_RUN_BODY: BodyModel = BodyModel::required(CANCEL_RUN_BODY_FIELDS).forbid_extra();
+
+const DELEGATE_TASK_TYPE: &[&str] = &["implement", "quick-edit", "script-run", "verify", "cold-read"];
+const COLD_READ_FIELDS: &[Field] = &[
+  Field::required("page_path", FieldType::String),
+  Field::required("genre", FieldType::String),
+  Field::required("trigger", FieldType::String),
+];
+const COLD_READ_BODY: BodyModel = BodyModel::required(COLD_READ_FIELDS).forbid_extra();
+const DELEGATE_INVOCATION_FIELDS: &[Field] = &[
+  Field::required("task_type", FieldType::Enum(DELEGATE_TASK_TYPE)),
+  Field::optional("repo_path", FieldType::NullableString),
+  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional("task_spec_file", FieldType::NullableString),
+  Field::optional("reviewer_context_file", FieldType::NullableString),
+  Field::required("keep_worktree", FieldType::Boolean),
+  Field::optional("backend", FieldType::NullableString),
+];
+const DELEGATE_INVOCATION_BODY: BodyModel = BodyModel::required(DELEGATE_INVOCATION_FIELDS).forbid_extra();
+const DELEGATE_BODY_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("description", FieldType::String),
+  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional("backend", FieldType::NullableString),
+  Field::optional("repo_path", FieldType::NullableString),
+  Field::optional("task_type", FieldType::Enum(DELEGATE_TASK_TYPE)),
+  Field::optional("keep_worktree", FieldType::Boolean),
+  Field::optional(
+    "delegate_invocation",
+    FieldType::NullableModel { class_name: "DelegateInvocationMetadata", model: &DELEGATE_INVOCATION_BODY },
+  ),
+  Field::optional("request_id", FieldType::NullableString),
+  Field::optional("cold_read", FieldType::NullableModel { class_name: "ColdReadSpec", model: &COLD_READ_BODY }),
+];
+const DELEGATE_BODY: BodyModel = BodyModel::required(DELEGATE_BODY_FIELDS);
+
+struct DelegateRequest {
+  session_id: String,
+  description: String,
+  base_branch: Option<String>,
+  backend: Option<String>,
+  repo_path: Option<String>,
+  task_type: TaskType,
+  keep_worktree: bool,
+  delegate_invocation: Option<Value>,
+  request_id: Option<String>,
+  cold_read: Option<ColdReadSpec>,
+}
+
+fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Response>> {
+  let values = body.validate(&DELEGATE_BODY)?;
+  let values = values.expect("a required request body validates to an object");
+  let task_type = match values.get("task_type").and_then(Value::as_str).unwrap_or("implement") {
+    "implement" => TaskType::Implement,
+    "quick-edit" => TaskType::QuickEdit,
+    "script-run" => TaskType::ScriptRun,
+    "verify" => TaskType::Verify,
+    "cold-read" => TaskType::ColdRead,
+    _ => unreachable!("validated task_type is a known task type"),
+  };
+  let cold_read = values
+    .get("cold_read")
+    .filter(|value| !value.is_null())
+    .map(|value| serde_json::from_value(value.clone()).expect("validated cold_read matches ColdReadSpec"));
+  Ok(DelegateRequest {
+    session_id: values["session_id"].as_str().expect("validated session_id is a string").to_string(),
+    description: values["description"].as_str().expect("validated description is a string").to_string(),
+    base_branch: optional_string(&values, "base_branch"),
+    backend: optional_string(&values, "backend"),
+    repo_path: optional_string(&values, "repo_path"),
+    task_type,
+    keep_worktree: values.get("keep_worktree").and_then(Value::as_bool).unwrap_or(false),
+    delegate_invocation: values.get("delegate_invocation").filter(|value| !value.is_null()).cloned(),
+    request_id: optional_string(&values, "request_id"),
+    cold_read,
+  })
+}
+
+fn optional_string(values: &Value, key: &str) -> Option<String> {
+  values.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn task_type_name(task_type: TaskType) -> &'static str {
+  match task_type {
+    TaskType::Implement => "implement",
+    TaskType::QuickEdit => "quick-edit",
+    TaskType::ScriptRun => "script-run",
+    TaskType::Verify => "verify",
+    TaskType::ColdRead => "cold-read",
+  }
+}
+
+fn delegate_field_contract(request: &DelegateRequest) -> Result<(), String> {
+  let task_type = task_type_name(request.task_type);
+  if request.task_type == TaskType::ColdRead && request.cold_read.is_none() {
+    return Err("cold-read delegations require cold_read".to_string());
+  }
+  if request.task_type != TaskType::ColdRead && request.cold_read.is_some() {
+    return Err(format!("{task_type} delegations reject cold_read"));
+  }
+  if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) {
+    if request.repo_path.is_some() {
+      return Err(format!("{task_type} delegations are repo-less; omit repo_path"));
+    }
+    if request.base_branch.is_some() {
+      return Err(format!("{task_type} delegations are repo-less; omit base_branch"));
+    }
+  } else if request.repo_path.is_some() != request.base_branch.is_some() {
+    return Err(format!(
+      "{task_type} delegations take repo_path and base_branch together; give both for a repo task, neither for a repo-less one"
+    ));
+  }
+  Ok(())
+}
+
+fn delegate_task_spec(request: &DelegateRequest) -> TaskSpec {
+  TaskSpec {
+    goal: request.description.clone(),
+    repo_path: request.repo_path.clone(),
+    base_branch: request.base_branch.clone(),
+    task_type: Some(request.task_type),
+    keep_worktree: request.keep_worktree,
+    cold_read: request.cold_read.clone(),
+    ..TaskSpec::default()
+  }
+}
+
+fn delegate_request_id(request: &DelegateRequest) -> String {
+  request.request_id.as_deref().filter(|request_id| !request_id.is_empty()).map(str::to_string).unwrap_or_else(|| {
+    control_events::derived_delegate_request_id(
+      &request.session_id,
+      task_type_name(request.task_type),
+      &request.description,
+    )
+  })
+}
+
+fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
+  let invocation = request.delegate_invocation.as_ref().unwrap_or(&Value::Null);
+  if invocation.is_null() {
+    return json!({
+      "task_type": task_type_name(request.task_type),
+      "repo_path": request.repo_path,
+      "base_branch": request.base_branch,
+      "task_spec_file": null,
+      "reviewer_context_file": null,
+      "keep_worktree": request.keep_worktree,
+      "backend": request.backend,
+    });
+  }
+  json!({
+    "task_type": invocation.get("task_type"),
+    "repo_path": invocation.get("repo_path").filter(|value| !value.is_null()),
+    "base_branch": invocation.get("base_branch").filter(|value| !value.is_null()),
+    "task_spec_file": invocation.get("task_spec_file").filter(|value| !value.is_null()),
+    "reviewer_context_file": invocation.get("reviewer_context_file").filter(|value| !value.is_null()),
+    "keep_worktree": invocation.get("keep_worktree"),
+    "backend": invocation.get("backend").filter(|value| !value.is_null()),
+  })
+}
+
+async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let request = match parse_delegate_request(&body) {
+    Ok(request) => request,
+    Err(response) => return *response,
+  };
+  if let Err(detail) = delegate_field_contract(&request) {
+    return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
+  }
+  let caller_identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(caller) => caller,
+    Err(response) => return response,
+  };
+  match features.store.get_session(&request.session_id).await {
+    Ok(Some(_)) => {}
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Err(error) => return task_http_error(error),
+  }
+
+  let task_spec = delegate_task_spec(&request);
+  if !charliebot_store::is_read_only_exempt(Some(&task_spec))
+    && let Err(error) = features.store.check_task_authorization(&request.session_id)
+  {
+    return task_http_error(error);
+  }
+  let cfg = match features.config.get() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let pool = match charliebot_agents::backend_pool::backend_pool(&features) {
+    Ok(pool) => pool,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let resolved = if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && request.backend.is_none() {
+    crate::spawner_backends::select_verify_backend(
+      &cfg,
+      &features.store,
+      &request.session_id,
+      task_type_name(request.task_type),
+      &pool,
+    )
+    .await
+    .map(|resolved| {
+      resolved.map(|(backend, model)| {
+        let backend_from_pool = cfg.backends.pool.iter().any(|member| member == &backend);
+        (backend, model, backend_from_pool)
+      })
+    })
+  } else {
+    crate::spawner_backends::resolve_requested_subagent_backend_model(
+      &cfg,
+      &features.store,
+      &request.session_id,
+      request.backend.as_deref(),
+      request.task_type,
+      &pool,
+    )
+    .await
+    .map(Some)
+  };
+  let (resolved_backend, resolved_model, backend_from_pool) = match resolved {
+    Ok(Some(resolved)) => resolved,
+    Ok(None) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": "no backend is available" })),
+    Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+  };
+  match delegate_task_tree(
+    &features,
+    &request,
+    &caller_identity,
+    &task_spec,
+    &resolved_backend,
+    resolved_model.as_deref(),
+    backend_from_pool,
+  )
+  .await
+  {
+    Ok(response) => responses::json(StatusCode::OK, &response),
+    Err(DelegateError::Task(error)) => task_http_error(error),
+    Err(DelegateError::Internal(error)) => responses::internal_error("RuntimeError", error),
+    Err(DelegateError::AdapterMissing) => {
+      responses::json(StatusCode::SERVICE_UNAVAILABLE, &json!({ "detail": "task execution adapter is not installed" }))
+    }
+  }
+}
+
+enum DelegateError {
+  Task(charliebot_store::StoreError),
+  Internal(String),
+  AdapterMissing,
+}
+
+impl From<charliebot_store::StoreError> for DelegateError {
+  fn from(error: charliebot_store::StoreError) -> Self {
+    Self::Task(error)
+  }
+}
+
+async fn delegate_task_tree(
+  features: &FeatureContext,
+  request: &DelegateRequest,
+  caller_identity: &CallerIdentity,
+  task_spec: &TaskSpec,
+  resolved_backend: &str,
+  resolved_model: Option<&str>,
+  backend_from_pool: bool,
+) -> Result<Value, DelegateError> {
+  let caller = match caller_identity {
+    CallerIdentity::Operator { .. } => TaskCaller::Operator,
+    CallerIdentity::Agent { claims } => TaskCaller::Agent { session_id: claims.session_id.clone() },
+  };
+  let request_id = delegate_request_id(request);
+  let name = if request.task_type == TaskType::ColdRead {
+    let path = request.cold_read.as_ref().expect("cold-read field contract was checked").page_path.as_str();
+    Some(format!(
+      "Cold read: {}",
+      std::path::Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or_default()
+    ))
+  } else {
+    None
+  };
+  let create_request = CreateTask {
+    request_id: request_id.clone(),
+    task_parent_id: Some(request.session_id.clone()),
+    profile: TaskProfile::Worker,
+    task: Some(task_spec.clone()),
+    name,
+    backend: Some(resolved_backend.to_string()),
+    group: None,
+    session_id: None,
+  };
+  features.store.runtime_gate(&create_request, &caller)?;
+  let child = features.store.create_task(create_request, caller, Default::default()).await?;
+  if backend_from_pool {
+    let guard = features.store.control_lock().await;
+    features
+      .store
+      .update_task_slot_fields_locked(
+        &guard,
+        &child.id,
+        charliebot_agents::backend_pool::METADATA_OWNER,
+        serde_json::Map::from_iter([("backend_from_pool".to_string(), json!(true))]),
+      )
+      .await?;
+  }
+  let run_id = control_events::stable_run_id(&child.id, &format!("{request_id}:work"));
+  let existing = features.store.read_run_sync(&child.id, &run_id)?;
+  if existing.is_none() {
+    if features.store.task_state(&child.id)? != "open" {
+      tracing::info!(target: "charliebot_tasks", parent = %request.session_id, child = %child.id, "delegate_child_closed");
+      return Ok(json!({
+        "session_id": child.id,
+        "parent_session_id": request.session_id,
+        "run_id": null,
+        "thread_id": null,
+        "description": request.description,
+      }));
+    }
+    let record = charliebot_store::RunRecord {
+      id: run_id.clone(),
+      session_id: child.id.clone(),
+      kind: charliebot_store::RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: Some(resolved_backend.to_string()),
+      model: resolved_model.map(str::to_string),
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: request.repo_path.clone(),
+      base_branch: request.base_branch.clone(),
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let task_spec_text = crate::execution::canonical_task_spec_text(Some(task_spec))
+      .map_err(|error| DelegateError::Internal(error.to_string()))?;
+    let guard = features.store.control_lock().await;
+    features.store.register_run_locked(&guard, &child.id, record, task_spec_text.as_deref()).await?;
+  }
+  let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
+  adapter.launch(&child.id, &run_id)?;
+  let task_event = json!({
+    "type": charliebot_core::event_types::TASK_DELEGATED,
+    "thread_id": run_id,
+    "description": request.description,
+    "backend": resolved_backend,
+    "model": resolved_model.unwrap_or_default(),
+    "child_session_id": child.id,
+    charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
+  });
+  features.store.persist_and_broadcast(&request.session_id, task_event).await?;
+  tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, "task_delegated_task_tree");
+  Ok(json!({
+    "session_id": child.id,
+    "parent_session_id": request.session_id,
+    "run_id": run_id,
+    "thread_id": run_id,
+    "description": request.description,
+  }))
+}
 
 async fn require_session(features: &FeatureContext, session_id: &str) -> Result<bool, Box<Response>> {
   match features.store.get_session(session_id).await {
@@ -792,6 +1171,60 @@ mod tests {
       let post = send(&router, Method::POST, path, post_body).await;
       assert_eq!(post.status(), StatusCode::NOT_FOUND, "POST {path} must reach its handler");
     }
+  }
+
+  #[tokio::test]
+  async fn delegate_field_contract_and_unknown_session_match_python() {
+    // Python: tests/test_task_execution.py::test_delegate_creates_one_child_and_replays_are_stable.
+    let (_home, features) = feature_context();
+    let router = routes(&features);
+    let missing_cold_read = send_operator(
+      &router,
+      "/api/internal/delegate",
+      br#"{"session_id":"synthetic-missing","description":"synthetic","task_type":"cold-read"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    assert_eq!(missing_cold_read.status(), StatusCode::BAD_REQUEST);
+
+    let incomplete_repo_pair = send_operator(
+      &router,
+      "/api/internal/delegate",
+      br#"{"session_id":"synthetic-missing","description":"synthetic","repo_path":"/synthetic/repo"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    assert_eq!(incomplete_repo_pair.status(), StatusCode::BAD_REQUEST);
+
+    let unknown_session = send_operator(
+      &router,
+      "/api/internal/delegate",
+      br#"{"session_id":"synthetic-missing","description":"synthetic","task_type":"script-run"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    assert_eq!(unknown_session.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  async fn delegate_checks_the_runtime_gate_before_creating_a_child() {
+    // Python: tests/test_task_manager_authorization.py::test_implementation_blocked_until_real_user_authorizes_then_delegates_from_depth.
+    let (_home, features) = feature_context();
+    create_upload_session(&features, "synthetic-manager").await;
+    let before_children = features.store.child_ids("synthetic-manager").unwrap();
+    let before_events = features.store.load_chat_events_sync("synthetic-manager").unwrap();
+    let router = routes(&features);
+    let response = send_operator(
+      &router,
+      "/api/internal/delegate",
+      br#"{"session_id":"synthetic-manager","description":"synthetic task","task_type":"script-run"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(features.store.child_ids("synthetic-manager").unwrap(), before_children);
+    assert_eq!(features.store.load_chat_events_sync("synthetic-manager").unwrap(), before_events);
   }
 
   #[tokio::test]

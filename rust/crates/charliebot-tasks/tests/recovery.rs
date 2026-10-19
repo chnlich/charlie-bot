@@ -11,14 +11,17 @@ mod recovery_support;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode, header};
 use charliebot_agents::transport::identity;
 use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::SequenceCompletion;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller};
@@ -30,10 +33,33 @@ use recovery_support::{
   cold_read_spec, implement_spec, script_option, synthetic_run,
 };
 use serde_json::{Map, Value, json};
+use tower::ServiceExt;
 
 /// The stop request a node that closed before its queued run settles it with (`closed_task_stop_request_id`).
 fn closed_task_stop(run_id: &str) -> String {
   format!("closed-task:{run_id}")
+}
+
+fn script_run_spec() -> TaskSpec {
+  TaskSpec { goal: "synthetic worker task".to_string(), task_type: Some(TaskType::ScriptRun), ..TaskSpec::default() }
+}
+
+/// One JSON request to the delegated-worker route, authenticated as the synthetic operator.
+async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(StatusCode, Value)> {
+  let response = router
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/internal/delegate")
+        .header(header::AUTHORIZATION, "Bearer synthetic-access-key")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body)?))?,
+    )
+    .await?;
+  let status = response.status();
+  let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+  Ok((status, serde_json::from_slice(&bytes)?))
 }
 
 /// The `run_stop_requested` facts of one run, as their request ids.
@@ -113,6 +139,94 @@ async fn stop_request_wins_over_launch_and_recovery() -> anyhow::Result<()> {
   Ok(())
 }
 
+/// A delegated repo-less script run creates its worker once, and a lost-response replay returns that same child and
+/// Run while persisting the task card in the manager's chat.
+#[tokio::test]
+async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_delegate_creates_one_child_and_replays_are_stable.
+  let guard = ProcessGroupGuard::new();
+  let stack =
+    Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"Synthetic worker finished"}'"#)
+      .await?;
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  let parent = stack.node("delegate-parent", None, TaskProfile::Manager, None).await?;
+
+  // The user message authorizes takeoff but must not launch a manager turn in this route-focused test.
+  stack.dispatch.set_executor(None);
+  stack.dispatch.admit_input(&parent.id, event_types::USER, "Start the synthetic task.", "user", json!({})).await?;
+  stack.dispatch.set_executor(Some(Arc::new(stack.adapter.clone())));
+
+  let router = charliebot_tasks::routes::routes(&stack.features);
+  let body = json!({
+    "session_id": parent.id,
+    "description": "Synthetic repo-less task",
+    "task_type": "script-run",
+    "request_id": "synthetic-delegate-request",
+    "backend": "fake",
+  });
+  let (first_status, first) = post_delegate(&router, body.clone()).await?;
+  assert_eq!(first_status, StatusCode::OK, "{first}");
+  let (replay_status, replay) = post_delegate(&router, body).await?;
+  assert_eq!(replay_status, StatusCode::OK, "{replay}");
+  assert_eq!(replay["session_id"], first["session_id"]);
+  assert_eq!(replay["run_id"], first["run_id"]);
+  assert_eq!(first["thread_id"], first["run_id"]);
+
+  let child_id = first["session_id"].as_str().expect("delegate returns a child session id").to_string();
+  let run_id = first["run_id"].as_str().expect("delegate returns the first run id").to_string();
+  let mut tracked_pid = None;
+  settle_until(|| {
+    let run = stack.store().read_run_sync(&child_id, &run_id)?;
+    if let Some(pid) = run.as_ref().and_then(|record| record.pid)
+      && tracked_pid != Some(pid)
+    {
+      guard.track(pid);
+      tracked_pid = Some(pid);
+    }
+    Ok(run_records::terminal_outcome(&stack.run_events(&child_id)?, &run_id)?.is_some())
+  })
+  .await?;
+
+  assert_eq!(run_records::terminal_outcome(&stack.run_events(&child_id)?, &run_id)?, Some(RunOutcomeKind::Success));
+  assert_eq!(stack.store().child_ids(&parent.id)?, vec![child_id.clone()]);
+  assert_eq!(stack.run_records(&child_id)?.iter().filter(|record| record.kind == RunKind::Work).count(), 1);
+  let card = stack
+    .store()
+    .load_chat_events_sync(&parent.id)?
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_DELEGATED && event["child_session_id"] == child_id)
+    .expect("the parent's chat holds the delegated-task card");
+  assert_eq!(card["thread_id"], run_id);
+  Ok(())
+}
+
+/// A failed worker Run reports its durable outcome and evidence once, then archives the stopped worker.
+#[tokio::test]
+async fn failed_worker_run_reports_to_parent_and_archives_worker() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_a_failed_worker_run_reports_once_and_archives_the_worker.
+  let guard = ProcessGroupGuard::new();
+  let stack = Stack::start("exit 17").await?;
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  let parent = stack.node("failure-parent", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("failing-worker", Some(&parent.id), TaskProfile::Worker, Some(script_run_spec())).await?;
+  stack.queue_run(&worker.id, "run-failed-worker", RunKind::Work).await?;
+  // Keep this test focused on report persistence; the parent's later turn has its own execution tests.
+  stack.dispatch.set_executor(None);
+
+  let settlement = stack.adapter.execute_run(&worker.id, "run-failed-worker").await?;
+  if let Some(pid) = stack.store().read_run_sync(&worker.id, "run-failed-worker")?.and_then(|run| run.pid) {
+    guard.track(pid);
+  }
+
+  assert_eq!(settlement.outcome.as_deref(), Some("failed"));
+  let reports = child_reports(&stack, &parent.id)?;
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "failed");
+  assert_eq!(reports[0]["result_refs"], json!(["run:run-failed-worker"]));
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
+  Ok(())
+}
+
 /// `test_task_recovery.py::test_reconcile_settles_a_queued_run_on_a_completed_node_once`: a completed node holding a
 /// queued run gets one closed-task stop request, and a repeated pass records nothing more.
 #[tokio::test]
@@ -137,43 +251,42 @@ async fn reconcile_settles_a_queued_run_on_a_completed_node_once() -> anyhow::Re
 }
 
 /// `test_task_recovery.py::test_restart_before_launch_requeues_through_the_same_launch_checks`: a claimed queued run
-/// re-enters the launch checks at boot. A worker run's launch belongs to the worker-run task, so the node pass refuses
-/// it with that owner's name, and the run stays queued.
+/// re-enters the launch checks at boot and finishes through the worker adapter.
 #[tokio::test]
 async fn restart_before_launch_requeues_through_the_same_launch_checks() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_restart_before_launch_requeues_through_the_same_launch_checks.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
-  let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
+  let guard = ProcessGroupGuard::new();
+  let stack =
+    Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"Synthetic worker finished"}'"#)
+      .await?;
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
   stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
   stack.queue_run(&worker.id, "run-queued", RunKind::Work).await?;
   stack.claim(&worker.id, "run-queued").await?;
 
-  let error = stack.node_pass(&worker.id).await.expect_err("the worker launch is refused");
-  let text = format!("{error:#}");
-  assert!(text.contains("owned by the worker-run task"), "{text}");
-  // The startup pass logs the same failure and carries on.
   stack.boot().await?;
-  assert!(log.text().contains("task_recovery_node_failed"), "{}", log.text());
+  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-queued")?.is_some())).await?;
   let run = stack.store().read_run_sync(&worker.id, "run-queued")?.expect("the queued run is recorded");
-  assert_eq!(run.pid, None, "a refused launch starts no process");
-  assert!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-queued")?.is_none());
+  assert!(run.pid.is_some(), "the worker launch did not persist its process identity: {run:?}");
+  guard.track(run.pid.expect("checked above"));
+  assert_eq!(
+    run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-queued")?,
+    Some(RunOutcomeKind::Success)
+  );
   Ok(())
 }
 
-/// `test_task_recovery.py::test_restart_after_launch_reattaches_live_process`: a recorded live process is followed, not
-/// relaunched. The follow of a worker run belongs to the worker-run task, so the node pass names that owner, and the
-/// live process is left running for the owner to follow.
+/// `test_task_recovery.py::test_restart_after_launch_reattaches_live_process`: a recorded live process is followed,
+/// not relaunched, and its result settles the original Run.
 #[tokio::test]
 async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_restart_after_launch_reattaches_live_process.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
   stack.queue_run(&worker.id, "run-live", RunKind::Work).await?;
+  stage_raw_result(&stack.store().run_dir(&worker.id, "run-live"), Duration::from_secs(1))?;
 
   let mut live = Command::new("/bin/sleep").arg("30").process_group(0).spawn()?;
   guard.track(live.id());
@@ -181,15 +294,18 @@ async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   let pid_start = identity.pid_start.expect("the live process has a stat line");
   stack.launch(&worker.id, "run-live", live.id(), &pid_start).await?;
 
-  let error = stack.node_pass(&worker.id).await.expect_err("the worker re-attach belongs to the worker-run task");
-  assert_named_error(&error, "worker-run");
-  stack.boot().await?;
-  assert_logged_node_failure(&log, "worker-run");
-  let run = stack.store().read_run_sync(&worker.id, "run-live")?.expect("the launched run is recorded");
-  assert_eq!(run.pid, Some(live.id()));
-  assert!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-live")?.is_none());
+  stack.node_pass(&worker.id).await?;
+  let key = (worker.id.clone(), "run-live".to_string());
+  settle_until(|| Ok(stack.adapter.resume_follows().contains(&key))).await?;
+  assert!(live.try_wait()?.is_none(), "the startup node pass returns while the worker process is alive");
   live.kill()?;
   live.wait()?;
+  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-live")?.is_some())).await?;
+  settle_until(|| Ok(!stack.adapter.resume_follows().contains(&key))).await?;
+
+  let run = stack.store().read_run_sync(&worker.id, "run-live")?.expect("the launched run is recorded");
+  assert_eq!(run.pid, Some(live.id()));
+  assert_eq!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-live")?, Some(RunOutcomeKind::Success));
   Ok(())
 }
 
@@ -277,25 +393,24 @@ fn is_out_of_space_error_walks_the_cause_chain() {
 }
 
 /// `test_task_execution.py::test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time`:
-/// a launched worker run whose process died unseen drains through the worker-run task. The node pass names that owner
-/// and records no end time.
+/// a launched worker run whose process died unseen drains from its raw log and lands the durable result.
 #[tokio::test]
-async fn a_drained_worker_run_belongs_to_the_worker_run_task() -> anyhow::Result<()> {
+async fn a_drained_worker_run_lands_its_result_and_raw_end_time() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
   stack.queue_run(&worker.id, "run-drained", RunKind::Work).await?;
   stack.launch(&worker.id, "run-drained", 424_901, "1-424000").await?;
-  stage_raw_result(&stack.store().run_dir(&worker.id, "run-drained"), Duration::from_secs(3600))?;
+  let raw_mtime = stage_raw_result(&stack.store().run_dir(&worker.id, "run-drained"), Duration::from_secs(3600))?;
 
-  let error = stack.node_pass(&worker.id).await.expect_err("the drain of a worker run belongs to the worker-run task");
-  assert_named_error(&error, "worker-run");
-  stack.boot().await?;
-  assert_logged_node_failure(&log, "worker-run");
+  stack.node_pass(&worker.id).await?;
   let run = stack.store().read_run_sync(&worker.id, "run-drained")?.expect("the drained run is recorded");
-  assert_eq!(run.ended_at, None, "no drain end time is written by the refused follow");
+  let ended_at = run.ended_at.expect("the drain lands an end time").into_inner();
+  assert!((ended_at - time::OffsetDateTime::from(raw_mtime)).abs() < time::Duration::seconds(1));
+  assert_eq!(
+    run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-drained")?,
+    Some(RunOutcomeKind::Success)
+  );
   Ok(())
 }
 
@@ -312,13 +427,22 @@ async fn assert_refused_by(stack: &Stack, log: &LogCapture, session_id: &str, ow
   Ok(format!("{error:#}"))
 }
 
-/// A queued worker run's launch runs through the worker-run task, so the node pass refuses it with that owner's name.
-async fn assert_queued_worker_launch_refused(stack: &Stack, log: &LogCapture, session_id: &str) -> anyhow::Result<()> {
-  let error = stack.node_pass(session_id).await.expect_err("a worker run launches through the worker-run task");
-  let text = format!("{error:#}");
-  assert!(text.contains("owned by the worker-run task"), "{text}");
+/// A queued worker run enters its adapter at boot and lands its launch failure once.
+async fn assert_queued_worker_launch_fails(
+  stack: &Stack,
+  log: &LogCapture,
+  session_id: &str,
+  expected_error: &str,
+) -> anyhow::Result<()> {
+  let run_id =
+    stack.store().list_run_records_sync(session_id)?.last().context("the queued worker run is recorded")?.id.clone();
   stack.boot().await?;
-  assert!(log.text().contains(&text), "the startup pass logs the refusal: {}", log.text());
+  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(session_id)?, &run_id)?.is_some())).await?;
+  assert_eq!(run_records::terminal_outcome(&stack.run_events(session_id)?, &run_id)?, Some(RunOutcomeKind::Failed));
+  let events_path = stack.store().run_dir(session_id, &run_id).join(run_records::RUN_EVENTS_NAME);
+  let events_log = std::fs::read_to_string(events_path)?;
+  assert!(events_log.contains(expected_error), "{events_log}");
+  assert!(log.text().contains(expected_error), "{}", log.text());
   Ok(())
 }
 
@@ -457,23 +581,43 @@ async fn recovery_refers_a_single_member_pool_review_to_the_review_chain() -> an
 }
 
 /// `test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run`:
-/// a registered run that never started makes the earlier successful run's review unowed. The queued run's own launch is
-/// refused with the worker-run owner's name, and the review is never spawned.
+/// a registered run that never started makes the earlier successful run's review unowed. A high configured disk
+/// floor withholds the queued run, and no review is spawned.
 #[tokio::test]
 async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
-  let stack = Stack::start("exit 0").await?;
+  let stack = Stack::start_with_min_free_disk_gib(
+    vec![script_option(BACKEND_ID, "exit 0")],
+    vec![BACKEND_ID.to_string()],
+    i64::MAX,
+  )
+  .await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
   finished_work_run(&stack, &worker.id, "run-work-early", Some("2026-10-18T09:00:00Z")).await?;
   stack.queue_run(&worker.id, "run-work-queued", RunKind::Work).await?;
 
-  assert_queued_worker_launch_refused(&stack, &log, &worker.id).await?;
+  stack.boot().await?;
+  settle_until(|| {
+    Ok(
+      stack
+        .run_events(&worker.id)?
+        .iter()
+        .any(|event| event["type"] == event_types::RUN_LAUNCH_WITHHELD && event["run_id"] == "run-work-queued"),
+    )
+  })
+  .await?;
   assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty(), "no review behind the unstarted run");
   let queued = stack.store().read_run_sync(&worker.id, "run-work-queued")?.expect("the queued run is recorded");
   assert_eq!(queued.pid, None);
-  let stops = stack.run_events(&worker.id)?.iter().filter(|event| event["type"] == "run_stop_requested").count();
+  let events = stack.run_events(&worker.id)?;
+  assert!(
+    events
+      .iter()
+      .any(|event| event["type"] == event_types::RUN_LAUNCH_WITHHELD && event["run_id"] == "run-work-queued"),
+    "the configured disk floor withholds the worker run"
+  );
+  assert_eq!(run_records::terminal_outcome(&events, "run-work-queued")?, None);
+  let stops = events.iter().filter(|event| event["type"] == "run_stop_requested").count();
   assert_eq!(stops, 0, "an open node's refused launch records no stop request");
   Ok(())
 }
@@ -636,8 +780,8 @@ async fn recovery_cold_read_interrupted_report_refers_to_the_cold_read_task() ->
 }
 
 /// `test_task_recovery.py::test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries`: a failed
-/// cold-read run with a registered retry drives nothing itself. The retry's launch is the worker-run task's, and the
-/// node pass refuses it, so the failed attempt is never re-driven and no second retry appears.
+/// cold-read run with a registered retry drives nothing itself. The retry's context failure lands once, so the failed
+/// attempt is never re-driven and no second retry appears.
 #[tokio::test]
 async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries.
@@ -653,52 +797,72 @@ async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries
   stack.finish(&reader.id, "run-cold-1", RunOutcomeKind::Failed).await?;
   stack.queue_run(&reader.id, "run-cold-2", RunKind::Work).await?;
 
-  assert_queued_worker_launch_refused(&stack, &log, &reader.id).await?;
+  assert_queued_worker_launch_fails(&stack, &log, &reader.id, "cold-read").await?;
   assert_eq!(run_ids_of_kind(&stack, &reader.id, RunKind::Work)?, ["run-cold-1", "run-cold-2"]);
   assert_eq!(closes_of(&stack, &reader.id)?, 0, "the failed attempt is never re-driven into an archive");
   Ok(())
 }
 
 /// `test_task_recovery.py::test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished`:
-/// the failed earlier run's report belongs to the worker-run task, so the node pass names it. The node stays open, as
-/// the later successful run ended last.
+/// a failed earlier run's report replay is idempotent, and a later successful run still owns the review follow-up.
 #[tokio::test]
-async fn recovery_failed_earlier_run_refers_its_report_to_the_worker_run_task() -> anyhow::Result<()> {
+async fn recovery_replays_failed_earlier_run_without_archiving_worker() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::
   //   test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker =
+    stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
   stack.queue_run(&worker.id, "run-a", RunKind::Work).await?;
   stack.finish(&worker.id, "run-a", RunOutcomeKind::Failed).await?;
   stack.queue_run(&worker.id, "run-b", RunKind::Work).await?;
   stack.finish(&worker.id, "run-b", RunOutcomeKind::Success).await?;
 
-  let text = assert_refused_by(&stack, &log, &worker.id, "worker-run").await?;
-  assert!(text.contains("the failure report of work run run-a to its parent"), "{text}");
+  stack.boot().await?;
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.iter().map(|report| report["outcome"].as_str()).collect::<Vec<_>>(), [Some("failed")]);
+  assert_eq!(reports[0]["result_refs"], json!(["run:run-a"]));
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
   assert_eq!(closes_of(&stack, &worker.id)?, 0);
+  settle_manager(&stack, &manager.id).await?;
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds`: the
-/// failure report of a failed open worker belongs to the worker-run task, so the node pass names that owner and
-/// archives nothing.
+/// `test_task_recovery.py::test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds`: an
+/// existing parent report is not delivered or dispatched again, and recovery archives the worker exactly once.
 #[tokio::test]
-async fn recovery_failed_worker_report_refers_to_the_worker_run_task() -> anyhow::Result<()> {
+async fn recovery_archives_worker_after_deduplicating_its_existing_failure_report() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::
   //   test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
   stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
-  stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  stack.record_terminal(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  let source = stack
+    .run_events(&worker.id)?
+    .into_iter()
+    .rev()
+    .find(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == "run-failed")
+    .context("the failed worker run has its terminal event")?;
+  stack.dispatch.set_executor(None);
+  let result_refs = vec!["run:run-failed".to_string()];
+  let (_report, created) = stack
+    .dispatch
+    .deliver_child_report(&worker.id, source, "failed", "run run-failed failed", Some(&result_refs), Some(&manager.id))
+    .await?;
+  assert!(created, "the setup delivery creates the parent's report");
+  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1);
 
-  let text = assert_refused_by(&stack, &log, &worker.id, "worker-run").await?;
-  assert!(text.contains("the failure report of work run run-failed to its parent"), "{text}");
-  assert_eq!(closes_of(&stack, &worker.id)?, 0);
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "replay does not append a second report");
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
+  assert_eq!(closes_of(&stack, &worker.id)?, 1);
+
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "a repeated pass does not append another report");
+  assert_eq!(closes_of(&stack, &worker.id)?, 1, "a repeated pass does not archive twice");
   Ok(())
 }
 
@@ -795,6 +959,7 @@ async fn iteration(
   position: i64,
 ) -> anyhow::Result<RunRecord> {
   let record = RunRecord {
+    kind: RunKind::Iteration,
     sequence_ref: Some(SequenceRef { kind: LOOP_KIND.to_string(), owner_ref: manager_id.to_string(), position }),
     ..queued_work(child_id, run_id)
   };
@@ -859,6 +1024,7 @@ async fn startup_closes_a_loop_whose_stop_requested_iteration_ended() -> anyhow:
   let (manager, child) =
     loop_child(&stack, marker("running", close_owed("failed", "[Synthetic loop 1] failed"))).await?;
   iteration(&stack, &child, &manager, "iter-run-1", 1).await?;
+  stage_raw_result(&stack.store().run_dir(&child, "iter-run-1"), Duration::from_secs(1))?;
   let mut live = Command::new("/bin/sleep").arg("30").process_group(0).spawn()?;
   guard.track(live.id());
   let pid_start = identity::pin_process_identity(live.id()).pid_start.expect("the live process has a stat line");
@@ -995,13 +1161,10 @@ async fn startup_closes_a_loop_whose_iteration_finished_before_its_after_run() -
   Ok(())
 }
 
-/// A dead iteration's drain belongs to the worker-run task. The boot pass marks the loop interrupted, and the node pass
-/// refuses the drain with that owner's name, so the child stays open and nothing closes.
+/// A dead iteration drains its result after the sequence controller marks the loop interrupted and closes its child.
 #[tokio::test]
 async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_drain() -> anyhow::Result<()> {
   // Python: tests/test_task_sequences.py::test_startup_recovery_closes_an_interrupted_loop_whose_process_died.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
     loop_child(&stack, marker("running", close_owed("failed", "[Synthetic loop 1] failed"))).await?;
@@ -1009,48 +1172,45 @@ async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_dr
   stack.launch(&child, "iter-run-1", 424_902, "1-424000").await?;
   stage_raw_result(&stack.store().run_dir(&child, "iter-run-1"), Duration::from_secs(3600))?;
 
-  let error = stack.node_pass(&child).await.expect_err("the iteration drain belongs to the worker-run task");
-  assert_named_error(&error, "worker-run");
-
   stack.boot().await?;
 
   assert_eq!(stack.read_marker(&child)?.status, "interrupted");
-  assert_eq!(stack.store().task_state(&child)?, "open", "the refused drain closes nothing");
-  assert!(closes(&stack, &child)?.is_empty());
-  assert_logged_node_failure(&log, "worker-run");
+  assert_eq!(stack.store().task_state(&child)?, "cancelled");
+  assert_eq!(closes(&stack, &child)?.len(), 1);
+  assert_eq!(run_records::terminal_outcome(&stack.run_events(&child)?, "iter-run-1")?, Some(RunOutcomeKind::Success));
   Ok(())
 }
 
 /// `test_task_sequences.py::test_startup_recovery_leaves_a_live_iterations_child_open_until_its_finish`:
 /// a live iteration keeps its child open. The boot pass marks the loop interrupted and leaves the process running, and
-/// its re-attach belongs to the worker-run task.
+/// its re-attach runs in the background until the process finishes.
 #[tokio::test]
 async fn startup_leaves_a_live_iterations_child_open_until_its_finish() -> anyhow::Result<()> {
   // Python: tests/test_task_sequences.py::test_startup_recovery_leaves_a_live_iterations_child_open_until_its_finish.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
     loop_child(&stack, marker("running", close_owed("failed", "[Synthetic loop 1] failed"))).await?;
   iteration(&stack, &child, &manager, "iter-run-1", 1).await?;
+  stage_raw_result(&stack.store().run_dir(&child, "iter-run-1"), Duration::from_secs(1))?;
   let mut live = Command::new("/bin/sleep").arg("30").process_group(0).spawn()?;
   guard.track(live.id());
   let pid_start = identity::pin_process_identity(live.id()).pid_start.expect("the live process has a stat line");
   stack.launch(&child, "iter-run-1", live.id(), &pid_start).await?;
 
-  let error = stack.node_pass(&child).await.expect_err("the iteration re-attach belongs to the worker-run task");
-  assert_named_error(&error, "worker-run");
-
   stack.boot().await?;
+  let key = (child.clone(), "iter-run-1".to_string());
+  settle_until(|| Ok(stack.adapter.resume_follows().contains(&key))).await?;
 
   assert_eq!(stack.read_marker(&child)?.status, "interrupted");
   assert_eq!(stack.store().task_state(&child)?, "open");
   assert!(closes(&stack, &child)?.is_empty());
   assert!(live.try_wait()?.is_none(), "the startup pass leaves the live iteration running");
-  assert_logged_node_failure(&log, "worker-run");
   live.kill()?;
   live.wait()?;
+  settle_until(|| Ok(!stack.adapter.resume_follows().contains(&key))).await?;
+  assert_eq!(stack.store().task_state(&child)?, "cancelled");
+  assert_eq!(closes(&stack, &child)?.len(), 1);
   Ok(())
 }
 
@@ -1060,7 +1220,7 @@ fn enospc_text() -> String {
 }
 
 /// Poll until `condition` holds, failing after ten seconds.
-async fn settle_until(condition: impl Fn() -> anyhow::Result<bool>) -> anyhow::Result<()> {
+async fn settle_until(mut condition: impl FnMut() -> anyhow::Result<bool>) -> anyhow::Result<()> {
   let deadline = std::time::Instant::now() + Duration::from_secs(10);
   while !condition()? {
     anyhow::ensure!(std::time::Instant::now() < deadline, "the condition did not hold within ten seconds");
@@ -1193,8 +1353,8 @@ async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyho
 }
 
 /// `test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives`:
-/// a node pass that a retry runs skips the worker and manager runs its process already drives, so no second follower
-/// or review starts. Without the driver, the same pass follows the launched worker run, which belongs to worker-run.
+/// a node pass that a retry runs skips worker and manager runs this process already drives, so no second follower or
+/// review starts.
 #[tokio::test]
 async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives.
@@ -1238,12 +1398,6 @@ async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::R
   assert!(manager_run.pid.is_some());
   assert!(run_records::terminal_outcome(&stack.run_events(&manager.id)?, &manager_run.id)?.is_none());
 
-  let undriven: &(dyn Fn(&RunRecord) -> bool + Sync) = &|_: &RunRecord| false;
-  let mut counters = PassCounters::default();
-  let error = recovery::reconcile_node(&stack.features, &stack.adapter, &worker.id, &mut counters, Some(undriven))
-    .await
-    .expect_err("without a driver the launched run belongs to the worker-run task");
-  assert_named_error(&error, "worker-run");
   Ok(())
 }
 

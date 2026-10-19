@@ -42,6 +42,9 @@ pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "budget has been exceeded",
 ];
 
+/// The session metadata slot that records whether the backend pool selected a worker's backend.
+pub const METADATA_OWNER: &str = "backend_pool";
+
 /// The cooldown for a quota error that names no reset time.
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
 
@@ -156,7 +159,7 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.metadata_slot_with_validator(
     MetadataSlot {
-      owner: "backend_pool",
+      owner: METADATA_OWNER,
       on: MetadataFile::Session,
       after: None,
       fields: vec![SlotField { name: "backend_from_pool", default: serde_json::json!(false) }],

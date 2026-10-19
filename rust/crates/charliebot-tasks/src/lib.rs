@@ -21,6 +21,7 @@ pub mod spawner_prompt;
 pub mod task_sessions;
 pub mod upload;
 pub mod verify_trailer;
+pub mod worker;
 
 use charliebot_registry::{Registry, RegistryError};
 

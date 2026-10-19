@@ -29,11 +29,15 @@ OPS = (
     "persist_account_label",
     "update_thinking_state",
     "mark_unread",
+    "mark_read",
     "rename_session",
     "set_group",
+    "rename_group",
+    "delete_group",
     "switch_backend",
     "archive_session",
     "unarchive_session",
+    "delete_session_permanently",
     "update_slot_fields",
 )
 
@@ -91,6 +95,7 @@ async def _seed_one(root: pathlib.Path, operation: str) -> None:
       status=status,
       created_at=FIXED,
       updated_at=FIXED,
+      has_unread=operation == "mark_read",
       cc_session_id="old-native-id",
       cc_session_started_at=FIXED,
       backend="old-backend",
@@ -149,16 +154,24 @@ async def _seed_one(root: pathlib.Path, operation: str) -> None:
     await anchors.update_thinking_state(SESSION_ID, FIXED)
   elif operation == "mark_unread":
     await lifecycle.mark_unread(SESSION_ID)
+  elif operation == "mark_read":
+    await lifecycle.mark_read(SESSION_ID)
   elif operation == "rename_session":
     await lifecycle.rename_session(SESSION_ID, "renamed session")
   elif operation == "set_group":
     await lifecycle.set_group(SESSION_ID, "new-group")
+  elif operation == "rename_group":
+    await lifecycle.rename_group("old-group", "new-group")
+  elif operation == "delete_group":
+    await lifecycle.delete_group("old-group")
   elif operation == "switch_backend":
     await lifecycle.switch_backend(SESSION_ID, "new-backend")
   elif operation == "archive_session":
     await lifecycle.archive_session(SESSION_ID)
   elif operation == "unarchive_session":
     await lifecycle.unarchive_session(SESSION_ID)
+  elif operation == "delete_session_permanently":
+    await lifecycle.delete_session_permanently(SESSION_ID)
   elif operation == "update_slot_fields":
     async with store.lock_for(SESSION_ID):
       fresh = await store.get_session_bypassing_cache(SESSION_ID)
@@ -179,6 +192,9 @@ def _verify(root: pathlib.Path) -> None:
   for operation in (*OPS, "event_append"):
     rust_home = root / operation / "rust-home"
     session_dir = rust_home / "sessions" / SESSION_ID
+    if operation == "delete_session_permanently":
+      assert not session_dir.exists()
+      continue
     raw = (session_dir / "metadata.json").read_text(encoding="utf-8")
     meta = models.validate_session_metadata(raw, str(session_dir / "metadata.json"))
     assert meta.left_by_deleted_package == {"text": "你好", "values": [1, 2.5, 1e16, 1e-5, -0.0]}

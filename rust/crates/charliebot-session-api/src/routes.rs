@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
-use charliebot_compat::routing::get_only;
+use charliebot_compat::routing::{get_and_delete, get_only};
 use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
@@ -43,7 +43,9 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/sessions/status", get_only(session_status))
     .route("/api/sessions/tree", get_only(session_tree))
     .route("/api/sessions/search", get_only(session_search))
+    .merge(crate::writes::routes())
     .merge(crate::detail::routes())
+    .route("/api/sessions/{session_id}", get_and_delete(crate::detail::session_detail, crate::writes::archive_session))
     .with_state(Arc::clone(features))
 }
 

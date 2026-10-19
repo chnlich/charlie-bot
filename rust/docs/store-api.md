@@ -24,8 +24,13 @@ that was checked, so a concurrent write's cached result stays current.
 | `Store::context_state(&self, session_id: &str) -> StoreResult<(Option<i64>, Option<UtcDateTime>)>` | Legacy mirror of `src/runtime/session_anchors.py::context_state`; its caller moves to `SessionUsage::context_state` on the agent-runtime line |
 | `Store::update_thinking_state(&self, session_id: &str, updated_at: UtcDateTime) -> StoreResult<()>` | `src/runtime/session_anchors.py::update_thinking_state`; `src/runtime/session_store.py::save_field_fresh` |
 | `Store::mark_unread(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::mark_unread`, `_set_unread_flag` |
+| `Store::mark_read(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::mark_read`, `_set_unread_flag` |
 | `Store::rename_session(&self, session_id: &str, name: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::rename_session` |
 | `Store::set_group(&self, session_id: &str, group: Option<&str>) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::set_group` |
+| `Store::star_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `Store::unstar_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::star_session`, `unstar_session` |
+| `Store::rename_group(&self, old_name: &str, new_name: &str) -> StoreResult<usize>`; `Store::delete_group(&self, group: &str) -> StoreResult<usize>` | `src/runtime/session_lifecycle.py::rename_group`, `delete_group` |
+| `Store::rate_round(&self, session_id: &str, round_id: &str, rating: Option<RoundRating>) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/api/sessions.py::rate_round` |
+| `Store::delete_session_permanently(&self, session_id: &str) -> StoreResult<bool>` | `src/runtime/session_lifecycle.py::delete_session_permanently` |
 | `Store::switch_backend(&self, session_id: &str, backend: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::switch_backend` |
 | `Store::archive_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::archive_session` |
 | `Store::unarchive_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>` | `src/runtime/session_lifecycle.py::unarchive_session` |
@@ -158,6 +163,7 @@ route accepts run-token identity. `records_generation` increments after each run
 | `record_native_anchor(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>) -> StoreResult<()>`; `record_native_anchor_with_reset(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>, reset_anchor: bool) -> StoreResult<()>` | `src/runtime/task_sessions.py::record_native_anchor` |
 | `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool>` | `src/runtime/task_sessions.py::archive_unsuccessful_worker` |
 | `archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::archive_subtree` |
+| `delete_permanently(&self, session_id: &str, caller: TaskCaller) -> StoreResult<bool>` | `src/runtime/task_sessions.py::delete_permanently`, `_deletion_blockers_locked` |
 | `ensure_prompt_changed_fact(&self, session_id: &str, meta: &SessionMetadata, scope: PromptScope) -> StoreResult<()>` | `src/runtime/task_sessions.py::_ensure_prompt_changed_fact` |
 | `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::load_meta`, `load_task_meta` |
 | `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<TaskFacts>` | `src/runtime/task_sessions.py::task_state`, `facts_of` |
@@ -181,6 +187,8 @@ store identity, and each metadata write re-reads its disk row before mutation. T
 two-second index. Prompt bodies are immutable files under `prompt_bodies/<sha256>.md`; prompt-change facts point to
 those hashes. The store calls required sequence archive and binding-mover hooks for archive, subtree archive, and
 elone rebind. `archive_subtree` accepts only `TaskCaller::Operator`, and it takes the control lock itself.
+`mark_read` keeps `updated_at` and broadcasts `unread_changed` only when the unread flag flips. Permanent deletion removes
+the session directory, clears runtime state, and removes an empty session cgroup.
 The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
 launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 
@@ -192,10 +200,10 @@ status from the class (`src/runtime/api/sessions.py::_task_http_error`), so the 
 | Python class | Rust variant | HTTP | Store producers |
 | --- | --- | --- | --- |
 | `task_errors.TaskInvalidError` | `StoreError::invalid` (`Invalid`) | 400 | `create_task`: a missing request id, a worker parent |
-| `task_errors.TaskNotFoundError`; `runs.RunNotFoundError` | `StoreError::not_found` (`NotFound`) | 404 | `load_task_meta` and every tree read of an absent node; `archive_subtree`; the locked slot, backend, adopt and rebind writes of an absent session; `require_run` |
-| `task_errors.TaskForbiddenError`; `takeoff_gate.DelegationBlockedError` | `StoreError::forbidden` (`Forbidden`) | 403 | an agent's create outside its own open manager task (`runtime_gate`); every `check_task_authorization` refusal; `archive_subtree` for a caller that is not the operator |
+| `task_errors.TaskNotFoundError`; `runs.RunNotFoundError` | `StoreError::not_found` (`NotFound`) | 404 | `load_task_meta` and every tree read of an absent node; `archive_subtree`, `delete_permanently`; the locked slot, backend, adopt and rebind writes of an absent session; `require_run` |
+| `task_errors.TaskForbiddenError`; `takeoff_gate.DelegationBlockedError` | `StoreError::forbidden` (`Forbidden`) | 403 | an agent's create outside its own open manager task (`runtime_gate`); every `check_task_authorization` refusal; `archive_subtree` and `delete_permanently` for a caller that is not the operator |
 | `task_errors.TaskArchivedError` | `StoreError::archived` (`Archived`) | 409, the sentence alone | none in the store yet: machine input to an archived node is refused by the dispatch admission (`session_dispatch.admit_input`) |
-| `task_errors.TaskConflictError` | `StoreError::conflict` (`Conflict`) | 409, `{message, blockers}` | a closed parent or ancestor (including a create under an archived parent); a relation cycle or hop limit; `archive_subtree`'s unfinished runs |
+| `task_errors.TaskConflictError` | `StoreError::conflict` (`Conflict`) | 409, `{message, blockers}` | a closed parent or ancestor (including a create under an archived parent); a relation cycle or hop limit; `archive_subtree`'s unfinished runs; `delete_permanently`'s saved references and content |
 | `runs.RunIdentityConflictError` | `StoreError::conflict` with one blocker | 409, `{message, blockers}` | the stop path's process identity checks (`follow_through_stop`) |
 | none: I/O, serialization, corrupt state, hook and invariant errors | `StoreError::new` (`Failure`) | none | every other error |
 

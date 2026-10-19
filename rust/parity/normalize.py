@@ -132,6 +132,23 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
     ),
     *(
         FieldRule(
+            name="session-write-updated-time",
+            target=route,
+            field="updated_at",
+            when=(),
+            reason="wall-clock time: each server stamps successful session metadata writes on its own clock",
+        ) for route in (
+            "POST /api/sessions/{session_id}/star",
+            "POST /api/sessions/{session_id}/unstar",
+            "POST /api/sessions/{session_id}/group",
+            "POST /api/sessions/{session_id}/rounds/{round_id}/rate",
+            "POST /api/sessions/{session_write_meta.write_session}/star",
+            "POST /api/sessions/{session_write_meta.write_session}/unstar",
+            "POST /api/sessions/{session_write_meta.write_session}/group",
+            "POST /api/sessions/{session_write_meta.write_session}/rounds/write-round/rate",
+        )),
+    *(
+        FieldRule(
             name="delivery-read-time",
             target=route,
             field="messages[*].timestamp",

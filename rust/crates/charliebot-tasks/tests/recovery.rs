@@ -20,6 +20,7 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
+use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller};
 use charliebot_tasks::execution::is_out_of_space_error;
 use charliebot_tasks::recovery::{self, PassCounters};
@@ -1143,6 +1144,51 @@ async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()
   assert_eq!(stack.store().task_state(&worker.id)?, "open", "no retry completed the follow-up");
   stack.boot().await?;
   assert_eq!(stack.store().task_state(&worker.id)?, "completed", "the next pass completes it");
+  Ok(())
+}
+
+/// `test_task_execution.py::test_manager_turn_master_done_enospc_retries_through_master_queue`: the manager turn's
+/// MASTER_DONE write fails out of space, so the turn lands no terminal fact. The retry's node pass re-attaches the dead
+/// turn through the master queue, and the resumed follow lands the end record with the raw log's last write time.
+#[tokio::test]
+async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_manager_turn_master_done_enospc_retries_through_master_queue.
+  let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"turn result"}'"#).await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  let guard = ProcessGroupGuard::new();
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let fault = write_faults::inject_chat_append_fault(
+    stack.store(),
+    event_types::MASTER_DONE,
+    &[manager.id.as_str()],
+    1,
+    libc::ENOSPC,
+  );
+  stack.dispatch.admit_input(&manager.id, event_types::USER, "Take off.", "user", json!({})).await?;
+  let decision = stack.dispatch.dispatch_pending(&manager.id).await?;
+  let run_id = decision["run_id"].as_str().expect("the manager dispatch names its run").to_string();
+
+  settle_until(|| Ok(stack.store().read_run_sync(&manager.id, &run_id)?.is_some_and(|run| run.pid.is_some()))).await?;
+  let pid =
+    stack.store().read_run_sync(&manager.id, &run_id)?.and_then(|run| run.pid).expect("the turn records its pid");
+  guard.track(pid);
+  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(&manager.id)?, &run_id)?.is_some())).await?;
+
+  assert_eq!(fault.hits(), [Hit::Failed, Hit::Written], "the live MASTER_DONE failed and the retry's write landed");
+  let run = stack.store().read_run_sync(&manager.id, &run_id)?.expect("the run is recorded");
+  let outcome = run_records::terminal_outcome(&stack.run_events(&manager.id)?, &run_id)?;
+  assert_eq!(outcome, Some(RunOutcomeKind::Success));
+  let raw_log = stack.store().run_dir(&manager.id, &run_id).join(RAW_LOG_NAME);
+  let raw_mtime = std::fs::metadata(&raw_log)?.modified()?;
+  let ended_at = run.ended_at.expect("the retry lands the end time").into_inner();
+  let raw_written = time::OffsetDateTime::from(raw_mtime);
+  let delta = ended_at - raw_written;
+  assert!(delta.abs() < time::Duration::seconds(1), "ended_at {ended_at} is not the raw log's write {raw_written}");
+
+  let follow = (manager.id.clone(), run_id.clone());
+  settle_until(|| Ok(!stack.adapter.resume_follows().contains(&follow))).await?;
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
   Ok(())
 }
 

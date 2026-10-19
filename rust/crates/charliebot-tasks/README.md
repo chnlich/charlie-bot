@@ -249,7 +249,9 @@ only synthetic `/bin/sh` backends.
 
 `recovery.rs` unit tests cover the review-owed rule
 (`a_review_is_owed_only_to_the_newest_unfollowed_work_run_of_an_open_task`), the closed-task stop id, and the
-end-landing retry rounds. The Python startup-recovery cases in `tests/test_task_recovery.py`,
+end-landing retry rounds. `tests/recovery.rs` ports the manager-turn MASTER_DONE out-of-space case over the store's
+write-fault seam (`write-faults` feature) and a live `/bin/sh` turn, with the retry interval replaced through the
+`test-hooks` feature. The other Python startup-recovery cases in `tests/test_task_recovery.py`,
 `tests/test_task_execution.py`, `tests/test_task_completion.py`, `tests/test_task_prompt_change_durable.py`,
 `tests/test_home_writer_fence.py` and the startup cases of `tests/test_task_sequences.py` are not ported yet.
 The cases that replay a named follow-up above (cold-read, failed-run report, review spawn) need that replay

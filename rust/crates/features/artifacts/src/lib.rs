@@ -11,7 +11,6 @@ pub mod plans;
 mod sidebar;
 #[cfg(test)]
 mod test_support;
-mod unicode;
 
 use std::sync::Arc;
 

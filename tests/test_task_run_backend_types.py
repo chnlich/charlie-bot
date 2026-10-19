@@ -122,7 +122,7 @@ async def test_zero_output_and_error_results_fail_across_types(
 
     async def run(self, prompt, cwd, env, uploaded_files=None):
       raise RuntimeError("transport died mid-turn")
-      yield  # pragma: no cover
+      yield  # keeps run an async generator
 
   errored = _TransportDeath([])
   conftest.install_scripted_backends(monkeypatch, [errored], conftest.BUILD_BACKEND_PATCH_TARGET)

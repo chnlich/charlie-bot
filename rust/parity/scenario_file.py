@@ -47,7 +47,7 @@ _FAKE_STEP_KEYS = {"kind", "name", "fake", "action", "payload"}
 _WAIT_STEP_KEYS = {"kind", "name", "timeout_seconds", "until"}
 _LOG_EVENT_STEP_KEYS = {"kind", "name", "event", "fields", "timeout_seconds"}
 _GATE_STEP_KEYS = {"kind", "name", "open"}
-_HANDOVER_STEP_KEYS = {"kind", "name", "agent_after_stop"}
+_HANDOVER_STEP_KEYS = {"kind", "name", "agent_after_stop", "open_while_stopped", "timeout_seconds"}
 _PROCESS_STEP_KEYS = {"kind", "name", "action", "process_id", "delay_seconds", "capture"}
 
 
@@ -85,6 +85,7 @@ class Step:
   until: dict | None
   open: str | None
   agent_after_stop: str | None
+  open_while_stopped: str | None
   send: tuple[dict, ...]
   collect: dict | None
   compare: str | dict
@@ -399,6 +400,7 @@ def _step(raw: Any, where: str) -> Step:
   open_name = None
   agent = None
   agent_after_stop = None
+  open_while_stopped = None
   send: tuple[dict, ...] = ()
   collect = None
   compare_mode: str | dict = "frames"
@@ -522,6 +524,15 @@ def _step(raw: Any, where: str) -> Step:
     agent_after_stop = raw.get("agent_after_stop")
     if agent_after_stop not in ("alive", "exited", "terminated"):
       raise ScenarioError(f"{where}: 'agent_after_stop' must be alive, exited or terminated")
+    if "open_while_stopped" in raw:
+      open_while_stopped = raw["open_while_stopped"]
+      if not isinstance(open_while_stopped, str) or not open_while_stopped:
+        raise ScenarioError(f"{where}: 'open_while_stopped' must be a non-empty string")
+      if "timeout_seconds" not in raw:
+        raise ScenarioError(f"{where}: 'timeout_seconds' is required with open_while_stopped")
+      timeout_seconds = _positive_timeout(raw["timeout_seconds"], f"{where}.timeout_seconds")
+    elif "timeout_seconds" in raw:
+      raise ScenarioError(f"{where}: 'timeout_seconds' applies only with open_while_stopped")
   elif kind == "process":
     action = raw.get("action")
     if action not in ("start", "stop"):
@@ -566,6 +577,7 @@ def _step(raw: Any, where: str) -> Step:
       until=until,
       open=open_name,
       agent_after_stop=agent_after_stop,
+      open_while_stopped=open_while_stopped,
       send=send,
       collect=collect,
       compare=compare_mode,
@@ -706,6 +718,17 @@ def load(path: pathlib.Path) -> Scenario:
   ]
   if needs_script and not has_script:
     raise ScenarioError(f"{path}: step {needs_script[0].name!r} needs a fake_agent script")
+  declared_gates = {
+      script_step["gate"]
+      for start in (fake_agent["starts"] if fake_agent is not None else [])
+      for script_step in start["steps"]
+      if "gate" in script_step
+  }
+  for handover in (step for step in parsed_steps if step.kind == "handover" and step.open_while_stopped is not None):
+    if handover.open_while_stopped not in declared_gates:
+      raise ScenarioError(
+          f"{path}: step {handover.name!r} opens gate {handover.open_while_stopped!r}, which no fake_agent start "
+          "declares")
   for step in parsed_steps:
     if step.kind == "fake" and step.fake not in fakes:
       raise ScenarioError(f"{path.name} step {step.name!r}: fake {step.fake!r} is not declared in fakes")

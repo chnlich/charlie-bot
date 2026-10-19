@@ -197,6 +197,7 @@ report, then `complete` or `error`. Nothing outside the tests constructs `Worker
 | `worker::Worker` and `Worker::new(Arc<FeatureContext>, WorkerSpec)` | `src/runtime/worker.py:78`, `:88-128` |
 | `worker::WorkerSpec` and its fields | `src/runtime/worker.py:88-128` (`Worker.__init__` arguments) |
 | `Worker::set_on_session_event`, `SessionEventFn` | `src/runtime/worker.py:88-128` (`on_session_event`) |
+| `worker::SpawnedFn` | `src/runtime/worker.py:97` (`on_spawned`), `:238-246` (`_on_spawn` awaits it with the thread node) |
 | `Worker::account_relays` | `src/runtime/worker.py:130` |
 | `Worker::run` | `src/runtime/worker.py:223-310` |
 | `Worker::resume` | `src/runtime/worker.py:311-376` |

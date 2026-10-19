@@ -318,6 +318,22 @@ Scenario fields:
   response contains the same match fields and named field, the rule validates and omits only that response field too;
   all other response fields keep comparing.
 
+- `either_order_of_adjacent_events` accepts either order of one adjacent pair of chat events in each tree. A tree's
+  chat log must hold exactly one `first` event and exactly one neighbour of it that matches `second`. Otherwise that
+  log compares unchanged, and the difference shows. The pair is written as `first`, then `second`, and the `event_index`
+  and `id` of both events are masked on each side, because a swap moves both. The rest of the log compares as usual:
+
+  ```yaml
+  comparison_rules:
+    - either_order_of_adjacent_events:
+        first:
+          type: agent_message
+          match_fields: {from_session_name: "Web reply"}
+        second:
+          type: run_finished
+          match_fields: {outcome: success}
+  ```
+
 Each fake-agent start names its executable, lists its steps and gives its exit code. A start without a matching
 entry prints the stand-in line and records `scripted: false`.
 

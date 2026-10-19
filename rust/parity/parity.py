@@ -182,8 +182,10 @@ def _event_field_rules(
     manifest: dict,
 ) -> tuple[tuple[compare.EventFieldRule, compare.EventFieldRule], ...]:
   rules = []
-  rule_name = "allowed_baseline_values_for_one_event_field"
+  rule_name = scenario_file.EVENT_FIELD_RULE_NAME
   for raw_rule in scenario.comparison_rules:
+    if rule_name not in raw_rule:
+      continue
     raw = raw_rule[rule_name]
     try:
       baseline = _substitute(sides[0], raw, manifest)
@@ -203,6 +205,45 @@ def _event_field_rules(
 
     rules.append((build_rule(baseline), build_rule(candidate)))
   return tuple(rules)
+
+
+def _adjacent_order_rules(
+    scenario: scenario_file.Scenario,
+    side: Side,
+    manifest: dict,
+) -> list[tuple[compare.EventSelector, compare.EventSelector]]:
+  rules = []
+  rule_name = scenario_file.ADJACENT_ORDER_RULE_NAME
+  for raw_rule in scenario.comparison_rules:
+    if rule_name not in raw_rule:
+      continue
+    try:
+      raw = _substitute(side, raw_rule[rule_name], manifest)
+    except scenario_file.UnresolvedReferenceError:
+      continue
+    rules.append(
+        tuple(
+            compare.EventSelector(event_type=raw[key]["type"], match_fields=raw[key]["match_fields"])
+            for key in ("first", "second")))
+  return rules
+
+
+def _delta_diff_lines(
+    scenario: scenario_file.Scenario,
+    sides: list[Side],
+    manifest: dict,
+    deltas: list[compare.Delta],
+    candidate_is_python: bool,
+) -> list[str]:
+  """Every difference between the two trees' step deltas, after each side's adjacent pairs are written in order."""
+  ordered = []
+  for side, delta in zip(sides, deltas, strict=True):
+    for first, second in _adjacent_order_rules(scenario, side, manifest):
+      delta = compare.order_adjacent_pair(delta, first, second)
+    ordered.append(delta)
+  return compare.delta_diff(
+      ordered[0], ordered[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
+      candidate_is_python)
 
 
 def _prepare_contexts(sides: list[Side], snapshots: list[compare.Snapshot]) -> None:
@@ -678,10 +719,7 @@ def _run_handover_step(
   after = _settle_sides(sides)
   _prepare_contexts(sides, after)
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
-  lines.extend(
-      compare.delta_diff(
-          deltas[0], deltas[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
-          candidate_is_python))
+  lines.extend(_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
   lines.extend(_exit_lines(sides, f"during handover step {step.name!r}"))
   result = StepResult(
@@ -821,10 +859,7 @@ def _run_step(
   deltas = None
   if not step.defer_files:
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
-    lines.extend(
-        compare.delta_diff(
-            deltas[0], deltas[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
-            candidate_is_python))
+    lines.extend(_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python))
   if step.kind == "http":
     for side, response in zip(sides, responses, strict=True):
       if response is not None:
@@ -1074,9 +1109,7 @@ def _run_scenario(
             "server shutdown and fake-agent cleanup",
             "(shutdown)", (None, None), [
                 *cleanup_lines,
-                *compare.delta_diff(
-                    deltas[0], deltas[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
-                    candidate_is_python),
+                *_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python),
             ],
             compare.describe_delta(deltas[0]), [],
             notes=refusal_notes))

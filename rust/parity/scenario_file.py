@@ -306,6 +306,29 @@ def _fixture_extras(raw: Any, path: pathlib.Path) -> tuple[str, ...]:
   return tuple(names)
 
 
+EVENT_FIELD_RULE_NAME = "allowed_baseline_values_for_one_event_field"
+ADJACENT_ORDER_RULE_NAME = "either_order_of_adjacent_events"
+COMPARISON_RULE_NAMES = (EVENT_FIELD_RULE_NAME, ADJACENT_ORDER_RULE_NAME)
+
+
+def _event_selector(raw: Any, where: str) -> dict[str, Any]:
+  if not isinstance(raw, dict) or set(raw) != {"type", "match_fields"}:
+    raise ScenarioError(f"{where} requires type and match_fields")
+  if not isinstance(raw["type"], str) or not raw["type"]:
+    raise ScenarioError(f"{where}.type must be a non-empty string")
+  match_fields = raw["match_fields"]
+  if not isinstance(match_fields, dict) or not match_fields or any(
+      not isinstance(key, str) or not key for key in match_fields):
+    raise ScenarioError(f"{where}.match_fields must map non-empty field names to JSON values")
+  return {"type": raw["type"], "match_fields": _overlay_mapping(match_fields, f"{where}.match_fields")}
+
+
+def _adjacent_order_rule(raw: Any, where: str) -> dict[str, Any]:
+  if not isinstance(raw, dict) or set(raw) != {"first", "second"}:
+    raise ScenarioError(f"{where} requires first and second")
+  return {key: _event_selector(raw[key], f"{where}.{key}") for key in ("first", "second")}
+
+
 def _comparison_rules(raw: Any, path: pathlib.Path) -> tuple[dict[str, Any], ...]:
   if raw is None:
     return ()
@@ -314,26 +337,19 @@ def _comparison_rules(raw: Any, path: pathlib.Path) -> tuple[dict[str, Any], ...
   rules = []
   for index, item in enumerate(raw, start=1):
     where = f"{path.name}.comparison_rules[{index}]"
-    rule_name = "allowed_baseline_values_for_one_event_field"
-    if not isinstance(item, dict) or set(item) != {rule_name}:
-      raise ScenarioError(f"{where} must name one supported rule: {rule_name}")
-    rule = item[rule_name]
+    if not isinstance(item, dict) or len(item) != 1 or next(iter(item)) not in COMPARISON_RULE_NAMES:
+      raise ScenarioError(f"{where} must name one supported rule: {', '.join(COMPARISON_RULE_NAMES)}")
+    rule_name, rule = next(iter(item.items()))
+    if rule_name == ADJACENT_ORDER_RULE_NAME:
+      rules.append({rule_name: _adjacent_order_rule(rule, f"{where}.{rule_name}")})
+      continue
     required = {"event", "field", "allowed_baseline_values", "required_candidate_value"}
     if not isinstance(rule, dict) or set(rule) != required:
       raise ScenarioError(
           f"{where}.{rule_name} requires event, field, allowed_baseline_values and required_candidate_value")
-    event = rule["event"]
-    if not isinstance(event, dict) or set(event) != {"type", "match_fields"}:
-      raise ScenarioError(f"{where}.{rule_name}.event requires type and match_fields")
-    if not isinstance(event["type"], str) or not event["type"]:
-      raise ScenarioError(f"{where}.{rule_name}.event.type must be a non-empty string")
-    match_fields = event["match_fields"]
-    if not isinstance(match_fields, dict) or not match_fields or any(
-        not isinstance(key, str) or not key for key in match_fields):
-      raise ScenarioError(f"{where}.{rule_name}.event.match_fields must map non-empty field names to JSON values")
-    match_fields = _overlay_mapping(match_fields, f"{where}.{rule_name}.event.match_fields")
+    event = _event_selector(rule["event"], f"{where}.{rule_name}.event")
     field = rule["field"]
-    if not isinstance(field, str) or not field or field in match_fields:
+    if not isinstance(field, str) or not field or field in event["match_fields"]:
       raise ScenarioError(f"{where}.{rule_name}.field must name one event field outside match_fields")
     allowed_values = rule["allowed_baseline_values"]
     if not isinstance(allowed_values, list) or not allowed_values:
@@ -345,10 +361,7 @@ def _comparison_rules(raw: Any, path: pathlib.Path) -> tuple[dict[str, Any], ...
         {
             rule_name:
                 {
-                    "event": {
-                        "type": event["type"],
-                        "match_fields": match_fields
-                    },
+                    "event": event,
                     "field": field,
                     "allowed_baseline_values": allowed_values,
                     "required_candidate_value": required_candidate_value,

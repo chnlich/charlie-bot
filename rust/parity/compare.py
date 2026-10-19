@@ -389,6 +389,68 @@ def tree_diff(left: Snapshot, right: Snapshot, left_ctx: normalize.Context, righ
   return lines
 
 
+@dataclasses.dataclass(frozen=True)
+class EventSelector:
+  """One chat event that an adjacency rule finds in a log: its type and the fields it must hold."""
+
+  event_type: str
+  match_fields: dict[str, Any]
+
+
+def _selected(event: Any, selector: EventSelector) -> bool:
+  return isinstance(event, dict) and event.get("type") == selector.event_type and all(
+      key in event and not json_diff(event[key], expected) for key, expected in selector.match_fields.items())
+
+
+def _adjacent_pair(events: list[Any], first: EventSelector, second: EventSelector) -> tuple[int, int] | None:
+  """The index of the one *first* event and of its one neighbour that matches *second*, or None without both."""
+  firsts = [index for index, event in enumerate(events) if _selected(event, first)]
+  if len(firsts) != 1:
+    return None
+  neighbours = [
+      index for index in (firsts[0] - 1, firsts[0] + 1)
+      if 0 <= index < len(events) and _selected(events[index], second)
+  ]
+  return (firsts[0], neighbours[0]) if len(neighbours) == 1 else None
+
+
+def _ordered_chat_log(data: bytes, first: EventSelector, second: EventSelector) -> bytes:
+  lines = [line for line in data.splitlines() if line.strip()]
+  events = [_jsonl_line_value(line) for line in lines]
+  pair = _adjacent_pair(events, first, second)
+  if pair is None:
+    return data
+  first_index, second_index = pair
+  lower, upper = sorted(pair)
+  placed = {lower: events[first_index], upper: events[second_index]}
+  rewritten = list(lines)
+  for position, event in placed.items():
+    event.pop("event_index", None)
+    if "id" in event:
+      event["id"] = f"<normalized-{event['type']}-id>"
+    rewritten[position] = json.dumps(event).encode()
+  return b"".join(line + b"\n" for line in rewritten)
+
+
+def order_adjacent_pair(delta: Delta, first: EventSelector, second: EventSelector) -> Delta:
+  """*delta* with each chat log's adjacent (first, second) pair written as first, then second.
+
+  The pair then compares as one order, whichever order the tree wrote it in. A swap moves each event's position and
+  minted id, so both events' event_index and id are masked. A log without exactly one *first* event and one neighbour
+  that matches *second* keeps its content, and the diff reports it.
+  """
+
+  def ordered(entries: dict[str, Entry]) -> dict[str, Entry]:
+    return {
+        path:
+            Entry(entry.kind, _ordered_chat_log(entry.data, first, second))
+            if entry.kind == "file" and path.endswith("/data/chat_events.jsonl") else entry
+        for path, entry in entries.items()
+    }
+
+  return dataclasses.replace(delta, added=ordered(delta.added), changed=ordered(delta.changed))
+
+
 def delta_diff(
     left: Delta,
     right: Delta,
@@ -662,5 +724,3 @@ def response_diff(
   else:
     lines.extend(f"body {line}" for line in json_diff(left_body, right_body))
   return lines
-
-

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use charliebot_core::config::ServerConfig;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::venv::VenvBin;
@@ -79,21 +79,24 @@ pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<
   Ok(startup.require::<AgentBaseEnvironment>()?)
 }
 
-/// Run the cgroup startup log and stale sweep against an injectable base.
-pub fn run_session_cgroup_startup(base_dir: &Path, server: &ServerConfig) -> anyhow::Result<()> {
-  let memory = u64::try_from(server.session_memory_max_mb).context("server.session_memory_max_mb is negative")?;
-  let swap = u64::try_from(server.session_swap_max_mb).context("server.session_swap_max_mb is negative")?;
-  let tasks = u64::try_from(server.session_tasks_max).context("server.session_tasks_max is negative")?;
-  cgroup::log_session_cgroup_startup(base_dir, memory, swap, tasks);
+/// Log the cgroup startup line and sweep stale session cgroups under an injectable base. Negative limits are logged as
+/// they are, as Python's startup does; each spawn applies them as well.
+pub fn run_session_cgroup_startup(base_dir: &Path, server: &ServerConfig) {
+  cgroup::log_session_cgroup_startup(
+    base_dir,
+    server.session_memory_max_mb,
+    server.session_swap_max_mb,
+    server.session_tasks_max,
+  );
   cgroup::sweep_stale_session_cgroups(base_dir);
-  Ok(())
 }
 
 /// Log cgroup availability and remove empty stale session cgroups before recovery.
 pub fn session_cgroup_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let cfg = features.config.get()?;
-    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.server)
+    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.server);
+    Ok(())
   })
 }
 
@@ -287,26 +290,29 @@ mod tests {
   }
 
   #[test]
-  fn runtime_cgroup_startup_sweeps_the_injected_base() {
-    let base = tempfile::tempdir().unwrap();
-    let stale = base.path().join("charliebot-sess-stale");
-    fs::create_dir(&stale).unwrap();
-    let retained = base.path().join("charliebot-sess-retained");
-    fs::create_dir(&retained).unwrap();
-    fs::write(retained.join("cgroup.procs"), "123").unwrap();
-    let server = ServerConfig {
-      host: "127.0.0.1".to_string(),
-      port: 18498,
-      subprocess_buffer_limit_mb: 1024,
-      session_memory_max_mb: 0,
-      session_swap_max_mb: 0,
-      session_tasks_max: 4096,
-      min_free_disk_gib: 10,
-    };
+  fn runtime_cgroup_startup_sweeps_the_injected_base_at_zero_and_negative_limits() {
+    // Python starts with each of these and sweeps the same way, so none of them refuses the start.
+    for (memory, swap, tasks) in [(0, 0, 4096), (-1, 0, 4096), (12288, -1, 4096), (12288, 0, -1)] {
+      let base = tempfile::tempdir().unwrap();
+      let stale = base.path().join("charliebot-sess-stale");
+      fs::create_dir(&stale).unwrap();
+      let retained = base.path().join("charliebot-sess-retained");
+      fs::create_dir(&retained).unwrap();
+      fs::write(retained.join("cgroup.procs"), "123").unwrap();
+      let server = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 18498,
+        subprocess_buffer_limit_mb: 1024,
+        session_memory_max_mb: memory,
+        session_swap_max_mb: swap,
+        session_tasks_max: tasks,
+        min_free_disk_gib: 10,
+      };
 
-    run_session_cgroup_startup(base.path(), &server).unwrap();
+      run_session_cgroup_startup(base.path(), &server);
 
-    assert!(!stale.exists());
-    assert!(retained.is_dir());
+      assert!(!stale.exists(), "limits {memory} {swap} {tasks}");
+      assert!(retained.is_dir(), "limits {memory} {swap} {tasks}");
+    }
   }
 }

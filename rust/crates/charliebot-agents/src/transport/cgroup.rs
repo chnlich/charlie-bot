@@ -18,7 +18,7 @@ pub struct SessionCgroup {
   /// Session cgroup directory.
   pub path: PathBuf,
   /// Configured memory cap in megabytes.
-  pub memory_max_mb: u64,
+  pub memory_max_mb: i64,
   /// `memory.events` counters recorded before spawn.
   pub events_before: Option<(u64, u64)>,
 }
@@ -45,13 +45,14 @@ pub fn session_cgroup_path(base_dir: &Path, session_id: &str) -> PathBuf {
   charliebot_core::cgroup::session_cgroup_path(base_dir, session_id)
 }
 
-/// Create or refresh cgroup limits, returning `None` with one warning per error string on failure.
+/// Create or refresh cgroup limits, returning `None` with one warning per error string on failure. A negative swap
+/// limit is written as its negative number, which the kernel refuses; the spawn then runs without its cgroup.
 pub fn ensure_session_cgroup(
   base_dir: &Path,
   session_id: &str,
-  memory_max_mb: u64,
-  swap_max_mb: u64,
-  tasks_max: u64,
+  memory_max_mb: i64,
+  swap_max_mb: i64,
+  tasks_max: i64,
 ) -> Option<PathBuf> {
   let path = session_cgroup_path(base_dir, session_id);
   match fs::create_dir(&path) {
@@ -116,7 +117,7 @@ pub fn classify_cgroup_exit(
   returncode: Option<i32>,
   before: Option<(u64, u64)>,
   after: Option<(u64, u64)>,
-  memory_max_mb: u64,
+  memory_max_mb: i64,
 ) -> Option<String> {
   if returncode != Some(-libc::SIGKILL) {
     return None;
@@ -135,16 +136,17 @@ pub fn classify_cgroup_exit(
   }
 }
 
-/// Ensure a session cgroup and snapshot its counters; disabled or unavailable cgroups return `None`.
+/// Ensure a session cgroup and snapshot its counters; disabled or unavailable cgroups return `None`. A memory limit of
+/// zero or below disables the cgroup, and no directory is created.
 pub fn prepare_session_cgroup(
   base_dir: &Path,
   session_id: Option<&str>,
-  memory_max_mb: u64,
-  swap_max_mb: u64,
-  tasks_max: u64,
+  memory_max_mb: i64,
+  swap_max_mb: i64,
+  tasks_max: i64,
 ) -> Option<SessionCgroup> {
   let session_id = session_id?;
-  if session_id.is_empty() || memory_max_mb == 0 {
+  if session_id.is_empty() || memory_max_mb <= 0 {
     return None;
   }
   let path = ensure_session_cgroup(base_dir, session_id, memory_max_mb, swap_max_mb, tasks_max)?;
@@ -194,9 +196,10 @@ pub fn sweep_stale_session_cgroups(base_dir: &Path) -> usize {
   removed
 }
 
-/// Log whether session cgroups are enabled for the supplied base and limits.
-pub fn log_session_cgroup_startup(base_dir: &Path, memory_max_mb: u64, swap_max_mb: u64, tasks_max: u64) {
-  if memory_max_mb == 0 {
+/// Log whether session cgroups are enabled for the supplied base and limits. A memory limit of zero or below disables
+/// them.
+pub fn log_session_cgroup_startup(base_dir: &Path, memory_max_mb: i64, swap_max_mb: i64, tasks_max: i64) {
+  if memory_max_mb <= 0 {
     tracing::info!(target: "charliebot_agents", reason = "server.session_memory_max_mb is 0", "session_cgroup_disabled");
   } else if !base_dir.is_dir() {
     tracing::info!(target: "charliebot_agents", reason = %format!("{} not present on this host", base_dir.display()), "session_cgroup_disabled");
@@ -262,5 +265,28 @@ mod tests {
     }
     assert!(cleanup_session_cgroup(base.path(), SESSION_ID));
     assert!(!path.exists());
+  }
+
+  #[test]
+  fn negative_memory_limit_starts_no_session_cgroup() {
+    let base = tempfile::tempdir().unwrap();
+    assert!(prepare_session_cgroup(base.path(), Some(SESSION_ID), -1, 32, 50).is_none());
+    assert!(!session_cgroup_path(base.path(), SESSION_ID).exists());
+  }
+
+  #[test]
+  fn negative_swap_limit_is_written_as_a_negative_number() {
+    // The kernel refuses this write, so the spawn runs without its cgroup. The temporary directory accepts any text,
+    // so the test checks the bytes that the refusal depends on.
+    let base = tempfile::tempdir().unwrap();
+    let path = ensure_session_cgroup(base.path(), SESSION_ID, 64, -32, 50).unwrap();
+    assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), "-33554432");
+  }
+
+  #[test]
+  fn negative_task_limit_writes_no_task_cap() {
+    let base = tempfile::tempdir().unwrap();
+    let path = ensure_session_cgroup(base.path(), SESSION_ID, 64, 32, -1).unwrap();
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max");
   }
 }

@@ -39,12 +39,12 @@ pub struct SpawnSpec {
   pub session_id: Option<String>,
   /// Caller-supplied delegated cgroup base.
   pub cgroup_base: PathBuf,
-  /// Session memory cap in megabytes; zero disables cgroups.
-  pub memory_max_mb: u64,
+  /// Session memory cap in megabytes; zero or below disables cgroups.
+  pub memory_max_mb: i64,
   /// Session swap cap in megabytes.
-  pub swap_max_mb: u64,
-  /// Session task cap; zero writes `max`.
-  pub tasks_max: u64,
+  pub swap_max_mb: i64,
+  /// Session task cap; zero or below writes `max`.
+  pub tasks_max: i64,
 }
 
 impl SpawnSpec {
@@ -57,9 +57,9 @@ impl SpawnSpec {
     env: HashMap<OsString, OsString>,
     session_id: Option<String>,
     cgroup_base: PathBuf,
-    memory_max_mb: u64,
-    swap_max_mb: u64,
-    tasks_max: u64,
+    memory_max_mb: i64,
+    swap_max_mb: i64,
+    tasks_max: i64,
   ) -> Self {
     Self { program: program.into(), args, cwd, env, session_id, cgroup_base, memory_max_mb, swap_max_mb, tasks_max }
   }

@@ -349,10 +349,13 @@ async fn compact_with_sonnet_inner(
   let command = compaction_command(session_id);
   tracing::info!(target: "charliebot_agents", cc_session_id = session_id, pre_tokens, session = %session_id, account = account_label, trigger, "claude_compaction_starting");
   let env = make_env(config_dir)?;
-  let memory = u64::try_from(cfg.server.session_memory_max_mb).context("server.session_memory_max_mb is negative")?;
-  let swap = u64::try_from(cfg.server.session_swap_max_mb).context("server.session_swap_max_mb is negative")?;
-  let tasks = u64::try_from(cfg.server.session_tasks_max).context("server.session_tasks_max is negative")?;
-  let group = cgroup::prepare_session_cgroup(&cgroup::system_cgroup_base_dir(), session_cgroup_id, memory, swap, tasks);
+  let group = cgroup::prepare_session_cgroup(
+    &cgroup::system_cgroup_base_dir(),
+    session_cgroup_id,
+    cfg.server.session_memory_max_mb,
+    cfg.server.session_swap_max_mb,
+    cfg.server.session_tasks_max,
+  );
   let mut process = Command::new(&command[0]);
   process
     .args(&command[1..])

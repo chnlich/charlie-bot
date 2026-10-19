@@ -4,6 +4,7 @@
 //! the same routes takes them from here rather than writing its own.
 
 pub mod fastapi_body;
+pub mod fastapi_form;
 pub mod headers;
 pub mod http_client;
 pub mod jinja;

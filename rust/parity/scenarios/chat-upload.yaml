@@ -1,0 +1,46 @@
+stage: agent-orchestration
+name: chat-upload
+steps:
+  - name: save an upload with a filename
+    method: POST
+    path: /api/chat/${sessions.atlas}/upload
+    multipart:
+      file:
+        file: audio/not-wave.bin
+        content_type: application/octet-stream
+        filename: synthetic-upload.bin
+    expect_status: 200
+  - name: save an upload with an empty filename as upload
+    method: POST
+    path: /api/chat/${sessions.atlas}/upload
+    multipart:
+      file:
+        file: audio/not-wave.bin
+        content_type: application/octet-stream
+        filename: ""
+    expect_status: 200
+  - name: save an upload with a directory part in its filename
+    method: POST
+    path: /api/chat/${sessions.atlas}/upload
+    multipart:
+      file:
+        file: audio/not-wave.bin
+        content_type: application/octet-stream
+        filename: ../directory/synthetic-upload.bin
+    expect_status: 200
+  - name: reject a multipart form without the file field
+    method: POST
+    path: /api/chat/${sessions.atlas}/upload
+    multipart:
+      note: synthetic upload without a file
+    expect_status: 422
+    compare: status_and_shape
+  - name: reject an upload for a missing session
+    method: POST
+    path: /api/chat/${missing_session}/upload
+    multipart:
+      file:
+        file: audio/not-wave.bin
+        content_type: application/octet-stream
+        filename: synthetic-upload.bin
+    expect_status: 404

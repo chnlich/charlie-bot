@@ -320,7 +320,8 @@ Step fields:
 - `query` and `headers` map names to scalar values.
 - `json` is a request body, sent as `application/json`.
 - `body_file` sends a raw file from `data/`. `multipart` maps form fields to scalar values or to
-  `{file: PATH, content_type: TYPE}` entries. Both sides use the same fixed multipart boundary. A step may
+  `{file: PATH, content_type: TYPE}` entries. Add `filename` to set the multipart file name.
+  Both sides use the same fixed multipart boundary. A step may
   contain at most one of `json`, `body_file` and `multipart`.
 - `auth` is `bearer` (the default), `cookie` or `none`.
 - `expect_status` (optional) is the status both servers must return.

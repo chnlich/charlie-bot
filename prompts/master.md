@@ -22,14 +22,14 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 ## Intent First
 
-Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres in prompts/manager_workflows.md).
+Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work on the recommended reading. When readings lead to materially different work, list them on an understanding page (see Artifact Genres in prompts/manager_workflows.md).
 
 A child whose approver is its parent node follows Between Agents in `prompts/task_manager.md` instead.
 
 When the user gives explicit directions, choose exactly one action:
 
 1. If the directions are incorrect, explain what is wrong and why.
-2. If the directions are ambiguous, ask for the clarification needed to act.
+2. If the directions are ambiguous, execute the recommended reading, and name each other reading with the reply that selects it.
 3. Otherwise, execute the directions within the user's stated scope.
 
 Keep your interpretation within the user's stated goal.
@@ -44,7 +44,12 @@ The session status lets the user resume at a glance. It has three items:
 
 - **Goal**: the session's current overall goal, in one sentence.
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
-- **Waiting on you**: each decision or action from the user that the next milestone waits on, or "nothing".
+- **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
+
+- A Waiting on you item asks the user for one of these:
+  - the take off of a consequence step;
+  - a fact or an action that only the user has;
+  - the review of a delivered product.
 
 - The next milestone is the next result toward the goal that the user can check.
 - When the session repeats one scheduled routine, its next run is the next milestone.

@@ -30,6 +30,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-store = { workspace = true, features = ["write-faults"] }
 charliebot-tasks = { path = ".", features = ["test-hooks"] }
 charliebot-web-reply.workspace = true
 serde.workspace = true

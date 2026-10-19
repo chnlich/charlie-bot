@@ -932,8 +932,10 @@ pub fn compose_input_prompt(
   Ok((parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"), uploads))
 }
 
-/// Whether an error or one of its sources reports ENOSPC or EDQUOT.
+/// Whether an error or one of its sources reports ENOSPC or EDQUOT. The store flattens filesystem errors into its
+/// message text (`StoreError::Failure`), so a message that carries the errno's `(os error N)` suffix counts too.
 pub fn is_out_of_space_error(error: &(dyn Error + 'static)) -> bool {
+  let out_of_space_suffixes = [format!("(os error {})", libc::ENOSPC), format!("(os error {})", libc::EDQUOT)];
   let mut current = Some(error);
   let mut seen = HashSet::new();
   while let Some(error) = current {
@@ -946,6 +948,10 @@ pub fn is_out_of_space_error(error: &(dyn Error + 'static)) -> bool {
       .and_then(std::io::Error::raw_os_error)
       .is_some_and(|errno| errno == libc::ENOSPC || errno == libc::EDQUOT)
     {
+      return true;
+    }
+    let message = error.to_string();
+    if out_of_space_suffixes.iter().any(|suffix| message.contains(suffix.as_str())) {
       return true;
     }
     current = error.source();
@@ -1118,6 +1124,17 @@ mod tests {
     let edquot = std::io::Error::from_raw_os_error(libc::EDQUOT);
     assert!(is_out_of_space_error(&edquot));
     assert!(!is_out_of_space_error(&std::io::Error::from_raw_os_error(libc::EACCES)));
+  }
+
+  #[test]
+  fn out_of_space_text_from_a_flattened_store_error_is_found() {
+    let flattened = charliebot_store::StoreError::new(format!(
+      "/synthetic/home/sessions/node/data/runs/run-1/metadata.json: {}",
+      std::io::Error::from_raw_os_error(libc::ENOSPC)
+    ));
+    assert!(is_out_of_space_error(&flattened));
+    let other = charliebot_store::StoreError::new("/synthetic/home/sessions: Permission denied (os error 13)");
+    assert!(!is_out_of_space_error(&other));
   }
 
   #[test]

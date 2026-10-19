@@ -879,7 +879,8 @@ def _kill_fake_group(label: str, record: dict) -> list[str]:
   pid = int(record["pid"])
   pgid = int(record["pgid"])
   if pgid != pid:
-    if servers.process_identity(pid) is not None and servers.process_identity(pid)[1] == record["pid_start"]:
+    start = servers.process_identity(pid)
+    if start is not None and start[1] == record["pid_start"]:
       with contextlib.suppress(ProcessLookupError):
         os.kill(pid, signal.SIGKILL)
     return [f"{label} fake agent {pid} does not lead its own process group (pgid {pgid} != pid {pid}): {record}"]

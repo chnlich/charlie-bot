@@ -110,6 +110,9 @@ _DELIVERY_STAMP = "the worker transcript stamps its closing run_delivery row wit
 _EXPLAIN_STAMP = (
     "wall-clock time: each server stamps an explanation's request and its finish on its own clock; "
     "a finish time is null until the generation ends")
+# A finish time is null while its entry is pending, and that null stays compared. A `when` holds one value per key,
+# so each ended state gets its own rule.
+_ENDED_STATES = ("ready", "error")
 
 RESPONSE_RULES: tuple[FieldRule, ...] = (
     FieldRule(
@@ -148,14 +151,26 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         ) for route in (
             "POST /api/sessions/{session_id}/explain",
             "GET /api/sessions/{session_id}/explain",
-        ) for field in ("requested_at", "generated_at")),
-    FieldRule(
-        name="explain-status-generated-time",
-        target="GET /api/sessions/{session_id}/explain/status",
-        field="*.generated_at",
-        when=(),
-        reason=_EXPLAIN_STAMP,
-    ),
+        ) for field in ("requested_at",)),
+    *(
+        FieldRule(
+            name="explain-generated-at",
+            target=route,
+            field="generated_at",
+            when=(("state", state),),
+            reason=_EXPLAIN_STAMP,
+        ) for route in (
+            "POST /api/sessions/{session_id}/explain",
+            "GET /api/sessions/{session_id}/explain",
+        ) for state in _ENDED_STATES),
+    *(
+        FieldRule(
+            name="explain-status-generated-time",
+            target="GET /api/sessions/{session_id}/explain/status",
+            field="*.generated_at",
+            when=(("state", state),),
+            reason=_EXPLAIN_STAMP,
+        ) for state in _ENDED_STATES),
 )
 
 WS_FRAME_RULES: dict[str, tuple[FieldRule, ...]] = {}
@@ -298,13 +313,14 @@ FILE_RULES: tuple[FieldRule, ...] = (
         when=(),
         reason=_EXPLAIN_STAMP,
     ),
-    FieldRule(
-        name="explain-result-generated-time",
-        target="home/sessions/*/data/explain_results.json",
-        field="*.generated_at",
-        when=(),
-        reason=_EXPLAIN_STAMP,
-    ),
+    *(
+        FieldRule(
+            name="explain-result-generated-time",
+            target="home/sessions/*/data/explain_results.json",
+            field="*.generated_at",
+            when=(("state", state),),
+            reason=_EXPLAIN_STAMP,
+        ) for state in _ENDED_STATES),
     FieldRule(
         name="fake-agent-pid",
         target="fake-agent/spawns.jsonl",

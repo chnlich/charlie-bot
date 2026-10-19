@@ -26,9 +26,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import yaml
+
+import compare
 
 # The fixed synthetic access key both servers accept. It guards nothing but the two temporary servers.
 ACCESS_KEY = "parity-access-key-7c1e4b"
@@ -396,7 +398,7 @@ class ServerProcess:
     return server_pid, identity[1]
 
   def stop_server(self) -> None:
-    """Stop tmux, SIGTERM the server, then stop any idle spawn-pool workers it leaves behind."""
+    """Stop tmux, SIGTERM the server, then stop the spawn-pool workers and headless browsers it leaves behind."""
     self._kill_tmux_server()
     if self._proc is None or self._proc.poll() is not None:
       return
@@ -412,6 +414,7 @@ class ServerProcess:
       identity = process_identity(server_pid)
       if identity is None or identity[0] == "Z" or identity[1] != pid_start:
         self._stop_spawn_pool_workers()
+        self._stop_headless_browsers()
         return
       time.sleep(POLL_INTERVAL_SECONDS)
     if self._proc.poll() is None:
@@ -423,22 +426,38 @@ class ServerProcess:
     """Stop Python spawn workers left alive by the server's non-blocking executor shutdown."""
     if self._proc is None:
       return
-    identities = {}
+    group = self._proc.pid
+
+    def spawn_worker(pid: int, command: bytes) -> bool:
+      return os.getpgid(pid) == group and b"multiprocessing.spawn" in command and b"--multiprocessing-fork" in command
+
+    self._stop_processes(self._processes_matching(spawn_worker), "process-pool workers")
+
+  def _stop_headless_browsers(self) -> None:
+    """Stop the headless Chrome that a server left running after SIGTERM, so the server's strace can exit."""
+    profile = f"--user-data-dir={self.tree.tmp / compare.HEADLESS_PROFILE_PREFIX}".encode()
+    self._stop_processes(self._processes_matching(lambda pid, command: profile in command), "headless browsers")
+
+  def _processes_matching(self, matches: Callable[[int, bytes], bool]) -> dict[int, str]:
+    """Live processes whose command line *matches* accepts, by pid and start time, so no signal reaches a reused pid."""
+    found = {}
     for process in pathlib.Path("/proc").iterdir():
       if not process.name.isdecimal():
         continue
       pid = int(process.name)
       try:
-        if os.getpgid(pid) != self._proc.pid:
-          continue
         command = (process / "cmdline").read_bytes()
+        if not matches(pid, command):
+          continue
       except (FileNotFoundError, ProcessLookupError):
-        continue
-      if b"multiprocessing.spawn" not in command or b"--multiprocessing-fork" not in command:
         continue
       identity = process_identity(pid)
       if identity is not None and identity[0] != "Z":
-        identities[pid] = identity[1]
+        found[pid] = identity[1]
+    return found
+
+  def _stop_processes(self, identities: dict[int, str], label: str) -> None:
+    """SIGTERM the processes, then SIGKILL those still running; raise if any survive the SIGKILL."""
     for pid, start_time in identities.items():
       identity = process_identity(pid)
       if identity is not None and identity[0] != "Z" and identity[1] == start_time:
@@ -446,10 +465,7 @@ class ServerProcess:
           os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + PROCESS_POOL_STOP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-      active = [
-          pid for pid, start_time in identities.items()
-          if (identity := process_identity(pid)) is not None and identity[0] != "Z" and identity[1] == start_time
-      ]
+      active = _still_running(identities)
       if not active:
         return
       time.sleep(POLL_INTERVAL_SECONDS)
@@ -458,14 +474,11 @@ class ServerProcess:
         os.kill(pid, signal.SIGKILL)
     deadline = time.monotonic() + PROCESS_POOL_STOP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-      active = [
-          pid for pid, start_time in identities.items()
-          if (identity := process_identity(pid)) is not None and identity[0] != "Z" and identity[1] == start_time
-      ]
+      active = _still_running(identities)
       if not active:
         return
       time.sleep(POLL_INTERVAL_SECONDS)
-    raise RuntimeError(f"{self.label} process-pool workers remained after SIGKILL: {active}")
+    raise RuntimeError(f"{self.label} {label} remained after SIGKILL: {active}")
 
   def wait_trace(self) -> None:
     """Wait for this server's strace process after its traced children have exited."""
@@ -517,6 +530,14 @@ def process_identity(pid: int) -> tuple[str, str] | None:
     return None
   fields = stat.rsplit(")", 1)[1].split()
   return fields[0], fields[19]
+
+
+def _still_running(identities: dict[int, str]) -> list[int]:
+  """The pids in *identities* that are still the same process: not a zombie, same start time."""
+  return [
+      pid for pid, start_time in identities.items()
+      if (identity := process_identity(pid)) is not None and identity[0] != "Z" and identity[1] == start_time
+  ]
 
 
 # prctl(2) option that makes the calling process the reaper of its orphaned descendants.

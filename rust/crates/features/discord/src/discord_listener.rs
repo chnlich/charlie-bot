@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Context;
-use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadMessage, ThreadPlatform};
+use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::FeatureContext;
@@ -18,44 +18,14 @@ use uuid::Uuid;
 
 use crate::config::DiscordConfig;
 use crate::discord_client::{DiscordClient, Message};
-use crate::event_types::DISCORD_REPLY;
 use crate::metadata::DiscordOrigin;
+pub use crate::thread_contract::{DISCORD, FOLLOW_TRIGGER_PREFIX, MAX_POST_CHARS, READ_COMMAND, REPLY_COMMAND};
 
 /// The namespace of Discord summon session ids. Changing it would orphan every existing Discord-backed session.
 const DISCORD_NS: Uuid = Uuid::from_u128(0x13667dae_7551_489f_9cf1_d0819d0978e6);
 
 /// The 👀 reaction: the summon ack, lit at the summon and cleared when the question closes.
 const ACK_EMOJI: &str = "👀";
-
-/// Discord's per-message text limit, which is also the chunking target.
-pub const MAX_POST_CHARS: usize = 2000;
-
-/// The command the thread reply contract names for posting a reply.
-pub const REPLY_COMMAND: &str = "charliebot discord reply";
-
-/// The command the contract names for reading the thread server-side.
-pub const READ_COMMAND: &str = "charliebot discord read";
-
-/// The trigger-label prefix of a session's armed thread-follow record.
-pub const FOLLOW_TRIGGER_PREFIX: &str = "discord-thread-follow";
-
-/// The platform description every shared thread entry takes (`discord_listener.DISCORD`).
-pub const DISCORD: ThreadPlatform = ThreadPlatform {
-  name: "discord",
-  display_name: "Discord",
-  reply_event_type: DISCORD_REPLY,
-  reply_command: REPLY_COMMAND,
-  max_post_chars: MAX_POST_CHARS,
-  scope_doc: "discord_reply_scope.md",
-  follow_trigger_prefix: FOLLOW_TRIGGER_PREFIX,
-  id_key: IdOrdering::Snowflake,
-  origin_field: "discord_origin",
-  watermark_field: "discord_watermark_id",
-  id_label: "id",
-  mention_key: "mention_id",
-  block_keys: &["guild_id", "channel_id", "thread_id", "mention_id"],
-  summon_line: "Discord 线程召唤",
-};
 
 /// The deterministic session id of the Discord thread `thread_id` in `guild_id` (`summon_session_id`).
 pub fn summon_session_id(guild_id: &str, thread_id: &str) -> String {
@@ -89,7 +59,7 @@ impl Bot {
   pub fn client(&self) -> anyhow::Result<DiscordClient> {
     let credentials = self.features.credentials.get()?;
     let token = credentials.require("discord", "bot_token")?;
-    Ok(DiscordClient::new(http_client::shared_client()?, self.base_url.clone(), token))
+    Ok(DiscordClient::new(http_client::client(&http_client::Settings::from_env())?, self.base_url.clone(), token))
   }
 
   /// The loaded config, read for one call.

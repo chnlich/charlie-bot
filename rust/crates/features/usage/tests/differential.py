@@ -367,6 +367,35 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
           "type": "thread.started",
           "thread_id": "malformed-run-thread"
       }))
+
+  # A fractional or boolean usage count: Python adds it and binds it as the INTEGER or REAL it is, so the stored
+  # row keeps a REAL where the count has a fraction and an INTEGER where a boolean reads as 1 or 0.
+  _thread(
+      home,
+      "session-counts",
+      "counts",
+      "claude-main",
+      "vendor/claude-counts",
+      _line({
+          "type": "result",
+          "timestamp": "2026-09-15T20:00:00+00:00",
+          "usage": {
+              "input_tokens": 1.5,
+              "cache_creation_input_tokens": True,
+              "cache_read_input_tokens": 3,
+              "output_tokens": 4
+          }
+      }) + _line({
+          "type": "result",
+          "timestamp": "2026-09-15T20:00:01+00:00",
+          "usage": {
+              "input_tokens": True,
+              "cache_creation_input_tokens": 2.0,
+              "cache_read_input_tokens": 3,
+              "output_tokens": 1.5
+          }
+      }) + _line({"session_id": "counts-kept"}),
+  )
   return live_ids
 
 

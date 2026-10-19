@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::Registry;
-use charliebot_registry::usage::{RecordKind, UsageRecord, UsageSource, UsageSourceImpl};
+use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
+use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
 
-use crate::ledger::UsageLedger;
+use crate::count::Count;
+use crate::ledger::{StoredRecord, UsageLedger};
 use crate::ndjson;
 
 const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
@@ -113,7 +115,7 @@ pub fn capture_charliebot(
       CharlieLogKind::Thread => thread_records(&path, config, registry, &mut live)?,
       CharlieLogKind::Master => master_records(&path, config, registry)?,
     };
-    written += ledger.record_file(host, path_text, &signature, &records)?;
+    written += ledger.record_stored_file(host, path_text, &signature, &records)?;
   }
   Ok(written)
 }
@@ -143,7 +145,7 @@ pub fn capture_runs(
       .transpose()?
       .flatten();
     let records = record.into_iter().collect::<Vec<_>>();
-    written += ledger.record_file(host, path_text, &signature, &records)?;
+    written += ledger.record_stored_file(host, path_text, &signature, &records)?;
   }
   Ok(written)
 }
@@ -271,7 +273,7 @@ fn thread_records(
   config: &CharlieBotConfig,
   registry: &Registry,
   live: &mut LiveSessions,
-) -> anyhow::Result<Vec<UsageRecord>> {
+) -> anyhow::Result<Vec<StoredRecord>> {
   let Some(metadata) = thread_metadata(path)? else {
     return Ok(Vec::new());
   };
@@ -304,13 +306,13 @@ fn thread_records(
     let usage = usage_object(result.get("usage"))?;
     let (in_fresh, cache_write, cache_read, output, in_unsplit) = verdict_counts(usage, verdict)?;
     let sessions = if verdict == Verdict::Native { Vec::new() } else { sorted_ids(&ids) };
-    records.push(UsageRecord {
+    records.push(StoredRecord {
       record_id: format!("thread:{session}/{thread}/{index}"),
       kind: if verdict == Verdict::Native { RecordKind::Native } else { RecordKind::Fallback },
       source: CHARLIE_BOT_SOURCE.to_string(),
       model: model.clone(),
       account: backend.clone(),
-      ts: truthy_string(result, "timestamp")?.unwrap_or_default(),
+      ts: SqlValue::Text(truthy_string(result, "timestamp")?.unwrap_or_default()),
       in_fresh,
       cache_write,
       cache_read,
@@ -337,7 +339,7 @@ fn thread_metadata(path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
   value.as_object().cloned().map(Some).ok_or_else(|| anyhow!("{}: metadata is not an object", metadata_path.display()))
 }
 
-fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -> anyhow::Result<Vec<UsageRecord>> {
+fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -> anyhow::Result<Vec<StoredRecord>> {
   let lines = ndjson::parse_marker_lines(path, &MASTER_MARKERS)?;
   let mut model = None;
   let mut last_result = None;
@@ -368,18 +370,18 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
   let parts = path_parts(path)?;
   let session = &parts[parts.len() - 5];
   let started = &parts[parts.len() - 2];
-  Ok(vec![UsageRecord {
+  Ok(vec![StoredRecord {
     record_id: format!("master:{session}/{started}"),
     kind: RecordKind::Native,
     source: CHARLIE_BOT_SOURCE.to_string(),
     model: bare_model(&model),
     account,
-    ts: started.clone(),
-    in_fresh: subtract(input, cached, "master cached tokens")?,
-    cache_write: 0,
+    ts: SqlValue::Text(started.clone()),
+    in_fresh: input.sub(cached, "master cached tokens")?,
+    cache_write: Count::Int(0),
     cache_read: cached,
     output,
-    in_unsplit: 0,
+    in_unsplit: Count::Int(0),
     sessions: Vec::new(),
   }])
 }
@@ -400,7 +402,7 @@ fn run_record(
   backend: &str,
   id: &str,
   live: &mut LiveSessions,
-) -> anyhow::Result<Option<UsageRecord>> {
+) -> anyhow::Result<Option<StoredRecord>> {
   let Some((verdict, source)) = backend_verdict(backend, config, registry)? else {
     return Ok(None);
   };
@@ -413,8 +415,8 @@ fn run_record(
       let input = count(usage, "input_tokens")?;
       let cached = count(usage, "cached_tokens")?;
       (
-        subtract(input, cached, "native run cached tokens")?,
-        0,
+        input.sub(cached, "native run cached tokens")?,
+        Count::Int(0),
         cached,
         count(usage, "output_tokens")?,
         RecordKind::Native,
@@ -429,7 +431,7 @@ fn run_record(
       if !admitted(verdict, source, &ids, live)? {
         return Ok(None);
       }
-      (in_fresh, 0, cache_read, output, RecordKind::Fallback, sorted_ids(&ids))
+      (in_fresh, Count::Int(0), cache_read, output, RecordKind::Fallback, sorted_ids(&ids))
     }
     Verdict::Fallback => {
       let Some(result) = last_result(objects)? else {
@@ -445,18 +447,18 @@ fn run_record(
     }
   };
   let model = thread_row_model(metadata, config, registry, backend)?;
-  Ok(Some(UsageRecord {
+  Ok(Some(StoredRecord {
     record_id: format!("run:{id}"),
     kind,
     source: CHARLIE_BOT_SOURCE.to_string(),
     model,
     account: backend.to_string(),
-    ts: truthy_string(metadata, "started_at")?.unwrap_or_default(),
+    ts: SqlValue::Text(truthy_string(metadata, "started_at")?.unwrap_or_default()),
     in_fresh,
     cache_write,
     cache_read,
     output,
-    in_unsplit: 0,
+    in_unsplit: Count::Int(0),
     sessions,
   }))
 }
@@ -471,8 +473,8 @@ fn last_result(objects: &[Value]) -> anyhow::Result<Option<&Map<String, Value>>>
   Ok(None)
 }
 
-fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(i64, i64, i64)>> {
-  let mut totals = (0i64, 0i64, 0i64);
+fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(Count, Count, Count)>> {
+  let mut totals = (Count::Int(0), Count::Int(0), Count::Int(0));
   let mut seen = false;
   for value in objects {
     let object = as_object(value, "run event")?;
@@ -482,10 +484,10 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(i64, i64, i64)>> {
     seen = true;
     let usage = usage_object(object.get("usage"))?;
     let cached = count(usage, "cached_input_tokens")?;
-    totals.0 =
-      add(totals.0, subtract(count(usage, "input_tokens")?, cached, "Codex cached tokens")?, "Codex input tokens")?;
-    totals.1 = add(totals.1, cached, "Codex cached tokens")?;
-    totals.2 = add(totals.2, count(usage, "output_tokens")?, "Codex output tokens")?;
+    let fresh = count(usage, "input_tokens")?.sub(cached, "Codex cached tokens")?;
+    totals.0 = totals.0.add(fresh, "Codex input tokens")?;
+    totals.1 = totals.1.add(cached, "Codex cached tokens")?;
+    totals.2 = totals.2.add(count(usage, "output_tokens")?, "Codex output tokens")?;
   }
   Ok(seen.then_some(totals))
 }
@@ -567,16 +569,30 @@ fn thread_row_model(
   Ok(backend.strip_prefix(prefix).unwrap_or(backend).to_string())
 }
 
-fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Result<(i64, i64, i64, i64, i64)> {
-  let (input, cache_write, cache_read, output) = usage_counts(usage)?;
+/// A thread result's (in_fresh, cache_write, cache_read, output, in_unsplit), split by the backend's verdict. Python
+/// reads all four keys but adds or binds only the ones the verdict keeps, so a value under a dropped key cannot fail
+/// the capture, and only the kept keys are read here.
+fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Result<(Count, Count, Count, Count, Count)> {
   match verdict {
-    Verdict::CodexRule => Ok((subtract(input, cache_read, "thread cached tokens")?, 0, cache_read, output, 0)),
-    Verdict::Native => Ok((0, 0, 0, output, input)),
-    Verdict::Fallback => Ok((input, cache_write, cache_read, output, 0)),
+    Verdict::CodexRule => {
+      let input = count(usage, "input_tokens")?;
+      let cache_read = count(usage, "cache_read_input_tokens")?;
+      let output = count(usage, "output_tokens")?;
+      Ok((input.sub(cache_read, "thread cached tokens")?, Count::Int(0), cache_read, output, Count::Int(0)))
+    }
+    Verdict::Native => {
+      let input = count(usage, "input_tokens")?;
+      let output = count(usage, "output_tokens")?;
+      Ok((Count::Int(0), Count::Int(0), Count::Int(0), output, input))
+    }
+    Verdict::Fallback => {
+      let (input, cache_write, cache_read, output) = usage_counts(usage)?;
+      Ok((input, cache_write, cache_read, output, Count::Int(0)))
+    }
   }
 }
 
-fn usage_counts(usage: &Map<String, Value>) -> anyhow::Result<(i64, i64, i64, i64)> {
+fn usage_counts(usage: &Map<String, Value>) -> anyhow::Result<(Count, Count, Count, Count)> {
   Ok((
     count(usage, "input_tokens")?,
     count(usage, "cache_creation_input_tokens")?,
@@ -599,23 +615,27 @@ fn empty_object() -> &'static Map<String, Value> {
   &EMPTY
 }
 
-fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
+/// One usage count as Python reads it, `usage.get(key, 0) or 0`: an absent or falsy value is 0, `true` is 1, and a
+/// number keeps its integer or real type. Any other value fails here; Python fails where the value is added or bound.
+fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
   match object.get(key) {
-    None => Ok(0),
-    Some(value) if is_falsy(value) => Ok(0),
-    Some(Value::Number(number)) => {
-      number.as_i64().ok_or_else(|| anyhow!("usage count {key} is outside the signed 64-bit range"))
-    }
-    Some(_) => bail!("usage count {key} is not an integer"),
+    None => Ok(Count::Int(0)),
+    Some(value) if is_falsy(value) => Ok(Count::Int(0)),
+    Some(Value::Bool(_)) => Ok(Count::Int(1)),
+    Some(Value::Number(number)) => number_count(number).with_context(|| format!("usage count {key}")),
+    Some(_) => bail!("usage count {key} is not a number"),
   }
 }
 
-fn subtract(left: i64, right: i64, label: &str) -> anyhow::Result<i64> {
-  left.checked_sub(right).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
-}
-
-fn add(left: i64, right: i64, label: &str) -> anyhow::Result<i64> {
-  left.checked_add(right).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
+/// A JSON number as the value Python binds for it: an integer within the signed 64-bit range, else a real.
+fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
+  if let Some(integer) = number.as_i64() {
+    return Ok(Count::Int(integer));
+  }
+  match number.as_f64() {
+    Some(real) if number.is_f64() => Ok(Count::Real(real)),
+    _ => bail!("integer {number} is outside the signed 64-bit range"),
+  }
 }
 
 /// Python's truth test over a JSON value: null, false, zero, and an empty string, list or map are falsy.

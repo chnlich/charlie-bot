@@ -43,7 +43,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.backends.openai_compatible", charliebot_agents::backends::openai_compatible::register),
   ("src.backends.antigravity", charliebot_agents::backends::antigravity::register),
   ("src.backends.charlie_code", charliebot_agents::backends::charlie_code::register),
-  ("src.backends.claude_code", backends::claude_code), // stub: src.backends.claude_code
+  ("src.backends.claude_code", charliebot_agents::backends::claude_code::register),
   ("src.backends.codex", charliebot_agents::backends::codex::register),
   ("src.backends.gemini", charliebot_agents::backends::gemini::register),
   ("src.backends.kimi", charliebot_agents::backends::kimi::register),

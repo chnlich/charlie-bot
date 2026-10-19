@@ -81,10 +81,62 @@ impl PollHost for ServerHost {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME, CharlieBotConfig};
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::Registry;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks::store_hooks;
+  use charliebot_store::Store;
+  use futures_util::FutureExt;
+
   use super::*;
+
+  fn feature_context(home: &std::path::Path) -> Arc<FeatureContext> {
+    let registry = Arc::new(Registry::new());
+    let config_home = home.to_path_buf();
+    let config_registry = Arc::clone(&registry);
+    let config = Arc::new(HotReload::new(
+      home.join(CONFIG_FILENAME),
+      "config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credentials_home = home.to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.join(CREDENTIALS_FILENAME),
+      "credentials_reload_failed",
+      Box::new(move || load_credentials(&credentials_home)),
+    ));
+    let cfg: CharlieBotConfig = registry.load_config(home).unwrap();
+    let store = Store::new(cfg, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).unwrap();
+    Arc::new(FeatureContext {
+      config,
+      credentials,
+      store: Arc::new(store),
+      registry,
+      startup: Arc::new(StartupState::default()),
+    })
+  }
 
   #[tokio::test]
   async fn stop_without_start_returns_at_once() {
     ExtUsagePoller::default().stop().await.unwrap();
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn start_spawns_the_loop_and_stop_cancels_and_waits_for_it() {
+    let home = tempfile::tempdir().unwrap();
+    let poller = ExtUsagePoller::default();
+    let context = ServiceContext {
+      features: feature_context(home.path()),
+      recovery_done: futures_util::future::ready(()).boxed().shared(),
+    };
+
+    poller.start(context).await.unwrap();
+    tokio::task::yield_now().await;
+
+    assert!(poller.task.lock().unwrap().as_ref().is_some_and(|task| !task.is_finished()));
+    poller.stop().await.unwrap();
+    assert!(poller.task.lock().unwrap().is_none());
   }
 }

@@ -12,6 +12,7 @@ pub fn exists(path: &Path) -> io::Result<bool> {
   match fs::metadata(path) {
     Ok(_) => Ok(true),
     Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => Ok(false),
+    Err(error) if error.raw_os_error() == Some(libc::ELOOP) => Ok(false),
     Err(error) => Err(error),
   }
 }
@@ -36,4 +37,19 @@ pub fn fallback_relative_path(session_dir: &Path, candidate: &Path) -> PathBuf {
     }
   }
   Path::new("artifacts").join(candidate.file_name().unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+  use std::os::unix::fs::symlink;
+
+  use super::*;
+
+  #[test]
+  fn a_symlink_loop_is_absent_like_pathlib_exists() {
+    let dir = tempfile::tempdir().expect("a temporary directory is available");
+    let loop_path = dir.path().join("loop");
+    symlink(&loop_path, &loop_path).expect("the symlink loop is created");
+    assert!(!exists(&loop_path).expect("Path.exists treats a symlink loop as absent"));
+  }
 }

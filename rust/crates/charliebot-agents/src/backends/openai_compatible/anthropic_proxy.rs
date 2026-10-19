@@ -3,14 +3,14 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
-use charliebot_compat::http_client::{self, Settings};
+use charliebot_compat::http_client;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::pyfmt;
@@ -38,18 +38,6 @@ pub fn matches(path: &str) -> bool {
     .strip_prefix(ROUTE_PREFIX)
     .and_then(|rest| rest.strip_suffix(ROUTE_SUFFIX))
     .is_some_and(|backend_id| !backend_id.is_empty() && !backend_id.contains('/'))
-}
-
-/// The upstream client, built from the process settings the first time a proxy request needs one. Python builds its
-/// httpx client on first use too, so a bad TLS setting fails the first request rather than the server's start.
-static UPSTREAM: OnceLock<reqwest::Client> = OnceLock::new();
-
-fn upstream_client() -> anyhow::Result<&'static reqwest::Client> {
-  if let Some(client) = UPSTREAM.get() {
-    return Ok(client);
-  }
-  let client = http_client::client(&Settings::from_env())?;
-  Ok(UPSTREAM.get_or_init(|| client))
 }
 
 /// How a failed request is answered: a FastAPI `HTTPException` with its detail, or an unhandled exception.
@@ -131,7 +119,9 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
     }
   };
 
-  let client = upstream_client().map_err(|error| unhandled("ClientError", format!("{error:#}")))?;
+  // The shared client is built on the first proxy request, as Python's httpx client is, so a bad TLS setting fails that
+  // request rather than the server's start.
+  let client = http_client::shared_client().map_err(|error| unhandled("ClientError", format!("{error:#}")))?;
   let mut request = client
     .post(&upstream_url)
     .header(header::CONTENT_TYPE, "application/json")

@@ -2,9 +2,8 @@
 
 Both are reads through the one assembly owner: a preview is the current
 configuration in the launch snapshot's shape, a Run's context is the stored
-snapshot of record (plus pinned evidence references), legacy raw-prompt
-evidence is labeled limited, and neither endpoint can mutate anything or
-launch a process.
+snapshot of record (plus pinned evidence references), and neither endpoint
+can mutate anything or launch a process.
 """
 
 from __future__ import annotations
@@ -95,7 +94,6 @@ async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   assert body["snapshot"] is not None
   assert body["snapshot"]["prompt_hash"] == snapshot.prompt_hash
   assert body["snapshot"]["char_count"] == snapshot.char_count
-  assert body["legacy_prompt"] is None
   assert body["task_spec"] == {"ref": run.task_spec_ref, "sha256": run.task_spec_hash}
   assert set(body["logs"]) == {"raw_log_ref", "events_ref", "result_ref"}
   # The read is repeatable and immutable: a second call returns the same bytes.

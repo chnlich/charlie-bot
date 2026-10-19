@@ -188,9 +188,22 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   `translate_fallback`. At most one type holds the translate fallback. A type without a lifecycle runs one process per
   run.
 - Example: `registry.backend_type(BackendTypeRegistration { type_name: "codex", traits, option_model, factory, lifecycle: None, translate_fallback: false })?;`
-- `AgentBackend::one_shot_text(base_env: &Env, prompt: &str, system: &str, timeout: Option<Duration>)` receives the
-  base agent environment explicitly.
-- `LaunchContext.base_env: Arc<Env>` carries that environment into lifecycle launches and compaction.
+- `LaunchContext.base_env: Arc<Env>` carries the base agent environment into lifecycle launches and compaction.
+- Three seams that a backend type uses beyond `AgentBackend`'s command, environment and translator:
+  - **One-shot.** `AgentBackend::one_shot_text(base_env, prompt, system, timeout)` returns
+    `Option<BoxFuture<..>>`: `Some` is the CLI-native, tool-less one-shot, and `None` means the type has none (the
+    default). Callers never call the trait method; `charliebot_agents::one_shot_text(built, base_env, prompt, system,
+    timeout)` runs the native one-shot when present and `agent_one_shot_text` otherwise. That is Python's polymorphic
+    `backend.one_shot_text(...)`.
+  - **Uploads.** `RunRequest.uploaded_files: Vec<Value>` carries the message's attachment refs. The runner calls
+    `AgentBackend::accept_uploads(&uploaded_files)` before the cwd, the transport and the process. `Err(message)` ends
+    the run with exactly one error event and no process; the outcome's exit code is `None`. The default accepts every
+    upload, as Python's base `run` ignores them.
+  - **Final stdout.** `TransportKind::FinalStdout` runs the process with a piped stdout, which the runner tees into
+    `stdout.log` (truncated at open), and with stderr streamed to `stderr.log`. After the exit the runner calls
+    `AgentBackend::finish_final_stdout(stdout, stderr, exit_code)`, which returns a `FinalStdoutOutcome { events,
+    exit_code, guard_error }`. The runner emits the events, records `exit_code` (`AgentRunner::exit_code()`), and then
+    fails the run with `guard_error` when it is set.
 
 ### Running turns
 

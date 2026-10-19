@@ -130,6 +130,8 @@ _SESSION_WRITE_STAMP = "wall-clock time of the write: each server stamps the ses
 _SESSION_WRITE_ROUTES = (
     "POST /api/sessions/",
     "POST /api/sessions/{session_id}/backend",
+    "POST /api/sessions/{session_id}/fork",
+    "POST /api/sessions/{session_id}/elone",
     "PATCH /api/sessions/{session_id}",
 )
 

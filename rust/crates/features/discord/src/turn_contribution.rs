@@ -1,16 +1,18 @@
-//! The Discord package's turn contribution (`src/features/discord/turn_contribution.py`). It carries the thread reply
-//! contract in a manager run of a Discord thread session, and renders `discord_reply` events as chat lines. The
-//! round-end audit and the other turn steps are not ported yet.
+//! The Discord package's round-end audit, thread reply contract, and `discord_reply` chat renderer.
+
+use std::sync::Arc;
 
 use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
+use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
-use crate::discord_listener::DISCORD;
+use crate::discord_listener::{self, DISCORD};
 use crate::event_types::DISCORD_REPLY;
 use crate::metadata::discord_origin;
 use crate::thread_contract::thread_contract_part;
@@ -42,6 +44,19 @@ impl TurnContribution for DiscordTurnContribution {
 
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     vec![(DISCORD_REPLY, discord_reply_message)]
+  }
+
+  fn after_turn<'a>(
+    &'a self,
+    meta: &'a SessionMetadata,
+    done_event: &'a Value,
+    _cfg: &'a CharlieBotConfig,
+    features: &'a Arc<FeatureContext>,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      discord_listener::deliver_done(features, &meta.id, done_event).await?;
+      Ok(())
+    })
   }
 }
 

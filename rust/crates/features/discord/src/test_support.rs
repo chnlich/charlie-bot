@@ -9,7 +9,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME};
+use charliebot_core::config::{BackendOption, CONFIG_FILENAME, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::store_hooks::store_hooks;
@@ -106,13 +106,18 @@ const FIXTURE_BACKEND: &str = "fixture";
 pub struct FakeDiscord {
   /// Channel id to its messages, oldest first.
   pub channels: HashMap<String, Vec<Value>>,
+  /// Channel objects returned by GET /channels/{channel_id}.
+  pub channel_objects: HashMap<String, Value>,
   /// Channels whose reads answer 403.
   pub hidden: Vec<String>,
   pub user: Value,
   pub application: Value,
   pub guilds: Value,
+  pub gateway_url: Option<String>,
   /// Posted messages as (channel id, content).
   pub posts: Vec<(String, String)>,
+  /// Started threads as (parent channel, source message, thread name).
+  pub started_threads: Vec<(String, String, String)>,
   /// Each request as the server saw it: method, path and query.
   pub calls: Vec<String>,
   /// A message that lands in a channel right after its first read answers.
@@ -133,9 +138,16 @@ impl FakeDiscord {
     ));
     let parts: Vec<&str> = request.path.split('/').collect();
     match (request.method.as_str(), parts.as_slice()) {
+      ("GET", ["", "api", "v10", "gateway", "bot"]) => {
+        Reply::json(200, json!({"url": self.gateway_url.as_deref().unwrap_or("wss://gateway.discord.gg")}))
+      }
       ("GET", ["", "api", "v10", "users", "@me"]) => Reply::json(200, self.user.clone()),
       ("GET", ["", "api", "v10", "applications", "@me"]) => Reply::json(200, self.application.clone()),
       ("GET", ["", "api", "v10", "users", "@me", "guilds"]) => Reply::json(200, self.guilds.clone()),
+      ("GET", ["", "api", "v10", "channels", channel]) => self.channel_objects.get(*channel).map_or_else(
+        || Reply::json(404, json!({"code": 10003, "message": "Unknown Channel"})),
+        |value| Reply::json(200, value.clone()),
+      ),
       ("GET", ["", "api", "v10", "channels", channel, "messages", message]) => {
         match self.find_message(channel, message) {
           Some(message) => Reply::json(200, message),
@@ -147,6 +159,15 @@ impl FakeDiscord {
         let content = request.json()["content"].as_str().unwrap_or_default().to_string();
         self.posts.push((channel.to_string(), content.clone()));
         Reply::json(200, json!({"id": "900000000000000099", "content": content}))
+      }
+      ("POST", ["", "api", "v10", "channels", _, "messages", _, "threads"]) => {
+        let body = request.json();
+        self.started_threads.push((
+          parts[4].to_string(),
+          parts[6].to_string(),
+          body["name"].as_str().unwrap().to_string(),
+        ));
+        Reply::json(201, json!({"id": "900000000000000003", "type": 11, "name": body["name"]}))
       }
       ("PUT" | "DELETE", ["", "api", "v10", "channels", _, "messages", _, "reactions", _, "@me"]) => Reply::empty(204),
       _ => Reply::json(404, json!({"code": 0, "message": "404: Not Found"})),
@@ -194,14 +215,12 @@ pub struct Home {
 }
 
 impl Home {
-  /// A home whose config maps `ALLOWED_USER` and `OTHER_USER`, and whose credentials hold `TEST_TOKEN` when `token`.
+  /// A home whose config allows `ALLOWED_USER` and whose credentials hold `TEST_TOKEN` when `token`.
   pub async fn new(token: bool) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(
       dir.path().join(CONFIG_FILENAME),
-      format!(
-        "discord:\n  allowed_users:\n    \"{ALLOWED_USER}\": {ALLOWED_PERSON}\n    \"{OTHER_USER}\": tester-two\n"
-      ),
+      format!("discord:\n  allowed_users:\n    \"{ALLOWED_USER}\": {ALLOWED_PERSON}\n"),
     )
     .expect("the config writes");
     if token {
@@ -224,13 +243,27 @@ impl Home {
       "discord_test_credentials_reload_failed",
       Box::new(move || load_credentials(&credential_home)),
     ));
-    let loaded = registry.load_config(dir.path()).expect("the synthetic config loads");
+    let mut loaded = registry.load_config(dir.path()).expect("the synthetic config loads");
+    loaded.backends.options.push(BackendOption {
+      id: FIXTURE_BACKEND.to_string(),
+      label: "Synthetic fixture".to_string(),
+      model: "synthetic-model".to_string(),
+      prompt_overlay: None,
+      backend_type: "synthetic".to_string(),
+      type_fields: Default::default(),
+    });
+    fs::create_dir_all(loaded.sessions_dir()).expect("the synthetic sessions directory exists");
     let store = Arc::new(
       Store::new(loaded, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("the store opens"),
     );
     let startup = StartupState::default();
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the running-turn stub inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
+    features.registry.bind_feature_context(&features).expect("the registry binds its feature context once");
+    features
+      .startup
+      .insert(Arc::new(charliebot_sched::triggers::TriggerManager::new(Arc::clone(&features))))
+      .expect("the trigger manager inserts once");
     let discord = Arc::new(Mutex::new(FakeDiscord::default()));
     let fake = Arc::clone(&discord);
     let api = serve(move |request| fake.lock().expect("the fake lock is never poisoned").answer(request)).await;

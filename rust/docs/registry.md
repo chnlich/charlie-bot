@@ -3,7 +3,8 @@
 `charliebot-registry` is the Rust counterpart of the Python hook layer: `src/runtime/hooks/*`,
 `src/infra/config_registry.py`, `src/infra/metadata_slot_registration.py` and the lifespan in `server.py`. Each
 package makes its contributions through one `register(&mut Registry)` function, and the server builds one
-`Registry` at startup. The registry is read-only after that.
+`Registry` at startup. The registry is read-only after that, except for one binding: the server binds its feature
+context right after building it (`bind_feature_context`), and the store's hooks read that binding through a `Weak`.
 
 Rules that hold for every hook kind:
 

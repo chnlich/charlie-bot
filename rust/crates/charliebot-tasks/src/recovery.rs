@@ -19,8 +19,8 @@ use charliebot_agents::transport::{identity, recovery as transport_recovery};
 use charliebot_core::config::BackendOption;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{
-  SequenceCompletion, SequenceController, SequenceDispatch, SequenceExecutor, SequenceSessionEvents, SequenceTreeRuntime,
-  StoreSequenceTree,
+  SequenceCompletion, SequenceController, SequenceDispatch, SequenceExecutor, SequenceSessionEvents,
+  SequenceTreeRuntime, StoreSequenceTree,
 };
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
@@ -75,7 +75,9 @@ pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow
         followups = counters.followups,
         "task_tree_recovery_done"
       ),
-      Err(error) => tracing::error!(target: "charliebot_tasks", error = %format!("{error:#}"), "task_tree_recovery_failed"),
+      Err(error) => {
+        tracing::error!(target: "charliebot_tasks", error = %format!("{error:#}"), "task_tree_recovery_failed")
+      }
     }
     Ok(())
   })
@@ -204,12 +206,8 @@ pub async fn reconcile_node(
       continue;
     }
     let boot = identity::read_host_boot_time().context("reading the host boot time for task recovery")?;
-    let alive = identity::is_run_alive(
-      run.pid,
-      run.pid_start.as_deref(),
-      run.started_at.map(UtcDateTime::into_inner),
-      boot,
-    );
+    let alive =
+      identity::is_run_alive(run.pid, run.pid_start.as_deref(), run.started_at.map(UtcDateTime::into_inner), boot);
     if alive {
       counters.resumed += 1;
       tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_resume");
@@ -408,15 +406,10 @@ async fn resume_run_checked(
       Arc::new(probe) as ResumeLiveness
     }
   };
-  let meta = store
-    .load_meta(session_id)
-    .await?
-    .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+  let meta =
+    store.load_meta(session_id).await?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
   if meta.profile != TaskProfile::Manager || run.kind != RunKind::ManagerTurn {
-    bail!(owner_not_landed(
-      "worker-run",
-      &format!("re-attaching run {run_id} (kind {})", run_kind_name(run.kind))
-    ));
+    bail!(owner_not_landed("worker-run", &format!("re-attaching run {run_id} (kind {})", run_kind_name(run.kind))));
   }
   let ended_at = if is_alive() {
     dispatch::note_run_liveness(store, session_id, &run, true).await;
@@ -456,9 +449,7 @@ async fn enqueue_manager_resume(
   let spawn_run = run.id.clone();
   let on_task_spawn: TaskSpawnCallback = Arc::new(move |_pid, _pid_start| {
     let run_id = spawn_run.clone();
-    Box::pin(async move {
-      Err::<(), anyhow::Error>(anyhow!("resume follow of run {run_id} must not spawn a process"))
-    })
+    Box::pin(async move { Err::<(), anyhow::Error>(anyhow!("resume follow of run {run_id} must not spawn a process")) })
   });
   let on_task_finish = adapter.manager_finish_recorder(
     session_id,

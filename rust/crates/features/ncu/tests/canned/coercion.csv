@@ -1,5 +1,6 @@
 ID,Kernel Name,Block Size,Grid Size,CC,Section Name,Metric Name,Metric Unit,Metric Value
 0,coerce_kernel,"(1, 1, 1)","(1)",7.5,Values,metric_comma_int,,"1,024"
+0,coerce_kernel,"(1, 1, 1)","(1)",7.5,Values,metric_large_int,,18446744073709551616
 0,coerce_kernel,"(1, 1, 1)","(1)",7.5,Values,metric_negative,,-7
 0,coerce_kernel,"(1, 1, 1)","(1)",7.5,Values,metric_double_minus,,--7
 0,coerce_kernel,"(1, 1, 1)","(1)",7.5,Values,metric_exponent,,2.5e3

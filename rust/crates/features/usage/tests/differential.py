@@ -72,13 +72,17 @@ def _run(
     native_session_id: str | None,
     events: bytes,
 ) -> pathlib.Path:
-  directory = home / "sessions" / "run-session" / "data" / "runs" / run_id
-  directory.mkdir(parents=True)
   metadata = {"backend": backend, "started_at": "2026-09-11T20:00:00+00:00"}
   if model is not None:
     metadata["model"] = model
   if native_session_id is not None:
     metadata["native_session_id"] = native_session_id
+  return _raw_run(home, run_id, metadata, events)
+
+
+def _raw_run(home: pathlib.Path, run_id: str, metadata: dict, events: bytes) -> pathlib.Path:
+  directory = home / "sessions" / "run-session" / "data" / "runs" / run_id
+  directory.mkdir(parents=True)
   (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
   path = directory / "agent.raw.ndjson"
   path.write_bytes(events)
@@ -278,6 +282,90 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
       _line({
           "type": "thread.started",
           "thread_id": "unused"
+      }))
+
+  # Malformed shapes Python reads through its truth tests and type checks: a non-string type skips its line,
+  # a non-string or empty session id is ignored, and a falsy model, usage, timestamp or count reads as absent.
+  usage = {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3, "output_tokens": 4}
+  _thread(
+      home,
+      "session-malformed",
+      "malformed-shapes",
+      "claude-main",
+      "vendor/claude-model",
+      _line({
+          "type": "result",
+          "timestamp": "2026-09-14T20:00:00+00:00",
+          "usage": usage
+      }) + _line({
+          "type": 7,
+          "timestamp": "2026-09-14T20:00:01+00:00",
+          "usage": usage
+      }) + _line({
+          "type": ["result"],
+          "timestamp": "2026-09-14T20:00:02+00:00",
+          "usage": usage
+      }) + _line({"session_id": 42}) + _line({"session_id": ""}) + _line({"session_id": None}) +
+      _line({"session_id": "malformed-kept"}) + _line({
+          "type": "result",
+          "timestamp": False,
+          "usage": False
+      }),
+  )
+  _master(
+      home, "session-malformed", "2026-09-04T00:00:00Z",
+      _line({
+          "type": "context",
+          "model": NATIVE_MODEL
+      }) + _line({
+          "type": 3,
+          "model": "vendor/other-model"
+      }) + _line({
+          "type": "context",
+          "model": False
+      }) + _line({
+          "type": "result",
+          "usage": {
+              "input_tokens": 5,
+              "cached_tokens": False,
+              "output_tokens": 2
+          }
+      }) + _line({
+          "type": ["result"],
+          "usage": {
+              "input_tokens": 999,
+              "cached_tokens": 0,
+              "output_tokens": 999
+          }
+      }))
+  _raw_run(
+      home, "run-malformed", {
+          "backend": "codex-main",
+          "model": False,
+          "started_at": "2026-09-11T20:00:00+00:00",
+          "native_session_id": 7
+      },
+      _line({
+          "type": ["turn.completed"],
+          "usage": {
+              "input_tokens": 999,
+              "cached_input_tokens": 0,
+              "output_tokens": 9
+          }
+      }) +
+      _line({
+          "type": "turn.completed",
+          "usage": {
+              "input_tokens": 60,
+              "cached_input_tokens": 20,
+              "output_tokens": 8
+          }
+      }) + _line({
+          "type": "thread.started",
+          "thread_id": 5
+      }) + _line({"session_id": None}) + _line({
+          "type": "thread.started",
+          "thread_id": "malformed-run-thread"
       }))
   return live_ids
 

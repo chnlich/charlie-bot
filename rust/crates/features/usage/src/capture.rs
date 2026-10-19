@@ -136,7 +136,7 @@ pub fn capture_runs(
     }
     let objects = ndjson::parse_marker_lines(&path, &RUN_MARKERS)?;
     let metadata = run_metadata(&path)?;
-    let backend = string_field(&metadata, "backend")?;
+    let backend = truthy_string(&metadata, "backend")?;
     let record = backend
       .as_deref()
       .map(|backend| run_record(&objects, &metadata, config, registry, backend, run_id(&path)?, &mut live))
@@ -275,7 +275,7 @@ fn thread_records(
   let Some(metadata) = thread_metadata(path)? else {
     return Ok(Vec::new());
   };
-  let Some(backend) = string_field(&metadata, "backend")? else {
+  let Some(backend) = truthy_string(&metadata, "backend")? else {
     return Ok(Vec::new());
   };
   let Some((verdict, source)) = backend_verdict(&backend, config, registry)? else {
@@ -286,11 +286,9 @@ fn thread_records(
   let mut ids = HashSet::new();
   for line in &lines {
     let object = as_object(line, "thread event")?;
-    if string_field(object, "type")?.as_deref() == Some("result") {
+    if is_type(object, "result") {
       results.push(object);
-    } else if let Some(session) = string_field(object, "session_id")?
-      && !session.is_empty()
-    {
+    } else if let Some(session) = session_text(object, "session_id") {
       ids.insert(session);
     }
   }
@@ -312,7 +310,7 @@ fn thread_records(
       source: CHARLIE_BOT_SOURCE.to_string(),
       model: model.clone(),
       account: backend.clone(),
-      ts: string_field(result, "timestamp")?.unwrap_or_default(),
+      ts: truthy_string(result, "timestamp")?.unwrap_or_default(),
       in_fresh,
       cache_write,
       cache_read,
@@ -345,14 +343,12 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
   let mut last_result = None;
   for line in &lines {
     let object = as_object(line, "master event")?;
-    match string_field(object, "type")?.as_deref() {
-      Some("context") => {
-        if let Some(named) = string_field(object, "model")?.filter(|named| !named.is_empty()) {
-          model = Some(named);
-        }
+    if is_type(object, "context") {
+      if let Some(named) = truthy_string(object, "model")? {
+        model = Some(named);
       }
-      Some("result") => last_result = Some(object),
-      _ => {}
+    } else if is_type(object, "result") {
+      last_result = Some(object);
     }
   }
   let (Some(model), Some(result)) = (model, last_result) else {
@@ -455,7 +451,7 @@ fn run_record(
     source: CHARLIE_BOT_SOURCE.to_string(),
     model,
     account: backend.to_string(),
-    ts: string_field(metadata, "started_at")?.unwrap_or_default(),
+    ts: truthy_string(metadata, "started_at")?.unwrap_or_default(),
     in_fresh,
     cache_write,
     cache_read,
@@ -468,7 +464,7 @@ fn run_record(
 fn last_result(objects: &[Value]) -> anyhow::Result<Option<&Map<String, Value>>> {
   for value in objects.iter().rev() {
     let object = as_object(value, "run event")?;
-    if string_field(object, "type")?.as_deref() == Some("result") {
+    if is_type(object, "result") {
       return Ok(Some(object));
     }
   }
@@ -480,7 +476,7 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(i64, i64, i64)>> {
   let mut seen = false;
   for value in objects {
     let object = as_object(value, "run event")?;
-    if string_field(object, "type")?.as_deref() != Some("turn.completed") {
+    if !is_type(object, "turn.completed") {
       continue;
     }
     seen = true;
@@ -496,23 +492,12 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(i64, i64, i64)>> {
 
 fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::Result<HashSet<String>> {
   let mut ids = HashSet::new();
-  if let Some(id) = string_field(metadata, "native_session_id")?
-    && !id.is_empty()
-  {
-    ids.insert(id);
-  }
+  ids.extend(session_text(metadata, "native_session_id"));
   for value in objects {
     let object = as_object(value, "run event")?;
-    if let Some(id) = string_field(object, "session_id")?
-      && !id.is_empty()
-    {
-      ids.insert(id);
-    }
-    if string_field(object, "type")?.as_deref() == Some("thread.started")
-      && let Some(id) = string_field(object, "thread_id")?
-      && !id.is_empty()
-    {
-      ids.insert(id);
+    ids.extend(session_text(object, "session_id"));
+    if is_type(object, "thread.started") {
+      ids.extend(session_text(object, "thread_id"));
     }
   }
   Ok(ids)
@@ -564,11 +549,8 @@ fn thread_row_model(
   registry: &Registry,
   backend: &str,
 ) -> anyhow::Result<String> {
-  if let Some(model) = string_field(metadata, "model")?.filter(|model| !model.is_empty()) {
+  if let Some(model) = truthy_string(metadata, "model")? {
     return Ok(bare_model(&model));
-  }
-  if backend.is_empty() {
-    return Ok("unknown".to_string());
   }
   if let Some(option) = config.get_backend_option(backend)
     && !option.model.is_empty()
@@ -605,7 +587,8 @@ fn usage_counts(usage: &Map<String, Value>) -> anyhow::Result<(i64, i64, i64, i6
 
 fn usage_object(value: Option<&Value>) -> anyhow::Result<&Map<String, Value>> {
   match value {
-    None | Some(Value::Null) => Ok(empty_object()),
+    None => Ok(empty_object()),
+    Some(value) if is_falsy(value) => Ok(empty_object()),
     Some(Value::Object(object)) => Ok(object),
     Some(_) => bail!("usage field is not an object"),
   }
@@ -618,7 +601,8 @@ fn empty_object() -> &'static Map<String, Value> {
 
 fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match object.get(key) {
-    None | Some(Value::Null) => Ok(0),
+    None => Ok(0),
+    Some(value) if is_falsy(value) => Ok(0),
     Some(Value::Number(number)) => {
       number.as_i64().ok_or_else(|| anyhow!("usage count {key} is outside the signed 64-bit range"))
     }
@@ -634,12 +618,39 @@ fn add(left: i64, right: i64, label: &str) -> anyhow::Result<i64> {
   left.checked_add(right).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
 }
 
-fn string_field(object: &Map<String, Value>, key: &str) -> anyhow::Result<Option<String>> {
+/// Python's truth test over a JSON value: null, false, zero, and an empty string, list or map are falsy.
+fn is_falsy(value: &Value) -> bool {
+  match value {
+    Value::Null => true,
+    Value::Bool(flag) => !flag,
+    Value::Number(number) => number.as_f64() == Some(0.0),
+    Value::String(text) => text.is_empty(),
+    Value::Array(items) => items.is_empty(),
+    Value::Object(entries) => entries.is_empty(),
+  }
+}
+
+/// The string under `key` read through Python's truth test: an absent or falsy value is None, and a truthy value
+/// that is not a string fails the capture, as the Python read raises on it.
+fn truthy_string(object: &Map<String, Value>, key: &str) -> anyhow::Result<Option<String>> {
   match object.get(key) {
-    None | Some(Value::Null) => Ok(None),
+    None => Ok(None),
+    Some(value) if is_falsy(value) => Ok(None),
     Some(Value::String(value)) => Ok(Some(value.clone())),
     Some(_) => bail!("field {key} is not a string"),
   }
+}
+
+/// The non-empty string under `key`. Any other value names no session and is ignored, as token_tally's
+/// `isinstance(..., str)` test does.
+fn session_text(object: &Map<String, Value>, key: &str) -> Option<String> {
+  object.get(key).and_then(Value::as_str).filter(|session| !session.is_empty()).map(str::to_string)
+}
+
+/// Whether the line's `type` is the string `kind`. A `type` that is not a string matches no kind, as
+/// `line.get("type") == ...` does in Python.
+fn is_type(object: &Map<String, Value>, kind: &str) -> bool {
+  object.get("type").and_then(Value::as_str) == Some(kind)
 }
 
 fn as_object<'a>(value: &'a Value, label: &str) -> anyhow::Result<&'a Map<String, Value>> {

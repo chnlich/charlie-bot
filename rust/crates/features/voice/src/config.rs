@@ -11,7 +11,7 @@ use serde_json::json;
 pub(crate) const BACKEND_IDS: &[&str] = &["local", "gemini", "muse"];
 const LEGACY_KEYS: &[(&str, &str)] = &[("voice_engine", "voice.engine"), ("voice_model_id", "voice.model_id")];
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum VoiceEngine {
   Sherpa,
@@ -33,8 +33,7 @@ pub(crate) struct VoiceSettings {
   #[serde(default = "default_engine")]
   pub(crate) engine: VoiceEngine,
   #[serde(default = "default_model_id")]
-  #[allow(dead_code)]
-  model_id: String,
+  pub(crate) model_id: String,
   #[serde(default = "default_backend")]
   pub(crate) default_backend: String,
   #[serde(default)]

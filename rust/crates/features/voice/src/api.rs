@@ -16,6 +16,7 @@ use axum::response::{IntoResponse, Response};
 use charliebot_compat::fastapi_form::{self, Field, FormModel};
 use charliebot_compat::routing::post_only;
 use charliebot_compat::{python_json, responses};
+use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::FeatureContext;
 use serde_json::{Value, json};
@@ -121,11 +122,15 @@ async fn confirm_voice_recording(State(features): State<Arc<FeatureContext>>, re
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let repo_root = match features.startup.require::<RepoRoot>() {
+    Ok(repo_root) => repo_root,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
   let pcm = match wav_body_to_pcm(&body, CONFIRM_MAX_SECONDS * SAMPLE_RATE) {
     Ok(pcm) => pcm,
     Err(error) => return error_response(error),
   };
-  let decoded = tokio::task::spawn_blocking(move || decode_probe(&cfg, &session_id, &pcm))
+  let decoded = tokio::task::spawn_blocking(move || decode_probe(&cfg, repo_root.path(), &session_id, &pcm))
     .await
     .expect("the probe decode does not panic");
   match decoded {
@@ -163,12 +168,16 @@ async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, req
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let repo_root = match features.startup.require::<RepoRoot>() {
+    Ok(repo_root) => repo_root,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
   tokio::task::spawn_blocking(move || {
     upload_recording(
       &cfg,
       &session_id,
       upload,
-      || acquire_speech_bundle(&cfg),
+      || acquire_speech_bundle(&cfg, repo_root.path()),
       |bundle, pcm| transcribe_with_bundle(&session_id, &bundle, pcm),
       &NoClipBackends,
     )
@@ -334,12 +343,17 @@ fn wav_body_to_pcm(body: &[u8], max_samples: usize) -> Result<Vec<u8>, VoiceRequ
 }
 
 /// The resident speech bundle. A not-ready model answers 503; any other failure answers 500.
-fn acquire_speech_bundle(cfg: &CharlieBotConfig) -> Result<Arc<SpeechModelBundle>, VoiceRequestError> {
-  transcriber::get_transcription_bundle(cfg).map_err(|error| match error.downcast_ref::<SpeechModelsNotReadyError>() {
-    Some(not_ready) => VoiceRequestError::new(StatusCode::SERVICE_UNAVAILABLE, not_ready.to_string()),
-    None => {
-      tracing::error!(exception = %format!("{error:#}"), "voice_bundle_acquire_failed");
-      VoiceRequestError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("speech inference failed: {error:#}"))
+fn acquire_speech_bundle(
+  cfg: &CharlieBotConfig,
+  repo_root: &Path,
+) -> Result<Arc<SpeechModelBundle>, VoiceRequestError> {
+  transcriber::get_transcription_bundle(cfg, repo_root).map_err(|error| {
+    match error.downcast_ref::<SpeechModelsNotReadyError>() {
+      Some(not_ready) => VoiceRequestError::new(StatusCode::SERVICE_UNAVAILABLE, not_ready.to_string()),
+      None => {
+        tracing::error!(exception = %format!("{error:#}"), "voice_bundle_acquire_failed");
+        VoiceRequestError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("speech inference failed: {error:#}"))
+      }
     }
   })
 }
@@ -355,8 +369,13 @@ fn transcribe_with_bundle(
   })
 }
 
-fn decode_probe(cfg: &CharlieBotConfig, session_id: &str, pcm: &[u8]) -> Result<String, VoiceRequestError> {
-  let bundle = acquire_speech_bundle(cfg)?;
+fn decode_probe(
+  cfg: &CharlieBotConfig,
+  repo_root: &Path,
+  session_id: &str,
+  pcm: &[u8],
+) -> Result<String, VoiceRequestError> {
+  let bundle = acquire_speech_bundle(cfg, repo_root)?;
   transcribe_with_bundle(session_id, &bundle, pcm)
 }
 

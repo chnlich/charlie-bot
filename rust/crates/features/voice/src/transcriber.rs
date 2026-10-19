@@ -1,14 +1,17 @@
-//! The sherpa decode of a finished recording: the VAD windows, the recognizer pool and the segment join.
+//! The decode of a finished recording: the VAD windows, the recognizer pool and the segment join.
 //!
-//! Port of `src/features/voice/transcriber.py` for the CPU sherpa engine. The qwen3_hf engine is not ported.
+//! Port of `src/features/voice/transcriber.py`. The pool holds sherpa recognizers on the CPU engine and the qwen3_hf
+//! helper's recognizer on the GPU engine. Both decode one window at a time and hand back its text.
 
 use std::cmp::Reverse;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::python_helper::{LongLived, PythonHelper};
 use sherpa_onnx::{
   OfflineModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer, OfflineRecognizerConfig, SileroVadModelConfig,
   TenVadModelConfig, VadModelConfig, VoiceActivityDetector,
@@ -16,7 +19,8 @@ use sherpa_onnx::{
 
 use crate::audio::SAMPLE_RATE;
 use crate::config::{VoiceEngine, VoiceSettings};
-use crate::provisioning::{QWEN3_ASR_DIR_NAME, SpeechModelsNotReadyError, VoiceModelPaths, get_ready_model_paths};
+use crate::provisioning::{QWEN3_ASR_DIR_NAME, VoiceModelPaths, ensure_sherpa_paths, get_ready_model_paths};
+use crate::qwen3_hf::{HELPER_SCRIPT, Qwen3HfRecognizer};
 use crate::transcription::python_whitespace;
 
 /// A segment's decode keeps 5 s of pause before it, so quiet speech the detector labels silence still reaches the model.
@@ -50,13 +54,37 @@ pub(crate) struct OfflineDecode {
 
 /// The resident bundle: one recognizer per pool worker, each behind its own lock, and the VAD configuration.
 pub(crate) struct SpeechModelBundle {
-  recognizers: Vec<Mutex<OfflineRecognizer>>,
+  /// The qwen3_hf pool has one recognizer, whose helper decodes one request at a time.
+  recognizers: Vec<Mutex<Recognizer>>,
   vad_config: VadModelConfig,
+  /// The engine whose recognizers the pool holds: sherpa after a qwen3_hf fallback, even when `voice.engine` asks for
+  /// qwen3_hf.
+  engine: VoiceEngine,
+  /// The model behind the pool: the sherpa archive's directory, or `voice.model_id` for qwen3_hf.
+  model_id: String,
+  /// The qwen3_hf helpers the server stops on shutdown. They sit outside the pool locks: a decode in flight holds its
+  /// lock until its reply arrives, and the stop must not wait for that reply.
+  helpers: Vec<Arc<LongLived>>,
+}
+
+/// One pool worker's recognizer: the sherpa recognizer on the CPU engine, or the qwen3_hf helper's on the GPU engine.
+pub(crate) enum Recognizer {
+  Sherpa(OfflineRecognizer),
+  Qwen3Hf(Qwen3HfRecognizer),
 }
 
 /// One pool worker's recognizer: decodes a window of 16 kHz mono float samples into its text.
 pub(crate) trait WindowDecoder: Send {
   fn decode_window(&mut self, samples: &[f32]) -> anyhow::Result<String>;
+}
+
+impl WindowDecoder for Recognizer {
+  fn decode_window(&mut self, samples: &[f32]) -> anyhow::Result<String> {
+    match self {
+      Recognizer::Sherpa(recognizer) => recognizer.decode_window(samples),
+      Recognizer::Qwen3Hf(recognizer) => recognizer.decode_window(samples),
+    }
+  }
 }
 
 impl WindowDecoder for OfflineRecognizer {
@@ -65,8 +93,13 @@ impl WindowDecoder for OfflineRecognizer {
     stream.accept_waveform(SAMPLE_RATE as i32, samples);
     self.decode(&stream);
     let result = stream.get_result().context("the recognizer returned no result")?;
-    Ok(result.text.split(python_whitespace).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" "))
+    Ok(normalize_text(&result.text))
   }
+}
+
+/// `_decode_samples`' whitespace normalization: the text's words, joined by single spaces.
+pub(crate) fn normalize_text(text: &str) -> String {
+  text.split(python_whitespace).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 fn logical_cpus() -> usize {
@@ -254,40 +287,125 @@ pub(crate) fn create_sherpa_bundle(paths: &VoiceModelPaths, hotwords: &str) -> a
   let workers = decode_workers(cpus);
   let threads = decode_threads(cpus, workers);
   let recognizers = (0..workers)
-    .map(|_| create_recognizer(paths, hotwords, threads).map(Mutex::new))
+    .map(|_| create_recognizer(paths, hotwords, threads).map(|recognizer| Mutex::new(Recognizer::Sherpa(recognizer))))
     .collect::<anyhow::Result<Vec<_>>>()?;
-  Ok(SpeechModelBundle { recognizers, vad_config: create_vad_config(paths) })
+  Ok(SpeechModelBundle {
+    recognizers,
+    vad_config: create_vad_config(paths),
+    engine: VoiceEngine::Sherpa,
+    model_id: QWEN3_ASR_DIR_NAME.to_string(),
+    helpers: Vec::new(),
+  })
+}
+
+/// The GPU bundle: one qwen3_hf helper, which loads the transformers model when it starts. The helper's text decodes
+/// through the same VAD windows as the sherpa pool.
+pub(crate) fn qwen3_hf_bundle(
+  helper: PythonHelper,
+  script: &Path,
+  paths: &VoiceModelPaths,
+  model_id: &str,
+) -> anyhow::Result<SpeechModelBundle> {
+  let recognizer = Qwen3HfRecognizer::start(helper, script)?;
+  Ok(SpeechModelBundle {
+    helpers: vec![recognizer.helper()],
+    recognizers: vec![Mutex::new(Recognizer::Qwen3Hf(recognizer))],
+    vad_config: create_vad_config(paths),
+    engine: VoiceEngine::Qwen3Hf,
+    model_id: model_id.to_string(),
+  })
+}
+
+/// The bundle of `voice.engine`. A qwen3_hf bundle that fails to build falls back to the CPU bundle: voice stays alive,
+/// and the warning names the failure.
+fn create_bundle(
+  cfg: &CharlieBotConfig,
+  repo_root: &Path,
+  paths: &VoiceModelPaths,
+) -> anyhow::Result<SpeechModelBundle> {
+  let settings = cfg.section::<VoiceSettings>("voice");
+  match settings.engine {
+    VoiceEngine::Sherpa => create_sherpa_bundle(paths, ""),
+    VoiceEngine::Qwen3Hf => {
+      let gpu = qwen3_hf_bundle(PythonHelper::new(repo_root), Path::new(HELPER_SCRIPT), paths, &settings.model_id);
+      fall_back_to_cpu(gpu, || create_sherpa_bundle(&ensure_sherpa_paths(cfg)?, ""))
+    }
+  }
+}
+
+/// `_get_model_bundle`'s fallback: the qwen3_hf bundle, or when it failed to build, the CPU bundle that `cpu` builds.
+fn fall_back_to_cpu(
+  gpu: anyhow::Result<SpeechModelBundle>,
+  cpu: impl FnOnce() -> anyhow::Result<SpeechModelBundle>,
+) -> anyhow::Result<SpeechModelBundle> {
+  match gpu {
+    Ok(bundle) => Ok(bundle),
+    Err(error) => {
+      tracing::warn!(
+        error = %format!("{error:#}"),
+        engine = "qwen3_hf",
+        fallback = "sherpa",
+        "voice_gpu_engine_init_failed"
+      );
+      cpu()
+    }
+  }
+}
+
+/// The resident bundle, with the engine its config asked for.
+struct ResidentBundle {
+  requested: VoiceEngine,
+  bundle: Arc<SpeechModelBundle>,
 }
 
 // The resident bundle is built once per process. The build lock is held across the build, so concurrent first
 // requests share one bundle, and the bundle lock is held only for the swap.
-static BUNDLE: Mutex<Option<Arc<SpeechModelBundle>>> = Mutex::new(None);
+static BUNDLE: Mutex<Option<ResidentBundle>> = Mutex::new(None);
 static BUNDLE_BUILD_LOCK: Mutex<()> = Mutex::new(());
 
-fn resident_bundle() -> Option<Arc<SpeechModelBundle>> {
-  BUNDLE.lock().expect("the bundle lock is never poisoned").clone()
+/// The resident bundle, when it was built for the engine `voice.engine` names now.
+fn resident_bundle(requested: VoiceEngine) -> Option<Arc<SpeechModelBundle>> {
+  let resident = BUNDLE.lock().expect("the bundle lock is never poisoned");
+  resident.as_ref().filter(|resident| resident.requested == requested).map(|resident| Arc::clone(&resident.bundle))
 }
 
 /// The resident recognizer and VAD bundle for offline calls. Raises the not-ready error while provisioning is
 /// incomplete, which the voice endpoints answer with 503.
-pub(crate) fn get_transcription_bundle(cfg: &CharlieBotConfig) -> anyhow::Result<Arc<SpeechModelBundle>> {
-  if matches!(cfg.section::<VoiceSettings>("voice").engine, VoiceEngine::Qwen3Hf) {
-    return Err(
-      SpeechModelsNotReadyError::new("speech models are not ready: the qwen3_hf engine is not ported".into()).into(),
-    );
-  }
+pub(crate) fn get_transcription_bundle(
+  cfg: &CharlieBotConfig,
+  repo_root: &Path,
+) -> anyhow::Result<Arc<SpeechModelBundle>> {
+  let requested = cfg.section::<VoiceSettings>("voice").engine;
   let paths = get_ready_model_paths()?;
-  if let Some(bundle) = resident_bundle() {
+  if let Some(bundle) = resident_bundle(requested) {
     return Ok(bundle);
   }
   let _build = BUNDLE_BUILD_LOCK.lock().expect("the bundle build lock is never poisoned");
-  if let Some(bundle) = resident_bundle() {
+  if let Some(bundle) = resident_bundle(requested) {
     return Ok(bundle);
   }
-  let bundle = Arc::new(create_sherpa_bundle(&paths, "")?);
-  tracing::info!(engine = "sherpa", model_id = QWEN3_ASR_DIR_NAME, "voice_model_bundle_ready");
-  *BUNDLE.lock().expect("the bundle lock is never poisoned") = Some(Arc::clone(&bundle));
+  let bundle = Arc::new(create_bundle(cfg, repo_root, &paths)?);
+  tracing::info!(engine = bundle.engine.name(), model_id = bundle.model_id.as_str(), "voice_model_bundle_ready");
+  *BUNDLE.lock().expect("the bundle lock is never poisoned") =
+    Some(ResidentBundle { requested, bundle: Arc::clone(&bundle) });
   Ok(bundle)
+}
+
+/// Stop the resident bundle's qwen3_hf helpers, so the server's shutdown leaves no helper process running. The bundle
+/// stays resident: a decode after the stop fails as a decode after the helper's exit does, and nothing restarts it.
+pub(crate) fn stop_resident_bundle() {
+  if let Some(resident) = BUNDLE.lock().expect("the bundle lock is never poisoned").as_ref() {
+    resident.bundle.stop();
+  }
+}
+
+impl SpeechModelBundle {
+  /// Kill the helpers' process groups. A decode in flight fails, and so does every later one.
+  fn stop(&self) {
+    for helper in &self.helpers {
+      helper.stop();
+    }
+  }
 }
 
 /// Decode one deterministic 0.5 s 440 Hz sine through every pool recognizer. The decoded text is dropped: the point
@@ -308,7 +426,13 @@ pub(crate) fn warm_up_bundle(bundle: &SpeechModelBundle) -> anyhow::Result<()> {
 mod tests {
   use super::*;
   use std::fs;
+  use std::io;
   use std::time::Duration;
+
+  use anyhow::anyhow;
+
+  use crate::provisioning::voice_model_paths;
+  use crate::qwen3_hf::test_support::{StubTree, wait_until_gone};
 
   /// Decodes a window's first sample (times 32768) as its marker `w<marker>`, after the delay the test gives that
   /// marker. Every entry is logged, so a test can see which recognizer decoded which window.
@@ -425,5 +549,113 @@ mod tests {
       .find_map(|line| line.trim().strip_prefix("version: \"")?.strip_suffix("\","))
       .expect("the pin table has a version");
     assert_eq!(pinned, locked);
+  }
+
+  fn synthetic_paths() -> VoiceModelPaths {
+    voice_model_paths(Path::new("/synthetic/home/models"))
+  }
+
+  fn qwen3_hf_bundle_of(tree: &StubTree, mode: &str) -> anyhow::Result<SpeechModelBundle> {
+    qwen3_hf_bundle(tree.helper(mode), &tree.script(), &synthetic_paths(), "synthetic/model")
+  }
+
+  #[test]
+  fn warm_up_decodes_one_half_second_sine_through_the_helper() {
+    let tree = StubTree::new();
+    let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
+
+    warm_up_bundle(&bundle).expect("the warm-up decodes");
+
+    assert_eq!(tree.decoded_sample_counts(), vec![8_000]);
+    assert_eq!(bundle.engine, VoiceEngine::Qwen3Hf);
+    assert_eq!(bundle.model_id, "synthetic/model");
+  }
+
+  #[test]
+  fn concurrent_windows_share_the_helper_and_each_gets_its_own_text() {
+    let tree = StubTree::new();
+    let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
+
+    thread::scope(|scope| {
+      for marker in 1..=4 {
+        let bundle = &bundle;
+        scope.spawn(move || {
+          for _ in 0..3 {
+            let window = [marker as f32 / 1000.0; 8];
+            let text = decode_samples(&bundle.recognizers[0], &window).expect("the window decodes");
+            assert_eq!(text, format!("marker {marker}"));
+          }
+        });
+      }
+    });
+  }
+
+  #[test]
+  fn stopping_the_bundle_kills_the_helpers_children_and_fails_later_decodes() {
+    let tree = StubTree::new();
+    let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
+
+    bundle.stop();
+
+    wait_until_gone(tree.child_pid());
+    let error = decode_samples(&bundle.recognizers[0], &[0.5]).expect_err("the stopped helper cannot decode");
+    assert_eq!(error.to_string(), "Python helper qwen3_hf stopped answering: the server stopped it");
+  }
+
+  /// The log lines `run` writes, as the server's formatter renders them.
+  fn logged_by(run: impl FnOnce()) -> String {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buffer);
+    let subscriber =
+      tracing_subscriber::fmt().with_ansi(false).with_writer(move || LogSink(Arc::clone(&sink))).finish();
+    tracing::subscriber::with_default(subscriber, run);
+    let bytes = buffer.lock().expect("the log buffer is never poisoned").clone();
+    String::from_utf8(bytes).expect("the log is UTF-8")
+  }
+
+  /// A log writer that appends to a buffer the test reads back.
+  struct LogSink(Arc<Mutex<Vec<u8>>>);
+
+  impl io::Write for LogSink {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+      self.0.lock().expect("the log buffer is never poisoned").extend_from_slice(bytes);
+      Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+      Ok(())
+    }
+  }
+
+  #[test]
+  fn init_error_falls_back_to_the_cpu_bundle_and_logs_the_gpu_failure() {
+    let tree = StubTree::new();
+    let gpu = qwen3_hf_bundle_of(&tree, "init_error");
+    let mut outcome = None;
+
+    let logs = logged_by(|| outcome = Some(fall_back_to_cpu(gpu, || Err(anyhow!("the CPU bundle was built")))));
+
+    let error = outcome.expect("the fallback ran").err().expect("the CPU builder's result is returned");
+    assert_eq!(error.to_string(), "the CPU bundle was built");
+    assert!(logs.contains("voice_gpu_engine_init_failed"), "{logs}");
+    assert!(logs.contains("error=synthetic init failure"), "{logs}");
+    assert!(logs.contains("engine=\"qwen3_hf\""), "{logs}");
+    assert!(logs.contains("fallback=\"sherpa\""), "{logs}");
+  }
+
+  #[test]
+  fn exit_before_ready_falls_back_to_the_cpu_bundle_and_logs_the_exit() {
+    let tree = StubTree::new();
+    let gpu = qwen3_hf_bundle_of(&tree, "exit_before_ready");
+    let mut outcome = None;
+
+    let logs = logged_by(|| outcome = Some(fall_back_to_cpu(gpu, || Err(anyhow!("the CPU bundle was built")))));
+
+    assert_eq!(
+      outcome.expect("the fallback ran").err().expect("the CPU bundle is returned").to_string(),
+      "the CPU bundle was built"
+    );
+    assert!(logs.contains("voice_gpu_engine_init_failed"), "{logs}");
+    assert!(logs.contains("exited with code 3"), "{logs}");
   }
 }

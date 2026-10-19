@@ -13,11 +13,15 @@ router = fastapi.APIRouter()
 
 
 class WebReplyRequest(pydantic.BaseModel):
-  """Request body for the internal web/reply endpoint: the calling session records *text* as its web reply."""
+  """Request body for the internal web/reply endpoint: the calling session records *text* as its web reply.
+
+  *keep_language* is the agent's reason for posting *text* past the language check; None when the agent gave none.
+  """
   model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   text: str
+  keep_language: str | None = None
 
 
 class WebStatusRequest(pydantic.BaseModel):
@@ -47,11 +51,12 @@ async def web_reply(
 ) -> dict:
   """Record the calling session's web reply and return the readback the CLI prints.
 
-  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session or a worker, 422 blank text.
-  Nothing is recorded on a refusal.
+  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, a worker or a language hold, 422
+  blank text or an empty keep_language reason. Nothing is recorded on a refusal.
   """
   try:
-    return await reply.post_web_reply(req.session_id, req.text, store, events, lifecycle)
+    return await reply.post_web_reply(
+        req.session_id, req.text, store, events, lifecycle, keep_language=req.keep_language)
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 

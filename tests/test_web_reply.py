@@ -1,6 +1,6 @@
-"""Acceptance tests for the web reply channel (src.features.web_reply): the reply record and its refusals, the answers
-binding, the round-end audit, the For-you layer, the rules segment, the live broadcast of a reply, and the session
-status: its set and read, their refusals, the bootstrap object, the rendering and the ancestor notice."""
+"""Acceptance tests for the web reply channel (src.features.web_reply): the reply record and its refusals, the language
+check, the answers binding, the round-end audit, the For-you layer, the rules segment, the live broadcast of a reply,
+and the session status: its set and read, their refusals, the bootstrap object, the rendering and the ancestor notice."""
 
 from __future__ import annotations
 
@@ -166,6 +166,142 @@ async def test_the_budget_flags_an_over_budget_reply_and_the_reply_still_posts(
 
 
 # ---------------------------------------------------------------------------
+# The language check: an English reply to a Chinese message is held unless the agent gives a reason
+# ---------------------------------------------------------------------------
+
+_CHINESE_MESSAGE = "这个改动先别合入，我想再看一下状态面板的折叠逻辑。"
+_MANY_TERMS_MESSAGE = "这个 PR 的 CI 挂了，pytest 的 log 里有 Kubernetes pod 的 timeout，你看一下 rebase 之后还在不在。"
+_ARTIFACT_COMMENT_MESSAGE = (
+    "[Artifact comments · plan_32.html] (1)\n\n"
+    "1. ▸ \"Keep the phone status toggle sticky while scrolling\"\n"
+    "   ↳ 这一条为什么要改？先说明理由再动手。")
+_ENGLISH_REPLY = "I will hold the merge until the review is done."
+_CODE_HEAVY_REPLY = "改好了，入口在下面：\n\n```\n" + " ".join(["ChatPanelStatusToggle"] * 20) + "\n```\n测试全部通过。"
+
+
+def _user_message(text: str) -> dict:
+  """A user message as the chat API writes it: the actor is the user."""
+  return {**conftest.user_event(text), "actor": "user"}
+
+
+async def _post_reply(blocks: conftest.SessionBlocks, sid: str, text: str, keep_language: str | None = None) -> dict:
+  return await reply.post_web_reply(
+      sid, text, blocks.store, blocks.events, blocks.lifecycle, keep_language=keep_language)
+
+
+@pytest.mark.asyncio
+async def test_an_english_reply_after_a_chinese_message_is_held_and_records_nothing(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, _user_message(_CHINESE_MESSAGE))
+  events_before = len(_events(blocks, sid))
+
+  with pytest.raises(reply.WebReplyError) as refusal:
+    await _post_reply(blocks, sid, _ENGLISH_REPLY)
+
+  assert (refusal.value.status, refusal.value.detail) == (409, reply.LANGUAGE_HOLD_DETAIL)
+  assert len(_events(blocks, sid)) == events_before
+  assert not (await blocks.store.get_session(sid)).has_unread
+
+
+@pytest.mark.asyncio
+async def test_a_reply_with_a_keep_language_reason_posts_as_written_and_records_the_reason(
+    tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, _user_message(_CHINESE_MESSAGE))
+  client = conftest.make_internal_router_client(blocks.cfg, blocks)
+  reason = "The reply quotes an English term."
+
+  resp = client.post(
+      "/api/internal/web/reply", json={
+          "session_id": sid,
+          "text": _ENGLISH_REPLY,
+          "keep_language": reason
+      })
+
+  assert resp.status_code == 200
+  replies = _of_type(_events(blocks, sid), ET.WEB_REPLY)
+  assert [(ev["content"], ev[ET.WEB_REPLY]) for ev in replies] == [
+      (_ENGLISH_REPLY, {
+          "answers": None,
+          "chars": len(_ENGLISH_REPLY),
+          "keep_language": reason
+      })
+  ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["", "  "])
+async def test_an_empty_keep_language_reason_is_refused_and_records_nothing(
+    tmp_path: pathlib.Path, reason: str) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, _user_message(_CHINESE_MESSAGE))
+  client = conftest.make_internal_router_client(blocks.cfg, blocks)
+  events_before = len(_events(blocks, sid))
+
+  resp = client.post(
+      "/api/internal/web/reply", json={
+          "session_id": sid,
+          "text": _ENGLISH_REPLY,
+          "keep_language": reason
+      })
+
+  assert resp.status_code == 422
+  assert len(_events(blocks, sid)) == events_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_message", [_MANY_TERMS_MESSAGE, _ARTIFACT_COMMENT_MESSAGE],
+    ids=["many-english-terms", "artifact-comment-with-english-quote"])
+async def test_an_english_reply_after_a_chinese_message_with_english_inside_it_is_held(
+    tmp_path: pathlib.Path, user_message: str) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, _user_message(user_message))
+
+  with pytest.raises(reply.WebReplyError) as refusal:
+    await _post_reply(blocks, sid, _ENGLISH_REPLY)
+
+  assert refusal.value.detail == reply.LANGUAGE_HOLD_DETAIL
+
+
+@pytest.mark.asyncio
+async def test_an_english_reply_after_an_english_message_posts_even_after_a_chinese_one(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, _user_message(_CHINESE_MESSAGE))
+  await _append(blocks, sid, _user_message("Please rerun the suite and report the failures."))
+
+  readback = await _post_reply(blocks, sid, _ENGLISH_REPLY)
+
+  assert readback["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_chinese_reply_with_many_code_names_posts(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, _user_message(_CHINESE_MESSAGE))
+
+  readback = await _post_reply(blocks, sid, _CODE_HEAVY_REPLY)
+
+  assert readback["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_reply_in_a_session_without_a_user_message_posts(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+
+  readback = await _post_reply(blocks, sid, _ENGLISH_REPLY)
+
+  assert readback["posted"] is True
+
+
+# ---------------------------------------------------------------------------
 # The CLI: readback and refusal
 # ---------------------------------------------------------------------------
 
@@ -193,12 +329,13 @@ def test_the_cli_posts_the_reply_text_and_prints_the_readback_as_one_json_line(
   assert json.loads(out) == readback
 
 
+@pytest.mark.parametrize("detail", ["Session is not a web session", reply.LANGUAGE_HOLD_DETAIL])
 def test_the_cli_exits_non_zero_with_a_json_error_on_a_refusal(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], detail: str) -> None:
   cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   reply_file = tmp_path / "reply.md"
   reply_file.write_text("the answer", encoding="utf-8")
-  refused = conftest.make_json_response({"detail": "Session is not a web session"}, 409)
+  refused = conftest.make_json_response({"detail": detail}, 409)
 
   with (
       conftest.patched_cli_post(cfg, ["web", "reply", "--file", str(reply_file)], return_value=refused),
@@ -209,9 +346,27 @@ def test_the_cli_exits_non_zero_with_a_json_error_on_a_refusal(
 
   assert exc_info.value.code == 1
   assert json.loads(capsys.readouterr().err) == {
-      "error": "Session is not a web session",
+      "error": detail,
       "code": "server_error",
       "effect": "none",
+  }
+
+
+def test_the_cli_sends_the_keep_language_reason_with_the_reply(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  reply_file = tmp_path / "reply.md"
+  reply_file.write_text("the answer", encoding="utf-8")
+  argv = ["web", "reply", "--file", str(reply_file), "--keep-language", "The reply quotes an English term."]
+  readback = {"posted": True, "chars": 10, "over_budget": False, "answers": None}
+
+  with conftest.patched_cli_post(cfg, argv, return_value=conftest.make_json_response(readback)) as post_mock:
+    importlib.import_module("src.features.web_reply.cli").main()
+
+  assert post_mock.call_args.kwargs["json"] == {
+      "session_id": "abc",
+      "text": "the answer",
+      "keep_language": "The reply quotes an English term.",
   }
 
 

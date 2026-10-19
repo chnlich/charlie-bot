@@ -181,8 +181,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .sidebar-overlay { display: none; }
 .hamburger-btn { display: none !important; }
 @media (max-width: 768px) {
-  .input-row { flex-wrap: wrap; }
-  .input-row textarea { width: 100% !important; min-width: 100% !important; flex-basis: 100%; }
+  .input-row { flex-wrap: nowrap; }
   .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }
   .input-buttons .overflow-toggle { display: inline-flex; }
   .input-buttons .collapsible { display: none; }
@@ -192,10 +191,15 @@ body.resizing { cursor: col-resize; user-select: none; }
   #resize-handle { display: none; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
-  /* Tabs on their own row on mobile */
+  /* Header on phones: the menu, name, bounded backend badge and Compact keep the
+     first row; the tabs and the events link share the second, the link at its
+     right end. */
   main > header { flex-wrap: wrap; }
-  #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
+  #backend-badge { max-width: 120px; overflow: hidden; }
+  #backend-badge select { max-width: 100%; }
+  #tab-buttons { width: auto; flex: 1 1 calc(100% - 2.5rem); overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
+  main > header > a[title="View JSONL events"] { order: 100; align-self: center; }
   #usage-indicator { display: none !important; }
   .input-buttons button { min-width: 44px; min-height: 44px; }
 }

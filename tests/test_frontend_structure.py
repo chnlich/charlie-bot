@@ -55,6 +55,10 @@ package's script registers a handler with it at load time. The core registration
     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)
 
+A package that adds an item to a core menu needs no registration entry: it appends its own
+element to the menu's container (the voice package adds the composer ⋯ menu's Voice backend
+entry to #overflow-menu), so the core markup names nothing the package defines.
+
 Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
 for it. The core page events today:
 

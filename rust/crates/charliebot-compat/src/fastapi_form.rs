@@ -189,43 +189,133 @@ async fn read_urlencoded(body: Body) -> Result<FormBody, Box<Response>> {
     bytes.extend_from_slice(&chunk);
   }
   let mut form = FormBody::default();
-  for pair in bytes.split(|byte| *byte == b'&') {
-    let (name, value) = match pair.iter().position(|byte| *byte == b'=') {
-      Some(position) => (&pair[..position], &pair[position + 1..]),
-      None => (pair, &pair[pair.len()..]),
-    };
+  for (name, value) in querystring_fields(&bytes) {
     form.parts.push(Part { name: unquote_plus(name), value: PartValue::Form(unquote_plus(value)) });
   }
   Ok(form)
 }
 
-/// Decode `urllib.parse.unquote_plus`: `+` becomes a space, `%XX` pairs become bytes, and the bytes decode as UTF-8
-/// with replacement characters for invalid sequences.
-fn unquote_plus(bytes: &[u8]) -> String {
-  let mut decoded = Vec::with_capacity(bytes.len());
+/// Split a urlencoded body into raw name and value pairs the way python-multipart's `QuerystringParser` does, which
+/// Starlette's `FormParser` uses. Both `&` and `;` separate fields, and repeated separators are skipped. A name ends at
+/// the first `=` before the next separator. A value ends at the next separator, where `&` is looked for before `;`. A
+/// bare name is kept only when a separator follows it, because python-multipart finishes a field at the end of the
+/// body only once its value has started.
+fn querystring_fields(data: &[u8]) -> Vec<(&[u8], &[u8])> {
+  let ampersands = positions_of(data, b'&');
+  let semicolons = positions_of(data, b';');
+  let separator_from = |from: usize| next_position(&ampersands, from).or_else(|| next_position(&semicolons, from));
+  let mut fields = Vec::new();
   let mut index = 0;
-  while index < bytes.len() {
-    match bytes[index] {
-      b'+' => decoded.push(b' '),
-      b'%' if index + 2 < bytes.len() => {
-        let hex = bytes.get(index + 1..index + 3).and_then(|pair| {
-          let high = (pair[0] as char).to_digit(16)?;
-          let low = (pair[1] as char).to_digit(16)?;
-          Some((high * 16 + low) as u8)
-        });
-        match hex {
-          Some(byte) => {
-            decoded.push(byte);
-            index += 2;
-          }
-          None => decoded.push(b'%'),
-        }
+  while index < data.len() {
+    if matches!(data[index], b'&' | b';') {
+      index += 1;
+      continue;
+    }
+    let separator = separator_from(index);
+    let name_end = separator.unwrap_or(data.len());
+    match data[index..name_end].iter().position(|byte| *byte == b'=').map(|offset| index + offset) {
+      Some(equals) => {
+        let value_end = separator_from(equals + 1).unwrap_or(data.len());
+        fields.push((&data[index..equals], &data[equals + 1..value_end]));
+        index = value_end;
       }
+      None => {
+        let Some(end) = separator else { break };
+        fields.push((&data[index..end], &data[end..end]));
+        index = end;
+      }
+    }
+  }
+  fields
+}
+
+fn positions_of(data: &[u8], byte: u8) -> Vec<usize> {
+  data.iter().enumerate().filter(|(_, candidate)| **candidate == byte).map(|(index, _)| index).collect()
+}
+
+/// The first position at or after `from` in the ascending `positions`.
+fn next_position(positions: &[usize], from: usize) -> Option<usize> {
+  positions.get(positions.partition_point(|position| *position < from)).copied()
+}
+
+/// Decode a name or value the way Starlette's `FormParser` does: each byte is a latin-1 character, and the characters
+/// are percent-decoded with `urllib.parse.unquote_plus`. Escapes in a run of ASCII characters decode as UTF-8 with
+/// replacement characters, and every other character stays as it is.
+fn unquote_plus(bytes: &[u8]) -> String {
+  let mut text = String::with_capacity(bytes.len());
+  let mut ascii_run = Vec::new();
+  for &byte in bytes {
+    if byte.is_ascii() {
+      ascii_run.push(byte);
+    } else {
+      text.push_str(&unquote_ascii(&ascii_run));
+      ascii_run.clear();
+      text.push(char::from(byte));
+    }
+  }
+  text.push_str(&unquote_ascii(&ascii_run));
+  text
+}
+
+fn unquote_ascii(run: &[u8]) -> String {
+  let mut decoded = Vec::with_capacity(run.len());
+  let mut index = 0;
+  while index < run.len() {
+    match run[index] {
+      b'+' => decoded.push(b' '),
+      b'%' => match run.get(index + 1..index + 3).and_then(hex_pair) {
+        Some(byte) => {
+          decoded.push(byte);
+          index += 2;
+        }
+        None => decoded.push(b'%'),
+      },
       byte => decoded.push(byte),
     }
     index += 1;
   }
   String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_pair(pair: &[u8]) -> Option<u8> {
+  let high = char::from(pair[0]).to_digit(16)?;
+  let low = char::from(pair[1]).to_digit(16)?;
+  Some((high * 16 + low) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn fields(data: &[u8]) -> Vec<(String, String)> {
+    querystring_fields(data).into_iter().map(|(name, value)| (unquote_plus(name), unquote_plus(value))).collect()
+  }
+
+  fn pair(name: &str, value: &str) -> (String, String) {
+    (name.to_string(), value.to_string())
+  }
+
+  #[test]
+  fn querystring_splits_fields_as_python_multipart_does() {
+    assert_eq!(fields(b"a;b=1&c=2"), [pair("a;b", "1"), pair("c", "2")]);
+    assert_eq!(fields(b"a=x;y&b=2"), [pair("a", "x;y"), pair("b", "2")]);
+    assert_eq!(fields(b"a=x;y"), [pair("a", "x")]);
+    assert_eq!(fields(b"a;b"), [pair("a", "")]);
+    assert_eq!(fields(b"a&b&c=3"), [pair("a", ""), pair("b", ""), pair("c", "3")]);
+    assert_eq!(fields(b"a==b"), [pair("a", "=b")]);
+    assert_eq!(fields(b"x=1;;y=2"), [pair("x", "1"), pair("y", "2")]);
+    assert_eq!(fields(b"=x&&note=2"), [pair("", "x"), pair("note", "2")]);
+    assert_eq!(fields(b"&&"), []);
+  }
+
+  #[test]
+  fn unquote_plus_decodes_latin_1_bytes_as_starlette_does() {
+    assert_eq!(unquote_plus(b"caf\xc3\xa9"), "caf\u{c3}\u{a9}");
+    assert_eq!(unquote_plus(b"caf%C3%A9"), "caf\u{e9}");
+    assert_eq!(unquote_plus(b"%C3\xa9"), "\u{fffd}\u{a9}");
+    assert_eq!(unquote_plus(b"a+b%2Bc"), "a b+c");
+    assert_eq!(unquote_plus(b"%zz%4"), "%zz%4");
+  }
 }
 
 /// Decode a string with Starlette's `_user_safe_decode`: an unknown codec or an invalid sequence falls back to

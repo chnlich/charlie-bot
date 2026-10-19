@@ -5,11 +5,14 @@
 //! functions of the raw value, so tests pass that value in and set no environment variable.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{paths, pyfmt};
 
 pub const CHARLIEBOT_HOME_ENV: &str = "CHARLIEBOT_HOME";
+
+/// The profile's opencode store directory name, under the profile home.
+pub const OPENCODE_DIR_NAME: &str = "opencode";
 
 /// A `CHARLIEBOT_HOME` value that names no usable home.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,9 +78,45 @@ fn explicit_home(raw: &str) -> Result<Option<PathBuf>, HomeError> {
   resolve_home(raw).map(Some)
 }
 
+/// The opencode store root, `<CHARLIEBOT_HOME>/opencode`; the server's XDG base directories sit under it.
+pub fn opencode_store_dir() -> Result<PathBuf, HomeError> {
+  Ok(opencode_store_in(&charliebot_home_dir()?))
+}
+
+/// The server's `XDG_DATA_HOME`, `<store>/data`.
+pub fn opencode_data_dir() -> Result<PathBuf, HomeError> {
+  Ok(opencode_data_in(&charliebot_home_dir()?))
+}
+
+/// The opencode 2.0 database, `<store>/data/opencode/opencode.db`: read by the usage source, vacuumed by its sweep.
+pub fn opencode_db() -> Result<PathBuf, HomeError> {
+  Ok(opencode_db_in(&charliebot_home_dir()?))
+}
+
+fn opencode_store_in(home: &Path) -> PathBuf {
+  home.join(OPENCODE_DIR_NAME)
+}
+
+fn opencode_data_in(home: &Path) -> PathBuf {
+  opencode_store_in(home).join("data")
+}
+
+fn opencode_db_in(home: &Path) -> PathBuf {
+  opencode_data_in(home).join("opencode").join("opencode.db")
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn opencode_store_paths_derive_from_the_profile() {
+    // tests/test_charliebot_home.py::test_opencode_store_paths_derive_from_the_profile
+    let home = Path::new("/synthetic/profile");
+    assert_eq!(opencode_store_in(home), PathBuf::from("/synthetic/profile/opencode"));
+    assert_eq!(opencode_data_in(home), PathBuf::from("/synthetic/profile/opencode/data"));
+    assert_eq!(opencode_db_in(home), PathBuf::from("/synthetic/profile/opencode/data/opencode/opencode.db"));
+  }
 
   #[test]
   fn a_relative_home_is_refused_with_the_python_message() {

@@ -41,13 +41,17 @@ fn differential_backup_matches_python() {
   unsafe { std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, home.path()) };
   let rust_archive = charliebot_backup::backup::create_backup().unwrap();
   unsafe { std::env::remove_var(charliebot_core::home::CHARLIEBOT_HOME_ENV) };
+  // Python's archive goes to the same directory under the same second-resolution name, so the Rust
+  // archive moves aside before Python runs; otherwise Python overwrites it and the comparison passes vacuously.
+  let rust_copy = rust_archive.with_file_name("rust-archive.tar.gz");
+  std::fs::rename(&rust_archive, &rust_copy).unwrap();
 
   let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/differential_compare.py");
   let output = Command::new("uv")
     .args(["run", "python"])
     .arg(&script)
     .arg(home.path())
-    .arg(&rust_archive)
+    .arg(&rust_copy)
     .current_dir(repo)
     .output()
     .expect("running the Python comparison driver");

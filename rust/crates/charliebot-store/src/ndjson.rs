@@ -31,6 +31,13 @@ pub(crate) fn read_file(path: &Path) -> StoreResult<Vec<Value>> {
   Ok(bytes.split(|byte| *byte == b'\n').filter_map(parse_line).collect())
 }
 
+/// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.
+pub(crate) fn encode_line(value: &Value) -> String {
+  let mut line = pyfmt::json_dumps(value, &APPEND_JSON);
+  line.push('\n');
+  line
+}
+
 /// Append one Python `json.dumps(..., ensure_ascii=False)` line and sync its data to disk.
 pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
   let parent = path.parent().expect("an event-log path has a parent directory");
@@ -40,8 +47,7 @@ pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
     .append(true)
     .open(path)
     .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  let mut line = pyfmt::json_dumps(value, &APPEND_JSON);
-  line.push('\n');
+  let line = encode_line(value);
   file.write_all(line.as_bytes()).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   file.sync_data().map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   Ok(())

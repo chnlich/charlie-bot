@@ -429,7 +429,8 @@ impl Store {
     Ok(meta.map_or(0, |meta| meta.archive_offset.max(0) as usize))
   }
 
-  fn archive_paths(&self, session_id: &str) -> StoreResult<Vec<PathBuf>> {
+  /// The session's archive files in chronological (filename) order: `data/archives/chat_events.*.jsonl`.
+  pub(crate) fn archive_paths(&self, session_id: &str) -> StoreResult<Vec<PathBuf>> {
     let dir = self.session_dir(session_id).join("data").join("archives");
     let entries = match fs::read_dir(&dir) {
       Ok(entries) => entries,

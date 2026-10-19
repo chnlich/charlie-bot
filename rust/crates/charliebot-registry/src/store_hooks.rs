@@ -3,6 +3,7 @@
 //! injects them at startup, when it constructs the store.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 
 use charliebot_core::config::CharlieBotConfig;
@@ -267,6 +268,13 @@ impl RuntimeEventHooks for RegistryRuntimeEvents {
   }
 
   fn drop_session_runtime_state(&self, _session_id: &str) {}
+
+  fn copy_on_fork(&self, parent_dir: &Path, child_dir: &Path) -> StoreResult<()> {
+    for contribution in self.registry.sidebar_contributions() {
+      contribution.copy_on_fork(parent_dir, child_dir).map_err(|error| StoreError::new(error.to_string()))?;
+    }
+    Ok(())
+  }
 }
 
 #[cfg(test)]

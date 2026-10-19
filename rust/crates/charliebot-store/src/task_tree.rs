@@ -1493,7 +1493,7 @@ fn task_spec_hash(task: &TaskSpec) -> StoreResult<String> {
 }
 
 /// One archive-format close fact: outcome `archived` and no report target, so an archive wakes nobody.
-fn archived_close_event(
+pub(crate) fn archived_close_event(
   session_id: &str,
   request_id: &str,
   actor: &str,
@@ -1602,7 +1602,7 @@ fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use std::collections::HashMap;
   use std::sync::{Arc, Mutex};
 
@@ -1694,7 +1694,7 @@ mod tests {
     ]
   }
 
-  fn make_store(home: &Path) -> Store {
+  pub(crate) fn make_store(home: &Path) -> Store {
     make_store_with_archive(home, Arc::new(crate::store::test_support::SequenceArchive))
   }
 
@@ -1716,7 +1716,12 @@ mod tests {
     .unwrap()
   }
 
-  async fn create_node(store: &Store, request_id: &str, parent: Option<&str>, profile: TaskProfile) -> SessionMetadata {
+  pub(crate) async fn create_node(
+    store: &Store,
+    request_id: &str,
+    parent: Option<&str>,
+    profile: TaskProfile,
+  ) -> SessionMetadata {
     store
       .create_task(
         CreateTask {
@@ -2144,7 +2149,7 @@ mod tests {
     }
   }
 
-  fn queued_run(session_id: &str, run_id: &str) -> RunRecord {
+  pub(crate) fn queued_run(session_id: &str, run_id: &str) -> RunRecord {
     RunRecord {
       id: run_id.to_string(),
       session_id: session_id.to_string(),

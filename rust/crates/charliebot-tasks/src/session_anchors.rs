@@ -1,10 +1,6 @@
 //! Native-context reset notes (`src/runtime/session_anchors.py`).
 
-/// Where the earlier history of the session stays readable (`src/runtime/session_fork.py:38`).
-const HISTORY_LOCATION_NOTE: &str = concat!(
-  "Earlier turns' history remains readable in this session's chat log, ",
-  "data/chat_events.jsonl in the working directory."
-);
+use charliebot_store::session_fork::HISTORY_LOCATION_NOTE;
 
 /// The instruction a fresh native conversation follows before it responds (`src/runtime/session_anchors.py:28`).
 const CONTEXT_RESET_INSTRUCTION: &str = concat!(

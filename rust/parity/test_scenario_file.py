@@ -1,10 +1,14 @@
 """Scenario loader tests for the parity harness's asynchronous step forms."""
 
+import json
+import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 import threading
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -322,6 +326,83 @@ def test_scenario_cleanup_stops_leftover_synthetic_process_and_reports_it(tmp_pa
     if process.poll() is None:
       process.kill()
       process.wait()
+
+
+# A fake agent's stand-in: it leads its process group and ignores SIGTERM, so only SIGKILL ends it.
+_LEADER_IGNORING_SIGTERM = (
+    "import signal, time\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "print('ready', flush=True)\n"
+    "time.sleep(60)\n")
+
+
+@pytest.fixture
+def sigterm_leader() -> Iterator[subprocess.Popen]:
+  leader = subprocess.Popen(
+      [sys.executable, "-c", _LEADER_IGNORING_SIGTERM],
+      stdin=subprocess.DEVNULL,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.DEVNULL,
+      text=True,
+      start_new_session=True)
+  try:
+    assert leader.stdout.readline() == "ready\n"
+    yield leader
+  finally:
+    # The leader is the only member of its group, so killing it ends the group whatever the test did.
+    if leader.poll() is None:
+      leader.kill()
+    leader.wait()
+
+
+def _spawn_record(leader: subprocess.Popen) -> dict[str, Any]:
+  _, pid_start = parity.servers.process_identity(leader.pid)
+  return {"index": 1, "pid": leader.pid, "pid_start": pid_start, "pgid": os.getpgid(leader.pid)}
+
+
+def test_fake_group_kill_ends_a_leader_that_ignores_sigterm(sigterm_leader: subprocess.Popen) -> None:
+  assert parity._kill_fake_group("baseline", _spawn_record(sigterm_leader)) == []
+  assert parity.servers.process_identity(sigterm_leader.pid) is None
+
+
+def test_fake_group_kill_names_a_group_that_outlives_the_timeout(
+    sigterm_leader: subprocess.Popen, monkeypatch: pytest.MonkeyPatch) -> None:
+  real_killpg = os.killpg
+
+  def killpg_that_spares_the_group(pgid: int, signum: int) -> None:
+    if signum != signal.SIGKILL:
+      real_killpg(pgid, signum)
+
+  monkeypatch.setattr(parity.os, "killpg", killpg_that_spares_the_group)
+  monkeypatch.setattr(parity, "FAKE_GROUP_EXIT_TIMEOUT_SECONDS", 0.2)
+
+  lines = parity._kill_fake_group("baseline", _spawn_record(sigterm_leader))
+
+  assert len(lines) == 1
+  assert f"process group {sigterm_leader.pid} remained" in lines[0]
+
+
+def test_fake_group_kill_passes_a_start_whose_leader_and_group_are_gone() -> None:
+  gone = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+  gone.wait()
+  record = {"index": 1, "pid": gone.pid, "pid_start": "0", "pgid": gone.pid}
+
+  assert parity._kill_fake_group("baseline", record) == []
+
+
+def test_scenario_cleanup_kills_a_fake_group_that_ignores_sigterm(
+    tmp_path: pathlib.Path, sigterm_leader: subprocess.Popen) -> None:
+  side = parity.Side("candidate", parity.servers.Tree(label="candidate", root=tmp_path), port=18600)
+  agent_dir = tmp_path / "fake-agent"
+  agent_dir.mkdir()
+  (agent_dir / "spawns.jsonl").write_text(json.dumps(_spawn_record(sigterm_leader)) + "\n", encoding="utf-8")
+
+  cleanup_lines, notes = parity._cleanup_scenario([side])
+
+  assert parity.servers.process_identity(sigterm_leader.pid) is None
+  assert len(cleanup_lines) == 1
+  assert "remained alive at scenario end" in cleanup_lines[0]
+  assert notes == []
 
 
 @pytest.mark.parametrize(

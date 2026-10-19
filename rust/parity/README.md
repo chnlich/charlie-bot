@@ -178,7 +178,13 @@ entry and appends one record to `fake-agent/spawns.jsonl`; every start writes `e
 The record includes argv, cwd, pid and `/proc` start time, stdout target, stdin byte count and its UTF-8 text, nice
 value, session ownership, parent-death signal, selected environment, and decoded run-token claims with signature
 validity. A stdin that is not UTF-8 raises before the start writes its record, so that start leaves no record and no
-exit marker. The scenario end checks that no recorded process remains alive.
+exit marker.
+
+The scenario end runs on a failed step and on an exception too. It names each recorded start that is still alive,
+then SIGKILLs the process group of every recorded start in both trees, whether or not the start is still alive. A
+group that remains 10 s after its SIGKILL is a failure line that names it. The harness is the child subreaper, so a
+fake that outlives its server becomes the harness's child, and the scenario end reaps each recorded fake leader.
+Without that, the runner that started the harness keeps the zombie until the run ends.
 
 ### The outside-write guard
 

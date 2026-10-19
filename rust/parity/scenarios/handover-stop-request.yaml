@@ -1,5 +1,5 @@
-# The first server records a stop request that its exit wait cannot finish: the agent ignores SIGTERM until the first gate
-# opens. The second server's recovery signals the run again under the default disposition and records its exit.
+# The first server records a stop request that its exit wait cannot finish: the agent ignores SIGTERM until its
+# first gate opens. The second server's recovery signals the run under the default disposition and records its exit.
 stage: agent-orchestration
 name: handover-stop-request
 fake_agent:

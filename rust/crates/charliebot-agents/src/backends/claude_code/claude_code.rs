@@ -391,11 +391,12 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn one_shot_text<'a>(
     &'a mut self,
+    base_env: &'a Env,
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
   ) -> BoxFuture<'a, anyhow::Result<String>> {
-    self.backend.one_shot_text(prompt, system, timeout)
+    self.backend.one_shot_text(base_env, prompt, system, timeout)
   }
 }
 

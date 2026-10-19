@@ -361,10 +361,10 @@ def _multipart_body(fields: dict) -> bytes:
   for name, value in fields.items():
     if isinstance(value, dict):
       file_path = scenario_file.DATA_DIR / value["file"]
+      filename = value.get("filename", file_path.name)
       parts.extend(
           (
-              f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{file_path.name}\"\r\n".
-              encode(),
+              f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n".encode(),
               f"Content-Type: {value['content_type']}\r\n\r\n".encode(),
               file_path.read_bytes(),
               b"\r\n",

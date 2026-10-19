@@ -17,6 +17,7 @@ pub mod session_anchors;
 pub mod spawner_backends;
 pub mod spawner_prompt;
 pub mod task_sessions;
+pub mod upload;
 pub mod verify_trailer;
 
 use charliebot_registry::{Registry, RegistryError};

@@ -333,6 +333,29 @@ async fn update(request: Request<Body>) -> Response {
 }
 ```
 
+`fastapi_form::read(&headers, body).await` streams multipart file parts to temporary files before route dependencies run.
+After the dependencies succeed, `FormBody::validate(&model)` checks required and typed `File` and `Form` fields in
+declaration order. A handler then reads the parsed values:
+
+```rust
+async fn upload(request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let form = match fastapi_form::read(&parts.headers, stream).await {
+    Ok(form) => form,
+    Err(response) => return *response,
+  };
+  let session = match require_session(&parts).await {
+    Ok(session) => session,
+    Err(response) => return response,
+  };
+  if let Err(response) = form.validate(&UPLOAD_FORM) {
+    return *response;
+  }
+  let file = form.file("file").expect("the required file field validated");
+  save_upload(session, file).await
+}
+```
+
 ## The typed startup state
 
 `FeatureContext` holds the config and credentials (`Arc<HotReload<_>>`), the store, the registry and the

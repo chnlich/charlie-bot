@@ -41,6 +41,7 @@ impl FromRequestParts<Arc<FeatureContext>> for RequiredTaskSession {
 /// Build the four task orchestration routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
+    .route("/api/chat/{session_id}/upload", post_only(crate::upload::upload_file))
     .route("/api/chat/{session_id}/message", post_only(send_message))
     .route("/api/chat/{session_id}/cancel", post_only(cancel_chat))
     .route("/api/sessions/{session_id}/retry", post_only(retry_run))
@@ -56,7 +57,7 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
 pub fn matches(path: &str) -> bool {
   let parts = path.split('/').collect::<Vec<_>>();
   match parts.as_slice() {
-    ["", "api", "chat", session_id, "message" | "cancel"] => !session_id.is_empty(),
+    ["", "api", "chat", session_id, "upload" | "message" | "cancel"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "retry"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
     ["", "api", "sessions", session_id, "complete" | "cancel" | "unarchive"] => !session_id.is_empty(),
@@ -480,7 +481,8 @@ mod tests {
   use charliebot_registry::context::StartupState;
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
-  use charliebot_store::Store;
+  use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::{CreateTask, Store, TaskCaller};
   use serde_json::{Value, json};
   use tower::ServiceExt;
 
@@ -525,6 +527,43 @@ mod tests {
       .body(Body::from(body.to_string()))
       .unwrap();
     router.clone().oneshot(request).await.unwrap()
+  }
+
+  async fn create_upload_session(features: &FeatureContext, session_id: &str) {
+    features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: format!("synthetic-upload-{session_id}"),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some(format!("Synthetic {session_id}")),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: Some(session_id.to_string()),
+        },
+        TaskCaller::Operator,
+        serde_json::Map::new(),
+      )
+      .await
+      .expect("the upload test session is created");
+  }
+
+  fn multipart_upload(path: &str, filename: &str, payload: &[u8]) -> Request<Body> {
+    const BOUNDARY: &str = "synthetic-upload-boundary";
+    let mut body = format!(
+      "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(payload);
+    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+    Request::builder()
+      .method(Method::POST)
+      .uri(path)
+      .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+      .body(Body::from(body))
+      .expect("the upload request builds")
   }
 
   #[tokio::test]
@@ -581,5 +620,74 @@ mod tests {
       let post = send(&router, Method::POST, path, post_body).await;
       assert_eq!(post.status(), StatusCode::NOT_FOUND, "POST {path} must reach its handler");
     }
+  }
+
+  #[tokio::test]
+  async fn chat_upload_saves_file_name_and_overwrites_existing_file() {
+    let (_home, features) = feature_context();
+    const SESSION_ID: &str = "synthetic-upload-session";
+    create_upload_session(&features, SESSION_ID).await;
+    let router = routes(&features);
+    let config = features.config.get().unwrap();
+    let uploads_dir = config.sessions_dir().join(SESSION_ID).join("uploads");
+
+    let response = router
+      .clone()
+      .oneshot(multipart_upload(&format!("/api/chat/{SESSION_ID}/upload"), "../synthetic.txt", b"first"))
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    let saved_path = uploads_dir.join("synthetic.txt").canonicalize().unwrap();
+    assert_eq!(body, json!({"filename": "../synthetic.txt", "path": saved_path.to_string_lossy(), "size": 5}));
+    assert_eq!(std::fs::read(&saved_path).unwrap(), b"first");
+
+    let response = router
+      .clone()
+      .oneshot(multipart_upload(&format!("/api/chat/{SESSION_ID}/upload"), "synthetic.txt", b"replacement"))
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(std::fs::read(&saved_path).unwrap(), b"replacement");
+
+    let response =
+      router.oneshot(multipart_upload(&format!("/api/chat/{SESSION_ID}/upload"), "", b"nameless")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    let nameless_path = uploads_dir.join("upload").canonicalize().unwrap();
+    assert_eq!(body, json!({"filename": "", "path": nameless_path.to_string_lossy(), "size": 8}));
+    assert_eq!(std::fs::read(nameless_path).unwrap(), b"nameless");
+  }
+
+  #[tokio::test]
+  async fn chat_upload_checks_session_after_multipart_parsing() {
+    let (_home, features) = feature_context();
+    let response = routes(&features)
+      .oneshot(multipart_upload("/api/chat/synthetic-missing-session/upload", "synthetic.txt", b"content"))
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({ "detail": "Session not found" }));
+  }
+
+  #[tokio::test]
+  async fn chat_upload_returns_server_error_when_upload_directory_is_a_file() {
+    let (_home, features) = feature_context();
+    const SESSION_ID: &str = "synthetic-upload-failure";
+    create_upload_session(&features, SESSION_ID).await;
+    let config = features.config.get().unwrap();
+    let uploads_dir = config.sessions_dir().join(SESSION_ID).join("uploads");
+    std::fs::write(&uploads_dir, b"not a directory").unwrap();
+
+    let response = routes(&features)
+      .oneshot(multipart_upload(&format!("/api/chat/{SESSION_ID}/upload"), "synthetic.txt", b"content"))
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), b"Internal Server Error");
   }
 }

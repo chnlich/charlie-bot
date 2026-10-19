@@ -254,9 +254,14 @@ def _multipart(raw: Any, where: str) -> dict:
       raise ScenarioError(f"{where}.multipart field names must be non-empty strings")
     if isinstance(value, dict):
       content_type = value.get("content_type")
-      if set(value) != {"file", "content_type"} or not isinstance(content_type, str) or not content_type:
+      if set(value) not in ({"file", "content_type"}, {"file", "content_type", "filename"
+                                                      }) or not isinstance(content_type, str) or not content_type:
         raise ScenarioError(f"{field_where} file value requires file and content_type")
+      if "filename" in value and not isinstance(value["filename"], str):
+        raise ScenarioError(f"{field_where}.filename must be a string")
       fields[name] = {"file": _data_file(value["file"], field_where), "content_type": value["content_type"]}
+      if "filename" in value:
+        fields[name]["filename"] = value["filename"]
     elif value is None or isinstance(value, (str, int, float, bool)):
       fields[name] = value
     else:

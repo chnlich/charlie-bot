@@ -61,7 +61,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | POST | `/api/sessions/{session_id}/complete` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/cancel` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/runs/{run_id}/cancel` | sessions | ported |  |
-| POST | `/api/chat/{session_id}/upload` | chat | todo |  |
+| POST | `/api/chat/{session_id}/upload` | chat | ported |  |
 | POST | `/api/chat/{session_id}/message` | chat | ported |  |
 | POST | `/api/chat/{session_id}/cancel` | chat | ported |  |
 | GET | `/api/internal/version` | foundation | ported |  |
@@ -267,7 +267,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/launches/<launch_id>/exit` | foundation | todo | |
 | `sessions/<sid>/plans.json` | features/artifacts | todo | |
 | session artifact pages | features/artifacts | ported | |
-| `sessions/<sid>/uploads/<filename>` | chat | todo | |
+| `sessions/<sid>/uploads/<filename>` | chat | ported | |
 | `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | ported | 16 kHz mono PCM16 WAV |
 | `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | ported | final transcript |
 | `sessions/<sid>/loops/active.lock` | features/improve | todo | |

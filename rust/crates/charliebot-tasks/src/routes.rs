@@ -5,11 +5,10 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::handler::Handler;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::{MethodRouter, post};
 use charliebot_compat::responses;
+use charliebot_compat::routing::post_only;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
@@ -39,18 +38,6 @@ pub fn matches(path: &str) -> bool {
     ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
     _ => false,
   }
-}
-
-fn post_only<H, T>(handler: H) -> MethodRouter<Arc<FeatureContext>>
-where
-  H: Handler<T, Arc<FeatureContext>>,
-  T: 'static,
-{
-  post(handler).fallback(method_not_allowed)
-}
-
-async fn method_not_allowed() -> Response {
-  responses::method_not_allowed("POST")
 }
 
 #[derive(Deserialize)]
@@ -283,4 +270,95 @@ async fn cancel_run(
     StatusCode::OK,
     &json!({ "run_id": result.run_id, "stop_requested": result.stop_requested, "outcome": outcome }),
   )
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+
+  use axum::body::{Body, to_bytes};
+  use axum::http::{Method, Request, StatusCode, header};
+  use charliebot_core::config::CREDENTIALS_FILENAME;
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks;
+  use charliebot_registry::{FeatureContext, Registry};
+  use charliebot_store::Store;
+  use serde_json::{Value, json};
+  use tower::ServiceExt;
+
+  use super::*;
+
+  const INVALID_RUN_TOKEN: &str = "invalid-synthetic-run-token";
+
+  fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
+      .unwrap();
+    let registry = Arc::new(Registry::new());
+    let config_value = registry.load_config(home.path()).unwrap();
+    let store = Arc::new(
+      Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
+        .unwrap(),
+    );
+    let config_registry = Arc::clone(&registry);
+    let config_home = home.path().to_path_buf();
+    let config = Arc::new(HotReload::new(
+      config_value.config_file(),
+      "task_routes_test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join(CREDENTIALS_FILENAME),
+      "task_routes_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let features =
+      Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+    (home, features)
+  }
+
+  async fn send(router: &Router, method: Method, path: &str, body: &str) -> axum::response::Response {
+    let request = Request::builder()
+      .method(method)
+      .uri(path)
+      .header(header::AUTHORIZATION, format!("Bearer {INVALID_RUN_TOKEN}"))
+      .header(header::CONTENT_TYPE, "application/json")
+      .body(Body::from(body.to_string()))
+      .unwrap();
+    router.clone().oneshot(request).await.unwrap()
+  }
+
+  #[tokio::test]
+  async fn task_routes_refuse_head_and_put_and_serve_post() {
+    let (_home, features) = feature_context();
+    let router = routes(&features);
+    let route_cases = [
+      ("/api/chat/synthetic-session/message", r#"{"content":"synthetic message"}"#),
+      ("/api/chat/synthetic-session/cancel", ""),
+      ("/api/sessions/synthetic-session/retry", r#"{"request_id":"synthetic-request","run_id":"synthetic-run"}"#),
+      ("/api/sessions/synthetic-session/runs/synthetic-run/cancel", r#"{"request_id":"synthetic-request"}"#),
+    ];
+
+    for (path, post_body) in route_cases {
+      let head = send(&router, Method::HEAD, path, "").await;
+      assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED, "HEAD {path}");
+      assert_eq!(head.headers()[header::ALLOW], "POST", "HEAD {path}");
+
+      let put = send(&router, Method::PUT, path, "").await;
+      assert_eq!(put.status(), StatusCode::METHOD_NOT_ALLOWED, "PUT {path}");
+      assert_eq!(put.headers()[header::ALLOW], "POST", "PUT {path}");
+      let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+      assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({ "detail": "Method Not Allowed" }),
+        "PUT {path} body"
+      );
+
+      let post = send(&router, Method::POST, path, post_body).await;
+      assert_eq!(post.status(), StatusCode::UNAUTHORIZED, "POST {path} must reach its handler");
+    }
+  }
 }

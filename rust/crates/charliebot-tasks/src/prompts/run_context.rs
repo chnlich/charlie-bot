@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use charliebot_agents::python_json;
+use charliebot_compat::python_json;
 use charliebot_store::Store;
 use charliebot_store::control_events::sha256_hex;
 use serde_json::{Value, json};

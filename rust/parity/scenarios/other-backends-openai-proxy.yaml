@@ -37,6 +37,14 @@ fakes:
   openai_compatible: {}
 fixture_extras: [openai_proxy_models_cache]
 steps:
+  - name: HEAD is refused by the proxy route
+    method: HEAD
+    path: /api/anthropic-proxy/openai-compatible/claude-glm52/v1/messages
+    expect_status: 405
+  - name: PUT is refused by the proxy route
+    method: PUT
+    path: /api/anthropic-proxy/openai-compatible/claude-glm52/v1/messages
+    expect_status: 405
   - name: non-stream answer through the proxy
     method: POST
     path: /api/anthropic-proxy/openai-compatible/claude-glm52/v1/messages

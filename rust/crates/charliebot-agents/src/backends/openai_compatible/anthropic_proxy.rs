@@ -10,9 +10,9 @@ use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
-use axum::routing::post;
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_compat::responses;
+use charliebot_compat::routing::post_only;
 use charliebot_core::pyfmt;
 use charliebot_registry::FeatureContext;
 use futures_util::stream::{self, Stream};
@@ -29,7 +29,7 @@ const ROUTE_SUFFIX: &str = "/v1/messages";
 
 /// The route's router, mounted by the registry.
 pub fn router(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route(ROUTE, post(messages)).with_state(Arc::clone(features))
+  Router::new().route(ROUTE, post_only(messages)).with_state(Arc::clone(features))
 }
 
 /// Whether `path` is one of the route's paths: a single backend id between the prefix and the `v1/messages` suffix.
@@ -306,7 +306,53 @@ fn trim_python_space(raw: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
+  use axum::body::{Body, to_bytes};
+  use axum::http::{Method, Request, StatusCode, header};
+  use axum::response::Response;
+  use charliebot_core::config::CREDENTIALS_FILENAME;
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks;
+  use charliebot_registry::{FeatureContext, Registry};
+  use charliebot_store::Store;
+  use serde_json::{Value, json};
+  use tower::ServiceExt;
+
   use super::*;
+
+  fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().unwrap();
+    let registry = Arc::new(Registry::new());
+    let config_value = registry.load_config(home.path()).unwrap();
+    let store = Arc::new(
+      Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
+        .unwrap(),
+    );
+    let config_registry = Arc::clone(&registry);
+    let config_home = home.path().to_path_buf();
+    let config = Arc::new(HotReload::new(
+      config_value.config_file(),
+      "proxy_test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join(CREDENTIALS_FILENAME),
+      "proxy_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let features =
+      Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+    (home, features)
+  }
+
+  async fn send(router: &Router, method: Method, path: &str) -> Response {
+    let request = Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
+    router.clone().oneshot(request).await.unwrap()
+  }
 
   #[test]
   fn the_route_matches_one_backend_id_under_the_prefix() {
@@ -320,5 +366,30 @@ mod tests {
   fn python_strip_removes_the_vertical_tab_too() {
     assert_eq!(trim_python_space(b" \x0b{}\r\x0c"), b"{}");
     assert_eq!(trim_python_space(b" \t "), b"");
+  }
+
+  #[tokio::test]
+  async fn proxy_route_refuses_head_and_put_and_serves_post() {
+    let (_home, features) = feature_context();
+    let router = router(&features);
+    let path = "/api/anthropic-proxy/openai-compatible/synthetic-missing/v1/messages";
+
+    let head = send(&router, Method::HEAD, path).await;
+    assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(head.headers()[header::ALLOW], "POST");
+
+    let put = send(&router, Method::PUT, path).await;
+    assert_eq!(put.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(put.headers()[header::ALLOW], "POST");
+    let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({ "detail": "Method Not Allowed" }));
+
+    let post = send(&router, Method::POST, path).await;
+    assert_eq!(post.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(post.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+      serde_json::from_slice::<Value>(&body).unwrap(),
+      json!({ "detail": "unknown backend id: synthetic-missing" })
+    );
   }
 }

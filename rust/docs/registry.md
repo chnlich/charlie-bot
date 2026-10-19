@@ -355,13 +355,14 @@ implements them over the registered lifecycles and sequence controllers, and the
 Packages whose port has not landed still register their data, so the server's behavior does not change:
 
 - The `claude_code` package is ported. It registers typed account configuration, its config check, metadata slots,
-  pooled lifecycle and the login-notice renderer. The `codex` package is ported too.
+  the pooled `ClaudeCodeLifecycle`, and the login-notice renderer.
+- The `codex` backend is ported. It registers no lifecycle, so each run uses one process.
+- The `cc-openai-compatible` backend is ported. It registers `ClaudeCliLifecycle`.
 - Data-carrying stubs: `artifacts` (`publish` section), `cron` (session slot), `slack` (`slack` section, session slot
   and turn contribution), `discord` (`discord` section, session slot and turn contribution), `web_reply` (session slot
   and turn contribution), `code_server` (`code_server` section), `voice` (`voice` section, its two template globals
-  and the default-backend check), `gemini` (two legacy keys), and the backend types `cc-openai-compatible`,
-  `antigravity`, `charlie-code`, `gemini`, `cc-kimi` and `opencode`. Each type's factory refuses every launch with
-  "not ported".
+  and the default-backend check), `gemini` (two legacy keys), and the backend types `antigravity`, `charlie-code`,
+  `gemini`, `cc-kimi` and `opencode`. Each type's factory refuses every launch with "not ported".
 - Empty stubs: the other listed packages.
 - `backend_pool` is ported, not a stub: its session slot comes from `charliebot_agents::backend_pool::register`.
 
@@ -370,6 +371,6 @@ Not registered yet:
 - `code_server`'s template global for the diff page, which the Rust page does not port yet.
 - The `src.features.usage` page package is not ported; the runtime session-usage owner and Codex's registered source
   are separate from that page.
-- `cc-openai-compatible` and `cc-kimi` lifecycles. They use the default lifecycle, not the Python `ClaudeCliLifecycle`.
+- The `cc-kimi` backend uses the default lifecycle. Its Python `ClaudeCliLifecycle` is not ported yet.
 - WebSocket routes, services and startup checks. No stub makes them yet. The ported `files` package registers the
   routers, file views and cards, and the ported `memory` package registers the diff root `memory`.

@@ -225,6 +225,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]

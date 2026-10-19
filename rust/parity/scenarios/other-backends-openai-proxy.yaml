@@ -35,6 +35,7 @@ credentials:
     api_key: sk-parity-synthetic-upstream
 fakes:
   openai_compatible: {}
+fixture_extras: [openai_proxy_models_cache]
 steps:
   - name: non-stream answer through the proxy
     method: POST

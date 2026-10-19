@@ -10,8 +10,8 @@ mod sidebar;
 mod test_support;
 mod tree;
 mod worker_transcript;
-mod writes;
 mod write_routes;
+mod writes;
 
 use std::sync::Arc;
 

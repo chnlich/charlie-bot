@@ -165,24 +165,24 @@ implemented.
 
 | Kind | Service or step | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
-| pre-loop | `agent_environment.apply_agent_environment` | foundation | todo | |
+| pre-loop | `agent_environment.apply_agent_environment` | foundation | ported | Runs as the first pre-recovery step (`charliebot-agents/src/agent_environment.rs:80`, registered at `charliebot-agents/src/lib.rs:23`); the venv requirement is `CHARLIEBOT_VENV_BIN` (`charliebot-server/src/main.rs:210`). |
 | pre-loop | `config.get_config` | foundation | ported | |
 | pre-loop | `config.require_backends` | foundation | ported | |
 | pre-loop | `v1_sessions.require_no_v1_sessions` | foundation | ported | Runs before bind. |
-| pre-loop | Registered startup checks | foundation | todo | Cron and usage backend-reference checks. |
+| pre-loop | Registered startup checks | foundation | todo | The loop runs registered checks (`charliebot-server/src/main.rs:226`), but no cron or usage backend-reference check registers one. |
 | pre-loop | Start server on configured host and port | foundation | ported | |
 | lifespan | 1. Read config | foundation | ported | |
 | lifespan | 2. Acquire home writer fence | foundation | ported | |
 | lifespan | 3. Capture build information | foundation | ported | |
 | lifespan | 4. Initialize the home | foundation | ported | |
-| lifespan | 5. Log and sweep session cgroups | foundation | todo | |
-| lifespan | 6. Start task-tree recovery | agent-runtime | todo | |
-| lifespan | 7. Start early services | services | todo | |
-| lifespan | 8. Await task-tree recovery | agent-runtime | todo | |
+| lifespan | 5. Log and sweep session cgroups | foundation | ported | The `session_cgroups` pre-recovery step logs availability and sweeps empty stale cgroups (`charliebot-agents/src/agent_environment.rs:99`, `transport/cgroup.rs:211`). |
+| lifespan | 6. Start task-tree recovery | agent-runtime | todo | The runner spawns a registered recovery step (`charliebot-registry/src/lifespan.rs:79`); no package registers one. |
+| lifespan | 7. Start early services | services | ported | `charliebot-registry/src/lifespan.rs:91`. |
+| lifespan | 8. Await task-tree recovery | agent-runtime | todo | The runner awaits it (`charliebot-registry/src/lifespan.rs:92`); no package registers one. |
 | lifespan | 9. Recover pending triggers | agent-runtime | ported | |
-| lifespan | 10. Start ready services | services | todo | |
+| lifespan | 10. Start ready services | services | ported | `charliebot-registry/src/lifespan.rs:99`. |
 | lifespan | 11. Log ready and serve | foundation | ported | |
-| lifespan | 12. Stop services and close shared clients | services | todo | Signal shutdown and writer-fence release are implemented; service teardown is not. |
+| lifespan | 12. Stop services and close shared clients | services | todo | Signal shutdown, service teardown in reverse registration order (`charliebot-registry/src/lifespan.rs:126`) and writer-fence release are implemented; closing shared clients is not. |
 | lifespan | 13. Release home writer fence | foundation | ported | |
 | service | `scheduler` | features/cron | todo | |
 | service | `slack` | features/slack | todo | |
@@ -191,7 +191,7 @@ implemented.
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
 | service | `usage_tally` | features/usage | todo | |
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
-| service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf provisioning is not ported`; warm-up events are deferred. |
+| service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf` provisioning is not ported; warm-up events are deferred. |
 | registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
@@ -210,18 +210,18 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `config.yaml` | foundation | ported | |
 | `credentials.yaml` | foundation | ported | |
 | `config.d/cron.d/<name>.yaml` | features/cron | todo | |
-| `MASTER_AGENT_PROMPT.md` | agent-runtime | todo | |
+| `MASTER_AGENT_PROMPT.md` | agent-runtime | ported | Read only: the host supplement of a manager prompt, with `YOUR_SESSION_UUID` replaced (`charliebot-tasks/src/prompts/sources.rs:91`). |
 | `state/home_writer.lock` | foundation | ported | |
 | `state/writer_identity.json` | foundation | ported | |
 | `state/cron_alert_fingerprint.json` | features/cron | todo | |
-| `cache/cli_base_url.json` | foundation | todo | |
+| `cache/cli_base_url.json` | foundation | not applicable | Written and read by the Python CLI (`src/runtime/cli/common.py:335`), which stays (Trade-off 2). |
 | `cache/perfetto_merge/` | features/trace | ported | Cache directory for merged Perfetto traces. |
 | `cache/perfetto_merge/<sha256>.json.gz` | features/trace | ported | |
 | `/tmp/merge-chunks-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `/tmp/merge-members-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `host_auth.json` | features/host_auth | ported | written atomically with `json.dumps(indent=2)` and a newline |
 | `usage/ledger.sqlite3` | features/usage | todo | |
-| `prompt_bodies/<sha256>.md` | agent-runtime | todo | |
+| `prompt_bodies/<sha256>.md` | agent-runtime | ported | Written once by `store_prompt_body` (`charliebot-store/src/task_tree.rs:485`); read with the sha256 check (`charliebot-tasks/src/prompts/sources.rs:98`). |
 | `memory/` | features/memory | ported | Git repository created by `ensure_store` on first use. |
 | `memory/topics` | features/memory | ported | Seeded when missing; read by the selection. |
 | `memory/.gitignore` | features/memory | ported | Seeded when missing. |
@@ -230,12 +230,12 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `memory/staging/<stamp>-<sess8>-<slug>.md` | features/memory | not applicable | Written by `charliebot memory add`: the Python CLI stays (Trade-off 2). |
 | `memory-proposal/` | features/memory | not applicable | Created by `charliebot memory proposal open`: the Python CLI stays (Trade-off 2). |
 | `models/` speech assets | features/voice | ported | Sherpa assets are verified and cached; `qwen3_hf` snapshot provisioning is not ported. |
-| `vendor/katex/katex.min.js` | foundation | todo | |
-| `voice_eval/<ts>/results.json` | features/voice | todo | |
-| `voice_eval/<ts>/summary.md` | features/voice | todo | |
+| `vendor/katex/katex.min.js` | foundation | not applicable | Written by `charliebot artifact wrap`, a Python CLI that stays (Trade-off 2). |
+| `voice_eval/<ts>/results.json` | features/voice | not applicable | CLI output; the Python CLI stays (Trade-off 2). |
+| `voice_eval/<ts>/summary.md` | features/voice | not applicable | CLI output; the Python CLI stays (Trade-off 2). |
 | `opencode/` | backends/opencode | todo | |
-| `sessions/.counter` | agent-runtime | todo | |
-| `sessions/.task-<id>-<pid>-<uuid>.tmp/` | agent-runtime | todo | |
+| `sessions/.counter` | agent-runtime | ported | Read, counted fallback and rewrite in `next_session_name` (`charliebot-store/src/task_tree.rs:877`). |
+| `sessions/.task-<id>-<pid>-<uuid>.tmp/` | agent-runtime | todo | Rust writes `.task-<id>-<uuid>.tmp`, without the pid component (`charliebot-store/src/task_tree.rs:846`). |
 | in-memory usage caches | features/usage | todo | Not persisted files. |
 | `sessions/<sid>/metadata.json` | S1 | ported | Ordered typed metadata, registered slots, unknown keys, atomic writes. |
 | `sessions/<sid>/threads/<tid>/metadata.json` | S1 | ported | Typed thread model and registered slots. |
@@ -245,19 +245,19 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/data/runs/<run>/task_spec.md` | S2 | planned | |
 | `sessions/<sid>/data/runs/<run>/metadata.json` | S2 | planned | |
 | `sessions/<sid>/data/runs/<run>/events.jsonl` | S2 | planned | |
-| `sessions/<sid>/data/runs/<run>/agent.raw.ndjson` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/agent.stderr.log` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/agent.raw.cursor` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/agent.raw.ndjson.<n>` | agent-runtime | todo | Rotated raw output. |
-| `sessions/<sid>/data/runs/<run>/agent.stderr.log.<n>` | agent-runtime | todo | Rotated stderr. |
+| `sessions/<sid>/data/runs/<run>/agent.raw.ndjson` | agent-runtime | ported | Written by the runner (`charliebot-agents/src/runner.rs:195`). |
+| `sessions/<sid>/data/runs/<run>/agent.stderr.log` | agent-runtime | ported | Written by the runner (`charliebot-agents/src/runner.rs:196`). |
+| `sessions/<sid>/data/runs/<run>/agent.raw.cursor` | agent-runtime | ported | Maintained by the runner (`charliebot-agents/src/runner.rs:197`). |
+| `sessions/<sid>/data/runs/<run>/agent.raw.ndjson.<n>` | agent-runtime | ported | Rotated before each fresh child (`charliebot-agents/src/runner.rs:198`, `transport/rotation.rs:9`). |
+| `sessions/<sid>/data/runs/<run>/agent.stderr.log.<n>` | agent-runtime | ported | Rotated beside the raw output (`charliebot-agents/src/transport/rotation.rs:24`). |
 | `sessions/<sid>/data/runs/<run>/stdout.log` | backends/antigravity | ported | Written by the final-stdout run, truncated at each run's start (`charliebot-agents/src/runner.rs`). |
 | `sessions/<sid>/data/runs/<run>/stderr.log` | backends/antigravity | ported | Written by the final-stdout run (`charliebot-agents/src/runner.rs`). |
 | `sessions/<sid>/data/runs/<run>/task.md` | backends/charlie-code | ported | Written by the charlie-code command builder (`charliebot-agents/src/backends/charlie_code/charlie_code_cli.rs`). |
-| `sessions/<sid>/data/runs/<run>/harness_instructions.md` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/prompt_snapshot.json` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/launch_prompt.md` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/cold_read.json` | agent-runtime | todo | |
-| `sessions/<sid>/data/runs/<run>/hang_diagnostics.json` | agent-runtime | todo | |
+| `sessions/<sid>/data/runs/<run>/harness_instructions.md` | agent-runtime | todo | The writer accepts an `instructions_file` (`charliebot-agents/src/runner.rs:605`), but no run path sets one. |
+| `sessions/<sid>/data/runs/<run>/prompt_snapshot.json` | agent-runtime | ported | Written atomically before launch (`charliebot-tasks/src/execution.rs:319`). |
+| `sessions/<sid>/data/runs/<run>/launch_prompt.md` | agent-runtime | ported | Written atomically by `persist_launch_text` (`charliebot-tasks/src/execution.rs:562`). |
+| `sessions/<sid>/data/runs/<run>/cold_read.json` | agent-runtime | todo | The evidence-file name exists (`charliebot-tasks/src/cold_read.rs:21`); nothing writes it. |
+| `sessions/<sid>/data/runs/<run>/hang_diagnostics.json` | agent-runtime | todo | Diagnostics are captured into the run outcome (`charliebot-agents/src/runner.rs:328`); the file is not written. |
 | legacy `sessions/<sid>/data/master_runs/<started_at>/` | agent-runtime | todo | Read-only baseline layout. |
 | legacy `sessions/<sid>/threads/<tid>/data/` | agent-runtime | todo | Read-only baseline layout. |
 | `sessions/<sid>/triggers/<trigger_id>.json` | agent-runtime | ported | |
@@ -274,9 +274,9 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/loops/<n>/goal.md` | features/improve | todo | |
 | `sessions/<sid>/loops/<n>/plan.md` | features/improve | todo | |
 | `sessions/<sid>/loops/<n>/iter_<n>.md` | features/improve | todo | |
-| `sessions/<sid>/CLAUDE.md` instructions | agent-runtime | todo | |
-| `sessions/<sid>/AGENTS.md` instructions | agent-runtime | todo | |
-| session cgroup directories | agent-runtime | todo | Outside the home. |
+| `sessions/<sid>/CLAUDE.md` instructions | agent-runtime | ported | Written into the run cwd by `prepare_cwd` (`charliebot-agents/src/runner.rs:600`); the claude-code target is `claude_code.rs:281`, the launch content `master_run.rs:530`. |
+| `sessions/<sid>/AGENTS.md` instructions | agent-runtime | ported | Same `prepare_cwd` path (`charliebot-agents/src/runner.rs:600`); the codex target is `codex/backend.rs:218`, charlie-code's `charlie_code_cli.rs:165`. |
+| session cgroup directories | agent-runtime | ported | Created and populated per run by `prepare_session_cgroup` (`charliebot-agents/src/transport/cgroup.rs:141`, called from `transport/spawn.rs:68`). Outside the home. |
 | Claude `.credentials.json` | backends/claude-code | ported | Read for the panel and renewed by `claude_code/usage_quota.rs` (atomic write, mode 0600); account health reads in `claude_code/claude_accounts.rs`. Outside the home. |
 | Claude and Codex transcript files | backends/claude-code, backends/codex | ported | Read by `claude_code/usage_logs.rs` and `codex/usage_logs.rs`; swept by `claude_code/usage_sweep.rs` and `codex/usage_sweep.rs`; live pool copies trimmed by `claude_accounts::retire_transcript_copies`. Outside the home. |
 | worktree directories | agent-runtime | todo | Outside the home. |

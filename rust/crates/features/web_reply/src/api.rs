@@ -7,28 +7,32 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::body::Bytes;
+use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, header};
+use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::python_json::{self, LoadError};
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Kind, Loc, Source};
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
-use crate::json_input::replace_unrepresentable_numbers;
 use crate::reply::{self, WebReplyError};
 use crate::status;
 
 /// `POST /api/internal/web/reply`: records the body's text as the session's web reply.
-pub async fn post_reply(State(features): State<Arc<FeatureContext>>, headers: HeaderMap, body: Bytes) -> Response {
-  let request = match SessionText::parse(&headers, &body) {
-    Ok(request) => request,
-    Err(errors) => return validation::response(&errors),
+pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
   };
-  answer(reply::post_web_reply(&features, &request.session_id, &request.text).await)
+  let model = match SessionText::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(reply::post_web_reply(&features, &model.session_id, &model.text).await)
 }
 
 /// `GET /api/internal/web/dialog?session_id=`: the session's For-you layer, in log order.
@@ -44,12 +48,17 @@ pub async fn get_dialog(
 }
 
 /// `POST /api/internal/web/status`: stores the items the body's JSON text names and answers the stored status.
-pub async fn post_status(State(features): State<Arc<FeatureContext>>, headers: HeaderMap, body: Bytes) -> Response {
-  let request = match SessionText::parse(&headers, &body) {
-    Ok(request) => request,
-    Err(errors) => return validation::response(&errors),
+pub async fn post_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
   };
-  answer(status::set_status(&features, &request.session_id, &request.text).await)
+  let model = match SessionText::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(status::set_status(&features, &model.session_id, &model.text).await)
 }
 
 /// `GET /api/internal/web/status?session_id=`: the session's status and its waiting descendants.
@@ -89,150 +98,81 @@ fn session_id_param(query: &HashMap<String, String>) -> Result<String, Box<Field
   }
 }
 
-/// `WebReplyRequest` and `WebStatusRequest`: the calling session's id and a text, both required strings. Unknown keys
-/// are refused, as `extra="forbid"` refuses them.
+/// The fields of `WebReplyRequest` and `WebStatusRequest`: the calling session's id and a text, both required strings.
+const SESSION_TEXT_FIELDS: &[Field] =
+  &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
+const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS);
+
+/// The validated `WebReplyRequest` or `WebStatusRequest`, whose model forbids extra keys.
 struct SessionText {
   session_id: String,
   text: String,
 }
 
 impl SessionText {
-  /// FastAPI reads the body, then pydantic validates the model: a missing or mistyped field lists in declaration
-  /// order, and the extra keys follow.
-  fn parse(headers: &HeaderMap, body: &[u8]) -> Result<Self, Vec<FieldError>> {
-    let value = read_body(headers, body)?;
-    let fields = match &value {
-      Value::Object(fields) => fields,
-      Value::Null => return Err(vec![body_error(None, Value::Null, Kind::Missing)]),
-      other => return Err(vec![body_error(None, other.clone(), Kind::ModelAttributesType)]),
+  /// Validates the body against `SESSION_TEXT_BODY`, then refuses the keys the model does not declare. The shared model
+  /// ignores unknown keys, so `extra_forbidden` errors come only when the declared fields validate.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&SESSION_TEXT_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
     };
-    let mut errors = Vec::new();
-    let session_id = string_field(fields, &value, "session_id", &mut errors);
-    let text = string_field(fields, &value, "text", &mut errors);
-    for key in fields.keys().filter(|key| !matches!(key.as_str(), "session_id" | "text")) {
-      errors.push(body_error(Some(key), fields[key].clone(), Kind::ExtraForbidden));
+    let RequestBody::Json(Value::Object(raw)) = body else { unreachable!("a validated body is a JSON object") };
+    let extras: Vec<FieldError> = raw
+      .iter()
+      .filter(|(key, _)| !matches!(key.as_str(), "session_id" | "text"))
+      .map(|(key, value)| field_error(key, value.clone(), Kind::ExtraForbidden))
+      .collect();
+    if !extras.is_empty() {
+      return Err(Box::new(validation::response(&extras)));
     }
-    match (session_id, text) {
-      (Some(session_id), Some(text)) if errors.is_empty() => Ok(Self { session_id, text }),
-      _ => Err(errors),
-    }
+    Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text") })
   }
 }
 
-/// A required string field: its text, or a `missing` or `string_type` error.
-fn string_field(fields: &Map<String, Value>, body: &Value, name: &str, errors: &mut Vec<FieldError>) -> Option<String> {
-  match fields.get(name) {
-    Some(Value::String(text)) => Some(text.clone()),
-    Some(input) => {
-      errors.push(body_error(Some(name), input.clone(), Kind::StringType));
-      None
-    }
-    None => {
-      errors.push(body_error(Some(name), body.clone(), Kind::Missing));
-      None
-    }
+/// A string field of a validated model.
+fn text_field(fields: &mut Map<String, Value>, name: &str) -> String {
+  match fields.remove(name) {
+    Some(Value::String(text)) => text,
+    _ => unreachable!("a validated {name} is a string"),
   }
 }
 
-/// The body as FastAPI hands it to the model: the parsed JSON when the request is JSON or names no type, else the raw
-/// text. An empty body is `null`, which the model reports as missing.
-fn read_body(headers: &HeaderMap, body: &[u8]) -> Result<Value, Vec<FieldError>> {
-  if body.is_empty() {
-    return Ok(Value::Null);
-  }
-  let json_body = match headers.get(header::CONTENT_TYPE) {
-    None => true,
-    Some(content_type) => is_json_media_type(content_type.to_str().unwrap_or_default()),
-  };
-  if !json_body {
-    return Ok(Value::String(String::from_utf8_lossy(body).into_owned()));
-  }
-  let parsed = match serde_json::from_slice(body) {
-    Ok(value) => Ok(value),
-    Err(error) => match python_json::loads(body) {
-      Ok(value) => Ok(value),
-      Err(LoadError::Unrepresentable(_)) => match std::str::from_utf8(body) {
-        Ok(text) => serde_json::from_str(&replace_unrepresentable_numbers(text)).map_err(|_| error),
-        Err(_) => Err(error),
-      },
-      Err(LoadError::Value(_)) => Err(error),
-    },
-  };
-  parsed.map_err(|error| {
-    // The position is serde's own (line and column), counted in characters; the message is serde's, not CPython's.
-    let mut loc = body_loc(None);
-    loc.push(Loc::Index(char_position(body, &error)));
-    vec![FieldError { loc, input: json!({}), kind: Kind::JsonInvalid { error: error.to_string() } }]
-  })
-}
-
-/// The character offset of a JSON error's position in `body`.
-fn char_position(body: &[u8], error: &serde_json::Error) -> usize {
-  let line_start: usize =
-    body.split_inclusive(|byte| *byte == b'\n').take(error.line().saturating_sub(1)).map(<[u8]>::len).sum();
-  let end = (line_start + error.column().saturating_sub(1)).min(body.len());
-  String::from_utf8_lossy(&body[..end]).chars().count()
-}
-
-/// `application/json` or a `+json` subtype, as FastAPI reads the request's content type.
-fn is_json_media_type(content_type: &str) -> bool {
-  let media = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
-  match media.split_once('/') {
-    Some(("application", subtype)) => subtype == "json" || subtype.ends_with("+json"),
-    _ => false,
-  }
-}
-
-/// The location of a body field, or of the body itself when `field` is `None`.
-fn body_loc(field: Option<&str>) -> Vec<Loc> {
-  let mut loc = vec![Loc::Field("body".to_string())];
-  loc.extend(field.map(|name| Loc::Field(name.to_string())));
-  loc
-}
-
-fn body_error(field: Option<&str>, input: Value, kind: Kind) -> FieldError {
-  FieldError { loc: body_loc(field), input, kind }
+/// A validation error at `body.<field>`.
+fn field_error(field: &str, input: Value, kind: Kind) -> FieldError {
+  FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(field.to_string())], input, kind }
 }
 
 #[cfg(test)]
 mod tests {
+  use axum::http::Method;
+
   use super::*;
+  use crate::test_support::Home;
 
-  fn json_headers() -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-    headers
+  #[tokio::test]
+  async fn an_extra_key_answers_422_extra_forbidden_once_the_declared_fields_validate() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let body = json!({"session_id": sid, "text": "x", "extra": 1});
+
+    for path in ["/api/internal/web/reply", "/api/internal/web/status"] {
+      let (status, detail) = home.send(Method::POST, path, Some(body.clone())).await;
+      assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{path}");
+      assert_eq!(detail["detail"][0]["type"], "extra_forbidden", "{path}");
+      assert_eq!(detail["detail"][0]["loc"], json!(["body", "extra"]), "{path}");
+    }
   }
 
-  #[test]
-  fn a_session_text_body_reads_both_fields_and_refuses_extra_keys() {
-    let body = br#"{"session_id": "s1", "text": "hi"}"#;
-    let parsed = SessionText::parse(&json_headers(), body).expect("a complete body parses");
-    assert_eq!((parsed.session_id.as_str(), parsed.text.as_str()), ("s1", "hi"));
+  #[tokio::test]
+  async fn a_missing_and_a_mistyped_field_list_in_declaration_order() {
+    let home = Home::new();
 
-    let errors = SessionText::parse(&json_headers(), br#"{"session_id": "s1", "text": "hi", "extra": 1}"#)
-      .err()
-      .expect("an extra key is refused");
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].loc, body_loc(Some("extra")));
-  }
+    let (status, detail) = home.send(Method::POST, "/api/internal/web/reply", Some(json!({"text": 5}))).await;
 
-  #[test]
-  fn a_missing_or_mistyped_field_lists_in_declaration_order() {
-    let errors = SessionText::parse(&json_headers(), br#"{"text": 5}"#).err().expect("both fields are refused");
-    let locs: Vec<&Vec<Loc>> = errors.iter().map(|error| &error.loc).collect();
-    assert_eq!(locs, vec![&body_loc(Some("session_id")), &body_loc(Some("text"))]);
-    assert!(matches!(errors[0].kind, Kind::Missing));
-    assert!(matches!(errors[1].kind, Kind::StringType));
-  }
-
-  #[test]
-  fn an_out_of_range_number_stays_a_field_type_error() {
-    let errors = SessionText::parse(&json_headers(), br#"{"session_id": 123456789012345678901234567890, "text": "x"}"#)
-      .err()
-      .expect("a number is not a session id");
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].loc, body_loc(Some("session_id")));
-    assert!(matches!(errors[0].kind, Kind::StringType));
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail["detail"][0]["type"], "missing");
+    assert_eq!(detail["detail"][0]["loc"], json!(["body", "session_id"]));
+    assert_eq!(detail["detail"][1]["type"], "string_type");
+    assert_eq!(detail["detail"][1]["loc"], json!(["body", "text"]));
   }
 }

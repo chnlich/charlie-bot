@@ -13,6 +13,7 @@
 //! let-go steps in registration order and waits for them before the process exits.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use futures_util::FutureExt;
@@ -57,6 +58,20 @@ pub struct Lifespan {
   features: Arc<FeatureContext>,
   /// The services that started, in start order.
   started: Vec<(Phase, Arc<dyn Service>)>,
+}
+
+/// How long each close of the shutdown took. The `charliebot_shutdown` line reports each field in milliseconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CloseTimings {
+  /// Closing the shared HTTP client (`http_client_ms`).
+  pub http_client: Duration,
+}
+
+/// The outcome of [`Lifespan::shutdown`]. Every stop runs even when one fails, so the closes are timed either way.
+pub struct Shutdown {
+  pub closes: CloseTimings,
+  /// The first stop failure, if any.
+  pub error: Option<anyhow::Error>,
 }
 
 impl Lifespan {
@@ -115,15 +130,16 @@ impl Lifespan {
 
   /// Stops what started after a failed startup and returns the startup error, with any shutdown error added to it.
   async fn abort(self, error: anyhow::Error) -> anyhow::Error {
-    match self.shutdown().await {
-      Ok(()) => error,
-      Err(stop_error) => error.context(format!("stopping after the failed startup also failed: {stop_error:#}")),
+    match self.shutdown().await.error {
+      None => error,
+      Some(stop_error) => error.context(format!("stopping after the failed startup also failed: {stop_error:#}")),
     }
   }
 
-  /// Stops the started services (ready ones in reverse order, then early ones in reverse), then runs the let-go steps
-  /// in registration order. Every step runs even when an earlier one fails; the first failure is returned.
-  pub async fn shutdown(self) -> anyhow::Result<()> {
+  /// Stops the started services (ready ones in reverse order, then early ones in reverse), runs the let-go steps in
+  /// registration order, then closes the shared HTTP client. Every step runs even when an earlier one fails; the first
+  /// failure is returned with the close timings.
+  pub async fn shutdown(self) -> Shutdown {
     let mut first_error: Option<anyhow::Error> = None;
     for phase in [Phase::Ready, Phase::Early] {
       for (_, service) in self.started.iter().rev().filter(|(started, _)| *started == phase) {
@@ -139,7 +155,10 @@ impl Lifespan {
         first_error.get_or_insert(error);
       }
     }
-    first_error.map_or(Ok(()), Err)
+    let started = Instant::now();
+    charliebot_compat::http_client::close_shared_client();
+    let closes = CloseTimings { http_client: started.elapsed() };
+    Shutdown { closes, error: first_error }
   }
 }
 
@@ -279,6 +298,7 @@ mod tests {
     let features = features_over(home.path(), Arc::new(registry));
 
     let lifespan = Lifespan::start(features).await.unwrap();
+    charliebot_compat::http_client::shared_client().unwrap();
     let started = TRACE.lock().unwrap().clone();
     let position = |entry: &str| {
       started.iter().position(|logged| logged == entry).unwrap_or_else(|| panic!("{entry} did not run: {started:?}"))
@@ -291,7 +311,9 @@ mod tests {
     assert!(position("trigger") < position("ready_alpha:start"));
     assert!(position("ready_alpha:start") < position("ready_beta:start"));
 
-    lifespan.shutdown().await.unwrap();
+    let shutdown = lifespan.shutdown().await;
+    assert!(shutdown.error.is_none(), "{:?}", shutdown.error);
+    assert!(!charliebot_compat::http_client::close_shared_client(), "the shutdown closed the shared HTTP client");
     let all = TRACE.lock().unwrap().clone();
     let stopped: Vec<&str> = all[started.len()..].iter().map(String::as_str).collect();
     assert_eq!(stopped, ["ready_beta:stop", "ready_alpha:stop", "early_beta:stop", "early_alpha:stop", "let_go"]);

@@ -109,3 +109,11 @@ fn a_bundle_without_certificates_is_refused() {
   let error = http_client::client(&settings).expect_err("an empty bundle leaves no trust root");
   assert!(matches!(error, ClientError::Tls(_)), "{error}");
 }
+
+#[test]
+fn the_shared_client_is_open_until_one_close_drops_it() {
+  assert!(!http_client::close_shared_client(), "no client is open before the first use");
+  http_client::shared_client().expect("the shared client builds");
+  assert!(http_client::close_shared_client(), "the first use left a client open");
+  assert!(!http_client::close_shared_client(), "a second close finds nothing to drop");
+}

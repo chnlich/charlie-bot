@@ -5,8 +5,9 @@
 //! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture the build identity,
 //! initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the
 //! configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests finish for up to five seconds,
-//! stops the lifespan's services and runs its let-go steps, releases the fence, logs `charliebot_shutdown`, then raises
-//! the signal again under its default disposition, so the process ends killed by that signal as uvicorn's does.
+//! stops the lifespan's services, runs its let-go steps and closes the shared HTTP client, releases the fence, logs
+//! `charliebot_shutdown`, then raises the signal again under its default disposition, so the process ends killed by
+//! that signal as uvicorn's does.
 //!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
 //! page packages and `configs/` the server serves; the Python server derives the same root from its own file location.
@@ -35,7 +36,7 @@ use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::venv::VenvBin;
 use charliebot_core::{config, home, logging, paths, v1_sessions};
-use charliebot_registry::lifespan::Lifespan;
+use charliebot_registry::lifespan::{CloseTimings, Lifespan};
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
 use nix::sys::signal::{SigHandler, Signal};
@@ -159,9 +160,9 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     Err(message) => {
       eprintln!("charliebot-server: {message}");
       let shutdown_started = Instant::now();
-      stop_lifespan(lifespan).await;
+      let closes = stop_lifespan(lifespan).await;
       writer_fence.release();
-      tracing::info!(shutdown_ms = round_ms(shutdown_started.elapsed()), "charliebot_shutdown");
+      log_shutdown(shutdown_started, closes);
       return ExitCode::from(EXIT_CONFIG);
     }
   };
@@ -188,17 +189,28 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     Err(_) => tracing::warn!(timeout_s = GRACEFUL_SHUTDOWN_TIMEOUT.as_secs(), "graceful_shutdown_timeout_exceeded"),
   }
   let shutdown_started = Instant::now();
-  stop_lifespan(lifespan).await;
+  let closes = stop_lifespan(lifespan).await;
   writer_fence.release();
-  tracing::info!(shutdown_ms = round_ms(shutdown_started.elapsed()), "charliebot_shutdown");
+  log_shutdown(shutdown_started, closes);
   exit_by_signal(received)
 }
 
 /// The lifespan's shutdown. A failed stop is logged, and the caller still releases the home fence.
-async fn stop_lifespan(lifespan: Lifespan) {
-  if let Err(error) = lifespan.shutdown().await {
+async fn stop_lifespan(lifespan: Lifespan) -> CloseTimings {
+  let shutdown = lifespan.shutdown().await;
+  if let Some(error) = shutdown.error {
     tracing::error!(error = format!("{error:#}"), "lifespan_shutdown_failed");
   }
+  shutdown.closes
+}
+
+/// The `charliebot_shutdown` line: the shutdown's total time and the time of each close, as Python's lifespan logs them.
+fn log_shutdown(shutdown_started: Instant, closes: CloseTimings) {
+  tracing::info!(
+    shutdown_ms = round_ms(shutdown_started.elapsed()),
+    http_client_ms = round_ms(closes.http_client),
+    "charliebot_shutdown"
+  );
 }
 
 /// uvicorn's `capture_signals` exit: restore the default disposition and raise the stop signal again.
@@ -287,5 +299,58 @@ impl StopSignal {
       _ = self.terminate.recv() => Signal::SIGTERM,
       _ = self.interrupt.recv() => Signal::SIGINT,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fmt;
+  use std::sync::{Arc, Mutex};
+
+  use tracing::field::{Field, Visit};
+  use tracing::{Event, Subscriber};
+  use tracing_subscriber::layer::{Context, SubscriberExt};
+  use tracing_subscriber::{Layer, Registry};
+
+  use super::*;
+
+  /// The `(name, value)` pairs of one event, in the order the event records them.
+  #[derive(Default)]
+  struct Fields(Vec<(String, String)>);
+
+  impl Visit for Fields {
+    fn record_u64(&mut self, field: &Field, value: u64) {
+      self.0.push((field.name().to_string(), value.to_string()));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+      self.0.push((field.name().to_string(), format!("{value:?}")));
+    }
+  }
+
+  struct Capture(Arc<Mutex<Vec<Vec<(String, String)>>>>);
+
+  impl<S: Subscriber> Layer<S> for Capture {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+      let mut fields = Fields::default();
+      event.record(&mut fields);
+      self.0.lock().unwrap().push(fields.0);
+    }
+  }
+
+  #[test]
+  fn shutdown_line_reports_the_shutdown_and_the_http_client_close() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = Registry::default().with(Capture(Arc::clone(&events)));
+    tracing::subscriber::with_default(subscriber, || {
+      log_shutdown(Instant::now(), CloseTimings { http_client: Duration::from_millis(3) });
+    });
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    let names: Vec<&str> = events[0].iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["message", "shutdown_ms", "http_client_ms"]);
+    assert_eq!(events[0][0].1, "charliebot_shutdown");
+    assert_eq!(events[0][2].1, "3");
   }
 }

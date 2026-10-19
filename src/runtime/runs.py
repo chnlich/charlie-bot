@@ -223,7 +223,7 @@ def summarize_result(events: Iterable[dict]) -> dict | None:
 
 
 def result_success(result: dict) -> bool:
-  """Terminal-status judgment from a result event (matches spawner semantics)."""
+  """Terminal-status judgment from a result event."""
   return result.get("subtype") in (None, "success") and result.get("is_error") in (None, False)
 
 

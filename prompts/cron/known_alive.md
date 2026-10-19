@@ -479,3 +479,63 @@ Known-alive symbols:
   `src/features/voice/__init__.py`), and the page render binds the template global as
   `getattr(import_module(module), attr)`. Vulture flags each function as an unused function at
   60% confidence.
+- `_one_lane` (`PublishConfig` in `src/features/artifacts/config.py`), `_run_package_checks`
+  (`CharlieBotConfig` in `src/infra/config.py`), `_cold_read_matches_task_type` (`TaskSpec` in
+  `src/infra/models.py`), `_registered_keys_only` (`CreateSessionRequest` in `src/infra/models.py`)
+  and `_serialize_with_slots` (`ThreadMetadata` and `SessionMetadata` in `src/infra/models.py`) —
+  pydantic `@model_validator(mode="after")` methods, plus `@model_serializer(mode="wrap")` for
+  `_serialize_with_slots`, registered with pydantic at class-definition time and invoked during
+  validation and serialization. Each name has exactly zero whole-repo matches outside its
+  definition, so vulture flags each as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.
+- `content_type_is_excluded` (the `_IsalGZipResponder` write in `server.py`), `row_factory` (the
+  `UsageLedger` connection write in `src/features/usage/usage_ledger.py`), `should_exit` (the
+  uvicorn `Server` writes in `tools/chat_scroll_regression.py` and
+  `tools/live_smoke_task_tree.py`) and `longrepr` (the pytest `TestReport` writes in
+  `tests/conftest.py`) — attribute writes on library objects the library itself reads back:
+  starlette's `GZipResponder.send_with_compression` branches on the exclusion flag for body
+  messages, sqlite3 applies the connection's row factory to every cursor it creates, uvicorn's
+  serve loop polls `should_exit`, and pytest renders `longrepr` when a test fails. Nothing in the
+  repo reads the attributes back, so vulture flags each write as an unused attribute. Same
+  library-attribute class as the `_theme`/`_decolor` entry above.
+- `exc_type`, `tb` (the `UsageLedger.__exit__` signature in
+  `src/features/usage/usage_ledger.py`) and `exitstatus` (`pytest_terminal_summary` in
+  `tests/conftest.py`) — protocol-mandated parameters the body does not read: the `with`
+  statement passes the exception triple to `__exit__`, and pluggy passes the exit status to the
+  hook. Vulture flags each at 100% confidence as an unused variable; dropping one from the
+  signature breaks the protocol.
+- `pytest_addoption`, `pytest_runtest_protocol`, `pytest_terminal_summary`,
+  `pytest_collection_finish` and `pytest_plugins` (`tests/conftest.py`) — pytest hook bindings
+  pluggy resolves by module attribute name, same class as the `pytest_runtest_setup/call/teardown`
+  entry above; `pytest_plugins` is the module-level list pytest reads at collection. Vulture
+  flags each binding as an unused function or variable.
+- `empty_registry` (`tests/test_usage_sources.py` and `tests/test_sidebar_contributions.py`,
+  reached by string via `@pytest.mark.usefixtures("empty_registry")`; the
+  `tests/test_turn_contributions.py` copy, injected by parameter name for its registry-reset side
+  effect) and `usage_services_only` (`tests/test_ext_usage.py`, same usefixtures string form) —
+  pytest fixtures, same class as the `_clean_ceiling_env` entry above. Vulture flags each
+  definition as an unused function and, at the parameter-injection sites, each unread parameter
+  as an unused variable at 100% confidence; `stop_servers` (`tests/test_opencode_backend.py`)
+  draws the same pair of flags as a `pytest_asyncio` fixture the file's tests request by
+  parameter name for its teardown alone.
+- `_reset_backend_pool` (`tests/conftest.py`) and `fakechat_metadata_access`
+  (`tests/core/test_thread_entry.py`) — pytest `autouse=True` fixtures, reached by pytest's
+  fixture-name discovery only, same class as the `_fresh_*` entry above. Vulture flags each as an
+  unused function at 60% confidence.
+- `first_step`, `second_step` and `lone_step` (`tests/test_setup_runner.py`) — reached by string:
+  the tests pass `attr="first_step"` and `attr="second_step"` to `wiring.register_setup_step` and
+  `f"{__name__}:lone_step"` to `setup_runner.main --step`, and the runner resolves the function
+  from the string, same class as the `enable_step` entry above. Vulture flags each as an unused
+  function at 60% confidence.
+- `OPENS_A` and `OPENS_B` (`tests/test_turn_contributions.py`) — `_Opens` instances reached by
+  string: the tests register them through `register(opens_a="OPENS_A")`, which builds
+  `f"{__name__}:OPENS_A"` for `turn_contributions.register_turn_contribution`, and the hook
+  imports the attribute from that string when a turn is composed, same class as the
+  `CONTRIBUTION` entry above. Vulture flags each instance as an unused variable at 60%
+  confidence.
+- `FieldOfTheMetadataModel`, `FieldOfAnotherOwner` and `LateSessionFields`
+  (`tests/test_metadata_slots.py`) — reached by string: the tests pass each name to
+  `metadata_slot_registration.register_metadata_fields` through the `_probe(...)` prefix
+  (`f"{__name__}:{name}"`), and the registry imports the class from that string on the first
+  metadata_slots call, same class as the `PoolNodeMetadata` entry above. Vulture flags each class
+  as unused at 60% confidence.

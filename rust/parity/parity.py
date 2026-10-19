@@ -1035,9 +1035,9 @@ def main() -> int:
   runs: list[dict] = []
   scratch_root: pathlib.Path | None = None
   try:
-    # The servers run only on homes under /tmp, whatever TMPDIR says. The tree lives inside the cleanup
-    # scope, so an exception between mkdtemp and the first run (for example in authority.generate)
-    # removes it too.
+    # The servers run only on homes under /tmp, whatever TMPDIR says: a tree's tmux socket path must stay
+    # within 107 bytes (servers.make_tree), and a long TMPDIR breaks that. The tree lives inside the cleanup
+    # scope, so an exception between mkdtemp and the first run (for example in authority.generate) removes it too.
     scratch.sweep()
     scratch_root = pathlib.Path(tempfile.mkdtemp(prefix=scratch.SCRATCH_PREFIX, dir="/tmp"))
     scratch.record_owner(scratch_root)

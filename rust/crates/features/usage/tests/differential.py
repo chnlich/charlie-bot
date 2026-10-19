@@ -14,7 +14,6 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
 HOST = "fixture-host"
 NATIVE_MODEL = "vendor/native-model"
 CONFIG = """backends:
@@ -96,12 +95,13 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
   result = {
       "type": "result",
       "timestamp": "2026-09-11T20:00:00+00:00",
-      "usage": {
-          "input_tokens": 120,
-          "cache_creation_input_tokens": 5,
-          "cache_read_input_tokens": 30,
-          "output_tokens": 7,
-      },
+      "usage":
+          {
+              "input_tokens": 120,
+              "cache_creation_input_tokens": 5,
+              "cache_read_input_tokens": 30,
+              "output_tokens": 7,
+          },
   }
   _thread(
       home,
@@ -109,14 +109,19 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
       "native",
       "charlie-code-native",
       "vendor/recorded-model",
-      _line(result) + _line({"session_id": "native-session"}) + b'{"type": "result", broken}\n{"type": "result", "usage": {"input_tokens": 999}',
+      _line(result) + _line({"session_id": "native-session"}) +
+      b'{"type": "result", broken}\n{"type": "result", "usage": {"input_tokens": 999}',
   )
   _thread(home, "session-native", "native-no-id", "charlie-code-native", None, _line(result))
 
   codex_thread = {
       "type": "result",
       "timestamp": "2026-09-12T20:00:00+00:00",
-      "usage": {"input_tokens": 100, "cache_read_input_tokens": 30, "output_tokens": 14},
+      "usage": {
+          "input_tokens": 100,
+          "cache_read_input_tokens": 30,
+          "output_tokens": 14
+      },
   }
   _thread(
       home,
@@ -139,12 +144,13 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
   fallback_thread = {
       "type": "result",
       "timestamp": "2026-09-13T20:00:00+00:00",
-      "usage": {
-          "input_tokens": 40,
-          "cache_creation_input_tokens": 8,
-          "cache_read_input_tokens": 12,
-          "output_tokens": 9,
-      },
+      "usage":
+          {
+              "input_tokens": 40,
+              "cache_creation_input_tokens": 8,
+              "cache_read_input_tokens": 12,
+              "output_tokens": 9,
+          },
   }
   _thread(
       home,
@@ -169,51 +175,115 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
 
   master_time = "2026-09-01T00:00:00Z"
   master = (
-      _line({"type": "context", "model": NATIVE_MODEL})
-      + _line({"type": "result", "usage": {"input_tokens": 20, "cached_tokens": 4, "output_tokens": 7}})
-      + _line({"type": "result", "usage": {"input_tokens": 30, "cached_tokens": 9, "output_tokens": 11}})
-  )
+      _line({
+          "type": "context",
+          "model": NATIVE_MODEL
+      }) + _line({
+          "type": "result",
+          "usage": {
+              "input_tokens": 20,
+              "cached_tokens": 4,
+              "output_tokens": 7
+          }
+      }) + _line({
+          "type": "result",
+          "usage": {
+              "input_tokens": 30,
+              "cached_tokens": 9,
+              "output_tokens": 11
+          }
+      }))
   _master(home, "session-master", master_time, master)
   _master(home, "session-master", "2026-09-02T00:00:00Z", _line({"type": "result", "usage": {"input_tokens": 8}}))
   _master(home, "session-master", "2026-09-03T00:00:00Z", _line({"type": "context", "model": NATIVE_MODEL}))
 
   native_run = (
-      _line({"type": "result", "usage": {"input_tokens": 18, "cached_tokens": 4, "output_tokens": 7}})
-      + b'{"type": "result", broken}\n{"type": "result", "usage": {"input_tokens": 999}'
-  )
+      _line({
+          "type": "result",
+          "usage": {
+              "input_tokens": 18,
+              "cached_tokens": 4,
+              "output_tokens": 7
+          }
+      }) + b'{"type": "result", broken}\n{"type": "result", "usage": {"input_tokens": 999}')
   _run(home, "run-native", "charlie-code-native", None, None, native_run)
   codex_run = (
-      _line({"type": "turn.completed", "usage": {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 8}})
-      + _line({"type": "turn.completed", "usage": {"input_tokens": 40, "cached_input_tokens": 10, "output_tokens": 6}})
-      + _line({"type": "thread.started", "thread_id": "codex-offline-run"})
-  )
+      _line({
+          "type": "turn.completed",
+          "usage": {
+              "input_tokens": 60,
+              "cached_input_tokens": 20,
+              "output_tokens": 8
+          }
+      }) +
+      _line({
+          "type": "turn.completed",
+          "usage": {
+              "input_tokens": 40,
+              "cached_input_tokens": 10,
+              "output_tokens": 6
+          }
+      }) + _line({
+          "type": "thread.started",
+          "thread_id": "codex-offline-run"
+      }))
   _run(home, "run-codex", "codex-main", "vendor/gpt-run", None, codex_run)
   live_run = (
-      _line({"type": "turn.completed", "usage": {"input_tokens": 8, "cached_input_tokens": 2, "output_tokens": 1}})
-      + _line({"type": "thread.started", "thread_id": "live-run"})
-  )
+      _line({
+          "type": "turn.completed",
+          "usage": {
+              "input_tokens": 8,
+              "cached_input_tokens": 2,
+              "output_tokens": 1
+          }
+      }) + _line({
+          "type": "thread.started",
+          "thread_id": "live-run"
+      }))
   _run(home, "run-codex-live", "codex-main", None, None, live_run)
   _run(home, "run-codex-no-id", "codex-main", None, None, live_run.replace(b"live-run", b""))
   claude_run = (
-      _line({"session_id": "claude-run"})
-      + _line({
+      _line({"session_id": "claude-run"}) + _line(
+          {
+              "type": "result",
+              "usage":
+                  {
+                      "input_tokens": 13,
+                      "cache_creation_input_tokens": 3,
+                      "cache_read_input_tokens": 2,
+                      "output_tokens": 6,
+                  },
+          }))
+  _run(home, "run-claude", "claude-main", None, "claude-run", claude_run)
+  _run(
+      home, "run-claude-no-id", "claude-main", None, None,
+      _line({
           "type": "result",
           "usage": {
               "input_tokens": 13,
-              "cache_creation_input_tokens": 3,
-              "cache_read_input_tokens": 2,
-              "output_tokens": 6,
-          },
-      })
-  )
-  _run(home, "run-claude", "claude-main", None, "claude-run", claude_run)
-  _run(home, "run-claude-no-id", "claude-main", None, None, _line({"type": "result", "usage": {"input_tokens": 13, "output_tokens": 6}}))
-  _run(home, "run-unknown", "unknown-backend", None, "unknown", _line({"type": "result", "usage": {"input_tokens": 13, "output_tokens": 6}}))
-  _run(home, "run-resultless", "charlie-code-native", None, None, _line({"type": "thread.started", "thread_id": "unused"}))
+              "output_tokens": 6
+          }
+      }))
+  _run(
+      home, "run-unknown", "unknown-backend", None, "unknown",
+      _line({
+          "type": "result",
+          "usage": {
+              "input_tokens": 13,
+              "output_tokens": 6
+          }
+      }))
+  _run(
+      home, "run-resultless", "charlie-code-native", None, None,
+      _line({
+          "type": "thread.started",
+          "thread_id": "unused"
+      }))
   return live_ids
 
 
 class FixtureCodex:
+
   def __init__(self, live_ids: pathlib.Path):
     self.live_ids = live_ids
 
@@ -265,28 +335,46 @@ def python_capture(home: pathlib.Path, ledger_path: pathlib.Path, live_ids: path
 
 def rows_value(rows, starts: dict[str, str]) -> dict:
   return {
-      "rows": [
-          {
-              "source": row.source,
-              "model": row.model,
-              "in_fresh": row.in_fresh,
-              "cache_write": row.cache_write,
-              "cache_read": row.cache_read,
-              "in_unsplit": row.in_unsplit,
-              "output": row.output,
-              "calls": row.calls,
-              "total": row.total,
-              "first": row.first,
-              "last": row.last,
-              "fallback_calls": row.fallback_calls,
-              "fallback_output": row.fallback_output,
-              "accounts": [
-                  {"name": account.name, "calls": account.calls, "output": account.output, "total": account.total}
-                  for account in row.accounts
-              ],
-          }
-          for row in rows
-      ],
+      "rows":
+          [
+              {
+                  "source":
+                      row.source,
+                  "model":
+                      row.model,
+                  "in_fresh":
+                      row.in_fresh,
+                  "cache_write":
+                      row.cache_write,
+                  "cache_read":
+                      row.cache_read,
+                  "in_unsplit":
+                      row.in_unsplit,
+                  "output":
+                      row.output,
+                  "calls":
+                      row.calls,
+                  "total":
+                      row.total,
+                  "first":
+                      row.first,
+                  "last":
+                      row.last,
+                  "fallback_calls":
+                      row.fallback_calls,
+                  "fallback_output":
+                      row.fallback_output,
+                  "accounts":
+                      [
+                          {
+                              "name": account.name,
+                              "calls": account.calls,
+                              "output": account.output,
+                              "total": account.total
+                          } for account in row.accounts
+                      ],
+              } for row in rows
+          ],
       "native_starts": starts,
   }
 
@@ -306,16 +394,27 @@ def _ordered_rows(connection: sqlite3.Connection, table: str) -> list[tuple]:
 def snapshot(home: pathlib.Path, ledger_path: pathlib.Path) -> dict[str, list[tuple]]:
   connection = sqlite3.connect(ledger_path)
   try:
-    rows = {table: _ordered_rows(connection, table) for table in ("usage", "native_sessions", "fallback_sessions", "captured_files", "usage_agg", "ledger_meta")}
+    rows = {
+        table: _ordered_rows(connection, table)
+        for table in ("usage", "native_sessions", "fallback_sessions", "captured_files", "usage_agg", "ledger_meta")
+    }
   finally:
     connection.close()
   normalized_usage = []
   for row in rows["usage"]:
     origin = pathlib.Path(row[12])
-    normalized_usage.append((*row[:12], origin.relative_to(home).as_posix(),))
+    normalized_usage.append((
+        *row[:12],
+        origin.relative_to(home).as_posix(),
+    ))
   rows["usage"] = normalized_usage
-  rows["captured_files"] = [(host, pathlib.Path(path).relative_to(home).as_posix(), sig) for host, path, sig in rows["captured_files"]]
-  rows["ledger_meta"] = [(key, "<timestamp omitted>" if key.startswith("last_capture_at:") else value) for key, value in rows["ledger_meta"]]
+  rows["captured_files"] = [
+      (host, pathlib.Path(path).relative_to(home).as_posix(), sig) for host, path, sig in rows["captured_files"]
+  ]
+  rows["ledger_meta"] = [
+      (key, "<timestamp omitted>" if key.startswith("last_capture_at:") else value)
+      for key, value in rows["ledger_meta"]
+  ]
   return rows
 
 
@@ -338,7 +437,8 @@ def differences(left: dict[str, list[tuple]], right: dict[str, list[tuple]]) -> 
   return changed
 
 
-def run_rust_capture(rust_bin: pathlib.Path, home: pathlib.Path, ledger_path: pathlib.Path, live_ids: pathlib.Path) -> dict:
+def run_rust_capture(
+    rust_bin: pathlib.Path, home: pathlib.Path, ledger_path: pathlib.Path, live_ids: pathlib.Path) -> dict:
   environment = os.environ.copy()
   environment.update({
       "HOME": str(home),

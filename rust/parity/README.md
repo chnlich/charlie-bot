@@ -15,7 +15,9 @@ One run walks the selected scenarios. For each scenario it:
 3. Writes the scenario's fake-agent script into both trees before either server starts.
 4. Starts one declared fake-service set per side, then starts the baseline Python server and the candidate. A
    handover scenario starts its candidate in the named
-   direction and starts the next server after the handover step.
+   direction and starts the next server after the handover step. Once both servers answer, the harness waits for
+   each side to log `speech_models_ready` or `speech_model_provisioning_failed` (both servers provision speech models
+   in the background), then takes the startup snapshot. A handover waits the same way after its restarted server answers.
 5. Sends HTTP and WebSocket steps to both servers. Fake steps push provider events to both fake services. Wait
    steps observe durable state, and gate steps release fake agents. Handover steps stop and restart servers on
    the same homes.
@@ -291,7 +293,7 @@ verified run-token claims.
 
 Step fields:
 
-- `kind`: `http` (the default), `ws`, `fake`, `wait`, `gate` or `handover`.
+- `kind`: `http` (the default), `ws`, `fake`, `wait`, `log_event`, `gate` or `handover`.
 - `name` is required for every step. HTTP steps also require `method` and `path`. `path` carries no query string.
 - `query` and `headers` map names to scalar values.
 - `json` is a request body, sent as `application/json`.
@@ -321,6 +323,17 @@ Step fields:
 - `until.event` matches chat events by session, type and fields. `count` requires that many matches and defaults to 1.
 - `until.file_field` reads a dotted field from a home-relative JSON file and compares it with `equals`.
 - `until.at_gate` waits for the gate marker and for `agent.raw.cursor` to equal the raw stdout file size.
+- `log_event` requires `event` and `timeout_seconds`; `fields` (optional) are scalar values. It waits until each side's
+  current server log holds that event with every field matching, and a side that does not in time fails the step by
+  name. Python's console lines and Rust's JSON lines both count. A field compares as the text each server logged, so a
+  boolean is `true` or `false` on either side. Example:
+
+  ```yaml
+  - kind: log_event
+    name: speech models are provisioned on both sides
+    event: speech_models_ready
+    timeout_seconds: 60
+  ```
 - `gate` requires `open`; the harness writes `open-<name>` in both fake-agent directories.
 - `handover` requires `agent_after_stop`: `alive`, `exited` or `terminated`. It checks every scripted start that
   had no exit marker before the server stopped.

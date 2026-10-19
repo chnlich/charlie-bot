@@ -1,7 +1,8 @@
 """Scenario files define the inputs and comparisons that make one server route reproducible.
 
 HTTP and WebSocket steps drive both servers. Fake steps inject provider events, while wait, gate and handover
-steps coordinate the scripted agent. References name fixture values, side-local tree paths and prior captures.
+steps coordinate the scripted agent. A log_event step waits for an event each server writes to its log. References
+name fixture values, side-local tree paths and prior captures.
 """
 
 import contextlib
@@ -17,7 +18,7 @@ import yaml
 SCENARIO_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
 DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 FIXTURE_EXTRAS_DIR = pathlib.Path(__file__).resolve().parent / "fixture_extras"
-STEP_KINDS = ("http", "ws", "fake", "wait", "gate", "handover", "process")
+STEP_KINDS = ("http", "ws", "fake", "wait", "log_event", "gate", "handover", "process")
 AUTH_MODES = ("bearer", "cookie", "none")
 WS_AUTH_MODES = ("token", "none")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -42,6 +43,7 @@ _WS_STEP_KEYS = {
 }
 _FAKE_STEP_KEYS = {"kind", "name", "fake", "action", "payload"}
 _WAIT_STEP_KEYS = {"kind", "name", "timeout_seconds", "until"}
+_LOG_EVENT_STEP_KEYS = {"kind", "name", "event", "fields", "timeout_seconds"}
 _GATE_STEP_KEYS = {"kind", "name", "open"}
 _HANDOVER_STEP_KEYS = {"kind", "name", "agent_after_stop"}
 _PROCESS_STEP_KEYS = {"kind", "name", "action", "process_id", "delay_seconds", "capture"}
@@ -84,6 +86,8 @@ class Step:
   fake: str | None
   action: str | None
   payload: Any
+  log_event: str | None
+  log_fields: dict[str, str]
 
   @property
   def route(self) -> str:
@@ -303,6 +307,7 @@ def _step(raw: Any, where: str) -> Step:
       "ws": _WS_STEP_KEYS,
       "fake": _FAKE_STEP_KEYS,
       "wait": _WAIT_STEP_KEYS,
+      "log_event": _LOG_EVENT_STEP_KEYS,
       "gate": _GATE_STEP_KEYS,
       "handover": _HANDOVER_STEP_KEYS,
       "process": _PROCESS_STEP_KEYS,
@@ -337,6 +342,8 @@ def _step(raw: Any, where: str) -> Step:
   fake_name = None
   action = None
   payload = None
+  log_event: str | None = None
+  log_fields: dict[str, str] = {}
   if kind == "http":
     for required in ("method", "path"):
       if not isinstance(raw.get(required), str) or not raw[required]:
@@ -427,6 +434,13 @@ def _step(raw: Any, where: str) -> Step:
     if not finite_timeout or timeout_seconds <= 0:
       raise ScenarioError(f"{where}: 'timeout_seconds' is required and must be positive")
     until = _until(raw.get("until"), where)
+  elif kind == "log_event":
+    event = raw.get("event")
+    if not isinstance(event, str) or not event:
+      raise ScenarioError(f"{where}: 'event' is required and must be a non-empty string")
+    log_event = event
+    log_fields = _string_map(raw.get("fields", {}), f"{where}.fields")
+    timeout_seconds = _positive_timeout(raw.get("timeout_seconds"), f"{where}.timeout_seconds")
   elif kind == "gate":
     open_name = raw.get("open")
     if not isinstance(open_name, str) or not open_name:
@@ -486,6 +500,8 @@ def _step(raw: Any, where: str) -> Step:
       fake=fake_name,
       action=action,
       payload=payload,
+      log_event=log_event,
+      log_fields=log_fields,
   )
 
 

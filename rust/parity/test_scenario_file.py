@@ -111,12 +111,40 @@ def _fake_agent() -> dict[str, Any]:
                 "expect_starts": 0,
                 "directions": ["python-to-candidate"],
             }),
+        (
+            {
+                "kind": "log_event",
+                "name": "log event step",
+                "event": "speech_models_ready",
+                "fields": {
+                    "ok": True
+                },
+                "timeout_seconds": 5,
+            }, {}),
     ])
 def test_new_step_kinds_and_keys_load(tmp_path: pathlib.Path, step: dict[str, Any], fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [step], **fields)
   assert scenario.steps[0].name == step["name"]
   if step.get("wait_for_fake_handshake"):
     assert scenario.steps[0].wait_for_fake_handshake == step["wait_for_fake_handshake"]
+
+
+def test_log_event_step_keeps_its_event_fields_and_timeout(tmp_path: pathlib.Path) -> None:
+  step = {
+      "kind": "log_event",
+      "name": "ext usage fetch fails",
+      "event": "ext_usage_fetched",
+      "fields": {
+          "ok": False,
+          "attempt": 2
+      },
+      "timeout_seconds": 5,
+  }
+  parsed = _load(tmp_path, [step]).steps[0]
+  assert parsed.route == "(log_event)"
+  assert parsed.log_event == "ext_usage_fetched"
+  assert parsed.log_fields == {"ok": "false", "attempt": "2"}
+  assert parsed.timeout_seconds == 5.0
 
 
 def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> None:
@@ -410,6 +438,25 @@ def test_new_http_websocket_and_fake_forms_load(
             "fake": "slack",
             "action": "socket_event",
             "payload": {},
+        },
+        {
+            "kind": "log_event",
+            "name": "log event without a name",
+            "timeout_seconds": 1,
+        },
+        {
+            "kind": "log_event",
+            "name": "log event with a list field",
+            "event": "speech_models_ready",
+            "fields": {
+                "cache_dir": ["/tmp/synthetic"]
+            },
+            "timeout_seconds": 1,
+        },
+        {
+            "kind": "log_event",
+            "name": "log event without a timeout",
+            "event": "speech_models_ready",
         },
     ])
 def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any]) -> None:

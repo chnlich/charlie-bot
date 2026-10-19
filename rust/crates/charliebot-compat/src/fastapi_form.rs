@@ -316,18 +316,65 @@ mod tests {
     assert_eq!(unquote_plus(b"a+b%2Bc"), "a b+c");
     assert_eq!(unquote_plus(b"%zz%4"), "%zz%4");
   }
+
+  #[test]
+  fn header_options_split_outside_quotes_as_python_multipart_does() {
+    let (media_type, params) = parse_options_header(r#"form-data; name="a;b"; filename="x.txt""#);
+    assert_eq!(media_type, "form-data");
+    assert_eq!(params, [pair("name", "a;b"), pair("filename", "x.txt")]);
+    let (media_type, params) = parse_options_header(r#"form-data; name="a\";b"; x=1"#);
+    assert_eq!(media_type, "form-data");
+    assert_eq!(params, [pair("name", "a\";b"), pair("x", "1")]);
+    assert_eq!(parse_options_header("Form-Data; name=q").0, "Form-Data");
+    assert_eq!(parse_options_header("Form-Data").0, "form-data");
+    assert_eq!(parse_options_header("form-data; name").1, [pair("name", "")]);
+    assert_eq!(parse_options_header("form-data; name=<x>").1, [pair("name", "x")]);
+    assert_eq!(parse_options_header("form-data; name=\"\\\\\"\"").1, [pair("name", "\"")]);
+    assert_eq!(parse_options_header(r#"form-data; filename="C:\dir\a.txt""#).1, [pair("filename", "a.txt")]);
+  }
+
+  #[test]
+  fn user_safe_decode_normalizes_codec_names_and_falls_back_to_latin_1() {
+    assert_eq!(user_safe_decode("caf\u{e9}".as_bytes(), "UTF-8"), "caf\u{e9}");
+    assert_eq!(user_safe_decode("caf\u{e9}".as_bytes(), "utf_8"), "caf\u{e9}");
+    assert_eq!(user_safe_decode(b"caf\xe9", "latin-1"), "caf\u{e9}");
+    assert_eq!(user_safe_decode(b"\xff", "utf-8"), "\u{ff}");
+  }
 }
 
 /// Decode a string with Starlette's `_user_safe_decode`: an unknown codec or an invalid sequence falls back to
-/// latin-1, which never fails.
+/// latin-1, which never fails. Only the codecs that need no table are known here, so any other charset also falls back
+/// to latin-1.
 fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
-  let decoded = match charset {
-    "utf-8" | "utf8" => std::str::from_utf8(bytes).ok().map(str::to_string),
-    "ascii" | "us-ascii" => bytes.is_ascii().then(|| String::from_utf8_lossy(bytes).into_owned()),
-    "latin-1" | "iso-8859-1" | "iso8859-1" => Some(latin1(bytes)),
+  let decoded = match normalize_codec_name(charset).as_str() {
+    "utf_8" | "utf8" | "u8" | "utf" | "cp65001" => std::str::from_utf8(bytes).ok().map(str::to_string),
+    "ascii" | "us_ascii" | "646" | "cp367" => bytes.is_ascii().then(|| String::from_utf8_lossy(bytes).into_owned()),
+    "latin_1" | "latin1" | "iso8859_1" | "iso_8859_1" | "iso_8859_1_1987" | "iso_ir_100" | "l1" | "latin" | "cp819"
+    | "8859" => Some(latin1(bytes)),
     _ => None,
   };
   decoded.unwrap_or_else(|| latin1(bytes))
+}
+
+/// Normalize a codec name the way Python's `encodings.normalize_encoding` does before its alias lookup: letters and
+/// digits and dots are kept in lower case, and each run of other characters becomes one underscore between names.
+fn normalize_codec_name(name: &str) -> String {
+  let mut normalized = String::new();
+  let mut separated = false;
+  for character in name.chars() {
+    if character.is_alphanumeric() || character == '.' {
+      if separated && !normalized.is_empty() {
+        normalized.push('_');
+      }
+      if character.is_ascii() {
+        normalized.push(character.to_ascii_lowercase());
+      }
+      separated = false;
+    } else {
+      separated = true;
+    }
+  }
+  normalized
 }
 
 fn latin1(bytes: &[u8]) -> String {
@@ -338,24 +385,24 @@ fn latin1_bytes(value: &str) -> Vec<u8> {
   value.chars().map(|character| character as u32 as u8).collect()
 }
 
-/// Parse a header the way `python_multipart.parse_options_header` does through `email.message.Message.get_params`:
-/// a lowered media type and a list of lower-cased parameter names with their values, where a later parameter with
-/// the same name wins.
+/// Parse a header the way python-multipart's `parse_options_header` does through `email.message`: a value without a
+/// semicolon is lowered, and otherwise the first segment is the media type as written. A parameter with a value has
+/// its name lowered, and a later parameter with the same name wins.
 fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
   if !value.contains(';') {
     return (value.trim().to_lowercase(), Vec::new());
   }
-  let mut parts = value.split(';');
-  let media_type = parts.next().unwrap_or_default().trim().to_lowercase();
+  let mut segments = split_parameters(value).into_iter().map(|segment| match segment.split_once('=') {
+    Some((raw_key, raw_value)) => (raw_key.trim().to_lowercase(), unquote_header_value(raw_value.trim())),
+    None => (segment.trim().to_string(), String::new()),
+  });
+  let media_type = segments.next().map(|(key, _)| key).unwrap_or_default();
   let mut params: Vec<(String, String)> = Vec::new();
-  for parameter in parts {
-    let Some((raw_key, raw_value)) = parameter.split_once('=') else { continue };
-    let key = raw_key.trim().to_lowercase();
-    let mut value = unquote_header_value(raw_value.trim());
+  for (key, value) in segments {
+    let mut value = value;
     // python-multipart fixes the IE6 bug of sending the full file path as the filename.
     if key == "filename"
-      && (value.as_bytes().get(1) == Some(&b':') && value.as_bytes().get(2) == Some(&b'\\')
-        || value.starts_with("\\\\"))
+      && (value.chars().nth(1) == Some(':') && value.chars().nth(2) == Some('\\') || value.starts_with("\\\\"))
     {
       value = value.rsplit('\\').next().unwrap_or_default().to_string();
     }
@@ -365,15 +412,38 @@ fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
   (media_type, params)
 }
 
-/// Read a header parameter value the way `email.message.Message.get_params` reports it: a quoted value loses its
-/// quotes, and inside a quoted value an escaped quote or backslash keeps the escaped character only, while any other
-/// backslash sequence stays as written. An unquoted value is kept as written.
-fn unquote_header_value(value: &str) -> String {
-  if !(value.len() >= 2 && value.starts_with('"') && value.ends_with('"')) {
-    return value.to_string();
+/// Split a header value at the semicolons outside quoted strings. python-multipart's `_parseparam` takes a semicolon as
+/// a separator when the quotes before it, not counting escaped quotes, are balanced.
+fn split_parameters(value: &str) -> Vec<&str> {
+  let mut segments = Vec::new();
+  let mut start = 0;
+  let mut in_quotes = false;
+  let mut previous = None;
+  for (index, character) in value.char_indices() {
+    match character {
+      '"' if previous != Some('\\') => in_quotes = !in_quotes,
+      ';' if !in_quotes => {
+        segments.push(&value[start..index]);
+        start = index + 1;
+      }
+      _ => {}
+    }
+    previous = Some(character);
   }
-  let inner = &value[1..value.len() - 1];
-  inner.replace("\\\\", "\u{0}").replace("\\\"", "\"").replace('\u{0}', "\\")
+  segments.push(&value[start..]);
+  segments
+}
+
+/// Unquote a header value the way `email.utils.unquote` does: a quoted value loses its quotes, with `\\` read as `\`
+/// before `\"` is read as `"`, and an angle-bracketed value loses its brackets.
+fn unquote_header_value(value: &str) -> String {
+  if value.len() > 1 && value.starts_with('"') && value.ends_with('"') {
+    return value[1..value.len() - 1].replace("\\\\", "\\").replace("\\\"", "\"");
+  }
+  if value.len() > 1 && value.starts_with('<') && value.ends_with('>') {
+    return value[1..value.len() - 1].to_string();
+  }
+  value.to_string()
 }
 
 /// Return the value of the last parameter named `key`, the way a Python dict of parameters does.

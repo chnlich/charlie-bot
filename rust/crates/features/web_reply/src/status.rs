@@ -13,6 +13,7 @@ use charliebot_store::{Store, session_channel};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::json_input::replace_unrepresentable_numbers;
 use crate::reply::{self, WebReplyError};
 
 /// The owner the web reply package registers its metadata under (`status.OWNER`).
@@ -118,9 +119,11 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
         format!("Status file is not JSON: {}", json_message(&message)),
       ));
     }
-    Err(LoadError::Unrepresentable(message)) => serde_json::from_str(text).map_err(|_| {
-      WebReplyError::Failed(anyhow::anyhow!("the status file holds a value the port cannot read: {message}"))
-    })?,
+    Err(LoadError::Unrepresentable(message)) => {
+      serde_json::from_str(&replace_unrepresentable_numbers(text)).map_err(|_| {
+        WebReplyError::Failed(anyhow::anyhow!("the status file holds a value the port cannot read: {message}"))
+      })?
+    }
   };
   let Value::Object(fields) = raw else {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Status file is not a JSON object"));

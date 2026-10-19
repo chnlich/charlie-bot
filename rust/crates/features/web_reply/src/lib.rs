@@ -4,6 +4,7 @@
 //! not ported yet; the package keeps its stub marker until the thread-core port lands it.
 
 mod api;
+mod json_input;
 mod reply;
 mod status;
 mod turn_contribution;

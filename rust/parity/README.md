@@ -342,7 +342,9 @@ Step fields:
   `{file: PATH, content_type: TYPE}` entries. Add `filename` to set the multipart file name.
   Both sides use the same fixed multipart boundary. A step may
   contain at most one of `json`, `body_file` and `multipart`.
-- `auth` is `bearer` (the default), `cookie` or `none`.
+- `auth` is `bearer` (the default), `cookie`, `none` or `agent`. `agent` signs a run token for the `agent` mapping,
+  which names the `session` and `run` ids (literals or references), with the synthetic access key. The server
+  verifies it as the token of a live run, so the run must be launched and unfinished when the step runs.
 - `expect_status` (optional) is the status both servers must return.
 - `compare: status_and_shape` (optional, requires an `expect_status` of 400 or more) narrows the comparison for a
   malformed-input step to the status code and the error shape: for a body whose `detail` is a list, the list

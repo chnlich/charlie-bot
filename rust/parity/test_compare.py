@@ -85,32 +85,61 @@ def test_detail_list_against_detail_text_fails_in_both_orders() -> None:
 
 NUDGE = compare.EventSelector(event_type="agent_message", match_fields={"from_session_name": "Web reply"})
 FINISHED = compare.EventSelector(event_type="run_finished", match_fields={"outcome": "success"})
+NOTICE = compare.EventSelector(event_type="web_reply_notice", match_fields={})
+RUN_PATH = "home/sessions/synthetic-session/data/runs/synthetic-run/metadata.json"
 
 
 def _chat_delta(events: list[dict]) -> compare.Delta:
   path = "home/sessions/synthetic-session/data/chat_events.jsonl"
   data = "".join(json.dumps(event) + "\n" for event in events).encode()
-  return compare.Delta(added={}, removed=frozenset(), changed={path: compare.Entry("file", data)})
+  nudge_ids = [event["id"] for event in events if event["type"] == "agent_message"]
+  run = json.dumps({"input_event_ids": nudge_ids}).encode()
+  return compare.Delta(
+      added={}, removed=frozenset(), changed={
+          path: compare.Entry("file", data),
+          RUN_PATH: compare.Entry("file", run)
+      })
 
 
-def _chat_events(nudge_first: bool, nudge_id: str = "nudge-id") -> list[dict]:
+def _chat_events(nudge_first: bool, nudge_id: str = "nudge-id", notice_first: bool = True) -> list[dict]:
+  """The audit's writes: the turn's master_done, the nudge and the turn's run_finished, the nudged turn's master_done,
+  then the notice and the nudged turn's run_finished. Each pair is written in the order its flag names."""
   nudge = {"type": "agent_message", "id": nudge_id, "from_session_name": "Web reply", "content": "Post the reply."}
   finished = {"type": "run_finished", "id": "finished-id", "outcome": "success", "run_id": "synthetic-run"}
+  nudged_done = {"type": "master_done", "id": "nudged-done-id", "exit_code": 0, "input_event_ids": [nudge_id]}
+  notice = {"type": "web_reply_notice", "id": "notice-id"}
+  nudged_finished = {
+      "type": "run_finished",
+      "id": "nudged-finished-id",
+      "outcome": "success",
+      "run_id": "nudged-run",
+      "input_event_ids": [nudge_id],
+  }
   pair = [nudge, finished] if nudge_first else [finished, nudge]
-  events = [{"type": "master_done", "id": "done-id", "exit_code": 0}, *pair, {"type": "web_reply_notice"}]
+  tail = [notice, nudged_finished] if notice_first else [nudged_finished, notice]
+  events = [{"type": "master_done", "id": "done-id", "exit_code": 0}, *pair, nudged_done, *tail]
   for index, event in enumerate(events):
     event["event_index"] = index
   return events
 
 
 def _ordered_diff(baseline: list[dict], candidate: list[dict], candidate_is_python: bool = False) -> list[str]:
-  left, right = (compare.order_adjacent_pair(_chat_delta(events), NUDGE, FINISHED) for events in (baseline, candidate))
+  """The diff of two chat logs after each one's nudge pair and notice pair are ordered."""
+  sides = []
+  for events in (baseline, candidate):
+    delta = compare.order_adjacent_pair(_chat_delta(events), NUDGE, FINISHED)
+    sides.append(compare.order_adjacent_pair(delta, NOTICE, FINISHED))
+  left, right = sides
   return compare.delta_diff(left, right, _context(), _context(), candidate_is_python=candidate_is_python)
 
 
 def test_adjacent_pair_compares_equal_in_either_order_with_different_ids() -> None:
-  assert _ordered_diff(_chat_events(True, "nudge-1"), _chat_events(False, "nudge-2")) == []
-  assert _ordered_diff(_chat_events(False, "nudge-1"), _chat_events(True, "nudge-2")) == []
+  orders = [(nudge_first, notice_first) for nudge_first in (True, False) for notice_first in (True, False)]
+  for left_nudge_first, left_notice_first in orders:
+    for right_nudge_first, right_notice_first in orders:
+      baseline = _chat_events(left_nudge_first, "nudge-1", left_notice_first)
+      candidate = _chat_events(right_nudge_first, "nudge-2", right_notice_first)
+      assert _ordered_diff(baseline, candidate) == []
   assert _ordered_diff(_chat_events(True), _chat_events(False), candidate_is_python=True) == []
 
 

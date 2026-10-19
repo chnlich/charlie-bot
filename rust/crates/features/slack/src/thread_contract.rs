@@ -1,12 +1,27 @@
 //! The Slack part of the thread reply contract (`src/features/slack/slack_listener.py`): the platform line, the
 //! thread's address, and the read and ack sentences. The shared contract joins it with the common docs.
 
-use charliebot_chat_threads::thread_entry::{LINKED_PAGES_LINE, ThreadPlatform};
+use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
 use crate::metadata::SlackOrigin;
 
 /// The Slack platform as the shared contract reads it (`slack_listener.SLACK`).
-pub const SLACK: ThreadPlatform = ThreadPlatform { scope_doc: "slack_reply_scope.md" };
+pub const SLACK: ThreadPlatform = ThreadPlatform {
+  name: "slack",
+  display_name: "Slack",
+  reply_event_type: crate::event_types::SLACK_REPLY,
+  reply_command: "charliebot slack reply",
+  max_post_chars: 40000,
+  scope_doc: "slack_reply_scope.md",
+  follow_trigger_prefix: "slack-thread-follow",
+  id_key: IdOrdering::Text,
+  origin_field: "slack_origin",
+  watermark_field: "slack_watermark_ts",
+  id_label: "ts",
+  mention_key: "mention_ts",
+  block_keys: &["channel_id", "thread_ts", "mention_ts"],
+  summon_line: "Slack 线程召唤",
+};
 
 /// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
 const REPLY_COMMAND: &str = "charliebot slack reply";

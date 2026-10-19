@@ -1,10 +1,25 @@
 //! The Discord part of the thread reply contract (`src/features/discord/discord_listener.py`): the platform line and
 //! the read sentences. The shared contract joins it with the common docs.
 
-use charliebot_chat_threads::thread_entry::{LINKED_PAGES_LINE, ThreadPlatform};
+use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
 /// The Discord platform as the shared contract reads it (`discord_listener.DISCORD`).
-pub const DISCORD: ThreadPlatform = ThreadPlatform { scope_doc: "discord_reply_scope.md" };
+pub const DISCORD: ThreadPlatform = ThreadPlatform {
+  name: "discord",
+  display_name: "Discord",
+  reply_event_type: crate::event_types::DISCORD_REPLY,
+  reply_command: "charliebot discord reply",
+  max_post_chars: 2000,
+  scope_doc: "discord_reply_scope.md",
+  follow_trigger_prefix: "discord-thread-follow",
+  id_key: IdOrdering::Snowflake,
+  origin_field: "discord_origin",
+  watermark_field: "discord_watermark_id",
+  id_label: "id",
+  mention_key: "mention_id",
+  block_keys: &["guild_id", "channel_id", "thread_id", "mention_id"],
+  summon_line: "Discord 线程召唤",
+};
 
 /// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
 const REPLY_COMMAND: &str = "charliebot discord reply";

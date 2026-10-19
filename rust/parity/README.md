@@ -35,6 +35,7 @@ The modules:
 | `fake_agent.py` | scripted fake agents, spawn records and gate markers |
 | `sandbox.py` | the Landlock launcher: confines each process under test to its tree and to its TCP connect ports |
 | `guard.py` | the outside-write guard: parses the strace logs |
+| `scratch.py` | the `/tmp` scratch trees: the owner record, the keep marker, the start sweep and the run end |
 | `compare.py` | tree snapshots and deltas, response and file comparison, the structural JSON diff |
 | `normalize.py` | every normalization rule, each with the field it masks and why the value cannot match |
 | `scenario_file.py` | the scenario format: loading, validation, references, route templates |
@@ -79,11 +80,22 @@ uv run python rust/parity/parity.py --python-vs-python --stage features
 - `--voice-models DIR` selects the read-only model source for scenarios with `voice_models: true`. Its default is
   `~/.charliebot/models`. Before starting any server, the harness checks for the VAD file, sherpa archive and
   extracted model directory, then links those entries into each synthetic home.
-- `--keep` keeps the trees and logs. A run that fails keeps them anyway and prints their path. Each run's directory
-  is named `NN-RR` (scenario index, run number), so the socket path under its tree stays within 107 bytes;
+- `--keep` keeps the trees and logs after the run. Without it the run removes its scratch tree whether the steps
+  pass or fail, and a failed run prints one line that names `--keep` as the way to inspect the trees. Each run's
+  directory is named `NN-RR` (scenario index, run number), so the socket path under its tree stays within 107 bytes;
   `runs.json` in the scratch root maps each name to its scenario, direction and the two tree paths.
 
 Needs `/usr/bin/strace` and a kernel with Landlock ABI 4 or newer (Linux 6.7 or newer, enabled in the LSM list).
+
+### The scratch trees
+
+Every run lays out one `/tmp/charliebot-parity-<random>/` root and records its owning process in it
+(`owner.json`: the pid and the process's /proc start time, so a recycled pid still reads as gone). At start,
+a run sweeps `/tmp`: it removes every `charliebot-parity-*` tree of our user whose owning process is gone and
+that holds no `--keep` marker; a tree from before this change has no record, and the sweep removes it when it
+is older than six hours. The sweep never touches a live run's tree, a marked tree, or the port lock directory
+`/tmp/charliebot-parity-ports`. `--keep` writes that marker into the tree it keeps, so the next start sweep
+leaves it. See `scratch.py`.
 
 ### Reading the report
 

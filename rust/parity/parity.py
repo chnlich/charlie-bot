@@ -35,6 +35,7 @@ import fakes
 import guard
 import normalize
 import scenario_file
+import scratch
 import servers
 from fakes import authority
 from websockets import exceptions
@@ -50,8 +51,6 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 # root in file content, and a file's size (and every ETag, memo revision or offset derived from it) matches
 # only when the roots are equally long.
 TREE_NAMES = {"baseline": "base", "candidate": "cand"}
-# The scratch root's map from each run directory's short name to its scenario, direction and tree paths.
-RUNS_MANIFEST = "runs.json"
 # The rename --tamper applies to the candidate home: a deliberate mismatch that shows the harness failing.
 TAMPER_SESSION = "atlas"
 TAMPER_NAME = "Atlas planning (tampered)"
@@ -1026,8 +1025,11 @@ def main() -> int:
   if any(scenario.name == "features-harness-terminal" for scenario in scenarios) and shutil.which("tmux") is None:
     raise SystemExit("parity: features-harness-terminal requires tmux on PATH")
   # The servers run only on homes under /tmp, whatever TMPDIR says.
-  scratch = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-parity-", dir="/tmp"))
-  certificates = authority.generate(scratch / "certificates") if any(scenario.fakes for scenario in scenarios) else None
+  scratch.sweep()
+  scratch_root = pathlib.Path(tempfile.mkdtemp(prefix=scratch.SCRATCH_PREFIX, dir="/tmp"))
+  scratch.record_owner(scratch_root)
+  certificates = authority.generate(scratch_root / "certificates") if any(
+      scenario.fakes for scenario in scenarios) else None
   guard_report = guard.Report()
   output: list[str] = []
 
@@ -1057,7 +1059,7 @@ def main() -> int:
         if direction is not None:
           heading += f" direction={direction}"
         emit([heading])
-        scenario_dir = scratch / run_name
+        scenario_dir = scratch_root / run_name
         trees = {label: str(scenario_dir / name) for label, name in TREE_NAMES.items()}
         runs.append({"run": run_name, "scenario": scenario.name, "direction": direction, "trees": trees})
         # The ports stay reserved until both servers of this run have stopped.
@@ -1072,12 +1074,9 @@ def main() -> int:
         results.extend(scenario_results)
   finally:
     failed = [result for result in results if not result.passed]
-    clean = bool(results) and not failed and not guard_report.violations
-    if args.keep or not clean:
-      (scratch / RUNS_MANIFEST).write_text(json.dumps(runs, indent=2) + "\n", encoding="utf-8")
-      print(f"\ntrees and logs kept in {scratch}; {RUNS_MANIFEST} maps each run to its scenario and trees")
-    else:
-      shutil.rmtree(scratch)
+    # A run in progress leaves sys.exc_info() set in its finally block, so an exception counts as unclean too.
+    clean = bool(results) and not failed and not guard_report.violations and sys.exc_info()[0] is None
+    scratch.finalize(scratch_root, args.keep, clean, runs)
 
   emit(["", "Routes:", *_route_summary(results)])
   # Each trace path once, in the order the guard met it.

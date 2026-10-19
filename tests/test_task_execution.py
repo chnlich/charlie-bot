@@ -529,7 +529,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   # user message, takeoff phrase or not.
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     payload = {
         "session_id": manager.id,
@@ -642,7 +642,7 @@ async def test_repo_review_context_carries_the_delegated_spec(
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
   conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   spec = "## Goal\n\nrename the config key\n\n## Reviewer Checklist\n- the legacy key still loads\n"
   # The delegated run launches on the API loop, which lives only inside this block.
   with make_api_client(cfg, session_blocks, tree) as client:
@@ -719,7 +719,7 @@ async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
           SpawningScriptedBackend([conftest.assistant_text_event("started")], exit_code=1),
           SpawningScriptedBackend([result_event("adjusted")]),
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/delegate",
@@ -790,7 +790,7 @@ async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
   conftest.install_scripted_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/delegate",
@@ -830,7 +830,7 @@ async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
           SpawningScriptedBackend([conftest.assistant_text_event("retrying")], exit_code=1),
           SpawningScriptedBackend([result_event("done")]),
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   with make_api_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/delegate",
@@ -2393,7 +2393,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   # The client context stays open across the waits: the launches are tasks on
   # the client's portal loop, alive exactly while the block stands.
   with make_api_client(cfg, session_blocks, tree) as client:

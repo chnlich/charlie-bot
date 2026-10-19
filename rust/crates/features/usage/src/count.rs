@@ -55,7 +55,8 @@ impl Count {
     }
   }
 
-  fn as_f64(self) -> f64 {
+  /// The count as a float, for the page's shares, compactions and JSON numbers.
+  pub(crate) fn as_f64(self) -> f64 {
     match self {
       Count::Int(number) => number as f64,
       Count::Real(number) => number,

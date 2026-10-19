@@ -16,6 +16,7 @@ use time::OffsetDateTime;
 use tower::ServiceExt;
 
 use super::*;
+use crate::count::Count;
 use crate::ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 use crate::test_support::{feature_context, registry};
 
@@ -158,32 +159,33 @@ fn payload_rows(context: &Value) -> Vec<Value> {
 /// as the ledger keeps it, and the default dates.
 fn row(source: &str, model: &str, tokens: [i64; 5], accounts: Vec<LedgerAccount>) -> LedgerRow {
   let [in_fresh, cache_write, cache_read, in_unsplit, output] = tokens;
+  let count = |number: i64| Count::Int(number);
   LedgerRow {
     source: source.to_string(),
     model: model.to_string(),
-    in_fresh,
-    cache_write,
-    cache_read,
-    in_unsplit,
-    output,
+    in_fresh: count(in_fresh),
+    cache_write: count(cache_write),
+    cache_read: count(cache_read),
+    in_unsplit: count(in_unsplit),
+    output: count(output),
     calls: 1,
-    total: tokens.iter().sum(),
+    total: count(tokens.iter().sum()),
     first: "2026-02-01".to_string(),
     last: "2026-02-02".to_string(),
     fallback_calls: 0,
-    fallback_output: 0,
+    fallback_output: Count::Int(0),
     accounts,
   }
 }
 
 fn with_fallback(mut row: LedgerRow, output: i64) -> LedgerRow {
   row.fallback_calls = 1;
-  row.fallback_output = output;
+  row.fallback_output = Count::Int(output);
   row
 }
 
 fn account(name: &str, calls: i64, output: i64, total: i64) -> LedgerAccount {
-  LedgerAccount { name: name.to_string(), calls, output, total }
+  LedgerAccount { name: name.to_string(), calls, output: Count::Int(output), total: Count::Int(total) }
 }
 
 fn names(row: &Value) -> Vec<&str> {
@@ -338,7 +340,7 @@ fn per_source_tiles_count_attributed_accounts() {
   let ctx = &context["ctx"];
   assert_eq!(ctx["per_src"][OC]["models"], json!(2));
   assert_eq!(ctx["per_src"][OC]["total"], json!(16));
-  assert_eq!(ctx["per_src"][CLC]["t_comp"], json!(compact(2)));
+  assert_eq!(ctx["per_src"][CLC]["t_comp"], json!(compact(Count::Int(2))));
   assert_eq!(ctx["per_src"][CLC]["models"], json!(1));
   assert_eq!(ctx["per_src"][CODEX]["total"], json!(1));
   assert_eq!(ctx["per_src"][CC]["total"], json!(0));
@@ -353,8 +355,8 @@ fn in_unsplit_carries_into_the_payload_the_table_column_and_the_hero() {
   let payload = payload_rows(&context);
   assert_eq!(payload[0]["in_unsplit"], json!(5));
   assert_eq!(payload[0]["total"], json!(30));
-  assert_eq!(context["ctx"]["tot_compact"], json!(compact(30)));
-  assert_eq!(context["ctx"]["in_compact"], json!(compact(26)));
+  assert_eq!(context["ctx"]["tot_compact"], json!(compact(Count::Int(30))));
+  assert_eq!(context["ctx"]["in_compact"], json!(compact(Count::Int(26))));
 }
 
 #[tokio::test]
@@ -391,7 +393,7 @@ fn charlie_bot_native_accounts_read_as_clc() {
   let payload = payload_rows(&context);
   assert_eq!(slots_and_totals(&payload[0]), [(5, 140)]);
   assert_eq!(names(&payload[0]), ["CLC · charlie-code-x"]);
-  assert_eq!(context["ctx"]["per_src"][CLC]["t_comp"], json!(compact(140)));
+  assert_eq!(context["ctx"]["per_src"][CLC]["t_comp"], json!(compact(Count::Int(140))));
   assert_eq!(context["ctx"]["per_src"][CLC]["native_start"], json!("2026-01-01"));
 }
 
@@ -409,7 +411,7 @@ fn charlie_bot_antigravity_accounts_read_as_antigravity() {
   let payload = payload_rows(&context);
   assert_eq!(slots_and_totals(&payload[0]), [(4, 140)]);
   assert_eq!(names(&payload[0]), ["Antigravity · agy-antigravity"]);
-  assert_eq!(context["ctx"]["per_src"][AGY]["t_comp"], json!(compact(140)));
+  assert_eq!(context["ctx"]["per_src"][AGY]["t_comp"], json!(compact(Count::Int(140))));
   assert_eq!(context["ctx"]["per_src"][AGY]["native_start"], json!("2026-01-01"));
 }
 
@@ -463,11 +465,11 @@ fn every_tile_total_sums_to_the_page_total() {
     row(CB, "glm-z", [0, 0, 0, 100, 40], vec![account("charlie-code-x", 2, 40, 140)]),
     row(OC, "o3", [0, 0, 0, 0, 300], vec![account("acct-a", 3, 300, 300)]),
   ];
-  let page_total: i64 = rows.iter().map(|row| row.total).sum();
+  let page_total = rows.iter().fold(Count::Int(0), |sum, row| sum.add(row.total, "test page total").unwrap());
   let context = context_of(&features, rows);
   let per_src = &context["ctx"]["per_src"];
-  let tiles: i64 = [CC, CODEX, OC, AGY, CLC].iter().map(|source| per_src[source]["total"].as_i64().unwrap()).sum();
-  assert_eq!(tiles, page_total);
+  let tiles: f64 = [CC, CODEX, OC, AGY, CLC].iter().map(|source| per_src[source]["total"].as_f64().unwrap()).sum();
+  assert_eq!(Count::Real(tiles).compare(page_total), std::cmp::Ordering::Equal);
   assert_eq!(per_src[AGY]["total"], json!(0));
 }
 

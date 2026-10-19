@@ -23,6 +23,7 @@ use serde_json::{Map, Value, json};
 use time::{OffsetDateTime, UtcOffset};
 
 use crate::capture::{CHARLIE_BOT_SOURCE, host_name};
+use crate::count::Count;
 use crate::ledger::{LedgerRow, UsageLedger, default_ledger_path};
 use crate::page_rows::{self, PageRow, canonical_model, compact, group_thousands};
 
@@ -107,7 +108,7 @@ pub(crate) fn token_usage_context(
   now: OffsetDateTime,
 ) -> anyhow::Result<Value> {
   let cards = cards(registry);
-  let tot = Totals::of(&read.rows);
+  let tot = Totals::of(&read.rows)?;
   let merged = page_rows::merge(&read.rows, &read.config, registry, &cards)?;
   let rows = Value::Array(merged.iter().map(PageRow::to_json).collect());
   let (window_first, window_last) = window(&read.rows)?;
@@ -118,7 +119,11 @@ pub(crate) fn token_usage_context(
   let ctx = json!({
     "rows": rows.clone(),
     "tot_compact": compact(tot.total),
-    "in_compact": compact(tot.in_fresh + tot.cache_write + tot.cache_read + tot.in_unsplit),
+    "in_compact": compact(tot
+      .in_fresh
+      .add(tot.cache_write, "page input tokens")?
+      .add(tot.cache_read, "page input tokens")?
+      .add(tot.in_unsplit, "page input tokens")?),
     "out_compact": compact(tot.output),
     "cr_compact": compact(tot.cache_read),
     "cw_compact": compact(tot.cache_write),
@@ -127,7 +132,7 @@ pub(crate) fn token_usage_context(
     "out_share": ratio(tot.output, tot.total),
     "per_src": per_src,
     "usage_sources": cards.iter().map(|card| card.name).collect::<Vec<_>>(),
-    "tot_calls": group_thousands(tot.calls),
+    "tot_calls": group_thousands(Count::Int(tot.calls)),
     "top_escaped": top.map_or("", |row| row.model.as_str()),
     "top_compact": top.map_or_else(|| "0".to_string(), |row| compact(row.total)),
     "top_out_escaped": top_out.map_or("", |row| row.model.as_str()),
@@ -161,8 +166,8 @@ fn per_source(
       let (source, _) = page_rows::account_source(row, &account.name, &read.config, registry)?;
       let bucket =
         sums.get_mut(source.as_str()).with_context(|| format!("usage source {source:?} is not a card of the page"))?;
-      bucket.total += account.total;
-      bucket.output += account.output;
+      bucket.total = bucket.total.add(account.total, "usage source total")?;
+      bucket.output = bucket.output.add(account.output, "usage source output")?;
       bucket.models.insert(canonical.clone());
     }
   }
@@ -175,9 +180,9 @@ fn per_source(
     per_src.insert(
       card.name.to_string(),
       json!({
-        "total": bucket.total,
+        "total": page_rows::count_json(bucket.total),
         "t_comp": compact(bucket.total),
-        "output": bucket.output,
+        "output": page_rows::count_json(bucket.output),
         "models": bucket.models.len(),
         "share": percent(bucket.total, tot.total),
         "native_start": read.native_starts.get(ledger_source).map_or("", String::as_str),
@@ -190,35 +195,36 @@ fn per_source(
 /// The sums of one card's tile.
 #[derive(Default)]
 struct Bucket {
-  total: i64,
-  output: i64,
+  total: Count,
+  output: Count,
   models: BTreeSet<String>,
 }
 
 /// The totals of every row, before the rows merge.
 #[derive(Default)]
 struct Totals {
-  in_fresh: i64,
-  cache_write: i64,
-  cache_read: i64,
-  in_unsplit: i64,
-  output: i64,
-  total: i64,
+  in_fresh: Count,
+  cache_write: Count,
+  cache_read: Count,
+  in_unsplit: Count,
+  output: Count,
+  total: Count,
   calls: i64,
 }
 
 impl Totals {
-  fn of(rows: &[LedgerRow]) -> Totals {
-    rows.iter().fold(Totals::default(), |mut tot, row| {
-      tot.in_fresh += row.in_fresh;
-      tot.cache_write += row.cache_write;
-      tot.cache_read += row.cache_read;
-      tot.in_unsplit += row.in_unsplit;
-      tot.output += row.output;
-      tot.total += row.total;
+  fn of(rows: &[LedgerRow]) -> anyhow::Result<Totals> {
+    let mut tot = Totals::default();
+    for row in rows {
+      tot.in_fresh = tot.in_fresh.add(row.in_fresh, "page total in-fresh")?;
+      tot.cache_write = tot.cache_write.add(row.cache_write, "page total cache-write")?;
+      tot.cache_read = tot.cache_read.add(row.cache_read, "page total cache-read")?;
+      tot.in_unsplit = tot.in_unsplit.add(row.in_unsplit, "page total in-unsplit")?;
+      tot.output = tot.output.add(row.output, "page total output")?;
+      tot.total = tot.total.add(row.total, "page total total")?;
       tot.calls += row.calls;
-      tot
-    })
+    }
+    Ok(tot)
   }
 }
 
@@ -236,13 +242,14 @@ fn window(rows: &[LedgerRow]) -> anyhow::Result<(String, String)> {
 }
 
 /// `part / whole * 100`, or `0.0` when the whole is zero.
-fn percent(part: i64, whole: i64) -> f64 {
+fn percent(part: Count, whole: Count) -> f64 {
   ratio(part, whole) * 100.0
 }
 
 /// `part / whole`, or `0.0` when the whole is zero.
-fn ratio(part: i64, whole: i64) -> f64 {
-  if whole == 0 { 0.0 } else { part as f64 / whole as f64 }
+fn ratio(part: Count, whole: Count) -> f64 {
+  let whole = whole.as_f64();
+  if whole == 0.0 { 0.0 } else { part.as_f64() / whole }
 }
 
 /// `_as_of`: the last capture's finish in local time, or that none has run.

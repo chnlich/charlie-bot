@@ -10,6 +10,7 @@ use charliebot_registry::usage::UsageSource;
 use serde_json::{Value, json};
 
 use crate::capture::{CHARLIE_BOT_SOURCE, backend_source};
+use crate::count::Count;
 use crate::ledger::LedgerRow;
 
 /// One model's usage over every ledger part that names it. `accounts` ranks the (card · account) sub-rows by total,
@@ -17,13 +18,13 @@ use crate::ledger::LedgerRow;
 pub(crate) struct PageRow {
   pub model: String,
   pub calls: i64,
-  pub in_fresh: i64,
-  pub cache_write: i64,
-  pub cache_read: i64,
-  pub in_unsplit: i64,
-  pub output: i64,
-  pub total: i64,
-  pub fallback_output: i64,
+  pub in_fresh: Count,
+  pub cache_write: Count,
+  pub cache_read: Count,
+  pub in_unsplit: Count,
+  pub output: Count,
+  pub total: Count,
+  pub fallback_output: Count,
   pub accounts: Vec<PageAccount>,
   pub segments: Vec<Segment>,
   pub window: String,
@@ -32,15 +33,15 @@ pub(crate) struct PageRow {
 pub(crate) struct PageAccount {
   pub name: String,
   pub calls: i64,
-  pub output: i64,
-  pub total: i64,
+  pub output: Count,
+  pub total: Count,
 }
 
 pub(crate) struct Segment {
   /// The card's position from 1, in card order.
   pub slot: usize,
-  pub total: i64,
-  pub output: i64,
+  pub total: Count,
+  pub output: Count,
 }
 
 impl PageRow {
@@ -49,13 +50,13 @@ impl PageRow {
     json!({
       "model": self.model,
       "calls": self.calls,
-      "in_fresh": self.in_fresh,
-      "cache_write": self.cache_write,
-      "cache_read": self.cache_read,
-      "in_unsplit": self.in_unsplit,
-      "output": self.output,
-      "total": self.total,
-      "fallback_output": self.fallback_output,
+      "in_fresh": count_json(self.in_fresh),
+      "cache_write": count_json(self.cache_write),
+      "cache_read": count_json(self.cache_read),
+      "in_unsplit": count_json(self.in_unsplit),
+      "output": count_json(self.output),
+      "total": count_json(self.total),
+      "fallback_output": count_json(self.fallback_output),
       "accounts": self.accounts.iter().map(PageAccount::to_json).collect::<Vec<_>>(),
       "segments": self.segments.iter().map(Segment::to_json).collect::<Vec<_>>(),
       "window": self.window,
@@ -65,21 +66,21 @@ impl PageRow {
 
 impl PageAccount {
   fn to_json(&self) -> Value {
-    json!({"name": self.name, "calls": self.calls, "output": self.output, "total": self.total})
+    json!({"name": self.name, "calls": self.calls, "output": count_json(self.output), "total": count_json(self.total)})
   }
 }
 
 impl Segment {
   fn to_json(&self) -> Value {
-    json!({"slot": self.slot, "total": self.total, "output": self.output})
+    json!({"slot": self.slot, "total": count_json(self.total), "output": count_json(self.output)})
   }
 }
 
 #[derive(Default)]
 struct Tally {
   calls: i64,
-  output: i64,
-  total: i64,
+  output: Count,
+  total: Count,
 }
 
 /// `_merge_ledger_rows`: the page rows, ranked by total then model. Rows group on the casefolded model leaf, so a
@@ -96,7 +97,7 @@ pub(crate) fn merge(
   }
   let mut merged =
     groups.values().map(|parts| merge_group(parts, config, registry, cards)).collect::<anyhow::Result<Vec<_>>>()?;
-  merged.sort_by(|left, right| (-left.total, &left.model).cmp(&(-right.total, &right.model)));
+  merged.sort_by(|left, right| right.total.compare(left.total).then_with(|| left.model.cmp(&right.model)));
   Ok(merged)
 }
 
@@ -107,22 +108,25 @@ fn merge_group(
   cards: &[&UsageSource],
 ) -> anyhow::Result<PageRow> {
   let mut accounts: BTreeMap<(String, String, bool), Tally> = BTreeMap::new();
-  let mut seg_totals: BTreeMap<String, i64> = BTreeMap::new();
-  let mut seg_outputs: BTreeMap<String, i64> = BTreeMap::new();
+  let mut seg_totals: BTreeMap<String, Count> = BTreeMap::new();
+  let mut seg_outputs: BTreeMap<String, Count> = BTreeMap::new();
   for part in parts {
     for account in &part.accounts {
       let (source, fallback) = account_source(part, &account.name, config, registry)?;
       let tally = accounts.entry((source.clone(), account.name.clone(), fallback)).or_default();
       tally.calls += account.calls;
-      tally.output += account.output;
-      tally.total += account.total;
-      *seg_totals.entry(source.clone()).or_default() += account.total;
-      *seg_outputs.entry(source).or_default() += account.output;
+      tally.output = tally.output.add(account.output, "page account output")?;
+      tally.total = tally.total.add(account.total, "page account total")?;
+      let seg_total = seg_totals.entry(source.clone()).or_default();
+      *seg_total = seg_total.add(account.total, "page segment total")?;
+      let seg_output = seg_outputs.entry(source).or_default();
+      *seg_output = seg_output.add(account.output, "page segment output")?;
     }
   }
   let mut ranked: Vec<((String, String, bool), Tally)> = accounts.into_iter().collect();
-  ranked
-    .sort_by(|(left_key, left), (right_key, right)| right.total.cmp(&left.total).then_with(|| left_key.cmp(right_key)));
+  ranked.sort_by(|(left_key, left), (right_key, right)| {
+    right.total.compare(left.total).then_with(|| left_key.cmp(right_key))
+  });
   let segments = cards
     .iter()
     .enumerate()
@@ -140,13 +144,13 @@ fn merge_group(
   Ok(PageRow {
     model: model_leaf(&spelling.model).to_string(),
     calls: parts.iter().map(|part| part.calls).sum(),
-    in_fresh: parts.iter().map(|part| part.in_fresh).sum(),
-    cache_write: parts.iter().map(|part| part.cache_write).sum(),
-    cache_read: parts.iter().map(|part| part.cache_read).sum(),
-    in_unsplit: parts.iter().map(|part| part.in_unsplit).sum(),
-    output: parts.iter().map(|part| part.output).sum(),
-    total: parts.iter().map(|part| part.total).sum(),
-    fallback_output: parts.iter().map(|part| part.fallback_output).sum(),
+    in_fresh: sum_counts(parts.iter().map(|part| &part.in_fresh), "page row in-fresh")?,
+    cache_write: sum_counts(parts.iter().map(|part| &part.cache_write), "page row cache-write")?,
+    cache_read: sum_counts(parts.iter().map(|part| &part.cache_read), "page row cache-read")?,
+    in_unsplit: sum_counts(parts.iter().map(|part| &part.in_unsplit), "page row in-unsplit")?,
+    output: sum_counts(parts.iter().map(|part| &part.output), "page row output")?,
+    total: sum_counts(parts.iter().map(|part| &part.total), "page row total")?,
+    fallback_output: sum_counts(parts.iter().map(|part| &part.fallback_output), "page row fallback output")?,
     accounts: ranked
       .into_iter()
       .map(|((source, name, fallback), tally)| PageAccount {
@@ -211,19 +215,25 @@ pub(crate) fn canonical_model(model: &str) -> String {
 }
 
 /// `_compact`: a count in K, M or B with at most two decimals (`1.23M`, `456K`), else the count with comma groups.
-pub(crate) fn compact(count: i64) -> String {
+pub(crate) fn compact(count: Count) -> String {
+  let value = count.as_f64();
   for (cut, suffix) in [(1e9, "B"), (1e6, "M"), (1e3, "K")] {
-    if (count as f64).abs() >= cut {
-      let text = format!("{:.2}", count as f64 / cut);
+    if value.abs() >= cut {
+      let text = format!("{:.2}", value / cut);
       return format!("{}{suffix}", text.trim_end_matches('0').trim_end_matches('.'));
     }
   }
   group_thousands(count)
 }
 
-/// Python's `f"{value:,}"`: the digits in groups of three, with a leading minus for a negative value.
-pub(crate) fn group_thousands(value: i64) -> String {
-  let digits = value.unsigned_abs().to_string();
+/// Python's `f"{int(value):,}"`: `int()` truncates toward zero, then the digits go in groups of three, with a leading
+/// minus for a negative value.
+pub(crate) fn group_thousands(value: Count) -> String {
+  let whole = match value {
+    Count::Int(number) => number,
+    Count::Real(number) => number as i64,
+  };
+  let digits = whole.unsigned_abs().to_string();
   let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
   for (index, digit) in digits.chars().enumerate() {
     if index > 0 && (digits.len() - index).is_multiple_of(3) {
@@ -231,12 +241,32 @@ pub(crate) fn group_thousands(value: i64) -> String {
     }
     grouped.push(digit);
   }
-  if value < 0 { format!("-{grouped}") } else { grouped }
+  if whole < 0 { format!("-{grouped}") } else { grouped }
+}
+
+/// The count as a JSON number keeping its Python type: an integer stays an integer, a real prints with its decimal
+/// point.
+pub(crate) fn count_json(count: Count) -> Value {
+  match count {
+    Count::Int(number) => json!(number),
+    Count::Real(number) => json!(number),
+  }
+}
+
+/// The sum of the counts, as Python's `sum()` of the rows' values gives it.
+pub(crate) fn sum_counts<'a>(items: impl Iterator<Item = &'a Count>, label: &'static str) -> anyhow::Result<Count> {
+  let mut sum = Count::Int(0);
+  for item in items {
+    sum = sum.add(*item, label)?;
+  }
+  Ok(sum)
 }
 
 /// Python's `max(items, key=...)`: the first item of the largest key, so a tie keeps the earlier item.
-pub(crate) fn first_max_by<T>(items: &[T], key: impl Fn(&T) -> i64) -> Option<&T> {
-  items.iter().reduce(|best, item| if key(item) > key(best) { item } else { best })
+pub(crate) fn first_max_by<T>(items: &[T], key: impl Fn(&T) -> Count) -> Option<&T> {
+  items
+    .iter()
+    .reduce(|best, item| if key(item).compare(key(best)) == std::cmp::Ordering::Greater { item } else { best })
 }
 
 #[cfg(test)]
@@ -245,25 +275,27 @@ mod tests {
 
   #[test]
   fn compact_counts_in_the_largest_unit_with_two_decimals() {
-    let cases = [
-      (999, "999"),
-      (1_000, "1K"),
-      (1_500, "1.5K"),
-      (456_000, "456K"),
-      (1_000_000, "1M"),
-      (1_234_567, "1.23M"),
-      (2_000_000_000, "2B"),
+    let cases: [(Count, &str); 8] = [
+      (Count::Int(999), "999"),
+      (Count::Int(1_000), "1K"),
+      (Count::Int(1_500), "1.5K"),
+      (Count::Int(456_000), "456K"),
+      (Count::Int(1_000_000), "1M"),
+      (Count::Int(1_234_567), "1.23M"),
+      (Count::Int(2_000_000_000), "2B"),
+      (Count::Real(1_500.5), "1.5K"),
     ];
     for (count, expected) in cases {
-      assert_eq!(compact(count), expected, "compact({count})");
+      assert_eq!(compact(count), expected, "compact({count:?})");
     }
   }
 
   #[test]
   fn group_thousands_puts_commas_between_digit_groups() {
-    assert_eq!(group_thousands(1_234_567), "1,234,567");
-    assert_eq!(group_thousands(999), "999");
-    assert_eq!(group_thousands(-1_234), "-1,234");
+    assert_eq!(group_thousands(Count::Int(1_234_567)), "1,234,567");
+    assert_eq!(group_thousands(Count::Int(999)), "999");
+    assert_eq!(group_thousands(Count::Int(-1_234)), "-1,234");
+    assert_eq!(group_thousands(Count::Real(-1_500.5)), "-1,500");
   }
 
   #[test]
@@ -277,6 +309,6 @@ mod tests {
   #[test]
   fn first_max_by_keeps_the_earlier_of_equal_keys() {
     let items = [("a", 5), ("b", 5), ("c", 1)];
-    assert_eq!(first_max_by(&items, |item| item.1).map(|item| item.0), Some("a"));
+    assert_eq!(first_max_by(&items, |item| Count::Int(item.1)).map(|item| item.0), Some("a"));
   }
 }

@@ -580,6 +580,7 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-sched",
  "charliebot-store",
  "charliebot-tasks",
  "charliebot-usage",

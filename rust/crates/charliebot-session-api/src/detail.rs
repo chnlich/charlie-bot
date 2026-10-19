@@ -17,6 +17,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
+use charliebot_sched::triggers::{PendingTrigger, TriggerManager, TriggerStatus};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunOrder, RunRecord};
 use charliebot_store::{Store, StoreError, StoreResult, TaskFacts};
@@ -43,6 +44,7 @@ static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| Mutex::n
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
     .route("/api/sessions/{session_id}", get_only(session_detail))
+    .route("/api/sessions/{session_id}/pending-triggers", get_only(pending_triggers))
     .route("/api/sessions/{session_id}/bootstrap", get_only(session_bootstrap))
     .route("/api/sessions/{session_id}/usage", get_only(session_usage))
     .route("/api/sessions/{session_id}/events", get_only(session_events))
@@ -140,6 +142,34 @@ fn prompt_rule_summary(store: &Store, prompt_ref: Option<&str>) -> StoreResult<V
     "chars": body.chars().count(),
     "text": body,
   }))
+}
+
+/// `GET /api/sessions/{session_id}/pending-triggers`: the session's pending delayed triggers, `fire_at` ascending.
+/// Fired and cancelled records stay out: the transcript shows fired triggers, and the cancel route owns removal.
+async fn pending_triggers(
+  State(features): State<Arc<FeatureContext>>,
+  AxumPath(session_id): AxumPath<String>,
+) -> Response {
+  if let Err(error) = features.store.require_session(&session_id).await {
+    return store_error(error);
+  }
+  let manager = match features.startup.require::<Arc<TriggerManager>>() {
+    Ok(manager) => manager,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let triggers = match manager.list_triggers(&session_id).await {
+    Ok(triggers) => triggers,
+    Err(error) => return responses::internal_error("RuntimeError", format!("{error:#}")),
+  };
+  let mut pending: Vec<PendingTrigger> =
+    triggers.into_iter().filter(|trigger| trigger.status == TriggerStatus::Pending).collect();
+  // A stable sort keeps `list_triggers`' creation order among equal deadlines, as Python's `sorted` does.
+  pending.sort_by_key(|trigger| trigger.fire_at);
+  let values = match pending.iter().map(serde_json::to_value).collect::<Result<Vec<Value>, _>>() {
+    Ok(values) => values,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  responses::json(StatusCode::OK, &Value::Array(values))
 }
 
 async fn session_bootstrap(
@@ -710,8 +740,14 @@ fn path_error(path: &Path, error: std::io::Error) -> StoreError {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+  use charliebot_core::config::CREDENTIALS_FILENAME;
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks;
   use charliebot_store::run_records::RunKind;
+
+  use super::*;
 
   fn run(id: &str, inputs: &[&str], pid: Option<u32>) -> RunRecord {
     RunRecord {
@@ -768,5 +804,110 @@ mod tests {
     let pending = pending_input_events(&facts, &[run("live", &["claimed"], Some(12))], &[], "worker").unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0]["id"], "pending");
+  }
+
+  const TRIGGER_SESSION_ID: &str = "synthetic-trigger-session";
+
+  fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().expect("temporary home");
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
+    let registry = Arc::new(Registry::new());
+    let config_value = registry.load_config(home.path()).expect("test config");
+    let store = Arc::new(
+      Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
+        .expect("test store"),
+    );
+    let config_registry = Arc::clone(&registry);
+    let config_home = home.path().to_path_buf();
+    let config = Arc::new(HotReload::new(
+      config_value.config_file(),
+      "session_api_test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join(CREDENTIALS_FILENAME),
+      "session_api_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let startup = Arc::new(StartupState::default());
+    (home, Arc::new(FeatureContext { config, credentials, store, registry, startup }))
+  }
+
+  fn add_trigger_session(features: &FeatureContext) {
+    let metadata = SessionMetadata::new(TRIGGER_SESSION_ID, "Synthetic trigger session", TaskProfile::Manager);
+    let path = features.store.metadata_path(TRIGGER_SESSION_ID);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, metadata.to_json_string(&features.registry.metadata_slots(), true)).unwrap();
+  }
+
+  fn trigger_record(id: &str, status: TriggerStatus, fire_at: &str, created_at: &str) -> PendingTrigger {
+    PendingTrigger {
+      id: id.to_string(),
+      session_id: TRIGGER_SESSION_ID.to_string(),
+      fire_at: UtcDateTime::parse(fire_at).unwrap(),
+      message: format!("synthetic wake {id}"),
+      created_at: UtcDateTime::parse(created_at).unwrap(),
+      status,
+      fired_at: None,
+      watch_targets: Vec::new(),
+      fire_reason: None,
+    }
+  }
+
+  fn write_trigger(features: &FeatureContext, trigger: &PendingTrigger) {
+    let directory = features.store.session_dir(&trigger.session_id).join("triggers");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join(format!("{}.json", trigger.id)), serde_json::to_vec_pretty(trigger).unwrap())
+      .unwrap();
+  }
+
+  async fn pending_triggers_response(features: &Arc<FeatureContext>, session_id: &str) -> (StatusCode, Value) {
+    let response = pending_triggers(State(Arc::clone(features)), AxumPath(session_id.to_string())).await;
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+  }
+
+  #[tokio::test]
+  async fn pending_triggers_are_empty_without_trigger_records() {
+    let (_home, features) = feature_context();
+    add_trigger_session(&features);
+    features.startup.insert(Arc::new(TriggerManager::new(Arc::clone(&features)))).unwrap();
+    let (status, body) = pending_triggers_response(&features, TRIGGER_SESSION_ID).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!([]));
+  }
+
+  #[tokio::test]
+  async fn pending_triggers_list_only_pending_records_by_fire_at() {
+    let (_home, features) = feature_context();
+    add_trigger_session(&features);
+    features.startup.insert(Arc::new(TriggerManager::new(Arc::clone(&features)))).unwrap();
+    // Creation order runs opposite to fire order, so `soon` leads only because the route sorts by `fire_at`.
+    for trigger in [
+      trigger_record("late", TriggerStatus::Pending, "2026-10-18T12:00:00Z", "2026-10-18T09:30:00Z"),
+      trigger_record("fired", TriggerStatus::Fired, "2026-10-18T10:00:00Z", "2026-10-18T09:20:00Z"),
+      trigger_record("soon", TriggerStatus::Pending, "2026-10-18T10:30:00Z", "2026-10-18T09:00:00Z"),
+      trigger_record("cancelled", TriggerStatus::Cancelled, "2026-10-18T10:15:00Z", "2026-10-18T09:10:00Z"),
+      trigger_record("mid", TriggerStatus::Pending, "2026-10-18T11:00:00Z", "2026-10-18T09:05:00Z"),
+    ] {
+      write_trigger(&features, &trigger);
+    }
+    let (status, body) = pending_triggers_response(&features, TRIGGER_SESSION_ID).await;
+    assert_eq!(status, StatusCode::OK);
+    let records = body.as_array().unwrap();
+    let ids: Vec<&str> = records.iter().map(|record| record["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["soon", "mid", "late"]);
+    assert!(records.iter().all(|record| record["status"] == "pending"));
+  }
+
+  #[tokio::test]
+  async fn pending_triggers_refuse_a_missing_session() {
+    let (_home, features) = feature_context();
+    features.startup.insert(Arc::new(TriggerManager::new(Arc::clone(&features)))).unwrap();
+    let (status, body) = pending_triggers_response(&features, "synthetic-missing-session").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"detail": "Session not found"}));
   }
 }

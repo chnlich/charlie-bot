@@ -123,7 +123,7 @@ It answers seven questions about these items:
 7. the project terms without a gloss at first use, for the reader of the Vocabulary rule (prompts/master.md).
 
 The trigger is the chat message that asked for the page.
-For a plan, the trigger is the goal sentence of the confirmed understanding, verbatim.
+For a plan, the trigger is the goal sentence of its understanding page, verbatim.
 When no understanding exists, the trigger for a plan is the originating request.
 
 The cold read runs in a cold-read child session after the page leaves the author.

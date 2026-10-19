@@ -19,9 +19,9 @@ the inherited rules above define your task.
   split by your recommended reading and ask about it on this node's page.
 - Write in each child's goal its approver, what the child decides, and what it returns. Limit its
   acceptance and context_refs to its own line.
-- Choose each child's approver, who confirms its reading. The user approves a line whose
-  reading still waits for the user, unless the user handed this node the goal end to end
-  ("e2e"). This node approves every other line and every child's plan.
+- Choose each child's approver, who confirms its reading on the first version. The user approves
+  a line whose reading the user has not confirmed, unless the user handed this node the goal end
+  to end ("e2e"). This node approves every other line and every child's plan.
   A child that this node approves follows Between Agents. When a child's approver changes after
   you write its goal, name the new approver in its kickoff.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only

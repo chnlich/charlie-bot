@@ -846,6 +846,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "futures-util",
+ "libc",
  "minijinja",
  "percent-encoding",
  "serde",

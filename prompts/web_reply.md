@@ -3,11 +3,13 @@
 The web reply is the message that the user reads in the For-you view of this session.
 The session status is the Goal, Now and Waiting on you of this session, as the Status Block section defines them.
 The status panel at the top of the session page shows the session status in both views.
-The Everything view keeps the full output of each turn for the user.
+The Everything view shows the full output of each turn.
+The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to reply
 
 - When a user message woke this turn, post exactly one web reply.
+- When the web reply nudge woke this turn, post the web reply that the last turn missed.
 - When another input woke this turn, post a web reply only for one of these results:
   - a new or changed item in **Waiting on you**;
   - the completion of a request that the user made in this session;
@@ -25,9 +27,10 @@ The Everything view keeps the full output of each turn for the user.
 
 ## Form
 
-- Write the web reply as the answer itself: the conclusion first, in a few sentences.
-- Keep the web reply under 500 characters.
-- When the answer needs more detail, put it on a page, and link the page in the web reply.
+- Write the web reply as your whole answer to the user's message.
+- Begin the web reply with the conclusion.
+- Put the supporting detail behind the answer on a page.
+- Link that page in the web reply.
 - Write the web reply and the session status in the language of your chat replies.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.
@@ -45,6 +48,8 @@ The Everything view keeps the full output of each turn for the user.
 - Write the web reply text to a file.
 - Then run `charliebot web reply --file <path>`.
 - The command records the web reply in the session. It prints a readback with the character count.
+- The readback sets `over_budget` for a reply over 500 characters.
+- Before you post a reply over 500 characters, move its supporting detail to a page.
 - Write the changed session status items to a JSON file.
 - The JSON object takes any of the keys `goal`, `now` and `waiting`.
 - `waiting` is a list of objects with the keys `text` and `link`. Set `link` to null when the place has no link.

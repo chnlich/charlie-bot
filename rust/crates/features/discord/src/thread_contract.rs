@@ -1,9 +1,34 @@
 //! The Discord part of the thread reply contract (`discord_listener.thread_contract_part`): the platform line and the read
 //! sentences. The shared contract joins it with the common docs.
 
-use charliebot_chat_threads::thread_entry::LINKED_PAGES_LINE;
+use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
-use crate::discord_listener::{FOLLOW_TRIGGER_PREFIX, MAX_POST_CHARS, READ_COMMAND, REPLY_COMMAND};
+/// The command the reply-format contract names for posting a reply (`_REPLY_COMMAND`).
+pub const REPLY_COMMAND: &str = "charliebot discord reply";
+/// Discord's per-message text limit, which is also the chunking target (`_MAX_POST_CHARS`).
+pub const MAX_POST_CHARS: usize = 2000;
+/// The command the contract names for reading the thread server-side (`_READ_COMMAND`).
+pub const READ_COMMAND: &str = "charliebot discord read";
+/// The trigger-label prefix of a session's armed thread-follow record (`_FOLLOW_TRIGGER_PREFIX`).
+pub const FOLLOW_TRIGGER_PREFIX: &str = "discord-thread-follow";
+
+/// The Discord platform as the shared contract reads it (`discord_listener.DISCORD`).
+pub const DISCORD: ThreadPlatform = ThreadPlatform {
+  name: "discord",
+  display_name: "Discord",
+  reply_event_type: crate::event_types::DISCORD_REPLY,
+  reply_command: REPLY_COMMAND,
+  max_post_chars: MAX_POST_CHARS,
+  scope_doc: "discord_reply_scope.md",
+  follow_trigger_prefix: FOLLOW_TRIGGER_PREFIX,
+  id_key: IdOrdering::Snowflake,
+  origin_field: "discord_origin",
+  watermark_field: "discord_watermark_id",
+  id_label: "id",
+  mention_key: "mention_id",
+  block_keys: &["guild_id", "channel_id", "thread_id", "mention_id"],
+  summon_line: "Discord 线程召唤",
+};
 
 /// The Discord part of the contract (`thread_contract_part`). It names no thread: the read command reaches it.
 pub fn thread_contract_part() -> String {

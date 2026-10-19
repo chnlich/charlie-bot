@@ -76,6 +76,10 @@ pub enum Kind {
   ListType,
   DictType,
   ModelAttributesType,
+  /// `model_type`: a nested model field received a value that is not an object.
+  ModelType {
+    class_name: &'static str,
+  },
   /// `literal_error`: the value is not one of a `Literal[...]` of strings.
   Literal(&'static [&'static str]),
   /// `enum`: the value is not one of an `Enum` class's values.
@@ -115,6 +119,7 @@ impl Kind {
       Kind::ListType => "list_type",
       Kind::DictType => "dict_type",
       Kind::ModelAttributesType => "model_attributes_type",
+      Kind::ModelType { .. } => "model_type",
       Kind::Literal(_) => "literal_error",
       Kind::Enum(_) => "enum",
       Kind::GreaterThan(_) => "greater_than",
@@ -149,6 +154,7 @@ impl Kind {
       Kind::ListType => "Input should be a valid list".to_string(),
       Kind::DictType => "Input should be a valid dictionary".to_string(),
       Kind::ModelAttributesType => "Input should be a valid dictionary or object to extract fields from".to_string(),
+      Kind::ModelType { class_name } => format!("Input should be a valid dictionary or instance of {class_name}"),
       Kind::Literal(choices) | Kind::Enum(choices) => format!("Input should be {}", one_of(choices)),
       Kind::GreaterThan(bound) => format!("Input should be greater than {}", bound.text()),
       Kind::GreaterThanEqual(bound) => format!("Input should be greater than or equal to {}", bound.text()),
@@ -171,6 +177,7 @@ impl Kind {
       Kind::LessThan(bound) => Some(json!({"lt": bound.value()})),
       Kind::LessThanEqual(bound) => Some(json!({"le": bound.value()})),
       Kind::JsonInvalid { error } => Some(json!({"error": error})),
+      Kind::ModelType { class_name } => Some(json!({"class_name": class_name})),
       // FastAPI's jsonable_encoder writes the ValueError object as an empty mapping (FastAPI 0.135.2).
       Kind::ValueError { .. } => Some(json!({"error": {}})),
       _ => None,

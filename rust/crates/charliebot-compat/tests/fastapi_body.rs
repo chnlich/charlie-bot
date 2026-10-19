@@ -129,7 +129,7 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
   assert_eq!(items.len(), 40);
   compare_corpus(&client, python_address, rust_address, "/items", &items).await;
   let bounded = bounded_corpus();
-  assert_eq!(bounded.len(), 27);
+  assert_eq!(bounded.len(), 28);
   compare_corpus(&client, python_address, rust_address, "/bounds", &bounded).await;
 
   rust_server.abort();
@@ -395,6 +395,7 @@ fn bounded_corpus() -> Vec<Case> {
     json_value_case("ratio as a word", bounded_with(&[("ratio", json!("high"))])),
     json_ok_case("label at its minimum length", bounded_with(&[("label", json!("a"))])),
     json_value_case("label below its minimum length", bounded_with(&[("label", json!(""))])),
+    json_ok_case("label above its minimum length", bounded_with(&[("label", json!("ab"))])),
     json_ok_case("tags at its maximum length", bounded_with(&[("tags", json!(["x", "y"]))])),
     json_ok_case("tags empty", bounded_with(&[("tags", json!([]))])),
     json_value_case("tags above its maximum length", bounded_with(&[("tags", json!(["x", "y", "z"]))])),

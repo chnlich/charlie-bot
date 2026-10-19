@@ -856,7 +856,10 @@ def _group_exists(pgid: int) -> bool:
 
 
 def _reap_leader(pid: int) -> None:
-  """Reap a fake agent that this harness adopted, since a zombie keeps its process group alive for kill(2)."""
+  """Reap a fake agent that this harness adopted, since a zombie keeps its process group alive for kill(2).
+
+  A pid that is not this process's child, because it was reaped already or was never adopted, has no zombie to reap.
+  """
   with contextlib.suppress(ChildProcessError):
     os.waitpid(pid, os.WNOHANG)
 
@@ -864,8 +867,8 @@ def _reap_leader(pid: int) -> None:
 def _kill_fake_group(label: str, record: dict) -> list[str]:
   """SIGKILL the process group of one fake-agent start, then wait for the group to be gone.
 
-  The leader's identity decides whether the group is the start's: a leader with the recorded pid_start is that start,
-  and a gone leader leaves its group only while kill(2) still reaches it.
+  A leader that still has the recorded pid_start is the start, so its group is the start's. A gone leader keeps its
+  group only while kill(2) still reaches that group.
   """
   pid = int(record["pid"])
   pgid = int(record["pgid"])

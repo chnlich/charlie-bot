@@ -415,8 +415,8 @@ impl ThreadAdapter for SlackThreadAdapter {
       messages
         .iter()
         .filter(|message| eligible_thread_message(message, allowed_user_ids))
-        .map(|message| {
-          let id = object_text(message, "ts").to_string();
+        .map(|message| -> Result<ThreadMessage> {
+          let id = message.get("ts").and_then(Value::as_str).context("Slack thread message has no ts")?.to_string();
           let user = message.get("user").and_then(Value::as_str).map(str::to_string);
           let text = message
             .get("text")

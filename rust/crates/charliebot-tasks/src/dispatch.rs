@@ -9,7 +9,7 @@ use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
-use charliebot_store::{ControlGuard, Store, StoreError, StoreResult};
+use charliebot_store::{ControlGuard, Store, StoreError, StoreResult, StructuralBlockers};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -655,6 +655,16 @@ impl Dispatcher {
       }
     }
     Ok(undelivered)
+  }
+}
+
+impl StructuralBlockers for Dispatcher {
+  fn pending_input_blockers(&self, session_id: &str) -> StoreResult<Vec<String>> {
+    Dispatcher::pending_input_blockers(self, session_id)
+  }
+
+  fn undelivered_report_blockers(&self, session_id: &str) -> StoreResult<Vec<String>> {
+    Dispatcher::undelivered_report_blockers(self, session_id)
   }
 }
 

@@ -255,6 +255,36 @@ error frames discard a pending preview. The control-sink two-phase path primes b
 appends under the lock, then announces after release only when its epoch still matches. Feature event
 renderers and after-turn work enter through `StoreHooks.runtime_events`; they are not mutable store hooks.
 
+## Test write faults (`write-faults` feature, test-only)
+
+The `write-faults` feature compiles `charliebot_store::write_faults`. It fails the store's own writes on demand, so a
+test can drive the out-of-space landing retry through a live store write. The Python equivalents are
+`inject_chat_append_fault` and `inject_run_record_write_fault` in `tests/test_task_execution.py`, which patch
+`append_ndjson` and `RunStore.write_record`.
+
+The feature is off by default, and no production crate enables it. Only a `[dev-dependencies]` entry turns it on: this
+crate enables it for its own tests through `charliebot-store = { path = ".", features = ["write-faults"] }`, and a crate
+that needs the seam in its tests adds the same entry. Builds that do not enable the feature do not compile the seam.
+
+| Rust API | Python source |
+| --- | --- |
+| `inject_chat_append_fault(store: &Store, event_type: &str, session_ids: &[&str], times: usize, errno: i32) -> WriteFault` | `inject_chat_append_fault` |
+| `inject_run_record_write_fault(store: &Store, only_finished: bool, times: usize, errno: i32) -> WriteFault` | `inject_run_record_write_fault` |
+| `WriteFault::hits(&self) -> Vec<Hit>` | the returned `list[bool]` (`True` is a failed write) |
+
+- A chat-append fault matches an append whose event `type` is `event_type` and whose session is in `session_ids`. The
+  first `times` matching appends fail, and every other append writes through. The check runs in `append_chat_event`,
+  and in the first append of a new task node (`publish_task_node`), before the log is written.
+- A run-record fault matches the record writes that set `ended_at` when `only_finished` is set, and every record write
+  otherwise. The check runs at the top of `write_run_record`, before the disk is touched, so a failed record write
+  leaves no record file. A caller may already have created the run directory, as it would after a real failure.
+- A failed write returns a `StoreError` shaped as the store's I/O errors are: `<path>: <io::Error::from_raw_os_error>`.
+  `charliebot-tasks::is_out_of_space_error` reads it as a disk error.
+- An injector is scoped to one `Store` value. Its `WriteFault` guard removes the fault on drop. When two faults match
+  one write, each decides it, and the write fails with the errno of the first fault that fails it.
+- `hits` has one entry per matching write, in write order: `Hit::Failed` for a write the fault failed, and
+  `Hit::Written` for a match after its `times` were spent.
+
 ## Not store-owned
 
 The feature request's plan files, explain results, voice files, host-auth data, usage ledger, trace

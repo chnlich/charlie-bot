@@ -592,6 +592,15 @@ ANSWERS = {
         json.dumps({
             "id": "chatcmpl-synthetic"
         }).encode(),
+    "response-id-missing":
+        json.dumps({
+            "choices": [{
+                "message": dict(ANSWER_MESSAGE),
+                "finish_reason": "stop"
+            }]
+        }).encode(),
+    "response-id-empty":
+        _reply(id=""),
     "choices-empty":
         json.dumps({
             "choices": []

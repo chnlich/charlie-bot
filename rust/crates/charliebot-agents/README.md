@@ -75,7 +75,11 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `one_shot_text` (the dispatcher) | `src/runtime/agent_process/base.py:1156-1190` (the polymorphic `one_shot_text`; the tool-capable fallback is `agent_one_shot_text`) |
 | `RunRequest.uploaded_files`, `RunOutcome` identity and follow as `Option`, and `RunOutcome` for a run with no process | `src/runtime/agent_process/base.py:653-708`; `src/runtime/master_cc_run.py:575` (the manager turn passes the item's uploads); `charlie_code.py:87-117` (the upload gate) |
 | `runner::AgentRunner::exit_code` and the final-stdout run (`TransportKind::FinalStdout`) | `src/backends/antigravity/antigravity_cli.py:69-165` (stdout tee, the cleanup and the exit); `src/runtime/agent_process/base.py:936-1050` |
+| `backends::opencode::USAGE_SOURCE` and `backends::opencode::register_usage_source` | `src/backends/opencode/__init__.py:6`, `:24-30` |
+| `backends::opencode::usage_logs::OpencodeLogs`, `OpencodeLogs::new`, and its `UsageSourceImpl` methods `ops`, `logs`, `read`, `sweep` | `src/backends/opencode/usage_logs.py:39` (`logs`), `:115` (`read`), `:140` (`sweep`) |
+| `backends::opencode::usage_logs::read` (its `file_state`, `stored_state` and `record` helpers, and the `TOKENS_KEY` prefilter) | `src/backends/opencode/usage_logs.py:115`, `:46`, `:56`, `:71`, `:34` |
+| `backends::opencode::usage_sweep::sweep` (its vacuum, writer count, freelist and the `SQLITE_LOCK_WAIT_SECONDS` and `SQLITE_LOCK_WAIT_MS` waits) | `src/backends/opencode/usage_sweep.py:109`, `:70`, `:49`, `:36`, `:98`; `src/infra/timeouts.py:213-214` |
 
 ## Tests
 
-The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic NDJSON. The cross-implementation tests (`codex_cross_implementation.rs`, `cli_backends_cross_implementation.rs`) each run a Python helper through `uv run python`; the CLI backend test resolves fake `gemini`, `charlie-code` and `agy` scripts in a temporary directory and runs only the fake `agy` ones. None starts an agent CLI or server.
+The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic NDJSON. The cross-implementation tests (`codex_cross_implementation.rs`, `cli_backends_cross_implementation.rs`, `opencode_usage_cross_impl.rs`) each run a Python helper through `uv run python`; the CLI backend test resolves fake `gemini`, `charlie-code` and `agy` scripts in a temporary directory and runs only the fake `agy` ones. None starts an agent CLI or server.

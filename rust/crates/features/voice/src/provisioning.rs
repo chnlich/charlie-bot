@@ -372,10 +372,10 @@ impl Service for SpeechService {
     Box::pin(async move {
       let task = self.task.lock().expect("speech service task lock is never poisoned").take();
       if let Some(task) = task {
-        task.abort();
+        // The monitor owns a spawn_blocking worker, which abort cannot cancel. Join it before stopping the resident
+        // bundle so a helper that is still starting cannot appear after the process-group kill.
         match task.await {
           Ok(()) => {}
-          Err(error) if error.is_cancelled() => {}
           Err(error) => return Err(error.into()),
         }
       }
@@ -389,6 +389,8 @@ impl Service for SpeechService {
 mod tests {
   use std::io::Cursor;
   use std::net::TcpListener;
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicBool, Ordering};
   use std::thread;
 
   use bzip2::write::BzEncoder;
@@ -396,6 +398,21 @@ mod tests {
   use tar::{Builder, Header};
 
   use super::*;
+
+  #[tokio::test]
+  async fn service_stop_waits_for_the_worker_monitor_before_stopping_the_bundle() {
+    let service = SpeechService::default();
+    let worker_finished = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&worker_finished);
+    *service.task.lock().expect("speech service task lock is never poisoned") = Some(tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+      signal.store(true, Ordering::SeqCst);
+    }));
+
+    service.stop().await.expect("the service stops");
+
+    assert!(worker_finished.load(Ordering::SeqCst));
+  }
 
   fn test_paths(root: &Path) -> VoiceModelPaths {
     let cache_dir = root.join("models");

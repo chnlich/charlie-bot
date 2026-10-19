@@ -1,0 +1,101 @@
+# The web reply routes: a web manager's reply is recorded and answers nothing when no turn is running; a reply to a worker,
+# an unknown session and blank text are refused; the dialog reads the For-you layer; the status is set, refused four ways,
+# and read with its waiting descendants: one open, one archived and one closed, of which only the open one is listed.
+stage: features
+name: features-web-reply
+fixture_extras: [web_reply_cases]
+steps:
+  - name: a reply to a web session with no running turn
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout."}
+    expect_status: 200
+  - name: a reply over the 500-character budget still posts
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijx"}
+    expect_status: 200
+  - name: a reply to a worker session is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.atlas_notes}", text: "Not for a worker."}
+    expect_status: 409
+  - name: a reply to an unknown session is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${missing_session}", text: "No such session."}
+    expect_status: 404
+  - name: a reply of blank text is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: " \n\t"}
+    expect_status: 422
+  - name: the dialog lists the user messages and the replies in log order
+    method: GET
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 200
+  - name: a status set of now alone
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Checking the gauges\"}"}
+    expect_status: 200
+  - name: a status set with a null goal
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"goal\": null}"}
+    expect_status: 200
+  - name: a status file that is not JSON is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "not json"}
+    expect_status: 422
+  - name: a status file that is not an object is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "[1, 2]"}
+    expect_status: 422
+  - name: a status file with an unknown key is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"colour\": \"red\"}"}
+    expect_status: 422
+  - name: a status file that names no item is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{}"}
+    expect_status: 422
+  - name: the status read lists the open waiting descendant only
+    method: GET
+    path: /api/internal/web/status
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 200
+  - name: HEAD on the reply path
+    method: HEAD
+    path: /api/internal/web/reply
+    expect_status: 405
+  - name: PUT on the reply path
+    method: PUT
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "Wrong method."}
+    expect_status: 405
+  - name: HEAD on the dialog path
+    method: HEAD
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 405
+  - name: PUT on the dialog path
+    method: PUT
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 405
+  - name: HEAD on the status path
+    method: HEAD
+    path: /api/internal/web/status
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 405
+  - name: PUT on the status path
+    method: PUT
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Wrong method.\"}"}
+    expect_status: 405

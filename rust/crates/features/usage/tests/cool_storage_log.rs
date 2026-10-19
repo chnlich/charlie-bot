@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use charliebot_agents::backends::claude_code::usage_quota::QuotaHttp;
 use charliebot_agents::backends::claude_code::{self, ClaudeHost};
 use charliebot_agents::backends::codex::{self, CodexHost};
+use charliebot_core::paths::realpath;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_usage_page::cool_storage::run_cool_sweep;
@@ -57,11 +58,21 @@ fn sweep_done_event_carries_each_python_field() {
   let home = tree.path().join("home");
   fs::create_dir_all(&charlie).expect("the CharlieBot home");
   let worktrees = tree.path().join("worktrees");
+  let claude_config = tree.path().join("claude-config");
   fs::write(charlie.join("config.yaml"), format!("paths:\n  worktree_dir: '{}'\n", worktrees.display()))
     .expect("the synthetic config");
+  // The sandbox guard: the home and every store the sweep reads resolve inside the temporary tree.
+  let codex_home = home.join(".codex");
+  for path in [&charlie, &home, &claude_config, &worktrees, &codex_home] {
+    assert!(
+      realpath(path).starts_with(realpath(tree.path())),
+      "{} resolves outside the synthetic tree",
+      path.display()
+    );
+  }
   HOSTS.with(|slot| {
     *slot.borrow_mut() = Some((
-      ClaudeHost { home: home.clone(), claude_config_dir: tree.path().join("claude-config") },
+      ClaudeHost { home: home.clone(), claude_config_dir: claude_config },
       CodexHost { path: "/usr/bin:/bin".to_string(), home },
     ))
   });

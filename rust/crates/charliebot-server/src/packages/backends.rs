@@ -63,5 +63,6 @@ impl BackendFactory for NotPorted {
 }
 
 pub fn opencode(registry: &mut Registry) -> Result<(), RegistryError> {
-  register_type(registry, "opencode", plain(ResumeStyle::NativeId, false), None, false)
+  register_type(registry, "opencode", plain(ResumeStyle::NativeId, false), None, false)?;
+  charliebot_agents::backends::opencode::register_usage_source(registry)
 }

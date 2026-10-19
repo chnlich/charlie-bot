@@ -8,12 +8,15 @@ and each server) runs inside sandbox.py's Landlock ruleset and under ``strace``;
 writes outside each tree.
 """
 
+import ast
 import contextlib
 import dataclasses
 import fcntl
+import json
 import os
 import pathlib
 import random
+import re
 import shlex
 import signal
 import socket
@@ -567,3 +570,101 @@ def _socket_owner(inodes: set[int]) -> int | None:
     if entry.name.isdecimal() and _socket_inodes(int(entry.name)) & inodes:
       return int(entry.name)
   return None
+
+
+# -- log events -------------------------------------------------------------
+
+# structlog's console renderer, which the Python server logs with: "<date> <time> [<level>] <event> <key>=<value>...".
+# A value is bare unless it holds a space, a tab, "=", a quote or a line break; such a value is repr()'d.
+_CONSOLE_HEADER = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[\w+\s*\] (?P<event>\S+)(?P<fields>.*)")
+_CONSOLE_FIELD = re.compile(r"\s(?P<key>\w+)=(?P<value>'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|\S+)")
+# The console renderer writes Python's spelling of a bool or None; the Rust server's JSON writes the JSON spelling.
+_PYTHON_SPELLINGS = {"True": "true", "False": "false", "None": "null"}
+# The keys the Rust server adds to each JSON line beside the event's own fields.
+_RUST_LINE_KEYS = ("event", "level", "timestamp")
+
+
+@dataclasses.dataclass(frozen=True)
+class LogEvent:
+  """One event line of a server log: its name and the text of each field."""
+
+  name: str
+  fields: dict[str, str]
+
+
+def read_log_events(path: pathlib.Path) -> list[LogEvent]:
+  """The events of one server log in order: a Rust JSON object per line, or a Python console header.
+
+  A last line still being written has no newline, so it is left for a later read. Any other line, such as a
+  traceback, names no event.
+  """
+  events = []
+  for line in path.read_bytes().splitlines(keepends=True):
+    if not line.endswith(b"\n"):
+      continue
+    text = line.decode("utf-8", errors="replace")
+    event = _json_event(text) if text.startswith("{") else _console_event(text)
+    if event is not None:
+      events.append(event)
+  return events
+
+
+def _json_event(text: str) -> LogEvent | None:
+  try:
+    record = json.loads(text)
+  except json.JSONDecodeError:
+    return None  # a traceback line that opens with a brace is not a Rust event line
+  if not isinstance(record, dict) or not isinstance(record.get("event"), str):
+    return None
+  return LogEvent(
+      record["event"], {
+          key: _json_text(value) for key, value in record.items() if key not in _RUST_LINE_KEYS
+      })
+
+
+def _json_text(value: object) -> str:
+  """A string as itself; any other JSON scalar as JSON spells it (true, null, 3)."""
+  return value if isinstance(value, str) else json.dumps(value)
+
+
+def _console_event(text: str) -> LogEvent | None:
+  header = _CONSOLE_HEADER.match(text)
+  if header is None:
+    return None
+  fields = {field["key"]: _console_text(field["value"]) for field in _CONSOLE_FIELD.finditer(header["fields"])}
+  return LogEvent(header["event"], fields)
+
+
+def _console_text(value: str) -> str:
+  if value[0] in "'\"":
+    return ast.literal_eval(value)
+  return _PYTHON_SPELLINGS.get(value, value)
+
+
+def wait_for_log_events(
+    logs: dict[str, pathlib.Path],
+    names: tuple[str, ...],
+    fields: dict[str, str],
+    timeout_seconds: float,
+) -> list[str]:
+  """Poll until each side's log holds an event named in *names* with every field in *fields*.
+
+  *logs* maps each side's label to that side's own server log, so one side's event never answers another side's wait.
+  Returns one message per side that did not log a match within *timeout_seconds*, naming the side and the events.
+  """
+  deadline = time.monotonic() + timeout_seconds
+  pending = dict(logs)
+  while pending:
+    pending = {label: path for label, path in pending.items() if not _has_match(read_log_events(path), names, fields)}
+    if not pending or time.monotonic() >= deadline:
+      break
+    time.sleep(POLL_INTERVAL_SECONDS)
+  wanted = " or ".join(names)
+  if fields:
+    wanted += " with " + ", ".join(f"{key}={value}" for key, value in fields.items())
+  return [f"{label} server did not log {wanted} within {timeout_seconds}s" for label in pending]
+
+
+def _has_match(events: list[LogEvent], names: tuple[str, ...], fields: dict[str, str]) -> bool:
+  return any(
+      event.name in names and all(event.fields.get(key) == value for key, value in fields.items()) for event in events)

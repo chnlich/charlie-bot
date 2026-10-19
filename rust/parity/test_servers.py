@@ -1,16 +1,27 @@
-"""Port reservation and listener ownership for the parity servers."""
+"""Port reservation, listener ownership and server log events for the parity servers."""
 
 import concurrent.futures
 import os
 import pathlib
 import socket
 import threading
+import time
 
 import pytest
 
 from rust.parity import servers
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+# One event line as each server writes it: the Python server's console renderer, then the Rust server's JSON.
+PYTHON_EVENT = "2026-10-18 22:38:55 [info     ] speech_models_ready cache_dir=/tmp/synthetic/home/models\n"
+RUST_EVENT = (
+    '{"event": "speech_models_ready", "cache_dir": "/tmp/synthetic/home/models", "level": "info", '
+    '"timestamp": "2026-10-18T22:38:55.000Z"}\n')
+PYTHON_FIELDS = "2026-10-18 22:38:55 [info     ] server_started purpose='server startup' ok=True\n"
+RUST_FIELDS = (
+    '{"event": "server_started", "purpose": "server startup", "ok": true, "level": "info", '
+    '"timestamp": "2026-10-18T22:38:55.000Z"}\n')
+PROVISIONING = ("speech_models_ready", "speech_model_provisioning_failed")
 
 
 def test_wait_ready_refuses_a_listener_outside_the_server_tree(tmp_path: pathlib.Path) -> None:
@@ -43,3 +54,59 @@ def test_concurrent_pick_ports_return_disjoint_ports() -> None:
     first, second = (future.result() for future in futures)
   assert len(first) == len(second) == 2
   assert not set(first) & set(second)
+
+
+@pytest.mark.parametrize("line", [PYTHON_EVENT, RUST_EVENT], ids=["python-console", "rust-json"])
+def test_log_event_wait_returns_on_the_event_in_either_servers_form(tmp_path: pathlib.Path, line: str) -> None:
+  log = tmp_path / "baseline.server-1.log"
+  log.write_text("Traceback (most recent call last):\n  File \"synthetic.py\", line 1\n" + line, encoding="utf-8")
+  assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=0.2) == []
+
+
+@pytest.mark.parametrize("line", [PYTHON_FIELDS, RUST_FIELDS], ids=["python-console", "rust-json"])
+def test_log_event_wait_matches_each_field_as_its_logged_text(tmp_path: pathlib.Path, line: str) -> None:
+  log = tmp_path / "candidate.server-1.log"
+  log.write_text(line, encoding="utf-8")
+  fields = {"purpose": "server startup", "ok": "true"}
+  assert servers.wait_for_log_events({"candidate": log}, ("server_started",), fields, timeout_seconds=0.2) == []
+  mismatch = {"purpose": "server startup", "ok": "false"}
+  assert servers.wait_for_log_events({"candidate": log}, ("server_started",), mismatch, timeout_seconds=0.2) == [
+      "candidate server did not log server_started with purpose=server startup, ok=false within 0.2s"
+  ]
+
+
+def test_log_event_wait_reads_each_side_from_its_own_log(tmp_path: pathlib.Path) -> None:
+  baseline = tmp_path / "baseline.server-1.log"
+  candidate = tmp_path / "candidate.server-1.log"
+  baseline.write_text(PYTHON_EVENT, encoding="utf-8")
+  candidate.write_text("", encoding="utf-8")
+  logs = {"baseline": baseline, "candidate": candidate}
+  assert servers.wait_for_log_events(
+      logs, ("speech_models_ready",), {},
+      timeout_seconds=0.2) == ["candidate server did not log speech_models_ready within 0.2s"]
+
+
+def test_log_event_wait_names_both_events_when_neither_arrives(tmp_path: pathlib.Path) -> None:
+  log = tmp_path / "baseline.server-1.log"
+  log.write_text(PYTHON_FIELDS, encoding="utf-8")
+  assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=0.2) == [
+      "baseline server did not log speech_models_ready or speech_model_provisioning_failed within 0.2s"
+  ]
+
+
+def test_log_event_wait_ignores_a_line_until_its_newline_arrives(tmp_path: pathlib.Path) -> None:
+  log = tmp_path / "baseline.server-1.log"
+  log.write_text(PYTHON_EVENT.rstrip("\n"), encoding="utf-8")
+  assert servers.read_log_events(log) == []
+
+  def finish_line() -> None:
+    time.sleep(0.1)
+    with log.open("a", encoding="utf-8") as handle:
+      handle.write("\n")
+
+  writer = threading.Thread(target=finish_line)
+  writer.start()
+  try:
+    assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=5) == []
+  finally:
+    writer.join()

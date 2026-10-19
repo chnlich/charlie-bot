@@ -42,8 +42,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | GET | `/api/sessions/{session_id}/usage` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}/events` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}/transcript` | sessions | ported |  |
-| POST | `/api/sessions/{session_id}/fork` | sessions | todo |  |
-| POST | `/api/sessions/{session_id}/elone` | sessions | todo |  |
+| POST | `/api/sessions/{session_id}/fork` | sessions | ported |  |
+| POST | `/api/sessions/{session_id}/elone` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/backend` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}` | sessions | ported |  |

@@ -165,13 +165,27 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 ### Turn contributions
 
 - Python: `src/runtime/hooks/turn_contributions.py:92` `register_turn_contribution`
-- Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The trait has the default-able
-  `instruction_segments(&self, meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig, repo: &RepoRoot)`,
-  `workflow_rules_file`, `input_preamble`, `event_renderers` and `claims_turn_end_unread`, and the async `before_turn`
-  and `after_turn` hooks. `repo` is the checkout the server serves (`RepoRoot`); a contribution reads its prompt docs
-  through it, and `Registry::instruction_segments` takes the same `repo` argument and passes it to each contribution.
-  The registry's readers run them in registration order. Two contributions that render the same event type fail.
+- Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The trait's one required
+  method is `class_name()`, the Python class that `type(contribution).__name__` names. The other steps default to
+  adding nothing: `instruction_segments(&self, meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig,
+  repo: &RepoRoot)`, `workflow_rules_file`, `input_preamble`, `event_renderers`, `claims_turn_end_unread`, and the
+  async `before_turn` and `after_turn(meta, done_event, cfg, features)` hooks. `repo` is the checkout the server serves
+  (`RepoRoot`); a contribution reads its prompt docs through it, and `Registry::instruction_segments` takes the same
+  `repo` argument and passes it to each contribution. The registry's readers run them in registration order. Two
+  contributions that render the same event type fail.
 - Example: `registry.turn_contribution("memory", Arc::new(MemoryTurn))?;`
+- After-turn work: `RegistryRuntimeEvents::after_turn` (`store_hooks.rs`) answers one work per contribution, in
+  registration order. The store starts each work as its own task after it broadcasts a `master_done` of a session that
+  exists (`session_events.py:150-161`). The task is named `after-turn-<class_name>-<session id>`. A task that fails logs
+  `background_task_failed` with that `task_name`, as `tasks.create_logged_task` does, and the other tasks run on.
+- The context: each work needs the `FeatureContext`. The server calls `Registry::bind_feature_context` once, right after
+  it builds the context and before the lifespan starts, because the lifespan's recovery can finish a round. The registry
+  keeps a `Weak` link, so the store never holds the context. When no context is bound, or the bound one was dropped,
+  every work fails with a message that names the `FeatureContext`.
+- Round origins: every `master_done` is persisted by the master queue's round end (`master_cc_queue.py:298-304`,
+  `master_queue.rs:538`). That covers a chat turn, a task turn, an auto-trigger, and a turn re-attached after a restart,
+  so each reaches the hook. The announce path (`announce_appended_event`) carries no `master_done`, and in Python and in
+  Rust it starts no after-turn work.
 
 ### Sidebar contributions
 

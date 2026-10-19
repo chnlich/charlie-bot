@@ -210,6 +210,10 @@ impl SequenceBindingMover for RegisteredSequenceBindingMover {
   }
 }
 
+/// The failure of an after-turn work when no feature context is bound: the server binds one at startup, and a bound one
+/// that was dropped counts as unbound.
+const NO_FEATURE_CONTEXT: &str = "no FeatureContext is bound to the registry (unset, or the bound one was dropped)";
+
 /// Bridges feature turn contributions and event renderers into the store's runtime event hooks.
 struct RegistryRuntimeEvents {
   registry: Arc<Registry>,
@@ -230,8 +234,32 @@ impl RuntimeEventHooks for RegistryRuntimeEvents {
     Ok(renderers)
   }
 
-  fn after_turn(&self, _meta: SessionMetadata, _event: Value, _cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
-    Vec::new()
+  /// One work per turn contribution, in registration order. The feature context is read as the turn ends, so a missing
+  /// one fails every work of that turn by name.
+  fn after_turn(&self, meta: SessionMetadata, event: Value, cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
+    let features = self.registry.feature_context();
+    self
+      .registry
+      .turn_contributions
+      .values()
+      .map(|contribution| {
+        let contribution = Arc::clone(contribution);
+        let features = features.clone();
+        let meta = meta.clone();
+        let event = event.clone();
+        let cfg = cfg.clone();
+        AfterTurnWork {
+          name: contribution.class_name().to_string(),
+          future: Box::pin(async move {
+            let features = features.ok_or_else(|| StoreError::new(NO_FEATURE_CONTEXT))?;
+            contribution
+              .after_turn(&meta, &event, &cfg, &features)
+              .await
+              .map_err(|error| StoreError::new(format!("{error:#}")))
+          }),
+        }
+      })
+      .collect()
   }
 
   fn mark_sidebar_dirty(&self, session_id: &str) {
@@ -239,4 +267,214 @@ impl RuntimeEventHooks for RegistryRuntimeEvents {
   }
 
   fn drop_session_runtime_state(&self, _session_id: &str) {}
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fmt::Debug;
+  use std::sync::Mutex;
+  use std::time::Duration;
+
+  use charliebot_store::Store;
+  use charliebot_store::metadata::TaskProfile;
+  use futures_util::future::BoxFuture;
+  use serde_json::json;
+  use tracing::field::{Field, Visit};
+  use tracing::{Event, Level, Subscriber};
+  use tracing_subscriber::Layer;
+  use tracing_subscriber::layer::{Context, SubscriberExt};
+
+  use super::*;
+  use crate::context::{FeatureContext, features_over};
+  use crate::registry::RegistryError;
+  use crate::turn::TurnContribution;
+
+  /// The session ids the recording contribution saw, held in the test context's startup state.
+  #[derive(Default)]
+  struct CallLog(Mutex<Vec<String>>);
+
+  /// Fails every after-turn call.
+  struct FailingContribution;
+
+  impl TurnContribution for FailingContribution {
+    fn class_name(&self) -> &'static str {
+      "FailingContribution"
+    }
+
+    fn after_turn<'a>(
+      &'a self,
+      _meta: &'a SessionMetadata,
+      _done_event: &'a Value,
+      _cfg: &'a CharlieBotConfig,
+      _features: &'a Arc<FeatureContext>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+      Box::pin(async { Err(anyhow::anyhow!("synthetic after-turn failure")) })
+    }
+  }
+
+  /// Records the session of each after-turn call.
+  struct RecordingContribution;
+
+  impl TurnContribution for RecordingContribution {
+    fn class_name(&self) -> &'static str {
+      "RecordingContribution"
+    }
+
+    fn after_turn<'a>(
+      &'a self,
+      meta: &'a SessionMetadata,
+      _done_event: &'a Value,
+      _cfg: &'a CharlieBotConfig,
+      features: &'a Arc<FeatureContext>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+      Box::pin(async move {
+        let calls = features.startup.require::<CallLog>()?;
+        calls.0.lock().unwrap().push(meta.id.clone());
+        Ok(())
+      })
+    }
+  }
+
+  fn register_pair(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.turn_contribution("failing", Arc::new(FailingContribution))?;
+    registry.turn_contribution("recording", Arc::new(RecordingContribution))
+  }
+
+  fn pair_registry() -> Arc<Registry> {
+    let mut registry = Registry::new();
+    registry.register_package("src.features.synthetic", register_pair).unwrap();
+    Arc::new(registry)
+  }
+
+  /// One error event as the tracing layer saw it: its message and the text of each field.
+  #[derive(Default)]
+  struct ErrorEvent {
+    message: String,
+    fields: Vec<(&'static str, String)>,
+  }
+
+  impl ErrorEvent {
+    fn field(&self, name: &str) -> &str {
+      let (_, value) = self.fields.iter().find(|(key, _)| *key == name).expect("the event carries the field");
+      value
+    }
+  }
+
+  impl Visit for ErrorEvent {
+    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+      let text = format!("{value:?}");
+      if field.name() == "message" {
+        self.message = text;
+      } else {
+        self.fields.push((field.name(), text));
+      }
+    }
+  }
+
+  /// Keeps each error event that the store's after-turn tasks log.
+  struct ErrorCapture(Arc<Mutex<Vec<ErrorEvent>>>);
+
+  impl<S: Subscriber> Layer<S> for ErrorCapture {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+      if *event.metadata().level() == Level::ERROR {
+        let mut captured = ErrorEvent::default();
+        event.record(&mut captured);
+        self.0.lock().unwrap().push(captured);
+      }
+    }
+  }
+
+  /// Captures the error events logged on this test's thread. The returned guard keeps the capture installed.
+  fn capture_errors() -> (Arc<Mutex<Vec<ErrorEvent>>>, tracing::subscriber::DefaultGuard) {
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let guard =
+      tracing::subscriber::set_default(tracing_subscriber::registry().with(ErrorCapture(Arc::clone(&errors))));
+    (errors, guard)
+  }
+
+  /// Writes the session's metadata file. The synthetic registry registers no metadata slots, so none is written.
+  fn write_session(store: &Store, session_id: &str) {
+    let meta = SessionMetadata::new(session_id, "Synthetic", TaskProfile::Manager);
+    let path = store.metadata_path(session_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, meta.to_json_string(&[], true)).unwrap();
+  }
+
+  /// Ends one turn of the synthetic session: its metadata exists, then its master_done is persisted.
+  async fn end_turn(store: &Store) {
+    write_session(store, "synthetic");
+    store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
+  }
+
+  /// Yields until `done` holds. The store's after-turn tasks run on this test's current-thread runtime meanwhile.
+  async fn settle(done: impl Fn() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while !done() {
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .expect("the after-turn tasks finish within five seconds");
+  }
+
+  #[tokio::test]
+  async fn master_done_runs_every_contribution_and_logs_the_failed_task_by_name() {
+    let (errors, _guard) = capture_errors();
+    let registry = pair_registry();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::clone(&registry));
+    registry.bind_feature_context(&features).unwrap();
+    features.startup.insert(CallLog::default()).unwrap();
+    let calls = features.startup.require::<CallLog>().unwrap();
+
+    end_turn(&features.store).await;
+    settle(|| errors.lock().unwrap().len() == 1 && calls.0.lock().unwrap().len() == 1).await;
+
+    let errors = errors.lock().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].message, "background_task_failed");
+    assert_eq!(errors[0].field("task_name"), "after-turn-FailingContribution-synthetic");
+    assert!(errors[0].field("error").contains("synthetic after-turn failure"));
+    assert_eq!(*calls.0.lock().unwrap(), ["synthetic"]);
+  }
+
+  #[tokio::test]
+  async fn master_done_without_a_bound_context_fails_each_work_by_name() {
+    let (errors, _guard) = capture_errors();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), pair_registry());
+
+    end_turn(&features.store).await;
+    settle(|| errors.lock().unwrap().len() == 2).await;
+
+    assert_missing_context(&errors.lock().unwrap());
+  }
+
+  #[tokio::test]
+  async fn master_done_after_the_bound_context_drops_fails_each_work_by_name() {
+    let (errors, _guard) = capture_errors();
+    let registry = pair_registry();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::clone(&registry));
+    registry.bind_feature_context(&features).unwrap();
+    // The store outlives the context only if the store holds no strong link to it, which is what this checks.
+    let store = Arc::clone(&features.store);
+    drop(features);
+
+    end_turn(&store).await;
+    settle(|| errors.lock().unwrap().len() == 2).await;
+
+    assert_missing_context(&errors.lock().unwrap());
+  }
+
+  /// Each of the two works of a turn with no live context failed with the named error.
+  fn assert_missing_context(errors: &[ErrorEvent]) {
+    let mut names: Vec<&str> = errors.iter().map(|error| error.field("task_name")).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["after-turn-FailingContribution-synthetic", "after-turn-RecordingContribution-synthetic"]);
+    for error in errors {
+      assert_eq!(error.message, "background_task_failed");
+      assert!(error.field("error").contains("no FeatureContext is bound"));
+    }
+  }
 }

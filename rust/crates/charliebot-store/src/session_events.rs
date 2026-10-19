@@ -95,7 +95,7 @@ impl Store {
         let name = format!("after-turn-{}-{session_id}", work.name);
         tokio::spawn(async move {
           if let Err(error) = work.future.await {
-            tracing::error!(task = %name, error = %error, "after-turn contribution failed");
+            tracing::error!(task_name = %name, error = %error, "background_task_failed");
           }
         });
       }
@@ -360,6 +360,7 @@ fn async_lock_for(locks: &StdMutex<HashMap<String, Arc<Mutex<()>>>>, session_id:
 
 #[cfg(test)]
 mod tests {
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::{Arc, Mutex as StdMutex};
 
   use charliebot_core::config::CharlieBotConfig;
@@ -545,6 +546,44 @@ mod tests {
     assert_eq!(contribution_event["type"], "master_done");
     assert_eq!(contribution_event["event_index"], 0);
     assert_eq!(store.load_chat_events_sync("synthetic").unwrap().len(), 1);
+  }
+
+  /// Counts the after-turn requests the store makes; it starts no work.
+  #[derive(Default)]
+  struct CountingAfterTurnHook {
+    requests: AtomicUsize,
+  }
+
+  impl RuntimeEventHooks for CountingAfterTurnHook {
+    fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
+      Ok(Vec::new())
+    }
+
+    fn after_turn(&self, _meta: SessionMetadata, _event: Value, _cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
+      self.requests.fetch_add(1, Ordering::SeqCst);
+      Vec::new()
+    }
+
+    fn mark_sidebar_dirty(&self, _session_id: &str) {}
+
+    fn drop_session_runtime_state(&self, _session_id: &str) {}
+  }
+
+  #[tokio::test]
+  async fn after_turn_is_requested_only_for_a_master_done_of_an_existing_session() {
+    let hook = Arc::new(CountingAfterTurnHook::default());
+    let (_home, store) = make_test_store_with_runtime(hook.clone());
+    write_test_session(&store, "synthetic");
+
+    store
+      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "t1"}))
+      .await
+      .unwrap();
+    store.persist_and_broadcast("missing", json!({"type": "master_done"})).await.unwrap();
+    assert_eq!(hook.requests.load(Ordering::SeqCst), 0);
+
+    store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
+    assert_eq!(hook.requests.load(Ordering::SeqCst), 1);
   }
 
   #[test]

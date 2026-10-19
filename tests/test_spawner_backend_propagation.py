@@ -4,7 +4,7 @@ import conftest
 import pytest
 
 from src.infra import config
-from src.runtime import spawner
+from src.runtime import spawner_backends
 
 
 def _build_cfg() -> config.CharlieBotConfig:
@@ -30,17 +30,17 @@ def _build_cfg() -> config.CharlieBotConfig:
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   cfg = _build_cfg()
-  opt = spawner.spawner_backends.resolve_backend_option(cfg, conftest.OPUS_BACKEND_ID, "claude-opus-4-6")
+  opt = spawner_backends.resolve_backend_option(cfg, conftest.OPUS_BACKEND_ID, "claude-opus-4-6")
   assert opt.id == conftest.OPUS_BACKEND_ID
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
   assert opt.cli_binary == "claude-alt"
 
   with pytest.raises(ValueError, match=r"is not in backends.options"):
-    spawner.spawner_backends.resolve_backend_option(cfg, "missing", "o3")
+    spawner_backends.resolve_backend_option(cfg, "missing", "o3")
 
   with pytest.raises(ValueError, match="model is required"):
-    spawner.spawner_backends.resolve_backend_option(cfg, "codex-o3", "")
+    spawner_backends.resolve_backend_option(cfg, "codex-o3", "")
 
 
 @pytest.mark.parametrize(
@@ -78,4 +78,4 @@ def test_resolve_backend_option_rejects_missing_model_for_model_required_backend
   )
 
   with pytest.raises(ValueError, match="resolved model is required"):
-    spawner.spawner_backends.resolve_backend_option(cfg, backend_type, "")
+    spawner_backends.resolve_backend_option(cfg, backend_type, "")

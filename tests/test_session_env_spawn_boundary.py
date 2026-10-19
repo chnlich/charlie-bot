@@ -24,7 +24,7 @@ import pytest
 from src.backends.claude_code import claude_code
 from src.infra import config as core_config
 from src.infra import constants, models
-from src.runtime import master_cc
+from src.runtime import master_cc_run
 
 _SHIM_TEMPLATE = """#!/bin/sh
 env > '{dump}'
@@ -90,7 +90,7 @@ async def test_master_child_environment_carries_its_own_session_id(
 
   item = conftest.make_work_item(
       cfg, models.SessionMetadata(profile="manager", id="live-session", name="Live"), cfg.backends.options[0])
-  await master_cc.master_cc_run._run_cc(item)
+  await master_cc_run._run_cc(item)
 
   assert _read_env_dump(dump)[constants.SESSION_ID_ENV_VAR] == "live-session"
 

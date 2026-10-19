@@ -13,7 +13,7 @@ Ownership boundaries it never crosses:
   requests stay in :mod:`src.runtime.runs`; task metadata and tree relations stay
   in :mod:`src.runtime.task_sessions`; completion/evidence policy stays in
   :mod:`src.runtime.task_completion`. This module only binds a registered Run to
-  the existing process harnesses — the master queue (``src.runtime.master_cc``)
+  the existing process harnesses — the master queue (``src.runtime.master_cc_queue``)
   for manager turns, the Worker/backend adapters (``src.runtime.worker``) for
   work and review — and lands their outcomes through those owners.
 - The one short control write lock is held only across durable reservation

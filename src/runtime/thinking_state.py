@@ -1,7 +1,7 @@
 """Single source of truth for master thinking state.
 
 ``busy_since(session_id)`` is non-None if and only if that session has a work
-item running or queued. The writer is master_cc (mark at enqueue, clear at
+item running or queued. The writer is master_cc_queue (mark at enqueue, clear at
 consumer teardown); readers are sessions / scheduled_sessions / api. All
 accessors are synchronous dict operations — no I/O, no await — so stamping can
 happen on every metadata return path (including per-session list reads) and

@@ -57,6 +57,13 @@ backends:
   # Codex reasoning effort is xhigh unless the entry sets model_reasoning_effort.
   # An id names the model family, never a version: a version bump edits only the
   # entry's model and label (the id rule: BackendsConfig in src/infra/config.py).
+  # Router program that orders unpinned work (commented out: without this section the pool
+  # rotation alone decides, as it always has). The first item resolves on the server process's
+  # PATH; each selection starts it once, feeds it one JSON object on stdin ({role, text,
+  # candidates: [{id, cooling_until}]}) and reads one JSON object on stdout
+  # ({backends: [id, ...], reason: "one line"}). See src/runtime/backend_pool.route.
+  # routing:
+  #   command: [charliebot, router]
   options:
     - id: claude-fable
       label: "CC · Fable 5.1"

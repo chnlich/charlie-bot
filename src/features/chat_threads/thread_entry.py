@@ -39,6 +39,7 @@ from urllib import parse
 from src.infra import config, log_once, metadata_slots, models, tasks
 from src.infra import event_types as ET
 from src.runtime import (
+    backend_pool,
     file_urls,
     master_cc_queue,
     master_cc_state,
@@ -981,6 +982,46 @@ def _local_time() -> str:
   return datetime.datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
+async def _route_thread_session(
+    adapter: ThreadAdapter,
+    cfg: config.CharlieBotConfig,
+    origin: Any,
+) -> tuple[str | None, backend_pool.BackendRoute | None]:
+  """The backend a new thread session runs on, and the router's route when one ran.
+
+  The whole thread is read through the adapter before the session exists, and every readable
+  message goes to the router in time order, untrimmed, under the ``thread`` role. An empty route
+  list falls back to the pool; a router error or a pool with no available member posts the error
+  into the thread and raises — no session is created.
+  """
+  routing = cfg.backends.routing if cfg is not None and cfg.backends is not None else None
+  if routing is None:
+    return None, None
+  messages = await adapter.read_eligible(origin, cfg)
+  text = "\n".join(f"{m.user}: {m.text}" if m.user else m.text for m in messages)
+  candidates = [option.id for option in cfg.backends.options]
+  try:
+    route = await backend_pool.route(cfg, role="thread", text=text, candidates=candidates)
+  except backend_pool.RouterError as e:
+    await _post_thread_error(adapter, origin, f"backend router failed: {e}")
+    raise
+  option = None
+  if route.backends:
+    option = backend_pool.pick_ordered(cfg, caller="thread", backends=route.backends)
+  if option is None:
+    option = backend_pool.select(cfg, caller="thread")
+  if option is None:
+    message = f"no backend is available for the thread session: {backend_pool.recovery_report(cfg)}"
+    await _post_thread_error(adapter, origin, message)
+    raise backend_pool.RouterError(message)
+  return option.id, route
+
+
+async def _post_thread_error(adapter: ThreadAdapter, origin: Any, text: str) -> None:
+  """Post one error line into the thread *origin* names, unacked — the summon produced no session."""
+  await adapter.post(adapter.address_of(origin), text)
+
+
 async def accept_summon(
     adapter: ThreadAdapter,
     cfg: config.CharlieBotConfig,
@@ -1016,18 +1057,22 @@ async def accept_summon(
   session_meta = await store.get_session(session_id)
   if session_meta is None:
     session_name = f"{label} {_local_time()}"
+    backend_id, route = await _route_thread_session(adapter, cfg, origin)
     await task_execution.task_manager().create_task(
         request_id=f"{platform.name}-summon-{session_id}",
         task_parent_id=None,
         profile="manager",
         task=None,
         name=session_name,
-        backend=None,
+        backend=backend_id,
         group=None,
         session_id=session_id,
         slot_values={platform.origin_field: origin},
         caller="system",
     )
+    if route is not None:
+      await task_execution.task_manager().update_slot_fields(
+          session_id, backend_pool.METADATA_OWNER, route=route.model_dump(mode="json"))
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
   elif session_meta.status == models.SessionStatus.ARCHIVED:
     await lifecycle.unarchive_session(session_id)

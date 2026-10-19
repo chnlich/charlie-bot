@@ -87,6 +87,17 @@ EXT_USAGE_VERSION_PROBE_TIMEOUT = 5  # seconds
 # CLI -> CharlieBot server internal endpoints (the delegate and sequence commands).
 HTTP_INTERNAL_API_TIMEOUT = 30  # seconds — local loopback, generous for cold starts
 
+# ---------------------------------------------------------------------------
+# Backend router subprocess
+# ---------------------------------------------------------------------------
+
+# The whole backend router call (src/runtime/backend_pool.route): process start,
+# the router's own decision work, the stdout read. It must sit below the delegate
+# client's HTTP_INTERNAL_API_TIMEOUT above — the delegation calls the router before
+# the child task exists, so a router call outliving that bound would turn a known
+# failure into a "result unknown".
+ROUTER_TIMEOUT_SECONDS = 25  # seconds
+
 # Best-effort fetch of /api/internal/version on the CLI error path, bounded so a hung
 # server never stalls CLI error reporting.
 HTTP_VERSION_SKEW_TIMEOUT = 2.0  # seconds

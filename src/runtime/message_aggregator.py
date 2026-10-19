@@ -364,6 +364,17 @@ def _system_msg(ev: dict) -> dict | None:
   }
 
 
+def _quota_failover_msg(ev: dict) -> dict:
+  """One line in the worker session: the quota failover's old backend, new backend and recovery time."""
+  from_backend = ev.get("from", "")
+  recovers_at = ev.get("recovers_at") or ""
+  recovery = f"; {from_backend} recovers at {recovers_at}" if recovers_at else ""
+  return {
+      "role": "system",
+      "content": f"Quota exhausted on {from_backend}: switched to {ev.get('to', '')}{recovery}",
+  }
+
+
 def _backend_switched_msg(ev: dict) -> dict:
   return {
       "role": "system",
@@ -526,6 +537,8 @@ def _run_delivery_msg(ev: dict) -> dict:
 
 
 def _task_delegated_msg(ev: dict) -> dict:
+  route = ev.get("route")
+
   backend = ev.get("backend") or ev.get("resolved_backend") or ""
   model = ev.get("model") or ev.get("resolved_model") or ""
   # Task-spec-length description and the worker summary's full text stay on the
@@ -541,6 +554,7 @@ def _task_delegated_msg(ev: dict) -> dict:
       ET.DELEGATE_INVOCATION: ev.get(ET.DELEGATE_INVOCATION),
       "backend": backend,
       "model": model,
+      "route": route,
       "timestamp": ev.get("timestamp") or ev.get("created_at"),
   }
 
@@ -610,6 +624,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
+    ET.QUOTA_FAILOVER:
+        _quota_failover_msg,
     ET.BACKEND_OVERLAY_INACTIVE:
         _backend_overlay_inactive_msg,
     # Legacy render alias: persisted history events of this type render through

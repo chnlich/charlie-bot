@@ -67,6 +67,37 @@ test('task_delegated renders CLI-style metadata without full task spec', () => {
   assert.doesNotMatch(html, /Secret implementation details/);
 });
 
+test('a routed delegation renders its backend list and reason under the backend/model row', () => {
+  const context = loadChatRendering();
+
+  const html = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-9',
+    backend: 'fake2',
+    model: 'fake-model',
+    route: {backends: ['fake2', 'fake'], reason: 'design p=0.9'},
+  }, 'session-a');
+
+  assert.match(html, /route/);
+  assert.match(html, /fake2, fake/);
+  assert.match(html, /design p=0\.9/);
+});
+
+test('a delegation without a route renders no route row', () => {
+  const context = loadChatRendering();
+
+  const html = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-9',
+    backend: 'fake',
+    model: 'fake-model',
+  }, 'session-a');
+
+  assert.doesNotMatch(html, /route/);
+});
+
 test('task_delegated verify metadata renders explicit none for repo and base', () => {
   const context = loadChatRendering();
 

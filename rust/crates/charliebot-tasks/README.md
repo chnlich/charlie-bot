@@ -146,9 +146,12 @@ node pass cannot replay it`. Startup logs each one as `task_recovery_node_failed
 | --- | --- | --- |
 | worker-run | `resume_run_checked` for a launched worker, review or iteration run that is alive or drained at boot | re-attach and drain of worker kinds (`_resume_run_checked`, `task_execution.py:1956`) |
 | worker-run | `replay_followups` for a failed or interrupted work run | failure report of the run to its parent |
+| worker-run | `refuse_worker` (`execution.rs:1050`) for a queued worker run that the node pass would launch, with the message `worker execution is owned by the worker-run task` | the launch of a queued worker run through the executor (`test_task_recovery.py::test_restart_before_launch_requeues_through_the_same_launch_checks`) |
 | review-chain | `replay_followups` for a successful implement run that owes a review | review spawn |
 | review-chain | `replay_followups` for a finished review run | review-run follow-up |
 | cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
+
+`tests/recovery.rs` drives each row through the full execution stack; its `// Python:` comments name the cases it follows.
 
 ## Prompt assembly
 

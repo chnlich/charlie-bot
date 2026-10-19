@@ -38,6 +38,8 @@ pub(crate) struct MasterRunOutcome {
   pub error_msg: Option<String>,
   pub finish_extras: Map<String, Value>,
   pub cancelled: bool,
+  /// The cancellation was a covered let-go: the process keeps running in its detached transport.
+  pub let_go: bool,
 }
 
 struct RunTimingTracker {
@@ -350,6 +352,7 @@ async fn refuse_turn(
     error_msg: Some(message.to_string()),
     finish_extras: Map::new(),
     cancelled: false,
+    let_go: false,
   })
 }
 
@@ -702,6 +705,19 @@ impl std::fmt::Display for TurnCancelled {
 
 impl std::error::Error for TurnCancelled {}
 
+/// The error a covered cancellation leaves on its turn. The process keeps running in its detached transport, and the
+/// next boot's reconcile settles the run, so the launch path records no failure for it (`master_cc_run.py:648-691`).
+#[derive(Debug)]
+pub(crate) struct TurnLetGo;
+
+impl std::fmt::Display for TurnLetGo {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str("manager turn let go at shutdown; its process keeps running")
+  }
+}
+
+impl std::error::Error for TurnLetGo {}
+
 fn subprocess_buffer_bytes(cfg: &CharlieBotConfig) -> anyhow::Result<usize> {
   let megabytes = usize::try_from(cfg.server.subprocess_buffer_limit_mb).context("negative subprocess buffer limit")?;
   megabytes.checked_mul(1024 * 1024).context("subprocess buffer limit overflows usize")
@@ -855,7 +871,14 @@ pub(crate) async fn run_cc(
     tracing::info!(target: "charliebot_tasks", session = %session_id, exit_code, finish_extras = ?finish_extras, "master_cc_finished");
   }
   let cc_session_id = cc_session_id.lock().expect("session id mutex is not poisoned").clone();
-  Ok(MasterRunOutcome { cc_session_id, exit_code, error_msg, finish_extras, cancelled: was_cancelled })
+  Ok(MasterRunOutcome {
+    cc_session_id,
+    exit_code,
+    error_msg,
+    finish_extras,
+    cancelled: was_cancelled,
+    let_go: was_cancelled && covered,
+  })
 }
 
 fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
@@ -1030,6 +1053,8 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
     error_msg,
     finish_extras,
     cancelled: *cancelled.lock().expect("resume cancellation mutex is not poisoned"),
+    // A resumed turn keeps the generic cancellation error: the let-go of a resumed follow is not ported yet.
+    let_go: false,
   })
 }
 

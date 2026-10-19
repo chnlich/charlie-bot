@@ -139,6 +139,9 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     registry: Arc::clone(&registry),
     startup: Arc::new(startup),
   });
+  // The lifespan's recovery can re-attach a round whose master_done starts the after-turn works, so the context is
+  // bound before the lifespan starts.
+  registry.bind_feature_context(&features).expect("the registry binds its feature context once, at startup");
   let lifespan = match Lifespan::start(Arc::clone(&features)).await {
     Ok(lifespan) => lifespan,
     Err(error) => {

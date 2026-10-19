@@ -23,9 +23,9 @@ where
   }
 }
 
-/// A named after-turn task started after a master_done frame is broadcast.
+/// One contribution's after-turn work. The store starts it as its own task after a master_done frame is broadcast.
 pub struct AfterTurnWork {
-  /// Name used in the task log.
+  /// The contribution's Python class name. The task is named `after-turn-<name>-<session id>`.
   pub name: String,
   /// Future for the contribution's after-turn action.
   pub future: Pin<Box<dyn Future<Output = StoreResult<()>> + Send + 'static>>,

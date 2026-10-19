@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use charliebot_core::config::{CharlieBotConfig, ConfigError, ConfigSchema, ConfigSection};
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator};
@@ -11,6 +11,7 @@ use charliebot_core::paths;
 use crate::backend::{
   BackendLifecycle, BackendTypeRegistration, ChildEnvFn, DefaultLifecycle, ReadingLimitsFn, UsageResolverConstructor,
 };
+use crate::context::{FeatureContext, StateError};
 use crate::lifespan::StepFn;
 use crate::pages::{HomeCard, TemplateGlobalFn};
 use crate::sequence::SequenceController;
@@ -138,6 +139,10 @@ pub struct Registry {
   pub(crate) recovery_step: Ledger<StepFn>,
   pub(crate) trigger_step: Ledger<StepFn>,
   pub(crate) let_go_steps: Ledger<StepFn>,
+  /// The server's feature context, bound once right after the server builds it. The store's after-turn hooks read it
+  /// through this link. It is a `Weak`: the store's hooks hold the registry, and a strong link would form a cycle that
+  /// keeps the context alive.
+  feature_context: OnceLock<Weak<FeatureContext>>,
 }
 
 impl Default for Registry {
@@ -180,6 +185,7 @@ impl Registry {
       recovery_step: Ledger::new("recovery step"),
       trigger_step: Ledger::new("trigger step"),
       let_go_steps: Ledger::new("let-go step"),
+      feature_context: OnceLock::new(),
     }
   }
 
@@ -203,6 +209,20 @@ impl Registry {
       package: "(no package)",
       message: "a registration ran outside register_package".to_string(),
     })
+  }
+
+  /// Bind the server's feature context. The server calls this once, right after it builds the context; a second call
+  /// fails and keeps the first binding.
+  pub fn bind_feature_context(&self, features: &Arc<FeatureContext>) -> Result<(), StateError> {
+    self
+      .feature_context
+      .set(Arc::downgrade(features))
+      .map_err(|_| StateError("the registry already holds a FeatureContext".to_string()))
+  }
+
+  /// The bound feature context, or `None` when none is bound or the bound one was dropped.
+  pub fn feature_context(&self) -> Option<Arc<FeatureContext>> {
+    self.feature_context.get()?.upgrade()
   }
 
   /// The config schema the registered packages declare, for `charliebot_core::config::load_config`.

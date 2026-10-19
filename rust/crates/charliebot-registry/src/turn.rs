@@ -189,18 +189,4 @@ impl Registry {
     }
     Ok(())
   }
-
-  /// Run every contribution's `after_turn` in registration order.
-  pub async fn after_turn(
-    &self,
-    meta: &SessionMetadata,
-    done_event: &Value,
-    cfg: &CharlieBotConfig,
-    features: &Arc<FeatureContext>,
-  ) -> anyhow::Result<()> {
-    for contribution in self.turn_contributions.values() {
-      contribution.after_turn(meta, done_event, cfg, features).await?;
-    }
-    Ok(())
-  }
 }

@@ -469,6 +469,7 @@ dependencies = [
  "charliebot-session-api",
  "charliebot-slack",
  "charliebot-store",
+ "charliebot-tasks",
  "charliebot-terminal",
  "charliebot-trace",
  "charliebot-usage",

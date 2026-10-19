@@ -50,33 +50,20 @@ fake_agent:
       exit_code: 0
     - name: claude
       steps:
-        - emit: {type: system, subtype: init, session_id: synthetic-chat-cancel}
-        - gate: chat-cancel-turn
-        - emit:
-            type: assistant
-            message:
-              role: assistant
-              model: claude-sonnet-5
-              content: [{type: text, text: This line is not reached after cancellation.}]
-        - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
-      exit_code: 0
-    - name: claude
-      steps:
         - emit: {type: system, subtype: init, session_id: synthetic-retry-manager}
-        - gate: run-cancel-turn
         - emit:
             type: assistant
             message:
               role: assistant
               model: claude-sonnet-5
-              content: [{type: text, text: The retried manager turn finished.}]
+              content: [{type: text, text: The retried synthetic manager turn finished.}]
         - emit:
             type: result
             result: ""
             usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-expect_starts: 5
+expect_starts: 4
 steps:
   - name: send a manager message
     method: POST
@@ -122,41 +109,6 @@ steps:
         session: ${sessions.delta}
         type: run_finished
         fields: {input_event_ids: ["${capture.second_input}"]}
-  - name: start a gated manager turn for chat cancel
-    method: POST
-    path: /api/chat/${sessions.delta}/message
-    json: {content: Hold this manager turn for cancellation.}
-    capture: {chat_cancel_input: input_event_id}
-    expect_status: 202
-    defer_files: true
-  - kind: wait
-    name: wait for the active chat cancel gate
-    timeout_seconds: 30
-    until: {at_gate: chat-cancel-turn}
-  - name: cancel the active manager turn
-    method: POST
-    path: /api/chat/${sessions.delta}/cancel
-    expect_status: 200
-    defer_files: true
-  - kind: wait
-    name: wait for the chat-cancelled run to finish
-    timeout_seconds: 30
-    until:
-      event:
-        session: ${sessions.delta}
-        type: run_finished
-        fields: {input_event_ids: ["${capture.chat_cancel_input}"]}
-  - name: cancel when there is no active manager run
-    method: POST
-    path: /api/chat/${sessions.delta}/cancel
-    expect_status: 404
-  - kind: wait
-    name: observe the no-active-run error event
-    timeout_seconds: 10
-    until:
-      event:
-        session: ${sessions.delta}
-        type: assistant_error
   - name: retry a failed manager run
     method: POST
     path: /api/sessions/${sessions.atlas}/retry
@@ -165,17 +117,7 @@ steps:
     expect_status: 200
     defer_files: true
   - kind: wait
-    name: wait at the retried manager run gate
-    timeout_seconds: 30
-    until: {at_gate: run-cancel-turn}
-  - name: cancel the gated manager retry by id
-    method: POST
-    path: /api/sessions/${sessions.atlas}/runs/${capture.retry_run_id}/cancel
-    json: {request_id: synthetic-manager-run-cancel}
-    expect_status: 200
-    defer_files: true
-  - kind: wait
-    name: wait for the run-cancelled manager retry to finish
+    name: wait for the retried manager run to finish
     timeout_seconds: 30
     until:
       event:

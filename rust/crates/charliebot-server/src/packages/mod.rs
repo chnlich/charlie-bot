@@ -15,6 +15,7 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
   ("runtime.agents", charliebot_agents::register_runtime),
   ("runtime.usage", charliebot_usage::register),
   ("runtime.session_api", charliebot_session_api::register),
+  ("runtime.tasks", charliebot_tasks::register),
 ];
 
 /// The listed packages in registration order.

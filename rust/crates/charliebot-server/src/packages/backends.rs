@@ -86,10 +86,6 @@ pub fn kimi(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "cc-kimi", plain(ResumeStyle::CliFlag, true), None, false)
 }
 
-pub fn openai_compatible(registry: &mut Registry) -> Result<(), RegistryError> {
-  register_type(registry, "cc-openai-compatible", plain(ResumeStyle::CliFlag, true), None, false)
-}
-
 pub fn opencode(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "opencode", plain(ResumeStyle::NativeId, false), None, false)
 }

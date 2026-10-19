@@ -57,4 +57,26 @@ mod tests {
     let values = parse_marker_lines(&path, &[b"\"type\": \"result\""]).unwrap();
     assert_eq!(values[0]["model"], "bad�");
   }
+
+  #[test]
+  fn parse_marker_lines_across_chunks_around_a_giant_line() {
+    // A no-marker line spanning many reads parses never: the marker lines around it come out in file order, and the
+    // trailing fragment without its newline waits.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("giant.ndjson");
+    let lines = [
+      "{\"type\": \"context\", \"model\": \"clc-x\"}".to_string(),
+      format!("{{\"pad\": \"{}\"}}", "q".repeat(500)),
+      "{\"type\": \"result\", \"usage\": {\"input_tokens\": 3, \"output_tokens\": 4}}".to_string(),
+      format!("{{\"pad2\": \"{}\"}}", "r".repeat(130)),
+      "{\"type\": \"result\", \"usage\": {\"input_tokens\": 5, \"output_tokens\": 6}}".to_string(),
+    ];
+    fs::write(&path, format!("{}\n{{\"trailing\": \"fragment\"}}", lines.join("\n"))).unwrap();
+    let objects = parse_marker_lines(&path, &[b"\"type\": \"context\"", b"\"type\": \"result\""]).unwrap();
+    let shape = objects.iter().map(|object| (object["type"].as_str(), object["usage"]["input_tokens"].as_i64()));
+    assert_eq!(
+      shape.collect::<Vec<_>>(),
+      [(Some("context"), None), (Some("result"), Some(3)), (Some("result"), Some(5))]
+    );
+  }
 }

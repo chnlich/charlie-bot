@@ -122,7 +122,7 @@ def test_init_charliebot_home_seeds_config_and_credentials(
   home.mkdir()
   monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(home))
   fake_cfg = config.CharlieBotConfig(charliebot_home=home)
-  monkeypatch.setattr("src.infra.config.get_config", lambda: fake_cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: fake_cfg)
   asyncio.run(init_seed.init_charliebot_home())
   credentials_path = home / "credentials.yaml"
   assert credentials_path.exists()

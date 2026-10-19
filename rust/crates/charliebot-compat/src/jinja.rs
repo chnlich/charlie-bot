@@ -2,8 +2,9 @@
 //!
 //! Starlette's `Jinja2Templates` builds a Jinja2 environment with autoescaping, and a page prints values
 //! through it: markup prints as is, anything else prints as Python's `str()` escaped with markupsafe's table.
-//! Two filters carry bytes the pages depend on, so they are Jinja2's own: `tojson` (`htmlsafe_json_dumps` with
-//! `sort_keys`) and `urlencode` (`do_urlencode`). minijinja's `tojson` and `urlencode` are replaced here.
+//! Three filters carry bytes the pages depend on, so they are Jinja2's own: `tojson` (`htmlsafe_json_dumps` with
+//! `sort_keys`), `urlencode` (`do_urlencode`) and `format` (`do_format` with one positional argument, the `%` operator
+//! on the value). minijinja's `tojson`, `urlencode` and `format` are replaced here.
 
 use std::path::PathBuf;
 
@@ -36,6 +37,7 @@ pub fn environment(
   });
   environment.add_filter("tojson", tojson);
   environment.add_filter("urlencode", urlencode);
+  environment.add_filter("format", percent_format);
   environment
 }
 
@@ -160,6 +162,95 @@ fn query_quote(text: &str) -> String {
   quote(text, b"").replace("%20", "+")
 }
 
+/// Jinja2's `format` filter (`do_format`): `soft_str(value) % (kwargs or args)` with the one positional argument the
+/// pages pass. The conversions are `%f` and `%.Nf`, `%d`, `%s` and `%%`; any other conversion fails the render.
+fn percent_format(template: Value, argument: Value) -> Result<String, Error> {
+  let template = python_text(&template)?;
+  let argument = to_json(&argument)?;
+  let mut out = String::with_capacity(template.len());
+  let mut pending = Some(&argument);
+  let mut rest = template.as_str();
+  while let Some(percent) = rest.find('%') {
+    out.push_str(&rest[..percent]);
+    rest = &rest[percent + 1..];
+    if let Some(after) = rest.strip_prefix('%') {
+      out.push('%');
+      rest = after;
+      continue;
+    }
+    let spec_length = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+    let spec = &rest[..spec_length];
+    let Some(conversion) = rest[spec_length..].chars().next() else {
+      return Err(format_error(format!("incomplete format {template:?}: the template ends in a %")));
+    };
+    rest = &rest[spec_length + conversion.len_utf8()..];
+    let Some(value) = pending.take() else {
+      return Err(format_error(format!("not enough arguments for the format string {template:?}")));
+    };
+    out.push_str(&convert(spec, conversion, value)?);
+  }
+  out.push_str(rest);
+  if pending.is_some() {
+    return Err(format_error(format!("not all arguments converted during the formatting of {template:?}")));
+  }
+  Ok(out)
+}
+
+/// One conversion of `percent_format`. `%f` takes `.N` (six digits when the spec is empty); `%d` and `%s` take no spec.
+fn convert(spec: &str, conversion: char, value: &serde_json::Value) -> Result<String, Error> {
+  match conversion {
+    'f' => Ok(pyfmt::format_f(real(value, conversion)?, precision(spec, conversion)?)),
+    'd' if spec.is_empty() => integer(value),
+    's' if spec.is_empty() => Ok(pyfmt::python_str(value)),
+    _ => Err(format_error(format!(
+      "unsupported format conversion '%{spec}{conversion}': the format filter supports %f, %.Nf, %d, %s and %%"
+    ))),
+  }
+}
+
+/// The digits after the point of a `%f` spec: `.N`, `.` alone for zero, or nothing for Python's default of six.
+fn precision(spec: &str, conversion: char) -> Result<usize, Error> {
+  match spec.strip_prefix('.') {
+    None if spec.is_empty() => Ok(6),
+    None => Err(format_error(format!("unsupported format conversion '%{spec}{conversion}'"))),
+    Some("") => Ok(0),
+    Some(digits) => {
+      digits.parse().map_err(|_| format_error(format!("unsupported format conversion '%{spec}{conversion}'")))
+    }
+  }
+}
+
+/// The argument of a `%f` conversion as a real number: an int or a float, and a bool as 0 or 1.
+fn real(value: &serde_json::Value, conversion: char) -> Result<f64, Error> {
+  match value {
+    serde_json::Value::Number(number) => Ok(number.as_f64().expect("a serde_json number reads as f64")),
+    serde_json::Value::Bool(flag) => Ok(f64::from(u8::from(*flag))),
+    _ => Err(format_error(format!("%{conversion} format: a real number is required"))),
+  }
+}
+
+/// The argument of a `%d` conversion as an integer: a float truncates toward zero, as `int()` does.
+fn integer(value: &serde_json::Value) -> Result<String, Error> {
+  match value {
+    serde_json::Value::Number(number) if number.is_f64() => {
+      let float = number.as_f64().expect("a serde_json number reads as f64");
+      if !float.is_finite() {
+        return Err(format_error(format!("cannot convert float {float} to integer")));
+      }
+      // The sign of a zero truncation is dropped: `int(-0.5)` is `0`, not `-0`.
+      let truncated = float.trunc();
+      Ok(format!("{:.0}", if truncated == 0.0 { 0.0 } else { truncated }))
+    }
+    serde_json::Value::Number(number) => Ok(number.to_string()),
+    serde_json::Value::Bool(flag) => Ok(u8::from(*flag).to_string()),
+    _ => Err(format_error("%d format: a number is required".to_string())),
+  }
+}
+
+fn format_error(detail: String) -> Error {
+  Error::new(ErrorKind::InvalidOperation, detail)
+}
+
 /// `urllib.parse.quote(text, safe)`: the unreserved characters and `safe` pass, every other byte is `%XX`.
 fn quote(text: &str, safe: &[u8]) -> String {
   let mut out = String::with_capacity(text.len());
@@ -175,6 +266,10 @@ fn quote(text: &str, safe: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+  use std::io::Write;
+  use std::path::Path;
+  use std::process::{Command, Stdio};
+
   use serde_json::json;
 
   use super::*;
@@ -213,5 +308,106 @@ mod tests {
   fn datetime_isoformat_returns_the_serialized_timestamp() {
     let timestamp = "2026-10-18T12:30:00+00:00";
     assert_eq!(render_str("{{ timestamp.isoformat() }}", json!({"timestamp": timestamp})), timestamp);
+  }
+
+  /// Jinja2 renders every `[template, context]` pair of stdin in the worktree's Python, and prints the outputs as JSON.
+  const JINJA2_RENDER: &str = "\
+import json, sys
+import jinja2
+cases = json.load(sys.stdin)
+environment = jinja2.Environment()
+print(json.dumps([environment.from_string(template).render(context) for template, context in cases]))";
+
+  fn jinja2_renders(cases: &[(String, serde_json::Value)]) -> Vec<String> {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).expect("the crate lies under the repo");
+    let mut child = Command::new("uv")
+      .args(["run", "python", "-c", JINJA2_RENDER])
+      .current_dir(repo_root)
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped())
+      .spawn()
+      .expect("uv runs the worktree Python");
+    child
+      .stdin
+      .take()
+      .expect("stdin is piped")
+      .write_all(&serde_json::to_vec(cases).expect("the cases serialize"))
+      .expect("the cases reach Python");
+    let output = child.wait_with_output().expect("Python finishes");
+    assert!(output.status.success(), "Jinja2 failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    serde_json::from_slice(&output.stdout).expect("Jinja2 prints a JSON list of outputs")
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_the_page_and_the_edge_values() {
+    let mut cases: Vec<(String, serde_json::Value)> = vec![
+      // The uses in token_usage.html: `"%.1f"|format(cache_share)` at lines 85, 106 and 121.
+      (r#"{{ "%.1f"|format(cache_share) }}%"#.into(), json!({"cache_share": 37.45})),
+      (r#"{{ "%.2f"|format(ctx.out_share*100) }}% of the total"#.into(), json!({"ctx": {"out_share": 0.0625}})),
+      (r#"{{ "%.1f"|format(ctx.fresh_percent) }}%"#.into(), json!({"ctx": {"fresh_percent": 12.25}})),
+      (r#"{{"%.0f"|format(ps["share"])}}%"#.into(), json!({"ps": {"share": 2.5}})),
+      (r#"{{ "%.2f"|format(ctx.elapsed_s) }}"#.into(), json!({"ctx": {"elapsed_s": 0.125}})),
+      (r#"{{ "%d%%"|format(5) }} {{ "%.1f%%"|format(12.25) }}"#.into(), json!({})),
+      (r#"{{ "%d"|format(x) }} {{ "%s"|format(x) }}"#.into(), json!({"x": 2.7})),
+      (r#"{{ "%d"|format(x) }} {{ "%s"|format(x) }}"#.into(), json!({"x": -0.5})),
+      (r#"{{ "%d"|format(x) }} {{ "%s"|format(x) }}"#.into(), json!({"x": true})),
+      (r#"{{ "%d"|format(x) }} {{ "%s"|format(x) }}"#.into(), json!({"x": 7})),
+      (r#"{{ "%s"|format(x) }}"#.into(), json!({"x": null})),
+      (r#"{{ "%s"|format(x) }}"#.into(), json!({"x": "text"})),
+    ];
+    // Exact ties at two decimals (k/8), values at one and two decimals (k/1000), and halves at none (k/2).
+    for k in 0..1000 {
+      let eighth = f64::from(k) / 8.0;
+      let thousandth = f64::from(k) / 1000.0;
+      cases.push((r#"{{ "%.2f"|format(x) }}"#.into(), json!({"x": eighth})));
+      cases.push((r#"{{ "%.2f"|format(x) }}"#.into(), json!({"x": thousandth})));
+      cases.push((r#"{{ "%.1f"|format(x) }}"#.into(), json!({"x": thousandth})));
+    }
+    for k in 0..200 {
+      cases.push((r#"{{ "%.0f"|format(x) }}"#.into(), json!({"x": f64::from(k) / 2.0})));
+    }
+    let expected = jinja2_renders(&cases);
+    assert_eq!(expected.len(), cases.len());
+    let environment = environment(|_| Ok(None));
+    let mismatches: Vec<String> = cases
+      .iter()
+      .zip(&expected)
+      .filter_map(|((template, context), jinja2)| {
+        let ours = environment
+          .render_str(template, Value::from_serialize(context))
+          .unwrap_or_else(|error| panic!("{template} with {context}: {error}"));
+        (ours != *jinja2).then(|| format!("{template} with {context}: Jinja2 {jinja2:?}, ours {ours:?}"))
+      })
+      .collect();
+    assert!(
+      mismatches.is_empty(),
+      "{} renders differ, first {:?}",
+      mismatches.len(),
+      &mismatches[..mismatches.len().min(8)]
+    );
+  }
+
+  #[test]
+  fn format_filter_rounds_the_half_way_values_to_even() {
+    assert_eq!(render_str(r#"{{ "%.2f"|format(0.125) }}"#, json!({})), "0.12");
+    assert_eq!(render_str(r#"{{ "%.2f"|format(2.675) }}"#, json!({})), "2.67");
+  }
+
+  #[test]
+  fn format_filter_fails_the_render_on_a_conversion_it_does_not_support() {
+    for (template, named) in [(r#"{{ "%x"|format(10) }}"#, "'%x'"), (r#"{{ "%5.2f"|format(1.5) }}"#, "'%5.2f'")] {
+      let error = environment(|_| Ok(None)).render_str(template, json!({})).expect_err("the conversion is refused");
+      assert!(error.to_string().contains(named), "{template}: {error}");
+    }
+  }
+
+  #[test]
+  fn format_filter_refuses_an_argument_count_that_python_refuses() {
+    let environment = environment(|_| Ok(None));
+    let missing = environment.render_str(r#"{{ "%s %s"|format(1) }}"#, json!({})).expect_err("one argument is short");
+    assert!(missing.to_string().contains("not enough arguments"), "{missing}");
+    let unused = environment.render_str(r#"{{ "%%"|format(1) }}"#, json!({})).expect_err("the argument is unused");
+    assert!(unused.to_string().contains("not all arguments converted"), "{unused}");
   }
 }

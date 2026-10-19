@@ -122,6 +122,19 @@ pub fn format_g(x: f64) -> String {
   }
 }
 
+/// CPython's `'%.{precision}f' % x`, which `format(x, '.{precision}f')` shares: `x` in fixed notation with `precision`
+/// digits after the point. Rust's fixed form rounds the exact binary value and breaks an exact tie toward the even
+/// digit, as CPython does. NaN and the infinities print as CPython's lowercase words.
+pub fn format_f(x: f64, precision: usize) -> String {
+  if x.is_nan() {
+    return "nan".to_string();
+  }
+  if x.is_infinite() {
+    return if x > 0.0 { "inf" } else { "-inf" }.to_string();
+  }
+  format!("{x:.precision$}")
+}
+
 /// Drops the trailing zeros, and a bare decimal point, from a fixed-notation number.
 fn trim_fraction_zeros(text: &str) -> String {
   if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text.to_string() }
@@ -394,6 +407,25 @@ mod tests {
     ];
     for (value, expected) in cases {
       assert_eq!(format_g(value), expected, "format({value}, 'g')");
+    }
+  }
+
+  #[test]
+  fn format_f_rounds_the_exact_binary_value_like_cpython() {
+    let cases = [
+      (0.125, 2, "0.12"),
+      (0.375, 2, "0.38"),
+      (2.675, 2, "2.67"),
+      (0.5, 0, "0"),
+      (1.5, 0, "2"),
+      (2.5, 0, "2"),
+      (-0.04, 1, "-0.0"),
+      (1e20, 0, "100000000000000000000"),
+      (f64::NAN, 2, "nan"),
+      (f64::NEG_INFINITY, 1, "-inf"),
+    ];
+    for (value, precision, expected) in cases {
+      assert_eq!(format_f(value, precision), expected, "'%.{precision}f' % {value}");
     }
   }
 

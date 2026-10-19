@@ -56,6 +56,15 @@ impl Credentials {
   pub fn access_key(&self) -> Option<String> {
     self.get("charliebot", "access_key").filter(|value| value.is_truthy()).map(CredentialValue::python_str)
   }
+
+  /// `Credentials.require(section, key)`: the value as `str(...)`, or an error naming the key and the file
+  /// when it is unset. A falsy value such as `""` or `False` is set, as in Python.
+  pub fn require(&self, section: &str, key: &str) -> Result<String, ConfigError> {
+    self
+      .get(section, key)
+      .map(CredentialValue::python_str)
+      .ok_or_else(|| ConfigError(format!("credentials.{section}.{key} is not set in {}", paths::display(&self.path))))
+  }
 }
 
 /// Load `<home>/credentials.yaml`. A missing or empty file loads as no sections; a `null` value counts
@@ -132,6 +141,28 @@ mod tests {
     assert!(error.starts_with("credentials.charliebot must be a mapping of keys: "), "{error}");
     let error = load("- a\n").unwrap_err().to_string();
     assert!(error.starts_with("credentials must be a mapping of sections: "), "{error}");
+  }
+
+  #[test]
+  fn require_names_a_missing_section_or_key_and_the_file() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "upstream:\n  api_key: k\n").unwrap();
+    let credentials = load_credentials(home.path()).unwrap();
+    let path = home.path().join(CREDENTIALS_FILENAME).display().to_string();
+
+    let error = credentials.require("missing", "api_key").unwrap_err().to_string();
+    assert_eq!(error, format!("credentials.missing.api_key is not set in {path}"));
+    let error = credentials.require("upstream", "token").unwrap_err().to_string();
+    assert_eq!(error, format!("credentials.upstream.token is not set in {path}"));
+    assert_eq!(credentials.require("upstream", "api_key").unwrap(), "k");
+  }
+
+  #[test]
+  fn require_returns_a_non_string_value_as_python_str() {
+    let credentials = load("upstream:\n  count: 42\n  flag: false\n  empty: \"\"\n").unwrap();
+    assert_eq!(credentials.require("upstream", "count").unwrap(), "42");
+    assert_eq!(credentials.require("upstream", "flag").unwrap(), "False");
+    assert_eq!(credentials.require("upstream", "empty").unwrap(), "");
   }
 
   #[test]

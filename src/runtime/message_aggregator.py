@@ -331,9 +331,15 @@ def _context_compacted_msg(ev: dict) -> dict:
 
 
 def _context_compact_failed_msg(ev: dict) -> dict:
+  """The failure line; an event that names its trigger puts it in parentheses after "Compaction"."""
   error = ev.get('error')
+  head = 'Compaction'
+  if ev.get('trigger'):
+    head += f' ({ev["trigger"]})'
   note = _compacting_model_note(ev)
-  head = f'Compaction {note} failed' if note else 'Compaction failed'
+  if note:
+    head += f' {note}'
+  head += ' failed'
   content = head if not error else f'{head} — {error}'
   return {'role': 'system', 'kind': ET.CONTEXT_COMPACT_FAILED, 'content': content}
 

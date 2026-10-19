@@ -64,6 +64,16 @@ pub enum Kind {
   StringTooLong {
     max_length: usize,
   },
+  /// `too_short` on a list: fewer items than `min_length`. pydantic reports it after the items validate.
+  ListTooShort {
+    min_length: usize,
+    actual_length: usize,
+  },
+  /// `too_long` on a list: more items than `max_length`. pydantic reports it before the items validate.
+  ListTooLong {
+    max_length: usize,
+    actual_length: usize,
+  },
   IntType,
   IntParsing,
   IntFromFloat,
@@ -108,6 +118,8 @@ impl Kind {
       Kind::StringType => "string_type",
       Kind::StringTooShort { .. } => "string_too_short",
       Kind::StringTooLong { .. } => "string_too_long",
+      Kind::ListTooShort { .. } => "too_short",
+      Kind::ListTooLong { .. } => "too_long",
       Kind::IntType => "int_type",
       Kind::IntParsing => "int_parsing",
       Kind::IntFromFloat => "int_from_float",
@@ -143,6 +155,12 @@ impl Kind {
       Kind::StringTooLong { max_length } => {
         format!("String should have at most {max_length} {}", characters(*max_length))
       }
+      Kind::ListTooShort { min_length, actual_length } => {
+        format!("List should have at least {min_length} {} after validation, not {actual_length}", items(*min_length))
+      }
+      Kind::ListTooLong { max_length, actual_length } => {
+        format!("List should have at most {max_length} {} after validation, not {actual_length}", items(*max_length))
+      }
       Kind::IntType => "Input should be a valid integer".to_string(),
       Kind::IntParsing => "Input should be a valid integer, unable to parse string as an integer".to_string(),
       Kind::IntFromFloat => "Input should be a valid integer, got a number with a fractional part".to_string(),
@@ -171,6 +189,12 @@ impl Kind {
     match self {
       Kind::StringTooShort { min_length } => Some(json!({"min_length": min_length})),
       Kind::StringTooLong { max_length } => Some(json!({"max_length": max_length})),
+      Kind::ListTooShort { min_length, actual_length } => {
+        Some(json!({"field_type": "List", "min_length": min_length, "actual_length": actual_length}))
+      }
+      Kind::ListTooLong { max_length, actual_length } => {
+        Some(json!({"field_type": "List", "max_length": max_length, "actual_length": actual_length}))
+      }
       Kind::Literal(choices) | Kind::Enum(choices) => Some(json!({"expected": one_of(choices)})),
       Kind::GreaterThan(bound) => Some(json!({"gt": bound.value()})),
       Kind::GreaterThanEqual(bound) => Some(json!({"ge": bound.value()})),
@@ -187,6 +211,10 @@ impl Kind {
 
 fn characters(count: usize) -> &'static str {
   if count == 1 { "character" } else { "characters" }
+}
+
+fn items(count: usize) -> &'static str {
+  if count == 1 { "item" } else { "items" }
 }
 
 /// pydantic's expected-choices text: `'a'`, `'a' or 'b'`, `'a', 'b' or 'c'`.
@@ -339,6 +367,23 @@ pub fn parse_bool(source: Source, name: &str, text: &str) -> Result<bool, Box<Fi
   }
 }
 
+/// A `float` value's text, read as pydantic's lax mode reads a string: surrounding whitespace is ignored and an
+/// underscore may join two digits. A non-finite text (`nan`, `inf`) fails as `float_parsing`, because the port
+/// refuses non-finite floats (`rust/docs/PORT_STATUS.md`).
+pub fn parse_float(source: Source, name: &str, text: &str) -> Result<f64, Box<FieldError>> {
+  let parsed = if underscores_join_digits(text) { text.trim().replace('_', "").parse::<f64>().ok() } else { None };
+  parsed.filter(|value| value.is_finite()).ok_or_else(|| failure(source, name, text, Kind::FloatParsing))
+}
+
+/// Whether each underscore in `text` sits between two ASCII digits, the places Python's `float` accepts one.
+fn underscores_join_digits(text: &str) -> bool {
+  let bytes = text.as_bytes();
+  bytes.iter().enumerate().all(|(index, byte)| {
+    *byte != b'_'
+      || (index > 0 && bytes[index - 1].is_ascii_digit() && bytes.get(index + 1).is_some_and(u8::is_ascii_digit))
+  })
+}
+
 /// A `Literal[...]` string parameter: the text must equal one of `choices`.
 pub fn parse_literal(
   source: Source,
@@ -375,6 +420,17 @@ mod tests {
     }
     for text in ["1.5", "1.", ".5", "1e3", "1.0_0", "0x10", "1__0", "_1", "", "-", "\u{661}\u{662}"] {
       assert_eq!(lax_int(text), None, "{text:?}");
+    }
+  }
+
+  #[test]
+  fn lax_float_reads_what_pydantic_reads() {
+    let accepted = [(" 0.5 ", 0.5), ("1_0.5", 10.5), ("+2", 2.0), ("1.", 1.0), (".5", 0.5), ("1e3", 1000.0)];
+    for (text, value) in accepted {
+      assert_eq!(parse_float(Source::Query, "x", text).ok(), Some(value), "{text:?}");
+    }
+    for text in ["abc", "", "nan", "inf", "1__0", "_1", "1_", "1_.5", "1._5"] {
+      assert!(parse_float(Source::Query, "x", text).is_err(), "{text:?}");
     }
   }
 

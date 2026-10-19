@@ -226,9 +226,6 @@ Python tests reach the same paths through mocks, so the hooks have no Python cou
 
 Known divergences from Python:
 
-- `Worker::resume` returns an error and leaves the process running when the process is still alive after the follow.
-  Python captures the process's diagnostics (`base._capture_proc_diagnostics`) and kills its group. The capture is
-  `charliebot-agents` `runner::capture_process_diagnostics`, which is private to that module.
 - The hang-diagnostics, stderr and cgroup terminal events are appended through the run's held events-log handle with
   `sync_data`, not through `charliebot-store`'s `ndjson::append`, which is crate-private. The line bytes are the same
   compact JSON.
@@ -341,7 +338,8 @@ before they can pass, and the rest need a store fixture with live run processes.
 `tests/test_worker_diagnostics.py`, `tests/test_worker_event_line.py` and `tests/test_worker_quota_scan.py`, and the
 non-Claude build case of `tests/test_backend_hooks.py`. Each test carries its `// Python:` comment. It runs scripted
 `/bin/sh` processes, which the process-group guard kills when a test ends, and it starts no agent CLI. All twenty-one
-cases pass. Three differ in how they observe the Python behavior. The falls-back case raises the below-line target's
+ported cases pass. The resume case of `src/runtime/worker.py:357-372` has no Python test: a fake agent writes a result
+and stays alive, and the case checks the diagnostics file, the group's exit and the terminal event. Three differ in how they observe the Python behavior. The falls-back case raises the below-line target's
 reading from a subscriber on the thread channel, when the safe point's `user` frame is broadcast. The watch has observed
 that event by then, and the move reads the pool only after the process exits, so the reading rises between the gate and
 the move. The Python case stubs `claude_accounts.select` instead. The hang-diagnostics case checks the written file's

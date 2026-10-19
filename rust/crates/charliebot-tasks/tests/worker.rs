@@ -13,7 +13,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -47,6 +49,7 @@ use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
+use charliebot_store::run_records::RAW_LOG_NAME;
 use charliebot_tasks::worker::{self, QuotaExhaustedError, SpawnedFn, Worker, WorkerSpec};
 use futures_util::future::BoxFuture;
 use process_guard::ProcessGroupGuard;
@@ -999,6 +1002,65 @@ async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result
   assert_eq!(task_worker.run().await?, 0);
 
   assert!(!root.path().join("data").join(worker::HANG_DIAGNOSTICS_NAME).exists());
+  Ok(())
+}
+
+// Python: src/runtime/worker.py:357-372
+#[tokio::test]
+async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  // Resume builds its backend twice, for the stream translator and for the exit scan, and each build takes one script.
+  // Resume runs neither script.
+  let scripts = Scripts::new(vec![String::new(), String::new()]);
+  let config = config_text(&root, &[], &[], &[option_yaml("worker", "worker_script", Some(&scripts.token), None)])?;
+  let setup = Setup::new(&root, scripted_registry(&Arc::new(ClaudeAccountState::new()))?, &config)?;
+  let mut frames = setup.features.store.subscribe("t1");
+  let data = root.path().join("data");
+  fs::create_dir_all(&data)?;
+  // The agent writes its result to the raw log, then stays alive. `exec` leaves the sleep as the group's only process.
+  let result_line = serde_json::to_string(&result())?;
+  let raw_log = data.join(RAW_LOG_NAME);
+  let agent_script = format!("printf '%s\\n' '{result_line}' >> '{}'; exec sleep {HOLD_SECONDS}", raw_log.display());
+  let agent = Command::new("/bin/sh")
+    .args(["-c", &agent_script])
+    .process_group(0)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()?;
+  let pid = agent.id();
+  setup.guard.track(pid);
+  let agent = Arc::new(Mutex::new(agent));
+  let mut spec = setup.spec(&root, Some("worker"), None)?;
+  spec.thread.pid = Some(pid);
+  let task_worker = setup.worker(spec)?.with_hang_timeouts(Duration::from_millis(300), Duration::from_secs(2));
+  // The agent is this test's child. The probe reaps it once it exits, so its group id then resolves to no process.
+  let probe = Arc::clone(&agent);
+  let is_alive = Arc::new(move || {
+    let mut agent = probe.lock().expect("agent mutex is not poisoned");
+    agent.try_wait().expect("the agent's exit status reads").is_none()
+  });
+
+  let exit_code = task_worker.resume(is_alive, None).await?;
+
+  assert_eq!(exit_code, 0, "the raw log's result is a success");
+  assert!(data.join(worker::HANG_DIAGNOSTICS_NAME).is_file(), "the diagnostics are written beside the events log");
+  assert_eq!(unsafe { libc::kill(-(pid as libc::pid_t), 0) }, -1, "the agent's process group is gone");
+  assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+  // The events log ends with its last persisted terminal event, which carries the scanned exit code. The completion
+  // is only broadcast, as `worker.py` `_emit_terminal_events` broadcasts it, so the thread channel carries it.
+  let logged = read_events(&root.events_log())?;
+  let persisted_terminal = logged.last().context("the events log ends with a terminal event")?;
+  assert_eq!(persisted_terminal["type"], ET::SYSTEM);
+  assert_eq!(persisted_terminal["subtype"], "hang_diagnostics");
+  assert_eq!(persisted_terminal["exit_code"], exit_code);
+  let mut broadcast = Vec::new();
+  while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(200), frames.recv()).await {
+    broadcast.push(serde_json::from_str::<Value>(&frame)?);
+  }
+  let completion = broadcast.last().context("the thread channel carries the completion")?;
+  assert_eq!(completion["type"], ET::COMPLETE);
+  assert_eq!(completion["exit_code"], exit_code);
   Ok(())
 }
 

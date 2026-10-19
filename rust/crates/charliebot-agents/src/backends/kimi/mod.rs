@@ -1,7 +1,7 @@
 //! The `cc-kimi` backend type (`src/backends/kimi`): Claude Code against Kimi's Anthropic-compatible endpoint. The Claude
 //! CLI runs every call, so the type's usage counts under Claude Code.
 
-mod factory;
+pub mod factory;
 mod kimi_claude;
 mod options;
 

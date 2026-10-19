@@ -2,7 +2,7 @@
 //! the process has exited. The CLI logs its usage only into CharlieBot's own run logs, so its usage source has no reader.
 
 mod antigravity_cli;
-mod factory;
+pub mod factory;
 mod options;
 
 use std::sync::Arc;

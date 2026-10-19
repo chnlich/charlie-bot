@@ -1,0 +1,113 @@
+# The plan present and amend verbs on pages that pass the plan assertions: a lineage presented and amended with each
+# trigger, then its listings; the refusals that each check names; the unknown session; and the request shapes the models
+# refuse. The lineage session's plans move through their states in step order, so each answer depends on the steps
+# before it. The page height is measured through the scenario's headless Chrome on both servers.
+stage: features
+name: features-artifacts-plan-present
+fixture_extras: [artifacts_plan_pages]
+headless_chrome: true
+config:
+  headless_chrome_bin: ${tree.root}/bin/headless-chrome
+steps:
+  - name: present a page that passes every assertion, with a base
+    method: POST
+    path: /api/internal/plan/present
+    json:
+      session_id: "${sessions.pages_lineage}"
+      file: artifacts/plan_one.html
+      title: Plan one
+      base_repo: synthetic/repo
+      base_branch: main
+      base_sha: "0123456789abcdef"
+    expect_status: 200
+  - name: amend plan 1 with the auto_amend trigger
+    method: POST
+    path: /api/internal/plan/amend
+    json:
+      session_id: "${sessions.pages_lineage}"
+      file: artifacts/plan_two.html
+      plan_id: 1
+      trigger: auto_amend
+      note: Split the executor into its own section
+    expect_status: 200
+  - name: amend plan 1 with the feedback trigger
+    method: POST
+    path: /api/internal/plan/amend
+    json:
+      session_id: "${sessions.pages_lineage}"
+      file: artifacts/plan_three.html
+      plan_id: 1
+      trigger: feedback
+      note: Narrow the scope to the executor
+    expect_status: 200
+  - name: plans of the lineage session after the presentation and the amendments
+    method: GET
+    path: /api/sessions/${sessions.pages_lineage}/plans
+    expect_status: 200
+  - name: session listing after the presentation
+    method: GET
+    path: /api/sessions/
+    expect_status: 200
+  - name: present a page that fails two assertions refuses with both reasons
+    method: POST
+    path: /api/internal/plan/present
+    json: {session_id: "${sessions.pages_refusals}", file: artifacts/plan_broken.html, title: Broken plan}
+    expect_status: 400
+  - name: present a file that a version already binds refuses
+    method: POST
+    path: /api/internal/plan/present
+    json: {session_id: "${sessions.pages_lineage}", file: artifacts/plan_one.html, title: Rebound plan}
+    expect_status: 400
+  - name: present a file outside the session directory refuses
+    method: POST
+    path: /api/internal/plan/present
+    json: {session_id: "${sessions.pages_refusals}", file: "../${sessions.pages_other}/artifacts/plan_other.html", title: Outside plan}
+    expect_status: 400
+  - name: present a missing file refuses
+    method: POST
+    path: /api/internal/plan/present
+    json: {session_id: "${sessions.pages_refusals}", file: artifacts/plan_missing.html, title: Missing plan}
+    expect_status: 400
+  - name: amend with a blank note refuses
+    method: POST
+    path: /api/internal/plan/amend
+    json: {session_id: "${sessions.pages_lineage}", file: artifacts/plan_blank.html, plan_id: 1, note: "   "}
+    expect_status: 400
+  - name: amend with no open lineage refuses
+    method: POST
+    path: /api/internal/plan/amend
+    json: {session_id: "${sessions.pages_closed}", file: artifacts/plan_extra.html, note: Revised after close}
+    expect_status: 400
+  - name: amend with two open lineages and no plan id refuses
+    method: POST
+    path: /api/internal/plan/amend
+    json: {session_id: "${sessions.pages_two_open}", file: artifacts/plan_extra.html, note: Revised with two open}
+    expect_status: 400
+  - name: present on an unknown session answers 404
+    method: POST
+    path: /api/internal/plan/present
+    json: {session_id: "${missing_session}", file: artifacts/plan_one.html, title: Missing session}
+    expect_status: 404
+  - name: amend on an unknown session answers 404
+    method: POST
+    path: /api/internal/plan/amend
+    json: {session_id: "${missing_session}", file: artifacts/plan_one.html, plan_id: 1, note: Missing session}
+    expect_status: 404
+  - name: present with an extra key answers 422
+    method: POST
+    path: /api/internal/plan/present
+    json: {session_id: "${sessions.pages_refusals}", file: artifacts/plan_one.html, title: Extra key, extra: true}
+    expect_status: 422
+    compare: status_and_shape
+  - name: amend without a note answers 422
+    method: POST
+    path: /api/internal/plan/amend
+    json: {session_id: "${sessions.pages_lineage}", file: artifacts/plan_one.html, plan_id: 1}
+    expect_status: 422
+    compare: status_and_shape
+  - name: amend with an unknown trigger answers 422
+    method: POST
+    path: /api/internal/plan/amend
+    json: {session_id: "${sessions.pages_lineage}", file: artifacts/plan_one.html, plan_id: 1, note: Unknown trigger, trigger: retired}
+    expect_status: 422
+    compare: status_and_shape

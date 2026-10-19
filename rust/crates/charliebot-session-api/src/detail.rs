@@ -68,6 +68,12 @@ pub fn build_bootstrap_payload(
   } else if let Some(projection) = store.get_message_projection(&meta.id)? {
     let (messages, oldest, has_more) = projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
     (messages, projection.pending_draft().cloned(), projection.event_count(), oldest, has_more)
+  } else if meta.archive_offset == 0 {
+    let events = store.load_chat_events_shared_sync(&meta.id)?;
+    let event_count = events.len();
+    let oldest = event_count.saturating_sub(BOOTSTRAP_MESSAGE_LIMIT);
+    let (messages, pending_draft) = store.events_to_view_at(&events[oldest..], oldest)?;
+    (messages, pending_draft, event_count, oldest, oldest > 0)
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
     let (events, total_count, has_more) = store.load_chat_events_tail(&meta.id, BOOTSTRAP_MESSAGE_LIMIT)?;
@@ -283,9 +289,19 @@ async fn session_events(
 
   let start = if before <= 0 { 0 } else { (before - limit as i64).max(0) as usize };
   let end = usize::try_from(before).unwrap_or(0);
-  let (events, has_more) = match features.store.load_chat_events_range(&session_id, start, end) {
-    Ok(result) => result,
-    Err(error) => return store_error(error),
+  let (events, has_more) = if meta.archive_offset == 0 {
+    let snapshot = match features.store.load_chat_events_shared_sync(&session_id) {
+      Ok(snapshot) => snapshot,
+      Err(error) => return store_error(error),
+    };
+    let page_start = start.min(snapshot.len());
+    let page_end = end.min(snapshot.len()).max(page_start);
+    (snapshot[page_start..page_end].to_vec(), start > 0)
+  } else {
+    match features.store.load_chat_events_range(&session_id, start, end) {
+      Ok(result) => result,
+      Err(error) => return store_error(error),
+    }
   };
   let messages = match features.store.events_to_messages_at(&events, start) {
     Ok(messages) => messages,
@@ -397,7 +413,7 @@ async fn session_runs(
     }
     Err(error) => return store_error(error),
   };
-  let events = match features.store.load_all_facts(&meta.id) {
+  let events = match features.store.load_all_facts_shared_sync(&meta.id) {
     Ok(events) => events,
     Err(error) => return store_error(error),
   };
@@ -413,8 +429,10 @@ async fn session_runs(
     };
     let object = row.as_object_mut().expect("run record serializes to an object");
     object.insert("state".to_string(), Value::String(state.to_string()));
-    object
-      .insert("stop_requested".to_string(), Value::Bool(run_records::stop_requested_in_events(&events, &run.id, None)));
+    object.insert(
+      "stop_requested".to_string(),
+      Value::Bool(run_records::stop_requested_in_events(events.as_slice(), &run.id, None)),
+    );
     items.push(row);
   }
   responses::fast_json(StatusCode::OK, &json!({"items": items, "next_cursor": page.next_cursor}))
@@ -436,11 +454,11 @@ async fn pending_task_inputs(
     Ok(runs) => runs,
     Err(error) => return task_http_error(error),
   };
-  let all_events = match features.store.load_all_facts(&meta.id) {
+  let all_events = match features.store.load_all_facts_shared_sync(&meta.id) {
     Ok(events) => events,
     Err(error) => return task_http_error(error),
   };
-  let pending = match pending_input_events(&facts, &run_records, &all_events, &meta.id) {
+  let pending = match pending_input_events(&facts, &run_records, all_events.as_slice(), &meta.id) {
     Ok(pending) => pending,
     Err(error) => return task_http_error(error),
   };

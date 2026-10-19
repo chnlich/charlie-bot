@@ -134,8 +134,8 @@ Known-alive symbols:
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete. The same marker takes a second form: an unreachable `yield` after a `raise` in
   `tests/test_task_run_backend_types.py` and `tests/test_turn_contributions.py`, which vulture
-  reads as unreachable code after `raise` at 100% confidence; the yield is again what keeps the
-  fake backend's `run()` an async generator, as each site's inline comment states.
+  reads as unreachable code after `raise` at 100% confidence; the yield is again what keeps each
+  fake backend's `run()` an async generator.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
   `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,

@@ -77,8 +77,8 @@ class _UsageFacts:
 
   ``chosen_prompt_tokens`` > 0 selects the claude tier: the value is the chosen
   assistant event's usage prompt-token sum, and ``chosen_model`` is its
-  ``message.model``. ``post_compact_tokens`` is the latest ``compact_boundary``
-  int ``post_tokens`` seen while the slot kind was ``claude`` (each qualifying
+  ``message.model``. ``post_compact_tokens`` is the latest ``compact_boundary`` or
+  ``context_compacted`` int ``post_tokens`` seen while the slot kind was ``claude`` (each qualifying
   assistant event resets it), or None. ``model_windows`` merges
   ``modelUsage[model].contextWindow`` across result events (last wins).
   ``snapshot`` is the newest result event's dict ``context_snapshot``, or None.
@@ -109,8 +109,8 @@ class _UsageFold:
   Every field the scan reports is carried forward event by event, so feeding
   a suffix into the carried state lands on the same state as a fresh fold
   over the whole list: a qualifying ``assistant`` event overwrites the chosen
-  claude reading and resets its boundary, a later ``compact_boundary``
-  refines the boundary only while the latest-reading slot is still claude, a
+  claude reading and resets its boundary, a later ``compact_boundary`` or
+  ``context_compacted`` refines the boundary only while the latest-reading slot is still claude, a
   result event's dict ``context_snapshot`` and a ``system`` /
   ``context_reading`` payload each overwrite the slot with their own kind,
   ``model_windows`` merges last-wins, and the cost sum adds in event order
@@ -161,15 +161,14 @@ class _UsageFold:
       elif kind == ET.SYSTEM:
         subtype = ev.get("subtype")
         if subtype == ET.COMPACT_BOUNDARY:
-          if self.reading_kind == _READING_CLAUDE:
-            candidate = (ev.get(ET.COMPACT_METADATA) or {}).get(ET.COMPACT_POST_TOKENS)
-            if isinstance(candidate, int):
-              self.post_compact_tokens = candidate
+          self._fold_compaction_boundary(ev)
         elif subtype == ET.CONTEXT_READING:
           payload = ev.get(ET.CONTEXT_READING)
           if isinstance(payload, dict):
             self.reading_kind = _READING_RESOLVED
             self.reading = payload
+      elif kind == ET.CONTEXT_COMPACTED:
+        self._fold_compaction_boundary(ev)
       elif kind == ET.RESULT:
         for model_name, info in (ev.get("modelUsage") or {}).items():
           window = info.get("contextWindow")
@@ -184,6 +183,13 @@ class _UsageFold:
           self.unknown_cost = True
         else:
           self.total_cost += event_cost
+
+  def _fold_compaction_boundary(self, ev: dict) -> None:
+    """Take a compaction event's int ``post_tokens`` as the reading while the slot is claude."""
+    if self.reading_kind == _READING_CLAUDE:
+      candidate = (ev.get(ET.COMPACT_METADATA) or {}).get(ET.COMPACT_POST_TOKENS)
+      if isinstance(candidate, int):
+        self.post_compact_tokens = candidate
 
   def facts(self) -> _UsageFacts:
     """Snapshot the carried state as the frozen facts the tiers read."""
@@ -241,9 +247,10 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   """Resolve usage from the last main-chain assistant event with positive prompt tokens.
 
   context_tokens is that assistant event's ``message.usage`` prompt-token sum, unless
-  a ``compact_boundary`` event with an int ``compact_metadata.post_tokens`` occurs
-  after it -- in which case the latest such ``post_tokens`` wins. ``model`` comes from
-  the assistant event's ``message.model``. context_full is ``min(contextWindow of
+  a ``compact_boundary`` or ``context_compacted`` event with an int
+  ``compact_metadata.post_tokens`` occurs after it -- in which case the latest such
+  ``post_tokens`` wins. ``model`` comes from the assistant event's
+  ``message.model``. context_full is ``min(contextWindow of
   modelUsage[model], declared_window)``; when the assistant model is absent from
   ``modelUsage`` the declared window alone is used. context_compact_at is
   ``context_full`` minus the compaction reserve of the registered ``claude`` reading limits; it is

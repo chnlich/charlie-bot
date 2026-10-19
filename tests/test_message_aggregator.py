@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import conftest
+import pytest
 
 from src.infra import event_types as ET
 from src.runtime import message_aggregator
@@ -260,3 +261,33 @@ def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
   # Every live delta re-serializes the whole buffered draft, so one uncapped
   # output would ride all of them; the cap bounds each snapshot instead.
   assert max(serialized) < 100_000
+
+
+@pytest.mark.parametrize(
+    ("event", "line"),
+    [
+        pytest.param(
+            {
+                "type": ET.CONTEXT_COMPACT_FAILED,
+                "error": "boom",
+                "model": "claude-opus-5-5",
+                "trigger": "idle"
+            },
+            "Compaction (idle) by Opus failed — boom",
+            id="idle_names_its_trigger",
+        ),
+        pytest.param(
+            {
+                "type": ET.CONTEXT_COMPACT_FAILED,
+                "error": "boom",
+                "model": "claude-sonnet-5"
+            },
+            "Compaction by Sonnet failed — boom",
+            id="untriggered_renders_unchanged",
+        ),
+    ],
+)
+def test_compaction_failure_line_names_the_trigger_only_when_the_event_carries_one(event: dict, line: str) -> None:
+  deltas = list(message_aggregator.MessageAggregator().feed(event))
+
+  assert [delta["message"]["content"] for delta in deltas] == [line]

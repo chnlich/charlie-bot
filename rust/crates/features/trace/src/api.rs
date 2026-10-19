@@ -9,8 +9,8 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
-use axum::routing::get;
 use charliebot_compat::mimetypes::MimeTypes;
+use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
@@ -28,8 +28,8 @@ static MIME_TYPES: OnceLock<MimeTypes> = OnceLock::new();
 
 pub(super) fn router(features: &std::sync::Arc<FeatureContext>) -> Router {
   Router::new()
-    .route(VIEWER_PATH, get(perfetto_viewer))
-    .route(MERGED_PATH, get(perfetto_merged))
+    .route(VIEWER_PATH, get_only(perfetto_viewer))
+    .route(MERGED_PATH, get_only(perfetto_merged))
     .with_state(std::sync::Arc::clone(features))
 }
 

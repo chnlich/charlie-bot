@@ -8,6 +8,8 @@ use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{StatusCode, Uri, request::Parts};
 use axum::response::Response;
+use charliebot_compat::responses::{self, Failure};
+use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
 use charliebot_core::paths;
 use charliebot_registry::Registry;
@@ -18,9 +20,8 @@ use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 
-use super::{Family, get_only};
+use super::Family;
 use crate::state::AppState;
-use charliebot_compat::responses::{self, Failure};
 
 pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path) };
 

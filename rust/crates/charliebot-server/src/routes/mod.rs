@@ -14,9 +14,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::handler::Handler;
 use axum::response::Response;
-use axum::routing::{MethodRouter, get};
 use charliebot_compat::responses;
 use http::{StatusCode, header};
 
@@ -38,19 +36,6 @@ pub const FAMILIES: &[Family] = &[pages::FAMILY, system::FAMILY, static_mounts::
 /// The HTTP router: every family's routes, then the not-found answer.
 pub fn router() -> Router<Arc<AppState>> {
   FAMILIES.iter().fold(Router::new(), |router, family| router.merge((family.routes)())).fallback(not_found)
-}
-
-/// A FastAPI GET route: other methods, HEAD included, answer 405 with `allow: GET`.
-pub fn get_only<H, T>(handler: H) -> MethodRouter<Arc<AppState>>
-where
-  H: Handler<T, Arc<AppState>>,
-  T: 'static,
-{
-  get(handler).head(get_method_not_allowed).fallback(get_method_not_allowed)
-}
-
-async fn get_method_not_allowed() -> Response {
-  responses::method_not_allowed("GET")
 }
 
 /// starlette's router when no route matches: a 307 to the slash-toggled path when that path matches

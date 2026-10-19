@@ -6,11 +6,10 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
-use axum::handler::Handler;
 use axum::http::StatusCode;
 use axum::response::Response;
-use axum::routing::{MethodRouter, get};
 use charliebot_compat::responses;
+use charliebot_compat::routing::get_only;
 use charliebot_core::pyfmt::str_repr;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::FeatureContext;
@@ -18,7 +17,7 @@ use charliebot_store::metadata::TaskProfile;
 use charliebot_tasks::prompts::{self, PromptEnv, TaskPromptError};
 use serde_json::{Value, json};
 
-use crate::routes::{method_not_allowed, store_error};
+use crate::routes::store_error;
 
 /// `EMPTY_BACKENDS_OPTIONS_REFUSAL` (`src/runtime/spawner_backends.py:46`): a preview refuses a config with no backend.
 const EMPTY_BACKENDS_OPTIONS_REFUSAL: &str = "session backend resolution requires a configured backends.options entry";
@@ -39,15 +38,6 @@ pub(crate) fn matches(path: &str) -> bool {
     ["", "api", "sessions", session_id, "runs", run_id, "context"] => !session_id.is_empty() && !run_id.is_empty(),
     _ => false,
   }
-}
-
-/// A FastAPI GET route: HEAD and the other methods answer 405 with `allow: GET`.
-fn get_only<H, T>(handler: H) -> MethodRouter<Arc<FeatureContext>>
-where
-  H: Handler<T, Arc<FeatureContext>>,
-  T: 'static,
-{
-  get(handler).head(method_not_allowed).fallback(method_not_allowed)
 }
 
 /// `GET /api/sessions/{session_id}/effective-prompt`: the snapshot-shaped preview of the next start of a task node.

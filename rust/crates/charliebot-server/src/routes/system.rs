@@ -5,13 +5,14 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
+use charliebot_compat::responses;
+use charliebot_compat::routing::get_only;
 use http::StatusCode;
 use serde_json::json;
 
-use super::{Family, get_only};
+use super::Family;
 use crate::auth::AUTH_STATUS_PATH;
 use crate::state::AppState;
-use charliebot_compat::responses;
 
 /// `internal.get_version`'s path: the CLI's version-skew probe.
 pub const VERSION_PATH: &str = "/api/internal/version";

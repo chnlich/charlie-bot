@@ -313,7 +313,7 @@ mod tests {
 
     let shutdown = lifespan.shutdown().await;
     assert!(shutdown.error.is_none(), "{:?}", shutdown.error);
-    assert!(!charliebot_compat::http_client::close_shared_client(), "the shutdown closed the shared HTTP client");
+    assert!(!charliebot_compat::http_client::close_shared_client(), "the shutdown left the shared HTTP client open");
     let all = TRACE.lock().unwrap().clone();
     let stopped: Vec<&str> = all[started.len()..].iter().map(String::as_str).collect();
     assert_eq!(stopped, ["ready_beta:stop", "ready_alpha:stop", "early_beta:stop", "early_alpha:stop", "let_go"]);

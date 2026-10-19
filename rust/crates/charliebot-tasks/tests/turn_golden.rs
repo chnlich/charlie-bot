@@ -805,8 +805,6 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
 }
 
 async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::Result<()> {
-  use std::os::unix::fs::PermissionsExt;
-
   let _serial = CANCEL_ROUTE_TEST_LOCK.lock().await;
   const ACCESS_KEY: &str = "synthetic-cancel-route-access-key";
   const SESSION_ID: &str = "synthetic-cancel-loop-session";
@@ -819,21 +817,16 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
   std::fs::write(home.join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))?;
   let control_dir = temp.path().join("fake-agent-control");
   std::fs::create_dir_all(&control_dir)?;
-  let fake_bin = temp.path().join("bin");
-  std::fs::create_dir_all(&fake_bin)?;
-  let fake_agent = fake_bin.join("fake-agent");
+  // The fake agent runs inline through `/bin/sh -c`, like the other scripted backends of this file. It waits
+  // until its release file appears or its control directory is removed.
   let script = format!(
     "counter=0; if [ -f '{0}/count' ]; then counter=$(/bin/cat '{0}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{0}/count'; touch '{0}/started-'\"$counter\"; printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"synthetic-native-session\"}}'; while [ ! -e '{0}/release-'\"$counter\" ] && [ -d '{0}' ]; do /bin/sleep 0.01; done",
     control_dir.display()
   );
-  std::fs::write(&fake_agent, script)?;
-  std::fs::set_permissions(&fake_agent, std::fs::Permissions::from_mode(0o755))?;
-
-  let option = backend_option("fake-agent".to_string());
+  let option = backend_option(script);
   let cfg = Arc::new(config(&home, Some(option)));
-  let agent_path = format!("{}:/usr/bin:/bin", fake_bin.display());
   let registry = registry();
-  let (cfg, features) = config_with_features_from_config_and_agent_path(cfg, Arc::clone(&registry), false, agent_path)?;
+  let (cfg, features) = config_with_features_from_config(cfg, Arc::clone(&registry), false)?;
   execution::pre_recovery_step(Arc::clone(&features)).await?;
   features
     .store

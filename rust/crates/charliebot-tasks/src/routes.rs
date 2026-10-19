@@ -11,7 +11,6 @@ use axum::response::{IntoResponse, Response};
 use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_compat::validation;
 
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -73,12 +72,21 @@ struct UploadedFileRef {
 
 struct SendMessageRequest {
   content: String,
-  uploaded_files: Option<Vec<UploadedFileRef>>,
+  uploaded_files: Vec<UploadedFileRef>,
   input_mode: Option<Option<String>>,
 }
 
-const SEND_MESSAGE_BODY_FIELDS: &[Field] =
-  &[Field::required("content", FieldType::String), Field::optional("input_mode", FieldType::NullableString)];
+const UPLOADED_FILE_BODY_FIELDS: &[Field] = &[
+  Field::required("filename", FieldType::String),
+  Field::required("path", FieldType::String),
+  Field::optional("size", FieldType::NullableInteger),
+];
+const UPLOADED_FILE_BODY: BodyModel = BodyModel::required(UPLOADED_FILE_BODY_FIELDS);
+const SEND_MESSAGE_BODY_FIELDS: &[Field] = &[
+  Field::required("content", FieldType::String),
+  Field::optional("uploaded_files", FieldType::ModelList { class_name: "UploadedFileRef", model: &UPLOADED_FILE_BODY }),
+  Field::optional("input_mode", FieldType::NullableString),
+];
 const SEND_MESSAGE_BODY: BodyModel = BodyModel::required(SEND_MESSAGE_BODY_FIELDS);
 
 const RETRY_RUN_BODY_FIELDS: &[Field] =
@@ -100,122 +108,21 @@ fn parse_send_message_request(body: &RequestBody) -> Result<SendMessageRequest, 
   let values = body.validate(&SEND_MESSAGE_BODY)?;
   let values = values.expect("a required request body validates to an object");
   let content = values["content"].as_str().expect("validated content is a string").to_string();
-  let uploaded_files = parse_uploaded_files(body)?;
+  let uploaded_files = match values.get("uploaded_files") {
+    None | Some(Value::Null) => Vec::new(),
+    Some(Value::Array(items)) => items.iter().map(uploaded_file).collect(),
+    _ => unreachable!("validated uploaded_files is a list"),
+  };
   let input_mode = values.get("input_mode").map(|value| value.as_str().map(str::to_string));
   Ok(SendMessageRequest { content, uploaded_files, input_mode })
 }
 
-fn parse_uploaded_files(body: &RequestBody) -> Result<Option<Vec<UploadedFileRef>>, Box<Response>> {
-  let RequestBody::Json(Value::Object(object)) = body else {
-    unreachable!("the send-message model validated a JSON object")
-  };
-  let Some(value) = object.get("uploaded_files") else {
-    return Ok(None);
-  };
-  let Some(items) = value.as_array() else {
-    return Err(body_validation_error(
-      vec![validation::Loc::Field("body".to_string()), validation::Loc::Field("uploaded_files".to_string())],
-      value.clone(),
-      validation::Kind::ListType,
-    ));
-  };
-
-  let mut files = Vec::with_capacity(items.len());
-  let mut errors = Vec::new();
-  for (index, item) in items.iter().enumerate() {
-    let Some(fields) = item.as_object() else {
-      errors.push(validation::FieldError {
-        loc: vec![
-          validation::Loc::Field("body".to_string()),
-          validation::Loc::Field("uploaded_files".to_string()),
-          validation::Loc::Index(index),
-        ],
-        input: item.clone(),
-        kind: validation::Kind::ModelAttributesType,
-      });
-      continue;
-    };
-    let error_start = errors.len();
-    let filename = nested_string(fields.get("filename"), index, "filename", &mut errors);
-    let path = nested_string(fields.get("path"), index, "path", &mut errors);
-    let size = match fields.get("size") {
-      None | Some(Value::Null) => None,
-      Some(value) => match uploaded_file_size(value) {
-        Ok(size) => Some(size),
-        Err(kind) => {
-          errors.push(uploaded_file_error(index, "size", value.clone(), kind));
-          None
-        }
-      },
-    };
-    if errors.len() == error_start {
-      files.push(UploadedFileRef {
-        filename: filename.expect("valid uploaded filename"),
-        path: path.expect("valid uploaded path"),
-        size,
-      });
-    }
-  }
-  if errors.is_empty() { Ok(Some(files)) } else { Err(Box::new(validation::response(&errors))) }
-}
-
-fn nested_string(
-  value: Option<&Value>,
-  index: usize,
-  field: &str,
-  errors: &mut Vec<validation::FieldError>,
-) -> Option<String> {
-  match value {
-    Some(Value::String(value)) => Some(value.clone()),
-    Some(value) => {
-      errors.push(uploaded_file_error(index, field, value.clone(), validation::Kind::StringType));
-      None
-    }
-    None => {
-      errors.push(uploaded_file_error(index, field, Value::Null, validation::Kind::Missing));
-      None
-    }
-  }
-}
-
-fn uploaded_file_error(index: usize, field: &str, input: Value, kind: validation::Kind) -> validation::FieldError {
-  validation::FieldError {
-    loc: vec![
-      validation::Loc::Field("body".to_string()),
-      validation::Loc::Field("uploaded_files".to_string()),
-      validation::Loc::Index(index),
-      validation::Loc::Field(field.to_string()),
-    ],
-    input,
-    kind,
-  }
-}
-
-fn uploaded_file_size(value: &Value) -> Result<i64, validation::Kind> {
-  match value {
-    Value::Bool(value) => Ok(i64::from(*value)),
-    Value::Number(number) => {
-      if let Some(value) = number.as_i64() {
-        return Ok(value);
-      }
-      if let Some(value) = number.as_u64() {
-        return i64::try_from(value).map_err(|_| validation::Kind::IntParsingSize);
-      }
-      let Some(value) = number.as_f64() else {
-        return Err(validation::Kind::IntType);
-      };
-      if value.fract() != 0.0 {
-        return Err(validation::Kind::IntFromFloat);
-      }
-      if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value) {
-        return Err(validation::Kind::IntParsingSize);
-      }
-      Ok(value as i64)
-    }
-    Value::String(value) => {
-      validation::parse_int(validation::Source::Query, "size", value, None, None).map_err(|error| error.kind)
-    }
-    _ => Err(validation::Kind::IntType),
+fn uploaded_file(item: &Value) -> UploadedFileRef {
+  let object = item.as_object().expect("a validated uploaded file is an object");
+  UploadedFileRef {
+    filename: object["filename"].as_str().expect("validated filename is a string").to_string(),
+    path: object["path"].as_str().expect("validated path is a string").to_string(),
+    size: object.get("size").and_then(Value::as_i64),
   }
 }
 
@@ -234,10 +141,6 @@ fn parse_cancel_run_request(body: &RequestBody) -> Result<CancelRunRequest, Box<
   Ok(CancelRunRequest {
     request_id: values["request_id"].as_str().expect("validated request_id is a string").to_string(),
   })
-}
-
-fn body_validation_error(loc: Vec<validation::Loc>, input: Value, kind: validation::Kind) -> Box<Response> {
-  Box::new(validation::response(&[validation::FieldError { loc, input, kind }]))
 }
 
 async fn send_message(
@@ -263,7 +166,7 @@ async fn send_message(
     Ok(request) => request,
     Err(response) => return *response,
   };
-  let uploaded_files = request.uploaded_files.unwrap_or_default();
+  let uploaded_files = request.uploaded_files;
   let input_mode = request.input_mode.unwrap_or(None);
   let event_type = dispatch::input_event_type_for_caller(&caller);
   let (from_session, from_session_name) =
@@ -750,6 +653,26 @@ mod tests {
     features.store.invalidate_cache(session_id);
   }
 
+  /// Install the dispatcher that the send-message route reads, the way the execution stage does.
+  fn install_dispatcher(features: &Arc<FeatureContext>) {
+    features.startup.insert(crate::completion::TaskCompletion::new(Arc::clone(features))).unwrap();
+    let completion = features.startup.require::<crate::completion::TaskCompletion>().unwrap();
+    let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
+    let run: Arc<dyn dispatch::RunFinishedCompletion> = completion;
+    features.startup.insert(dispatch::Dispatcher::new(Arc::clone(&features.store), sequence, run)).unwrap();
+  }
+
+  /// Assert the 202 body Python returns for a valid chat message when no executor launches a run.
+  async fn assert_accepted(response: Response) {
+    let status = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "body: {body}");
+    assert_eq!(body["status"], "accepted");
+    assert!(body["input_event_id"].as_str().is_some_and(|id| !id.is_empty()), "body: {body}");
+    assert_eq!(body["launch"], false);
+    assert_eq!(body["reason"], "execution adapters register in the next stage");
+  }
+
   async fn response_json(response: Response) -> Value {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
@@ -960,18 +883,24 @@ mod tests {
 
   #[tokio::test]
   async fn python_send_message_model_reads_valid_utf16_and_defaulted_fields() {
+    // Python: src/runtime/api/chat.py:48-80 answers 202 for a valid body; without an executor the
+    // dispatch records "execution adapters register in the next stage"
+    // (src/runtime/session_dispatch.py:430-502), so the body carries launch false with that reason.
     let (_home, features) = feature_context();
-    add_session(&features, "synthetic-session");
+    create_upload_session(&features, "synthetic-session").await;
+    install_dispatcher(&features);
     let router = routes(&features);
     let path = "/api/chat/synthetic-session/message";
     let valid = r#"{"content":"synthetic message","uploaded_files":[{"filename":"sample.txt","path":"/tmp/sample.txt","size":2}],"input_mode":"chat"}"#;
     let response = send_operator(&router, path, valid.as_bytes().to_vec(), Some("application/json")).await;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_accepted(response).await;
 
+    // Python: src/infra/models.py:635 defaults uploaded_files to an empty list when the key is absent.
     let utf16 = utf16le_json(r#"{"content":"synthetic UTF-16 message"}"#);
     let response = send_operator(&router, path, utf16, Some("application/json")).await;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_accepted(response).await;
 
+    // Python: SendMessageRequest ignores extra keys (pydantic's default extra behavior).
     let response = send_operator(
       &router,
       path,
@@ -979,7 +908,70 @@ mod tests {
       Some("application/json"),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_accepted(response).await;
+
+    // Python: src/infra/models.py:635 accepts two files, and UploadedFileRef ignores an item's extra keys.
+    let two_files = r#"{"content":"synthetic message","uploaded_files":[{"filename":"first.txt","path":"/tmp/first.txt","size":2},{"filename":"second.txt","path":"/tmp/second.txt","unknown":1}]}"#;
+    let response = send_operator(&router, path, two_files.as_bytes().to_vec(), Some("application/json")).await;
+    assert_accepted(response).await;
+  }
+
+  #[tokio::test]
+  async fn python_send_message_reports_every_uploaded_file_error_with_the_content_error() {
+    // Python: src/infra/models.py:630-640 validates content and each uploaded_files item in declaration
+    // order, so a wrong content and a bad item give two errors in one 422 body.
+    let (_home, features) = feature_context();
+    create_upload_session(&features, "synthetic-session").await;
+    let router = routes(&features);
+    let path = "/api/chat/synthetic-session/message";
+    let response = send_operator(
+      &router,
+      path,
+      br#"{"content":1,"uploaded_files":[{"filename":1,"path":"x"}]}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"].as_array().map(Vec::as_slice).unwrap().len(), 2);
+    assert_eq!(body["detail"][0]["type"], "string_type");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "content"]));
+    assert_eq!(body["detail"][1]["type"], "string_type");
+    assert_eq!(body["detail"][1]["loc"], json!(["body", "uploaded_files", 0, "filename"]));
+
+    // Python: a non-list uploaded_files reports list_type at the field
+    // (pydantic's list check runs before the items).
+    assert_validation(
+      send_operator(&router, path, br#"{"content":"x","uploaded_files":"wrong"}"#.to_vec(), Some("application/json"))
+        .await,
+      "list_type",
+      json!(["body", "uploaded_files"]),
+    )
+    .await;
+
+    // Python: a non-object item reports model_attributes_type at its index, with no trailing field
+    // (FastAPI validates each list item as the model).
+    assert_validation(
+      send_operator(&router, path, br#"{"content":"x","uploaded_files":[42]}"#.to_vec(), Some("application/json"))
+        .await,
+      "model_attributes_type",
+      json!(["body", "uploaded_files", 0]),
+    )
+    .await;
+
+    // Python: UploadedFileRef requires path (src/infra/models.py:631-633).
+    assert_validation(
+      send_operator(
+        &router,
+        path,
+        br#"{"content":"x","uploaded_files":[{"filename":"x"}]}"#.to_vec(),
+        Some("application/json"),
+      )
+      .await,
+      "missing",
+      json!(["body", "uploaded_files", 0, "path"]),
+    )
+    .await;
   }
 
   #[tokio::test]

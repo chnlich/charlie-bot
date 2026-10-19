@@ -14,8 +14,13 @@ AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 AUTOCOMPACT_PCT_OVERRIDE_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
 MAX_CONTEXT_TOKENS_ENV = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 
+# The waiting rule in prompts/task_base.md sets a 15-minute foreground limit.
+# Claude Code's Bash tool defaults to 2 minutes and caps at 10 minutes without
+# these variables, so a foreground command the rule allows would be killed early.
 HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": "900000",
+    "BASH_MAX_TIMEOUT_MS": "900000",
 }
 
 # CharlieBot-chosen defaults, applied only when the host has not set the variable.

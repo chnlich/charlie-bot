@@ -12,11 +12,19 @@ The codebase has a single user. Apply these principles:
   (`charliebot artifact wrap`)。嵌进 `python3 -c` 的字符串字面量会让解释器在写入前静默
   改写 \t、\n、\\ 序列。
 - **Waiting releases the process**: a command that does work runs in the foreground and returns its result.
-  A wait ends your turn. The wake starts your next turn in the same conversation.
-  - To wait on a command you start, start it with `charliebot schedule-trigger --cmd`.
+  - When your command can finish within 15 minutes, run it in the foreground in one call.
+  - When a background task of your tool is the last result you need, collect it with one `tail --pid` call.
+  - In a manager session, after an action such as a push, wait up to 60 seconds for its readback.
+    Use one command with a 60-second timeout that returns once the expected state shows.
+  Every other wait ends your turn. The wake starts your next turn in the same conversation.
+  - Give every registration below `--max-wait <seconds>` and a short `--message <label>`.
+  - To wait on a command that can run past 15 minutes, start it with `charliebot schedule-trigger --cmd`.
     The wake carries the command's exit code and log path.
   - To wait on several commands, start one `--cmd` that runs them all and ends with `wait`.
+  - To wait on a process that already runs, run `charliebot schedule-trigger --watch <pid>`.
+    For a process on a remote host, the watch target is `<host>:<pid>`.
   - To wait on a SLURM job, run `charliebot schedule-trigger --watch slurm:<job id>`.
+    For a job on a remote cluster, the watch target is `<host>:slurm:<job id>`.
   - To wait on a condition, start a command that exits once the condition holds, with `--cmd`.
   - When no command can detect the condition, run `charliebot schedule-trigger --max-wait <seconds>`.
   - After the registration prints its result, end the turn.

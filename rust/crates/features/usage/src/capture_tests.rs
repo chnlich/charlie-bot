@@ -1264,7 +1264,8 @@ fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the bare pair is no current signature
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
-  assert_eq!((row.calls, row.in_fresh.int(), row.in_unsplit.int(), row.output.int()), (1, 0, 100, 5)); // same id, corrected values
+  // same id, corrected values
+  assert_eq!((row.calls, row.in_fresh.int(), row.in_unsplit.int(), row.output.int()), (1, 0, 100, 5));
   assert!(ledger.captured_sigs(HOST).unwrap()[path.to_str().unwrap()].starts_with("p2:"));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the p2 signature serves
 }

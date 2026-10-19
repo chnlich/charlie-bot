@@ -1095,7 +1095,7 @@ async fn sequence_close_replays_races_repeats_and_post_reopen_calls() {
 
 #[tokio::test]
 async fn recovered_sequence_close_report_takes_the_sequence_outcome() {
-  // Python: tests/test_task_sequences.py::test_recovered_sequence_close_report_takes_the_sequence_outcome.
+  // Python: tests/test_task_completion.py::test_recovered_sequence_close_report_takes_the_sequence_outcome.
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h.base.create_task("child", Some(&root.id), TaskProfile::Worker, "Child").await;

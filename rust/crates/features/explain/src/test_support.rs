@@ -156,7 +156,7 @@ pub fn failing_script() -> String {
 
 /// The script of an agent that outlives any test budget.
 pub fn hanging_script() -> String {
-  "sleep 30".to_string()
+  "exec sleep 30".to_string()
 }
 
 /// The script of an agent that answers `text` after `seconds`, so a test can observe the pending state.

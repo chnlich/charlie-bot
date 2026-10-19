@@ -244,9 +244,9 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/data/runs/<run>/agent.raw.cursor` | agent-runtime | todo | |
 | `sessions/<sid>/data/runs/<run>/agent.raw.ndjson.<n>` | agent-runtime | todo | Rotated raw output. |
 | `sessions/<sid>/data/runs/<run>/agent.stderr.log.<n>` | agent-runtime | todo | Rotated stderr. |
-| `sessions/<sid>/data/runs/<run>/stdout.log` | backends/antigravity | todo | |
-| `sessions/<sid>/data/runs/<run>/stderr.log` | backends/antigravity | todo | |
-| `sessions/<sid>/data/runs/<run>/task.md` | backends/charlie-code | todo | |
+| `sessions/<sid>/data/runs/<run>/stdout.log` | backends/antigravity | ported | Written by the final-stdout run, truncated at each run's start (`charliebot-agents/src/runner.rs`). |
+| `sessions/<sid>/data/runs/<run>/stderr.log` | backends/antigravity | ported | Written by the final-stdout run (`charliebot-agents/src/runner.rs`). |
+| `sessions/<sid>/data/runs/<run>/task.md` | backends/charlie-code | ported | Written by the charlie-code command builder (`charliebot-agents/src/backends/charlie_code/charlie_code_cli.rs`). |
 | `sessions/<sid>/data/runs/<run>/harness_instructions.md` | agent-runtime | todo | |
 | `sessions/<sid>/data/runs/<run>/prompt_snapshot.json` | agent-runtime | todo | |
 | `sessions/<sid>/data/runs/<run>/launch_prompt.md` | agent-runtime | todo | |

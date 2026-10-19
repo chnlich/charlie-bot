@@ -66,6 +66,15 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `backends::openai_compatible::{translate, sse, pyvalue}` (private) | `src/backends/openai_compatible/anthropic_proxy.py:22-278` (request and answer translation), `:280-445` (`_sse_event` and the stream translator); `src/infra/sse.py` (line framing) |
 | `backends::claude_code::AnthropicEndpointBackend`, `AnthropicEndpointBackend::new`, and its `AgentBackend` methods | `src/backends/claude_code/claude_code.py:328-348`; `src/backends/openai_compatible/openai_compatible_claude.py:6` |
 | `backends::claude_code::claude_model_env` | `src/backends/claude_code/claude_code.py:87-100` |
+| `cli_base::{LOCAL_NO_PROXY_ENTRIES, IMAGE_MIME_BY_EXT, CliHost, resolve_binary, prepend_path_dir, merge_local_no_proxy, apply_proxy_env, strip_google_api_keys, framed_prompt, py_is_space, py_strip, py_split_whitespace, truthy, str_field, required_str, int_field}` | `src/runtime/agent_process/base.py:125-218` (`USER_LOCAL_BIN`, `IMAGE_MIME_BY_EXT`, the helpers), `:705-714` (`_effective_prompt`, `_frame_system_prompt`); Python truthiness and `str.strip`, `str.split` |
+| `backends::kimi::register` (private `kimi_claude`, `factory`, `options`) | `src/backends/kimi/__init__.py:6-25`, `kimi.py:5-18`, `factory.py:10-14`, `options.py:8-10` |
+| `backends::gemini::register` (private `gemini_cli`, `translate`, `factory`, `options`) | `src/backends/gemini/__init__.py:7-26`, `gemini_cli.py:10-97`, `factory.py:36-37`, `options.py:45-46` |
+| `backends::charlie_code::{register, USAGE_SOURCE}`, `CharlieCodeBackend`, `API_KEY_ENV` (private `charlie_code_cli`, `translate`, `factory`, `options`) | `src/backends/charlie_code/__init__.py:6-34`; `charlie_code.py:43-166` (backend, command, env, upload gate), `:168-239` (translator), `:28-40` (context fields); `factory.py:44-56`; `options.py:66-81` |
+| `charliebot_core::pyfmt::format_g` (the `%g` of the progress labels) | `src/backends/charlie_code/charlie_code.py:21-25` (`_duration_label`) |
+| `backends::antigravity::{register, USAGE_SOURCE}`, `AntigravityBackend` and its finish (private `antigravity_cli`, `factory`, `options`) | `src/backends/antigravity/__init__.py:7-28`; `antigravity_cli.py:17-67` (platform notices, command, env, envelope), `:69-165` (`run` and its finish); `factory.py:38-43`; `options.py:51-53` |
+| `one_shot_text` (the dispatcher) | `src/runtime/agent_process/base.py:1156-1190` (the polymorphic `one_shot_text`; the tool-capable fallback is `agent_one_shot_text`) |
+| `RunRequest.uploaded_files`, `RunOutcome` identity and follow as `Option`, and `RunOutcome` for a run with no process | `src/runtime/agent_process/base.py:653-708`; `src/runtime/master_cc_run.py:575` (the manager turn passes the item's uploads); `charlie_code.py:87-117` (the upload gate) |
+| `runner::AgentRunner::exit_code` and the final-stdout run (`TransportKind::FinalStdout`) | `src/backends/antigravity/antigravity_cli.py:69-165` (stdout tee, the cleanup and the exit); `src/runtime/agent_process/base.py:936-1050` |
 
 ## Tests
 

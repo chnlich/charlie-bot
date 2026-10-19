@@ -249,6 +249,9 @@ def link_cases() -> dict[str, list[dict]]:
               {
                   "text": "https://host.example/absolute_filepath"
               },
+              {
+                  "text": "see http://localhost:١٨٤٩٨/absolute_filepath/home/u/private.txt"
+              },
           ],
       "application_route_links":
           [
@@ -262,6 +265,10 @@ def link_cases() -> dict[str, list[dict]]:
               },
               {
                   "text": "http://h:08080/x and http://h/none",
+                  "port": 8080
+              },
+              {
+                  "text": "http://h:٨٠٨٠/unicode-port",
                   "port": 8080
               },
               {

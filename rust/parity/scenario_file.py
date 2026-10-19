@@ -33,7 +33,7 @@ MULTIPART_BOUNDARY = "charliebot-parity-multipart-boundary-1792318577"
 _REFERENCE = re.compile(r"\$\{(?P<ref>[A-Za-z0-9_.]+)\}")
 _SCENARIO_KEYS = {
     "stage", "name", "description", "steps", "fake_agent", "expect_starts", "directions", "config", "credentials",
-    "fakes", "fixture_extras", "voice_models", "comparison_rules"
+    "fakes", "fixture_extras", "voice_models", "headless_chrome", "comparison_rules"
 }
 _HTTP_STEP_KEYS = {
     "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "agent",
@@ -123,6 +123,7 @@ class Scenario:
   fakes: dict[str, dict]
   fixture_extras: tuple[str, ...]
   voice_models: bool
+  headless_chrome: bool
   comparison_rules: tuple[dict[str, Any], ...]
 
 
@@ -702,6 +703,9 @@ def load(path: pathlib.Path) -> Scenario:
   voice_models = raw.get("voice_models", False)
   if not isinstance(voice_models, bool):
     raise ScenarioError(f"{path.name}.voice_models must be a boolean")
+  headless_chrome = raw.get("headless_chrome", False)
+  if not isinstance(headless_chrome, bool):
+    raise ScenarioError(f"{path.name}.headless_chrome must be a boolean")
   handovers = [step for step in parsed_steps if step.kind == "handover"]
   has_script = "fake_agent" in raw
   has_expectation = "expect_starts" in raw
@@ -761,6 +765,7 @@ def load(path: pathlib.Path) -> Scenario:
       fakes=fakes,
       fixture_extras=fixture_extras,
       voice_models=voice_models,
+      headless_chrome=headless_chrome,
       comparison_rules=comparison_rules,
   )
 

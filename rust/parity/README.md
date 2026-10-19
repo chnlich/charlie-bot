@@ -81,6 +81,9 @@ uv run python rust/parity/parity.py --python-vs-python --stage features
 - `--voice-models DIR` selects the read-only model source for scenarios with `voice_models: true`. Its default is
   `~/.charliebot/models`. Before starting any server, the harness checks for the VAD file, sherpa archive and
   extracted model directory, then links those entries into each synthetic home.
+- `--headless-chrome PATH` selects the headless Chrome binary for scenarios with `headless_chrome: true`. Its
+  default is `~/.cache/ms-playwright/chromium_headless_shell-1228/chrome-linux/headless_shell`. A run that selects
+  such a scenario exits before starting any server when the file is absent, and the message names this flag.
 - `--keep` keeps the trees and logs after the run. Without it the run removes its scratch tree whether the steps
   pass or fail, and a failed run prints one line that names `--keep` as the way to inspect the trees. Each run's
   directory is named `NN-RR` (scenario index, run number), so the socket path under its tree stays within 107 bytes;
@@ -305,6 +308,9 @@ Scenario fields:
   `Builder.node` and appear under `sessions`.
 - `voice_models: true` links the three sherpa entries from `--voice-models` into `<tree>/home/models/`. The
   source directory is read only.
+- `headless_chrome: true` links the `--headless-chrome` binary to `<tree>/bin/headless-chrome` on each side. A
+  scenario points its server at that link with the config overlay
+  `headless_chrome_bin: ${tree.root}/bin/headless-chrome`, so each server starts Chrome through its own sandbox.
 - `comparison_rules` adds a scoped rule to the existing home comparison. Use
   `allowed_baseline_values_for_one_event_field` when Python can produce several values for one event field:
 

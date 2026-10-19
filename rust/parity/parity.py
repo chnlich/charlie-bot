@@ -61,6 +61,9 @@ VOICE_MODEL_ENTRIES = (
     "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
     "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
 )
+# The headless Chrome that scenarios with `headless_chrome: true` link into each tree at bin/headless-chrome.
+HEADLESS_CHROME_BIN = (
+    pathlib.Path.home() / ".cache/ms-playwright/chromium_headless_shell-1228/chrome-linux/headless_shell")
 # The two events a server logs when its background speech-model provisioning ends, ready or failed.
 PROVISIONING_EVENTS = ("speech_models_ready", "speech_model_provisioning_failed")
 # The sherpa engine downloads two artifacts, and each download is bounded by the 60 s model download timeout on both
@@ -1016,6 +1019,20 @@ def _link_voice_models(sides: list[Side], model_dir: pathlib.Path) -> None:
       (target_dir / name).symlink_to(model_dir / name, target_is_directory=name == VOICE_MODEL_ENTRIES[2])
 
 
+def _check_headless_chrome(scenarios: list[scenario_file.Scenario], chrome: pathlib.Path) -> None:
+  if not any(scenario.headless_chrome for scenario in scenarios):
+    return
+  if not chrome.is_file():
+    raise SystemExit(f"parity: missing headless Chrome {chrome}; provide it with --headless-chrome PATH")
+
+
+def _link_headless_chrome(sides: list[Side], chrome: pathlib.Path) -> None:
+  for side in sides:
+    bin_dir = side.tree.root / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "headless-chrome").symlink_to(chrome)
+
+
 def _run_scenario(
     scenario: scenario_file.Scenario,
     work_dir: pathlib.Path,
@@ -1027,6 +1044,7 @@ def _run_scenario(
     guard_report: guard.Report,
     certificates: authority.Certificates | None,
     voice_model_dir: pathlib.Path,
+    headless_chrome: pathlib.Path,
     candidate_is_python: bool,
 ) -> list[StepResult]:
   log_dir = work_dir / "logs"
@@ -1050,6 +1068,8 @@ def _run_scenario(
   scenario_file.check_references(scenario, manifest)
   if scenario.voice_models:
     _link_voice_models(sides, voice_model_dir)
+  if scenario.headless_chrome:
+    _link_headless_chrome(sides, headless_chrome)
   _write_fake_agent_script(sides, scenario.fake_agent)
   if tamper:
     _tamper(sides[1], manifest)
@@ -1161,6 +1181,12 @@ def main() -> int:
       help="read-only source directory for the sherpa voice model links",
   )
   parser.add_argument(
+      "--headless-chrome",
+      type=pathlib.Path,
+      default=HEADLESS_CHROME_BIN,
+      help="headless Chrome binary that scenarios with headless_chrome: true link into each tree's bin/",
+  )
+  parser.add_argument(
       "--tamper",
       action="store_true",
       help=f"rename session {TAMPER_SESSION!r} in the candidate home: the run must fail")
@@ -1173,6 +1199,8 @@ def main() -> int:
   scenarios = scenario_file.load_all(args.stage)
   voice_model_dir = args.voice_models.expanduser().resolve()
   _check_voice_models(scenarios, voice_model_dir)
+  headless_chrome = args.headless_chrome.expanduser().resolve()
+  _check_headless_chrome(scenarios, headless_chrome)
   if any(scenario.fakes for scenario in scenarios) and not authority.OPENSSL.is_file():
     raise SystemExit(f"parity: fake services require {authority.OPENSSL}")
   if any(scenario.name == "features-harness-terminal" for scenario in scenarios) and shutil.which("tmux") is None:
@@ -1222,7 +1250,7 @@ def main() -> int:
         with servers.pick_ports(2) as ports:
           scenario_results = _run_scenario(
               scenario, scenario_dir, ports, candidate_first, candidate_handover, direction, args.tamper, guard_report,
-              certificates, voice_model_dir, args.python_vs_python)
+              certificates, voice_model_dir, headless_chrome, args.python_vs_python)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

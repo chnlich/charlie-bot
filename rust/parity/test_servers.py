@@ -12,6 +12,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from rust.parity import parity
 from rust.parity import servers
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -123,3 +124,14 @@ def test_log_event_wait_ignores_a_line_until_its_newline_arrives(tmp_path: pathl
     assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=5) == []
   finally:
     writer.join()
+
+
+def test_headless_chrome_link_points_each_tree_at_the_binary(short_root: pathlib.Path) -> None:
+  chrome = short_root / "headless_shell"
+  chrome.write_bytes(b"")
+  sides = [parity.Side(label, servers.make_tree(label, short_root / label), 1) for label in ("base", "cand")]
+  parity._link_headless_chrome(sides, chrome)
+  for side in sides:
+    link = side.tree.root / "bin" / "headless-chrome"
+    assert link.is_symlink()
+    assert link.resolve() == chrome.resolve()

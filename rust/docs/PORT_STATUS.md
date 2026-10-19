@@ -199,8 +199,11 @@ implemented.
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
 | registration | router `/api/internal` (`web_reply`) | features/web_reply | ported | The four web reply routes above. The round-end audit (`audit.py`) and the turn contribution's `after_turn` are not ported: the thread-core task owns them. |
-| registration | turn contribution `slack`: instruction segments | features/slack | ported | Adds the thread reply contract to a manager run of a Slack thread session. The round-end audit and the rest of `thread_entry.py` are not ported yet. |
-| registration | turn contribution `discord`: instruction segments | features/discord | ported | Adds the thread reply contract to a manager run of a Discord thread session. The round-end audit and the rest of `thread_entry.py` are not ported yet. |
+| registration | turn contribution `slack`: instruction segments | features/slack | ported | Adds the thread reply contract to a manager run of a Slack thread session. The thread core it reads (`thread_entry.py`) is ported in `features/chat_threads`; the Slack listener is the `slack` service above. |
+| registration | turn contribution `discord`: instruction segments | features/discord | ported | Adds the thread reply contract to a manager run of a Discord thread session. The thread core it reads (`thread_entry.py`) is ported in `features/chat_threads`; the Discord listener is the `discord` service above. |
+| component | thread core (`thread_entry.py`) | features/chat_threads | ported | Reply posting and retries, the round audit, lost-summon backfill, follow triggers, and the file-server link checks. Each platform supplies its own `ThreadAdapter`; none is registered yet. |
+| component | `ChannelService` (`channel_service.py`) | features/chat_threads | ported | Starts a platform's listener and its boot backfill on the server's `ServiceContext`, and stops both by cancelling and awaiting them. No listener is registered yet: the `slack` and `discord` services above are `todo`. |
+| component | boot backfill `run_backfill` (`backfill.py`) | features/chat_threads | ported | Waits for crash recovery, then reports the platform's summons lost across the restart. It runs when a listener starts, so it stays idle until the `slack` and `discord` services land. |
 
 ## State files
 

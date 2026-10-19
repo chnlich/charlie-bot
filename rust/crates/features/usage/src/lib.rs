@@ -1,7 +1,8 @@
-//! `src/features/usage`: the quota panel and usage ledger capture are ported. The usage page and cold-storage sweep
-//! are pending, and the home card stays registered.
+//! `src/features/usage`: the quota panel, the usage ledger capture and the `backend_ids` startup check are ported. The
+//! usage page and cold-storage sweep are pending, and the home card stays registered.
 
 mod api;
+mod backend_ids;
 pub mod capture;
 mod count;
 mod ext_usage;
@@ -22,7 +23,7 @@ pub use count::Count;
 pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 
 /// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the `ext_usage` service in phase
-/// Ready, the home card, then the `usage_ledger` scheduled handler.
+/// Ready, the home card, the `usage_ledger` scheduled handler, then the `backend_ids` startup check.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.service(Arc::new(poller::ExtUsagePoller::default()))?;
@@ -31,7 +32,8 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     url: "/token-usage",
     description: "Tokens per model across every agent log on this host.",
   })?;
-  registry.scheduled_handler("usage_ledger", run_usage_ledger)
+  registry.scheduled_handler("usage_ledger", run_usage_ledger)?;
+  registry.startup_check("backend_ids", backend_ids::check_backend_ids)
 }
 
 fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<String>> {
@@ -62,7 +64,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn register_mounts_the_router_starts_the_service_and_lists_the_card() {
+  fn register_mounts_the_router_starts_the_service_lists_the_card_and_checks_the_ids() {
     let mut registry = Registry::new();
     registry.register_package("src.features.usage", register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);
@@ -72,5 +74,6 @@ mod tests {
     let cards = registry.home_cards();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].url, "/token-usage");
+    assert_eq!(registry.startup_checks().map(|(name, _)| name).collect::<Vec<_>>(), ["backend_ids"]);
   }
 }

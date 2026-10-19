@@ -1520,6 +1520,7 @@ fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow:
 async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> anyhow::Result<()> {
   // Python: tests/test_turn_contributions.py::test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn.
   let temp = tempfile::tempdir()?;
+  let guard = Arc::new(ProcessGroupGuard::new());
   let registry = registry();
   for (index, backend_type, backend_id, expected_unread) in
     [(1, "covered_script", "covered-option", false), (2, "uncovered_script", "uncovered-option", true)]
@@ -1541,9 +1542,12 @@ async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> any
     std::fs::create_dir_all(&transport_dir)?;
     let (spawned_sender, spawned_receiver) = oneshot::channel();
     let spawned_sender = Arc::new(Mutex::new(Some(spawned_sender)));
-    let on_task_spawn: TaskSpawnCallback = Arc::new(move |_pid, _start| {
+    let spawn_guard = Arc::clone(&guard);
+    let on_task_spawn: TaskSpawnCallback = Arc::new(move |pid, _start| {
       let sender = Arc::clone(&spawned_sender);
+      let spawn_guard = Arc::clone(&spawn_guard);
       Box::pin(async move {
+        spawn_guard.track(pid);
         let sender =
           sender.lock().expect("spawn signal mutex is not poisoned").take().context("spawn signal sent twice")?;
         sender.send(()).map_err(|_| anyhow::anyhow!("spawn signal receiver closed"))?;
@@ -1595,6 +1599,7 @@ async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> any
 
 async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: bool) -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
+  let groups = ProcessGroupGuard::new();
   let home = temp.path().join("home");
   std::fs::create_dir_all(&home)?;
   std::fs::write(home.join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-shutdown-access-key\n")?;
@@ -1698,6 +1703,19 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
     let _ = task.await;
     anyhow::bail!("task manager agent did not reach its shutdown gate");
   }
+  // Record the group while the pid is alive. A covered agent is detached and keeps running past shutdown, so the guard
+  // must be able to reap it.
+  let pid = tokio::time::timeout(Duration::from_secs(5), async {
+    loop {
+      if let Some(pid) = features.store.read_run_sync(&meta.id, run_id)?.and_then(|run| run.pid) {
+        break anyhow::Ok(pid);
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .context("task manager agent's pid was not persisted")??;
+  groups.track(pid);
   tokio::time::timeout(Duration::from_secs(5), async {
     loop {
       if features

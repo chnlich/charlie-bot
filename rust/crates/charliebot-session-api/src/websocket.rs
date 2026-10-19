@@ -66,6 +66,9 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
       if let Err(close_error) = close_with_code(&mut sender, 1011, "").await {
         tracing::info!(session_id, reason = %close_error, "session_ws_closed");
       }
+      features.store.unsubscribe(&mut session_subscription);
+      features.store.unsubscribe(&mut sidebar_subscription);
+      tracing::info!(session_id, "session_ws_disconnected");
       return;
     }
     Ok(Err(error)) => {

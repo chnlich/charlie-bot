@@ -1124,7 +1124,7 @@ impl Store {
       let data_dir = temp_dir.join("data");
       fs::create_dir(&data_dir).map_err(|error| path_error(&data_dir, error))?;
       let events_path = data_dir.join("chat_events.jsonl");
-      #[cfg(feature = "write-faults")]
+      #[cfg(any(test, feature = "write-faults"))]
       self.fail_chat_append(&meta.id, event, &events_path)?;
       crate::ndjson::append(&events_path, event)?;
       let metadata_path = temp_dir.join("metadata.json");

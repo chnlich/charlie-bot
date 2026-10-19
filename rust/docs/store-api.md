@@ -262,9 +262,9 @@ test can drive the out-of-space landing retry through a live store write. The Py
 `inject_chat_append_fault` and `inject_run_record_write_fault` in `tests/test_task_execution.py`, which patch
 `append_ndjson` and `RunStore.write_record`.
 
-The feature is off by default, and no production crate enables it. Only a `[dev-dependencies]` entry turns it on: this
-crate enables it for its own tests through `charliebot-store = { path = ".", features = ["write-faults"] }`, and a crate
-that needs the seam in its tests adds the same entry. Builds that do not enable the feature do not compile the seam.
+The feature is off by default, and no production crate enables it. The seam also compiles in this crate's own test
+builds, so its unit tests cover the injectors. A crate that needs the seam in its tests adds a `[dev-dependencies]`
+entry, `charliebot-store = { path = "...", features = ["write-faults"] }`. No other build compiles the seam.
 
 | Rust API | Python source |
 | --- | --- |

@@ -1,4 +1,4 @@
-"""Tests for session/requested subagent backend resolution in src.runtime.spawner."""
+"""Tests for session/requested subagent backend resolution in src.runtime.spawner_backends."""
 
 import datetime
 import pathlib
@@ -8,7 +8,7 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import backend_pool, spawner, spawner_backends
+from src.runtime import backend_pool, spawner_backends
 
 
 def _build_cfg(options: list[models.BackendOption]) -> config.CharlieBotConfig:
@@ -33,7 +33,7 @@ async def test_session_default_returns_configured_backend() -> None:
   session = models.SessionMetadata(profile="manager", name="s", backend="claude-opus-4.7")
   store = _mock_store(session)
 
-  backend, model, _from_pool = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
+  backend, model, _from_pool = await spawner_backends.resolve_requested_subagent_backend_model(
       session.id, cfg, store, requested_backend=None, role=models.TaskType.IMPLEMENT)
 
   assert backend == "claude-opus-4.7"
@@ -88,7 +88,7 @@ async def test_unresolvable_backend_resolution_raises(
   store = _mock_store(session)
 
   with pytest.raises(ValueError, match=match):
-    await spawner.spawner_backends.resolve_requested_subagent_backend_model(
+    await spawner_backends.resolve_requested_subagent_backend_model(
         session.id, cfg, store, requested_backend=requested_backend, role=models.TaskType.IMPLEMENT)
 
 

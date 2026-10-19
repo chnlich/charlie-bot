@@ -259,6 +259,20 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         when=(),
         reason="wall-clock time: each server records its agent launch on its own clock",
     ),
+    FieldRule(
+        name="session-runs-ended-at",
+        target="GET /api/sessions/{session_id}/runs",
+        field="items[*].ended_at",
+        when=(),
+        reason="wall-clock time: each server records its agent completion on its own clock",
+    ),
+    FieldRule(
+        name="session-runs-local-repo-task-spec-hash",
+        target="GET /api/sessions/{session_id}/runs",
+        field="items[*].task_spec_hash",
+        when=(("repo_path", "<tree>/workspace/worker-repo"),),
+        reason="the canonical task spec includes the repository path inside each independent parity tree",
+    ),
 )
 
 WS_FRAME_RULES: dict[str, tuple[FieldRule, ...]] = {}
@@ -352,11 +366,32 @@ FILE_RULES: tuple[FieldRule, ...] = (
         reason="wall-clock time: each server records its agent completion on its own clock",
     ),
     FieldRule(
+        name="run-local-repo-task-spec-hash",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="task_spec_hash",
+        when=(("repo_path", "<tree>/workspace/worker-repo"),),
+        reason="the canonical task spec includes the repository path inside each independent parity tree",
+    ),
+    FieldRule(
+        name="run-event-time",
+        target="home/sessions/*/data/runs/*/events.jsonl",
+      field="timestamp",
+        when=(),
+        reason="wall-clock time: each worker event is stamped by its own server",
+    ),
+    FieldRule(
         name="chat-event-time",
         target="home/sessions/*/data/chat_events.jsonl",
         field="timestamp",
         when=(),
         reason="wall-clock time: each process stamps its own chat and run facts",
+    ),
+    FieldRule(
+        name="local-repo-task-created-spec-hash",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="task_spec_hash",
+        when=(("request_id", "synthetic-delegate-implement-failure"),),
+        reason="the canonical task spec includes the repository path inside each independent parity tree",
     ),
     FieldRule(
         name="master-done-total-time",

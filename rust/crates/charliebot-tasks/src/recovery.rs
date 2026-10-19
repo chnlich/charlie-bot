@@ -248,8 +248,8 @@ pub async fn reconcile_node(
     if alive {
       counters.resumed += 1;
       tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_resume");
-      // A live manager turn enqueues its follow and returns; the follow is tracked, never awaited.
-      resume_run(adapter, session_id, &run.id, None).await?;
+      // A live worker follow tails the process in the background, never holding startup open.
+      adapter.follow_run_in_background(session_id, &run.id);
     } else {
       counters.drained += 1;
       tracing::warn!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_drain");
@@ -281,7 +281,6 @@ async fn replay_followups(
   };
   let events = store.load_all_facts(session_id)?;
   let run_records = store.list_run_records_sync(session_id)?;
-  let task_open = store.task_state(session_id)? == "open";
   let completion = features.startup.require::<TaskCompletion>()?;
   for (run_index, run) in run_records.iter().enumerate() {
     let outcome = run_records::terminal_outcome(&events, &run.id)?;
@@ -356,18 +355,16 @@ async fn replay_followups(
         continue;
       }
       if outcome == RunOutcomeKind::Success {
-        // The completion owner's post-success follow-up: the own close-request recheck and the automatic completion.
         completion.after_run_finished(session_id, &run.id).await?;
         if task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
-          if let Some(reason) = completion.pause_reason(session_id)? {
-            tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
-          } else if replay_owes_review(task_open, &run_records, run) {
+          let paused = completion.pause_reason(session_id)?.is_some();
+          if !paused && replay_owes_review(store.task_state(session_id)? == "open", &run_records, run) {
             bail!(owner_not_landed("review-chain", &format!("the review spawn of work run {}", run.id)));
           }
         }
-      } else {
-        bail!(owner_not_landed("worker-run", &format!("the failure report of work run {} to its parent", run.id)));
+        continue;
       }
+      adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;
     } else if run.kind == RunKind::Review {
       counters.followups += 1;
       bail!(owner_not_landed("review-chain", &format!("the review follow-up of run {}", run.id)));
@@ -390,10 +387,7 @@ pub fn replay_owes_review(task_open: bool, run_records: &[RunRecord], run: &RunR
     let Some(other_started) = other.started_at else {
       return false;
     };
-    let Some(run_started) = run.started_at else {
-      return false;
-    };
-    if (other_started, &other.id) > (run_started, &run.id) {
+    if run.started_at.is_none_or(|run_started| (other_started, &other.id) > (run_started, &run.id)) {
       return false;
     }
   }
@@ -451,9 +445,6 @@ async fn resume_run_checked(
   };
   let meta =
     store.load_meta(session_id).await?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
-  if meta.profile != TaskProfile::Manager || run.kind != RunKind::ManagerTurn {
-    bail!(owner_not_landed("worker-run", &format!("re-attaching run {run_id} (kind {})", run_kind_name(run.kind))));
-  }
   let ended_at = if is_alive() {
     dispatch::note_run_liveness(store, session_id, &run, true).await;
     None
@@ -464,6 +455,17 @@ async fn resume_run_checked(
   };
   let cfg = adapter.features.config.get().context("reading the configuration for a re-attach")?;
   let option = adapter.resolve_run_backend(&cfg, &run)?;
+  if meta.profile == TaskProfile::Worker && crate::prompts::WORKER_KINDS.contains(&run_kind_name(run.kind)) {
+    adapter.resume_worker_run(&meta, &run, &option, is_alive, ended_at).await?;
+    return Ok(false);
+  }
+  if meta.profile != TaskProfile::Manager || run.kind != RunKind::ManagerTurn {
+    bail!(
+      "run {run_id} (profile={}, kind={}) has no resume adapter",
+      profile_name(meta.profile),
+      run_kind_name(run.kind)
+    );
+  }
   let receiver = enqueue_manager_resume(adapter, &meta, &run, &option, is_alive, ended_at).await?;
   track_manager_follow(adapter, session_id, run_id, receiver);
   Ok(true)
@@ -675,7 +677,10 @@ fn controller_for_sequence(features: &FeatureContext, kind: &str) -> Option<Arc<
 
 /// The task-tree handle the sequence controllers use: the dispatcher, the completion owner, the store's session events,
 /// and the adapter as the launch executor.
-fn sequence_tree(features: &Arc<FeatureContext>, adapter: &TaskExecutionAdapter) -> anyhow::Result<StoreSequenceTree> {
+pub(crate) fn sequence_tree(
+  features: &Arc<FeatureContext>,
+  adapter: &TaskExecutionAdapter,
+) -> anyhow::Result<StoreSequenceTree> {
   let dispatch: Arc<dyn SequenceDispatch> = Arc::<Dispatcher>::clone(&adapter.dispatch);
   let completion: Arc<dyn SequenceCompletion> = features.startup.require::<TaskCompletion>()?;
   let session_events: Arc<dyn SequenceSessionEvents> = Arc::new(StoreSessionEvents(Arc::clone(&features.store)));
@@ -710,7 +715,7 @@ impl SequenceSessionEvents for StoreSessionEvents {
 const UNLANDED_SEQUENCE_KINDS: &[&str] = &["improve", "cron"];
 
 /// The error of a replay step whose owning task has not landed: the node pass fails and names the owner.
-fn owner_not_landed(owner: &str, step: &str) -> anyhow::Error {
+pub(crate) fn owner_not_landed(owner: &str, step: &str) -> anyhow::Error {
   anyhow!("{step} is owned by the {owner} task, which has not landed; the node pass cannot replay it")
 }
 
@@ -729,6 +734,13 @@ fn run_kind_name(kind: RunKind) -> &'static str {
     RunKind::Review => "review",
     RunKind::Iteration => "iteration",
     RunKind::ScheduledStep => "scheduled_step",
+  }
+}
+
+fn profile_name(profile: TaskProfile) -> &'static str {
+  match profile {
+    TaskProfile::Manager => "manager",
+    TaskProfile::Worker => "worker",
   }
 }
 

@@ -205,7 +205,7 @@ pub fn script_option(id: &str, script: &str) -> BackendOption {
   }
 }
 
-fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>) -> CharlieBotConfig {
+fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_disk_gib: i64) -> CharlieBotConfig {
   CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
     headless_chrome_bin: "/bin/false".to_string(),
@@ -216,7 +216,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>) -> Charli
       session_memory_max_mb: 0,
       session_swap_max_mb: 0,
       session_tasks_max: 0,
-      min_free_disk_gib: 0,
+      min_free_disk_gib,
     },
     paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
     backends: BackendsConfig { pool, options },
@@ -265,8 +265,16 @@ impl Stack {
   }
 
   pub async fn start_with(options: Vec<BackendOption>, pool: Vec<String>) -> anyhow::Result<Stack> {
+    Stack::start_with_min_free_disk_gib(options, pool, 0).await
+  }
+
+  pub async fn start_with_min_free_disk_gib(
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    min_free_disk_gib: i64,
+  ) -> anyhow::Result<Stack> {
     let home = tempfile::tempdir()?;
-    let cfg = Arc::new(config(home.path(), options, pool));
+    let cfg = Arc::new(config(home.path(), options, pool, min_free_disk_gib));
     let registry = Arc::new(registry()?);
     let hooks = Arc::new(TestHooks);
     let store = Store::new(
@@ -647,11 +655,11 @@ impl SequenceController for SyntheticLoop {
 
   fn after_run<'a>(
     &'a self,
-    _session_id: &'a str,
+    session_id: &'a str,
     _run: &'a RunRecord,
-    _tree: &'a dyn SequenceTree,
+    tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async { Ok(()) })
+    Box::pin(async move { SyntheticLoop::close_if_due(session_id, tree).await.map(|_| ()) })
   }
 
   fn recover_run<'a>(

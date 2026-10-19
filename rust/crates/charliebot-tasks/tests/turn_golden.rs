@@ -964,7 +964,7 @@ async fn run_cancel_records_interrupted_before_master_done_for_50_gated_manager_
 }
 
 #[tokio::test]
-async fn worker_execution_refuses_before_registering_or_writing_a_run() -> anyhow::Result<()> {
+async fn worker_execution_requires_a_registered_run() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let option = backend_option(scripted_process(&[json!({"type":"result","subtype":"success"})], 0, "")?);
   let registry = registry();
@@ -989,10 +989,10 @@ async fn worker_execution_refuses_before_registering_or_writing_a_run() -> anyho
     .await?;
   let before = features.store.load_all_facts(&worker.id)?;
   let adapter = features.startup.require::<TaskExecutionAdapter>()?;
-  let error = adapter.call(&worker.id, &[], None).await.unwrap_err().to_string();
-  assert!(error.contains("worker-run task"), "{error}");
+  assert!(adapter.call(&worker.id, &[], None).await?.is_none());
   let error = adapter.execute_run(&worker.id, "synthetic-unknown-run").await.unwrap_err().to_string();
-  assert!(error.contains("worker-run task"), "{error}");
+  assert!(error.contains("synthetic-unknown-run"), "{error}");
+  assert!(error.contains("not found"), "{error}");
   assert!(features.store.list_run_records_sync(&worker.id)?.is_empty());
   assert_eq!(features.store.load_all_facts(&worker.id)?, before);
   features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;

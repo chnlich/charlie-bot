@@ -27,10 +27,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## Form
 
-- Write the web reply as your whole answer to the user's message.
-- Begin the web reply with the conclusion.
-- Put the supporting detail behind the answer on a page.
-- Link that page in the web reply.
+- Write the web reply as the answer itself: the conclusion first, in a few sentences.
+- Keep the web reply under 500 characters.
+- When the answer needs more than 500 characters, write the whole answer on a page.
+- Then post the conclusion and the link to that page as the web reply.
 - Write the web reply and the session status in the language of your chat replies.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.
@@ -49,7 +49,6 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Then run `charliebot web reply --file <path>`.
 - The command records the web reply in the session. It prints a readback with the character count.
 - The readback sets `over_budget` for a reply over 500 characters.
-- Before you post a reply over 500 characters, move its supporting detail to a page.
 - Write the changed session status items to a JSON file.
 - The JSON object takes any of the keys `goal`, `now` and `waiting`.
 - `waiting` is a list of objects with the keys `text` and `link`. Set `link` to null when the place has no link.

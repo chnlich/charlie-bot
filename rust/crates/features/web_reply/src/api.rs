@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Extra, Field, FieldType, RequestBody};
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Source};
 use charliebot_registry::FeatureContext;
@@ -101,7 +101,7 @@ fn session_id_param(query: &HashMap<String, String>) -> Result<String, Box<Field
 /// The fields of `WebReplyRequest` and `WebStatusRequest`: the calling session's id and a text, both required strings.
 const SESSION_TEXT_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
-const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).extra(Extra::Forbid);
+const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).forbid_extra();
 
 /// The validated `WebReplyRequest` or `WebStatusRequest`.
 struct SessionText {

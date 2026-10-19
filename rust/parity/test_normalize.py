@@ -91,3 +91,4 @@ def test_an_upstream_supplied_id_stays_visible_on_the_proxy_route() -> None:
 
 def test_the_rule_applies_to_the_proxy_routes_only() -> None:
   assert normalize.mask_proxy_message_ids(MINTED_ID, "GET /api/sessions/{session_id}/bootstrap") == MINTED_ID
+  assert normalize.mask_proxy_message_ids(MINTED_ID, "POST /api/anthropic-proxy/other/v1/messages") == MINTED_ID

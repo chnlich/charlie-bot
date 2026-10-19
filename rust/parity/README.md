@@ -183,11 +183,12 @@ exit marker.
 The scenario end runs on a failed step and on an exception too. It names each recorded start that is still alive,
 then ends every recorded start in both trees, whether or not the start is still alive. When a start leads its own
 process group (pgid == pid, what both servers produce with setsid), the scenario end SIGKILLs the whole group, and a
-group that remains 10 s after its SIGKILL is a failure line that names it. When a start does not lead its group, the
+group that remains 10 s after its SIGKILL is a failure line that names it. When a start does not lead its group, that
 group also holds unrelated processes, so the scenario end SIGKILLs only the start's pid (while it still has the
-recorded `/proc` start time) and records a failure line that names the start and its process group. The harness is the child subreaper, so a
-fake that outlives its server becomes the harness's child, and the scenario end reaps each recorded fake leader.
-Without that, the runner that started the harness keeps the zombie until the run ends.
+recorded `/proc` start time) and records a failure line that names the start and its process group. The harness is the
+child subreaper, so a fake that outlives its server becomes the harness's child. The group wait reaps a fake that leads
+its group, so the runner that started the harness does not keep the zombie until the run ends. A pid-only start is not
+reaped, so it stays a zombie until the harness exits.
 
 ### The outside-write guard
 

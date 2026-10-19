@@ -22,7 +22,14 @@ import asyncio
 import dataclasses
 import datetime
 
-from src.backends.claude_code import claude_accounts, claude_code, claude_compaction, claude_config, claude_metadata
+from src.backends.claude_code import (
+    claude_accounts,
+    claude_code,
+    claude_compaction,
+    claude_config,
+    claude_metadata,
+    login_dirs,
+)
 from src.infra import config, log_once, models, tasks
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, master_cc_state, model_family, session_events, session_store
@@ -122,6 +129,10 @@ async def fire(session_id: str, now: datetime.datetime | None = None) -> asyncio
       _compacted_after, session_id, last_request_at)
   option = timer.ctx.option
   account = claude_accounts.account_by_label(cfg, claude_metadata.account_of(meta))
+  if account is None and not claude_accounts.is_pooled(option, cfg):
+    # Unpooled cc-claude sessions keep their transcript in the process login directory, not in
+    # accounts.claude metadata. Wrap that directory as the account target used by the shared runner.
+    account = claude_config.ClaudeAccount(label="default", config_dir=str(login_dirs.claude_config_dir()))
   resume_id = meta.cc_session_id
   transcript_present = (
       account is not None and resume_id is not None and

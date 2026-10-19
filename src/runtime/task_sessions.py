@@ -594,6 +594,11 @@ class TaskTreeManager:
     index = await self._get_index()
     return [meta.id for meta in self._ancestors(index, session_id)]
 
+  async def child_ids(self, session_id: str) -> list[str]:
+    """The ids of the direct children of *session_id*."""
+    index = await self._get_index()
+    return self._children_of(index, session_id)
+
   async def descendant_ids(self, session_id: str) -> list[str]:
     """The ids of every descendant of *session_id*, at any depth."""
     index = await self._get_index()

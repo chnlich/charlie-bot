@@ -46,6 +46,11 @@ const OLDER = {
 const CHILD_ID = 'child-aaaaaaaa-1111';
 const OTHER_CHILD_ID = 'child-bbbbbbbb-2222';
 
+const NOW_CHILDREN = [
+  {session_id: CHILD_ID, name: 'Child one', now: 'Waiting for the sweep', updated_at: '2026-10-16T20:30:00Z'},
+  {session_id: OTHER_CHILD_ID, name: 'Child two', now: 'Tests running', updated_at: '2026-10-16T20:10:00Z'},
+];
+
 function descendantRows(...counts) {
   return counts.map((n, i) => ({
     session_id: i === 0 ? CHILD_ID : OTHER_CHILD_ID,
@@ -63,7 +68,7 @@ function panelRig() {
   root.appendChild(stream);
   const panel = new FakeElement('DIV', {id: 'chat-status-panel', className: 'hidden'});
   const elements = new Map([['messages', root], ['streaming-msg', stream], ['chat-status-panel', panel]]);
-  const page = {descendants: []};
+  const page = {descendants: [], children: []};
   const statusGets = [];
   const {context} = baseSessionContext();
   const layout = {mode: 'desktop', callbacks: []};
@@ -85,7 +90,7 @@ function panelRig() {
       statusGets.push(url);
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
-        session_id: sessionId, web_status: null, descendants: page.descendants,
+        session_id: sessionId, web_status: null, descendants: page.descendants, children: page.children,
       })};
     }
     return {ok: true, status: 200, json: async () => []};
@@ -169,6 +174,14 @@ function childToggle(panel) {
 
 function childItems(panel) {
   return panel.querySelectorAll('[data-child-item]');
+}
+
+function childNowToggle(panel) {
+  return rowByKind(panel, 'children-now').children[0];
+}
+
+function childNowItems(panel) {
+  return panel.querySelectorAll('[data-child-now-item]');
 }
 
 // The socket of the open page: an open event, then one server frame.
@@ -266,6 +279,64 @@ test('a web_status_subtree notice triggers one GET and redraws the child row wit
   await deliver(rig, {type: 'web_status_subtree', source_session_id: OTHER_CHILD_ID});
   assert.equal(rig.statusGets.length, 2, 'the notice triggers exactly one GET');
   assert.equal(childToggle(rig.panel).dataset.childCount, '4');
+});
+
+test('the child Now block starts folded and shows the count of open children', async () => {
+  const rig = panelRig();
+  rig.page.children = NOW_CHILDREN;
+  await openSession(rig, {web_status: STATUS});
+  assert.deepEqual(rowKinds(rig.panel), ['goal', 'now', 'waiting', 'children-now']);
+  const toggle = childNowToggle(rig.panel);
+  assert.equal(toggle.dataset.childCount, '2');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(toggle.children[1].textContent, "Child sessions' Now · 2");
+  assert.equal(childNowItems(rig.panel).length, 0, 'folded: no child Now row shows');
+});
+
+test('opened, the child Now block lists each child with its Now, update time and Open link', async () => {
+  const rig = panelRig();
+  rig.page.children = NOW_CHILDREN;
+  await openSession(rig, {web_status: STATUS});
+  childNowToggle(rig.panel).onclick();
+  assert.equal(childNowToggle(rig.panel).getAttribute('aria-expanded'), 'true');
+  const items = childNowItems(rig.panel);
+  assert.equal(items.length, 2, 'one row per child');
+  assert.equal(items[0].children[0].textContent, 'Child one · ' + CHILD_ID.slice(0, 8) + ': Waiting for the sweep');
+  assert.equal(items[0].querySelectorAll('[data-status-updated]').length, 1, 'the row carries its update time');
+  const link = items[0].querySelectorAll('[data-open-link]');
+  assert.equal(link.length, 1);
+  assert.equal(link[0].href, '/?session=' + CHILD_ID, 'the row links to its child session page');
+});
+
+test('a session switch folds the child Now block again', async () => {
+  const rig = panelRig();
+  rig.page.children = NOW_CHILDREN;
+  await openSession(rig, {web_status: STATUS});
+  childNowToggle(rig.panel).onclick();
+  assert.equal(childNowItems(rig.panel).length, 2);
+
+  await openSession(rig, {id: 'session-b', web_status: STATUS});
+  assert.equal(childNowToggle(rig.panel).getAttribute('aria-expanded'), 'false');
+  assert.equal(childNowItems(rig.panel).length, 0);
+});
+
+test('a web_status_subtree notice redraws the child Now block with the new rows', async () => {
+  const rig = panelRig();
+  rig.page.children = NOW_CHILDREN;
+  await openSession(rig, {web_status: STATUS});
+  childNowToggle(rig.panel).onclick();
+  assert.equal(childNowItems(rig.panel).length, 2);
+
+  rig.page.children = [NOW_CHILDREN[1]];
+  await deliver(rig, {type: 'web_status_subtree', source_session_id: CHILD_ID});
+  assert.equal(childNowToggle(rig.panel).dataset.childCount, '1');
+  assert.equal(childNowItems(rig.panel).length, 1);
+});
+
+test('with no children rows the child Now block is absent', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  assert.deepEqual(rowKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 
 test('a live web_status message updates the panel in place', async () => {

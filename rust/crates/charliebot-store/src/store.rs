@@ -94,7 +94,12 @@ pub(crate) struct CachedMetadata {
   pub(crate) value: SessionMetadata,
   pub(crate) at: Instant,
   pub(crate) signature: Option<(i64, i64)>,
+  /// Changes only when a cache entry is replaced.
+  pub(crate) identity: Arc<()>,
 }
+
+#[cfg(test)]
+pub(crate) type MetadataStatHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
 pub(crate) struct CachedChatEvents {
   pub(crate) generation: u64,
@@ -116,6 +121,8 @@ pub struct Store {
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) next_events_cache_generation: AtomicU64,
+  #[cfg(test)]
+  pub(crate) metadata_stat_hook: StdMutex<Option<MetadataStatHook>>,
   #[cfg(test)]
   pub(crate) event_read_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   pub(crate) control: ControlLock,
@@ -168,6 +175,8 @@ impl Store {
       events_cache: StdMutex::new(HashMap::new()),
       next_events_cache_generation: AtomicU64::new(1),
       #[cfg(test)]
+      metadata_stat_hook: StdMutex::new(None),
+      #[cfg(test)]
       event_read_hook: StdMutex::new(None),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
@@ -211,12 +220,16 @@ impl Store {
     }
     let path = self.metadata_path(session_id);
     let signature = stat_signature(&path);
-    let Some(meta) = self.read_metadata_path(&path)? else { return Ok(None) };
-    self
-      .metadata_cache
-      .lock()
-      .expect("metadata cache mutex is not poisoned")
-      .insert(session_id.to_string(), CachedMetadata { value: meta.clone(), at: Instant::now(), signature });
+    let meta = self.read_metadata_path(&path)?;
+    let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
+    if let Some(entry) = cache.get(session_id) {
+      return Ok(Some(entry.value.clone()));
+    }
+    let Some(meta) = meta else { return Ok(None) };
+    cache.insert(
+      session_id.to_string(),
+      CachedMetadata { value: meta.clone(), at: Instant::now(), signature, identity: Arc::new(()) },
+    );
     Ok(Some(meta))
   }
 
@@ -272,16 +285,31 @@ impl Store {
   }
 
   pub(crate) fn fresh_cached_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
-    let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
-    let Some(entry) = cache.get_mut(session_id) else { return Ok(None) };
-    if entry.value.status == SessionStatus::Archived || entry.at.elapsed() < METADATA_CACHE_TTL {
-      return Ok(Some(entry.value.clone()));
-    }
-    if let Some(signature) = entry.signature
-      && stat_signature(&self.metadata_path(session_id)) == Some(signature)
+    let (identity, signature) = {
+      let cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
+      let Some(entry) = cache.get(session_id) else { return Ok(None) };
+      if entry.value.status == SessionStatus::Archived || entry.at.elapsed() < METADATA_CACHE_TTL {
+        return Ok(Some(entry.value.clone()));
+      }
+      (Arc::clone(&entry.identity), entry.signature)
+    };
+    let path = self.metadata_path(session_id);
+    #[cfg(test)]
     {
-      entry.at = Instant::now();
-      return Ok(Some(entry.value.clone()));
+      let hook = self.metadata_stat_hook.lock().expect("metadata stat hook mutex is not poisoned").clone();
+      if let Some(hook) = hook {
+        hook(&path);
+      }
+    }
+    let current_signature = stat_signature(&path);
+    let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
+    let Some(current) = cache.get_mut(session_id) else { return Ok(None) };
+    if !Arc::ptr_eq(&current.identity, &identity) {
+      return Ok(Some(current.value.clone()));
+    }
+    if signature.is_some() && current_signature == signature {
+      current.at = Instant::now();
+      return Ok(Some(current.value.clone()));
     }
     cache.remove(session_id);
     Ok(None)
@@ -346,7 +374,7 @@ impl Store {
       .metadata_cache
       .lock()
       .expect("metadata cache mutex is not poisoned")
-      .insert(meta.id.clone(), CachedMetadata { value: parsed, at: Instant::now(), signature });
+      .insert(meta.id.clone(), CachedMetadata { value: parsed, at: Instant::now(), signature, identity: Arc::new(()) });
     crate::sidebar_state::mark_sidebar_dirty(&meta.id);
     Ok(())
   }
@@ -1009,6 +1037,7 @@ mod tests {
         value: meta.clone(),
         at: Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1),
         signature: Some(signature),
+        identity: Arc::new(()),
       },
     );
     assert_eq!(store.get_session(&meta.id).await.unwrap().unwrap().name, "seed");
@@ -1018,5 +1047,78 @@ mod tests {
     store.metadata_cache.lock().unwrap().get_mut(&meta.id).unwrap().at =
       Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1);
     assert_eq!(store.get_session(&meta.id).await.unwrap().unwrap().name, "fresh metadata");
+  }
+
+  #[test]
+  fn stalled_metadata_stat_does_not_block_other_sessions_and_keeps_a_concurrent_write() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
+    let store = Arc::new(Store::new(cfg, Vec::new(), explicit_test_hooks()).unwrap());
+    for (id, name) in [("synthetic-a", "Session A"), ("synthetic-b", "Session B")] {
+      let meta = SessionMetadata::new(id, name, crate::metadata::TaskProfile::Manager);
+      let path = store.metadata_path(id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, meta.to_json_string(&[], true)).unwrap();
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(store.get_session("synthetic-a")).unwrap().unwrap();
+    runtime.block_on(store.get_session("synthetic-b")).unwrap().unwrap();
+    let expired_at = Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1);
+    for id in ["synthetic-a", "synthetic-b"] {
+      store.metadata_cache.lock().unwrap().get_mut(id).unwrap().at = expired_at;
+    }
+
+    let stat_path = store.metadata_path("synthetic-a");
+    let stat_entered = Arc::new(std::sync::Barrier::new(2));
+    let release_stat = Arc::new(std::sync::Barrier::new(2));
+    let hook_entered = Arc::clone(&stat_entered);
+    let hook_release = Arc::clone(&release_stat);
+    *store.metadata_stat_hook.lock().unwrap() = Some(Arc::new(move |path| {
+      if path == stat_path.as_path() {
+        hook_entered.wait();
+        hook_release.wait();
+      }
+    }));
+
+    let reader_store = Arc::clone(&store);
+    let reader_a = std::thread::spawn(move || {
+      tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(reader_store.get_session("synthetic-a"))
+    });
+    stat_entered.wait();
+
+    let (reader_b_tx, reader_b_rx) = std::sync::mpsc::channel();
+    let reader_store = Arc::clone(&store);
+    let reader_b = std::thread::spawn(move || {
+      let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+      reader_b_tx.send(runtime.block_on(reader_store.get_session("synthetic-b"))).unwrap();
+    });
+    let result_b = match reader_b_rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(result) => result,
+      Err(error) => {
+        release_stat.wait();
+        let _reader_a_result = reader_a.join().unwrap().unwrap();
+        reader_b.join().unwrap();
+        panic!("session B metadata read waited for session A stat: {error}");
+      }
+    };
+    assert_eq!(result_b.unwrap().unwrap().name, "Session B");
+    reader_b.join().unwrap();
+
+    let updated_at = UtcDateTime::parse("2026-01-06T00:00:00Z").unwrap();
+    let updated = runtime.block_on(store.rename_session_at("synthetic-a", "Updated A", updated_at)).unwrap().unwrap();
+    release_stat.wait();
+    let raced = reader_a.join().unwrap().unwrap().unwrap();
+    assert_eq!(raced.name, updated.name);
+    assert_eq!(raced.updated_at, updated.updated_at);
+
+    let next = runtime.block_on(store.get_session("synthetic-a")).unwrap().unwrap();
+    assert_eq!(next.name, updated.name);
+    assert_eq!(next.updated_at, updated.updated_at);
   }
 }

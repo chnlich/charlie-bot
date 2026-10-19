@@ -214,7 +214,17 @@ def _normalized_file(relative: str, entry: Entry, ctx: normalize.Context) -> Any
   if relative.endswith(".json"):
     return normalize.normalize_json(json.loads(entry.data), rules, ctx)
   if relative.endswith(".jsonl"):
-    return [normalize.normalize_json(json.loads(line), rules, ctx) for line in entry.data.splitlines() if line.strip()]
+    normalized_lines = []
+    for line in entry.data.splitlines():
+      if not line.strip():
+        continue
+      try:
+        value = json.loads(line)
+      except json.JSONDecodeError:
+        normalized_lines.append({"malformed_jsonl_line": line.decode("utf-8", errors="surrogateescape")})
+      else:
+        normalized_lines.append(normalize.normalize_json(value, rules, ctx))
+    return normalized_lines
   if relative.endswith((".yaml", ".yml")):
     return normalize.normalize_json(yaml.safe_load(entry.data), rules, ctx)
   return normalize.normalize_text(entry.data.decode("utf-8", errors="surrogateescape"), ctx).encode(

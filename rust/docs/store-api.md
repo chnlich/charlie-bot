@@ -5,6 +5,8 @@ Baseline: Python tree at `d9fdcd7c9`. The store owns writes to session `metadata
 six required runtime hooks at construction; absent hooks fail startup. Metadata mutation methods read from disk while
 holding the session lock, save atomically, then return a fresh read-back. No public whole-object save
 accepts a cached metadata value.
+Expired active metadata entries are checked by stat outside the cache mutex. Refresh and eviction apply only to the entry
+that was checked, so a concurrent write's cached result stays current.
 
 ## Metadata and listing (S1, implemented)
 
@@ -79,6 +81,11 @@ event operations do not wait on that I/O. A shared read returns the cached `Arc<
 reads without an intervening append share its allocation, and copy-on-write keeps an older snapshot
 unchanged when an append lands. The control guard is store-bound, non-cloneable, and required by
 locked operations.
+
+`load_chat_events_range` keeps Python's range indexes: an unarchived cold read selects physical `\n`-delimited lines,
+so blank and malformed lines consume indexes; an unarchived warm read slices the parsed-event cache. The
+`/api/sessions/{session_id}/events` fallback uses this range API, while projection and other whole-log callers keep
+the shared parsed-event read.
 
 `load_chat_events_delta_sync` returns the cached generation, current event count, the suffix start index, and the
 events from that index. Appends retain the generation; cache eviction or replacement gives a new generation.

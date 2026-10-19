@@ -830,6 +830,7 @@ async def build_garnet(b: Builder) -> None:
 def check_event_coverage(b: Builder) -> None:
   """Every type the message aggregator renders appears in some fixture chat log or run transcript."""
   from src.infra import event_types as ET
+  from src.infra import ndjson
   from src.runtime import message_aggregator
 
   wanted = set(
@@ -837,9 +838,8 @@ def check_event_coverage(b: Builder) -> None:
   wanted -= _PROJECTION_ONLY_TYPES
   seen: set[str] = set()
   for path in b.cfg.sessions_dir.rglob("*.jsonl"):
-    for line in path.read_text(encoding="utf-8").splitlines():
-      if line.strip():
-        seen.add(json.loads(line).get("type"))
+    for event in ndjson.parse_ndjson_file(path):
+      seen.add(event.get("type"))
   missing = sorted(wanted - seen)
   if missing:
     raise RuntimeError(f"fixture chat logs miss rendered event types: {missing}")

@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import time
+from collections.abc import Callable
 from typing import Any
 
 import normalize
@@ -225,17 +226,11 @@ def _normalized_file(relative: str, entry: Entry, ctx: normalize.Context) -> Any
   if relative.endswith(".json"):
     return normalize.normalize_json(json.loads(entry.data), rules, ctx)
   if relative.endswith(".jsonl"):
-    normalized_lines = []
-    for line in entry.data.splitlines():
-      if not line.strip():
-        continue
-      try:
-        value = json.loads(line)
-      except json.JSONDecodeError:
-        normalized_lines.append({"malformed_jsonl_line": line.decode("utf-8", errors="surrogateescape")})
-      else:
-        normalized_lines.append(normalize.normalize_json(value, rules, ctx))
-    return normalized_lines
+    return [
+        _jsonl_line_value(line, lambda value: normalize.normalize_json(value, rules, ctx))
+        for line in entry.data.splitlines()
+        if line.strip()
+    ]
   if relative.endswith((".yaml", ".yml")):
     return normalize.normalize_json(yaml.safe_load(entry.data), rules, ctx)
   return normalize.normalize_text(entry.data.decode("utf-8", errors="surrogateescape"), ctx).encode(
@@ -304,13 +299,14 @@ def _canonicalize_run_finish_order(events: list[Any], run_finished_index: int) -
   master_done.pop("event_index", None)
 
 
-def _jsonl_line_value(line: bytes) -> Any:
-  """One JSONL line's value. A line that json.loads refuses keeps its text under malformed_jsonl_line, which no
-  event rule matches, so it compares as that value."""
+def _jsonl_line_value(line: bytes, normalize_value: Callable[[Any], Any] | None = None) -> Any:
+  """One JSONL line's value, passed through normalize_value when json.loads accepts the line. A line that json.loads
+  refuses keeps its text under malformed_jsonl_line, which no event rule matches, so it compares as that value."""
   try:
-    return json.loads(line)
+    value = json.loads(line)
   except ValueError:
     return {"malformed_jsonl_line": line.decode("utf-8", errors="surrogateescape")}
+  return value if normalize_value is None else normalize_value(value)
 
 
 def _event_log_diff(

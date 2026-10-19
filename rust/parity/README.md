@@ -181,14 +181,21 @@ validity. A stdin that is not UTF-8 raises before the start writes its record, s
 exit marker.
 
 The scenario end runs on a failed step and on an exception too. It names each recorded start that is still alive,
-then ends every recorded start in both trees, whether or not the start is still alive. When a start leads its own
-process group (pgid == pid, what both servers produce with setsid), the scenario end SIGKILLs the whole group, and a
-group that remains 10 s after its SIGKILL is a failure line that names it. When a start does not lead its group, that
-group also holds unrelated processes, so the scenario end SIGKILLs only the start's pid (while it still has the
-recorded `/proc` start time) and records a failure line that names the start and its process group. The harness is the
-child subreaper, so a fake that outlives its server becomes the harness's child. The group wait reaps a fake that leads
-its group, so the runner that started the harness does not keep the zombie until the run ends. A pid-only start is not
-reaped, so it stays a zombie until the harness exits.
+then ends every recorded start in both trees, whether or not the start is still alive. How it ends a start depends on
+the start's process group and `/proc` start time:
+
+- pgid == pid (what both servers produce with setsid): the scenario end SIGKILLs the whole group. A group that remains
+  10 s after its SIGKILL is a failure line that names it.
+- pgid != pid, and the pid still has the recorded `/proc` start time: the group also holds unrelated processes (the
+  server that started it without setsid, or the harness itself), so the group is never signalled. The scenario end
+  SIGKILLs only the pid and records a failure line that names the start and its process group. A zombie still has its
+  start time, so it gets this line too.
+- pgid != pid, and the pid has no `/proc` entry or a different start time: the start has exited, as a probe the server
+  reaped does, or its pid was recycled. It gets no signal and no line.
+
+The harness is the child subreaper, so a fake that outlives its server becomes the harness's child. The group wait reaps
+a fake that leads its group, so the runner that started the harness does not keep the zombie until the run ends. A
+pid-only start is not reaped, so it stays a zombie until the harness exits.
 
 ### The outside-write guard
 

@@ -908,16 +908,18 @@ def _kill_fake_group(label: str, record: dict) -> list[str]:
   When the start leads its own process group (pgid == pid), SIGKILL the whole group: a leader that still has the
   recorded pid_start is the start, so its group is the start's, and a gone leader keeps its group only while kill(2)
   still reaches that group. When it does not lead its group, the group also holds unrelated processes (the server
-  that started it without setsid, or the harness itself), so only the pid alone gets SIGKILL, and only while it
-  still has the recorded pid_start; the step gets a failure line that names the record.
+  that started it without setsid, or the harness itself), so the group is never signalled. A pid that no longer has
+  the recorded pid_start has exited (a probe the server reaped, for one), so it gets no signal and no line. A pid that
+  still has it gets SIGKILL alone, and the step gets a failure line that names the record.
   """
   pid = int(record["pid"])
   pgid = int(record["pgid"])
   if pgid != pid:
     start = servers.process_identity(pid)
-    if start is not None and start[1] == record["pid_start"]:
-      with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGKILL)
+    if start is None or start[1] != record["pid_start"]:
+      return []
+    with contextlib.suppress(ProcessLookupError):
+      os.kill(pid, signal.SIGKILL)
     return [f"{label} fake agent {pid} does not lead its own process group (pgid {pgid} != pid {pid}): {record}"]
   leader = servers.process_identity(pid)
   if (leader is not None and leader[1] == record["pid_start"]) or (leader is None and _group_exists(pgid)):

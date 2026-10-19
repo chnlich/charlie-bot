@@ -516,6 +516,31 @@ def test_fake_group_kill_signals_only_the_pid_when_the_start_does_not_lead_its_g
       process.wait()
 
 
+def test_fake_group_kill_passes_an_exited_or_recycled_pid_only_start(monkeypatch: pytest.MonkeyPatch) -> None:
+  # Neither child calls setsid, so both share the test's process group. The exited start has no /proc entry; the
+  # recycled one is a live process that lacks the recorded pid_start. Neither may get a signal or a line.
+  exited = subprocess.Popen([sys.executable, "-c", "pass"])
+  exited.wait()
+  recycled = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+  signalled: list[str] = []
+  monkeypatch.setattr(parity.os, "killpg", lambda pgid, signum: signalled.append(f"killpg {pgid}"))
+  monkeypatch.setattr(parity.os, "kill", lambda pid, signum: signalled.append(f"kill {pid}"))
+  own_group = os.getpgid(0)
+  try:
+    exited_record = {"index": 1, "pid": exited.pid, "pid_start": "0", "pgid": own_group}
+    recycled_record = {"index": 2, "pid": recycled.pid, "pid_start": "0", "pgid": own_group}
+
+    assert parity._kill_fake_group("baseline", exited_record) == []
+    assert parity._kill_fake_group("baseline", recycled_record) == []
+
+    assert signalled == []
+  finally:
+    monkeypatch.undo()
+    if recycled.poll() is None:
+      recycled.kill()
+    recycled.wait()
+
+
 def test_scenario_cleanup_kills_a_fake_group_that_ignores_sigterm(
     tmp_path: pathlib.Path, sigterm_leader: subprocess.Popen) -> None:
   side = parity.Side("candidate", parity.servers.Tree(label="candidate", root=tmp_path), port=18600)

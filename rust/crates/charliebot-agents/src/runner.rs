@@ -858,8 +858,8 @@ mod tests {
       _: &'a str,
       _: &'a str,
       _: Option<Duration>,
-    ) -> BoxFuture<'a, anyhow::Result<String>> {
-      Box::pin(async { bail!("not used") })
+    ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+      None
     }
   }
 }

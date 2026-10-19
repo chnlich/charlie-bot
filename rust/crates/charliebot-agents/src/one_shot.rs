@@ -69,6 +69,21 @@ pub async fn agent_one_shot_text(
   Ok(result.text.trim().to_string())
 }
 
+/// The backend's one-shot text: its CLI-native one-shot when the backend has one, else the tool-capable
+/// [`agent_one_shot_text`]. This is Python's polymorphic `backend.one_shot_text(...)`.
+pub async fn one_shot_text(
+  mut built: BuiltBackend,
+  base_env: &charliebot_registry::backend::Env,
+  prompt: &str,
+  system_prompt: &str,
+  timeout: Option<Duration>,
+) -> anyhow::Result<String> {
+  if let Some(native) = built.backend.one_shot_text(base_env, prompt, system_prompt, timeout) {
+    return native.await;
+  }
+  agent_one_shot_text(built, base_env, prompt, system_prompt, timeout).await
+}
+
 #[derive(Default)]
 struct OneShotResult {
   text: String,
@@ -101,6 +116,7 @@ mod tests {
 
   struct ScriptedBackend {
     script: String,
+    native_answer: Option<String>,
   }
 
   impl AgentBackend for ScriptedBackend {
@@ -138,8 +154,9 @@ mod tests {
       _prompt: &'a str,
       _system: &'a str,
       _timeout: Option<Duration>,
-    ) -> BoxFuture<'a, anyhow::Result<String>> {
-      Box::pin(async { anyhow::bail!("native one-shot is unused in this test") })
+    ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+      let answer = self.native_answer.clone()?;
+      Some(Box::pin(async move { Ok(answer) }))
     }
   }
 
@@ -175,7 +192,7 @@ mod tests {
     )
     .to_string();
     let built = BuiltBackend {
-      backend: Box::new(ScriptedBackend { script }),
+      backend: Box::new(ScriptedBackend { script, native_answer: None }),
       launch: LaunchArgs {
         instructions_content: Some("must not be written".to_string()),
         instructions_file: Some(instructions_file.clone()),
@@ -192,5 +209,24 @@ mod tests {
 
     assert_eq!(answer, "first");
     assert!(!instructions_file.exists());
+  }
+
+  #[tokio::test]
+  async fn dispatcher_takes_the_native_one_shot_and_falls_back_to_the_tool_capable_one() {
+    let base_env = Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]);
+    let native = BuiltBackend {
+      backend: Box::new(ScriptedBackend { script: "exit 1".to_string(), native_answer: Some("native".to_string()) }),
+      launch: LaunchArgs::default(),
+      registry: Arc::new(Registry::new()),
+    };
+    assert_eq!(one_shot_text(native, &base_env, "prompt", "system", None).await.unwrap(), "native");
+
+    let script = "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"tool-capable\"}]}}' '{\"type\":\"result\"}'";
+    let tool_capable = BuiltBackend {
+      backend: Box::new(ScriptedBackend { script: script.to_string(), native_answer: None }),
+      launch: LaunchArgs::default(),
+      registry: Arc::new(Registry::new()),
+    };
+    assert_eq!(one_shot_text(tool_capable, &base_env, "prompt", "system", None).await.unwrap(), "tool-capable");
   }
 }

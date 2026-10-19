@@ -247,8 +247,8 @@ impl AgentBackend for CodexBackend {
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
-  ) -> BoxFuture<'a, anyhow::Result<String>> {
-    Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await })
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    Some(Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await }))
   }
 }
 

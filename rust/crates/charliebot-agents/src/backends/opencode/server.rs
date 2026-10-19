@@ -645,6 +645,7 @@ impl OpenCodeServer {
     let deadline = tokio::time::Instant::now() + self.timeouts()?.start;
     let display_path = self.pool()?.host.program.display.display().to_string();
     let timeout_seconds = self.timeouts()?.start.as_secs_f64();
+    let listen_re = LISTEN_RE.get_or_init(|| Regex::new(r"server listening on (http://\S+)").unwrap());
     loop {
       let mut line = Vec::new();
       let count = tokio::time::timeout_at(deadline, stdout.read_until(b'\n', &mut line)).await.map_err(|_| {
@@ -659,9 +660,7 @@ impl OpenCodeServer {
       }
       append_tail(&process.tail, &line);
       let text = String::from_utf8_lossy(&line);
-      if let Some(capture) =
-        LISTEN_RE.get_or_init(|| Regex::new(r"server listening on (http://\S+)").unwrap()).captures(&text)
-      {
+      if let Some(capture) = listen_re.captures(&text) {
         return Ok(capture[1].to_string());
       }
     }

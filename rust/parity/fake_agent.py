@@ -1,5 +1,6 @@
 """Scripted agent used by the isolated parity harness."""
 
+import asyncio
 import base64
 import ctypes
 import fcntl
@@ -12,6 +13,7 @@ import re
 import signal
 import sys
 import time
+import urllib.parse
 
 _ARGV_VALUE = re.compile(r"\$\{argv:(?P<flag>[^}]+)\}")
 _PDEATHSIG_OPTION = 2
@@ -93,6 +95,11 @@ def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> 
     error_number = ctypes.get_errno()
     raise OSError(error_number, os.strerror(error_number))
   claims, token_valid = _run_token_record()
+  stdout_path = os.readlink("/proc/self/fd/1")
+  if name == "opencode" and sys.argv[2:3] == ["serve"]:
+    stdout_path = str(pathlib.Path.home() / "fake-agent" / "agent.raw")
+    pathlib.Path(stdout_path).touch()
+    pathlib.Path(stdout_path).with_name("agent.raw.cursor").write_text("0", encoding="utf-8")
   return {
       "index": index,
       "name": name,
@@ -102,7 +109,7 @@ def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> 
       "pid": pid,
       "pid_start": pid_start,
       "pgid": os.getpgrp(),
-      "stdout_path": os.readlink("/proc/self/fd/1"),
+      "stdout_path": stdout_path,
       "stdin_bytes": len(stdin_bytes),
       "stdin": _stdin_text(index, stdin_bytes),
       "nice": os.getpriority(os.PRIO_PROCESS, 0),
@@ -185,6 +192,154 @@ def _write_exit(agent_dir: pathlib.Path, index: int, exit_code: int) -> None:
   (agent_dir / f"exit-{index}").write_text(str(exit_code), encoding="utf-8")
 
 
+class FakeOpenCodeServer:
+  """The loopback OpenCode API driven by one fake-agent start entry."""
+
+  def __init__(self, agent_dir: pathlib.Path, index: int, entry: dict) -> None:
+    self.agent_dir = agent_dir
+    self.index = index
+    self.entry = entry
+    self.sessions: dict[str, str] = {}
+    self.shells: dict[str, dict] = {}
+    self.active: dict[str, asyncio.Event] = {}
+    self.subscribers: list[asyncio.Queue] = []
+    self.next_id = 0
+
+  def new_id(self, prefix: str) -> str:
+    self.next_id += 1
+    return f"{prefix}_{self.next_id}"
+
+  def emit(self, event: dict) -> None:
+    for queue in self.subscribers:
+      queue.put_nowait(event)
+
+  async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    head = await reader.readuntil(b"\r\n\r\n")
+    lines = head.decode("ascii").split("\r\n")
+    method, target, _ = lines[0].split(" ", 2)
+    headers = {
+        key.strip().lower(): value.strip() for key, value in (line.split(":", 1) for line in lines[1:] if ":" in line)
+    }
+    length = int(headers.get("content-length", 0))
+    body = json.loads(await reader.readexactly(length)) if length else None
+    path, _, query = target.partition("?")
+    params = urllib.parse.parse_qs(query)
+    if method == "GET" and path == "/api/event":
+      await self.stream(writer)
+      return
+    status, payload = await self.route(method, path, params, body)
+    data = json.dumps(payload).encode("utf-8") if payload is not None else b""
+    writer.write(
+        f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\n"
+        "Connection: close\r\n\r\n".encode("ascii") + data)
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+  async def route(self, method: str, path: str, params: dict, body: dict | None) -> tuple[int, object]:
+    parts = path.strip("/").split("/")
+    if method == "GET" and path == "/api/info":
+      return 200, {"version": "2.0.32"}
+    if method == "GET" and path == "/api/model":
+      return 200, {
+          "data": [{
+              "id": "fake-model",
+              "providerID": "fakeprov",
+              "limit": {
+                  "context": 200000,
+                  "output": 8000
+              }
+          }]
+      }
+    if method == "POST" and path == "/api/session":
+      session_id = self.new_id("ses")
+      self.sessions[session_id] = body["location"]["directory"]
+      return 200, {"data": {"id": session_id}}
+    if len(parts) >= 3 and parts[:2] == ["api", "session"]:
+      session_id = parts[2]
+      if session_id not in self.sessions:
+        return 404, {"_tag": "SessionNotFoundError", "sessionID": session_id}
+      action = parts[3] if len(parts) > 3 else None
+      if method == "GET" and action is None:
+        return 200, {"data": {"id": session_id}}
+      if method == "PUT" and action == "environment":
+        return 204, None
+      if method == "POST" and action == "prompt":
+        asyncio.create_task(self.run_prompt(session_id, body))
+        return 200, {"data": {"id": self.new_id("msg")}}
+      if method == "POST" and action == "interrupt":
+        cancel = self.active.pop(session_id, None)
+        if cancel is None:
+          return 200, {"interrupted": False}
+        cancel.set()
+        self.emit({"type": "session.execution.interrupted", "data": {"sessionID": session_id, "reason": "user"}})
+        return 200, {"interrupted": True}
+    if method == "POST" and path == "/api/location/reload":
+      return 204, None
+    if method == "GET" and path == "/api/shell":
+      directory = params.get("location[directory]", [""])[0]
+      shells = [shell for shell in self.shells.values() if shell["directory"] == directory]
+      return 200, {"location": {"directory": directory}, "data": shells}
+    if method == "DELETE" and len(parts) == 3 and parts[:2] == ["api", "shell"]:
+      self.shells.pop(parts[2], None)
+      return 204, None
+    return 404, {"error": f"no route {method} {path}"}
+
+  async def run_prompt(self, session_id: str, body: dict) -> None:
+    cancel = asyncio.Event()
+    self.active[session_id] = cancel
+    self.emit({"type": "session.execution.started", "data": {"sessionID": session_id}})
+    for step in self.entry["steps"]:
+      if "emit" in step:
+        event = json.loads(json.dumps(step["emit"]))
+        event.setdefault("data", {}).setdefault("sessionID", session_id)
+        self.emit(event)
+        if event.get("type") in ("session.execution.succeeded", "session.execution.failed",
+                                 "session.execution.interrupted"):
+          self.active.pop(session_id, None)
+          return
+      elif "gate" in step:
+        gate = step["gate"]
+        (self.agent_dir / f"at-{gate}").write_text(str(self.index), encoding="utf-8")
+        while not (self.agent_dir / f"open-{gate}").exists() and not cancel.is_set():
+          if not self.agent_dir.is_dir():
+            raise AgentDirGone(f"fake-agent directory {self.agent_dir} is gone while gate {gate!r} waits")
+          await asyncio.sleep(0.02)
+        if cancel.is_set():
+          return
+      elif "sigterm" in step:
+        signal.signal(signal.SIGTERM, _SIGTERM_DISPOSITIONS[step["sigterm"]])
+      else:
+        raise ValueError(f"unknown fake-agent step: {step!r}")
+    self.active.pop(session_id, None)
+    self.emit({"type": "session.execution.succeeded", "data": {"sessionID": session_id}})
+
+  async def stream(self, writer: asyncio.StreamWriter) -> None:
+    writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+    queue: asyncio.Queue = asyncio.Queue()
+    self.subscribers.append(queue)
+    queue.put_nowait({"type": "server.connected", "data": {}})
+    try:
+      while True:
+        event = await queue.get()
+        if event is None:
+          break
+        writer.write(f"data: {json.dumps(event, separators=(',', ':'))}\n\n".encode("utf-8"))
+        await writer.drain()
+    except (ConnectionError, asyncio.CancelledError):
+      raise
+    finally:
+      self.subscribers.remove(queue)
+      writer.close()
+
+  async def serve(self) -> None:
+    server = await asyncio.start_server(self.handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    print(f"server listening on http://127.0.0.1:{port}", flush=True)
+    async with server:
+      await server.serve_forever()
+
+
 def main() -> int:
   name = sys.argv[1]
   agent_dir = pathlib.Path.home() / "fake-agent"
@@ -194,6 +349,14 @@ def main() -> int:
   if not scripted:
     print(f"{name}: parity stand-in, not an agent CLI", file=sys.stderr)
     exit_code = 1
+  elif name == "opencode" and sys.argv[2:3] == ["serve"]:
+    try:
+      asyncio.run(FakeOpenCodeServer(agent_dir, index, entry).serve())
+    except Exception as error:
+      print(f"{name}: {type(error).__name__}: {error}", file=sys.stderr)
+      _write_exit(agent_dir, index, 2)
+      return 2
+    return 0
   else:
     try:
       exit_code = _run_steps(entry, agent_dir, index)

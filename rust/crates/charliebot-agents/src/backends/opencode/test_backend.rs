@@ -23,6 +23,8 @@ use crate::runner::{AgentRunner, RunOutcome, RunRequest};
 use crate::transport::identity::{ProcessIdentity, read_pid_stat};
 use crate::transport::kill::kill_process_group;
 
+type TestRun = (Arc<AgentRunner>, Arc<Mutex<Vec<Value>>>, JoinHandle<anyhow::Result<RunOutcome>>);
+
 const MODEL: &str = "fakeprov/fake-model";
 
 struct Harness {
@@ -31,7 +33,7 @@ struct Harness {
   pool: Arc<OpenCodeServerPool>,
   server: Arc<OpenCodeServer>,
   servers: Arc<Mutex<Vec<Arc<OpenCodeServer>>>>,
-  turn_processes: Arc<Mutex<Vec<ProcessIdentity>>>,
+  turn_processes: Arc<Mutex<Vec<(String, ProcessIdentity)>>>,
   log_path: PathBuf,
   script_path: PathBuf,
 }
@@ -87,7 +89,7 @@ impl Harness {
     proxy_url: Option<String>,
     uploaded_files: Vec<Value>,
     additions: Env,
-  ) -> (Arc<AgentRunner>, Arc<Mutex<Vec<Value>>>, JoinHandle<anyhow::Result<RunOutcome>>) {
+  ) -> TestRun {
     let backend = OpenCodeBackend::new(
       MODEL.to_string(),
       OpenCodeOption { proxy_url: proxy_url.clone() },
@@ -124,15 +126,17 @@ impl Harness {
       })
     });
     let turn_processes = Arc::clone(&self.turn_processes);
+    let process_prompt = prompt.to_string();
     request.on_spawn = Some(Arc::new(move |identity| {
       let turn_processes = Arc::clone(&turn_processes);
+      let process_prompt = process_prompt.clone();
       Box::pin(async move {
         let current = read_pid_stat(identity.pid).context("reading the turn process stat at spawn notification")?;
         anyhow::ensure!(
           identity.pid_start.as_deref() == Some(current.pid_start.as_str()),
           "pid_start changed before callback"
         );
-        turn_processes.lock().expect("test turn process list is not poisoned").push(identity);
+        turn_processes.lock().expect("test turn process list is not poisoned").push((process_prompt, identity));
         Ok(())
       }) as BoxFuture<'static, anyhow::Result<()>>
     }));
@@ -184,7 +188,7 @@ impl Drop for Harness {
         kill_process_group(pid, Signal::SIGKILL);
       }
     }
-    for identity in self.turn_processes.lock().expect("test turn process list is not poisoned").iter() {
+    for (_, identity) in self.turn_processes.lock().expect("test turn process list is not poisoned").iter() {
       if read_pid_stat(identity.pid).is_some_and(|stat| Some(stat.pid_start.as_str()) == identity.pid_start.as_deref())
       {
         kill_process_group(identity.pid, Signal::SIGKILL);
@@ -401,9 +405,6 @@ fn snapshot_reading_limits_keep_the_opencode_reserve() {
 #[tokio::test]
 async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   // Python: tests/test_opencode_backend.py::test_turn_translates_events_sets_the_environment_and_ends_with_result
-  // Python: tests/test_backend_proxy_env.py::test_prepare_env_injects_proxy_and_merges_local_no_proxy_without_mutating_input
-  // Python: tests/test_backend_proxy_env.py::test_prepare_env_without_proxy_preserves_proxy_related_environment
-  // Python: tests/test_backend_proxy_env.py::test_proxy_state_is_isolated_between_backend_instances
   // Python: tests/test_backend_pid_start_contract.py::test_every_backend_subclass_has_a_harness
   // Python: tests/test_backend_pid_start_contract.py::test_pid_start_pinned_at_spawn_notification
   let script = json!({
@@ -521,10 +522,22 @@ async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
         == 2
     })
     .await;
-  let cancelled_pid = harness.turn_processes.lock().unwrap()[0].pid;
+  let cancelled_pid = harness
+    .turn_processes
+    .lock()
+    .unwrap()
+    .iter()
+    .find_map(|(prompt, identity)| (prompt == "held").then_some(identity.pid))
+    .expect("held turn has a spawned process");
   kill_process_group(cancelled_pid, Signal::SIGTERM);
   let cancelled = cancelled_task.await.unwrap().unwrap();
-  assert_eq!(cancelled.exit_code, Some(-libc::SIGTERM));
+  assert_eq!(
+    cancelled.exit_code,
+    Some(-libc::SIGTERM),
+    "cancelled events: {:?}; fake requests: {:?}",
+    collected_events(&cancelled_events),
+    harness.logs()
+  );
   assert!(!collected_events(&cancelled_events).iter().any(|event| event["type"] == event_types::ERROR));
   assert!(!other_task.is_finished());
   let other_session = session_id_for_prompt(&harness.logs(), "quick");
@@ -819,13 +832,17 @@ async fn opencode_prepare_cwd_writes_agents_md_even_when_config_exists() {
 #[tokio::test]
 async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
   // Python: tests/test_backend_prepare_cwd_contract.py::test_opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare
-  // Python: tests/test_backend_prepare_cwd_contract.py::test_prepare_cwd_skips_instructions_file_when_unset
+  // Python: tests/test_backend_prepare_cwd_contract.py::test_run_instructions_land_in_run_dir_and_tracked_guides_stay_untouched
   let framed = "<system-instructions>\nworker instructions\n</system-instructions>\n\nwork";
   let harness = Harness::new(json!({"prompts": {
     framed: {"events": [text_event("worker")]},
     "manage": {"events": [text_event("manager")]}
   }}));
-  let instruction_file = harness.root.path().join("work/worker/AGENTS.md");
+  let work = harness.root.path().join("work");
+  fs::create_dir_all(&work).unwrap();
+  fs::write(work.join("CLAUDE.md"), "tracked Claude guide").unwrap();
+  fs::write(work.join("AGENTS.md"), "tracked agent guide").unwrap();
+  let instruction_file = harness.root.path().join("run/harness_instructions.md");
   fs::create_dir_all(instruction_file.parent().unwrap()).unwrap();
   let (_, _, worker_task) = harness.start_run(
     "work",
@@ -836,6 +853,8 @@ async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
   );
   assert_eq!(worker_task.await.unwrap().unwrap().exit_code, Some(0));
   assert_eq!(fs::read_to_string(&instruction_file).unwrap(), "worker instructions");
+  assert_eq!(fs::read_to_string(work.join("CLAUDE.md")).unwrap(), "tracked Claude guide");
+  assert_eq!(fs::read_to_string(work.join("AGENTS.md")).unwrap(), "tracked agent guide");
   let (_, _, manager_task) = harness.start_run(
     "manage",
     launch_with_instructions(Some("manager instructions"), None, None),
@@ -851,6 +870,17 @@ async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
     .collect::<Vec<_>>();
   assert_eq!(prompts[0]["body"]["text"], framed);
   assert_eq!(prompts[1]["body"]["text"], "manage");
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+#[tokio::test]
+async fn opencode_prepare_cwd_skips_agents_md_when_instructions_are_unset() {
+  // Python: tests/test_backend_prepare_cwd_contract.py::test_prepare_cwd_skips_instructions_file_when_unset
+  let harness = Harness::new(json!({"prompts": {"plain": {"events": [text_event("ok")]}}}));
+  let (_, _, task) = harness.start_run("plain", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(task.await.unwrap().unwrap().exit_code, Some(0));
+  assert!(!harness.root.path().join("work/AGENTS.md").exists());
   harness.stop().await.unwrap();
   harness.clear_finished_turn_pids();
 }
@@ -951,7 +981,6 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
 
 #[tokio::test]
 async fn iter_ndjson_events_parses_and_skips() {
-  // Python: tests/test_backend_stream_parse.py::test_iter_ndjson_events_parses_and_skips
   let input = b"\nnot json\n{\"type\":\"text\",\"part\":{\"text\":\"answer\"}}\n";
   let mut reader = tokio::io::BufReader::new(&input[..]);
   let events = Arc::new(Mutex::new(Vec::new()));

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -109,16 +109,16 @@ impl OpenCodeBackend {
     system: &str,
     timeout: Option<Duration>,
   ) -> anyhow::Result<String> {
-    run_one_shot(
-      self.host.clone(),
-      self.model.clone(),
-      self.proxy_url.clone(),
-      self.launch.cgroup_session_id.clone(),
-      base_env.clone(),
-      prompt.to_string(),
-      system.to_string(),
+    run_one_shot(OpenCodeOneShotRequest {
+      host: self.host.clone(),
+      model: self.model.clone(),
+      proxy_url: self.proxy_url.clone(),
+      cgroup_session_id: self.launch.cgroup_session_id.clone(),
+      base_env: base_env.clone(),
+      prompt: prompt.to_string(),
+      system: system.to_string(),
       timeout,
-    )
+    })
     .await
   }
 }
@@ -441,7 +441,7 @@ fn process_exit_code(exit: &watch::Receiver<Option<Result<i32, String>>>) -> Opt
   }
 }
 
-async fn open_session(plan: &OpenCodeRunPlan, server: &OpenCodeServer, cwd: &PathBuf) -> anyhow::Result<String> {
+async fn open_session(plan: &OpenCodeRunPlan, server: &OpenCodeServer, cwd: &Path) -> anyhow::Result<String> {
   if let Some(session_id) = &plan.resume_session_id {
     let response = server.client_request(reqwest::Method::GET, &format!("/api/session/{session_id}"))?.send().await?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -470,7 +470,7 @@ async fn open_session(plan: &OpenCodeRunPlan, server: &OpenCodeServer, cwd: &Pat
 async fn fetch_model_limit(
   plan: &OpenCodeRunPlan,
   server: &OpenCodeServer,
-  cwd: &PathBuf,
+  cwd: &Path,
 ) -> anyhow::Result<Option<Map<String, Value>>> {
   let (provider_id, model_id) = split_model(&plan.model)?;
   let response = server
@@ -557,10 +557,10 @@ async fn send_prompt(
 }
 
 fn effective_prompt(plan: &OpenCodeRunPlan, prompt: &str) -> String {
-  if plan.instructions_file.is_some() {
-    if let Some(content) = plan.instructions_content.as_ref().filter(|content| !content.is_empty()) {
-      return crate::one_shot::frame_system_prompt(content, prompt);
-    }
+  if plan.instructions_file.is_some()
+    && let Some(content) = plan.instructions_content.as_ref().filter(|content| !content.is_empty())
+  {
+    return crate::one_shot::frame_system_prompt(content, prompt);
   }
   prompt.to_string()
 }
@@ -796,7 +796,7 @@ impl Translate for OpenCodeTranslator {
   }
 }
 
-async fn run_one_shot(
+struct OpenCodeOneShotRequest {
   host: OpenCodeHost,
   model: String,
   proxy_url: Option<String>,
@@ -805,7 +805,10 @@ async fn run_one_shot(
   prompt: String,
   system: String,
   timeout: Option<Duration>,
-) -> anyhow::Result<String> {
+}
+
+async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String> {
+  let OpenCodeOneShotRequest { host, model, proxy_url, cgroup_session_id, base_env, prompt, system, timeout } = request;
   if !host.program.program.is_file() {
     bail!("opencode 2.0 binary not found at {}", host.program.display.display());
   }

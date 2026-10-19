@@ -112,6 +112,44 @@ post-finish completion traits are supplied by the execution and completion stage
 | `TriggerMasterRequest::new` | `src/runtime/master_trigger.py:41-53` (default arguments) |
 | `master_trigger::trigger_master` | `src/runtime/master_trigger.py:41-87` |
 
+## Startup recovery and shutdown
+
+`recovery::recovery_step`, registered as `task_recovery`, runs after the pre-recovery step. It re-attaches manager
+turns that are still alive, drains runs that exited while the server was down, and replays the follow-ups their crash
+window lost. `recovery::let_go_step`, registered as `task_execution`, runs after services stop, so the queue's consumers
+are cancelled last: a turn whose record is durable detaches, and an uncovered turn terminates.
+
+| Rust item | Python source |
+| --- | --- |
+| `recovery::recovery_step` | `src/runtime/task_recovery.py:46`; `server.py:215-225` |
+| `recovery::reconcile_task_tree` | `src/runtime/task_recovery.py:46-85` |
+| `recovery::reconcile_node` | `src/runtime/task_execution.py:2668-2774` |
+| `recovery::replay_followups` (private) | `src/runtime/task_execution.py:2802-2914` |
+| `recovery::replay_owes_review` | `src/runtime/task_execution.py:2775-2801` |
+| `recovery::closed_task_stop_request_id` | `src/runtime/task_execution.py:210-219` |
+| `recovery::resume_run` (private `resume_run_checked`, `enqueue_manager_resume`) | `src/runtime/task_execution.py:1919-2034` |
+| `recovery::repair_end_metadata` | `src/runtime/task_execution.py:2084` |
+| `recovery::let_go_step` | `src/runtime/master_cc_run.py:648-691`; `server.py:228-300` |
+| `recovery::start_end_landing_retry`, `retry_while_out_of_space`, `RUN_END_LANDING_RETRY_INTERVAL` | `src/runtime/task_execution.py:611-660` |
+
+A manager turn that is alive enqueues a master resume through `MasterQueue::enqueue_master_resume`, and the follow is
+tracked and never awaited, so the boot pass does not wait on the queue. The resumed record carries no input ids, as
+`task_execution._resume_manager_turn` (`task_execution.py:2006-2034`) builds it.
+
+### Follow-ups that return a named error
+
+The port does not replay these follow-ups yet. The node pass returns an error that names the owner and the step, for
+example `the failure report of work run <id> to its parent is owned by the worker-run task, which has not landed; the
+node pass cannot replay it`. Startup logs each one as `task_recovery_node_failed` and continues with the other nodes.
+
+| Owner | Rust call site | Follow-up that Python replays (`task_execution.py:2802-2914`) |
+| --- | --- | --- |
+| worker-run | `resume_run_checked` for a launched worker, review or iteration run that is alive or drained at boot | re-attach and drain of worker kinds (`_resume_run_checked`, `task_execution.py:1956`) |
+| worker-run | `replay_followups` for a failed or interrupted work run | failure report of the run to its parent |
+| review-chain | `replay_followups` for a successful implement run that owes a review | review spawn |
+| review-chain | `replay_followups` for a finished review run | review-run follow-up |
+| cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
+
 ## Prompt assembly
 
 `prompts` assembles the managed instructions of every agent run. For the same sources it produces the same blocks,
@@ -203,3 +241,11 @@ steps and the snapshot dedup and hash.
 `tests/turn_golden.rs` runs `tests/python_turn_golden.py` through `uv run python`, then compares the same twelve
 scripted streams through the Rust queue after normalizing event ids, timestamps, and elapsed timing fields. It starts
 only synthetic `/bin/sh` backends.
+
+`recovery.rs` unit tests cover the review-owed rule
+(`a_review_is_owed_only_to_the_newest_unfollowed_work_run_of_an_open_task`), the closed-task stop id, and the
+end-landing retry rounds. The Python startup-recovery cases in `tests/test_task_recovery.py`,
+`tests/test_task_execution.py`, `tests/test_task_completion.py`, `tests/test_task_prompt_change_durable.py`,
+`tests/test_home_writer_fence.py` and the startup cases of `tests/test_task_sequences.py` are not ported yet.
+The cases that replay a named follow-up above (cold-read, failed-run report, review spawn) need that replay
+before they can pass, and the rest need a store fixture with live run processes.

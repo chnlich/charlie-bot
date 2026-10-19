@@ -1,7 +1,5 @@
-//! `src/features/discord`: registers the internal routes behind `charliebot discord reply`, `read` and `check`, the
-//! `discord:` config section, the Discord fields of each session and the turn contribution that carries the thread reply
-//! contract in manager runs and renders `discord_reply` events. The gateway listener and the boot backfills are not ported
-//! yet, so the package keeps its service out of the registry.
+//! `src/features/discord`: registers the gateway service, internal routes, config section, session fields and turn
+//! contribution for the Discord thread entrypoint.
 
 mod api;
 mod config;
@@ -10,6 +8,7 @@ mod discord_commands;
 pub mod discord_listener;
 mod event_types;
 pub mod metadata;
+mod service;
 mod thread_contract;
 mod turn_contribution;
 
@@ -21,11 +20,12 @@ use std::sync::Arc;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{Registry, RegistryError};
 use serde_json::{Map, Value};
+use service::DiscordService;
 use turn_contribution::DiscordTurnContribution;
 
-/// `src/features/discord`: the internal router, then the `discord:` section, the Discord fields of each session, and the
-/// turn contribution.
+/// Register in Python package order, omitting its Python-only `discord` CLI command.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.service(Arc::new(DiscordService::default()))?;
   registry.router(api::routes, api::matches)?;
   registry.config_section(config::section())?;
   registry.metadata_slot_with_validator(

@@ -447,8 +447,10 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-sched",
  "charliebot-store",
  "futures-util",
+ "getrandom 0.3.4",
  "http",
  "percent-encoding",
  "regex",
@@ -459,6 +461,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
  "uuid",
 ]
 

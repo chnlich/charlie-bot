@@ -190,7 +190,7 @@ implemented.
 | lifespan | 13. Release home writer fence | foundation | ported | |
 | service | `scheduler` | features/cron | todo | |
 | service | `slack` | features/slack | ported | Starts Socket Mode and the lost-summon backfill when both Slack tokens and an allowed-user id are configured. |
-| service | `discord` | features/discord | todo | |
+| service | `discord` | features/discord | ported | Starts the Discord gateway and lost-summon backfill when the bot token and an allowed user are configured. |
 | service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
 | service | `usage_tally` | features/usage | not applicable | It only preloads Python modules; Rust has no import cost to hide. |
@@ -207,10 +207,10 @@ implemented.
 | registration | turn contribution `web_reply`: instruction segments and round-end audit | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The Rust server runs the round-end audit (`after_turn`, `audit.py`) after a clean turn that answers a user: the store starts each contribution's `after_turn` on `master_done` (`RegistryRuntimeEvents::after_turn` in `charliebot-registry/src/store_hooks.rs`), and the audit posts the nudge or the notice. The run launch path that assembles the segments is not ported yet. |
 | registration | router `/api/internal` (`web_reply`) | features/web_reply | ported | The four web reply routes above. |
 | registration | turn contribution `slack` | features/slack | ported | Adds the thread reply contract to manager runs, renders `slack_reply`, and runs the round-end audit from `after_turn`. The thread core it calls (`thread_entry.py`) is ported in `features/chat_threads`. |
-| registration | turn contribution `discord`: instruction segments | features/discord | ported | Adds the thread reply contract to a manager run of a Discord thread session. The thread core it reads (`thread_entry.py`) is ported in `features/chat_threads`; the Discord listener is the `discord` service above. |
-| component | thread core (`thread_entry.py`) | features/chat_threads | ported | Reply posting and retries, the round audit, lost-summon backfill, follow triggers, and the file-server link checks. Each platform supplies its own `ThreadAdapter`; none is registered yet. |
-| component | `ChannelService` (`channel_service.py`) | features/chat_threads | ported | Starts a platform's listener and its boot backfill on the server's `ServiceContext`, and stops both by cancelling and awaiting them. No listener is registered yet: the `slack` and `discord` services above are `todo`. |
-| component | boot backfill `run_backfill` (`backfill.py`) | features/chat_threads | ported | Waits for crash recovery, then reports the platform's summons lost across the restart. It runs when a listener starts, so it stays idle until the `slack` and `discord` services land. |
+| registration | turn contribution `discord`: instruction segments and round-end audit | features/discord | ported | Adds the thread reply contract to manager runs and calls `deliver_done` from `after_turn`. The hook runs through the A1 runtime event hook. |
+| component | thread core (`thread_entry.py`) | features/chat_threads | ported | Reply posting and retries, the round audit, lost-summon backfill, follow triggers, and file-server link checks. Slack and Discord supply their own `ThreadAdapter` implementations. |
+| component | `ChannelService` (`channel_service.py`) | features/chat_threads | ported | Starts the Slack or Discord listener and boot backfill on the server's `ServiceContext`, and stops both by cancelling and awaiting them. |
+| component | boot backfill `run_backfill` (`backfill.py`) | features/chat_threads | ported | Waits for crash recovery, then reports the platform's summons lost across the restart. Both channel services run it. |
 
 ## State files
 

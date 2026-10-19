@@ -12,8 +12,10 @@ charliebot-chat-threads.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
+charliebot-sched.workspace = true
 charliebot-store.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
 regex.workspace = true
@@ -22,6 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

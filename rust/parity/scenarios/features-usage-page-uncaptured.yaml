@@ -1,0 +1,8 @@
+stage: features
+name: features-usage-page-uncaptured
+fixture_extras: [usage_ledger_empty]
+steps:
+  - name: token-usage page with an empty ledger and no capture
+    method: GET
+    path: /token-usage
+    expect_status: 200

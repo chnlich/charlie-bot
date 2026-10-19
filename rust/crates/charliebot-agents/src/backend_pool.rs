@@ -166,7 +166,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<String> {
-  let Some(value) = values.get_mut("backend_from_pool") else { return None };
+  let value = values.get_mut("backend_from_pool")?;
   let boolean = match value {
     Value::Bool(value) => *value,
     Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,

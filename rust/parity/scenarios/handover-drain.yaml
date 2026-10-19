@@ -1,0 +1,52 @@
+# The manager agent exits while no server runs; the second server drains its raw log to the scripted outcome.
+stage: agent-orchestration
+name: handover-drain
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-drain-session}
+        - gate: drain-turn
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The manager turn finished while no server ran.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 1  # One dispatch: the first server starts the agent; the second server drains it and launches nothing.
+directions: [python-to-candidate, candidate-to-python]
+steps:
+  - name: send a manager message
+    method: POST
+    path: /api/chat/${sessions.atlas}/message
+    json: {content: Continue the synthetic Atlas plan.}
+    capture: {input_id: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the raw log cursor at the gate
+    timeout_seconds: 30
+    until: {at_gate: drain-turn}
+  - kind: handover
+    name: stop both servers and let the agent exit while none runs
+    agent_after_stop: exited
+    open_while_stopped: drain-turn
+    timeout_seconds: 30
+  - kind: wait
+    name: wait for the drained run to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.input_id}"], outcome: success}
+  - kind: log_event
+    name: the second server logs the drain
+    event: task_recovery_drain
+    timeout_seconds: 30

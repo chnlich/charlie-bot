@@ -6,6 +6,10 @@ steps:
     method: GET
     path: /api/sessions/
     expect_status: 200
+  - name: HEAD, active list
+    method: HEAD
+    path: /api/sessions/
+    expect_status: 405
   - name: active list, gzip accepted
     method: GET
     path: /api/sessions/

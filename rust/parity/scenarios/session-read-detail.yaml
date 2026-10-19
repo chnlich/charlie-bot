@@ -15,6 +15,10 @@ steps:
     method: GET
     path: /api/sessions/${sessions.atlas}
     expect_status: 200
+  - name: HEAD, detail, manager root, starred, grouped
+    method: HEAD
+    path: /api/sessions/${sessions.atlas}
+    expect_status: 405
   - name: bootstrap, manager root, starred, grouped
     method: GET
     path: /api/sessions/${sessions.atlas}/bootstrap
@@ -23,6 +27,10 @@ steps:
     method: GET
     path: /api/sessions/${sessions.atlas}/usage
     expect_status: 200
+  - name: PUT, usage, manager root, starred, grouped
+    method: PUT
+    path: /api/sessions/${sessions.atlas}/usage
+    expect_status: 405
   - name: events, newest page, manager root, starred, grouped
     method: GET
     path: /api/sessions/${sessions.atlas}/events

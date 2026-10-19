@@ -9,19 +9,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_agents::backend_types::{self, BuiltBackend};
 use charliebot_agents::event_builders;
 use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
 use charliebot_agents::runner::{
-  AgentRunner, DEFAULT_CLEANUP_TIMEOUT, DEFAULT_POST_RESULT_TIMEOUT, OnSpawnFn, RunRequest,
+  AgentRunner, DEFAULT_CLEANUP_TIMEOUT, DEFAULT_POST_RESULT_TIMEOUT, OnSpawnFn, RunRequest, capture_process_diagnostics,
 };
 use charliebot_agents::transport::cgroup;
 use charliebot_agents::transport::cursor;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
 use charliebot_agents::transport::identity::ProcessIdentity;
+use charliebot_agents::transport::kill;
 use charliebot_agents::transport::recovery;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -235,7 +236,8 @@ impl Worker {
   }
 
   /// Re-attaches to an interrupted run and streams its remaining output, then emits the terminal events (`Worker.resume`).
-  /// `is_alive` judges the process from its pinned identity; `on_silence` is the follow's silence recheck.
+  /// `is_alive` judges the process from its pinned identity; `on_silence` is the follow's silence recheck. A process
+  /// still alive after the follow gets its diagnostics captured and its group killed before the terminal events.
   pub async fn resume(
     &self,
     is_alive: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -285,20 +287,20 @@ impl Worker {
 
     let mut scanned = self.build_backend(None, false)?.backend.translator();
     let (_, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;
-    if is_alive() {
-      // The hang path captures the process's diagnostics before it kills the group. Capturing them is
-      // `charliebot-agents` `runner::capture_process_diagnostics`, which is private there, so this path stops here and the
-      // process is left running.
-      bail!(
-        "resumed run {}: its process is alive after the follow ended, so its hang diagnostics are due; capturing them \
-         needs charliebot-agents' runner::capture_process_diagnostics (Python base._capture_proc_diagnostics), which is \
-         private to that module",
-        self.thread_id
-      );
-    }
+    // The follow ends with a live process only on the post-result timeout, so a live process here outlived its result.
+    // Its diagnostics are captured before its group is killed (`worker.py` `resume`).
+    let hang_diagnostics = if is_alive() {
+      let pid = self.thread.lock().expect("thread metadata mutex is not poisoned").pid;
+      let pid = pid.context("a live resumed run has no recorded pid")?;
+      let diagnostics = capture_process_diagnostics(pid).await;
+      kill::kill_group_escalating(pid, || is_alive()).await;
+      Some(diagnostics)
+    } else {
+      None
+    };
     let completion = recovery::raw_completion_time(&raw_path);
     let stderr_text = read_stderr_tail(&stderr_path)?;
-    self.emit_terminal_events(&sink, exit_code, &stderr_text, None, None, completion).await?;
+    self.emit_terminal_events(&sink, exit_code, &stderr_text, hang_diagnostics.as_ref(), None, completion).await?;
     tracing::info!(target: "charliebot_tasks", thread = %self.thread_id, exit_code, "worker_resume_finished");
     Ok(exit_code)
   }

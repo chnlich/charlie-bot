@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
+use charliebot_core::pystr;
 use charliebot_pyhtml::{EventKind, parse, unescape};
 use fancy_regex::Regex;
 use serde::Serialize;
@@ -13,7 +14,6 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::headless_render;
-use crate::unicode;
 
 const STYLE_VERBATIM: &str = "style-verbatim";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
@@ -206,7 +206,7 @@ fn parse_dom(source: &str) -> anyhow::Result<Vec<Element>> {
           })
           .collect::<HashMap<_, _>>();
         let class_value = attributes.get("class").and_then(Option::as_deref).unwrap_or("");
-        let classes = unicode::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
+        let classes = pystr::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
         let parent = *stack.last().expect("the root remains on the parser stack");
         let index = nodes.len();
         nodes.push(Element { tag: tag.clone(), classes, parent: Some(parent), children: Vec::new() });
@@ -280,7 +280,7 @@ fn section_heading(nodes: &[Element], element: usize) -> String {
     if nodes[index].tag == "section" {
       return find(nodes, index, "h2", &[])
         .first()
-        .map(|&heading| unicode::collapse_whitespace(&element_text(nodes, heading)))
+        .map(|&heading| pystr::collapse_whitespace(&element_text(nodes, heading)))
         .unwrap_or_else(|| "<unnamed section>".to_owned());
     }
     ancestor = nodes[index].parent;
@@ -329,8 +329,8 @@ fn check_style_verbatim(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
   if template_styles.len() != 1 {
     bail!("genre template {template_rel} carries {} <style> blocks, expected one", template_styles.len());
   }
-  let page_text = unicode::collapse_whitespace(&element_text(&context.nodes, page_styles[0]));
-  let template_text = unicode::collapse_whitespace(&element_text(&template_nodes, template_styles[0]));
+  let page_text = pystr::collapse_whitespace(&element_text(&context.nodes, page_styles[0]));
+  let template_text = pystr::collapse_whitespace(&element_text(&template_nodes, template_styles[0]));
   if page_text == template_text {
     Ok(vec![outcome(STYLE_VERBATIM, true, "")])
   } else {
@@ -343,7 +343,7 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
   for heading in find(&context.nodes, 0, "h2", &[]) {
     let numbers = find(&context.nodes, heading, "span", &["n"]);
     if numbers.len() > 1 {
-      let heading_text = unicode::collapse_whitespace(&element_text(&context.nodes, heading));
+      let heading_text = pystr::collapse_whitespace(&element_text(&context.nodes, heading));
       return Ok(vec![outcome(
         SECTIONS_NUMBERED,
         false,
@@ -352,14 +352,14 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
     }
     if let Some(&number) = numbers.first() {
       numbered.push((
-        unicode::collapse_whitespace(&element_text(&context.nodes, heading)),
-        unicode::collapse_whitespace(&element_text(&context.nodes, number)),
+        pystr::collapse_whitespace(&element_text(&context.nodes, heading)),
+        pystr::collapse_whitespace(&element_text(&context.nodes, number)),
       ));
     }
   }
   let mut values = Vec::new();
   for (heading, number) in numbered {
-    if !unicode::isdigit(&number) {
+    if !pystr::isdigit(&number) {
       return Ok(vec![outcome(
         SECTIONS_NUMBERED,
         false,
@@ -452,7 +452,7 @@ fn check_fork_explainer(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
     } else {
       let has_body = descendants(&context.nodes, layers[0]).into_iter().any(|element| {
         EXPLAINER_BODY_TAGS.contains(&context.nodes[element].tag.as_str())
-          && !unicode::split_whitespace(&element_text(&context.nodes, element)).is_empty()
+          && !pystr::split_whitespace(&element_text(&context.nodes, element)).is_empty()
       });
       if !has_body {
         failures.push(outcome(
@@ -490,7 +490,7 @@ fn check_goal_budget(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
   let body = revision_mark_regex("span", "revbadge").replace_all(&body, "");
   let body = TAG_RE.replace_all(&body, "");
   let decoded = unescape(&body);
-  let text = unicode::collapse_whitespace(&decoded);
+  let text = pystr::collapse_whitespace(&decoded);
   let weighted = text.chars().count()
     + text
       .chars()
@@ -575,7 +575,7 @@ fn render_probe(chrome_bin: &Path, probe: &Path) -> anyhow::Result<Result<i32, S
 fn python_decimal_integer(text: &str) -> Result<String, String> {
   let mut digits = String::with_capacity(text.len());
   for character in text.chars() {
-    let Some(digit) = unicode::python_decimal_value(character) else {
+    let Some(digit) = pystr::python_decimal_value(character) else {
       return Err(format!("invalid literal for int() with base 10: {}", pyfmt::str_repr(text)));
     };
     digits.push(char::from(b'0' + digit));
@@ -612,13 +612,13 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
   let fork_count = find(&context.nodes, 0, "div", &["fork"]).len();
   let section_numbers = find(&context.nodes, 0, "span", &["sn"])
     .into_iter()
-    .map(|element| unicode::collapse_whitespace(&element_text(&context.nodes, element)))
+    .map(|element| pystr::collapse_whitespace(&element_text(&context.nodes, element)))
     .collect::<HashSet<_>>();
   let mut named = HashSet::new();
   let mut flagged = Vec::new();
   for block in ordinal_blocks(&context.nodes) {
     let block_text = block_scan_text(&context.nodes, block);
-    let collapsed = unicode::collapse_whitespace(&block_text);
+    let collapsed = pystr::collapse_whitespace(&block_text);
     let text = unescape(&collapsed);
     for sentence in SENTENCE_SPLIT.split(&text) {
       let sentence = trim_python_whitespace(sentence?);
@@ -797,11 +797,11 @@ fn split_code_spans(source: &str) -> CodeText {
 }
 
 fn ordinal_label(kind: &str) -> String {
-  unicode::collapse_whitespace(kind)
+  pystr::collapse_whitespace(kind)
 }
 
 fn ordinal_number(number: &str) -> anyhow::Result<Option<usize>> {
-  if unicode::isdigit(number) {
+  if pystr::isdigit(number) {
     return Ok(python_decimal_integer(number).ok().and_then(|value| value.parse().ok()));
   }
   if number == "十" {
@@ -840,7 +840,7 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 }
 
 fn trim_python_whitespace(text: &str) -> &str {
-  text.trim_matches(unicode::is_python_whitespace)
+  text.trim_matches(pystr::is_python_whitespace)
 }
 
 fn trim_chars<'a>(text: &'a str, characters: &str) -> &'a str {

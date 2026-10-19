@@ -4,7 +4,6 @@ pub mod artifact_check;
 mod artifact_view;
 mod headless_render;
 pub mod plan_diff;
-mod unicode;
 
 use std::fs;
 use std::path::Path;

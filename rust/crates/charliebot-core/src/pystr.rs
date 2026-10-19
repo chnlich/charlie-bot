@@ -1,3 +1,6 @@
+//! CPython's `str` methods on Unicode text, for the ports to match: `isdigit`, the decimal value of a decimal digit,
+//! `isspace`, and `split()` with its `" ".join` collapse.
+
 const DIGIT_RANGES: &[(u32, u32)] = &[
   (0x0030, 0x0039),
   (0x00b2, 0x00b3),
@@ -100,22 +103,22 @@ const DECIMAL_ZEROES: &[u32] = &[
   0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e5f1, 0x1e950, 0x1fbf0,
 ];
 
-pub(crate) fn is_python_digit(character: char) -> bool {
+pub fn is_python_digit(character: char) -> bool {
   let code_point = character as u32;
   DIGIT_RANGES.iter().any(|&(start, end)| (start..=end).contains(&code_point))
 }
 
 /// Python's `str.isdigit`: a non-empty string whose every character is a digit.
-pub(crate) fn isdigit(text: &str) -> bool {
+pub fn isdigit(text: &str) -> bool {
   !text.is_empty() && text.chars().all(is_python_digit)
 }
 
-pub(crate) fn python_decimal_value(character: char) -> Option<u8> {
+pub fn python_decimal_value(character: char) -> Option<u8> {
   let code_point = character as u32;
   DECIMAL_ZEROES.iter().find_map(|&zero| (zero..zero + 10).contains(&code_point).then(|| (code_point - zero) as u8))
 }
 
-pub(crate) fn is_python_whitespace(character: char) -> bool {
+pub fn is_python_whitespace(character: char) -> bool {
   matches!(
     character,
     '\u{0009}'..='\u{000d}' | '\u{001c}'..='\u{0020}' | '\u{0085}' | '\u{00a0}' | '\u{1680}' |
@@ -123,7 +126,7 @@ pub(crate) fn is_python_whitespace(character: char) -> bool {
   )
 }
 
-pub(crate) fn split_whitespace(text: &str) -> Vec<&str> {
+pub fn split_whitespace(text: &str) -> Vec<&str> {
   let mut words = Vec::new();
   let mut start = None;
   for (offset, character) in text.char_indices() {
@@ -141,7 +144,7 @@ pub(crate) fn split_whitespace(text: &str) -> Vec<&str> {
   words
 }
 
-pub(crate) fn collapse_whitespace(text: &str) -> String {
+pub fn collapse_whitespace(text: &str) -> String {
   split_whitespace(text).join(" ")
 }
 

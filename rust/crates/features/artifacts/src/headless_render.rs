@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use charliebot_core::pyfmt;
+use charliebot_core::pystr;
 use serde_json::{Map, Value, json};
 use tempfile::{Builder, TempDir};
 use tungstenite::client::IntoClientRequest;
@@ -419,7 +420,7 @@ fn python_int_value(value: &Value) -> Result<i32, String> {
 fn python_decimal_integer(text: &str) -> Result<i32, String> {
   let mut digits = String::with_capacity(text.len());
   for character in text.chars() {
-    let Some(digit) = crate::unicode::python_decimal_value(character) else {
+    let Some(digit) = pystr::python_decimal_value(character) else {
       return Err(format!("invalid literal for int() with base 10: {}", pyfmt::str_repr(text)));
     };
     digits.push(char::from(b'0' + digit));
@@ -439,7 +440,7 @@ fn python_os_error(error: &std::io::Error, path: &Path) -> String {
 }
 
 fn charliebot_python_whitespace(character: char) -> bool {
-  crate::unicode::is_python_whitespace(character)
+  pystr::is_python_whitespace(character)
 }
 
 #[cfg(test)]

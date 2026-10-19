@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 use charliebot_core::fsutil;
 use charliebot_core::paths;
-use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_registry::sidebar::SidebarContribution;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value};
@@ -111,14 +110,10 @@ fn copy_plans_sync(parent_plans_path: &Path, parent_dir: &Path, child_dir: &Path
   }
 
   fs::create_dir_all(child_dir)?;
-  let text = pyfmt::json_dumps(&data, &REGISTRY_JSON);
+  let text = plans::registry_text(&data);
   fsutil::atomic_write_text(&child_dir.join(PLANS_FILE), &text)?;
   Ok(())
 }
-
-/// `json.dumps(registry, ensure_ascii=False, indent=2)`: the bytes `write_json_atomically` gives a child registry.
-const REGISTRY_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
 /// A version of the parent registry that names a file.
 struct Reference {

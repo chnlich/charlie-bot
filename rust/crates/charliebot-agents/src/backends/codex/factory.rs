@@ -1,12 +1,10 @@
 //! The codex backend factory (`src/backends/codex/factory.py`) and the codex binary lookup (`base.resolve_binary`).
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
+
+use crate::cli_base::resolve_binary;
 
 use super::CodexHost;
 use super::backend::CodexBackend;
@@ -41,27 +39,11 @@ impl BackendFactory for CodexFactory {
   }
 }
 
-/// The first executable `name` on `path`, else `fallback_dir/name` when that exists (`base.resolve_binary`).
-pub fn resolve_binary(name: &str, path: &str, fallback_dir: &Path) -> anyhow::Result<PathBuf> {
-  for dir in path.split(':') {
-    let candidate = Path::new(dir).join(name);
-    if is_executable_file(&candidate) {
-      return Ok(candidate);
-    }
-  }
-  let fallback = fallback_dir.join(name);
-  if fallback.exists() {
-    return Ok(fallback);
-  }
-  bail!("{name} binary not found on PATH or at {}", fallback.display())
-}
-
-fn is_executable_file(path: &Path) -> bool {
-  fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
 #[cfg(test)]
 mod tests {
+  use std::fs;
+  use std::os::unix::fs::PermissionsExt;
+
   use super::*;
 
   #[test]

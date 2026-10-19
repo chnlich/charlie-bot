@@ -4,13 +4,10 @@ use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
 
+pub use crate::cli_base::{py_strip, truthy};
+
 /// The empty object a missing `x.get(key, {})` falls back to.
 pub static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
-
-/// Python's `str.strip()`: trims the characters `str.isspace` accepts, which include U+001C to U+001F.
-pub fn py_strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
-}
 
 /// Python's `str.splitlines()`: the lines of `text` without their terminators. The terminators are wider than `\n`.
 pub fn py_splitlines(text: &str) -> Vec<&str> {
@@ -45,18 +42,6 @@ pub fn py_slice_from(text: &str, skip: usize) -> String {
 /// Python's `len(s)` for a string: its code point count.
 pub fn py_len(text: &str) -> usize {
   text.chars().count()
-}
-
-/// Python truthiness of a JSON value: null, false, zero, and empty strings, arrays and objects are false.
-pub fn truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_none_or(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
 }
 
 /// `value.get(key)` of a Python dict where a missing or falsy value reads as absent: `value.get(key) or {}`.

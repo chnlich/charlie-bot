@@ -1,5 +1,6 @@
 """Scenario loader tests for the parity harness's asynchronous step forms."""
 
+import contextlib
 import json
 import os
 import pathlib
@@ -380,6 +381,30 @@ def test_fake_group_kill_names_a_group_that_outlives_the_timeout(
 
   assert len(lines) == 1
   assert f"process group {sigterm_leader.pid} remained" in lines[0]
+
+
+def test_fake_group_cleanup_does_not_reap_a_recycled_leader_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+  leader = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+  try:
+    deadline = time.monotonic() + 10
+    identity = parity.servers.process_identity(leader.pid)
+    while identity is None or identity[0] != "Z":
+      assert time.monotonic() < deadline, "the synthetic child did not become a zombie"
+      time.sleep(0.02)
+      identity = parity.servers.process_identity(leader.pid)
+    record = _spawn_record(leader)
+    record["pid_start"] = str(int(record["pid_start"]) + 1)
+    monkeypatch.setattr(parity, "FAKE_GROUP_EXIT_TIMEOUT_SECONDS", 0.2)
+
+    lines = parity._kill_fake_group("baseline", record)
+
+    assert len(lines) == 1
+    assert "process group" in lines[0] and "remained" in lines[0]
+    assert parity.servers.process_identity(leader.pid)[0] == "Z"
+  finally:
+    with contextlib.suppress(ProcessLookupError):
+      os.killpg(leader.pid, signal.SIGKILL)
+    leader.wait()
 
 
 def test_fake_group_kill_passes_a_start_whose_leader_and_group_are_gone() -> None:

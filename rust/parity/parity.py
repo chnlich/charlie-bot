@@ -855,11 +855,14 @@ def _group_exists(pgid: int) -> bool:
   return True
 
 
-def _reap_leader(pid: int) -> None:
+def _reap_leader(pid: int, pid_start: str) -> None:
   """Reap a fake agent that this harness adopted, since a zombie keeps its process group alive for kill(2).
 
-  A pid that is not this process's child, because it was reaped already or was never adopted, has no zombie to reap.
+  Match the recorded start time first so a recycled pid cannot make the harness reap a different child.
   """
+  identity = servers.process_identity(pid)
+  if identity is None or identity[1] != pid_start:
+    return
   with contextlib.suppress(ChildProcessError):
     os.waitpid(pid, os.WNOHANG)
 
@@ -878,7 +881,7 @@ def _kill_fake_group(label: str, record: dict) -> list[str]:
       os.killpg(pgid, signal.SIGKILL)
   deadline = time.monotonic() + FAKE_GROUP_EXIT_TIMEOUT_SECONDS
   while True:
-    _reap_leader(pid)
+    _reap_leader(pid, record["pid_start"])
     if not _group_exists(pgid):
       return []
     if time.monotonic() >= deadline:

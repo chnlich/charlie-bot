@@ -113,8 +113,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | GET | `/perfetto/merged` | features/trace | ported |  |
 | GET | `/api/ext-usage` | features/usage | ported | `{"error": ...}` until the first round writes an entry; HEAD and other methods answer 405 with `allow: GET` |
 | GET | `/token-usage` | features/usage | ported | HEAD and other methods answer 405; loading the page reads the ledger alone and never captures |
-| POST | `/api/voice/{session_id}/confirm` | features/voice | todo |  |
-| POST | `/api/voice/{session_id}` | features/voice | todo |  |
+| POST | `/api/voice/{session_id}/confirm` | features/voice | ported | raw WAV body: persists the recording, decodes it locally, writes the transcript. The static sherpa-onnx 1.13.4 archive decodes some recordings differently from the Python wheel on aarch64 (see the differential). |
+| POST | `/api/voice/{session_id}` | features/voice | ported | multipart upload: local decode, or the selected non-live cloud backend (the production registry has none). Same transcript divergence as the confirm route. |
 | WS | `/ws/voice/{session_id}` | features/voice | ported | live preview relay and recording archive |
 | POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | ported | streaming and JSON answers; parity stage other-backends |
 | GET, HEAD | `/absolute_filepath/{path:path}` | features/files | ported |  |
@@ -195,8 +195,8 @@ implemented.
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
 | service | `usage_tally` | features/usage | not applicable | It only preloads Python modules; Rust has no import cost to hide. |
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
-| service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf` provisioning is not ported; warm-up events are deferred. |
 | service | `headless_renderer` | features/artifacts | ported | Lazy per-process Chrome renderer; the artifacts let-go step closes it. |
+| service | `speech` | features/voice | ported | Sherpa model provisioning and the warm-up event are ported, in the early background service. `qwen3_hf` provisioning is not ported. |
 | registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | scheduled handler `cool_storage` | features/usage | ported | Real run only (no dry run, session scope or vacuum): captures usage into the ledger, deletes cold sessions' raw transport files, then calls each usage source's sweep, off the async runtime. Returns `format_sweep_line` as the summary. The cold rule reads `updated_at` as `models.parse_utc_datetime` does (`utc_datetime.rs`), and a rotation suffix is `str.isdigit` (`charliebot_core::pystr`). Deviations: a metadata document with a NaN or infinite number fails the run, where Python loads it; `updated_at` text with a week date, a stray final character or a fractional offset keeps its session, where Python may read it as cold; `storage_cool_sweep_done` logs `session_id` as Debug text (`None`), not JSON null. The cron scheduler that fires it is not ported yet (agent-runtime). |

@@ -78,4 +78,4 @@ This crate owns the process transport below the agent backends. Raw-log children
 
 ## Tests
 
-The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic NDJSON. The cross-implementation test runs a Python helper through `uv run python`; it starts no agent CLI or server.
+The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic NDJSON. The cross-implementation tests (`codex_cross_implementation.rs`, `cli_backends_cross_implementation.rs`) each run a Python helper through `uv run python`; the CLI backend test resolves fake `gemini`, `charlie-code` and `agy` scripts in a temporary directory and runs only the fake `agy` ones. None starts an agent CLI or server.

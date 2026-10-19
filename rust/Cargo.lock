@@ -646,11 +646,11 @@ dependencies = [
  "serde_json",
  "tempfile",
  "time",
-  "tokio",
-  "tower",
-  "tracing",
-  "tracing-subscriber",
-  "uuid",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

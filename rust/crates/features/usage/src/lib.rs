@@ -1,10 +1,11 @@
-//! `src/features/usage`: the quota panel, the usage ledger capture, the token usage page and the `backend_ids` startup
-//! check are ported. The cold-storage sweep is pending, and the home card stays registered.
+//! `src/features/usage`: the quota panel, the usage ledger capture, the token usage page, the cold-storage sweep and the
+//! `backend_ids` startup check are ported. The home card stays registered.
 
 mod api;
 mod backend_ids;
 pub mod capture;
 mod count;
+pub mod cool_storage;
 mod ext_usage;
 pub mod ledger;
 mod ndjson;
@@ -17,6 +18,7 @@ mod test_support;
 
 use std::sync::Arc;
 
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
@@ -27,7 +29,8 @@ pub use count::Count;
 pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 
 /// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the page router, the `ext_usage`
-/// service in phase Ready, the home card, the `usage_ledger` scheduled handler, then the `backend_ids` startup check.
+/// service in phase Ready, the home card, the `usage_ledger` and `cool_storage` scheduled handlers, then the
+/// `backend_ids` startup check.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.router(page::routes, page::matches)?;
@@ -38,7 +41,20 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     description: "Tokens per model across every agent log on this host.",
   })?;
   registry.scheduled_handler("usage_ledger", run_usage_ledger)?;
+  registry.scheduled_handler("cool_storage", cool_storage::run_handler)?;
   registry.startup_check("backend_ids", backend_ids::check_backend_ids)
+}
+
+/// The capture both scheduled handlers run: this host's sources into the default ledger. The cold-storage sweep runs it
+/// before any deletion, so a failure here stops the sweep.
+pub(crate) fn capture_into_default_ledger(
+  config: &CharlieBotConfig,
+  registry: &Registry,
+) -> anyhow::Result<Vec<(String, usize)>> {
+  let mut ledger = UsageLedger::open(default_ledger_path(&config.charliebot_home))?;
+  let written = capture_local(&mut ledger, config, registry)?;
+  ledger.close()?;
+  Ok(written)
 }
 
 fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<String>> {
@@ -46,9 +62,7 @@ fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFu
     let context_for_capture = Arc::clone(&context);
     let written = tokio::task::spawn_blocking(move || {
       let config = context_for_capture.config.get()?;
-      let path = default_ledger_path(&config.charliebot_home);
-      let mut ledger = UsageLedger::open(path)?;
-      capture_local(&mut ledger, config.as_ref(), context_for_capture.registry.as_ref())
+      capture_into_default_ledger(config.as_ref(), context_for_capture.registry.as_ref())
     })
     .await??;
     let summary = written.iter().map(|(source, count)| format!("{source} {count}")).collect::<Vec<_>>().join("; ");

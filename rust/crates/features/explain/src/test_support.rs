@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
+use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
@@ -117,6 +118,7 @@ impl AgentBackend for ScriptedAgent {
 
   fn one_shot_text<'a>(
     &'a mut self,
+    _base_env: &'a Env,
     _prompt: &'a str,
     _system: &'a str,
     _timeout: Option<std::time::Duration>,
@@ -184,6 +186,10 @@ impl Home {
     .expect("the test config");
     let cfg = registry.load_config(dir.path()).expect("the test config loads");
     let store = Store::new(cfg, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("a store");
+    let startup = StartupState::default();
+    startup
+      .insert(AgentBaseEnvironment { values: Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]) })
+      .expect("the agent base environment");
     let config_home = dir.path().to_path_buf();
     let config_registry = Arc::clone(&registry);
     let credential_home = dir.path().to_path_buf();
@@ -200,7 +206,7 @@ impl Home {
       )),
       store: Arc::new(store),
       registry,
-      startup: Arc::new(StartupState::default()),
+      startup: Arc::new(startup),
     });
     Self { dir, features, factory }
   }

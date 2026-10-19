@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{FromRequestParts, Path, State};
+use axum::body::Body;
+use axum::extract::{FromRequestParts, Path, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_compat::validation::{self, FieldError, Kind, Loc};
 
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -296,37 +297,95 @@ async fn cancel_run(
   )
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CompleteTaskRequest {
-  request_id: String,
-  #[serde(default)]
-  summary: String,
-  #[serde(default)]
-  result_refs: Vec<String>,
-  #[serde(default)]
-  run_ids: Vec<String>,
+/// The POST /api/sessions/{session_id}/complete body model (`src/infra/models.py::CompleteTaskRequest`).
+const COMPLETE_TASK_BODY: BodyModel = BodyModel::required(&[
+  Field::required("request_id", FieldType::String),
+  Field::optional("summary", FieldType::String),
+  Field::optional("result_refs", FieldType::StringList),
+  Field::optional("run_ids", FieldType::StringList),
+]);
+
+/// The POST /api/sessions/{session_id}/cancel body model (`src/infra/models.py::CancelTaskRequest`).
+const CANCEL_TASK_BODY: BodyModel = BodyModel::required(&[
+  Field::required("request_id", FieldType::String),
+  Field::required("reason", FieldType::String),
+]);
+
+/// The task-inputs/acknowledge body model (`src/infra/models.py::AcknowledgeTaskInputsRequest`).
+const ACKNOWLEDGE_TASK_INPUTS_BODY: BodyModel = BodyModel::required(&[
+  Field::required("request_id", FieldType::String),
+  Field::required("input_ids", FieldType::StringList),
+  Field::optional("note", FieldType::String),
+]);
+
+/// Read the body first, then the session and caller dependencies, as FastAPI resolves a body-bearing route.
+#[allow(clippy::result_large_err)]
+async fn body_session_caller(
+  features: &Arc<FeatureContext>,
+  request: Request<Body>,
+) -> Result<(SessionMetadata, CallerIdentity, RequestBody), Response> {
+  let (mut parts, body) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, body).await {
+    Ok(body) => body,
+    Err(response) => return Err(*response),
+  };
+  let Path(session_id) =
+    Path::<String>::from_request_parts(&mut parts, features).await.map_err(IntoResponse::into_response)?;
+  let meta = features.store.require_session(&session_id).await.map_err(task_http_error)?;
+  let caller = CallerIdentity::from_request_parts(&mut parts, features).await.map_err(IntoResponse::into_response)?;
+  Ok((meta, caller, body))
 }
 
-async fn complete_task(
-  State(features): State<Arc<FeatureContext>>,
-  RequiredTaskSession(meta): RequiredTaskSession,
-  caller: CallerIdentity,
-  Json(request): Json<CompleteTaskRequest>,
-) -> Response {
+fn validated_string(fields: &Value, name: &str) -> String {
+  fields[name].as_str().expect("validated field is a string").to_string()
+}
+
+fn optional_validated_string(fields: &Value, name: &str) -> String {
+  fields.get(name).and_then(Value::as_str).unwrap_or_default().to_string()
+}
+
+fn validated_string_list(fields: &Value, name: &str) -> Vec<String> {
+  fields[name]
+    .as_array()
+    .expect("validated field is a list")
+    .iter()
+    .map(|value| value.as_str().expect("validated list item is a string").to_string())
+    .collect()
+}
+
+fn optional_validated_string_list(fields: &Value, name: &str) -> Vec<String> {
+  match fields.get(name).and_then(Value::as_array) {
+    Some(items) => {
+      items.iter().map(|item| item.as_str().expect("validated list item is a string").to_string()).collect()
+    }
+    None => Vec::new(),
+  }
+}
+
+async fn complete_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (meta, caller, body) = match body_session_caller(&features, request).await {
+    Ok(parts) => parts,
+    Err(response) => return response,
+  };
+  let fields = match body.validate(&COMPLETE_TASK_BODY) {
+    Ok(Some(fields)) => fields,
+    Ok(None) => unreachable!("a required model body is present after validation"),
+    Err(response) => return *response,
+  };
   let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
     return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
   };
   let evidence = CompletionEvidence {
-    summary: request.summary,
-    result_refs: request.result_refs,
-    run_ids: request.run_ids,
+    summary: optional_validated_string(&fields, "summary"),
+    result_refs: optional_validated_string_list(&fields, "result_refs"),
+    run_ids: optional_validated_string_list(&fields, "run_ids"),
     ..CompletionEvidence::default()
   };
-  let (status, payload) = match completion.complete_task(&meta.id, &request.request_id, &evidence, &caller).await {
-    Ok(result) => result,
-    Err(error) => return task_http_error(error),
-  };
+  let (status, payload) =
+    match completion.complete_task(&meta.id, &validated_string(&fields, "request_id"), &evidence, &caller).await {
+      Ok(result) => result,
+      Err(error) => return task_http_error(error),
+    };
   if status == 202 {
     return responses::json(StatusCode::ACCEPTED, &payload);
   }
@@ -337,23 +396,23 @@ async fn complete_task(
   responses::json(StatusCode::OK, &detail)
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CancelTaskRequest {
-  request_id: String,
-  reason: String,
-}
-
-async fn cancel_task(
-  State(features): State<Arc<FeatureContext>>,
-  RequiredTaskSession(meta): RequiredTaskSession,
-  caller: CallerIdentity,
-  Json(request): Json<CancelTaskRequest>,
-) -> Response {
+async fn cancel_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (meta, caller, body) = match body_session_caller(&features, request).await {
+    Ok(parts) => parts,
+    Err(response) => return response,
+  };
+  let fields = match body.validate(&CANCEL_TASK_BODY) {
+    Ok(Some(fields)) => fields,
+    Ok(None) => unreachable!("a required model body is present after validation"),
+    Err(response) => return *response,
+  };
   let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
     return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
   };
-  if let Err(error) = completion.cancel_task(&meta.id, &request.request_id, &request.reason, &caller).await {
+  if let Err(error) = completion
+    .cancel_task(&meta.id, &validated_string(&fields, "request_id"), &validated_string(&fields, "reason"), &caller)
+    .await
+  {
     return task_http_error(error);
   }
   match features.store.session_detail(&meta.id) {
@@ -362,101 +421,29 @@ async fn cancel_task(
   }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AcknowledgeTaskInputsRequest {
-  request_id: String,
-  input_ids: Vec<String>,
-  #[serde(default)]
-  note: String,
-}
-
-fn acknowledge_request_error(field: &str, input: Value, kind: Kind) -> FieldError {
-  FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(field.to_string())], input, kind }
-}
-
-fn parse_acknowledge_task_inputs_request(body: Value) -> Result<AcknowledgeTaskInputsRequest, Vec<FieldError>> {
-  let Some(fields) = body.as_object() else {
-    return Err(vec![FieldError {
-      loc: vec![Loc::Field("body".to_string())],
-      input: body,
-      kind: Kind::ModelAttributesType,
-    }]);
+async fn acknowledge_task_inputs(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (meta, caller, body) = match body_session_caller(&features, request).await {
+    Ok(parts) => parts,
+    Err(response) => return response,
   };
-
-  let mut errors = Vec::new();
-  let request_id = match fields.get("request_id") {
-    Some(Value::String(value)) => Some(value.clone()),
-    Some(value) => {
-      errors.push(acknowledge_request_error("request_id", value.clone(), Kind::StringType));
-      None
-    }
-    None => {
-      errors.push(acknowledge_request_error("request_id", Value::Null, Kind::Missing));
-      None
-    }
-  };
-  let input_ids = match fields.get("input_ids") {
-    Some(Value::Array(items)) => {
-      let mut input_ids = Vec::with_capacity(items.len());
-      for (index, item) in items.iter().enumerate() {
-        match item.as_str() {
-          Some(value) => input_ids.push(value.to_string()),
-          None => errors.push(FieldError {
-            loc: vec![Loc::Field("body".to_string()), Loc::Field("input_ids".to_string()), Loc::Index(index)],
-            input: item.clone(),
-            kind: Kind::StringType,
-          }),
-        }
-      }
-      Some(input_ids)
-    }
-    Some(value) => {
-      errors.push(acknowledge_request_error("input_ids", value.clone(), Kind::ListType));
-      None
-    }
-    None => {
-      errors.push(acknowledge_request_error("input_ids", Value::Null, Kind::Missing));
-      None
-    }
-  };
-  let note = match fields.get("note") {
-    None => Some(String::new()),
-    Some(Value::String(value)) => Some(value.clone()),
-    Some(value) => {
-      errors.push(acknowledge_request_error("note", value.clone(), Kind::StringType));
-      None
-    }
-  };
-  for (field, value) in fields {
-    if !matches!(field.as_str(), "request_id" | "input_ids" | "note") {
-      errors.push(acknowledge_request_error(field, value.clone(), Kind::ExtraForbidden));
-    }
-  }
-  if !errors.is_empty() {
-    return Err(errors);
-  }
-  Ok(AcknowledgeTaskInputsRequest {
-    request_id: request_id.expect("valid request_id is present"),
-    input_ids: input_ids.expect("valid input_ids are present"),
-    note: note.expect("valid note is present"),
-  })
-}
-
-async fn acknowledge_task_inputs(
-  State(features): State<Arc<FeatureContext>>,
-  RequiredTaskSession(meta): RequiredTaskSession,
-  caller: CallerIdentity,
-  Json(body): Json<Value>,
-) -> Response {
-  let request = match parse_acknowledge_task_inputs_request(body) {
-    Ok(request) => request,
-    Err(errors) => return validation::response(&errors),
+  let fields = match body.validate(&ACKNOWLEDGE_TASK_INPUTS_BODY) {
+    Ok(Some(fields)) => fields,
+    Ok(None) => unreachable!("a required model body is present after validation"),
+    Err(response) => return *response,
   };
   let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
     return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
   };
-  match completion.acknowledge_inputs(&meta.id, &request.request_id, &request.input_ids, &request.note, &caller).await {
+  match completion
+    .acknowledge_inputs(
+      &meta.id,
+      &validated_string(&fields, "request_id"),
+      &validated_string_list(&fields, "input_ids"),
+      &optional_validated_string(&fields, "note"),
+      &caller,
+    )
+    .await
+  {
     Ok(response) => responses::json(StatusCode::OK, &response),
     Err(error) => task_http_error(error),
   }

@@ -108,11 +108,18 @@ steps:
     path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
     json: {request_id: synthetic-cobalt-unknown-ack, input_ids: [synthetic-missing-input]}
     expect_status: 409
+  - name: invalid JSON body reports a 422
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/complete
+    body_file: malformed.json
+    expect_status: 422
+    compare: status_and_shape
   - name: malformed acknowledgement reports a 422 field location
     method: POST
     path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
     json: {request_id: synthetic-cobalt-malformed-ack, input_ids: synthetic-not-a-list}
     expect_status: 422
+    compare: status_and_shape
   - name: operator restores an archived ancestor chain
     method: POST
     path: /api/sessions/${sessions.beacon_draft}/unarchive

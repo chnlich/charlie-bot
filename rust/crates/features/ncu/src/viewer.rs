@@ -263,8 +263,9 @@ mod tests {
     let search_path = OsString::from(format!("{}/bin:/usr/bin:/bin", fake_install().display()));
     let reports = tempfile::tempdir().unwrap();
     let path = write_report(reports.path(), "a.ncu-rep", r#"{"refuse": "synthetic refusal", "kernels": []}"#);
+    let viewer = viewer(&search_path);
 
-    let error = viewer(&search_path).parse(&repo_root(), &path).unwrap_err();
+    let error = viewer.parse(&repo_root(), &path).unwrap_err();
 
     let ParseError::Report(text) = error else { panic!("expected a report error, got {error:?}") };
     assert_eq!(text, "Unable to load report: synthetic refusal");

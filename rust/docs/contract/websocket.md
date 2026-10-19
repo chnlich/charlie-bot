@@ -213,7 +213,7 @@ The browser reconnects after a close. The delay starts at 1 s and grows to at mo
 
 ### Shutdown
 
-At server shutdown, `StreamingManager.close_all` (`src/runtime/streaming.py:131`) drops pending stream frames. Then it closes every subscribed socket with the default close code (1000).
+At server shutdown, after the shared HTTP client closes, `StreamingManager.close_all` (`src/runtime/streaming.py:131`) drops pending stream frames. Then it closes every open session socket with the default close code (1000) and waits for each close frame. The step is timed as `ws_close_ms`.
 
 ## `/ws/terminal`
 

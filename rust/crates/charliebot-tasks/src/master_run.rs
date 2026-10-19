@@ -573,12 +573,9 @@ impl RunProcess for TurnProcess<'_> {
       request.environment_overlay = self.env.clone();
       request.uploaded_files = self.item.uploaded_files.clone().unwrap_or_default();
       request.session_id = Some(task_session_id);
-      request.memory_max_mb =
-        u64::try_from(self.item.cfg.server.session_memory_max_mb).context("negative session memory limit")?;
-      request.swap_max_mb =
-        u64::try_from(self.item.cfg.server.session_swap_max_mb).context("negative session swap limit")?;
-      request.tasks_max =
-        u64::try_from(self.item.cfg.server.session_tasks_max).context("negative session task limit")?;
+      request.memory_max_mb = self.item.cfg.server.session_memory_max_mb;
+      request.swap_max_mb = self.item.cfg.server.session_swap_max_mb;
+      request.tasks_max = self.item.cfg.server.session_tasks_max;
       request.on_event = on_event;
       request.gate_child_until_on_spawn();
       request.on_spawn = Some({

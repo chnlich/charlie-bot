@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use charliebot_core::python_helper::{Capture, capture};
-use serde_json::{Value, json};
+use serde_json::{Number, Value, json};
 
 use crate::csv_reader::{Row, dict_rows};
 use crate::error::ParseError;
@@ -144,7 +144,7 @@ impl Metrics {
 #[derive(Clone, Debug, PartialEq)]
 enum Cell {
   Null,
-  Int(i64),
+  Int(Number),
   Float(f64),
   Text(String),
 }
@@ -153,7 +153,7 @@ impl Cell {
   fn to_value(&self) -> Value {
     match self {
       Cell::Null => Value::Null,
-      Cell::Int(value) => json!(value),
+      Cell::Int(value) => Value::Number(value.clone()),
       Cell::Float(value) => serde_json::Number::from_f64(*value).map_or(Value::Null, Value::Number),
       Cell::Text(text) => Value::String(text.clone()),
     }
@@ -297,11 +297,13 @@ fn coerce(raw: Option<&str>) -> Result<Cell, ParseError> {
     if text.len() - unsigned.len() > 1 {
       return Ok(Cell::Text(raw_text.to_string()));
     }
-    // Python's int has no size limit. An integer past i64 cannot be a JSON number here, so the page fails instead.
-    return text.parse::<i64>().map(Cell::Int).map_err(|_| ParseError::Internal {
-      kind: "ValueError",
-      detail: format!("integer metric value out of range: {text}"),
-    });
+    // Normalize leading zeroes because Python accepts them in `int`, while JSON numbers do not.
+    let negative = text.starts_with('-');
+    let digits = unsigned.trim_start_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let canonical = if negative && digits != "0" { format!("-{digits}") } else { digits.to_string() };
+    let value: Value = serde_json::from_str(&canonical).expect("a canonical integer is valid JSON");
+    return Ok(Cell::Int(value.as_number().expect("a canonical integer is a JSON number").clone()));
   }
   match text.parse::<f64>() {
     Ok(value) if value.is_finite() => Ok(Cell::Float(value)),
@@ -320,7 +322,7 @@ fn format_dims(raw: &str) -> Option<String> {
 /// `_duration_ns`: a numeric metric in nanoseconds. A unit that is not a known time unit counts as nanoseconds.
 fn duration_ns(value: &Cell, unit: &str) -> Option<f64> {
   let number = match value {
-    Cell::Int(value) => *value as f64,
+    Cell::Int(value) => value.as_f64()?,
     Cell::Float(value) => *value,
     Cell::Null | Cell::Text(_) => return None,
   };
@@ -435,21 +437,24 @@ mod tests {
 
   #[test]
   fn coercion_follows_python_int_then_float_then_raw_text() {
-    assert_eq!(coerce(Some(" 1,024 ")).unwrap(), Cell::Int(1024));
-    assert_eq!(coerce(Some("-7")).unwrap(), Cell::Int(-7));
+    assert_eq!(coerce(Some(" 1,024 ")).unwrap().to_value(), json!(1024));
+    assert_eq!(coerce(Some("-7")).unwrap().to_value(), json!(-7));
     assert_eq!(coerce(Some("--7")).unwrap(), Cell::Text("--7".to_string()));
     assert_eq!(coerce(Some("2.5e3")).unwrap(), Cell::Float(2500.0));
     assert_eq!(coerce(Some("nan")).unwrap(), Cell::Null);
     assert_eq!(coerce(Some(" n/a ")).unwrap(), Cell::Text(" n/a ".to_string()));
     assert_eq!(coerce(None).unwrap(), Cell::Null);
-    assert!(coerce(Some("99999999999999999999")).is_err());
+    assert_eq!(
+      coerce(Some("18446744073709551616")).unwrap().to_value(),
+      serde_json::from_str::<Value>("18446744073709551616").unwrap()
+    );
   }
 
   #[test]
   fn dims_and_time_units_follow_the_python_helpers() {
     assert_eq!(format_dims(" (64, 6, 1) "), Some("64 × 6 × 1".to_string()));
     assert_eq!(format_dims("()"), None);
-    assert_eq!(duration_ns(&Cell::Int(3), "MSecond"), Some(3e6));
+    assert_eq!(duration_ns(&Cell::Int(Number::from(3)), "MSecond"), Some(3e6));
     assert_eq!(duration_ns(&Cell::Float(2.0), "furlong"), Some(2.0));
     assert_eq!(duration_ns(&Cell::Text("slow".to_string()), "s"), None);
   }

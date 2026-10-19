@@ -117,7 +117,10 @@ impl Viewer {
         self.set_module(ModuleState::Unavailable);
         self.parse_csv(abspath)
       }
-      HelperReply::Failed { error } => Err(ParseError::Report(error)),
+      HelperReply::Failed { error } => {
+        self.set_module(ModuleState::Available);
+        Err(ParseError::Report(error))
+      }
     }
   }
 
@@ -265,6 +268,7 @@ mod tests {
 
     let ParseError::Report(text) = error else { panic!("expected a report error, got {error:?}") };
     assert_eq!(text, "Unable to load report: synthetic refusal");
+    assert_eq!(*viewer.module.lock().unwrap(), ModuleState::Available);
   }
 
   #[test]

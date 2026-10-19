@@ -88,7 +88,7 @@ impl CodexTranslator {
       count_or_zero(usage, "output_tokens")?,
       count_or_zero(usage, "cached_input_tokens")?,
       0,
-      cost,
+      json!(cost),
       None,
     )])
   }

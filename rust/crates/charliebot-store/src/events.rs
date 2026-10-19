@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use charliebot_core::fsutil;
 use serde_json::Value;
@@ -31,10 +32,11 @@ impl Store {
     if !object.contains_key("timestamp") {
       object.insert("timestamp".to_string(), Value::String(python_event_timestamp(UtcDateTime::now())));
     }
-    let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     ndjson::append(&self.chat_events_path(session_id), &event)?;
-    if let Some(cached) = cache.get_mut(session_id) {
-      cached.events.push(event.clone());
+    if let Some(cached) = cache.as_mut() {
+      Arc::make_mut(&mut cached.events).push(event.clone());
     }
     Ok(event)
   }
@@ -55,16 +57,14 @@ impl Store {
 
   /// Read the live event log, using the in-memory parsed-event cache after the first read.
   pub fn load_chat_events_sync(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
-    let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
-    if let Some(cached) = cache.get(session_id) {
-      return Ok(cached.events.clone());
-    }
-    let events = ndjson::read_file(&self.chat_events_path(session_id))?;
-    cache.insert(
-      session_id.to_string(),
-      CachedChatEvents { generation: self.next_events_cache_generation(), events: events.clone() },
-    );
-    Ok(events)
+    Ok(self.load_chat_events_shared_sync(session_id)?.as_ref().clone())
+  }
+
+  /// Read the cached event list as an immutable shared snapshot.
+  pub fn load_chat_events_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    self.load_chat_events_shared_locked(session_id, &mut cache)
   }
 
   /// Read the live event cache from `covered` when its identity still matches, otherwise from the beginning.
@@ -74,13 +74,10 @@ impl Store {
     known_generation: Option<u64>,
     covered: usize,
   ) -> StoreResult<ChatEventsDelta> {
-    let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
-    if !cache.contains_key(session_id) {
-      let events = ndjson::read_file(&self.chat_events_path(session_id))?;
-      let generation = self.next_events_cache_generation();
-      cache.insert(session_id.to_string(), CachedChatEvents { generation, events });
-    }
-    let cached = cache.get(session_id).expect("event cache entry was inserted above");
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let _snapshot = self.load_chat_events_shared_locked(session_id, &mut cache)?;
+    let cached = cache.as_ref().expect("event cache entry was loaded above");
     let start_index =
       if known_generation == Some(cached.generation) && covered <= cached.events.len() { covered } else { 0 };
     Ok(ChatEventsDelta {
@@ -89,6 +86,20 @@ impl Store {
       event_count: cached.events.len(),
       events: cached.events[start_index..].to_vec(),
     })
+  }
+
+  /// Read archived facts and the live events, sharing the live cache when no archive is present.
+  pub fn load_all_facts_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let live = self.load_chat_events_shared_locked(session_id, &mut cache)?;
+    let archive_offset = self.read_archive_offset(session_id)?;
+    if archive_offset == 0 {
+      return Ok(live);
+    }
+    let mut events = self.load_archive_range(session_id, 0, archive_offset)?;
+    events.extend(live.iter().cloned());
+    Ok(Arc::new(events))
   }
 
   /// Read the latest live-log events without priming the event cache.
@@ -160,10 +171,8 @@ impl Store {
         let lines = self.live_range_lines(session_id)?;
         slice_live_lines(&lines, rel_start, rel_end)
       } else {
-        match self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id) {
-          Some(cached) => {
-            cached.events.iter().skip(rel_start).take(rel_end.saturating_sub(rel_start)).cloned().collect()
-          }
+        match self.cached_chat_events(session_id) {
+          Some(cached) => cached.iter().skip(rel_start).take(rel_end.saturating_sub(rel_start)).cloned().collect(),
           None => {
             let lines = self.live_lines_newline_split(session_id)?;
             slice_live_lines(&lines, rel_start, rel_end)
@@ -272,15 +281,45 @@ impl Store {
   /// Return the total event-index extent, using parsed cache length or physical live lines.
   pub fn get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize> {
     let offset = self.read_archive_offset(session_id)?;
-    if let Some(cached) = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id) {
-      return Ok(offset + cached.events.len());
+    if let Some(events) = self.cached_chat_events(session_id) {
+      return Ok(offset + events.len());
     }
     Ok(offset + ndjson::count_lines(&self.chat_events_path(session_id))?)
   }
 
   /// Discard the parsed live-log cache after a rewrite.
   pub fn clear_chat_events_cache(&self, session_id: &str) {
-    self.events_cache.lock().expect("event cache mutex is not poisoned").remove(session_id);
+    let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
+    let Some(cache_entry) = cache_entry else { return };
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    *cache = None;
+  }
+
+  fn load_chat_events_shared_locked(
+    &self,
+    session_id: &str,
+    cache: &mut Option<CachedChatEvents>,
+  ) -> StoreResult<Arc<Vec<ChatEvent>>> {
+    if let Some(cached) = cache.as_ref() {
+      return Ok(Arc::clone(&cached.events));
+    }
+    let events = Arc::new(self.read_chat_events_file(&self.chat_events_path(session_id))?);
+    *cache = Some(CachedChatEvents { generation: self.next_events_cache_generation(), events: Arc::clone(&events) });
+    Ok(events)
+  }
+
+  fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
+    #[cfg(test)]
+    if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
+      hook();
+    }
+    ndjson::read_file(path)
+  }
+
+  pub(crate) fn cached_chat_events(&self, session_id: &str) -> Option<Arc<Vec<ChatEvent>>> {
+    let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned()?;
+    let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    cache.as_ref().map(|cached| Arc::clone(&cached.events))
   }
 
   /// Return the latest persisted context reading and the newest assistant/result request time.
@@ -513,6 +552,9 @@ mod tests {
   use super::*;
   use crate::store::test_support::make_test_store;
   use serde_json::json;
+  use std::collections::BTreeSet;
+  use std::sync::{Mutex, mpsc};
+  use std::time::Duration;
 
   #[test]
   fn event_timestamp_matches_python_isoformat_offset() {
@@ -547,6 +589,123 @@ mod tests {
     let (full, has_earlier) = store.load_chat_events_range("synthetic", 0, 5).unwrap();
     assert_eq!(full, expected);
     assert!(!has_earlier);
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn cold_read_of_one_session_does_not_block_another_sessions_append() {
+    let (_home, store) = make_test_store();
+    let store = Arc::new(store);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
+      entered_tx.send(()).unwrap();
+      release_rx.lock().unwrap().recv().unwrap();
+    }));
+
+    let reader_store = Arc::clone(&store);
+    let reader = tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync("synthetic-a"));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+    if !entered {
+      let _ = release_tx.send(());
+      reader.await.unwrap().unwrap();
+      panic!("cold read did not reach its file-read hook");
+    }
+
+    let append_store = Arc::clone(&store);
+    let mut append = tokio::spawn(async move {
+      append_store.append_chat_event("synthetic-b", json!({"id": "event-b", "type": "user"})).await
+    });
+    let append_result = tokio::time::timeout(Duration::from_secs(1), &mut append).await;
+    let appended_while_read_held = append_result.is_ok();
+    release_tx.send(()).unwrap();
+    reader.await.unwrap().unwrap();
+    let appended = match append_result {
+      Ok(result) => result.unwrap().unwrap(),
+      Err(_) => append.await.unwrap().unwrap(),
+    };
+
+    assert!(appended_while_read_held, "session B append waited for session A file read");
+    assert_eq!(appended["id"], "event-b");
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn concurrent_appends_during_cold_reads_land_once_in_cache_and_file() {
+    let (_home, store) = make_test_store();
+    let store = Arc::new(store);
+    let session_id = "synthetic-same-session";
+    let path = store.chat_events_path(session_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+    for iteration in 0..200 {
+      store.clear_chat_events_cache(session_id);
+      std::fs::write(&path, b"").unwrap();
+      let (entered_tx, entered_rx) = mpsc::channel();
+      let (release_tx, release_rx) = mpsc::channel();
+      let release_rx = Arc::new(Mutex::new(release_rx));
+      *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.lock().unwrap().recv().unwrap();
+      }));
+
+      let reader_store = Arc::clone(&store);
+      let reader = tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync(session_id));
+      let entered = entered_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+      if !entered {
+        let _ = release_tx.send(());
+        reader.await.unwrap().unwrap();
+        panic!("iteration {iteration}: cold read did not reach its file-read hook");
+      }
+
+      let (started_tx, started_rx) = mpsc::channel();
+      let mut appends = Vec::new();
+      let expected: BTreeSet<String> = (0..2).map(|index| format!("event-{iteration}-{index}")).collect();
+      for index in 0..2 {
+        let append_store = Arc::clone(&store);
+        let started_tx = started_tx.clone();
+        let event_id = format!("event-{iteration}-{index}");
+        appends.push(tokio::spawn(async move {
+          started_tx.send(()).unwrap();
+          append_store.append_chat_event(session_id, json!({"id": event_id, "type": "user"})).await
+        }));
+      }
+      drop(started_tx);
+      for _ in 0..2 {
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+      }
+      release_tx.send(()).unwrap();
+      reader.await.unwrap().unwrap();
+      for append in appends {
+        append.await.unwrap().unwrap();
+      }
+
+      let cached = store.load_chat_events_shared_sync(session_id).unwrap();
+      let cache_ids: BTreeSet<String> = cached.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
+      let file_events = ndjson::read_file(&path).unwrap();
+      let file_ids: BTreeSet<String> =
+        file_events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
+      assert_eq!(cached.len(), expected.len(), "iteration {iteration}: cached event count");
+      assert_eq!(file_events.len(), expected.len(), "iteration {iteration}: file event count");
+      assert_eq!(cache_ids, expected, "iteration {iteration}: cache ids");
+      assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
+      assert_eq!(cached.as_slice(), file_events.as_slice(), "iteration {iteration}: cache and file order");
+    }
+  }
+
+  #[tokio::test]
+  async fn shared_reads_reuse_the_snapshot_until_append() {
+    let (_home, store) = make_test_store();
+    store.append_chat_event("synthetic-shared", json!({"id": "first", "type": "user"})).await.unwrap();
+
+    let first = store.load_chat_events_shared_sync("synthetic-shared").unwrap();
+    let second = store.load_chat_events_shared_sync("synthetic-shared").unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+
+    store.append_chat_event("synthetic-shared", json!({"id": "second", "type": "user"})).await.unwrap();
+    let appended = store.load_chat_events_shared_sync("synthetic-shared").unwrap();
+    assert!(!Arc::ptr_eq(&first, &appended));
+    assert_eq!(first.len(), 1);
+    assert_eq!(appended.last().unwrap()["id"], "second");
   }
 
   mod parity {

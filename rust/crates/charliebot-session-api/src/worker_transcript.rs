@@ -60,7 +60,7 @@ pub fn load_worker_transcript(store: &Store, session_id: &str) -> StoreResult<Ar
 
 fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature) -> StoreResult<TranscriptEntry> {
   let run_records = store.list_run_records_sync(session_id)?;
-  let facts_events = store.load_all_facts(session_id)?;
+  let facts_events = store.load_all_facts_shared_sync(session_id)?;
   let mut states = BTreeMap::new();
   for run in &run_records {
     states.insert(run.id.clone(), store.run_display_state(session_id, &run.id)?.as_str().to_string());
@@ -87,13 +87,13 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       &error,
       backend_label,
       &launch_prompt_ref,
-      if state == "withheld" { withheld_reason(&facts_events, &run.id) } else { None },
+      if state == "withheld" { withheld_reason(facts_events.as_slice(), &run.id) } else { None },
     ));
     transcript.extend(run_events);
   }
 
   let task_state = store.task_state(session_id)?;
-  if let Some(delivery) = delivery_event(&task_state, &facts_events, &run_records) {
+  if let Some(delivery) = delivery_event(&task_state, facts_events.as_slice(), &run_records) {
     transcript.push(delivery);
   }
   let active_run_id = run_records.iter().rev().find_map(|run| {

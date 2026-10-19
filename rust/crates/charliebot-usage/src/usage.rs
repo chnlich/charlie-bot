@@ -177,9 +177,9 @@ impl SessionUsage {
   fn resolve_with_facts(&self, session_id: &str, meta: &SessionMetadata) -> StoreResult<(Option<Value>, UsageFold)> {
     let (fold, event_count) = self.fold_cached(session_id)?;
     if let Some(resolver) = self.usage_resolver(&meta.backend)? {
-      let events = self.store.load_chat_events_sync(session_id)?;
+      let events = self.store.load_chat_events_shared_sync(session_id)?;
       if let Some(usage) = resolver
-        .resolve(session_id, meta, &events)
+        .resolve(session_id, meta, events.as_slice())
         .map_err(|error| StoreError::new(format!("usage resolver failed: {error:#}")))?
       {
         return Ok((Some(Value::Object(usage)), fold));

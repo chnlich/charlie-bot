@@ -189,7 +189,7 @@ impl Store {
     if archive_offset != 0 {
       return Ok(None);
     }
-    let live = self.load_chat_events_sync(session_id)?;
+    let live = self.load_chat_events_shared_sync(session_id)?;
     let mut cache = self.session_events.projections.lock().expect("projection cache mutex is not poisoned");
     if let Some(cached) = cache.get(session_id)
       && cached.event_count() == live.len()
@@ -199,7 +199,7 @@ impl Store {
     let cached = cache.get(session_id);
     let projection = match cached {
       Some(cached) if live.len() >= cached.event_count() => cached.advanced(&live[cached.event_count()..])?,
-      _ => MessageProjection::new(&live, 0, self.event_renderers.clone())?,
+      _ => MessageProjection::new(live.as_slice(), 0, self.event_renderers.clone())?,
     };
     let projection = Arc::new(projection);
     cache.store(session_id, Arc::clone(&projection));
@@ -208,12 +208,7 @@ impl Store {
 
   /// Return a memoized projection only when the in-memory event list proves it current.
   pub fn projection_memo_hit(&self, session_id: &str) -> Option<Arc<MessageProjection>> {
-    let live_len = self
-      .events_cache
-      .lock()
-      .expect("event cache mutex is not poisoned")
-      .get(session_id)
-      .map(|cached| cached.events.len())?;
+    let live_len = self.cached_chat_events(session_id)?.len();
     let projection =
       self.session_events.projections.lock().expect("projection cache mutex is not poisoned").get(session_id)?;
     (projection.event_count() == live_len).then_some(projection)

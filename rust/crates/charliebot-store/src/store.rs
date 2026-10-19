@@ -98,7 +98,7 @@ pub(crate) struct CachedMetadata {
 
 pub(crate) struct CachedChatEvents {
   pub(crate) generation: u64,
-  pub(crate) events: Vec<Value>,
+  pub(crate) events: Arc<Vec<Value>>,
 }
 
 /// Session metadata and event-log persistence for one configured CharlieBot home.
@@ -114,8 +114,10 @@ pub struct Store {
   pub(crate) sequence_binding_mover: Arc<dyn SequenceBindingMover>,
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
-  pub(crate) events_cache: StdMutex<HashMap<String, CachedChatEvents>>,
+  pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) next_events_cache_generation: AtomicU64,
+  #[cfg(test)]
+  pub(crate) event_read_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
@@ -165,6 +167,8 @@ impl Store {
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       next_events_cache_generation: AtomicU64::new(1),
+      #[cfg(test)]
+      event_read_hook: StdMutex::new(None),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),
@@ -188,6 +192,11 @@ impl Store {
 
   pub(crate) fn next_events_cache_generation(&self) -> u64 {
     self.next_events_cache_generation.fetch_add(1, Ordering::Relaxed)
+  }
+
+  pub(crate) fn events_cache_entry(&self, session_id: &str) -> Arc<StdMutex<Option<CachedChatEvents>>> {
+    let mut cache = self.events_cache.lock().expect("event cache mutex is not poisoned");
+    Arc::clone(cache.entry(session_id.to_string()).or_insert_with(|| Arc::new(StdMutex::new(None))))
   }
 
   /// The metadata file for `session_id`.

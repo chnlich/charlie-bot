@@ -19,7 +19,10 @@ which ships only for Python. The voice `qwen3_hf` engine will use the same modul
 - **Stdout.** One JSON value, parsed as a whole. Logs and tracebacks belong on stderr. A helper whose logger writes
   to stdout (structlog's default) must redirect `sys.stdout` before it logs, as `rust/helpers/ncu_report_helper.py`
   does.
-- **Timeout.** `Option<Duration>`. `None` waits as long as the helper runs. `Some` kills a helper that runs past it.
+- **Timeout.** `Option<Duration>`. `None` waits as long as the helper runs. `Some` kills a helper that runs past it, and
+  the helper's process group with it.
+- **Process group.** Each helper leads a process group of its own, so the group kill reaches the children the helper
+  started. The children hold the pipes open, so without the group kill a timed-out run would wait for them.
 
 ## Errors
 
@@ -34,6 +37,7 @@ shows the Python traceback next to the failure.
 | `Output` | exit status zero, but stdout is not one JSON value |
 | `TimedOut` | the timeout passed, and the helper was killed |
 | `Io` | writing stdin or waiting on the child failed |
+| `Unanswered` | a long-lived helper stopped answering; see the long-lived mode below |
 
 Nothing retries and nothing falls back. A caller decides what the error means for its request.
 
@@ -48,15 +52,36 @@ on it. The ncu helper prints one of:
 
 Any other exception is a crash: it exits nonzero, and the caller reports `Exit`.
 
+## The long-lived mode
+
+`PythonHelper::start_long_lived(script, args, label)` starts a helper that stays up between requests. The interpreter,
+working directory, `PYTHONPATH` and environment are those of the one-shot run above. The helper's protocol is JSON
+lines:
+
+- **Requests and replies.** `request` writes one JSON line to the helper's stdin and reads one line from its stdout.
+  `receive` reads a line the helper prints without a request, such as the ready line that a helper prints once its model
+  has loaded. The helper's own stdout must carry only these lines, so a helper redirects `sys.stdout` before it loads
+  anything, as `rust/helpers/ncu_report_helper.py` does for its logs.
+- **One request at a time.** The protocol lock is held from a request's write to its reply, so a second caller waits.
+- **Stderr.** Each line goes to the server log as a `python_helper_stderr` event that names the helper in `helper`.
+- **Retirement.** A helper that closes its stdout, writes a reply that is not one JSON value, or cannot take a request
+  is retired: the child is reaped, the process group is killed, and the reason is recorded. The failing request returns
+  `Unanswered` with that reason, and every later request returns the same error. Nothing restarts the helper.
+- **Stop.** `stop` kills the process group and reaps the child. A request in flight then fails with the reason
+  `the server stopped it`. Dropping the handle stops the helper.
+
 ## The capped child runner
 
 `python_helper::capture(child, stdin, timeout)` waits for an already spawned child and collects its piped stdout and
-stderr. It is the same bounded wait the ncu CSV import uses for its 120 s limit. A child past its timeout is killed and
-reported as `Capture::TimedOut`.
+stderr. It is the same bounded wait the ncu CSV import uses for its 120 s limit. A child past its timeout is reported as
+`Capture::TimedOut`. When the child leads its own process group, as every `PythonHelper` helper does, the whole group is
+killed; any other child is killed alone, as the ncu import's `ncu` process is.
 
 ## Tests
 
 `charliebot-core`'s `python_helper` tests start the checkout's `.venv` interpreter on scripts written to a temporary
 directory. They cover one JSON value with the working directory, `PYTHONPATH` and the environment override, stdin, a
-nonzero exit with stderr, stdout that is not JSON, a missing interpreter, an interpreter that cannot start, and a timeout.
+nonzero exit with stderr, stdout that is not JSON, a missing interpreter, an interpreter that cannot start, and a timeout
+that kills the helper's children. For the long-lived mode they cover one reply per request, requests that do not
+interleave, an exit that fails the pending and every later request, a reply that is not JSON, and `stop`.
 The checkout's `.venv` must exist, so run them through `run.sh uv run …` first.

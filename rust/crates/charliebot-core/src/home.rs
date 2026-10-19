@@ -88,6 +88,16 @@ pub fn opencode_data_dir() -> Result<PathBuf, HomeError> {
   Ok(opencode_data_in(&charliebot_home_dir()?))
 }
 
+/// The server's `XDG_STATE_HOME`, `<store>/state`.
+pub fn opencode_state_dir() -> Result<PathBuf, HomeError> {
+  Ok(opencode_state_in(&charliebot_home_dir()?))
+}
+
+/// The server's `XDG_CACHE_HOME`, `<store>/cache`.
+pub fn opencode_cache_dir() -> Result<PathBuf, HomeError> {
+  Ok(opencode_cache_in(&charliebot_home_dir()?))
+}
+
 /// The opencode 2.0 database, `<store>/data/opencode/opencode.db`: read by the usage source, vacuumed by its sweep.
 pub fn opencode_db() -> Result<PathBuf, HomeError> {
   Ok(opencode_db_in(&charliebot_home_dir()?))
@@ -99,6 +109,14 @@ fn opencode_store_in(home: &Path) -> PathBuf {
 
 fn opencode_data_in(home: &Path) -> PathBuf {
   opencode_store_in(home).join("data")
+}
+
+fn opencode_state_in(home: &Path) -> PathBuf {
+  opencode_store_in(home).join("state")
+}
+
+fn opencode_cache_in(home: &Path) -> PathBuf {
+  opencode_store_in(home).join("cache")
 }
 
 fn opencode_db_in(home: &Path) -> PathBuf {
@@ -115,6 +133,8 @@ mod tests {
     let home = Path::new("/synthetic/profile");
     assert_eq!(opencode_store_in(home), PathBuf::from("/synthetic/profile/opencode"));
     assert_eq!(opencode_data_in(home), PathBuf::from("/synthetic/profile/opencode/data"));
+    assert_eq!(opencode_state_in(home), PathBuf::from("/synthetic/profile/opencode/state"));
+    assert_eq!(opencode_cache_in(home), PathBuf::from("/synthetic/profile/opencode/cache"));
     assert_eq!(opencode_db_in(home), PathBuf::from("/synthetic/profile/opencode/data/opencode/opencode.db"));
   }
 

@@ -204,9 +204,6 @@ impl AgentRunner {
 
     let mut backend = self.backend.lock().await;
     let transport = backend.transport();
-    if transport == TransportKind::Serve {
-      bail!("the agent runner does not support the Serve transport");
-    }
     backend.prepare_transport(&log_dir)?;
     let command = backend.build_command(&request.prompt)?;
     let stdin_prompt = backend.stdin_prompt(&request.prompt);
@@ -218,6 +215,10 @@ impl AgentRunner {
       &request.environment_overlay,
     );
     let final_env = backend.prepare_env(child_environment)?;
+    if transport == TransportKind::Serve {
+      drop(backend);
+      return self.run_serve(request, &command, final_env, &log_dir).await;
+    }
     let buffer_limit = self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT);
     let original_program = command.first().context("backend command is empty")?.clone();
     let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
@@ -360,6 +361,101 @@ impl AgentRunner {
 
   /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
   /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
+  async fn run_serve(
+    &self,
+    request: RunRequest,
+    command: &[String],
+    env: Env,
+    log_dir: &Path,
+  ) -> anyhow::Result<RunOutcome> {
+    let plan = crate::backends::opencode::backend::take_run_plan(command)?;
+    let original_program = command.first().context("serve backend command is empty")?.clone();
+    let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
+      let mut args =
+        vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), original_program.into()];
+      args.extend(command.iter().skip(1).take(1).cloned().map(Into::into));
+      ("/bin/sh".into(), args)
+    } else {
+      (original_program.into(), command.iter().skip(1).take(1).cloned().map(Into::into).collect())
+    };
+    let spec = SpawnSpec::new(
+      program,
+      args,
+      Some(request.cwd.clone()),
+      env.clone().into_iter().map(|(key, value)| (key.into(), value.into())).collect::<HashMap<_, _>>(),
+      self.launch.cgroup_session_id.clone(),
+      request.cgroup_base.clone(),
+      request.memory_max_mb,
+      request.swap_max_mb,
+      request.tasks_max,
+    );
+    let raw_path = log_dir.join(RAW_LOG_NAME);
+    let stderr_path = log_dir.join(STDERR_LOG_NAME);
+    let mut spawned = spawn::spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null).await?;
+    if request.child_waits_for_spawn_callback {
+      wait_until_stopped_or_terminate(&mut spawned.child).await?;
+    }
+    let on_spawn = request.on_spawn.clone();
+    let (mut spawned, identity) = spawn::pin_identity_and_on_spawn(spawned, move |identity| async move {
+      match on_spawn {
+        Some(callback) => callback(identity).await,
+        None => Ok(()),
+      }
+    })
+    .await?;
+    if request.child_waits_for_spawn_callback {
+      spawn::continue_stopped_child(identity.pid)?;
+    }
+
+    let cgroup = spawned.cgroup.take();
+    let (sender, receiver) = watch::channel(None);
+    tokio::spawn(reap_child(spawned.child, sender));
+    let active = Arc::new(ActiveProcess { pid: identity.pid, exit: receiver, detached: AtomicBool::new(false) });
+    *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
+
+    let run_result = crate::backends::opencode::backend::run_turn(
+      plan,
+      crate::backends::opencode::backend::OpenCodeRunArgs {
+        prompt: request.prompt,
+        cwd: request.cwd,
+        env,
+        uploaded_files: request.uploaded_files,
+        process_id: identity.pid,
+        cgroup_path: cgroup.as_ref().map(|state| state.path.clone()),
+        exit: active.exit.clone(),
+        on_event: request.on_event.clone(),
+      },
+    )
+    .await;
+
+    if wait_for_exit(&active, Duration::ZERO).await?.is_none() {
+      self.graceful_shutdown(&active, request.cleanup_timeout, "backend_terminate_timeout").await?;
+    }
+    let process_exit =
+      wait_for_exit(&active, request.cleanup_timeout).await?.context("serve turn process did not exit")?;
+    let stderr_text = read_stderr_tail(&stderr_path)?;
+    let custom_exit = run_result.as_ref().ok().and_then(|result| result.exit_code);
+    let exit_code = custom_exit.unwrap_or(process_exit);
+    self.record_exit_code(exit_code);
+    let cgroup_exit_report = if self.terminated.load(Ordering::Acquire) {
+      None
+    } else {
+      cgroup.and_then(|state| state.classify_exit(Some(process_exit)))
+    };
+    self.clear_active(&active);
+    run_result?;
+    Ok(RunOutcome {
+      exit_code: Some(exit_code),
+      stderr_text,
+      cgroup_exit_report,
+      hang_diagnostics: None,
+      identity: Some(identity),
+      follow: None,
+    })
+  }
+
+  /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
+  /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
   async fn run_final_stdout(
     &self,
     request: RunRequest,
@@ -454,7 +550,10 @@ impl AgentRunner {
     self.terminated.store(true, Ordering::Release);
     let active = self.active.lock().expect("active process lock poisoned").clone();
     if let Some(active) = active {
-      self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await?;
+      let finish = crate::backends::opencode::server::finish_active_turn(active.pid).await;
+      let shutdown = self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await;
+      finish?;
+      shutdown?;
     }
     Ok(())
   }

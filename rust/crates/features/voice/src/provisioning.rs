@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 use bzip2::read::BzDecoder;
 use charliebot_compat::http_client::{self, Settings};
+use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use sha2::{Digest, Sha256};
@@ -58,12 +59,6 @@ fn provisioning_state() -> &'static Mutex<ProvisioningState> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpeechModelsNotReadyError(String);
 
-impl SpeechModelsNotReadyError {
-  pub(crate) fn new(message: String) -> Self {
-    Self(message)
-  }
-}
-
 impl std::fmt::Display for SpeechModelsNotReadyError {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     formatter.write_str(&self.0)
@@ -109,9 +104,9 @@ fn provision_models(cfg: &CharlieBotConfig) {
 
 /// `service.py`'s warm-up, run after provisioning on the same thread: the resident bundle, then one synthetic decode
 /// per recognizer. A failure logs and leaves readiness as provisioning published it.
-fn warm_up(cfg: &CharlieBotConfig) {
+fn warm_up(cfg: &CharlieBotConfig, repo_root: &Path) {
   let started = Instant::now();
-  match transcriber::get_transcription_bundle(cfg).and_then(|bundle| transcriber::warm_up_bundle(&bundle)) {
+  match transcriber::get_transcription_bundle(cfg, repo_root).and_then(|bundle| transcriber::warm_up_bundle(&bundle)) {
     Ok(()) => {
       let elapsed_ms = (started.elapsed().as_secs_f64() * 1000.0).round() as u64;
       tracing::info!(elapsed_ms, "voice_warmup_complete");
@@ -148,11 +143,22 @@ fn provision_models_with(state: &Mutex<ProvisioningState>, ensure: impl FnOnce()
   }
 }
 
-fn ensure_models_cached(cfg: &CharlieBotConfig) -> anyhow::Result<VoiceModelPaths> {
-  let paths = voice_model_paths(&cfg.charliebot_home.join("models"));
-  ensure_engine_cached(&paths, cfg.section::<VoiceSettings>("voice").engine, &Settings::from_env())
+fn model_paths(cfg: &CharlieBotConfig) -> VoiceModelPaths {
+  voice_model_paths(&cfg.charliebot_home.join("models"))
 }
 
+fn ensure_models_cached(cfg: &CharlieBotConfig) -> anyhow::Result<VoiceModelPaths> {
+  ensure_engine_cached(&model_paths(cfg), cfg.section::<VoiceSettings>("voice").engine, &Settings::from_env())
+}
+
+/// The CPU engine's archive, extracted and verified: the sherpa bundle's paths. The qwen3_hf fallback fetches it when
+/// the GPU bundle fails, so provisioning does not fetch it for a qwen3_hf config.
+pub(crate) fn ensure_sherpa_paths(cfg: &CharlieBotConfig) -> anyhow::Result<VoiceModelPaths> {
+  ensure_sherpa_paths_cached(&model_paths(cfg), &Settings::from_env())
+}
+
+/// Provision the models of `engine`. For qwen3_hf the VAD model is the only file this server fetches: the transformers
+/// snapshot is fetched by the helper, when its bundle is created.
 fn ensure_engine_cached(
   paths: &VoiceModelPaths,
   engine: VoiceEngine,
@@ -160,11 +166,19 @@ fn ensure_engine_cached(
 ) -> anyhow::Result<VoiceModelPaths> {
   match engine {
     VoiceEngine::Sherpa => ensure_sherpa_paths_cached(paths, settings),
-    VoiceEngine::Qwen3Hf => {
-      fs::create_dir_all(&paths.cache_dir).with_context(|| format!("create {}", paths.cache_dir.display()))?;
-      bail!("qwen3_hf provisioning is not ported")
-    }
+    VoiceEngine::Qwen3Hf => ensure_qwen3_hf_cached_with(paths, settings, SILERO_VAD_URL, SILERO_VAD_SHA256),
   }
+}
+
+fn ensure_qwen3_hf_cached_with(
+  paths: &VoiceModelPaths,
+  settings: &Settings,
+  vad_url: &str,
+  vad_sha256: &str,
+) -> anyhow::Result<VoiceModelPaths> {
+  fs::create_dir_all(&paths.cache_dir).with_context(|| format!("create {}", paths.cache_dir.display()))?;
+  ensure_artifact(&paths.silero_vad, vad_url, vad_sha256, settings)?;
+  Ok(paths.clone())
 }
 
 fn ensure_sherpa_paths_cached(paths: &VoiceModelPaths, settings: &Settings) -> anyhow::Result<VoiceModelPaths> {
@@ -338,9 +352,11 @@ impl Service for SpeechService {
     Box::pin(async move {
       let cfg = ctx.features.config.get().map_err(|error| anyhow::anyhow!(error.to_string()))?;
       let cfg = cfg.as_ref().clone();
+      let repo_root = ctx.features.startup.require::<RepoRoot>().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+      let repo_root = repo_root.path().to_path_buf();
       let worker = tokio::task::spawn_blocking(move || {
         provision_models(&cfg);
-        warm_up(&cfg);
+        warm_up(&cfg, &repo_root);
       });
       let monitor = tokio::spawn(async move {
         if let Err(error) = worker.await {
@@ -363,6 +379,7 @@ impl Service for SpeechService {
           Err(error) => return Err(error.into()),
         }
       }
+      transcriber::stop_resident_bundle();
       Ok(())
     })
   }
@@ -503,15 +520,19 @@ mod tests {
   }
 
   #[test]
-  fn qwen3_hf_provisioning_creates_the_cache_then_fails_with_the_recorded_text() {
+  fn qwen3_hf_provisioning_fetches_the_vad_model_and_not_the_cpu_archive() {
     let root = tempfile::tempdir().expect("create a synthetic model home");
     let paths = test_paths(root.path());
+    let vad = b"synthetic vad model";
+    let (url, server) = loopback_server(vec![http_answer("200 OK", None, vad)]);
 
-    let error = ensure_engine_cached(&paths, VoiceEngine::Qwen3Hf, &Settings::default())
-      .expect_err("the not-yet-ported engine must fail visibly");
+    let ready =
+      ensure_qwen3_hf_cached_with(&paths, &Settings::default(), &url, &sha256(vad)).expect("provision the VAD model");
+    server.join().expect("finish the loopback HTTP server");
 
-    assert_eq!(error.to_string(), "qwen3_hf provisioning is not ported");
-    assert!(paths.cache_dir.is_dir());
+    assert_eq!(ready, paths);
+    assert_eq!(fs::read(&paths.silero_vad).expect("read the VAD model"), vad);
+    assert!(!paths.qwen3_archive.exists(), "the CPU archive is fetched only by the fallback");
   }
 
   #[test]

@@ -7,6 +7,7 @@ mod config;
 #[doc(hidden)]
 pub mod differential;
 pub(crate) mod provisioning;
+mod qwen3_hf;
 mod relay;
 mod transcriber;
 mod transcription;

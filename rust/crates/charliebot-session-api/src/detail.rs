@@ -311,27 +311,19 @@ async fn session_events(
     }
   }
 
-  let start = if before <= 0 { 0 } else { (before - limit as i64).max(0) as usize };
-  let end = usize::try_from(before).unwrap_or(0);
-  let (events, has_more) = if meta.archive_offset == 0 {
-    let snapshot = match features.store.load_chat_events_shared_sync(&session_id) {
-      Ok(snapshot) => snapshot,
-      Err(error) => return store_error(error),
-    };
-    let page_start = start.min(snapshot.len());
-    let page_end = end.min(snapshot.len()).max(page_start);
-    (snapshot[page_start..page_end].to_vec(), start > 0)
-  } else {
-    match features.store.load_chat_events_range(&session_id, start, end) {
-      Ok(result) => result,
-      Err(error) => return store_error(error),
-    }
-  };
-  let messages = match features.store.events_to_messages_at(&events, start) {
-    Ok(messages) => messages,
+  let payload = match events_range_page(&features.store, &session_id, before, limit) {
+    Ok(payload) => payload,
     Err(error) => return store_error(error),
   };
-  responses::fast_json(StatusCode::OK, &json!({"messages": messages, "has_more": has_more, "next_before": start}))
+  responses::fast_json(StatusCode::OK, &payload)
+}
+
+fn events_range_page(store: &Store, session_id: &str, before: i64, limit: usize) -> StoreResult<Value> {
+  let start = if before <= 0 { 0 } else { (before - limit as i64).max(0) as usize };
+  let end = usize::try_from(before).unwrap_or(0);
+  let (events, has_more) = store.load_chat_events_range(session_id, start, end)?;
+  let messages = store.events_to_messages_at(&events, start)?;
+  Ok(json!({"messages": messages, "has_more": has_more, "next_before": start}))
 }
 
 async fn session_transcript(
@@ -744,7 +736,7 @@ mod tests {
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::context::StartupState;
-  use charliebot_registry::store_hooks;
+  use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::run_records::RunKind;
 
   use super::*;
@@ -909,5 +901,53 @@ mod tests {
     let (status, body) = pending_triggers_response(&features, "synthetic-missing-session").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body, json!({"detail": "Session not found"}));
+  }
+
+  #[test]
+  fn fallback_events_pages_keep_cold_physical_line_indexes() {
+    let home = tempfile::tempdir().unwrap();
+    let registry = Arc::new(Registry::new());
+    let config = registry.load_config(home.path()).unwrap();
+    let slots = registry.metadata_slots();
+    let store = Store::new(config, slots.clone(), store_hooks::store_hooks(Arc::clone(&registry))).unwrap();
+    let session_id = "synthetic-lines";
+    let meta = SessionMetadata::new(session_id, "Synthetic lines", TaskProfile::Manager);
+    let metadata_path = store.metadata_path(session_id);
+    fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    fs::write(&metadata_path, meta.to_json_string(&slots, true)).unwrap();
+
+    let events_path = store.chat_events_path(session_id);
+    fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+    fs::write(
+      &events_path,
+      concat!(
+        "{\"type\":\"user\",\"id\":\"line-0\",\"content\":\"Question zero\"}\n",
+        "\n",
+        "{malformed\n",
+        "{\"type\":\"assistant\",\"id\":\"line-3\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Answer three\"}]}}\n",
+        "{\"type\":\"master_done\",\"id\":\"line-4\"}\n",
+        "{\"type\":\"user\",\"id\":\"line-5\",\"content\":\"Question five\"}\n",
+        "\n",
+        "{malformed\n",
+        "{\"type\":\"assistant\",\"id\":\"line-8\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Answer eight\"}]}}\n",
+        "{\"type\":\"master_done\",\"id\":\"line-9\"}"
+      ),
+    )
+    .unwrap();
+
+    let cases = [
+      (4, 2, 2, vec!["Answer three"]),
+      (8, 3, 5, vec!["Question five"]),
+      (10, 4, 6, vec!["Answer eight", ""]),
+      (3, 5, 0, vec!["Question zero"]),
+    ];
+    for (before, limit, next_before, expected_content) in cases {
+      let page = events_range_page(&store, session_id, before, limit).unwrap();
+      let content: Vec<&str> =
+        page["messages"].as_array().unwrap().iter().map(|message| message["content"].as_str().unwrap_or("")).collect();
+      assert_eq!(content, expected_content, "before={before}, limit={limit}");
+      assert_eq!(page["next_before"], next_before, "before={before}, limit={limit}");
+      assert_eq!(page["has_more"], next_before > 0, "before={before}, limit={limit}");
+    }
   }
 }

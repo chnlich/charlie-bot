@@ -73,6 +73,7 @@ impl Store {
                   value: meta.clone(),
                   at: std::time::Instant::now(),
                   signature,
+                  identity: std::sync::Arc::new(()),
                 });
               Some(meta)
             }

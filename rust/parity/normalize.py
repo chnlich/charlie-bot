@@ -524,7 +524,11 @@ def prepare_snapshot(entries: list[tuple[str, str, bytes]], ctx: Context) -> Non
     elif path.endswith(".jsonl"):
       for line in data.splitlines():
         if line.strip():
-          _observe(json.loads(line), ctx)
+          try:
+            value = json.loads(line)
+          except json.JSONDecodeError:
+            continue
+          _observe(value, ctx)
     elif path.endswith((".yaml", ".yml")):
       _observe(yaml.safe_load(data), ctx)
     else:

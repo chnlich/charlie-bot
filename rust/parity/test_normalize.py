@@ -1,5 +1,5 @@
-"""Normalization tests: a fake's recording compares only the headers its feature code sets explicitly, and the
-stdin of each fake-agent start normalizes like any other recorded text.
+"""Normalization tests: a fake's recording compares only the headers its feature code sets explicitly, and each
+fake-agent start's stdin and stdout_path normalize under the rules that name them.
 """
 
 import json
@@ -311,6 +311,16 @@ def test_stdin_text_difference_names_the_stdin_field(tmp_path: pathlib.Path, mon
   lines = parity._spawns_diff([baseline, candidate], expect_starts=1)
   assert len(lines) == 1
   assert lines[0].startswith("fake-agent spawns $[0].stdin:")
+
+
+def test_probe_stdout_pipe_inodes_compare_equal_and_a_file_path_still_differs() -> None:
+  rules = normalize.file_rules("fake-agent/spawns.jsonl")
+  baseline = normalize.normalize_json({"stdout_path": "pipe:[100017684]"}, rules, _context())
+  candidate = normalize.normalize_json({"stdout_path": "pipe:[100007930]"}, rules, _context())
+  file_path = normalize.normalize_json(
+      {"stdout_path": "/tmp/charliebot-parity-synthetic/base/logs/probe.txt"}, rules, _context())
+  assert baseline == candidate == {"stdout_path": "pipe:[<fake-agent-stdout-inode>]"}
+  assert baseline != file_path
 
 
 PROXY_ROUTE = "POST /api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages"

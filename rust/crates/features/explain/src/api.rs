@@ -1,21 +1,24 @@
-//! The explain routes (`src/features/explain/api.py`): the session check, the request validation, and the answers.
+//! The explain routes (`src/features/explain/api.py`): the body, the session check, the request validation, and the
+//! answers.
 //!
-//! FastAPI runs the session dependency before it validates the body or the query, so a missing session answers 404
-//! whatever the rest of the request holds.
+//! FastAPI reads the body before it runs the session dependency, so malformed JSON answers 422 whatever the session is.
+//! The session check then runs before the body model is validated, so a well-formed body for a missing session answers
+//! 404.
 
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
 
-use axum::body::Bytes;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, header};
+use axum::http::Request;
 use axum::response::Response;
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Kind, Loc, Source};
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::explain;
 
@@ -23,9 +26,13 @@ use crate::explain;
 pub async fn post_explain(
   State(features): State<Arc<FeatureContext>>,
   Path(session_id): Path<String>,
-  headers: HeaderMap,
-  body: Bytes,
+  request: Request<Body>,
 ) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
   if let Some(response) = refusal(&features, &session_id).await {
     return response;
   }
@@ -33,17 +40,14 @@ pub async fn post_explain(
     Ok(cfg) => cfg,
     Err(error) => return failure(error),
   };
-  let request = match ExplainRequest::parse(&headers, &body) {
-    Ok(request) => request,
-    Err(errors) => return validation::response(&errors),
+  let model = match ExplainRequest::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
   };
-  let Some(option) = cfg.get_backend_option(&request.backend).cloned() else {
-    return responses::json(
-      StatusCode::BAD_REQUEST,
-      &json!({"detail": format!("unknown backend: {}", request.backend)}),
-    );
+  let Some(option) = cfg.get_backend_option(&model.backend).cloned() else {
+    return responses::json(StatusCode::BAD_REQUEST, &json!({"detail": format!("unknown backend: {}", model.backend)}));
   };
-  match explain::request_explain(&features, &session_id, request.event_index, option, cfg).await {
+  match explain::request_explain(&features, &session_id, model.event_index, option, cfg).await {
     Ok((entry, created)) => {
       let status = if created { StatusCode::ACCEPTED } else { StatusCode::OK };
       responses::fast_json(status, &Value::Object(entry))
@@ -112,116 +116,40 @@ fn upto_param(query: &HashMap<String, String>) -> Result<i64, Box<FieldError>> {
   }
 }
 
-/// `ExplainRequest`: the divider's event index and the backend option id, both required. Unknown keys are ignored.
+/// The fields of `ExplainRequest`: the divider's event index and the backend option id, both required. Unknown keys are
+/// ignored.
+const EXPLAIN_FIELDS: &[Field] =
+  &[Field::required("event_index", FieldType::Integer), Field::required("backend", FieldType::String)];
+const EXPLAIN_BODY: BodyModel = BodyModel::required(EXPLAIN_FIELDS);
+
+/// The validated `ExplainRequest`.
 struct ExplainRequest {
   event_index: i64,
   backend: String,
 }
 
 impl ExplainRequest {
-  /// FastAPI reads the body, then pydantic validates the model; a failed field lists in declaration order.
-  fn parse(headers: &HeaderMap, body: &[u8]) -> Result<Self, Vec<FieldError>> {
-    let value = read_body(headers, body)?;
-    let fields = match &value {
-      Value::Object(fields) => fields,
-      Value::Null => return Err(vec![body_error(None, Value::Null, Kind::Missing)]),
-      other => return Err(vec![body_error(None, other.clone(), Kind::ModelAttributesType)]),
+  /// Validates the body against `EXPLAIN_BODY` and reads its two fields.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&EXPLAIN_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
     };
-    let event_index = int_field(fields, &value, "event_index");
-    let backend = str_field(fields, &value, "backend");
-    match (event_index, backend) {
-      (Ok(event_index), Ok(backend)) => Ok(Self { event_index, backend }),
-      (event_index, backend) => {
-        Err(event_index.err().map(|error| *error).into_iter().chain(backend.err().map(|error| *error)).collect())
-      }
-    }
+    let index = fields.remove("event_index").expect("a validated body carries event_index");
+    // The shared reader keeps integers above the signed 64-bit range as unsigned numbers; the divider index is an i64.
+    let Some(event_index) = index.as_i64() else {
+      return Err(Box::new(validation::response(&[field_error("event_index", index, Kind::IntParsing)])));
+    };
+    let backend = match fields.remove("backend") {
+      Some(Value::String(backend)) => backend,
+      _ => unreachable!("a validated backend is a string"),
+    };
+    Ok(Self { event_index, backend })
   }
 }
 
-/// The body as FastAPI hands it to the model: the parsed JSON when the request is JSON or names no type, else the
-/// raw text. An empty body is `null`, which the model reports as missing.
-fn read_body(headers: &HeaderMap, body: &[u8]) -> Result<Value, Vec<FieldError>> {
-  if body.is_empty() {
-    return Ok(Value::Null);
-  }
-  let json_body = match headers.get(header::CONTENT_TYPE) {
-    None => true,
-    Some(content_type) => is_json_media_type(content_type.to_str().unwrap_or_default()),
-  };
-  if !json_body {
-    return Ok(Value::String(String::from_utf8_lossy(body).into_owned()));
-  }
-  serde_json::from_slice(body).map_err(|error| {
-    // The position is serde's own (line and column), counted in characters; the message is serde's, not CPython's.
-    let mut loc = body_loc(None);
-    loc.push(Loc::Index(char_position(body, &error)));
-    vec![FieldError { loc, input: json!({}), kind: Kind::JsonInvalid { error: error.to_string() } }]
-  })
-}
-
-/// The character offset of a JSON error's position in `body`.
-fn char_position(body: &[u8], error: &serde_json::Error) -> usize {
-  let line_start: usize =
-    body.split_inclusive(|byte| *byte == b'\n').take(error.line().saturating_sub(1)).map(<[u8]>::len).sum();
-  let end = (line_start + error.column().saturating_sub(1)).min(body.len());
-  String::from_utf8_lossy(&body[..end]).chars().count()
-}
-
-/// `application/json` or a `+json` subtype, as FastAPI reads the request's content type.
-fn is_json_media_type(content_type: &str) -> bool {
-  let media = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
-  match media.split_once('/') {
-    Some(("application", subtype)) => subtype == "json" || subtype.ends_with("+json"),
-    _ => false,
-  }
-}
-
-/// The location of a body field, or of the body itself when `field` is `None`.
-fn body_loc(field: Option<&str>) -> Vec<Loc> {
-  let mut loc = vec![Loc::Field("body".to_string())];
-  loc.extend(field.map(|name| Loc::Field(name.to_string())));
-  loc
-}
-
-fn body_error(field: Option<&str>, input: Value, kind: Kind) -> FieldError {
-  FieldError { loc: body_loc(field), input, kind }
-}
-
-/// The `event_index` field, read as pydantic's lax `int` reads a JSON value.
-fn int_field(fields: &Map<String, Value>, body: &Value, name: &str) -> Result<i64, Box<FieldError>> {
-  let Some(input) = fields.get(name) else {
-    return Err(Box::new(body_error(Some(name), body.clone(), Kind::Missing)));
-  };
-  let error = |kind| Box::new(body_error(Some(name), input.clone(), kind));
-  match input {
-    Value::Bool(flag) => Ok(i64::from(*flag)),
-    Value::Number(number) if number.is_f64() => {
-      let float = number.as_f64().expect("an f64 number reads as f64");
-      if float.fract() != 0.0 {
-        Err(error(Kind::IntFromFloat))
-      } else {
-        // The i64 bounds as floats: `-2^63` is exact, and `2^63` is the first value past the range.
-        const RANGE: std::ops::Range<f64> = -9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0;
-        if RANGE.contains(&float) { Ok(float as i64) } else { Err(error(Kind::IntParsing)) }
-      }
-    }
-    Value::Number(number) => number.as_i64().ok_or_else(|| error(Kind::IntParsing)),
-    Value::String(text) => validation::parse_int(Source::Query, name, text, None, None).map_err(|mut lax| {
-      // The text is read with the query parameter's lax-int rules; only the location differs.
-      lax.loc = body_loc(Some(name));
-      lax
-    }),
-    _ => Err(error(Kind::IntType)),
-  }
-}
-
-/// The `backend` field: a JSON string, read without coercion as pydantic's lax `str` reads it.
-fn str_field(fields: &Map<String, Value>, body: &Value, name: &str) -> Result<String, Box<FieldError>> {
-  match fields.get(name) {
-    Some(Value::String(text)) => Ok(text.clone()),
-    Some(input) => Err(Box::new(body_error(Some(name), input.clone(), Kind::StringType))),
-    None => Err(Box::new(body_error(Some(name), body.clone(), Kind::Missing))),
-  }
+/// A validation error at `body.<field>`.
+fn field_error(field: &str, input: Value, kind: Kind) -> FieldError {
+  FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(field.to_string())], input, kind }
 }
 
 #[cfg(test)]
@@ -229,9 +157,7 @@ mod tests {
   use std::fs;
   use std::time::{Duration, SystemTime};
 
-  use axum::body::Body;
   use charliebot_core::timefmt;
-  use http::Request;
   use tower::ServiceExt;
 
   use super::*;
@@ -242,7 +168,7 @@ mod tests {
     let request = Request::builder()
       .method(method)
       .uri(uri)
-      .header(header::CONTENT_TYPE, "application/json")
+      .header(http::header::CONTENT_TYPE, "application/json")
       .body(Body::from(body.unwrap_or_default().to_string()))
       .unwrap();
     let response = crate::routes(features).oneshot(request).await.unwrap();
@@ -262,15 +188,26 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_missing_session_answers_404_on_every_route_before_any_body_or_query_check() {
+  async fn a_missing_session_answers_404_on_every_route_once_the_body_reads() {
     let home = Home::new(vec![]);
 
-    let (post, _) = send(&home.features, "POST", "/api/sessions/nope/explain", Some("{not json")).await;
+    let (post, _) = send(&home.features, "POST", "/api/sessions/nope/explain", Some(&post_body(2))).await;
     let (get, _) = send(&home.features, "GET", "/api/sessions/nope/explain", None).await;
     let (status, body) = send(&home.features, "GET", "/api/sessions/nope/explain/status", None).await;
 
     assert_eq!((post, get, status), (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
     assert_eq!(body, json!({"detail": "Session not found"}));
+  }
+
+  #[tokio::test]
+  async fn malformed_json_for_a_missing_session_answers_422_json_invalid_before_the_session_check() {
+    let home = Home::new(vec![]);
+
+    let (status, detail) = send(&home.features, "POST", "/api/sessions/nope/explain", Some("{not json")).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail["detail"][0]["type"], "json_invalid");
+    assert_eq!(detail["detail"][0]["loc"], json!(["body", 1]));
   }
 
   #[tokio::test]
@@ -314,15 +251,9 @@ mod tests {
       send(&home.features, "POST", "/api/sessions/s1/explain", Some(&json!({"backend": OPTION_ID}).to_string())).await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(
-      detail,
-      json!({"detail": [{
-        "type": "missing",
-        "loc": ["body", "event_index"],
-        "msg": "Field required",
-        "input": {"backend": OPTION_ID},
-      }]})
-    );
+    assert_eq!(detail["detail"][0]["type"], "missing");
+    assert_eq!(detail["detail"][0]["loc"], json!(["body", "event_index"]));
+    assert_eq!(detail["detail"][0]["msg"], "Field required");
   }
 
   #[tokio::test]
@@ -334,7 +265,7 @@ mod tests {
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail["detail"][0]["type"], "json_invalid");
-    assert_eq!(detail["detail"][0]["loc"][0], "body");
+    assert_eq!(detail["detail"][0]["loc"], json!(["body", 1]));
   }
 
   #[tokio::test]

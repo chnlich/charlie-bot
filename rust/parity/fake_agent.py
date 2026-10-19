@@ -23,6 +23,10 @@ class MissingArgvFlag(ValueError):  # noqa: N818
   """An emit value names a command-line flag the backend did not pass."""
 
 
+class AgentDirGone(RuntimeError):  # noqa: N818
+  """The fake-agent directory was removed while a gate waited for its open marker."""
+
+
 def _proc_identity(pid: int) -> tuple[str, str]:
   stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
   fields = stat.rsplit(")", 1)[1].split()
@@ -166,6 +170,8 @@ def _run_steps(entry: dict, agent_dir: pathlib.Path, index: int) -> int:
       gate = step["gate"]
       (agent_dir / f"at-{gate}").write_text(str(index), encoding="utf-8")
       while not (agent_dir / f"open-{gate}").exists():
+        if not agent_dir.is_dir():
+          raise AgentDirGone(f"fake-agent directory {agent_dir} is gone while gate {gate!r} waits")
         time.sleep(0.02)
     elif "sigterm" in step:
       signal.signal(signal.SIGTERM, _SIGTERM_DISPOSITIONS[step["sigterm"]])
@@ -190,6 +196,10 @@ def main() -> int:
   else:
     try:
       exit_code = _run_steps(entry, agent_dir, index)
+    except AgentDirGone as error:
+      # The directory is gone, so the exit marker has nowhere to go: the start ends here.
+      print(f"{name}: {error}", file=sys.stderr)
+      return 2
     except MissingArgvFlag as error:
       print(f"{name}: {error}", file=sys.stderr)
       exit_code = 2

@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
-use axum::Json;
 use axum::Router;
-use axum::extract::rejection::JsonRejection;
+use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, pyfmt, ssh};
@@ -43,6 +43,12 @@ const REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS: u64 = 900;
 const DORMANCY_CHECK_SECONDS: u64 = 60;
 const SSH_OVERALL_TIMEOUT_SECONDS: u64 = 60;
 const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
+const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("delay_seconds", FieldType::Integer),
+  Field::required("message", FieldType::String),
+];
+const SCHEDULE_TRIGGER_BODY: BodyModel = BodyModel::required(SCHEDULE_TRIGGER_BODY_FIELDS);
 
 const SLURM_ACTIVE_STATES: [&str; 7] =
   ["PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"];
@@ -1299,15 +1305,19 @@ pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxF
   })
 }
 
-async fn schedule_trigger(
-  State(features): State<Arc<FeatureContext>>,
-  body: Result<Json<Value>, JsonRejection>,
-) -> Response {
-  let value = match body {
-    Ok(Json(value)) => value,
-    Err(rejection) => return json_body_rejection(rejection),
+async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
   };
-  let (request, errors) = parse_schedule_request(value);
+  let (request, errors) = match body {
+    RequestBody::Json(value) if value.is_object() => parse_schedule_request(value),
+    body => match body.validate(&SCHEDULE_TRIGGER_BODY) {
+      Ok(_) => unreachable!("a non-object body cannot validate to the schedule request model"),
+      Err(response) => return *response,
+    },
+  };
   if !errors.is_empty() {
     return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({ "detail": errors }));
   }
@@ -1407,16 +1417,6 @@ async fn cancel_trigger_route(
     }
     Err(error) => responses::internal_error("RuntimeError", error.to_string()),
   }
-}
-
-fn json_body_rejection(_rejection: JsonRejection) -> Response {
-  let error = json!({
-    "type": "json_invalid",
-    "loc": ["body"],
-    "msg": "JSON decode error",
-    "input": null,
-  });
-  responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({ "detail": [error] }))
 }
 
 fn parse_schedule_request(value: Value) -> (Option<ScheduleTriggerRequest>, Vec<Value>) {
@@ -1874,16 +1874,23 @@ mod tests {
   }
 
   async fn send(router: &Router, method: Method, path: &str, body: &str) -> Response {
+    send_body(router, method, path, body.as_bytes().to_vec(), Some("application/json")).await
+  }
+
+  async fn send_body(
+    router: &Router,
+    method: Method,
+    path: &str,
+    body: Vec<u8>,
+    content_type: Option<&str>,
+  ) -> Response {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(content_type) = content_type {
+      request = request.header(header::CONTENT_TYPE, content_type);
+    }
     router
       .clone()
-      .oneshot(
-        Request::builder()
-          .method(method)
-          .uri(path)
-          .header(header::CONTENT_TYPE, "application/json")
-          .body(Body::from(body.to_string()))
-          .expect("request builds"),
-      )
+      .oneshot(request.body(Body::from(body)).expect("request builds"))
       .await
       .expect("router handles request")
   }
@@ -1891,6 +1898,21 @@ mod tests {
   async fn response_json(response: Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.expect("response body"))
       .expect("JSON body")
+  }
+
+  async fn assert_validation(response: Response, error_type: &str, location: Value) {
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"][0]["type"], error_type);
+    assert_eq!(body["detail"][0]["loc"], location);
+  }
+
+  fn utf16le_json(value: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in value.encode_utf16() {
+      bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
   }
 
   fn near_future(seconds: i64) -> UtcDateTime {
@@ -2723,5 +2745,113 @@ mod tests {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["watch_probe"]["synthetic-host:slurm:123"], "RUNNING");
+  }
+
+  #[tokio::test]
+  async fn python_schedule_trigger_model_accepts_utf16_and_forbids_extra_fields() {
+    let (_home, features) = feature_context();
+    add_session(&features, SESSION_ID);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let router = routes(&features);
+    let path = "/api/internal/schedule-trigger";
+    let valid = format!(r#"{{"session_id":"{SESSION_ID}","delay_seconds":3600,"message":"synthetic wake"}}"#);
+    assert_eq!(send(&router, Method::POST, path, &valid).await.status(), StatusCode::OK);
+    assert_eq!(
+      send_body(&router, Method::POST, path, utf16le_json(&valid), Some("application/json")).await.status(),
+      StatusCode::OK
+    );
+    assert_validation(
+      send(
+        &router,
+        Method::POST,
+        path,
+        &format!(r#"{{"session_id":"{SESSION_ID}","delay_seconds":60,"message":"wake","extra":true}}"#),
+      )
+      .await,
+      "extra_forbidden",
+      json!(["body", "extra"]),
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn python_schedule_trigger_body_errors_precede_session_lookup() {
+    let (_home, features) = feature_context();
+    let router = routes(&features);
+    let path = "/api/internal/schedule-trigger";
+    assert_validation(
+      send_body(&router, Method::POST, path, Vec::new(), Some("application/json")).await,
+      "missing",
+      json!(["body"]),
+    )
+    .await;
+    assert_validation(
+      send_body(
+        &router,
+        Method::POST,
+        path,
+        br#"{"session_id":"synthetic-session","delay_seconds":60,"message":"wake"}"#.to_vec(),
+        Some("text/plain"),
+      )
+      .await,
+      "model_attributes_type",
+      json!(["body"]),
+    )
+    .await;
+    assert_validation(
+      send_body(&router, Method::POST, path, b"{".to_vec(), Some("application/json")).await,
+      "json_invalid",
+      json!(["body", 1]),
+    )
+    .await;
+    assert_validation(
+      send_body(&router, Method::POST, path, b"[]".to_vec(), Some("application/json")).await,
+      "model_attributes_type",
+      json!(["body"]),
+    )
+    .await;
+
+    let wrong_types = [
+      (r#"{"session_id":1,"delay_seconds":60,"message":"wake"}"#, "string_type", json!(["body", "session_id"])),
+      (
+        r#"{"session_id":"synthetic-session","delay_seconds":"soon","message":"wake"}"#,
+        "int_parsing",
+        json!(["body", "delay_seconds"]),
+      ),
+      (
+        r#"{"session_id":"synthetic-session","delay_seconds":60,"message":1}"#,
+        "string_type",
+        json!(["body", "message"]),
+      ),
+      (
+        r#"{"session_id":"synthetic-session","delay_seconds":60,"message":"wake","watch_targets":"wrong"}"#,
+        "list_type",
+        json!(["body", "watch_targets"]),
+      ),
+      (
+        r#"{"session_id":"synthetic-session","delay_seconds":60,"message":"wake","watch_targets":[{"kind":"local_pid","pid":"bad"}]}"#,
+        "int_parsing",
+        json!(["body", "watch_targets", 0, "pid"]),
+      ),
+    ];
+    for (body, error_type, location) in wrong_types {
+      assert_validation(send(&router, Method::POST, path, body).await, error_type, location).await;
+    }
+    for (body, location) in [
+      (r#"{"delay_seconds":60,"message":"wake"}"#, json!(["body", "session_id"])),
+      (r#"{"session_id":"synthetic-session","message":"wake"}"#, json!(["body", "delay_seconds"])),
+      (r#"{"session_id":"synthetic-session","delay_seconds":60}"#, json!(["body", "message"])),
+    ] {
+      assert_validation(send(&router, Method::POST, path, body).await, "missing", location).await;
+    }
+
+    let malformed_missing_session = r#"{"session_id":"synthetic-missing-session""#;
+    assert_validation(
+      send(&router, Method::POST, path, malformed_missing_session).await,
+      "json_invalid",
+      json!(["body", malformed_missing_session.len()]),
+    )
+    .await;
   }
 }

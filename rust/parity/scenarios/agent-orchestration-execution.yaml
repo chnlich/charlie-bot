@@ -161,3 +161,81 @@ steps:
     path: /api/sessions/${sessions.atlas}/retry
     json: {request_id: synthetic-unknown-retry, run_id: "${missing_run}"}
     expect_status: 404
+  - name: malformed chat-message JSON returns FastAPI json_invalid shape
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: chat-message content uses the Python string field
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: 42}
+    expect_status: 422
+    compare: status_and_shape
+  - name: chat-message content is required by the Python model
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {}
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed chat-message JSON wins over a missing session
+    method: POST
+    path: /api/chat/${missing_session}/message
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed retry JSON returns FastAPI json_invalid shape
+    method: POST
+    path: /api/sessions/${sessions.atlas}/retry
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: retry request_id uses the Python string field
+    method: POST
+    path: /api/sessions/${sessions.atlas}/retry
+    json: {request_id: 42, run_id: synthetic-run}
+    expect_status: 422
+    compare: status_and_shape
+  - name: retry request_id is required by the Python model
+    method: POST
+    path: /api/sessions/${sessions.atlas}/retry
+    json: {run_id: synthetic-run}
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed retry JSON wins over a missing session
+    method: POST
+    path: /api/sessions/${missing_session}/retry
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed run-cancel JSON returns FastAPI json_invalid shape
+    method: POST
+    path: /api/sessions/${sessions.atlas}/runs/${runs.atlas_t3.run}/cancel
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: run-cancel request_id uses the Python string field
+    method: POST
+    path: /api/sessions/${sessions.atlas}/runs/${runs.atlas_t3.run}/cancel
+    json: {request_id: 42}
+    expect_status: 422
+    compare: status_and_shape
+  - name: run-cancel request_id is required by the Python model
+    method: POST
+    path: /api/sessions/${sessions.atlas}/runs/${runs.atlas_t3.run}/cancel
+    json: {}
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed run-cancel JSON wins over a missing session
+    method: POST
+    path: /api/sessions/${missing_session}/runs/synthetic-run/cancel
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape

@@ -103,3 +103,40 @@ steps:
         session: ${sessions.atlas}
         type: run_finished
         fields: {input_event_ids: ["${capture.trigger_id}"]}
+  - name: malformed schedule JSON returns FastAPI json_invalid shape
+    method: POST
+    path: /api/internal/schedule-trigger
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: schedule delay_seconds uses the Python integer field
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: soon
+      message: Reject malformed delay.
+    expect_status: 422
+    compare: status_and_shape
+  - name: schedule message is required by the Python model
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: 2
+    expect_status: 422
+    compare: status_and_shape
+  - name: schedule session_id is required before target lookup
+    method: POST
+    path: /api/internal/schedule-trigger
+    json: {delay_seconds: 2, message: Reject missing session id.}
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed schedule JSON cannot become a missing-session 404
+    method: POST
+    path: /api/internal/schedule-trigger
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape

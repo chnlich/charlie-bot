@@ -109,7 +109,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | POST | `/api/voice/{session_id}/confirm` | features/voice | todo |  |
 | POST | `/api/voice/{session_id}` | features/voice | todo |  |
 | WS | `/ws/voice/{session_id}` | features/voice | ported | live preview relay and recording archive |
-| POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | todo |  |
+| POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | ported | streaming and JSON answers; parity stage other-backends |
 | GET, HEAD | `/absolute_filepath/{path:path}` | features/files | ported |  |
 | GET, HEAD | `/static/features/artifacts/{path:path}` | foundation | ported |  |
 | GET, HEAD | `/static/features/backup/{path:path}` | foundation | ported |  |

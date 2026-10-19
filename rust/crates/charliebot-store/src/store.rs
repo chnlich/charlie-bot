@@ -1019,25 +1019,4 @@ mod tests {
       Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1);
     assert_eq!(store.get_session(&meta.id).await.unwrap().unwrap().name, "fresh metadata");
   }
-
-  #[test]
-  fn a_compact_boundary_without_a_count_keeps_the_earlier_count() {
-    use serde_json::json;
-
-    let home = tempfile::tempdir().unwrap();
-    let cfg =
-      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
-    let store = Store::new(cfg, Vec::new(), explicit_test_hooks()).unwrap();
-    let session_id = "synthetic-events-session";
-    let path = store.chat_events_path(session_id);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lines = [
-      json!({"type": "assistant", "message": {"usage": {"input_tokens": 500}}}),
-      json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"post_tokens": 120}}),
-      json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {}}),
-    ];
-    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
-    fs::write(&path, text).unwrap();
-    assert_eq!(store.context_state(session_id).unwrap().0, Some(120));
-  }
 }

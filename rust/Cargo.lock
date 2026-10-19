@@ -543,6 +543,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "charliebot-usage",
  "charliebot-web-reply",
  "futures-util",
  "regex",

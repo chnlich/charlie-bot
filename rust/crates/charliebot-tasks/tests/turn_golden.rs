@@ -398,7 +398,7 @@ fn callbacks(features: Arc<FeatureContext>, unread: Arc<Mutex<Vec<String>>>) -> 
     mark_unread,
     persist_cc_session_id,
     persist_account_label: Some(persist_account_label),
-    context_state: Some(Arc::new(move |_session_id| Box::pin(async { Ok((None, None)) }))),
+    context_state: Some(Arc::new(move |_session_id, _session_meta| Box::pin(async { Ok((None, None)) }))),
     task_tree_activity: Arc::new(|_session_id| Ok((false, "".to_string()))),
     after_round: None,
   }

@@ -22,15 +22,19 @@ pub(crate) struct StreamEvent {
 }
 
 /// The runner's event callback and the receiver its consumer reads. The callback returns only after the consumer
-/// acknowledges the event, so the follow never passes an event the consumer has not processed.
-pub(crate) fn stream_event_channel() -> (EventFn, mpsc::Receiver<StreamEvent>) {
+/// acknowledges the event, so the follow never passes an event the consumer has not processed. `stopped` and
+/// `unacknowledged` are the errors of a consumer that has gone and of one that dropped its acknowledgement.
+pub(crate) fn stream_event_channel(
+  stopped: &'static str,
+  unacknowledged: &'static str,
+) -> (EventFn, mpsc::Receiver<StreamEvent>) {
   let (sender, receiver) = mpsc::channel::<StreamEvent>(1);
   let on_event: EventFn = Arc::new(move |event| {
     let sender = sender.clone();
     Box::pin(async move {
       let (ack_tx, ack_rx) = oneshot::channel();
-      sender.send(StreamEvent { event, acknowledged: ack_tx }).await.map_err(|_| anyhow!("event consumer stopped"))?;
-      ack_rx.await.context("event acknowledgement stopped")?.map_err(anyhow::Error::msg)
+      sender.send(StreamEvent { event, acknowledged: ack_tx }).await.map_err(|_| anyhow!(stopped))?;
+      ack_rx.await.context(unacknowledged)?.map_err(anyhow::Error::msg)
     })
   });
   (on_event, receiver)

@@ -482,7 +482,7 @@ impl Worker {
       "worker_starting"
     );
     let prompt = launch.prompt.clone().unwrap_or_else(|| self.task_description.clone());
-    let (on_event, mut receiver) = stream_event_channel();
+    let (on_event, mut receiver) = stream_event_channel("event consumer stopped", "event acknowledgement stopped");
     let base_env = self.features.startup.require::<AgentBaseEnvironment>()?;
     let mut request = RunRequest::new(
       prompt,

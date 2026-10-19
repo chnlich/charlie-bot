@@ -514,7 +514,8 @@ impl RunProcess for TurnProcess<'_> {
       let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
       self.was_built = true;
       let session_id = metadata.id.clone();
-      let (on_event, mut receiver) = stream_event_channel();
+      let (on_event, mut receiver) =
+        stream_event_channel("manager event consumer stopped", "manager event acknowledgement stopped");
       let task_session_id = self
         .item
         .extra_env

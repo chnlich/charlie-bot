@@ -310,7 +310,6 @@ class ServerProcess:
     self.log_path = tree.root / "logs" / f"{tree.label}.server-{process_number}.log"
     self._proc: subprocess.Popen | None = None
     self._server_identity: tuple[int, str] | None = None
-    self._descendants: dict[int, str] = {}
     # The pid whose socket listens on the port, verified by wait_ready.
     self.owner_pid: int | None = None
 
@@ -398,73 +397,27 @@ class ServerProcess:
 
   def stop_server(self) -> None:
     """Stop tmux, SIGTERM the server, then stop any idle spawn-pool workers it leaves behind."""
-    direct_children_before_stop = _direct_child_pids()
-    self._capture_descendants()
     self._kill_tmux_server()
     if self._proc is None or self._proc.poll() is not None:
       return
     if self._server_identity is None:
       self._server_identity = self._capture_identity()
     server_pid, pid_start = self._server_identity
-    descendants = {
-        pid: identity[1] for pid in set(_process_tree(server_pid)[1:]) if (identity := process_identity(pid)) is not None
-    }
-    turn_processes = {pid: start_time for pid, start_time in descendants.items() if _is_turn_process(pid, start_time)}
     identity = process_identity(server_pid)
-    try:
-      if identity is not None and identity[1] == pid_start and identity[0] != "Z":
-        with contextlib.suppress(ProcessLookupError):
-          os.kill(server_pid, signal.SIGTERM)
-      deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
-      while time.monotonic() < deadline:
-        identity = process_identity(server_pid)
-        if identity is None or identity[0] == "Z" or identity[1] != pid_start:
-          self._stop_spawn_pool_workers()
-          return
-        time.sleep(POLL_INTERVAL_SECONDS)
-      if self._proc.poll() is None:
-        os.killpg(self._proc.pid, signal.SIGKILL)
-        self._proc.wait()
-      raise RuntimeError(f"{self.label} server ignored SIGTERM for {STOP_TIMEOUT_SECONDS}s and was killed")
-    finally:
-      self._reap_exited_descendants(descendants)
-      for pid in _direct_child_pids() - direct_children_before_stop:
-        if (identity := process_identity(pid)) is not None and _is_sleep_process(pid):
-          turn_processes[pid] = identity[1]
-      self._reap_turn_processes(turn_processes)
-
-  @staticmethod
-  def _reap_exited_descendants(descendants: dict[int, str]) -> None:
-    """Reap exited descendants adopted after the server process stops."""
-    for pid, start_time in descendants.items():
-      identity = process_identity(pid)
-      if identity is None or identity[0] != "Z" or identity[1] != start_time:
-        continue
-      with contextlib.suppress(ChildProcessError):
-        os.waitpid(pid, os.WNOHANG)
-
-  @staticmethod
-  def _reap_turn_processes(turn_processes: dict[int, str]) -> None:
-    """Wait for each backend turn process to exit, then reap it if the harness adopted it."""
-    stuck = []
-    for pid, start_time in turn_processes.items():
-      deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
-      while True:
-        identity = process_identity(pid)
-        if identity is None or identity[1] != start_time or identity[0] == "Z":
-          break
-        if time.monotonic() >= deadline:
-          with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
-          stuck.append(pid)
-          break
-        time.sleep(POLL_INTERVAL_SECONDS)
-      identity = process_identity(pid)
-      if identity is not None and identity[0] == "Z" and identity[1] == start_time:
-        with contextlib.suppress(ChildProcessError):
-          os.waitpid(pid, os.WNOHANG)
-    if stuck:
-      raise RuntimeError(f"{len(stuck)} backend turn process(es) did not exit when the server stopped: {stuck}")
+    if identity is not None and identity[1] == pid_start and identity[0] != "Z":
+      with contextlib.suppress(ProcessLookupError):
+        os.kill(server_pid, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+      identity = process_identity(server_pid)
+      if identity is None or identity[0] == "Z" or identity[1] != pid_start:
+        self._stop_spawn_pool_workers()
+        return
+      time.sleep(POLL_INTERVAL_SECONDS)
+    if self._proc.poll() is None:
+      os.killpg(self._proc.pid, signal.SIGKILL)
+      self._proc.wait()
+    raise RuntimeError(f"{self.label} server ignored SIGTERM for {STOP_TIMEOUT_SECONDS}s and was killed")
 
   def _stop_spawn_pool_workers(self) -> None:
     """Stop Python spawn workers left alive by the server's non-blocking executor shutdown."""
@@ -516,52 +469,14 @@ class ServerProcess:
 
   def wait_trace(self) -> None:
     """Wait for this server's strace process after its traced children have exited."""
-    if self._proc is None:
+    if self._proc is None or self._proc.poll() is not None:
       return
-    self._capture_descendants()
-    if self._proc.poll() is None:
-      try:
-        self._proc.wait(timeout=STOP_TIMEOUT_SECONDS)
-      except subprocess.TimeoutExpired:
-        os.killpg(self._proc.pid, signal.SIGKILL)
-        self._proc.wait()
-        raise RuntimeError(f"{self.label} strace did not exit within {STOP_TIMEOUT_SECONDS}s and was killed") from None
-    self._reap_orphaned_descendants(self._descendants)
-
-  def _capture_descendants(self) -> None:
-    """Remember this server tree's process identities for reaping after its traced parent exits."""
-    if self._proc is None:
-      return
-    for pid in _process_tree(self._proc.pid)[1:]:
-      if identity := process_identity(pid):
-        self._descendants[pid] = identity[1]
-
-  @staticmethod
-  def _reap_orphaned_descendants(descendants: dict[int, str]) -> None:
-    """Kill and reap any server descendants adopted by the harness after the trace ends."""
-    pending = dict(descendants)
-    for pid, start_time in pending.items():
-      identity = process_identity(pid)
-      if identity is not None and identity[1] == start_time and identity[0] != "Z":
-        with contextlib.suppress(ProcessLookupError):
-          os.kill(pid, signal.SIGKILL)
-    deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
-    while pending and time.monotonic() < deadline:
-      for pid, start_time in list(pending.items()):
-        identity = process_identity(pid)
-        if identity is None or identity[1] != start_time:
-          del pending[pid]
-          continue
-        if identity[0] == "Z":
-          with contextlib.suppress(ChildProcessError):
-            os.waitpid(pid, os.WNOHANG)
-          identity = process_identity(pid)
-          if identity is None or identity[1] != start_time:
-            del pending[pid]
-      if pending:
-        time.sleep(POLL_INTERVAL_SECONDS)
-    if pending:
-      raise RuntimeError(f"{len(pending)} server descendant(s) remained after SIGKILL: {sorted(pending)}")
+    try:
+      self._proc.wait(timeout=STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+      os.killpg(self._proc.pid, signal.SIGKILL)
+      self._proc.wait()
+      raise RuntimeError(f"{self.label} strace did not exit within {STOP_TIMEOUT_SECONDS}s and was killed") from None
 
   def stop(self) -> None:
     """Stop the server and wait for strace after the server's children exit."""
@@ -570,7 +485,6 @@ class ServerProcess:
 
   def kill(self) -> None:
     """Kill the whole process group (the cleanup path after a harness error)."""
-    self._capture_descendants()
     self._kill_tmux_server()
     if self._proc is not None and self._proc.poll() is None:
       os.killpg(self._proc.pid, signal.SIGKILL)
@@ -593,76 +507,6 @@ class ServerProcess:
     )
     if result.returncode and "no server running" not in result.stderr.lower() and socket_path.exists():
       raise RuntimeError(f"{self.label} tmux cleanup failed: {result.stderr.strip() or result.stdout.strip()}")
-
-
-def _is_turn_process(pid: int, start_time: str) -> bool:
-  """Whether *pid* is the identity-only sleep process used by backend turns."""
-  try:
-    stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-  except FileNotFoundError:
-    return False
-  closing_parenthesis = stat.rfind(")")
-  command = stat[stat.find("(") + 1:closing_parenthesis]
-  fields = stat[closing_parenthesis + 1:].split()
-  return command == "sleep" and fields[19] == start_time
-
-
-def _is_sleep_process(pid: int) -> bool:
-  """Whether *pid* is a sleep process, including one whose command line disappeared after exit."""
-  try:
-    stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-  except FileNotFoundError:
-    return False
-  command = stat[stat.find("(") + 1:stat.rfind(")")]
-  return command == "sleep"
-
-
-def _direct_child_pids() -> set[int]:
-  """The direct process children adopted by the parity process."""
-  children = pathlib.Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
-  try:
-    return {int(pid) for pid in children.read_text(encoding="utf-8").split()}
-  except FileNotFoundError:
-    return set()
-
-
-def reap_adopted_children() -> int:
-  """Kill and reap process descendants the parity harness adopted from stopped servers."""
-  pending: dict[int, str] = {}
-  reaped = 0
-  deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
-  while time.monotonic() < deadline:
-    for pid in _direct_child_pids():
-      identity = process_identity(pid)
-      if identity is None:
-        continue
-      start_time = pending.setdefault(pid, identity[1])
-      if identity[1] != start_time:
-        del pending[pid]
-        continue
-      if identity[0] != "Z":
-        with contextlib.suppress(ProcessLookupError):
-          os.kill(pid, signal.SIGKILL)
-        continue
-      if identity[0] == "Z":
-        try:
-          waited_pid, _ = os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-          identity = process_identity(pid)
-          if identity is None or identity[1] != start_time:
-            del pending[pid]
-          else:
-            raise
-        else:
-          if waited_pid:
-            del pending[pid]
-            reaped += 1
-    if not _direct_child_pids():
-      return reaped
-    if _direct_child_pids():
-      time.sleep(POLL_INTERVAL_SECONDS)
-  remaining = sorted(_direct_child_pids())
-  raise RuntimeError(f"{len(remaining)} adopted process child(ren) remained after SIGKILL: {remaining}")
 
 
 def process_identity(pid: int) -> tuple[str, str] | None:

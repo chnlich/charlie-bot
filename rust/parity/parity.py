@@ -977,13 +977,6 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
         server.wait_trace()
       except RuntimeError as error:
         lines.append(f"{side.label} strace cleanup: {error}")
-  try:
-    orphan_count = servers.reap_adopted_children()
-  except RuntimeError as error:
-    lines.append(f"server descendant cleanup: {error}")
-  else:
-    if orphan_count:
-      notes.append(f"reaped {orphan_count} adopted server descendant(s)")
   return lines, notes
 
 

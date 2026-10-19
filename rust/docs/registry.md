@@ -429,7 +429,8 @@ Packages whose port has not landed still register their data, so the server's be
   and turn contribution), `discord` (`discord` section, session slot and turn contribution), `web_reply` (session slot
   and turn contribution), `code_server` (`code_server` section), `voice` (`voice` section, its two template globals
   and the default-backend check), and the backend type `opencode`, whose factory refuses every launch with
-  "not ported".
+  "not ported". The `opencode` stub also registers the usage source `opencode`, which reads and vacuums the store's
+  database.
 - Empty stubs: the other listed packages.
 - `backend_pool` is ported, not a stub: its session slot comes from `charliebot_agents::backend_pool::register`.
 

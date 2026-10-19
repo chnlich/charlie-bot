@@ -193,7 +193,8 @@ implemented.
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
 | service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf` provisioning is not ported; warm-up events are deferred. |
 | registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
-| registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. Python also captures opencode; Rust registers no opencode source until the agent-runtime line ports that backend. The cron scheduler that fires it is not ported yet (agent-runtime). |
+| registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. The cron scheduler that fires it is not ported yet (agent-runtime). |
+| registration | usage source `opencode` | backends/opencode | ported | Registers the source with id prefixes `opencode-` and `oc-`, and attributes the `opencode` backend type to it (`charliebot-agents/src/backends/opencode/mod.rs`). The log side reads the store's database (`usage_logs.rs`); the sweep vacuums it and reports its freelist (`usage_sweep.rs`). The backend type itself is not ported. |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
@@ -221,7 +222,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `/tmp/merge-chunks-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `/tmp/merge-members-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `host_auth.json` | features/host_auth | ported | written atomically with `json.dumps(indent=2)` and a newline |
-| `usage/ledger.sqlite3` | features/usage | ported | Rust preserves the Python schema, trigger text, queries and value formats. Python also captures opencode; Rust registers no opencode source until the agent-runtime line ports that backend. |
+| `usage/ledger.sqlite3` | features/usage | ported | Rust preserves the Python schema, trigger text, queries and value formats. |
 | `prompt_bodies/<sha256>.md` | agent-runtime | ported | Written once by `store_prompt_body` (`charliebot-store/src/task_tree.rs:485-499`); read with the sha256 check (`charliebot-tasks/src/prompts/sources.rs:97-115`). Python: `src/runtime/task_sessions.py:1527-1538`, `src/runtime/task_prompts.py:258-270`. |
 | `memory/` | features/memory | ported | Git repository created by `ensure_store` on first use. |
 | `memory/topics` | features/memory | ported | Seeded when missing; read by the selection. |
@@ -234,7 +235,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `vendor/katex/katex.min.js` | foundation | not applicable | Written by `charliebot artifact wrap`, a Python CLI that stays (Trade-off 2). |
 | `voice_eval/<ts>/results.json` | features/voice | not applicable | CLI output; the Python CLI stays (Trade-off 2). |
 | `voice_eval/<ts>/summary.md` | features/voice | not applicable | CLI output; the Python CLI stays (Trade-off 2). |
-| `opencode/` | backends/opencode | todo | |
+| `opencode/` | backends/opencode | todo | The usage source reads and vacuums `data/opencode/opencode.db`; the rest of the store is not ported. |
 | `sessions/.counter` | agent-runtime | ported | Read, count-dirs fallback and rewrite in `next_session_name` (`charliebot-store/src/task_tree.rs:877-897`); Python `src/runtime/task_sessions.py:1130-1151`. Deviation: Rust logs `session_counter_unparsable` or `session_counter_unreadable` at warn on the fallback; Python falls back silently. |
 | `sessions/.task-<id>-<pid>-<uuid>.tmp/` | agent-runtime | todo | Rust writes `.task-<id>-<uuid>.tmp`, without the pid component (`charliebot-store/src/task_tree.rs:846`). |
 | in-memory usage caches | features/usage | todo | Not persisted files. |

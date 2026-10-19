@@ -69,3 +69,10 @@ def test_detail_object_on_both_sides_matches_without_the_text() -> None:
 def test_detail_object_on_one_side_only_fails() -> None:
   lines = _diff(_response(404, {"detail": "one"}), _response(404, {"error": "two"}))
   assert lines == ["body: one side is a JSON object with a detail key, the other side is not"]
+
+
+def test_detail_list_against_detail_text_fails_in_both_orders() -> None:
+  errors = _response(422, {"detail": [{"type": "json_invalid", "loc": ["body"]}]})
+  text = _response(422, {"detail": "invalid json"})
+  assert _diff(errors, text) == ["body detail: a list on one side only"]
+  assert _diff(text, errors) == ["body detail: a list on one side only"]

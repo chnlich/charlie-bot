@@ -439,7 +439,10 @@ def status_and_shape_diff(
     return lines
   left_detail = left_body.get("detail") if isinstance(left_body, dict) else None
   right_detail = right_body.get("detail") if isinstance(right_body, dict) else None
-  if isinstance(left_detail, list) and isinstance(right_detail, list):
+  if isinstance(left_detail, list) or isinstance(right_detail, list):
+    if not (isinstance(left_detail, list) and isinstance(right_detail, list)):
+      lines.append("body detail: a list on one side only")
+      return lines
     if len(left_detail) != len(right_detail):
       lines.append(f"body detail: {len(left_detail)} errors != {len(right_detail)} errors")
     for index, (left_item, right_item) in enumerate(zip(left_detail, right_detail)):

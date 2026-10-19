@@ -30,6 +30,11 @@ def _cancel_event_delta(events: list[dict]) -> compare.Delta:
   return compare.Delta(added={}, removed=frozenset(), changed={path: compare.Entry("file", data)})
 
 
+def _raw_chat_delta(data: bytes) -> compare.Delta:
+  path = "sessions/synthetic-session/data/chat_events.jsonl"
+  return compare.Delta(added={}, removed=frozenset(), changed={path: compare.Entry("file", data)})
+
+
 def _cancel_event_diff(baseline: list[dict], candidate: list[dict], candidate_is_python: bool = False) -> list[str]:
   return compare.delta_diff(
       _cancel_event_delta(baseline),
@@ -170,6 +175,33 @@ def test_event_field_rule_still_compares_unrelated_cancel_response_fields() -> N
       event_field_rules=((_cancel_event_rule(), _cancel_event_rule()),),
   )
   assert any("$.extra" in line for line in differences)
+
+
+def test_a_chat_line_json_refuses_compares_as_malformed_text_without_raising() -> None:
+  """A chat line that json.loads refuses compares as its text under malformed_jsonl_line. No event rule matches it,
+  so two logs that hold the same bad line agree, and two different bad lines are reported as a difference."""
+  finished = b"".join(json.dumps(event).encode() + b"\n" for event in _cancel_events("interrupted", finish_first=True))
+  rules = ((_cancel_event_rule(), _cancel_event_rule()),)
+  base_ctx = normalize.Context(tree_root="/synthetic/base")
+  candidate_ctx = normalize.Context(tree_root="/synthetic/candidate")
+  same = compare.delta_diff(
+      _raw_chat_delta(finished + b"not json {\n"),
+      _raw_chat_delta(finished + b"not json {\n"),
+      base_ctx,
+      candidate_ctx,
+      rules,
+      False,
+  )
+  assert same == []
+  different = compare.delta_diff(
+      _raw_chat_delta(finished + b"not json {\n"),
+      _raw_chat_delta(finished + b"not json [\n"),
+      base_ctx,
+      candidate_ctx,
+      rules,
+      False,
+  )
+  assert different
 
 
 def test_status_and_shape_response_comparison_ignores_json_leaf_values() -> None:

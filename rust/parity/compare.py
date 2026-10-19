@@ -304,6 +304,15 @@ def _canonicalize_run_finish_order(events: list[Any], run_finished_index: int) -
   master_done.pop("event_index", None)
 
 
+def _jsonl_line_value(line: bytes) -> Any:
+  """One JSONL line's value. A line that json.loads refuses keeps its text under malformed_jsonl_line, which no
+  event rule matches, so it compares as that value."""
+  try:
+    return json.loads(line)
+  except ValueError:
+    return {"malformed_jsonl_line": line.decode("utf-8", errors="surrogateescape")}
+
+
 def _event_log_diff(
     left_relative: str,
     left: Entry,
@@ -534,7 +543,12 @@ def status_and_shape_diff(
     left_ctx: normalize.Context,
     right_ctx: normalize.Context,
 ) -> list[str]:
-  """Compare malformed-input status and error locations while ignoring error text."""
+  """The malformed-input comparison: the status, then each 422 error's type and loc, nothing else.
+
+  For a body whose ``detail`` is a list, it compares the list length and each item's ``type`` and ``loc``; the
+  error text may differ. For any other body, it only requires both sides to be JSON objects with a ``detail``
+  key, or both to be non-JSON.
+  """
   lines: list[str] = []
   if left.status != right.status:
     lines.append(f"status: {left.status} != {right.status}")

@@ -118,11 +118,9 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
         format!("Status file is not JSON: {}", json_message(&message)),
       ));
     }
-    Err(LoadError::Unrepresentable(message)) => {
-      return Err(WebReplyError::Failed(anyhow::anyhow!(
-        "the status file holds a value the port cannot read: {message}"
-      )));
-    }
+    Err(LoadError::Unrepresentable(message)) => serde_json::from_str(text).map_err(|_| {
+      WebReplyError::Failed(anyhow::anyhow!("the status file holds a value the port cannot read: {message}"))
+    })?,
   };
   let Value::Object(fields) = raw else {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Status file is not a JSON object"));
@@ -479,6 +477,7 @@ mod tests {
         r#"{"colour": 1, "goal": 5, "waiting": [{"text": 5, "zzz": 1}]}"#,
         "Status file is invalid: goal: Input should be a valid string; waiting.0.text: Input should be a valid string; waiting.0.zzz: Extra inputs are not permitted; colour: Extra inputs are not permitted",
       ),
+      (r#"{"goal": 123456789012345678901234567890}"#, "Status file is invalid: goal: Input should be a valid string"),
     ];
     for (text, expected) in cases {
       let error = parse_patch(text).expect_err("the status file is refused");

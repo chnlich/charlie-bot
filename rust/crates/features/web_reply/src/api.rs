@@ -212,4 +212,14 @@ mod tests {
     assert!(matches!(errors[0].kind, Kind::Missing));
     assert!(matches!(errors[1].kind, Kind::StringType));
   }
+
+  #[test]
+  fn an_out_of_range_number_stays_a_field_type_error() {
+    let errors = SessionText::parse(&json_headers(), br#"{"session_id": 123456789012345678901234567890, "text": "x"}"#)
+      .err()
+      .expect("a number is not a session id");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].loc, body_loc(Some("session_id")));
+    assert!(matches!(errors[0].kind, Kind::StringType));
+  }
 }

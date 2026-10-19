@@ -12,6 +12,7 @@ use std::thread;
 use anyhow::{Context, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::python_helper::{LongLived, PythonHelper};
+use charliebot_core::pystr;
 use sherpa_onnx::{
   OfflineModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer, OfflineRecognizerConfig, SileroVadModelConfig,
   TenVadModelConfig, VadModelConfig, VoiceActivityDetector,
@@ -21,7 +22,6 @@ use crate::audio::SAMPLE_RATE;
 use crate::config::{VoiceEngine, VoiceSettings};
 use crate::provisioning::{QWEN3_ASR_DIR_NAME, VoiceModelPaths, ensure_sherpa_paths, get_ready_model_paths};
 use crate::qwen3_hf::{HELPER_SCRIPT, Qwen3HfRecognizer};
-use crate::transcription::python_whitespace;
 
 /// A segment's decode keeps 5 s of pause before it, so quiet speech the detector labels silence still reaches the model.
 const SEGMENT_DECODE_PAUSE_SAMPLES: usize = 5 * SAMPLE_RATE;
@@ -99,7 +99,7 @@ impl WindowDecoder for OfflineRecognizer {
 
 /// `_decode_samples`' whitespace normalization: the text's words, joined by single spaces.
 pub(crate) fn normalize_text(text: &str) -> String {
-  text.split(python_whitespace).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ")
+  text.split(pystr::is_python_whitespace).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 fn logical_cpus() -> usize {
@@ -229,7 +229,7 @@ fn decode_samples<D: WindowDecoder>(decoder: &Mutex<D>, samples: &[f32]) -> anyh
 fn join_segments(parts: &[String]) -> String {
   parts
     .iter()
-    .map(|part| part.trim_matches(python_whitespace))
+    .map(|part| part.trim_matches(pystr::is_python_whitespace))
     .filter(|part| !part.is_empty())
     .collect::<Vec<_>>()
     .join(" ")

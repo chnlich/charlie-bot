@@ -37,6 +37,7 @@ use axum::http::StatusCode;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_core::pystr;
 use charliebot_files::MOUNT;
 use charliebot_registry::turn::{PromptSource, RuleSegment};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
@@ -277,7 +278,7 @@ pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyho
   let bytes =
     std::fs::read(&path).with_context(|| format!("{name} prompt not found at {} — {likely_cause}", path.display()))?;
   let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-  Ok(py_strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
+  Ok(pystr::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
 }
 
 /// The thread reply contract: `platform_part`, a blank line, then the platform's scope doc, the red line and the
@@ -317,12 +318,6 @@ pub fn thread_reply_segment(platform: &ThreadPlatform, text: String) -> RuleSegm
     })
     .collect();
   RuleSegment { text, sources, delivery: DELIVERY_FULL.to_string() }
-}
-
-/// Python's `str.strip()`: trims what `char::is_whitespace` trims plus the information separators U+001C to U+001F,
-/// which Python counts as whitespace and Rust does not.
-pub fn py_strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
 /// The armed follow trigger's label: the platform prefix and the chain floor id (`follow_wake_label`).
@@ -374,7 +369,7 @@ pub fn chunk_text(text: &str, limit: usize) -> Vec<String> {
   if !current.is_empty() {
     chunks.push(current);
   }
-  let nonblank: Vec<String> = chunks.iter().filter(|chunk| !py_strip(chunk).is_empty()).cloned().collect();
+  let nonblank: Vec<String> = chunks.iter().filter(|chunk| !pystr::strip(chunk).is_empty()).cloned().collect();
   if nonblank.is_empty() { chunks } else { nonblank }
 }
 
@@ -637,7 +632,7 @@ pub async fn post_reply(
 ) -> Result<Value, ThreadReplyError> {
   let platform = adapter.platform();
   let session = require_thread_session(platform, features, session_id).await?;
-  if py_strip(text).is_empty() {
+  if pystr::strip(text).is_empty() {
     return Err(ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
   assert_no_file_server_links(text)?;

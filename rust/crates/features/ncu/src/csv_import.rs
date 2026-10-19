@@ -10,12 +10,13 @@ use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use charliebot_core::pystr;
 use charliebot_core::python_helper::{Capture, capture};
 use serde_json::{Number, Value, json};
 
 use crate::csv_reader::{Row, dict_rows};
 use crate::error::ParseError;
-use crate::pycompat::{strip, take_chars};
+use crate::pycompat::take_chars;
 use crate::roofline;
 
 /// `SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT` (`ncu_parsing.py:37`), the bound on the `ncu` run.
@@ -78,7 +79,7 @@ pub fn parse(outcome: Outcome) -> Result<Value, ParseError> {
     Outcome::TimedOut => Err(ParseError::Report("ncu CSV import timed out.".to_string())),
     Outcome::Completed { success: false, stdout, stderr } => {
       let text = if stderr.is_empty() { &stdout } else { &stderr };
-      let detail = take_chars(strip(text), DETAIL_LIMIT);
+      let detail = take_chars(pystr::strip(text), DETAIL_LIMIT);
       Err(ParseError::Report(format!("ncu CSV import failed: {detail}")))
     }
     Outcome::Completed { success: true, stdout, .. } => parse_csv(&stdout),
@@ -100,7 +101,7 @@ impl Kernel {
       name: row.get("Kernel Name").unwrap_or(Some("")).map(str::to_string),
       grid: format_dims(row.get("Grid Size").flatten().unwrap_or("")),
       block: format_dims(row.get("Block Size").flatten().unwrap_or("")),
-      cc: strip(row.get("CC").flatten().unwrap_or("")).to_string(),
+      cc: pystr::strip(row.get("CC").flatten().unwrap_or("")).to_string(),
       metrics: Metrics::default(),
     }
   }
@@ -177,7 +178,7 @@ fn group_rows_into_sections(rows: &[Row]) -> Result<Vec<Vec<Value>>, ParseError>
       kernels.push(Vec::new());
       kernels.len() - 1
     });
-    let section_name = match strip(row.get("Section Name").flatten().unwrap_or("")) {
+    let section_name = match pystr::strip(row.get("Section Name").flatten().unwrap_or("")) {
       "" => "Other metrics",
       name => name,
     };
@@ -194,7 +195,7 @@ fn group_rows_into_sections(rows: &[Row]) -> Result<Vec<Vec<Value>>, ParseError>
       sections[section].metrics.push(json!({
         "name": name,
         "value": value.to_value(),
-        "unit": strip(row.get("Metric Unit").flatten().unwrap_or("")),
+        "unit": pystr::strip(row.get("Metric Unit").flatten().unwrap_or("")),
       }));
     }
   }
@@ -228,7 +229,7 @@ fn parse_csv(stdout: &str) -> Result<Value, ParseError> {
     if let Some(name) = row.get("Metric Name").flatten().filter(|name| !name.is_empty()) {
       let metric = Metric {
         value: coerce(row.get("Metric Value").flatten())?,
-        unit: strip(row.get("Metric Unit").flatten().unwrap_or("")).to_string(),
+        unit: pystr::strip(row.get("Metric Unit").flatten().unwrap_or("")).to_string(),
       };
       kernels[position].metrics.insert(name, metric);
     }
@@ -287,7 +288,7 @@ fn parse_csv(stdout: &str) -> Result<Value, ParseError> {
 /// float is anything `float()` takes that is finite, and the raw text is what remains.
 fn coerce(raw: Option<&str>) -> Result<Cell, ParseError> {
   let raw_text = raw.unwrap_or("");
-  let text = strip(raw_text).replace(',', "");
+  let text = pystr::strip(raw_text).replace(',', "");
   if text.is_empty() {
     return Ok(Cell::Null);
   }
@@ -326,8 +327,8 @@ fn coerce(raw: Option<&str>) -> Result<Cell, ParseError> {
 
 /// `_format_dims_csv`: `(64, 6, 1)` becomes `64 × 6 × 1`, and nothing when no part remains.
 fn format_dims(raw: &str) -> Option<String> {
-  let inner = strip(raw).trim_matches(|c| c == '(' || c == ')');
-  let parts: Vec<&str> = inner.split(',').map(strip).filter(|part| !part.is_empty()).collect();
+  let inner = pystr::strip(raw).trim_matches(|c| c == '(' || c == ')');
+  let parts: Vec<&str> = inner.split(',').map(pystr::strip).filter(|part| !part.is_empty()).collect();
   (!parts.is_empty()).then(|| parts.join(" × "))
 }
 
@@ -338,7 +339,7 @@ fn duration_ns(value: &Cell, unit: &str) -> Option<f64> {
     Cell::Float(value) => *value,
     Cell::Null | Cell::Text(_) => return None,
   };
-  let unit = strip(unit);
+  let unit = pystr::strip(unit);
   let unit = if unit.is_empty() { "ns" } else { unit };
   let factor = match unit.to_lowercase().as_str() {
     "ns" | "nsecond" => 1.0,

@@ -621,7 +621,7 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
     let collapsed = pystr::collapse_whitespace(&block_text);
     let text = unescape(&collapsed);
     for sentence in SENTENCE_SPLIT.split(&text) {
-      let sentence = trim_python_whitespace(sentence?);
+      let sentence = pystr::strip(sentence?);
       if sentence.is_empty() {
         continue;
       }
@@ -689,7 +689,7 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
         let opening = before.rfind(['（', '(']);
         let closing = before.rfind(['）', ')']);
         if opening.is_some_and(|opening| Some(opening) > closing)
-          && trim_python_whitespace(&before[..opening.unwrap()]).chars().count() >= 2
+          && pystr::strip(&before[..opening.unwrap()]).chars().count() >= 2
         {
           named.insert(ordinal_label(kind));
           continue;
@@ -837,10 +837,6 @@ fn cjk_digit(text: &str) -> Option<usize> {
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
   needles.iter().any(|needle| text.contains(needle))
-}
-
-fn trim_python_whitespace(text: &str) -> &str {
-  text.trim_matches(pystr::is_python_whitespace)
 }
 
 fn trim_chars<'a>(text: &'a str, characters: &str) -> &'a str {

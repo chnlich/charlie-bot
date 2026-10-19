@@ -5,11 +5,6 @@ use std::io;
 use charliebot_core::pyfmt;
 use nix::errno::Errno;
 
-/// `str.strip()`: Python's whitespace, which is Unicode whitespace plus the separator controls U+001C to U+001F.
-pub fn strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
-}
-
 /// `text[:count]` in code points, as Python slices a `str`.
 pub fn take_chars(text: &str, count: usize) -> &str {
   match text.char_indices().nth(count) {
@@ -62,6 +57,7 @@ fn leading_slashes(text: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_core::pystr;
 
   #[test]
   fn pathlib_and_normpath_fold_the_spellings_python_folds() {
@@ -76,7 +72,7 @@ mod tests {
 
   #[test]
   fn strip_and_take_follow_python_text_rules() {
-    assert_eq!(strip("\u{1c} padded \u{1f}\t"), "padded");
+    assert_eq!(pystr::strip("\u{1c} padded \u{1f}\t"), "padded");
     assert_eq!(take_chars("é€x", 2), "é€");
     assert_eq!(take_chars("ab", 5), "ab");
   }

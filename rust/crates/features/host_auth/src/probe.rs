@@ -6,6 +6,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
+use charliebot_core::pystr;
 use charliebot_core::ssh;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -39,15 +40,15 @@ pub fn classify(returncode: i32, output: &str) -> &'static str {
 /// `build_detail`: the first output line, plus the first URL line that follows it. An empty output is named by its
 /// return code. The result is capped at `DETAIL_MAX_CHARS` characters.
 pub fn build_detail(returncode: i32, output: &str) -> String {
-  let stripped = pytext::strip(output);
+  let stripped = pystr::strip(output);
   if stripped.is_empty() {
     return format!("exit {returncode}");
   }
   let lines = pytext::splitlines(stripped);
   let (first, rest) = lines.split_first().expect("a non-empty stripped text has a line");
-  let mut parts = vec![pytext::strip(first)];
+  let mut parts = vec![pystr::strip(first)];
   if let Some(url_line) = rest.iter().find(|line| line.contains(URL_MARKER)) {
-    parts.push(pytext::strip(url_line));
+    parts.push(pystr::strip(url_line));
   }
   parts.join("\n").chars().take(DETAIL_MAX_CHARS).collect()
 }

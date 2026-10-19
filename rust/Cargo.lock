@@ -558,6 +558,7 @@ dependencies = [
 name = "charliebot-pyhtml"
 version = "0.1.0"
 dependencies = [
+ "charliebot-core",
  "fancy-regex",
  "flate2",
  "serde",

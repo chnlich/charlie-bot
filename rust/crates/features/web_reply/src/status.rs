@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use charliebot_compat::python_json::{self, LoadError};
 use charliebot_core::event_types::WEB_STATUS;
+use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, session_channel};
@@ -156,7 +157,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
 /// `Text` for a present value: the non-blank string it holds, or a problem for a blank string or any other type.
 fn text_value(value: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<String> {
   match value {
-    Value::String(text) if reply::py_strip(text).is_empty() => {
+    Value::String(text) if pystr::strip(text).is_empty() => {
       problems.push(Problem { loc: loc.to_string(), msg: MUST_NOT_BE_BLANK });
       None
     }

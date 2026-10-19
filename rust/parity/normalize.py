@@ -324,7 +324,8 @@ FILE_RULES: tuple[FieldRule, ...] = (
         name="web-status-event-time",
         target="home/sessions/*/data/chat_events.jsonl",
         field="web_status.updated_at",
-        when=(("type", "web_status"),),
+        # `when` sees the status object that holds this leaf; only web_status events carry that object.
+        when=(),
         reason=_WEB_STATUS_STAMP,
     ),
     FieldRule(

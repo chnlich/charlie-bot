@@ -35,7 +35,11 @@ impl ProcessGroupGuard {
   pub fn track(&self, pid: u32) {
     let group = unsafe { libc::getpgid(pid as libc::pid_t) };
     if group < 0 {
-      return;
+      let error = std::io::Error::last_os_error();
+      if error.raw_os_error() == Some(libc::ESRCH) {
+        return;
+      }
+      panic!("process-group guard could not inspect process {pid}: {error}");
     }
     self.groups.lock().expect("process-group guard mutex is not poisoned").push(group);
   }
@@ -59,6 +63,15 @@ impl Drop for ProcessGroupGuard {
         return;
       }
       std::thread::sleep(REAP_POLL);
+    }
+    let remaining = groups.iter().copied().filter(|group| !group_gone(group)).collect::<Vec<_>>();
+    if !remaining.is_empty() {
+      let message = format!("process-group guard could not reap process groups {remaining:?} within {REAP_TIMEOUT:?}");
+      if std::thread::panicking() {
+        eprintln!("{message}");
+      } else {
+        panic!("{message}");
+      }
     }
   }
 }

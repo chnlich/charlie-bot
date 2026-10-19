@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -335,9 +335,8 @@ fn write_fixtures(root: &Path, now: OffsetDateTime) -> Fixture {
   let codex_home = home.join(".codex");
   let bin = root.join("bin");
   fs::create_dir_all(&bin).unwrap();
-  let codex = bin.join("codex");
-  fs::write(&codex, "#!/bin/sh\nexit 0\n").unwrap();
-  fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+  symlink(env!("CARGO_BIN_EXE_fake_program"), bin.join("codex")).unwrap();
+  write_text(&bin.join("probe.json"), &json!({"codex": [{"exit": 0}]}).to_string());
 
   let read_path = rollout_path(&codex_home, READ_THREAD, "2026-10-18T09-00-00");
   write_text(&read_path, &read_text());

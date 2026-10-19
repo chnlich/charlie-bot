@@ -8,7 +8,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -132,9 +132,7 @@ fn write_fixtures(root: &Path) -> Fixture {
   for dir in [&fx.home, &fx.charliebot_home, &fx.bin, &fx.transport] {
     fs::create_dir_all(dir).unwrap();
   }
-  for name in ["gemini", "charlie-code", "agy"] {
-    write_script(&fx.bin.join(name), "exit 0");
-  }
+  write_fakes(&fx.bin, json!({"gemini": [{"exit": 0}], "charlie-code": [{"exit": 0}], "agy": [{"exit": 0}]}));
   write_text(
     &fx.charliebot_home.join("credentials.yaml"),
     "kimi-main:\n  api_key: synthetic-kimi-key\nclc-main:\n  api_key: synthetic-clc-key\n",
@@ -142,14 +140,8 @@ fn write_fixtures(root: &Path) -> Fixture {
   for spec in finish_specs() {
     let dir = root.join("finish").join(spec.id);
     fs::create_dir_all(dir.join("cwd")).unwrap();
-    write_text(&dir.join("stdout.txt"), &spec.stdout);
-    write_text(&dir.join("stderr.txt"), spec.stderr);
-    let body = format!(
-      "cat '{dir}/stdout.txt'\ncat '{dir}/stderr.txt' >&2\nexit {code}",
-      dir = path_text(&dir),
-      code = spec.exit,
-    );
-    write_script(&dir.join("agy"), &body);
+    let steps = json!([{"stdout": spec.stdout}, {"stderr": spec.stderr}, {"exit": spec.exit}]);
+    write_fakes(&dir, json!({"agy": steps}));
   }
   fx
 }
@@ -582,9 +574,12 @@ fn write_text(path: &Path, contents: &str) {
   fs::write(path, contents).unwrap();
 }
 
-fn write_script(path: &Path, body: &str) {
-  write_text(path, &format!("#!/bin/sh\n{body}\n"));
-  fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+/// Links each role of `roles` to the fake-program helper in `dir`, and states their steps in `dir/probe.json`.
+fn write_fakes(dir: &Path, roles: Value) {
+  for role in roles.as_object().unwrap().keys() {
+    symlink(env!("CARGO_BIN_EXE_fake_program"), dir.join(role)).unwrap();
+  }
+  write_text(&dir.join("probe.json"), &roles.to_string());
 }
 
 fn text(value: &Value) -> &str {

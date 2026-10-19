@@ -8,7 +8,7 @@ use std::fs;
 use std::future::Future;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -80,10 +80,13 @@ impl Fixture {
     let bin = root.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let claude_runs = root.path().join("claude-runs");
-    let claude = bin.join("claude");
-    fs::write(&claude, format!("#!/bin/sh\necho run >> '{}'\necho '2.1.300 (Claude Code)'\n", claude_runs.display()))
-      .unwrap();
-    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    symlink(env!("CARGO_BIN_EXE_fake_program"), bin.join("claude")).unwrap();
+    let probe = json!({"claude": [
+      {"append": {"path": claude_runs, "text": "run\n"}},
+      {"stdout": "2.1.300 (Claude Code)\n"},
+      {"exit": 0},
+    ]});
+    fs::write(bin.join("probe.json"), probe.to_string()).unwrap();
 
     Self {
       root,

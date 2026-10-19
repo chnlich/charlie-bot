@@ -444,10 +444,7 @@ mod tests {
     assert_eq!(coerce(Some("nan")).unwrap(), Cell::Null);
     assert_eq!(coerce(Some(" n/a ")).unwrap(), Cell::Text(" n/a ".to_string()));
     assert_eq!(coerce(None).unwrap(), Cell::Null);
-    assert_eq!(
-      coerce(Some("9223372036854775808")).unwrap().to_value(),
-      json!(9_223_372_036_854_775_808_u64)
-    );
+    assert_eq!(coerce(Some("9223372036854775808")).unwrap().to_value(), json!(9_223_372_036_854_775_808_u64));
   }
 
   #[test]

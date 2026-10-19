@@ -117,7 +117,7 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
 
   let client = Client::new();
   let cases = corpus();
-  assert_eq!(cases.len(), 34);
+  assert_eq!(cases.len(), 40);
   for case in &cases {
     let (python_status, python_body) = send(&client, python_address, case.item_id, case.content_type, &case.body).await;
     let (rust_status, rust_body) = send(&client, rust_address, case.item_id, case.content_type, &case.body).await;
@@ -233,6 +233,14 @@ fn corpus() -> Vec<Case> {
       expected_status: StatusCode::OK,
       compare_body: true,
     },
+    Case {
+      name: "JSON subtype with a space before +json",
+      item_id: "present",
+      body: valid.clone(),
+      content_type: Some("application/x y+json"),
+      expected_status: StatusCode::OK,
+      compare_body: true,
+    },
     json_error_case("expecting value", b"?"),
     json_error_case("invalid control character", b"\"line\nbreak\""),
     json_error_case("unterminated string", b"\"unfinished"),
@@ -270,6 +278,7 @@ fn corpus() -> Vec<Case> {
     },
     json_value_case("JSON array", json!([])),
     json_value_case("JSON string", json!("body")),
+    json_value_case("JSON null", Value::Null),
     json_field_case("str field type", "name", Value::Null),
     json_field_case("nullable str field type", "note", json!(7)),
     json_field_case("nullable int field type", "count", json!([])),
@@ -278,6 +287,24 @@ fn corpus() -> Vec<Case> {
     json_field_case("list field type", "labels", json!({})),
     json_field_case("list item type", "labels", json!(["one", 2])),
     json_field_case("fractional int field", "count", json!(1.5)),
+    json_field_case("float above the i64 range", "count", json!(9.3e18)),
+    json_field_case("float at the negative i64 bound", "count", json!(-9223372036854775808.0)),
+    Case {
+      name: "float just below the i64 bound",
+      item_id: "present",
+      body: json_bytes(&field_overridden("count", json!(9223372036854774784.0))),
+      content_type: Some("application/json"),
+      expected_status: StatusCode::OK,
+      compare_body: true,
+    },
+    Case {
+      name: "integer above the i64 range",
+      item_id: "present",
+      body: json_bytes(&field_overridden("count", json!(9223372036854775808u64))),
+      content_type: Some("application/json"),
+      expected_status: StatusCode::OK,
+      compare_body: true,
+    },
     Case {
       name: "boolean coerces to integer",
       item_id: "present",

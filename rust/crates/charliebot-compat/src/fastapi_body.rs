@@ -84,12 +84,7 @@ pub fn is_json_content_type(value: &str) -> bool {
   let Some(sub_type) = components.next() else {
     return false;
   };
-  if components.next().is_some()
-    || main_type.is_empty()
-    || sub_type.is_empty()
-    || main_type.chars().any(char::is_whitespace)
-    || sub_type.chars().any(char::is_whitespace)
-  {
+  if components.next().is_some() || main_type.is_empty() || sub_type.is_empty() {
     return false;
   }
   main_type.eq_ignore_ascii_case("application")
@@ -158,11 +153,11 @@ impl RequestBody {
   /// Validate this body against a model and return its declared fields.
   pub fn validate(&self, model: &BodyModel) -> Result<Option<Value>, Box<Response>> {
     match self {
-      RequestBody::Absent => match model.requirement {
+      // FastAPI passes a JSON `null` body as None, which a required model reports as missing.
+      RequestBody::Absent | RequestBody::Json(Value::Null) => match model.requirement {
         BodyRequirement::Required => Err(Box::new(validation::response(&[body_missing_error()]))),
         BodyRequirement::Optional => Ok(None),
       },
-      RequestBody::Json(Value::Null) if model.requirement == BodyRequirement::Optional => Ok(None),
       RequestBody::Json(Value::Object(object)) => validate_object(object, model).map(Some),
       RequestBody::Json(value) => Err(model_attributes_error(value.clone())),
       RequestBody::Raw(bytes) => {
@@ -235,12 +230,10 @@ fn integer_value(value: &Value, nullable: bool) -> Result<Value, validation::Kin
     Value::Number(number) if number.is_i64() || number.is_u64() => Ok(value.clone()),
     Value::Number(number) => match number.as_f64() {
       Some(number) if number.fract() == 0.0 => {
-        if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&number) {
+        if number.abs() < 9_223_372_036_854_775_808.0 {
           Ok(Value::Number(Number::from(number as i64)))
-        } else if (9_223_372_036_854_775_808.0..18_446_744_073_709_551_616.0).contains(&number) {
-          Ok(Value::Number(Number::from(number as u64)))
         } else {
-          Ok(value.clone())
+          Err(validation::Kind::IntParsingSize)
         }
       }
       Some(_) => Err(validation::Kind::IntFromFloat),

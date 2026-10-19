@@ -59,6 +59,13 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `RunRequest`, its fields, `RunRequest::new`, and `RunRequest::from_features` | `src/runtime/agent_process/base.py:653-708`, `:936-1033` |
 | `RunOutcome` and its fields, including post-result hang diagnostics | `src/runtime/agent_process/base.py:98-120`, `:703`, `:1000-1050`, `:1110` |
 | `AgentRunner`, `AgentRunner::new`, `run`, `terminate`, and `detach` | `src/runtime/agent_process/base.py:936-1050`, `:1180-1205` |
+| `python_json::{loads, loads_text, LoadError, MAX_DEPTH}` (`charliebot_compat::python_json`, re-exported here) | `json.loads` on the stored prompt snapshot in `src/runtime/api/sessions.py:1589-1688`; CPython's `_json.c` scanner and `detect_encoding` |
+| `backends::openai_compatible::register` | `src/backends/openai_compatible/__init__.py:6-27` |
+| `backends::openai_compatible::{factory, openai_compatible_claude, options}` (private) | `src/backends/openai_compatible/factory.py:1-17`, `openai_compatible_claude.py:6-21`, `options.py:8-11` |
+| `backends::openai_compatible::anthropic_proxy`: the route, `Refusal`, the stream relay, and the upstream client (private) | `src/backends/openai_compatible/anthropic_proxy.py:447-468` (relay), `:471-490` (headers, upstream errors), `:493-542` (route) |
+| `backends::openai_compatible::{translate, sse, pyvalue}` (private) | `src/backends/openai_compatible/anthropic_proxy.py:22-278` (request and answer translation), `:280-445` (`_sse_event` and the stream translator); `src/infra/sse.py` (line framing) |
+| `backends::claude_code::AnthropicEndpointBackend`, `AnthropicEndpointBackend::new`, and its `AgentBackend` methods | `src/backends/claude_code/claude_code.py:328-348`; `src/backends/openai_compatible/openai_compatible_claude.py:6` |
+| `backends::claude_code::claude_model_env` | `src/backends/claude_code/claude_code.py:87-100` |
 
 ## Tests
 

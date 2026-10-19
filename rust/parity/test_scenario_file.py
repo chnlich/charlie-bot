@@ -754,6 +754,23 @@ def test_invalid_directions_fail_loading(
                 },
                 "expect_starts": 0
             }, "fake_agent start 1 step 1: emit must be an object or gate must be a non-empty string"),
+        (
+            [{
+                "name": "http",
+                "method": "GET",
+                "path": "/api/auth/status"
+            }], {
+                "fake_agent": {
+                    "starts": [{
+                        "name": "claude",
+                        "steps": [{
+                            "sigterm": "block"
+                        }],
+                        "exit_code": 0
+                    }]
+                },
+                "expect_starts": 0
+            }, "fake_agent start 1 step 1: emit must be an object or gate must be a non-empty string; sigterm"),
     ])
 def test_invalid_script_fails_loading(
     tmp_path: pathlib.Path, steps: list[dict[str, Any]], fields: dict[str, Any], message: str) -> None:

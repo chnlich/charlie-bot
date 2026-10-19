@@ -27,6 +27,7 @@ FAKE_NAMES = ("slack", "discord", "gemini", "muse", "openai_compatible")
 FAKE_ACTIONS = {"slack": ("socket_event",), "discord": ("dispatch",)}
 WS_COMPARE_MODES = ("frames",)
 HTTP_COMPARE_MODES = ("full", "status_and_shape")
+SIGTERM_DISPOSITIONS = ("ignore", "default")
 MULTIPART_BOUNDARY = "charliebot-parity-multipart-boundary-1792318577"
 
 _REFERENCE = re.compile(r"\$\{(?P<ref>[A-Za-z0-9_.]+)\}")
@@ -634,12 +635,16 @@ def _fake_agent(raw: Any, path: pathlib.Path) -> dict:
     for step_index, step in enumerate(start["steps"], start=1):
       step_where = f"{where} step {step_index}"
       if not isinstance(step, dict) or len(step) != 1:
-        raise ScenarioError(f"{step_where}: requires one emit or gate key")
+        raise ScenarioError(f"{step_where}: requires one emit, gate or sigterm key")
       if "emit" in step and isinstance(step["emit"], dict):
         continue
       if "gate" in step and isinstance(step["gate"], str) and step["gate"]:
         continue
-      raise ScenarioError(f"{step_where}: emit must be an object or gate must be a non-empty string")
+      if "sigterm" in step and step["sigterm"] in SIGTERM_DISPOSITIONS:
+        continue
+      raise ScenarioError(
+          f"{step_where}: emit must be an object or gate must be a non-empty string; "
+          f"sigterm must be one of {SIGTERM_DISPOSITIONS}")
   return raw
 
 

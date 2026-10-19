@@ -9,11 +9,14 @@ import json
 import os
 import pathlib
 import re
+import signal
 import sys
 import time
 
 _ARGV_VALUE = re.compile(r"\$\{argv:(?P<flag>[^}]+)\}")
 _PDEATHSIG_OPTION = 2
+# The SIGTERM dispositions a `sigterm` step names; scenario_file.py accepts the same two words.
+_SIGTERM_DISPOSITIONS = {"ignore": signal.SIG_IGN, "default": signal.SIG_DFL}
 
 
 class MissingArgvFlag(ValueError):  # noqa: N818
@@ -164,6 +167,8 @@ def _run_steps(entry: dict, agent_dir: pathlib.Path, index: int) -> int:
       (agent_dir / f"at-{gate}").write_text(str(index), encoding="utf-8")
       while not (agent_dir / f"open-{gate}").exists():
         time.sleep(0.02)
+    elif "sigterm" in step:
+      signal.signal(signal.SIGTERM, _SIGTERM_DISPOSITIONS[step["sigterm"]])
     else:
       raise ValueError(f"unknown fake-agent step: {step!r}")
   return entry["exit_code"]

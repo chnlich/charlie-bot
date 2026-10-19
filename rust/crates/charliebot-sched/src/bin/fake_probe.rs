@@ -19,9 +19,8 @@ fn main() {
     .unwrap_or_else(|error| panic!("read probe behavior {}: {error}", data_path.display()));
   let behavior: serde_json::Value =
     serde_json::from_str(&body).unwrap_or_else(|error| panic!("parse probe behavior {}: {error}", data_path.display()));
-  let role_behavior = behavior
-    .get(&role)
-    .unwrap_or_else(|| panic!("probe behavior {} states no role {role}", data_path.display()));
+  let role_behavior =
+    behavior.get(&role).unwrap_or_else(|| panic!("probe behavior {} states no role {role}", data_path.display()));
   let stdout = role_behavior["stdout"].as_str().expect("probe behavior stdout is a string");
   let stderr = role_behavior["stderr"].as_str().expect("probe behavior stderr is a string");
   let exit = role_behavior["exit"].as_i64().expect("probe behavior exit is an integer");

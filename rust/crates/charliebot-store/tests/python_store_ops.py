@@ -59,6 +59,20 @@ TASK_ARCHIVE_MID_ID = "synthetic-archive-mid"
 TASK_ARCHIVE_LEAF_ID = "synthetic-archive-leaf"
 TASK_DELEGATE_ROOT_ID = "synthetic-delegate-root"
 TASK_DELEGATE_RUN_ID = "synthetic-delegate-run"
+FORK_ROOT_ID = "synthetic-fork-root"
+FORK_MESSAGES = ("synthetic first message", "synthetic second message", "synthetic third message")
+# (case name, operation, event_index): the fixture log holds four lines, so index 3 is its last and 4 is past its end.
+FORK_CASES = (
+    ("fork-null", "fork", None),
+    ("fork-first", "fork", 0),
+    ("fork-middle", "fork", 2),
+    ("fork-last", "fork", 3),
+    ("fork-past-end", "fork", 4),
+    ("elone-first", "elone", 0),
+    ("elone-middle", "elone", 2),
+    ("elone-last", "elone", 3),
+    ("elone-past-end", "elone", 4),
+)
 
 
 def _registered() -> None:
@@ -568,6 +582,10 @@ def _read_runs(root: pathlib.Path, case: str) -> dict[str, object]:
 
 
 def _task_tree(home: pathlib.Path) -> task_sessions.TaskTreeManager:
+  return _task_tree_and_fork(home)[0]
+
+
+def _task_tree_and_fork(home: pathlib.Path) -> tuple[task_sessions.TaskTreeManager, session_fork.SessionFork]:
   os.environ["CHARLIEBOT_HOME"] = str(home)
   cfg = config.load_config()
   store = session_store.SessionStore(cfg)
@@ -578,10 +596,12 @@ def _task_tree(home: pathlib.Path) -> task_sessions.TaskTreeManager:
   fork = session_fork.SessionFork(cfg, store, events)
   anchors = session_anchors.SessionAnchors(cfg, store, events)
   successor = session_successor.SessionSuccessor(cfg, store, events)
-  return task_sessions.TaskTreeManager(cfg, store, events, sidebar, listing, lifecycle, fork, anchors, successor)
+  tree = task_sessions.TaskTreeManager(cfg, store, events, sidebar, listing, lifecycle, fork, anchors, successor)
+  return tree, fork
 
 
 class _TestSequenceController:
+
   def binding(self, _session_id: str) -> None:
     return None
 
@@ -619,8 +639,7 @@ async def _prepare_tasks(root: pathlib.Path) -> None:
   _registered()
   home = root / "task-base"
   tree = _task_tree(home)
-  manager = await _create_task_node(
-      tree, session_id=TASK_ROOT_ID, parent_id=None, request_id="root-request")
+  manager = await _create_task_node(tree, session_id=TASK_ROOT_ID, parent_id=None, request_id="root-request")
   worker = await _create_task_node(
       tree, session_id=TASK_WORKER_ID, parent_id=manager.id, request_id="worker-request", profile="worker")
   source = await _create_task_node(
@@ -634,8 +653,7 @@ async def _prepare_tasks(root: pathlib.Path) -> None:
           "last_run_status": "success",
       },
   )
-  await _create_task_node(
-      tree, session_id=TASK_NEW_ID, parent_id=manager.id, request_id="new-request")
+  await _create_task_node(tree, session_id=TASK_NEW_ID, parent_id=manager.id, request_id="new-request")
 
   record = models.RunRecord(
       id=TASK_RUN_ID,
@@ -802,6 +820,41 @@ def _archive_subtree_mode(root: pathlib.Path, home_name: str) -> None:
   asyncio.run(_archive_subtree(root / home_name))
 
 
+async def _prepare_fork(root: pathlib.Path) -> None:
+  _registered()
+  home = root / "fork-base"
+  tree = _task_tree(home)
+  await _create_task_node(tree, session_id=FORK_ROOT_ID, parent_id=None, request_id="fork-root")
+  with (home / "sessions" / FORK_ROOT_ID / "data" / "chat_events.jsonl").open("a", encoding="utf-8") as out:
+    for content in FORK_MESSAGES:
+      event = {"type": "user", "actor": "user", "source_session_id": FORK_ROOT_ID, "content": content}
+      out.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+async def _fork_op(home: pathlib.Path, operation: str, event_index: int | None) -> dict[str, str]:
+  _, fork = _task_tree_and_fork(home)
+  _install_test_sequence_controller()
+  try:
+    if operation == "fork":
+      await fork.fork_session(FORK_ROOT_ID, event_index, backend="synthetic")
+    else:
+      await fork.elone_session(FORK_ROOT_ID, event_index, backend="synthetic")
+  except ValueError as error:
+    return {"outcome": "refused", "error": str(error)}
+  return {"outcome": "created"}
+
+
+def _fork_cases_mode(root: pathlib.Path) -> None:
+  _registered()
+  outcomes = {}
+  for name, operation, event_index in FORK_CASES:
+    home = root / f"python-{name}"
+    shutil.copytree(root / "fork-base", home)
+    outcomes[name] = asyncio.run(_fork_op(home, operation, event_index))
+  # The session log writes its spawn records to stdout, so the outcomes go to a file the test reads.
+  (root / "fork-outcomes.json").write_text(json.dumps(outcomes, sort_keys=True) + "\n", encoding="utf-8")
+
+
 async def _prepare_delegate(root: pathlib.Path) -> None:
   _registered()
   tree = _task_tree(root / "delegate-base")
@@ -865,8 +918,7 @@ def _gate_parity(root: pathlib.Path) -> None:
       user_node = takeoff_gate.check_takeoff_gate_for_task(
           case["start"],
           load_events=lambda session_id: case["events"].get(session_id, []),
-          task_meta_of=lambda session_id: (
-              case["parents"].get(session_id), case["profiles"].get(session_id)),
+          task_meta_of=lambda session_id: (case["parents"].get(session_id), case["profiles"].get(session_id)),
           task_state_of=lambda session_id: case["states"].get(session_id, "open"),
       )
     except takeoff_gate.DelegationBlockedError as error:
@@ -899,6 +951,7 @@ def _prepare_parity_gate(root: pathlib.Path) -> None:
     sys.argv = previous_argv
   task_tree = task_execution.task_manager()
   manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
   async def collect() -> dict[str, dict[str, object]]:
     results = {}
     for session_id in sorted(manifest["sessions"].values()):
@@ -956,6 +1009,10 @@ if __name__ == "__main__":
     _prepare_delegate_mode(root)
   elif mode == "delegate_task":
     _delegate_task_mode(root, extra[0])
+  elif mode == "prepare_fork":
+    asyncio.run(_prepare_fork(root))
+  elif mode == "fork_cases":
+    _fork_cases_mode(root)
   elif mode == "gate_parity":
     _gate_parity(root)
   elif mode == "prepare_parity_gate":

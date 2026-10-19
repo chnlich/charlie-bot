@@ -23,7 +23,7 @@ class _FakeBackend(base.AgentBackend):
     self.hang_diagnostics = hang_diagnostics
     self.stderr_text = ""
 
-  def _build_command(self, prompt: str) -> list[str]:  # pragma: no cover - never spawned
+  def _build_command(self, prompt: str) -> list[str]:  # never spawned
     return ["true"]
 
   async def run(self,
@@ -33,7 +33,7 @@ class _FakeBackend(base.AgentBackend):
                 uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     if self._on_spawn is not None:
       await self._on_spawn(12345)
-    if False:  # pragma: no cover - keeps method an async generator
+    if False:  # keeps method an async generator
       yield {}
 
 

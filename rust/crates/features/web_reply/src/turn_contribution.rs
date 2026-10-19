@@ -1,19 +1,23 @@
 //! The web-reply package's turn contribution (`src/features/web_reply/turn_contribution.py`). It carries the reply
-//! rules in a web session's manager runs, renders the `web_reply`, `web_reply_notice` and `web_status` events as chat
-//! lines, and claims turn-end unread state for web sessions.
+//! rules in a web session's manager runs, runs the round-end audit after a turn that answers a user, renders the
+//! `web_reply`, `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for web
+//! sessions.
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
+use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, PromptSource, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
-use crate::reply;
+use crate::{audit, reply};
 
 /// The run kind that takes the manager contract (`task_prompts.MANAGER_KINDS`).
 const MANAGER_KIND: &str = "manager_turn";
@@ -47,6 +51,26 @@ impl TurnContribution for WebReplyTurnContribution {
       source_session_id: None,
     };
     Ok(vec![RuleSegment { text, sources: vec![source], delivery: DELIVERY_FULL.to_string() }])
+  }
+
+  fn after_turn<'a>(
+    &'a self,
+    meta: &'a SessionMetadata,
+    done_event: &'a Value,
+    _cfg: &'a CharlieBotConfig,
+    features: &'a Arc<FeatureContext>,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      if !reply::is_web_session(meta) {
+        return Ok(());
+      }
+      // An errored turn is not audited: its error event already shows and marks the session unread.
+      let exit_code = done_event.get("exit_code").context("the master_done event has no exit_code")?;
+      if exit_code.as_i64() != Some(0) {
+        return Ok(());
+      }
+      audit::audit_turn(features, &meta.id, done_event).await
+    })
   }
 
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
@@ -97,6 +121,7 @@ mod tests {
   use tempfile::TempDir;
 
   use super::*;
+  use crate::test_support::{Home, id_of, master_done, user_event};
 
   /// A synthetic checkout whose `prompts/web_reply.md` holds `text`.
   fn checkout(text: &str) -> (TempDir, RepoRoot) {
@@ -234,5 +259,62 @@ mod tests {
   fn web_status_without_content_or_status_renders_empty_and_null() {
     let event = json!({});
     assert_eq!(web_status_message(&event).to_string(), r#"{"role":"web_status","content":"","web_status":null}"#);
+  }
+
+  #[tokio::test]
+  async fn after_turn_audits_only_a_web_turn_that_answers_a_user() {
+    for (session_kind, input_kind, expect_nudge) in
+      [("web", "user", true), ("web", "background", false), ("thread", "user", false)]
+    {
+      let home = Home::new();
+      let origin = match session_kind {
+        "web" => None,
+        "thread" => {
+          Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})))
+        }
+        other => unreachable!("no session kind {other}"),
+      };
+      let sid = home.manager("session", origin).await;
+      let input = match input_kind {
+        "user" => user_event("the question"),
+        "background" => json!({"type": "scheduled_trigger", "content": "wake"}),
+        other => unreachable!("no input kind {other}"),
+      };
+      let input_id = id_of(&home.append(&sid, input).await).to_string();
+      let meta = home.meta(&sid).await;
+
+      WebReplyTurnContribution
+        .after_turn(&meta, &master_done(&[input_id.as_str()], 0), &config(), &home.features)
+        .await
+        .unwrap();
+
+      assert_eq!(!home.nudges(&sid).is_empty(), expect_nudge, "{session_kind} session, {input_kind} input");
+    }
+  }
+
+  #[tokio::test]
+  async fn an_errored_turn_gets_no_audit() {
+    for (errored_input, expected_nudges) in [("user", 0), ("nudge", 1)] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let user_id = id_of(&home.append(&sid, user_event("the question")).await).to_string();
+      let input_id = match errored_input {
+        "user" => user_id.clone(),
+        "nudge" => {
+          audit::audit_turn(&home.features, &sid, &master_done(&[user_id.as_str()], 0)).await.unwrap();
+          id_of(&home.nudges(&sid)[0]).to_string()
+        }
+        other => unreachable!("no errored input {other}"),
+      };
+      let meta = home.meta(&sid).await;
+
+      WebReplyTurnContribution
+        .after_turn(&meta, &master_done(&[input_id.as_str()], 1), &config(), &home.features)
+        .await
+        .unwrap();
+
+      assert_eq!(home.nudges(&sid).len(), expected_nudges, "errored {errored_input} input");
+      assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_REPLY_NOTICE), "errored {errored_input} input");
+    }
   }
 }

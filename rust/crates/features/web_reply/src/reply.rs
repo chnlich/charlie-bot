@@ -1,5 +1,6 @@
 //! The web reply record and the web-session test (`src/features/web_reply/reply.py`): the refusals, the `answers`
-//! binding, the For-you layer and the readback. The round-end audit (`audit.py`) belongs to the thread-core port.
+//! binding, the For-you layer and the readback. The round-end audit that nudges and notices over these records is in
+//! `audit.rs`.
 //!
 //! The web session test is chat_threads' `thread_sessions.is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
@@ -8,7 +9,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http::StatusCode;
-use charliebot_core::event_types::{AGENT_MESSAGE, USER, WEB_REPLY, WEB_REPLY_NOTICE};
+use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, StoreError};
@@ -16,6 +17,15 @@ use serde_json::{Value, json};
 
 /// The web reply rules file under `prompts/` (`reply.RULES_FILE`).
 pub const RULES_FILE: &str = "web_reply.md";
+
+/// The audit's nudge: the agent's input when a user message's turn ended without a reply (`reply.NUDGE_TEXT`).
+pub const NUDGE_TEXT: &str = "Post the web reply now.";
+
+/// The notice the user reads when the nudge turn also ended without a reply (`reply.NOTICE_TEXT`).
+pub const NOTICE_TEXT: &str = "No reply was posted for this message. The Everything view shows this turn's output.";
+
+/// The sender name the nudge carries in the chat log (`reply.NUDGE_SENDER_NAME`).
+pub const NUDGE_SENDER_NAME: &str = "Web reply";
 
 /// The reply budget the readback's `over_budget` flag measures; an over-budget reply still posts
 /// (`reply.REPLY_BUDGET_CHARS`).
@@ -86,11 +96,13 @@ pub async fn require_web_session(
 }
 
 /// The session's chat events in log order, read off the runtime's worker threads as `asyncio.to_thread` does.
-pub async fn load_events(features: &FeatureContext, session_id: &str) -> Result<Vec<Value>, WebReplyError> {
+pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow::Result<Vec<Value>> {
   let store = Arc::clone(&features.store);
   let session_id = session_id.to_string();
-  let loaded = tokio::task::spawn_blocking(move || store.load_chat_events_sync(&session_id)).await;
-  Ok(loaded.context("the chat-event read stopped")??)
+  let loaded = tokio::task::spawn_blocking(move || store.load_chat_events_sync(&session_id))
+    .await
+    .context("the chat-event read stopped")?;
+  Ok(loaded?)
 }
 
 /// The nudge's `nudge_of`: the user message an audit nudge was posted for, or `None` for any other event
@@ -121,6 +133,28 @@ pub fn answered_input<'a>(events: &'a [Value], input_event_ids: &[String]) -> Op
     }
   }
   bound
+}
+
+/// Whether the log holds a web reply that answers `user_event_id` (`reply.replied`).
+pub fn replied(events: &[Value], user_event_id: &str) -> bool {
+  events.iter().any(|event| {
+    event.get("type").and_then(Value::as_str) == Some(WEB_REPLY)
+      && event.get(WEB_REPLY).and_then(|record| record.get("answers")).and_then(Value::as_str) == Some(user_event_id)
+  })
+}
+
+/// Whether the log holds the nudge posted for `user_event_id` (`reply.nudged`).
+pub fn nudged(events: &[Value], user_event_id: &str) -> bool {
+  events.iter().any(|event| nudge_of(event) == Some(user_event_id))
+}
+
+/// Whether the log holds the no-reply notice for `user_event_id` (`reply.noticed`).
+pub fn noticed(events: &[Value], user_event_id: &str) -> bool {
+  events.iter().any(|event| {
+    event.get("type").and_then(Value::as_str) == Some(WEB_REPLY_NOTICE)
+      && event.get(WEB_REPLY_NOTICE).and_then(|record| record.get(INPUT_EVENT_ID)).and_then(Value::as_str)
+        == Some(user_event_id)
+  })
 }
 
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
@@ -174,10 +208,7 @@ pub fn py_strip(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::test_support::{Home, user_event};
-
-  /// The audit's nudge text, as the agent sees it in the nudged turn.
-  const NUDGE_TEXT: &str = "Post the web reply now.";
+  use crate::test_support::{Home, id_of, user_event};
 
   /// The web reply events of the session's log, as `(content, web_reply)` pairs.
   fn replies(home: &Home, session_id: &str) -> Vec<(Value, Value)> {
@@ -187,10 +218,6 @@ mod tests {
       .filter(|event| event["type"] == WEB_REPLY)
       .map(|event| (event["content"].clone(), event[WEB_REPLY].clone()))
       .collect()
-  }
-
-  fn id_of(event: &Value) -> &str {
-    event["id"].as_str().expect("an appended event carries its id")
   }
 
   #[tokio::test]

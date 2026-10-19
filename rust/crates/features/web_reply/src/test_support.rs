@@ -18,6 +18,8 @@ use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use crate::reply;
+
 /// The origin slots a thread session carries; the web test only reads them, so each is a null field.
 fn register_origins(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.metadata_slot(MetadataSlot {
@@ -154,6 +156,11 @@ impl Home {
     self.features.store.append_chat_event(session_id, event).await.expect("the chat event appends")
   }
 
+  /// The nudges the audit posted to the session, in log order.
+  pub fn nudges(&self, session_id: &str) -> Vec<Value> {
+    self.events(session_id).into_iter().filter(|event| reply::nudge_of(event).is_some()).collect()
+  }
+
   /// The session's metadata as the store reads it.
   pub async fn meta(&self, session_id: &str) -> SessionMetadata {
     self.features.store.get_session(session_id).await.expect("the metadata reads").expect("the session exists")
@@ -186,4 +193,14 @@ impl Home {
 /// A `user` chat event with `content`.
 pub fn user_event(content: &str) -> Value {
   json!({"type": "user", "content": content, "message": {"role": "user", "content": [{"type": "text", "text": content}]}})
+}
+
+/// The id the store stamped on an appended event.
+pub fn id_of(event: &Value) -> &str {
+  event["id"].as_str().expect("an appended event carries its id")
+}
+
+/// A `master_done` event that answers `input_event_ids` and ended with `exit_code`.
+pub fn master_done(input_event_ids: &[&str], exit_code: i32) -> Value {
+  json!({"type": "master_done", "exit_code": exit_code, "input_event_ids": input_event_ids})
 }

@@ -1,9 +1,10 @@
 //! `src/features/web_reply`: the internal routes behind `charliebot web reply`, `charliebot web dialog` and
-//! `charliebot web status`, the turn contribution that carries the reply rules into a web session's manager runs and
-//! renders the reply chat lines, and the web-reply status field of each session. The round-end audit (`audit.py`) is
-//! not ported yet; the package keeps its stub marker until the thread-core port lands it.
+//! `charliebot web status`, the turn contribution that carries the reply rules into a web session's manager runs,
+//! runs the round-end audit after a turn that answers a user, and renders the reply chat lines, and the web-reply
+//! status field of each session.
 
 mod api;
+mod audit;
 mod json_input;
 mod reply;
 mod status;

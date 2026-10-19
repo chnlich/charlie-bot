@@ -874,6 +874,8 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "charliebot-tasks",
+ "futures-util",
  "http",
  "serde",
  "serde_json",

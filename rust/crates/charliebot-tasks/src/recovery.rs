@@ -258,6 +258,12 @@ async fn replay_followups(
     if let Some(sequence) = &run.sequence_ref {
       match controller_for_sequence(features, &sequence.kind) {
         None => {
+          // The owning task's controller is not ported, so no terminal fact is written for this run. The interrupted
+          // finish below is Python's branch for a package that is gone.
+          if UNLANDED_SEQUENCE_KINDS.contains(&sequence.kind.as_str()) {
+            let step = format!("the recovery of {} sequence run {}", sequence.kind, run.id);
+            bail!(owner_not_landed(&sequence.kind, &step));
+          }
           // A registered-but-unlaunched run would sit queued forever, so it lands an interrupted finish.
           if outcome.is_none() && run.pid.is_none() {
             let guard = store.control_lock().await;
@@ -661,6 +667,11 @@ impl SequenceSessionEvents for StoreSessionEvents {
   }
 }
 
+/// The sequence kinds whose controllers Python registers but the port has not landed: a run of one of these kinds fails
+/// the node pass by name. The owning task is named by the kind. Each task deletes its entry when it registers its
+/// controller.
+const UNLANDED_SEQUENCE_KINDS: &[&str] = &["improve", "cron"];
+
 /// The error of a replay step whose owning task has not landed: the node pass fails and names the owner.
 fn owner_not_landed(owner: &str, step: &str) -> anyhow::Error {
   anyhow!("{step} is owned by the {owner} task, which has not landed; the node pass cannot replay it")
@@ -694,6 +705,17 @@ fn to_utc(value: OffsetDateTime) -> anyhow::Result<UtcDateTime> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::execution::pre_recovery_step;
+  use charliebot_agents::backend_pool::BackendPool;
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::store_hooks::store_hooks;
+  use charliebot_registry::{Registry, StartupState};
+  use charliebot_store::run_records::SequenceRef;
+  use charliebot_store::{CreateTask, TaskCaller};
+  use serde_json::Map;
+
+  const QUEUED_RUN_ID: &str = "synthetic-queued-run";
 
   fn run(id: &str, kind: RunKind, started_at: Option<&str>) -> RunRecord {
     RunRecord {
@@ -792,5 +814,108 @@ mod tests {
     wait_for_triggering_run_release(|| driven.load(std::sync::atomic::Ordering::Acquire)).await;
 
     assert!(!driven.load(std::sync::atomic::Ordering::Acquire));
+  }
+
+  /// A fresh synthetic home whose startup state holds the task execution runtime, as the startup step builds it.
+  async fn startup_features() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().expect("temporary directory exists");
+    let registry = Arc::new(Registry::new());
+    let loaded = registry.load_config(home.path()).expect("an empty home loads with the defaults");
+    let reload_config = loaded.clone();
+    let config = Arc::new(HotReload::new(
+      loaded.config_file(),
+      "recovery_test_config_reload_failed",
+      Box::new(move || Ok(reload_config.clone())),
+    ));
+    let store = Arc::new(
+      Store::new(loaded, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("the store opens"),
+    );
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join("credentials.yaml"),
+      "recovery_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let startup = Arc::new(StartupState::default());
+    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
+    pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
+    (home, features)
+  }
+
+  /// Creates an open task holding one queued run of `sequence_kind`, which no controller launches or claims.
+  async fn queue_sequence_run(features: &Arc<FeatureContext>, sequence_kind: &str, run_kind: RunKind) -> String {
+    let store = &features.store;
+    let task = store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-task-create".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic task".to_string()),
+          backend: Some("synthetic-backend".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .expect("the task node is created");
+    let sequence_ref =
+      SequenceRef { kind: sequence_kind.to_string(), owner_ref: "synthetic-owner".to_string(), position: 0 };
+    let queued =
+      RunRecord { session_id: task.id.clone(), sequence_ref: Some(sequence_ref), ..run(QUEUED_RUN_ID, run_kind, None) };
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &task.id, queued, None).await.expect("the queued run registers");
+    task.id
+  }
+
+  /// One node pass over `session_id`, run with the startup adapter as the boot pass runs it.
+  async fn node_pass(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<()> {
+    let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
+    reconcile_node(features, &adapter, session_id, &mut PassCounters::default(), None).await
+  }
+
+  #[tokio::test]
+  async fn a_queued_improve_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
+    let (_home, features) = startup_features().await;
+    let session_id = queue_sequence_run(&features, "improve", RunKind::Iteration).await;
+
+    let error = node_pass(&features, &session_id).await.expect_err("the improve run has no controller to replay it");
+
+    let message = format!("{error:#}");
+    assert!(
+      message.contains(QUEUED_RUN_ID) && message.contains("improve task"),
+      "the error names the owner: {message}"
+    );
+    let events = features.store.load_all_facts(&session_id).expect("the session facts load");
+    assert!(!has_terminal_fact(&events, QUEUED_RUN_ID).expect("the terminal fact reads"));
+  }
+
+  #[tokio::test]
+  async fn a_queued_cron_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
+    let (_home, features) = startup_features().await;
+    let session_id = queue_sequence_run(&features, "cron", RunKind::ScheduledStep).await;
+
+    let error = node_pass(&features, &session_id).await.expect_err("the cron run has no controller to replay it");
+
+    let message = format!("{error:#}");
+    assert!(message.contains(QUEUED_RUN_ID) && message.contains("cron task"), "the error names the owner: {message}");
+    let events = features.store.load_all_facts(&session_id).expect("the session facts load");
+    assert!(!has_terminal_fact(&events, QUEUED_RUN_ID).expect("the terminal fact reads"));
+  }
+
+  #[tokio::test]
+  async fn a_queued_run_of_an_unknown_sequence_kind_lands_an_interrupted_finish() {
+    let (_home, features) = startup_features().await;
+    let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
+
+    node_pass(&features, &session_id).await.expect("the node pass finishes");
+
+    let events = features.store.load_all_facts(&session_id).expect("the session facts load");
+    let outcome = run_records::terminal_outcome(&events, QUEUED_RUN_ID).expect("the terminal fact reads");
+    assert_eq!(outcome, Some(RunOutcomeKind::Interrupted));
   }
 }

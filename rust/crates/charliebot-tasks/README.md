@@ -150,6 +150,8 @@ node pass cannot replay it`. Startup logs each one as `task_recovery_node_failed
 | review-chain | `replay_followups` for a successful implement run that owes a review | review spawn |
 | review-chain | `replay_followups` for a finished review run | review-run follow-up |
 | cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
+| improve | `replay_followups` for an improve sequence run, queued, launched or terminal; no terminal fact is written | the loop's close step (`ImproveSequenceController::recover_run`, `src/features/improve/sequence_controller.py:66-79`) |
+| cron | `replay_followups` for a cron sequence run, queued, launched or terminal; no terminal fact is written | the frontier redrive (`CronSequenceController::recover_run`, `src/features/cron/sequence_controller.py:135-149`) |
 
 `tests/recovery.rs` drives each row through the full execution stack; its `// Python:` comments name the cases it follows.
 

@@ -14,12 +14,11 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_agents::{agent_one_shot_text, build_backend};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_core::{fsutil, timefmt};
+use charliebot_core::{fsutil, tempdir, timefmt};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_store::{Store, session_channel};
 use serde_json::{Map, Value, json};
-use tempfile::TempDir;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
@@ -167,7 +166,7 @@ fn extract_round_text(store: &Store, session_id: &str, upto: i64) -> anyhow::Res
 /// The read-only copy of `chat_events.jsonl` that a run reads. The copy lives in its own temporary directory, and
 /// dropping the copy removes that directory.
 struct HistoryCopy {
-  _dir: TempDir,
+  _dir: tempdir::TempDir,
   path: PathBuf,
 }
 
@@ -175,18 +174,7 @@ impl HistoryCopy {
   /// `_make_ro_copy`: copy the session's events into a fresh temporary directory, then chmod the copy 0444.
   fn make(store: &Store, session_id: &str) -> anyhow::Result<Self> {
     let source = store.chat_events_path(session_id);
-    let mut random = uuid::Uuid::new_v4().as_u128();
-    let alphabet = b"abcdefghijklmnopqrstuvwxyz0123456789_";
-    let suffix: String = (0..8)
-      .rev()
-      .map(|_| {
-        let character = alphabet[(random % alphabet.len() as u128) as usize] as char;
-        random /= alphabet.len() as u128;
-        character
-      })
-      .collect();
-    let prefix = format!("charliebot-explain-{suffix}");
-    let dir = tempfile::Builder::new().prefix(&prefix).rand_bytes(0).tempdir()?;
+    let dir = tempdir::mkdtemp("charliebot-explain-")?;
     let path = dir.path().join(source.file_name().context("the chat events path names no file")?);
     fs::copy(&source, &path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;

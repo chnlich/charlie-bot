@@ -525,12 +525,12 @@ def normalize_body_bytes(body: bytes, route: str, ctx: Context) -> bytes:
 # upstream's id would still show as a difference.
 PROXY_MESSAGE_ID = re.compile(rb'"id":"msg_[0-9a-f]{32}"')
 PROXY_MESSAGE_ID_PLACEHOLDER = b'"id":"<proxy-message-id>"'
-PROXY_ROUTE_PREFIX = "POST /api/anthropic-proxy/"
+PROXY_ROUTE = re.compile(r"POST /api/anthropic-proxy/openai-compatible/[^/]+/v1/messages")
 
 
 def mask_proxy_message_ids(body: bytes, route: str) -> bytes:
   """Mask each message id a proxy route minted in its body; the other routes' bodies are returned unchanged."""
-  if not route.startswith(PROXY_ROUTE_PREFIX):
+  if PROXY_ROUTE.fullmatch(route) is None:
     return body
   return PROXY_MESSAGE_ID.sub(PROXY_MESSAGE_ID_PLACEHOLDER, body)
 

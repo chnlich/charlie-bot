@@ -1,35 +1,35 @@
 //! Manager turn process execution and recovery.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
-use charliebot_agents::runner::{AgentRunner, EventFn, RunRequest};
+use charliebot_agents::runner::{AgentRunner, RunRequest};
 use charliebot_agents::transport::{cursor, follow, identity, recovery};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
-  ContextStateFn as TurnContextStateFn, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle,
+  ContextStateFn as TurnContextStateFn, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
 };
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
-use tokio::sync::{mpsc, oneshot};
 
 use crate::master_queue::SessionCallbacks;
 use crate::master_state::WorkItem;
+use crate::run_support::{
+  extra_flags_of, read_stderr_tail, route_resume_session, stream_event_channel, subprocess_buffer_bytes,
+};
 
 const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
-const STDERR_TAIL_BYTES: u64 = 64 * 1024;
 
 /// The per-round result consumed by the session queue.
 pub(crate) struct MasterRunOutcome {
@@ -246,29 +246,6 @@ async fn salvage_silent_turn(
   Ok(())
 }
 
-fn route_resume_session(
-  features: &FeatureContext,
-  option: &BackendOption,
-  cc_session_id: Option<&str>,
-) -> anyhow::Result<(Vec<String>, Option<String>)> {
-  let registration = features
-    .registry
-    .backend_type_of(&option.backend_type)
-    .with_context(|| format!("unknown backend type {}", option.backend_type))?;
-  route_resume_session_style(registration.traits.resume, cc_session_id)
-}
-
-fn route_resume_session_style(
-  style: ResumeStyle,
-  cc_session_id: Option<&str>,
-) -> anyhow::Result<(Vec<String>, Option<String>)> {
-  let Some(cc_session_id) = cc_session_id.filter(|id| !id.is_empty()) else { return Ok((Vec::new(), None)) };
-  match style {
-    ResumeStyle::CliFlag => Ok((vec!["--resume".to_string(), cc_session_id.to_string()], None)),
-    ResumeStyle::NativeId => Ok((Vec::new(), Some(cc_session_id.to_string()))),
-  }
-}
-
 fn build_extra_flags(
   features: &FeatureContext,
   option: &BackendOption,
@@ -276,12 +253,7 @@ fn build_extra_flags(
   item: &WorkItem,
 ) -> anyhow::Result<(Vec<String>, Option<String>)> {
   let (mut flags, resume_id) = route_resume_session(features, option, launch.resume_id.as_deref())?;
-  if let Some(extra_flags) = launch.backend_kwargs.get("extra_flags") {
-    let extra_flags = extra_flags.as_array().context("lifecycle extra_flags must be an array")?;
-    for flag in extra_flags {
-      flags.push(flag.as_str().context("lifecycle extra_flags entries must be strings")?.to_string());
-    }
-  }
+  flags.extend(extra_flags_of(&launch.backend_kwargs)?);
   if let Some(extra_flags) = &item.extra_claude_flags {
     flags.extend(extra_flags.iter().cloned());
   }
@@ -454,11 +426,6 @@ fn turn_context_state(
   })
 }
 
-struct StreamEvent {
-  event: Value,
-  acknowledged: oneshot::Sender<Result<(), String>>,
-}
-
 struct TurnProcess<'a> {
   queue: &'a crate::master_queue::MasterQueue,
   item: &'a mut WorkItem,
@@ -547,18 +514,7 @@ impl RunProcess for TurnProcess<'_> {
       let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
       self.was_built = true;
       let session_id = metadata.id.clone();
-      let (sender, mut receiver) = mpsc::channel::<StreamEvent>(1);
-      let on_event: EventFn = Arc::new(move |event| {
-        let sender = sender.clone();
-        Box::pin(async move {
-          let (ack_tx, ack_rx) = oneshot::channel();
-          sender
-            .send(StreamEvent { event, acknowledged: ack_tx })
-            .await
-            .map_err(|_| anyhow!("manager event consumer stopped"))?;
-          ack_rx.await.context("manager event acknowledgement stopped")?.map_err(anyhow::Error::msg)
-        })
-      });
+      let (on_event, mut receiver) = stream_event_channel();
       let task_session_id = self
         .item
         .extra_env
@@ -718,11 +674,6 @@ impl std::fmt::Display for TurnLetGo {
 
 impl std::error::Error for TurnLetGo {}
 
-fn subprocess_buffer_bytes(cfg: &CharlieBotConfig) -> anyhow::Result<usize> {
-  let megabytes = usize::try_from(cfg.server.subprocess_buffer_limit_mb).context("negative subprocess buffer limit")?;
-  megabytes.checked_mul(1024 * 1024).context("subprocess buffer limit overflows usize")
-}
-
 fn project_fresh_raw(
   features: &FeatureContext,
   option: &BackendOption,
@@ -879,16 +830,6 @@ pub(crate) async fn run_cc(
     cancelled: was_cancelled,
     let_go: was_cancelled && covered,
   })
-}
-
-fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
-  let contents = match fs::read(path) {
-    Ok(contents) => contents,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
-    Err(error) => return Err(error).with_context(|| format!("reading stderr log {}", path.display())),
-  };
-  let start = contents.len().saturating_sub(STDERR_TAIL_BYTES as usize);
-  Ok(String::from_utf8_lossy(&contents[start..]).trim().to_string())
 }
 
 fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
@@ -1085,8 +1026,11 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+  use charliebot_registry::backend::ResumeStyle;
   use charliebot_store::metadata::TaskProfile;
+
+  use super::*;
+  use crate::run_support::route_resume_session_style;
 
   #[test]
   fn resume_session_routing_matches_backend_style() {

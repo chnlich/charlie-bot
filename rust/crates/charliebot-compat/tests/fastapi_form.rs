@@ -112,7 +112,7 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
 
   let client = Client::new();
   let cases = corpus();
-  assert_eq!(cases.len(), 27);
+  assert_eq!(cases.len(), 32);
   eprintln!("multipart differential corpus: {} cases", cases.len());
   for case in &cases {
     let (python_status, python_body) = send(&client, python_address, case).await;
@@ -387,6 +387,51 @@ fn corpus() -> Vec<Case> {
       name: "opening boundary without a following CRLF",
       item_id: "present",
       body: format!("--{BOUNDARY}Note: x\r\n\r\nvalue\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "opening boundary with a CR and no LF",
+      item_id: "present",
+      body: format!("--{BOUNDARY}\rX\r\n\r\nvalue\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "closing boundary with one hyphen",
+      item_id: "present",
+      body: format!("--{BOUNDARY}-X").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "part header with an empty name",
+      item_id: "present",
+      body: format!("--{BOUNDARY}\r\n: x\r\n\r\nv\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "part header value ending in a CR without a LF",
+      item_id: "present",
+      body: format!("--{BOUNDARY}\r\nName: x\rX\r\n\r\nv\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "part headers ending in a CR without a LF",
+      item_id: "present",
+      body: format!("--{BOUNDARY}\r\nName: x\r\n\rX").into_bytes(),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::BAD_REQUEST,
       cookie: None,

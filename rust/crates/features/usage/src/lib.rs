@@ -4,8 +4,8 @@
 mod api;
 mod backend_ids;
 pub mod capture;
-mod count;
 pub mod cool_storage;
+mod count;
 mod ext_usage;
 pub mod ledger;
 mod ndjson;
@@ -15,6 +15,7 @@ mod poller;
 mod sql;
 #[cfg(test)]
 mod test_support;
+mod utc_datetime;
 
 use std::sync::Arc;
 

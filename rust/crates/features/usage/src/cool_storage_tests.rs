@@ -15,10 +15,8 @@ use charliebot_agents::backends::codex::{self, CodexHost};
 use charliebot_agents::backends::opencode::usage_logs::OpencodeLogs;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
-use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::usage::{CategoryResult, UsageSource};
 use charliebot_registry::{Registry, RegistryError};
-use charliebot_store::Store;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::run_records::{CURSOR_NAME, DATA_DIR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
 use serde_json::{Map, Value, json};
@@ -89,7 +87,6 @@ struct Fixture {
   tree: tempfile::TempDir,
   cfg: Arc<CharlieBotConfig>,
   registry: Arc<Registry>,
-  store: Store,
 }
 
 impl Fixture {
@@ -117,10 +114,7 @@ impl Fixture {
     let mut registry = Registry::new();
     registry.register_package("usage-cool-storage-tests", register_test_sources).expect("the test sources register");
     let cfg = registry.load_config(&charlie).expect("the synthetic config loads");
-    let registry = Arc::new(registry);
-    let store = Store::new(cfg.clone(), registry.metadata_slots(), store_hooks(Arc::clone(&registry)))
-      .expect("the store opens over the synthetic home");
-    Self { tree, cfg: Arc::new(cfg), registry, store }
+    Self { tree, cfg: Arc::new(cfg), registry: Arc::new(registry) }
   }
 
   fn sessions(&self) -> PathBuf {
@@ -157,7 +151,7 @@ impl Fixture {
   }
 
   fn sweep(&self) -> anyhow::Result<Vec<CategoryResult>> {
-    run_cool_sweep(Arc::clone(&self.cfg), &self.store, &self.registry, now())
+    run_cool_sweep(Arc::clone(&self.cfg), &self.registry, now())
   }
 }
 
@@ -397,7 +391,7 @@ fn capture_reads_a_transport_file_before_the_sweep_deletes_it() {
 
   assert!(!raw.exists(), "the cold transport file must be deleted");
   let mut ledger = UsageLedger::open(fixture.ledger()).expect("the ledger reopens");
-  let output: i64 = ledger.model_rows().expect("the ledger rows read").iter().map(|row| row.output).sum();
+  let output: i64 = ledger.model_rows().expect("the ledger rows read").iter().map(|row| row.output.int()).sum();
   assert_eq!(output, 7, "the usage in the deleted file must be captured");
 }
 
@@ -488,4 +482,96 @@ fn summary_line_lists_each_category_then_the_total_in_gib() {
     format_sweep_line(&categories),
     "total 1.50 GiB (raw-transport 2 files 1.00 GiB; claude-transcripts 1 dirs 0.50 GiB)"
   );
+}
+
+#[test]
+fn cold_rule_reads_updated_at_and_status_as_python_does() {
+  let now = now();
+  // `models.parse_utc_datetime` reads a date-only or naive value as UTC, and `str()` of an integer gives its digits.
+  assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": "2026-08-05"})), now));
+  assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": "2026-08-05T12:00:00"})), now));
+  assert!(is_cold_session(&meta(json!({"status": "archived", "updated_at": 20_260_805})), now));
+  // A falsy updated_at, a float whose str() is not a date, and a status other than the string qualify for nothing.
+  assert!(!is_cold_session(&meta(json!({"status": "archived", "updated_at": 0})), now));
+  assert!(!is_cold_session(&meta(json!({"status": "archived", "updated_at": 20_260_805.0})), now));
+  assert!(!is_cold_session(&meta(json!({"status": ["archived"], "updated_at": OLD})), now));
+}
+
+#[test]
+fn rotation_suffix_counts_unicode_digits_as_isdigit_does() {
+  // `str.isdigit` accepts the Arabic-Indic three and the superscript two, and refuses a vulgar fraction.
+  assert!(is_transport_name(Path::new("agent.raw.ndjson.\u{663}")));
+  assert!(is_transport_name(Path::new("stdout.log.\u{b2}")));
+  assert!(is_transport_name(Path::new("stderr.log.2")));
+  assert!(!is_transport_name(Path::new("stdout.log.\u{2153}")));
+  assert!(!is_transport_name(Path::new("stdout.log.x")));
+  assert!(!is_transport_name(Path::new("stdout.log.")));
+}
+
+#[test]
+fn cc_session_id_reads_each_truthy_value_as_python_str() {
+  assert_eq!(optional_text(Some(&json!("ses_x"))).as_deref(), Some("ses_x"));
+  assert_eq!(optional_text(Some(&json!(123))).as_deref(), Some("123"));
+  assert_eq!(optional_text(Some(&json!(1.5))).as_deref(), Some("1.5"));
+  assert_eq!(optional_text(Some(&json!(true))).as_deref(), Some("True"));
+  assert_eq!(optional_text(Some(&json!(["a"]))).as_deref(), Some("['a']"));
+  assert_eq!(optional_text(Some(&json!({"a": 1}))).as_deref(), Some("{'a': 1}"));
+  for falsy in [json!(""), json!(0), json!(0.0), json!(false), json!([]), json!({}), Value::Null] {
+    assert_eq!(optional_text(Some(&falsy)), None, "{falsy} is falsy");
+  }
+  assert_eq!(optional_text(None), None);
+}
+
+#[test]
+fn unreadable_or_malformed_session_metadata_skips_that_session() {
+  const SID_MALFORMED: &str = "cccccccc-dddd-4eee-8fff-000000000000";
+  let fixture = Fixture::new();
+  // A metadata path that is a directory cannot be read, and a file that is not JSON does not parse: each session is
+  // skipped, and the run goes on to the cold session beside them.
+  fs::create_dir_all(fixture.sessions().join(SID_DEAD).join("metadata.json"))
+    .expect("a directory at the metadata path");
+  put(&fixture.sessions().join(SID_MALFORMED).join("metadata.json"), b"{not json", None);
+  let cold = fixture.write_session(SID_COLD, cold_meta());
+  let transport = put(&thread_data(&cold).join("stdout.log"), b"transport", None);
+
+  let categories = fixture.sweep().expect("the sweep runs past the skipped sessions");
+
+  assert!(!transport.exists());
+  assert_eq!(category(&categories, "raw-transport").count, 1);
+}
+
+#[test]
+fn session_metadata_that_is_not_an_object_fails_the_run_before_any_deletion() {
+  let fixture = Fixture::new();
+  let cold = fixture.write_session(SID_COLD, cold_meta());
+  let transport = put(&thread_data(&cold).join("stdout.log"), b"transport", None);
+  put(&fixture.sessions().join(SID_DEAD).join("metadata.json"), b"[1, 2]", None);
+
+  assert!(fixture.sweep().is_err(), "the cold rule fails on a document that is not an object");
+  assert!(transport.exists());
+}
+
+#[test]
+fn symlinked_run_dirs_and_links_named_like_transport_files_are_skipped() {
+  let fixture = Fixture::new();
+  let cold = fixture.write_session(SID_COLD, cold_meta());
+  // A master run directory that is a symlink is not a managed directory, so the files behind it stay.
+  let outside = fixture.tree.path().join("outside/run");
+  let behind_link = put(&outside.join(RAW_LOG_NAME), b"outside the managed directories", None);
+  let linked = master_run(&cold, "2026-08-01T00:00:00+00:00");
+  fs::create_dir_all(linked.parent().expect("the master runs directory")).expect("the master runs directory");
+  std::os::unix::fs::symlink(&outside, &linked).expect("the run directory link");
+  // A dangling link and a looping link, each named like a transport file, read as absent. The plain file beside them goes.
+  let run = master_run(&cold, "2026-08-02T00:00:00+00:00");
+  fs::create_dir_all(&run).expect("the run directory");
+  std::os::unix::fs::symlink(run.join("missing"), run.join(STDERR_LOG_NAME)).expect("the dangling link");
+  std::os::unix::fs::symlink(run.join(CURSOR_NAME), run.join(CURSOR_NAME)).expect("the looping link");
+  let sibling = put(&run.join(RAW_LOG_NAME), b"x", None);
+
+  let categories = fixture.sweep().expect("the sweep runs");
+
+  assert!(behind_link.exists(), "a symlinked run directory is not swept");
+  assert!(!sibling.exists());
+  assert_eq!(category(&categories, "raw-transport").count, 1);
+  assert!(run.join(STDERR_LOG_NAME).symlink_metadata().is_ok(), "a dangling link is left in place");
 }

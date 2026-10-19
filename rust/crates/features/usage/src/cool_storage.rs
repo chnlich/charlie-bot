@@ -4,20 +4,22 @@
 //! A session is cold when its metadata reads `archived` and its `updated_at` is at least `MIN_IDLE_DAYS` old. The sweep
 //! deletes the raw transport files of cold sessions (an allowlist of names inside two directory shapes), then lets each
 //! registered usage source delete its own store through `UsageSourceImpl::sweep`. A real run first captures this host's
-//! token usage into the usage ledger, and a capture error aborts before any deletion.
+//! token usage into the usage ledger, and a capture error aborts before any deletion. A path that cannot be read logs
+//! or reads as absent, and the run goes on. Metadata that Python's loader or cold rule would raise on fails the run.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
+use charliebot_compat::python_json;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
+use charliebot_core::pyfmt;
+use charliebot_core::pystr;
 use charliebot_registry::usage::{CategoryResult, SessionFacts, SweepScope};
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::Store;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME,
@@ -27,7 +29,7 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
-use crate::capture_into_default_ledger;
+use crate::{capture_into_default_ledger, utc_datetime};
 
 /// `constants.MIN_IDLE_DAYS`: how long an archived session must sit idle to count as cold.
 const MIN_IDLE_DAYS: i64 = 14;
@@ -37,6 +39,8 @@ const ORPHAN_IDLE_DAYS: i64 = 2;
 const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, "stdout.log", "stderr.log"];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
 const RUN_EVIDENCE_KEYS: [&str; 3] = ["raw_log_ref", "events_ref", "result_ref"];
+/// `run_identity.SESSION_METADATA_NAME`: the file a session's metadata lives in.
+const SESSION_METADATA_NAME: &str = "metadata.json";
 const SESSION_ARCHIVED: &str = "archived";
 
 /// The `cool_storage` scheduled handler: the real sweep at the wall clock, off the async runtime.
@@ -45,7 +49,7 @@ pub fn run_handler(context: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::R
     let context_for_sweep = Arc::clone(&context);
     let categories = tokio::task::spawn_blocking(move || {
       let config = context_for_sweep.config.get()?;
-      run_cool_sweep(config, &context_for_sweep.store, &context_for_sweep.registry, UtcDateTime::now())
+      run_cool_sweep(config, &context_for_sweep.registry, UtcDateTime::now())
     })
     .await??;
     tracing::info!(total_bytes = total_bytes(&categories), "cool_storage_handler_done");
@@ -58,13 +62,12 @@ pub fn run_handler(context: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::R
 /// files, then each source's categories in registration order.
 pub fn run_cool_sweep(
   cfg: Arc<CharlieBotConfig>,
-  store: &Store,
   registry: &Registry,
   now: UtcDateTime,
 ) -> anyhow::Result<Vec<CategoryResult>> {
   // The capture guards every deletion: it runs before the scan, and its failure propagates so nothing is deleted.
   capture_into_default_ledger(&cfg, registry)?;
-  let facts = scan_sessions(store, now)?;
+  let facts = scan_sessions(&cfg.sessions_dir(), now)?;
   let references = scan_references(&facts);
   let mut transport = TransportCounter::default();
   let mut cold: Vec<&str> = facts.values().filter(|owner| owner.cold).map(|owner| owner.id.as_str()).collect();
@@ -87,12 +90,15 @@ pub fn run_cool_sweep(
   for swept in registry.sweep_all(&scope)? {
     categories.extend(swept.categories);
   }
-  let counts: Map<String, Value> =
-    categories.iter().map(|category| (category.name.replace('-', "_"), Value::from(category.count))).collect();
+  // Python passes each category as a keyword named for it. A tracing field name is fixed at compile time, so each category
+  // that the registered sources report has a field here, and a category without one is missing from the log line.
   tracing::info!(
     dry_run = false,
+    session_id = ?scope.session_id,
     total_bytes = total_bytes(&categories),
-    categories = ?counts,
+    raw_transport = count_of(&categories, "raw-transport"),
+    claude_transcripts = count_of(&categories, "claude-transcripts"),
+    codex_rollouts = count_of(&categories, "codex-rollouts"),
     "storage_cool_sweep_done"
   );
   Ok(categories)
@@ -111,48 +117,76 @@ fn total_bytes(categories: &[CategoryResult]) -> u64 {
   categories.iter().map(|category| category.bytes).sum()
 }
 
+fn count_of(categories: &[CategoryResult], name: &str) -> Option<u64> {
+  categories.iter().find(|category| category.name == name).map(|category| category.count)
+}
+
 fn gib(bytes: u64) -> f64 {
   bytes as f64 / (1024.0 * 1024.0 * 1024.0)
 }
 
-/// Every session's cold verdict and backend reference, from the store's raw metadata scan (`_scan_sessions`).
-fn scan_sessions(store: &Store, now: UtcDateTime) -> anyhow::Result<HashMap<String, SessionFacts>> {
+/// Every session's cold verdict and backend reference (`_scan_sessions`). A session whose metadata cannot be read is
+/// skipped; a document that is not a JSON object fails the run.
+fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMap<String, SessionFacts>> {
   let mut facts = HashMap::new();
-  for row in store.raw_metadata_scan()? {
-    let meta = match row.value {
-      // `load_json_meta` reads a JSON null as absent.
-      Value::Null => continue,
-      Value::Object(meta) => meta,
-      // Python's cold rule calls `.get` on the value, so a metadata file that is not an object fails the sweep.
-      _ => bail!("session {} metadata is not a JSON object", row.session_id),
+  if !is_dir(sessions_dir) {
+    return Ok(facts);
+  }
+  let mut session_dirs = fs::read_dir(sessions_dir)
+    .and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<Result<Vec<_>, _>>())
+    .with_context(|| format!("list {}", sessions_dir.display()))?;
+  session_dirs.sort();
+  for session_dir in session_dirs {
+    if !is_dir(&session_dir) {
+      continue;
+    }
+    let id = session_dir.file_name().expect("a directory entry has a name").to_string_lossy().into_owned();
+    let Some(meta) = load_json_meta(&session_dir.join(SESSION_METADATA_NAME), "storage_cool_meta_read_failed")? else {
+      continue;
     };
-    let cold = is_cold_session(&meta, now);
-    let cc_session_id = optional_text(&meta, &row.session_id)?;
-    facts.insert(row.session_id.clone(), SessionFacts { id: row.session_id, cold, cc_session_id });
+    let Value::Object(meta) = meta else {
+      // The cold rule calls `.get` on the document, which fails for every JSON value that is not an object.
+      bail!("session {id} metadata is not a JSON object");
+    };
+    facts.insert(
+      id.clone(),
+      SessionFacts { id, cold: is_cold_session(&meta, now), cc_session_id: optional_text(meta.get("cc_session_id")) },
+    );
   }
   Ok(facts)
 }
 
-/// The one cold rule: archived, and idle at least `MIN_IDLE_DAYS`. A field that is missing or unreadable never qualifies.
+/// The one cold rule (`storage_cool.is_cold_session`): archived, and idle at least `MIN_IDLE_DAYS`. A field that is
+/// missing or unusable never qualifies.
 fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
-  if meta.get("status").and_then(Value::as_str) != Some(SESSION_ARCHIVED) {
+  // `str(status)` equals "archived" only for that string, so a status of any other JSON type never qualifies.
+  if !matches!(meta.get("status"), Some(Value::String(status)) if *status == SESSION_ARCHIVED) {
     return false;
   }
-  let Some(updated_text) = meta.get("updated_at").and_then(Value::as_str) else {
+  // `if not raw_updated` drops the falsy values before `str()` reads the rest.
+  let Some(raw_updated) = meta.get("updated_at").filter(|value| is_truthy(value)) else {
     return false;
   };
-  let Ok(updated_at) = UtcDateTime::parse(updated_text) else {
+  let Some(updated_at) = utc_datetime::parse(&pyfmt::python_str(raw_updated)) else {
     return false;
   };
-  now.into_inner() - updated_at.into_inner() >= time::Duration::days(MIN_IDLE_DAYS)
+  now.into_inner() - updated_at >= time::Duration::days(MIN_IDLE_DAYS)
 }
 
-/// `_optional_str(meta.get("cc_session_id"))`: an absent or empty reference is none.
-fn optional_text(meta: &Map<String, Value>, session_id: &str) -> anyhow::Result<Option<String>> {
-  match meta.get("cc_session_id") {
-    None | Some(Value::Null) => Ok(None),
-    Some(Value::String(text)) => Ok((!text.is_empty()).then(|| text.clone())),
-    Some(_) => bail!("session {session_id}: cc_session_id is not a string"),
+/// `storage_cool._optional_str`: the Python `str()` text of a truthy value, and none for a falsy one.
+fn optional_text(value: Option<&Value>) -> Option<String> {
+  value.filter(|value| is_truthy(value)).map(pyfmt::python_str)
+}
+
+/// Python's truth value of a JSON value: null, false, zero, and the empty string, array and object are false.
+fn is_truthy(value: &Value) -> bool {
+  match value {
+    Value::Null => false,
+    Value::Bool(flag) => *flag,
+    Value::Number(number) => number.as_f64().is_some_and(|float| float != 0.0),
+    Value::String(text) => !text.is_empty(),
+    Value::Array(items) => !items.is_empty(),
+    Value::Object(members) => !members.is_empty(),
   }
 }
 
@@ -171,12 +205,9 @@ fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec
 /// A file that a v2 run record references is kept.
 fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> anyhow::Result<()> {
   let referenced = run_referenced_transport(session_dir)?;
-  for root in managed_transport_dirs(session_dir)? {
-    let Some(entries) = sorted_scan(&root) else {
-      continue;
-    };
-    for entry in entries {
-      if !is_file(&entry)? || !is_transport_name(&entry) {
+  for root in managed_transport_dirs(session_dir) {
+    for entry in sorted_scan(&root).unwrap_or_default() {
+      if !is_file(&entry) || !is_transport_name(&entry) {
         continue;
       }
       if referenced.contains(&realpath(&entry)) {
@@ -190,30 +221,27 @@ fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> an
 
 /// The two directory shapes whose direct children the transport rule governs (`_managed_transport_dirs`): each master
 /// run directory, and each thread's data directory. Symlinks are not followed.
-fn managed_transport_dirs(session_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+fn managed_transport_dirs(session_dir: &Path) -> Vec<PathBuf> {
   let mut managed = Vec::new();
   let data_root = session_dir.join(DATA_DIR_NAME);
   let master_runs = data_root.join(MASTER_RUNS_DIR_NAME);
-  if is_real_dir(&data_root)? && is_real_dir(&master_runs)? {
+  if is_real_dir(&data_root) && is_real_dir(&master_runs) {
     for run_dir in sorted_scan(&master_runs).unwrap_or_default() {
-      if is_real_dir(&run_dir)? {
+      if is_real_dir(&run_dir) {
         managed.push(run_dir);
       }
     }
   }
   let threads_dir = session_dir.join(THREADS_DIR_NAME);
-  if is_real_dir(&threads_dir)? {
+  if is_real_dir(&threads_dir) {
     for thread_dir in sorted_scan(&threads_dir).unwrap_or_default() {
-      if !is_real_dir(&thread_dir)? {
-        continue;
-      }
       let data_dir = thread_dir.join(DATA_DIR_NAME);
-      if is_real_dir(&data_dir)? {
+      if is_real_dir(&thread_dir) && is_real_dir(&data_dir) {
         managed.push(data_dir);
       }
     }
   }
-  Ok(managed)
+  managed
 }
 
 /// The transport files that a v2 run record of this session references (`_run_referenced_transport`). Migrated runs
@@ -221,14 +249,17 @@ fn managed_transport_dirs(session_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
   let runs_dir = session_dir.join(DATA_DIR_NAME).join(RUNS_DIR_NAME);
   let mut referenced = HashSet::new();
-  if !is_real_dir(&runs_dir)? {
+  if !is_real_dir(&runs_dir) {
     return Ok(referenced);
   }
   for run_dir in sorted_scan(&runs_dir).unwrap_or_default() {
-    if !is_real_dir(&run_dir)? {
+    if !is_real_dir(&run_dir) {
       continue;
     }
-    let Some(meta) = read_run_metadata(&run_dir.join(RUN_METADATA_NAME))? else {
+    // A record that is not a JSON object references nothing, as `isinstance(meta, dict)` skips it.
+    let Some(Value::Object(meta)) =
+      load_json_meta(&run_dir.join(RUN_METADATA_NAME), "storage_cool_run_meta_read_failed")?
+    else {
       continue;
     };
     for key in RUN_EVIDENCE_KEYS {
@@ -240,31 +271,7 @@ fn run_referenced_transport(session_dir: &Path) -> anyhow::Result<HashSet<PathBu
   Ok(referenced)
 }
 
-/// `json_utils.load_json_meta` for a run record: a missing, unreadable or malformed file reads as absent (the last two
-/// are logged), and invalid UTF-8 fails the sweep as Python's text read does.
-fn read_run_metadata(path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
-  let bytes = match fs::read(path) {
-    Ok(bytes) => bytes,
-    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-    Err(error) => {
-      tracing::debug!(path = %path.display(), error = %error, "storage_cool_run_meta_read_failed");
-      return Ok(None);
-    }
-  };
-  let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-  match serde_json::from_str::<Value>(&text) {
-    Ok(Value::Object(meta)) => Ok(Some(meta)),
-    // A JSON null is absent; any other value fails the dict check in `_run_referenced_transport`.
-    Ok(_) => Ok(None),
-    Err(error) => {
-      tracing::debug!(path = %path.display(), error = %error, "storage_cool_run_meta_read_failed");
-      Ok(None)
-    }
-  }
-}
-
-/// One of the five reserved transport names, or its `<name>.<N>` rotation variant. The suffix is ASCII digits: the
-/// rotation writes ASCII, and a name Python's `isdigit` alone would accept stays in place.
+/// One of the five reserved transport names, or its `<name>.<N>` rotation variant (`_is_transport_name`).
 fn is_transport_name(path: &Path) -> bool {
   let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
     return false;
@@ -272,9 +279,34 @@ fn is_transport_name(path: &Path) -> bool {
   if RAW_TRANSPORT_NAMES.contains(&name) {
     return true;
   }
-  name.rsplit_once('.').is_some_and(|(base, suffix)| {
-    RAW_TRANSPORT_NAMES.contains(&base) && !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-  })
+  name.rsplit_once('.').is_some_and(|(base, suffix)| RAW_TRANSPORT_NAMES.contains(&base) && pystr::isdigit(suffix))
+}
+
+/// `json_utils.load_json_meta`: the document at `path`, or None when the file does not exist, cannot be read, or is not
+/// JSON, or when it is JSON null. Invalid UTF-8 fails the run, as Python's uncaught `UnicodeDecodeError` does, and so
+/// does a document the port cannot hold (Python's NaN, for one).
+fn load_json_meta(path: &Path, log_event: &str) -> anyhow::Result<Option<Value>> {
+  // `Path.exists()` reads a failed stat as absent, and Python logs nothing for that.
+  if fs::metadata(path).is_err() {
+    return Ok(None);
+  }
+  let bytes = match fs::read(path) {
+    Ok(bytes) => bytes,
+    Err(error) => {
+      tracing::debug!(path = %path.display(), error = %error, "{log_event}");
+      return Ok(None);
+    }
+  };
+  let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
+  match python_json::loads_text(&text) {
+    Ok(Value::Null) => Ok(None),
+    Ok(value) => Ok(Some(value)),
+    Err(python_json::LoadError::Value(error)) => {
+      tracing::debug!(path = %path.display(), error = %error, "{log_event}");
+      Ok(None)
+    }
+    Err(python_json::LoadError::Unrepresentable(error)) => bail!("{}: {error}", path.display()),
+  }
 }
 
 /// One directory's entries, sorted. A failed listing logs and yields None, so one unreadable directory never stops the
@@ -294,26 +326,19 @@ fn sorted_scan(root: &Path) -> Option<Vec<PathBuf>> {
   }
 }
 
-/// `Path.stat()` for a sweep path: follows links, and a missing path reads as None.
-fn stat_followed(path: &Path) -> anyhow::Result<Option<fs::Metadata>> {
-  match fs::metadata(path) {
-    Ok(metadata) => Ok(Some(metadata)),
-    Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-    Err(error) => Err(error).with_context(|| format!("stat {}", path.display())),
-  }
+/// `Path.is_dir()` and `Path.is_file()`: each follows links, and a failed stat reads as false, as `os.path.isdir` does.
+fn is_dir(path: &Path) -> bool {
+  fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
-/// `Path.is_file()`: follows links, and a missing path is not a file.
-fn is_file(path: &Path) -> anyhow::Result<bool> {
-  Ok(stat_followed(path)?.is_some_and(|metadata| metadata.is_file()))
+fn is_file(path: &Path) -> bool {
+  fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
 }
 
-/// `Path.is_dir() and not Path.is_symlink()`: the directory shapes the sweep descends into.
-fn is_real_dir(path: &Path) -> anyhow::Result<bool> {
-  let Some(metadata) = stat_followed(path)? else {
-    return Ok(false);
-  };
-  Ok(metadata.is_dir() && !fs::symlink_metadata(path)?.file_type().is_symlink())
+/// `Path.is_dir() and not Path.is_symlink()`: a directory the path names itself, not through a link. The link's own
+/// metadata is a directory only when the path is not a link, and a failed lstat reads as false.
+fn is_real_dir(path: &Path) -> bool {
+  fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
 /// The raw-transport category: files deleted, and their bytes (`usage_sources.SweepCounter` with the `files` unit).

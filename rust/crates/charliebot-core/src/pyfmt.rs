@@ -96,6 +96,37 @@ pub fn float_repr(x: f64) -> String {
   if negative { format!("-{body}") } else { body }
 }
 
+/// Python's `format(x, "g")` (`%g`): six significant digits with the trailing zeros dropped. The exponent form is used
+/// when the exponent after rounding is below -4 or at least six, as C's `%g` chooses.
+pub fn format_g(x: f64) -> String {
+  const PRECISION: i32 = 6;
+  if x.is_nan() {
+    return "nan".to_string();
+  }
+  if x.is_infinite() {
+    return if x > 0.0 { "inf" } else { "-inf" }.to_string();
+  }
+  if x == 0.0 {
+    return if x.is_sign_negative() { "-0" } else { "0" }.to_string();
+  }
+  // The exponent after rounding to PRECISION significant digits, as C's %e reports it.
+  let scientific = format!("{x:.*e}", (PRECISION - 1) as usize);
+  let (mantissa, exponent) = scientific.split_once('e').expect("LowerExp output carries an exponent");
+  let exponent: i32 = exponent.parse().expect("LowerExp exponent is an integer");
+  if (-4..PRECISION).contains(&exponent) {
+    let decimals = (PRECISION - 1 - exponent) as usize;
+    trim_fraction_zeros(&format!("{x:.decimals$}"))
+  } else {
+    let sign = if exponent < 0 { '-' } else { '+' };
+    format!("{}e{sign}{:02}", trim_fraction_zeros(mantissa), exponent.unsigned_abs())
+  }
+}
+
+/// Drops the trailing zeros, and a bare decimal point, from a fixed-notation number.
+fn trim_fraction_zeros(text: &str) -> String {
+  if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text.to_string() }
+}
+
 /// pydantic's `model_dump_json` float form: the shortest round-trip digits in fixed notation when the decimal
 /// exponent is in `-5..16`, and in scientific notation otherwise, whose exponent has neither `+` nor padding
 /// (`1e16`, `1.5e-7`, `0.00001`). Checked against pydantic over random doubles; `repr` differs (`1e+16`).
@@ -346,6 +377,24 @@ mod tests {
     assert_eq!(pydantic_float_repr(1.5e-7), "1.5e-7");
     assert_eq!(pydantic_float_repr(1e-5), "0.00001");
     assert_eq!(pydantic_float_repr(-2.5), "-2.5");
+  }
+
+  #[test]
+  fn format_g_matches_cpython_percent_g() {
+    let cases = [
+      (1.0, "1"),
+      (59.5, "59.5"),
+      (1.2583333, "1.25833"),
+      (0.0001, "0.0001"),
+      (0.00001, "1e-05"),
+      (100000.0, "100000"),
+      (1234567.0, "1.23457e+06"),
+      (1e6, "1e+06"),
+      (-2.5, "-2.5"),
+    ];
+    for (value, expected) in cases {
+      assert_eq!(format_g(value), expected, "format({value}, 'g')");
+    }
   }
 
   #[test]

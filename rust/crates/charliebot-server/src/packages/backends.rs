@@ -62,11 +62,6 @@ impl BackendFactory for NotPorted {
   }
 }
 
-/// `src/backends/claude_code`: the registered backend, `accounts:` section and metadata fields.
-pub fn claude_code(registry: &mut Registry) -> Result<(), RegistryError> {
-  charliebot_agents::backends::claude_code::register(registry)
-}
-
 pub fn opencode(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "opencode", plain(ResumeStyle::NativeId, false), None, false)
 }

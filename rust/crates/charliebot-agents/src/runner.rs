@@ -32,6 +32,8 @@ use crate::transport::spawn::{self, RawStdin, SpawnSpec};
 pub const DEFAULT_POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 pub const DEFAULT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const STDERR_TAIL_BYTES: u64 = 64 * 1024;
+/// The file a final-stdout process's whole output is teed into (`antigravity_cli.py` `run`).
+const FINAL_STDOUT_LOG_NAME: &str = "stdout.log";
 const DIAGNOSTIC_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Callback invoked after the child identity is pinned and before tail-follow begins.
@@ -147,6 +149,7 @@ pub struct AgentRunner {
   active: Mutex<Option<Arc<ActiveProcess>>>,
   started: AtomicBool,
   terminated: AtomicBool,
+  exit_code: Mutex<Option<i32>>,
 }
 
 impl AgentRunner {
@@ -158,7 +161,14 @@ impl AgentRunner {
       active: Mutex::new(None),
       started: AtomicBool::new(false),
       terminated: AtomicBool::new(false),
+      exit_code: Mutex::new(None),
     }
+  }
+
+  /// The exit code the runner's process left with (`backend.exit_code`), or `None` before a process exits. A
+  /// final-stdout run records the code its backend chose, which can differ from the process's.
+  pub fn exit_code(&self) -> Option<i32> {
+    *self.exit_code.lock().expect("exit code lock poisoned")
   }
 
   /// Prepare, spawn and follow one registered raw-log backend.
@@ -188,7 +198,8 @@ impl AgentRunner {
     rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
 
     let mut backend = self.backend.lock().await;
-    if backend.transport() != TransportKind::RawLog {
+    let transport = backend.transport();
+    if transport == TransportKind::Serve {
       bail!("the agent runner does not support the Serve transport");
     }
     backend.prepare_transport(&log_dir)?;
@@ -215,14 +226,21 @@ impl AgentRunner {
     let spec = SpawnSpec::new(
       program,
       args,
-      Some(request.cwd),
+      Some(request.cwd.clone()),
       final_env.into_iter().map(|(key, value)| (key.into(), value.into())).collect::<HashMap<_, _>>(),
       self.launch.cgroup_session_id.clone(),
-      request.cgroup_base,
+      request.cgroup_base.clone(),
       request.memory_max_mb,
       request.swap_max_mb,
       request.tasks_max,
     );
+    if transport == TransportKind::FinalStdout {
+      if stdin_prompt.is_some() {
+        bail!("a final-stdout backend takes its prompt in argv, not on stdin");
+      }
+      drop(backend);
+      return self.run_final_stdout(request, &spec, &log_dir).await;
+    }
     let mut spawned = spawn::spawn_raw_log(
       &spec,
       &raw_path,
@@ -312,6 +330,9 @@ impl AgentRunner {
         wait_for_exit(&active, request.cleanup_timeout).await?
       }
     };
+    if let Some(code) = exit_code {
+      self.record_exit_code(code);
+    }
     let stderr_text = read_stderr_tail(&stderr_path)?;
     let cgroup_exit_report = if self.terminated.load(Ordering::Acquire) {
       None
@@ -329,6 +350,91 @@ impl AgentRunner {
       hang_diagnostics,
       identity: Some(identity),
       follow: Some(follow),
+    })
+  }
+
+  /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
+  /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
+  async fn run_final_stdout(
+    &self,
+    request: RunRequest,
+    spec: &SpawnSpec,
+    log_dir: &Path,
+  ) -> anyhow::Result<RunOutcome> {
+    let mut spawned = spawn::spawn_piped(spec).await?;
+    let mut stdout = spawned.child.stdout.take().context("agent stdout was not piped")?;
+    let mut stderr = spawned.child.stderr.take().context("agent stderr was not piped")?;
+    let cgroup = spawned.cgroup.take();
+    let on_spawn = request.on_spawn.clone();
+    let (spawned, identity) = spawn::pin_identity_and_on_spawn(spawned, move |identity| async move {
+      match on_spawn {
+        Some(callback) => callback(identity).await,
+        None => Ok(()),
+      }
+    })
+    .await?;
+    let pid = identity.pid;
+    let (sender, receiver) = watch::channel(None);
+    tokio::spawn(reap_child(spawned.child, sender));
+    let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false) });
+    *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
+
+    let stderr_path = log_dir.join(STDERR_LOG_NAME);
+    let stderr_log = stderr_path.clone();
+    let mut stderr_task =
+      tokio::spawn(async move { spawn::tee_stream(&mut stderr, Some(&stderr_log), |_| {}).await.map(|_| ()) });
+    let stdout_path = log_dir.join(FINAL_STDOUT_LOG_NAME);
+    let mut stdout_bytes = Vec::new();
+    spawn::tee_stream(&mut stdout, Some(&stdout_path), |chunk| stdout_bytes.extend_from_slice(chunk)).await?;
+
+    // The stderr stream ends with the process; a stream still open at the cleanup timeout is cancelled after the exit.
+    let stderr_joined = match tokio::time::timeout(request.cleanup_timeout, &mut stderr_task).await {
+      Ok(joined) => Some(joined),
+      Err(_) => {
+        tracing::debug!(target: "charliebot_agents", pid, "backend_stderr_stream_timeout");
+        None
+      }
+    };
+    let mut hang_diagnostics = None;
+    let exit_code = match wait_for_exit(&active, request.cleanup_timeout).await? {
+      Some(code) => code,
+      None => {
+        tracing::warn!(target: "charliebot_agents", pid, "backend_wait_timeout_after_result");
+        hang_diagnostics = Some(capture_process_diagnostics(pid).await);
+        self.graceful_shutdown(&active, request.cleanup_timeout, "backend_sigkill_after_result").await?;
+        wait_for_exit(&active, request.cleanup_timeout).await?.context("agent process did not exit after SIGKILL")?
+      }
+    };
+    if let Some(joined) = stderr_joined {
+      joined.context("waiting for the agent stderr stream failed")??;
+    }
+    if !stderr_task.is_finished() {
+      stderr_task.abort();
+    }
+    let stderr_text = read_stderr_tail(&stderr_path)?;
+    let cgroup_exit_report = if self.terminated.load(Ordering::Acquire) {
+      None
+    } else {
+      cgroup.and_then(|state: SessionCgroup| state.classify_exit(Some(exit_code)))
+    };
+    self.clear_active(&active);
+
+    let stdout_text = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    let outcome = self.backend.lock().await.finish_final_stdout(&stdout_text, &stderr_text, exit_code);
+    self.record_exit_code(outcome.exit_code);
+    for event in outcome.events {
+      (request.on_event)(event).await?;
+    }
+    if let Some(guard_error) = outcome.guard_error {
+      bail!(guard_error);
+    }
+    Ok(RunOutcome {
+      exit_code: Some(outcome.exit_code),
+      stderr_text,
+      cgroup_exit_report,
+      hang_diagnostics,
+      identity: Some(identity),
+      follow: None,
     })
   }
 
@@ -364,6 +470,10 @@ impl AgentRunner {
       wait_for_exit(active, Duration::from_secs(30)).await?;
     }
     Ok(())
+  }
+
+  fn record_exit_code(&self, exit_code: i32) {
+    *self.exit_code.lock().expect("exit code lock poisoned") = Some(exit_code);
   }
 
   fn clear_active(&self, active: &Arc<ActiveProcess>) {
@@ -519,6 +629,7 @@ fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
 mod tests {
   use std::fs;
 
+  use charliebot_registry::backend::FinalStdoutOutcome;
   use serde_json::json;
 
   use super::*;
@@ -815,6 +926,66 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn final_stdout_run_emits_the_backend_events_before_its_guard_error() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    fs::create_dir(&logs).unwrap();
+    fs::write(logs.join(FINAL_STDOUT_LOG_NAME), "stale").unwrap();
+    let runner = AgentRunner::new(
+      Box::new(FinalStdoutShell::new("printf 'answer'; printf 'warned' >&2; exit 0", Some("envelope guard"), None)),
+      LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::clone(&seen);
+    let mut request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]),
+      root.path().join("cgroups"),
+    );
+    request.on_event = Arc::new(move |event| {
+      let events = Arc::clone(&events);
+      Box::pin(async move {
+        events.lock().unwrap().push(event);
+        Ok(())
+      })
+    });
+
+    let error = runner.run(request).await.unwrap_err();
+
+    assert_eq!(error.to_string(), "envelope guard");
+    assert_eq!(
+      *seen.lock().unwrap(),
+      vec![json!({"type": "seen", "stdout": "answer", "stderr": "warned", "exit_code": 0})]
+    );
+    assert_eq!(fs::read_to_string(logs.join(FINAL_STDOUT_LOG_NAME)).unwrap(), "answer");
+    assert_eq!(fs::read_to_string(logs.join(STDERR_LOG_NAME)).unwrap(), "warned");
+    assert_eq!(runner.exit_code(), Some(0));
+  }
+
+  #[tokio::test]
+  async fn final_stdout_run_records_the_exit_code_its_backend_chose() {
+    let root = tempfile::tempdir().unwrap();
+    let runner = AgentRunner::new(
+      Box::new(FinalStdoutShell::new("exit 3", None, Some(1))),
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+
+    let outcome = runner
+      .run(test_request(
+        "prompt".to_string(),
+        root.path().to_path_buf(),
+        Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]),
+        root.path().join("cgroups"),
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(outcome.exit_code, Some(1));
+    assert_eq!(runner.exit_code(), Some(1));
+  }
+
+  #[tokio::test]
   async fn registered_claude_child_edits_apply_at_the_spawn_boundary() {
     let root = tempfile::tempdir().unwrap();
     let mut registry = charliebot_registry::Registry::new();
@@ -890,6 +1061,51 @@ mod tests {
 
     fn refusing_uploads(script: impl Into<String>, refusal: &str) -> Self {
       Self { script: script.into(), refusal: Some(refusal.to_string()) }
+    }
+  }
+
+  /// A final-stdout backend whose finish reports the output and exit code it was given, so a test sees the runner's
+  /// inputs. `exit_override` replaces the exit code it records, and `guard_error` ends the run after its events.
+  struct FinalStdoutShell {
+    script: String,
+    guard_error: Option<String>,
+    exit_override: Option<i32>,
+  }
+
+  impl FinalStdoutShell {
+    fn new(script: &str, guard_error: Option<&str>, exit_override: Option<i32>) -> Self {
+      Self { script: script.to_string(), guard_error: guard_error.map(str::to_string), exit_override }
+    }
+  }
+
+  impl AgentBackend for FinalStdoutShell {
+    fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+      None
+    }
+    fn prepare_transport(&mut self, _: &Path) -> anyhow::Result<()> {
+      Ok(())
+    }
+    fn build_command(&self, _: &str) -> anyhow::Result<Vec<String>> {
+      Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])
+    }
+    fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+      Ok(env)
+    }
+    fn stdin_prompt(&self, _: &str) -> Option<String> {
+      None
+    }
+    fn translator(&self) -> Box<dyn charliebot_registry::backend::Translate> {
+      unreachable!("a final-stdout run reads no translator")
+    }
+    fn transport(&self) -> TransportKind {
+      TransportKind::FinalStdout
+    }
+    fn finish_final_stdout(&mut self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
+      FinalStdoutOutcome {
+        events: vec![json!({"type": "seen", "stdout": stdout, "stderr": stderr, "exit_code": exit_code})],
+        exit_code: self.exit_override.unwrap_or(exit_code),
+        guard_error: self.guard_error.clone(),
+      }
     }
   }
 

@@ -128,8 +128,18 @@ pub trait BackendFactory: Send + Sync {
 pub enum TransportKind {
   /// The process writes a raw event log.
   RawLog,
+  /// The process writes its answer to stdout and exits; the runner reads the whole output after the exit.
+  FinalStdout,
   /// The process serves over a local protocol (opencode).
   Serve,
+}
+
+/// What a final-stdout backend makes of its finished process (`antigravity_cli.py` `run`). The runner emits `events`,
+/// records `exit_code`, and then fails the run with `guard_error` when it is set.
+pub struct FinalStdoutOutcome {
+  pub events: Vec<Value>,
+  pub exit_code: i32,
+  pub guard_error: Option<String>,
 }
 
 /// Maps one raw event of a backend's output to the runtime's events.
@@ -151,6 +161,11 @@ pub trait AgentBackend: Send {
   /// with exactly one error event and no process.
   fn accept_uploads(&mut self, _uploaded_files: &[Value]) -> Result<(), String> {
     Ok(())
+  }
+  /// Reads the output of a `FinalStdout` process once it has exited. Only a backend whose transport is `FinalStdout`
+  /// implements it; the runner calls it for no other.
+  fn finish_final_stdout(&mut self, _stdout: &str, _stderr: &str, _exit_code: i32) -> FinalStdoutOutcome {
+    panic!("finish_final_stdout is called only for a FinalStdout transport")
   }
   /// The CLI-native one-shot, tool-less, or `None` when the backend has none. The dispatcher
   /// `charliebot_agents::one_shot_text` runs the tool-capable one-shot for `None`.

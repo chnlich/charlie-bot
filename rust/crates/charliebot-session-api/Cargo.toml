@@ -16,11 +16,13 @@ charliebot-store.workspace = true
 charliebot-usage.workspace = true
 charliebot-tasks.workspace = true
 flate2.workspace = true
+futures-util.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
@@ -28,6 +30,6 @@ uuid.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 tempfile.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 tracing-subscriber.workspace = true

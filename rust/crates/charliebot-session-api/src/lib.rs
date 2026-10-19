@@ -9,6 +9,7 @@ mod sidebar;
 #[cfg(test)]
 mod test_support;
 mod tree;
+mod websocket;
 mod worker_transcript;
 mod write_routes;
 mod writes;
@@ -21,7 +22,8 @@ use charliebot_registry::{FeatureContext, Registry, RegistryError};
 /// Register the session listing router, the prompt-inspection router and their registry contributions.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes::routes, routes::matches)?;
-  registry.router(prompt_routes::routes, prompt_routes::matches)
+  registry.router(prompt_routes::routes, prompt_routes::matches)?;
+  registry.websocket("/ws/sessions/*", websocket::session_websocket)
 }
 
 /// Build the route table with the shared feature context.

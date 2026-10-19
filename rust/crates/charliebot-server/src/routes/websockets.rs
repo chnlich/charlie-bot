@@ -3,8 +3,9 @@
 //! uvicorn hands a request whose `Connection` tokens include `upgrade` and whose `Upgrade` is
 //! `websocket` to its WebSocket protocol, outside the HTTP middleware: no auth gate, no request log, no
 //! gzip. An unknown path, or a route whose `token` query parameter fails `check_ws_auth`, closes before
-//! accepting, which the protocol answers as a bare 403. The streams behind the three routes are not
-//! ported yet, so an authorized upgrade answers the same 403 and logs `websocket_route_not_ported`.
+//! accepting, which the protocol answers as a bare 403. The terminal and voice routes still have no
+//! registered Rust owner, so an authorized upgrade on either path answers the same 403 and logs
+//! `websocket_route_not_ported`.
 
 use std::sync::Arc;
 
@@ -336,7 +337,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn registered_routes_authorize_dispatch_and_keep_known_unregistered_routes_closed() {
+  async fn registered_routes_authorize_dispatch_and_keep_unowned_routes_closed() {
     let logs = captured_logs();
     let mut registry = Registry::new();
     registry.register_package("src.features.test", register_exchange).expect("register the test route");
@@ -354,17 +355,19 @@ mod tests {
     let (_socket, status) = handshake(address, "/ws/test/unauthorized").await;
     assert_eq!(status, 403);
 
-    logs.lock().expect("lock captured log messages").clear();
-    let (_socket, status) = handshake(address, "/ws/sessions/synthetic?token=synthetic-key").await;
-    assert_eq!(status, 403);
-    assert!(
-      logs
-        .lock()
-        .expect("lock captured log messages")
-        .iter()
-        .any(|message| message.contains("websocket_route_not_ported")),
-      "the known unregistered route logs websocket_route_not_ported"
-    );
+    for path in ["/ws/terminal?token=synthetic-key", "/ws/voice/synthetic?token=synthetic-key"] {
+      logs.lock().expect("lock captured log messages").clear();
+      let (_socket, status) = handshake(address, path).await;
+      assert_eq!(status, 403);
+      assert!(
+        logs
+          .lock()
+          .expect("lock captured log messages")
+          .iter()
+          .any(|message| message.contains("websocket_route_not_ported")),
+        "an unowned known route logs websocket_route_not_ported"
+      );
+    }
 
     server.abort();
     let _ = server.await;

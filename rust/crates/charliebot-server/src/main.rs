@@ -150,6 +150,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  let shutdown_store = Arc::clone(&features.store);
   let state = Arc::new(AppState {
     features,
     build_info,
@@ -179,6 +180,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       .with_graceful_shutdown(async move {
         // A dropped sender also stops the server.
         let _ = stop_receiver.await;
+        shutdown_store.close_subscribers();
       })
       .await
   });

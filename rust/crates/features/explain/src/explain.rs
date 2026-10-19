@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::{agent_one_shot_text, build_backend};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::{fsutil, tempdir, timefmt};
@@ -232,7 +233,8 @@ impl Generation {
     let prompt = prompt::user(self.upto, round_text, &copy.path);
     let launch = LaunchArgs { cgroup_session_id: Some(self.session_id.clone()), ..LaunchArgs::default() };
     let built = build_backend(Arc::clone(&self.features.registry), &self.option, &self.cfg, launch)?;
-    agent_one_shot_text(built, &prompt, prompt::SYSTEM, Some(timeout)).await
+    let base_env = self.features.startup.require::<AgentBaseEnvironment>()?;
+    agent_one_shot_text(built, &base_env.values, &prompt, prompt::SYSTEM, Some(timeout)).await
   }
 
   /// `_finish`: land the terminal entry, then broadcast the state the file now holds.

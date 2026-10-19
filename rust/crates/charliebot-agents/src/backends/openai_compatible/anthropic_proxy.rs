@@ -1,0 +1,324 @@
+//! `POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` (`anthropic_proxy.py:493`): an Anthropic
+//! Messages request answered by an OpenAI-compatible upstream. The upstream call goes through the shared HTTP client.
+
+use std::collections::VecDeque;
+use std::io;
+use std::sync::{Arc, OnceLock};
+
+use axum::Router;
+use axum::body::{Body, Bytes, to_bytes};
+use axum::extract::{Path, State};
+use axum::http::{StatusCode, header};
+use axum::response::Response;
+use axum::routing::post;
+use charliebot_compat::http_client::{self, Settings};
+use charliebot_compat::responses;
+use charliebot_core::pyfmt;
+use charliebot_registry::FeatureContext;
+use futures_util::stream::{self, Stream};
+use serde_json::{Value, json};
+
+use super::options::CcOpenAiOption;
+use super::pyvalue::{self, Fault};
+use super::sse::{LineFramer, sse_frame};
+use super::translate::{self, Event, OpenAiChatStream};
+
+const ROUTE: &str = "/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages";
+const ROUTE_PREFIX: &str = "/api/anthropic-proxy/openai-compatible/";
+const ROUTE_SUFFIX: &str = "/v1/messages";
+
+/// The route's router, mounted by the registry.
+pub fn router(features: &Arc<FeatureContext>) -> Router {
+  Router::new().route(ROUTE, post(messages)).with_state(Arc::clone(features))
+}
+
+/// Whether `path` is one of the route's paths: a single backend id between the prefix and the `v1/messages` suffix.
+pub fn matches(path: &str) -> bool {
+  path
+    .strip_prefix(ROUTE_PREFIX)
+    .and_then(|rest| rest.strip_suffix(ROUTE_SUFFIX))
+    .is_some_and(|backend_id| !backend_id.is_empty() && !backend_id.contains('/'))
+}
+
+/// The upstream client, built from the process settings the first time a proxy request needs one. Python builds its
+/// httpx client on first use too, so a bad TLS setting fails the first request rather than the server's start.
+static UPSTREAM: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn upstream_client() -> anyhow::Result<&'static reqwest::Client> {
+  if let Some(client) = UPSTREAM.get() {
+    return Ok(client);
+  }
+  let client = http_client::client(&Settings::from_env())?;
+  Ok(UPSTREAM.get_or_init(|| client))
+}
+
+/// How a failed request is answered: a FastAPI `HTTPException` with its detail, or an unhandled exception.
+enum Refusal {
+  Detail(StatusCode, String),
+  Unhandled { kind: String, message: String },
+}
+
+impl From<Fault> for Refusal {
+  fn from(fault: Fault) -> Self {
+    match fault {
+      Fault::Value(text) => Refusal::Detail(StatusCode::BAD_REQUEST, text),
+      Fault::Raised { kind, message } => Refusal::Unhandled { kind: kind.to_string(), message },
+    }
+  }
+}
+
+impl Refusal {
+  fn into_response(self) -> Response {
+    match self {
+      Refusal::Detail(status, detail) => responses::json(status, &json!({ "detail": detail })),
+      Refusal::Unhandled { kind, message } => responses::internal_error(&kind, message),
+    }
+  }
+}
+
+fn unhandled(kind: &str, message: impl Into<String>) -> Refusal {
+  Refusal::Unhandled { kind: kind.to_string(), message: message.into() }
+}
+
+fn detail(status: StatusCode, text: impl Into<String>) -> Refusal {
+  Refusal::Detail(status, text.into())
+}
+
+/// A failed upstream request: httpx's class names for the two failures a request can meet.
+fn upstream_failure(error: reqwest::Error) -> Refusal {
+  let kind = if error.is_connect() { "ConnectError" } else { "RequestError" };
+  unhandled(kind, error.to_string())
+}
+
+async fn messages(State(features): State<Arc<FeatureContext>>, Path(backend_id): Path<String>, body: Body) -> Response {
+  match forward(&features, &backend_id, body).await {
+    Ok(response) => response,
+    Err(refusal) => refusal.into_response(),
+  }
+}
+
+async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Result<Response, Refusal> {
+  let cfg = features.config.get().map_err(|error| unhandled("ConfigError", error.to_string()))?;
+  let option = cfg
+    .get_backend_option(backend_id)
+    .ok_or_else(|| detail(StatusCode::NOT_FOUND, format!("unknown backend id: {backend_id}")))?;
+  if option.backend_type != "cc-openai-compatible" {
+    return Err(detail(
+      StatusCode::BAD_REQUEST,
+      format!("backend '{backend_id}' is not type 'cc-openai-compatible' (got '{}')", option.backend_type),
+    ));
+  }
+  let fields = CcOpenAiOption::from_fields(&option.type_fields).map_err(|error| unhandled("ConfigError", error))?;
+  if fields.api_base.is_empty() {
+    return Err(detail(StatusCode::BAD_REQUEST, format!("backend '{backend_id}' missing api_base")));
+  }
+  if option.model.is_empty() {
+    return Err(detail(StatusCode::BAD_REQUEST, format!("backend '{backend_id}' missing model")));
+  }
+
+  let body = to_bytes(body, usize::MAX).await.map_err(|error| unhandled("ClientDisconnect", error.to_string()))?;
+  let anthropic_payload = pyvalue::loads_bytes(&body)?;
+  let openai_payload = translate::anthropic_to_openai_chat_request(&anthropic_payload, &option.model)?;
+  let upstream_url = format!("{}/chat/completions", fields.api_base.trim_end_matches('/'));
+  let authorization = match fields.credential.as_deref().filter(|section| !section.is_empty()) {
+    None => None,
+    Some(section) => {
+      let credentials =
+        features.credentials.get().map_err(|error| detail(StatusCode::BAD_REQUEST, error.to_string()))?;
+      let key =
+        credentials.require(section, "api_key").map_err(|error| detail(StatusCode::BAD_REQUEST, error.to_string()))?;
+      Some(format!("Bearer {key}"))
+    }
+  };
+
+  let client = upstream_client().map_err(|error| unhandled("ClientError", format!("{error:#}")))?;
+  let mut request = client
+    .post(&upstream_url)
+    .header(header::CONTENT_TYPE, "application/json")
+    .body(pyfmt::json_dumps(&openai_payload, &pyfmt::STARLETTE_JSON));
+  if let Some(authorization) = authorization {
+    request = request.header(header::AUTHORIZATION, authorization);
+  }
+  let upstream = request.send().await.map_err(upstream_failure)?;
+  if upstream.status().as_u16() >= 400 {
+    return Err(upstream_error(upstream).await);
+  }
+
+  if openai_payload.get("stream").and_then(Value::as_bool) == Some(true) {
+    return Ok(stream_response(upstream, &option.model));
+  }
+  let answer = upstream.bytes().await.map_err(upstream_failure)?;
+  let upstream_json = pyvalue::loads_bytes(&answer).map_err(answer_refusal)?;
+  let message = translate::openai_chat_response_to_anthropic(&upstream_json, &option.model).map_err(answer_refusal)?;
+  Ok(responses::json(StatusCode::OK, &message))
+}
+
+/// A translation failure of the upstream's answer: a `ValueError` is a 502 with its text, any other exception a 500.
+fn answer_refusal(fault: Fault) -> Refusal {
+  match fault {
+    Fault::Value(text) => detail(StatusCode::BAD_GATEWAY, text),
+    other => other.into(),
+  }
+}
+
+/// The upstream's error status with its body as the detail. The body decodes with replacement, as httpx's text does.
+async fn upstream_error(upstream: reqwest::Response) -> Refusal {
+  let status = upstream.status();
+  match upstream.bytes().await {
+    Ok(body) => detail(status, String::from_utf8_lossy(&body).into_owned()),
+    Err(error) => upstream_failure(error),
+  }
+}
+
+/// The streamed answer: the start event first, then the translated events as the upstream's lines arrive.
+fn stream_response(upstream: reqwest::Response, model: &str) -> Response {
+  let translator = OpenAiChatStream::new(model);
+  let mut relay = Relay {
+    upstream,
+    framer: LineFramer::default(),
+    translator,
+    frames: VecDeque::new(),
+    failure: None,
+    reading: true,
+    done: false,
+  };
+  relay.queue(relay.translator.start_events());
+  Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")
+    .body(Body::from_stream(relay_frames(relay)))
+    .expect("a fixed-header response builds")
+}
+
+/// The state of one streamed answer: the upstream being read, the line framer, the translator, and the frames ready
+/// to send.
+struct Relay {
+  upstream: reqwest::Response,
+  framer: LineFramer,
+  translator: OpenAiChatStream,
+  frames: VecDeque<Bytes>,
+  /// The failure that ends the body, sent after the frames queued before it.
+  failure: Option<io::Error>,
+  /// Whether the upstream still has lines to read. `[DONE]` and the upstream's end both clear it.
+  reading: bool,
+  done: bool,
+}
+
+/// The body's frames: every queued frame, then the failure that ends the body early, then the end. A failure leaves the
+/// body without `message_stop`, as the Python generator's exception does.
+fn relay_frames(state: Relay) -> impl Stream<Item = Result<Bytes, io::Error>> {
+  stream::unfold(state, |mut relay| async move {
+    loop {
+      if let Some(frame) = relay.frames.pop_front() {
+        return Some((Ok(frame), relay));
+      }
+      if let Some(failure) = relay.failure.take() {
+        // hyper writes the frames it has been given only when the body waits, so yield once: the frames already
+        // produced reach the client before the failure closes the connection, as the Python server's writes do.
+        tokio::task::yield_now().await;
+        return Some((Err(failure), relay));
+      }
+      if relay.done {
+        return None;
+      }
+      relay.advance().await;
+    }
+  })
+}
+
+impl Relay {
+  fn queue(&mut self, events: Vec<Event>) {
+    for (name, data) in events {
+      self.frames.push_back(Bytes::from(sse_frame(name, &data)));
+    }
+  }
+
+  async fn advance(&mut self) {
+    if let Err((kind, message)) = self.step().await {
+      tracing::error!(error = %kind, detail = %message, "Exception in ASGI application");
+      self.failure = Some(io::Error::other(message));
+      self.done = true;
+    }
+  }
+
+  /// Reads the upstream's next chunk and handles its complete lines, or finishes the message once the upstream is done.
+  async fn step(&mut self) -> Result<(), (String, String)> {
+    if !self.reading {
+      let events = self.translator.finish_events().map_err(fault_failure)?;
+      self.queue(events);
+      self.done = true;
+      return Ok(());
+    }
+    match self.upstream.chunk().await.map_err(|error| ("RequestError".to_string(), error.to_string()))? {
+      Some(chunk) => {
+        for line in self.framer.push(&chunk) {
+          self.handle_line(&line)?;
+          if !self.reading {
+            break;
+          }
+        }
+      }
+      None => {
+        if let Some(tail) = std::mem::take(&mut self.framer).finish() {
+          self.handle_line(&tail)?;
+        }
+        self.reading = false;
+      }
+    }
+    Ok(())
+  }
+
+  /// `_iter_anthropic_sse`'s handling of one line: a `data:` line carries one chunk, and `[DONE]` ends the reading.
+  fn handle_line(&mut self, line: &[u8]) -> Result<(), (String, String)> {
+    let Some(raw) = line.strip_prefix(b"data:") else {
+      return Ok(());
+    };
+    let raw = trim_python_space(raw);
+    if raw == b"[DONE]" {
+      self.reading = false;
+      return Ok(());
+    }
+    if raw.is_empty() {
+      return Ok(());
+    }
+    let chunk: Value =
+      serde_json::from_slice(raw).map_err(|error| ("JSONDecodeError".to_string(), error.to_string()))?;
+    let events = self.translator.events_for_chunk(&chunk).map_err(fault_failure)?;
+    self.queue(events);
+    Ok(())
+  }
+}
+
+fn fault_failure(fault: Fault) -> (String, String) {
+  match fault {
+    Fault::Value(text) => ("ValueError".to_string(), text),
+    Fault::Raised { kind, message } => (kind.to_string(), message),
+  }
+}
+
+/// `bytes.strip()`: the ASCII whitespace of a Python bytes value, which includes the vertical tab.
+fn trim_python_space(raw: &[u8]) -> &[u8] {
+  let is_space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+  let start = raw.iter().position(|byte| !is_space(byte)).unwrap_or(raw.len());
+  let end = raw.iter().rposition(|byte| !is_space(byte)).map_or(start, |last| last + 1);
+  &raw[start..end]
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn the_route_matches_one_backend_id_under_the_prefix() {
+    assert!(matches("/api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages"));
+    assert!(!matches("/api/anthropic-proxy/openai-compatible//v1/messages"));
+    assert!(!matches("/api/anthropic-proxy/openai-compatible/a/b/v1/messages"));
+    assert!(!matches("/api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages/x"));
+  }
+
+  #[test]
+  fn python_strip_removes_the_vertical_tab_too() {
+    assert_eq!(trim_python_space(b" \x0b{}\r\x0c"), b"{}");
+    assert_eq!(trim_python_space(b" \t "), b"");
+  }
+}

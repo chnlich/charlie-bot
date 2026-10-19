@@ -83,10 +83,10 @@ const SEND_MESSAGE_BODY: BodyModel = BodyModel::required(SEND_MESSAGE_BODY_FIELD
 
 const RETRY_RUN_BODY_FIELDS: &[Field] =
   &[Field::required("request_id", FieldType::String), Field::required("run_id", FieldType::String)];
-const RETRY_RUN_BODY: BodyModel = BodyModel::required(RETRY_RUN_BODY_FIELDS);
+const RETRY_RUN_BODY: BodyModel = BodyModel::required(RETRY_RUN_BODY_FIELDS).forbid_extra();
 
 const CANCEL_RUN_BODY_FIELDS: &[Field] = &[Field::required("request_id", FieldType::String)];
-const CANCEL_RUN_BODY: BodyModel = BodyModel::required(CANCEL_RUN_BODY_FIELDS);
+const CANCEL_RUN_BODY: BodyModel = BodyModel::required(CANCEL_RUN_BODY_FIELDS).forbid_extra();
 
 async fn require_session(features: &FeatureContext, session_id: &str) -> Result<bool, Box<Response>> {
   match features.store.get_session(session_id).await {
@@ -222,7 +222,6 @@ fn uploaded_file_size(value: &Value) -> Result<i64, validation::Kind> {
 fn parse_retry_run_request(body: &RequestBody) -> Result<RetryRunRequest, Box<Response>> {
   let values = body.validate(&RETRY_RUN_BODY)?;
   let values = values.expect("a required request body validates to an object");
-  reject_extra_fields(body, &["request_id", "run_id"])?;
   Ok(RetryRunRequest {
     request_id: values["request_id"].as_str().expect("validated request_id is a string").to_string(),
     run_id: values["run_id"].as_str().expect("validated run_id is a string").to_string(),
@@ -232,26 +231,9 @@ fn parse_retry_run_request(body: &RequestBody) -> Result<RetryRunRequest, Box<Re
 fn parse_cancel_run_request(body: &RequestBody) -> Result<CancelRunRequest, Box<Response>> {
   let values = body.validate(&CANCEL_RUN_BODY)?;
   let values = values.expect("a required request body validates to an object");
-  reject_extra_fields(body, &["request_id"])?;
   Ok(CancelRunRequest {
     request_id: values["request_id"].as_str().expect("validated request_id is a string").to_string(),
   })
-}
-
-fn reject_extra_fields(body: &RequestBody, allowed: &[&str]) -> Result<(), Box<Response>> {
-  let RequestBody::Json(Value::Object(object)) = body else {
-    unreachable!("the required request model validated a JSON object")
-  };
-  let errors = object
-    .iter()
-    .filter(|(key, _)| !allowed.contains(&key.as_str()))
-    .map(|(key, value)| validation::FieldError {
-      loc: vec![validation::Loc::Field("body".to_string()), validation::Loc::Field(key.clone())],
-      input: value.clone(),
-      kind: validation::Kind::ExtraForbidden,
-    })
-    .collect::<Vec<_>>();
-  if errors.is_empty() { Ok(()) } else { Err(Box::new(validation::response(&errors))) }
 }
 
 fn body_validation_error(loc: Vec<validation::Loc>, input: Value, kind: validation::Kind) -> Box<Response> {
@@ -1153,6 +1135,17 @@ mod tests {
       json!(["body", "extra"]),
     )
     .await;
+    // pydantic reports the field error and the extra key together, fields first.
+    let response =
+      send_operator(&router, path, br#"{"request_id":1,"run_id":"x","extra":true}"#.to_vec(), Some("application/json"))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"][0]["type"], "string_type");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "request_id"]));
+    assert_eq!(body["detail"][1]["type"], "extra_forbidden");
+    assert_eq!(body["detail"][1]["loc"], json!(["body", "extra"]));
+    assert_eq!(body["detail"].as_array().map(Vec::len), Some(2));
     assert_validation(
       send_operator(
         &router,
@@ -1225,6 +1218,16 @@ mod tests {
       json!(["body", "extra"]),
     )
     .await;
+    // pydantic reports the field error and the extra key together, fields first.
+    let response =
+      send_operator(&router, path, br#"{"request_id":1,"extra":true}"#.to_vec(), Some("application/json")).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response_json(response).await;
+    assert_eq!(body["detail"][0]["type"], "string_type");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "request_id"]));
+    assert_eq!(body["detail"][1]["type"], "extra_forbidden");
+    assert_eq!(body["detail"][1]["loc"], json!(["body", "extra"]));
+    assert_eq!(body["detail"].as_array().map(Vec::len), Some(2));
     assert_validation(
       send_operator(
         &router,

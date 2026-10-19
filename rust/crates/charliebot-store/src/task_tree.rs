@@ -780,6 +780,49 @@ impl Store {
     })
   }
 
+  /// Build the session detail projection used by the session read and completion routes.
+  pub fn session_detail(&self, session_id: &str) -> StoreResult<Value> {
+    let index = self.tree_index()?;
+    let meta =
+      index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+    let mut detail = serde_json::to_value(meta)?;
+    let object = detail.as_object_mut().expect("session metadata serializes to an object");
+    object.insert("task_state".to_string(), Value::String(self.task_state(session_id)?));
+    object.insert("work_state".to_string(), Value::String(self.task_tree_activity(session_id)?.work_state));
+    object.insert("archived".to_string(), Value::Bool(archived_of(self, &index, session_id)?));
+
+    let mut ancestors = Vec::new();
+    for ancestor_id in ancestor_ids(&index, session_id)? {
+      let ancestor =
+        index.metas.get(&ancestor_id).ok_or_else(|| StoreError::not_found(format!("task {ancestor_id} not found")))?;
+      ancestors.push(json!({"id": ancestor.id, "name": ancestor.name}));
+    }
+    object.insert("ancestors".to_string(), Value::Array(ancestors));
+
+    let descendants = descendant_ids(&index, session_id)?.len();
+    let prompt_rules = json!({
+      "subtree": self.prompt_rule_summary(meta.subtree_prompt_ref.as_deref())?,
+      "node": self.prompt_rule_summary(meta.node_prompt_ref.as_deref())?,
+      "affected_descendants": descendants,
+    });
+    object.insert("prompt_rules".to_string(), prompt_rules);
+    Ok(detail)
+  }
+
+  fn prompt_rule_summary(&self, prompt_ref: Option<&str>) -> StoreResult<Value> {
+    let Some(prompt_ref) = prompt_ref else {
+      return Ok(json!({"ref": null, "source": null, "chars": 0, "text": null}));
+    };
+    let path = self.prompt_bodies_dir().join(format!("{prompt_ref}.md"));
+    let body = fs::read_to_string(&path).map_err(|error| path_error(&path, error))?;
+    Ok(json!({
+      "ref": prompt_ref,
+      "source": path.to_string_lossy(),
+      "chars": body.chars().count(),
+      "text": body,
+    }))
+  }
+
   fn tree_index(&self) -> StoreResult<TreeIndex> {
     let generation = self.task_tree_generation.load(Ordering::Acquire);
     if let Some(cached) = self.task_tree_index.lock().expect("task tree index mutex is not poisoned").as_ref()

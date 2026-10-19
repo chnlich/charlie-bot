@@ -1,16 +1,27 @@
 //! The behavior cases of `tests/test_backup.py`, retention cases pinned to calendar dates at each age
 //! boundary, and the member fields Python's `tarfile` records.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
 use crate::backup::*;
 use crate::tar_writer::{Member, write_member};
+
+/// A home inside a fresh temporary root. Its `_backup` sibling is created inside the same root, so dropping
+/// the root removes every archive a test writes.
+fn temp_home() -> (TempDir, PathBuf) {
+  let root = tempdir().unwrap();
+  let home = root.path().join("profile");
+  fs::create_dir(&home).unwrap();
+  (root, home)
+}
 
 /// Reads one member's content out of a `.tar.gz` archive, by name.
 fn member_content(archive: &Path, name: &str) -> Option<Vec<u8>> {
@@ -36,24 +47,33 @@ fn member_names(archive: &Path) -> Vec<String> {
   names
 }
 
+/// The member names of a `.tar.gz` archive as raw bytes, in archive order.
+fn member_name_bytes(archive: &Path) -> Vec<Vec<u8>> {
+  let file = fs::File::open(archive).unwrap();
+  let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+  archive.entries().unwrap().map(|entry| entry.unwrap().path_bytes().into_owned()).collect()
+}
+
 #[test]
 fn exclusions_cover_the_secrets_file_and_noise() {
-  assert!(should_exclude("credentials.yaml"));
-  assert!(should_exclude(".git/HEAD"));
-  assert!(should_exclude("__pycache__/x.pyc"));
-  assert!(should_exclude("cache/x.pyc"));
-  assert!(should_exclude("sessions/s1/threads/t1/metadata.json"));
-  assert!(!should_exclude("config.yaml"));
-  assert!(!should_exclude("sessions/s1/triggers/t1.json"));
+  assert!(should_exclude(b"credentials.yaml"));
+  assert!(should_exclude(b".git/HEAD"));
+  assert!(should_exclude(b"__pycache__/x.pyc"));
+  assert!(should_exclude(b"cache/x.pyc"));
+  assert!(should_exclude(b"sessions/s1/threads/t1/metadata.json"));
+  assert!(should_exclude(b"raw-\xff.pyc"));
+  assert!(!should_exclude(b"config.yaml"));
+  assert!(!should_exclude(b"sessions/s1/triggers/t1.json"));
+  assert!(!should_exclude(b"raw-\xff.txt"));
 }
 
 #[test]
 fn create_backup_omits_the_secrets_file() {
-  let home = tempdir().unwrap();
-  fs::write(home.path().join("credentials.yaml"), "credentials:\n  access_key: secret\n").unwrap();
-  fs::write(home.path().join("config.yaml"), "server: {}\n").unwrap();
+  let (_root, home) = temp_home();
+  fs::write(home.join("credentials.yaml"), "credentials:\n  access_key: secret\n").unwrap();
+  fs::write(home.join("config.yaml"), "server: {}\n").unwrap();
 
-  let archive = create_backup_in(home.path()).unwrap();
+  let archive = create_backup_in(&home).unwrap();
   let names = member_names(&archive);
 
   assert!(names.iter().any(|name| name == "config.yaml"));
@@ -62,12 +82,27 @@ fn create_backup_omits_the_secrets_file() {
 
 #[test]
 fn create_backup_archive_round_trips_bytes() {
-  let home = tempdir().unwrap();
+  let (_root, home) = temp_home();
   let payload = "key: value\nlist:\n  - a\n  - b\n";
-  fs::write(home.path().join("config.yaml"), payload).unwrap();
+  fs::write(home.join("config.yaml"), payload).unwrap();
 
-  let archive = create_backup_in(home.path()).unwrap();
+  let archive = create_backup_in(&home).unwrap();
   assert_eq!(member_content(&archive, "config.yaml").unwrap(), payload.as_bytes());
+}
+
+#[test]
+fn create_backup_archives_names_that_are_not_utf8_as_their_bytes() {
+  let (_root, home) = temp_home();
+  fs::write(home.join(OsStr::from_bytes(b"raw-\xff.txt")), "top\n").unwrap();
+  fs::create_dir(home.join("nested")).unwrap();
+  fs::write(home.join("nested").join(OsStr::from_bytes(b"bad-\xc3(.txt")), "nested\n").unwrap();
+
+  // Every entry is present, in Python's order: a read that skips or fails on a name would drop one of them.
+  let archive = create_backup_in(&home).unwrap();
+  assert_eq!(
+    member_name_bytes(&archive),
+    [b"nested/".to_vec(), b"nested/bad-\xc3(.txt".to_vec(), b"raw-\xff.txt".to_vec()]
+  );
 }
 
 #[test]
@@ -104,9 +139,9 @@ fn create_backup_reads_the_profile_home_from_the_environment() {
 
 #[test]
 fn create_backup_names_the_archive_by_local_time() {
-  let home = tempdir().unwrap();
-  fs::write(home.path().join("config.yaml"), "server: {}\n").unwrap();
-  let archive = create_backup_in(home.path()).unwrap();
+  let (_root, home) = temp_home();
+  fs::write(home.join("config.yaml"), "server: {}\n").unwrap();
+  let archive = create_backup_in(&home).unwrap();
   let name = archive.file_name().unwrap().to_str().unwrap();
   assert!(name.starts_with("charliebot-") && name.ends_with(".tar.gz"));
   assert_eq!(name.len(), "charliebot-YYYYMMDD-HHMMSS.tar.gz".len());
@@ -115,13 +150,13 @@ fn create_backup_names_the_archive_by_local_time() {
 
 #[test]
 fn create_backup_records_the_permission_bits_and_directory_slashes() {
-  let home = tempdir().unwrap();
-  let config = home.path().join("config.yaml");
+  let (_root, home) = temp_home();
+  let config = home.join("config.yaml");
   fs::write(&config, "server: {}\n").unwrap();
   fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).unwrap();
-  fs::create_dir(home.path().join("sub")).unwrap();
+  fs::create_dir(home.join("sub")).unwrap();
 
-  let archive = create_backup_in(home.path()).unwrap();
+  let archive = create_backup_in(&home).unwrap();
   let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&archive).unwrap()));
   let mut members = Vec::new();
   for entry in tar.entries().unwrap() {
@@ -137,7 +172,7 @@ fn create_backup_records_the_permission_bits_and_directory_slashes() {
 #[test]
 fn write_member_moves_a_uid_past_the_ustar_field_to_a_pax_record() {
   let member = Member {
-    name: "owned.txt",
+    name: b"owned.txt",
     mode: 0o100644,
     uid: 2_097_152,
     gid: 0,
@@ -145,9 +180,9 @@ fn write_member_moves_a_uid_past_the_ustar_field_to_a_pax_record() {
     mtime_sec: 1_700_000_000,
     mtime_nsec: 0,
     typeflag: b'0',
-    linkname: "",
-    uname: "",
-    gname: "",
+    linkname: b"",
+    uname: b"",
+    gname: b"",
     devmajor: 0,
     devminor: 0,
   };

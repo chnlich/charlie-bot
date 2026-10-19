@@ -6,6 +6,10 @@
 //! carries a PAX `mtime` record. The Rust side keeps the same split: the rounded integer mtime in the
 //! ustar header and the full-precision float in the PAX record, so a reader sees the same mtime value
 //! from either archive.
+//!
+//! Names and link targets are raw bytes, as `os.fsencode` gives them. A value that is not UTF-8 goes
+//! to its PAX record as those bytes under `hdrcharset=BINARY`, and its ustar field holds `?` for each
+//! character, as Python's `surrogateescape` string does.
 
 use std::io::{Read, Write};
 
@@ -19,7 +23,7 @@ const GNAME_LEN: usize = 32;
 
 /// One member's metadata, in the fields Python's `tarfile.TarInfo` records.
 pub struct Member<'a> {
-  pub name: &'a str,
+  pub name: &'a [u8],
   /// The full `st_mode`, type bits included, as Python's `gettarinfo` stores it.
   pub mode: u32,
   pub uid: u32,
@@ -29,11 +33,22 @@ pub struct Member<'a> {
   pub mtime_sec: i64,
   pub mtime_nsec: u32,
   pub typeflag: u8,
-  pub linkname: &'a str,
-  pub uname: &'a str,
-  pub gname: &'a str,
+  pub linkname: &'a [u8],
+  pub uname: &'a [u8],
+  pub gname: &'a [u8],
   pub devmajor: u32,
   pub devminor: u32,
+}
+
+/// The code points of a name as Python's `str` holds it: the bytes decoded as UTF-8 with `surrogateescape`,
+/// so each byte outside a UTF-8 sequence stands for U+DC00 plus that byte. Python sorts names by these.
+pub fn python_code_points(name: &[u8]) -> Vec<u32> {
+  let mut points = Vec::with_capacity(name.len());
+  for chunk in name.utf8_chunks() {
+    points.extend(chunk.valid().chars().map(u32::from));
+    points.extend(chunk.invalid().iter().map(|&byte| 0xDC00 + u32::from(byte)));
+  }
+  points
 }
 
 /// One octal number in a ustar field: `digits - 1` zero-padded digits, then NUL, as Python's `tarfile.itn`.
@@ -65,17 +80,17 @@ fn mtime_ustar(member: &Member) -> i128 {
   mtime_float(member).round_ties_even() as i128
 }
 
-fn store_name(field: &mut [u8], value: &str) {
-  // Python's ustar text fields are ASCII: each other character becomes `?`, and the PAX record keeps it.
-  let ascii: String = value.chars().map(|c| if c.is_ascii() { c } else { '?' }).collect();
-  let bytes = ascii.as_bytes();
-  let len = bytes.len().min(field.len());
-  field[..len].copy_from_slice(&bytes[..len]);
+/// Stores a text field as Python's ustar text: each code point that is not ASCII becomes `?`
+/// (`stn` with `ascii` and `replace`), and the PAX record keeps the real value.
+fn store_text(field: &mut [u8], value: &[u8]) {
+  let text: Vec<u8> = python_code_points(value).into_iter().map(|c| if c < 0x80 { c as u8 } else { b'?' }).collect();
+  let len = text.len().min(field.len());
+  field[..len].copy_from_slice(&text[..len]);
 }
 
 fn ustar_header(member: &Member) -> [u8; BLOCK] {
   let mut header = [0u8; BLOCK];
-  store_name(&mut header[0..NAME_LEN], member.name);
+  store_text(&mut header[0..NAME_LEN], member.name);
   // Python's `get_info` keeps the permission and the setuid, setgid and sticky bits only.
   itn(&mut header[100..108], u64::from(member.mode & 0o7777), 8);
   itn(&mut header[108..116], ustar_number(i128::from(member.uid), 8), 8);
@@ -84,11 +99,11 @@ fn ustar_header(member: &Member) -> [u8; BLOCK] {
   itn(&mut header[136..148], ustar_number(mtime_ustar(member), 12), 12);
   header[148..156].fill(b' ');
   header[156] = member.typeflag;
-  store_name(&mut header[157..157 + LINKNAME_LEN], member.linkname);
+  store_text(&mut header[157..157 + LINKNAME_LEN], member.linkname);
   header[257..263].copy_from_slice(b"ustar\0");
   header[263..265].copy_from_slice(b"00");
-  store_name(&mut header[265..265 + UNAME_LEN], member.uname);
-  store_name(&mut header[297..297 + GNAME_LEN], member.gname);
+  store_text(&mut header[265..265 + UNAME_LEN], member.uname);
+  store_text(&mut header[297..297 + GNAME_LEN], member.gname);
   // Python writes the device numbers of character and block devices only; the other members keep NULs.
   if matches!(member.typeflag, b'3' | b'4') {
     itn(&mut header[329..337], u64::from(member.devmajor), 8);
@@ -102,7 +117,7 @@ fn ustar_header(member: &Member) -> [u8; BLOCK] {
 
 /// One PAX record: `len key=value\n`, with the length found by the same fixed-point
 /// iteration Python's `_create_pax_generic_header` uses.
-fn pax_record(key: &str, value: &str) -> Vec<u8> {
+fn pax_record(key: &str, value: &[u8]) -> Vec<u8> {
   let mut p = 0;
   loop {
     let n = key.len() + value.len() + 3 + p.to_string().len();
@@ -111,7 +126,10 @@ fn pax_record(key: &str, value: &str) -> Vec<u8> {
     }
     p = n;
   }
-  format!("{p} {key}={value}\n").into_bytes()
+  let mut record = format!("{p} {key}=").into_bytes();
+  record.extend_from_slice(value);
+  record.push(b'\n');
+  record
 }
 
 /// Python's `str(float)`: the shortest round-trip digits, with `.0` kept for integral values.
@@ -125,7 +143,7 @@ fn float_repr(value: f64) -> String {
 /// Returns the bytes written, header and padding included.
 fn pax_entry<W: Write>(out: &mut W, records: &[u8]) -> std::io::Result<u64> {
   let pax = Member {
-    name: "././@PaxHeader",
+    name: b"././@PaxHeader",
     mode: 0,
     uid: 0,
     gid: 0,
@@ -133,9 +151,9 @@ fn pax_entry<W: Write>(out: &mut W, records: &[u8]) -> std::io::Result<u64> {
     mtime_sec: 0,
     mtime_nsec: 0,
     typeflag: b'x',
-    linkname: "",
-    uname: "",
-    gname: "",
+    linkname: b"",
+    uname: b"",
+    gname: b"",
     devmajor: 0,
     devminor: 0,
   };
@@ -147,32 +165,44 @@ fn pax_entry<W: Write>(out: &mut W, records: &[u8]) -> std::io::Result<u64> {
   Ok((BLOCK + records.len() + padding) as u64)
 }
 
-/// The PAX records this member needs, empty when ustar holds every field.
+/// The PAX records this member needs, empty when ustar holds every field. A value that is not UTF-8 makes
+/// the header `hdrcharset=BINARY`, first, as Python's `_create_pax_generic_header` writes it.
 fn pax_records(member: &Member) -> Vec<u8> {
-  let mut records = Vec::new();
-  if !member.name.is_ascii() || member.name.len() > NAME_LEN {
-    records.extend(pax_record("path", member.name));
-  }
-  if !member.linkname.is_ascii() || member.linkname.len() > LINKNAME_LEN {
-    records.extend(pax_record("linkpath", member.linkname));
-  }
-  if !member.uname.is_ascii() || member.uname.len() > UNAME_LEN {
-    records.extend(pax_record("uname", member.uname));
-  }
-  if !member.gname.is_ascii() || member.gname.len() > GNAME_LEN {
-    records.extend(pax_record("gname", member.gname));
+  let mut fields: Vec<(&str, &[u8])> = Vec::new();
+  let mut numbers: Vec<(&str, Vec<u8>)> = Vec::new();
+  let text_fields = [
+    ("path", member.name, NAME_LEN),
+    ("linkpath", member.linkname, LINKNAME_LEN),
+    ("uname", member.uname, UNAME_LEN),
+    ("gname", member.gname, GNAME_LEN),
+  ];
+  for (key, value, limit) in text_fields {
+    if !value.is_ascii() || value.len() > limit {
+      fields.push((key, value));
+    }
   }
   // A number field that does not fit its ustar field goes to a PAX record, as `create_pax_header` does.
-  let numbers =
+  let number_fields =
     [("uid", i128::from(member.uid), 8), ("gid", i128::from(member.gid), 8), ("size", i128::from(member.size), 12)];
-  for (key, value, digits) in numbers {
+  for (key, value, digits) in number_fields {
     if !fits_ustar(value, digits) {
-      records.extend(pax_record(key, &value.to_string()));
+      numbers.push((key, value.to_string().into_bytes()));
     }
   }
   // os.stat hands Python's tarfile a float mtime, so the PAX record always rides the member,
   // exactly as Python writes it; the ustar header keeps the rounded integer.
-  records.extend(pax_record("mtime", &float_repr(mtime_float(member))));
+  numbers.push(("mtime", float_repr(mtime_float(member)).into_bytes()));
+  let binary = fields.iter().any(|(_, value)| std::str::from_utf8(value).is_err());
+  let mut records = Vec::new();
+  if binary {
+    records.extend(pax_record("hdrcharset", b"BINARY"));
+  }
+  for (key, value) in fields {
+    records.extend(pax_record(key, value));
+  }
+  for (key, value) in numbers {
+    records.extend(pax_record(key, &value));
+  }
   records
 }
 

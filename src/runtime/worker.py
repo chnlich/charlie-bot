@@ -142,8 +142,8 @@ class Worker:
     the constructor and a real run never silently degrades to another backend.
     Translate-only builds (on_spawn None) only parse events, so a construction
     failure (e.g. the host lacks the backend's CLI binary) degrades to the
-    method's binary-free fallback branch — same shape as spawner's stale-id
-    translate-only fallback — and never crashes restart recovery's drain.
+    method's binary-free fallback branch and never crashes restart recovery's
+    drain.
     """
     if self._backend_option:
       launch_kwargs = dict(launch.backend_kwargs) if launch is not None else {}

@@ -2,7 +2,7 @@
 
 This module owns the verify-trailer surface ``src.runtime.spawner_prompt`` interpolates into the
 verify prompt: the expected final ``RESULT:`` line a verify worker's report must end with. It
-knows nothing about the plan registry; the dependency direction is spawner -> verify_trailer.
+knows nothing about the plan registry; the dependency direction is spawner_prompt -> verify_trailer.
 """
 
 import re

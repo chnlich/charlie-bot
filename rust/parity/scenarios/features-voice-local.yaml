@@ -91,3 +91,26 @@ steps:
       output_device: Synthetic speakers
       device_error: "null"
     timeout_seconds: 30
+  - name: upload with an empty backend id decodes locally
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: ""
+      devices: *devices
+    expect_status: 200
+  - name: upload with a malformed multipart body
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    headers: {content-type: "multipart/form-data; boundary=synthetic-boundary"}
+    body_file: audio/voice-malformed-multipart.bin
+    expect_status: 422
+    compare: status_and_shape
+  - name: upload without an audio field
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      backend: local
+      devices: *devices
+    expect_status: 422
+    compare: status_and_shape

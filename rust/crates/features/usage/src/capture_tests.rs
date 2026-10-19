@@ -2097,6 +2097,20 @@ fn malformed_timestamp_shapes_capture_the_rows_python_writes() {
     let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
     assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
   }
+
+  // Run metadata uses the same `... or ""` bind as a thread timestamp.
+  let raising_started_at = [
+    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": [1]}"#,
+    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": {"a": 1}}"#,
+  ];
+  for (index, metadata) in raising_started_at.into_iter().enumerate() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (config, registry) = fixture(&home);
+    write_run_json(&home, "run-session", &format!("run-bad-ts-{index}"), metadata, &run_usage);
+    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+  }
 }
 
 const MASTER_RESULT: &str =

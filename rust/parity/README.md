@@ -9,7 +9,8 @@ normalized responses and in the files each request changed. A route counts as po
 One run walks the selected scenarios. For each scenario it:
 
 1. Lays out two temporary trees under `/tmp/charliebot-parity-*/`, one per server (`base/` for the baseline,
-   `cand/` for the candidate), and writes a synthetic `config.yaml` and `credentials.yaml` into each home.
+   `cand/` for the candidate), writes a synthetic `config.yaml` and `credentials.yaml`, and installs the fake OpenCode
+   executable at each synthetic `$HOME/.opencode/bin/opencode`.
 2. Runs `fixture.py` in each tree. It builds the same synthetic home through the Python server's own writers.
    The harness then checks that both homes match file for file.
 3. Writes the scenario's fake-agent script into both trees before either server starts.
@@ -172,9 +173,11 @@ server's verified owner pid, and a handover step lists the new ones.
 A server that exits before the harness stops it fails the step that was running, with its exit status and log path.
 The harness checks for this after every step, before a handover stops a server, and before the shutdown step.
 
-Without `fake-agent/script.json`, the fake prints the stand-in line and exits 1. It reads stdin to EOF before
-the first scripted step unless stdin is a TTY. A `flock` on `fake-agent/lock` assigns each start the next script
-entry and appends one record to `fake-agent/spawns.jsonl`; every start writes `exit-<index>` before it exits.
+Without `fake-agent/script.json`, a fake CLI prints the stand-in line and exits 1. It reads stdin to EOF before
+the first scripted step unless stdin is a TTY. The `opencode serve` stand-in serves the local OpenCode HTTP API;
+its session events and gates come from the matching start in the same script. A `flock` on `fake-agent/lock` assigns
+each start the next script entry and appends one record to `fake-agent/spawns.jsonl`; each exiting start writes
+`exit-<index>` before it exits.
 The record includes argv, cwd, pid and `/proc` start time, stdout target, stdin byte count and its UTF-8 text, nice
 value, session ownership, parent-death signal, selected environment, and decoded run-token claims with signature
 validity. A stdin that is not UTF-8 raises before the start writes its record, so that start leaves no record and no
@@ -415,7 +418,8 @@ Step fields:
   ```
 - `gate` requires `open`; the harness writes `open-<name>` in both fake-agent directories.
 - `handover` requires `agent_after_stop`: `alive`, `exited` or `terminated`. It checks every scripted start that
-  had no exit marker before the server stopped.
+  had no exit marker before the server stopped. The OpenCode handover scenario expects its shared API process to be
+  terminated by server A and checks the run finish produced when server B reconciles the recorded turn.
 - `handover` with `open_while_stopped: <gate>` also requires `timeout_seconds`, and `timeout_seconds` is refused
   without it. The step stops every server, then writes `open-<gate>` in both fake-agent directories while no server
   runs. It then waits, up to the timeout, until each scripted start that had no exit marker before the stop has

@@ -197,11 +197,6 @@ impl AgentRunner {
       }
     };
     tokio::fs::create_dir_all(&log_dir).await?;
-    let raw_path = log_dir.join(RAW_LOG_NAME);
-    let stderr_path = log_dir.join(STDERR_LOG_NAME);
-    let cursor_path = log_dir.join(charliebot_store::run_records::CURSOR_NAME);
-    rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
-
     let mut backend = self.backend.lock().await;
     let transport = backend.transport();
     backend.prepare_transport(&log_dir)?;
@@ -217,8 +212,12 @@ impl AgentRunner {
     let final_env = backend.prepare_env(child_environment)?;
     if transport == TransportKind::Serve {
       drop(backend);
-      return self.run_serve(request, &command, final_env, &log_dir).await;
+      return self.run_serve(request, &command, final_env).await;
     }
+    let raw_path = log_dir.join(RAW_LOG_NAME);
+    let stderr_path = log_dir.join(STDERR_LOG_NAME);
+    let cursor_path = log_dir.join(charliebot_store::run_records::CURSOR_NAME);
+    rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
     let buffer_limit = self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT);
     let original_program = command.first().context("backend command is empty")?.clone();
     let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
@@ -361,13 +360,7 @@ impl AgentRunner {
 
   /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
   /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
-  async fn run_serve(
-    &self,
-    request: RunRequest,
-    command: &[String],
-    env: Env,
-    log_dir: &Path,
-  ) -> anyhow::Result<RunOutcome> {
+  async fn run_serve(&self, request: RunRequest, command: &[String], env: Env) -> anyhow::Result<RunOutcome> {
     let plan = crate::backends::opencode::backend::take_run_plan(command)?;
     let original_program = command.first().context("serve backend command is empty")?.clone();
     let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
@@ -389,9 +382,7 @@ impl AgentRunner {
       request.swap_max_mb,
       request.tasks_max,
     );
-    let raw_path = log_dir.join(RAW_LOG_NAME);
-    let stderr_path = log_dir.join(STDERR_LOG_NAME);
-    let mut spawned = spawn::spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null).await?;
+    let mut spawned = spawn::spawn_piped(&spec).await?;
     if request.child_waits_for_spawn_callback {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
@@ -433,7 +424,7 @@ impl AgentRunner {
     }
     let process_exit =
       wait_for_exit(&active, request.cleanup_timeout).await?.context("serve turn process did not exit")?;
-    let stderr_text = read_stderr_tail(&stderr_path)?;
+    let stderr_text = String::new();
     let custom_exit = run_result.as_ref().ok().and_then(|result| result.exit_code);
     let exit_code = custom_exit.unwrap_or(process_exit);
     self.record_exit_code(exit_code);

@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -16,11 +17,11 @@ import pytest
 FAKE_AGENT = pathlib.Path(__file__).resolve().parent / "fake_agent.py"
 
 
-def _write_script(home: pathlib.Path, steps: list[dict[str, Any]]) -> pathlib.Path:
+def _write_script(home: pathlib.Path, steps: list[dict[str, Any]], name: str = "claude") -> pathlib.Path:
   """One scripted start with *steps*; returns the fake-agent directory the script runs in."""
   agent_dir = home / "fake-agent"
   agent_dir.mkdir(parents=True)
-  script = {"starts": [{"name": "claude", "steps": steps, "exit_code": 0}]}
+  script = {"starts": [{"name": name, "steps": steps, "exit_code": 0}]}
   (agent_dir / "script.json").write_text(json.dumps(script), encoding="utf-8")
   return agent_dir
 
@@ -30,22 +31,26 @@ def start_fake() -> Iterator[Callable[[pathlib.Path], subprocess.Popen]]:
   """Start the fake as the ``claude`` agent of a home; a test that ends kills every fake it started."""
   processes: list[subprocess.Popen] = []
 
-  def start(home: pathlib.Path) -> subprocess.Popen:
+  def start(home: pathlib.Path, name: str = "claude", *args: str) -> subprocess.Popen:
     environment = {"HOME": str(home), "PATH": os.environ["PATH"]}
     process = subprocess.Popen(
-        [sys.executable, str(FAKE_AGENT), "claude"],
+        [sys.executable, str(FAKE_AGENT), name, *args],
         env=environment,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True)
+        text=True,
+        start_new_session=True)
     processes.append(process)
     return process
 
   yield start
   for process in processes:
+    try:
+      os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+      pass
     if process.poll() is None:
-      process.kill()
       process.wait()
 
 
@@ -93,3 +98,82 @@ def test_gate_poll_exits_two_when_the_fake_agent_directory_is_gone(
 
   assert process.wait(timeout=10) == 2
   assert len(process.stderr.read().splitlines()) == 1
+
+
+def _read_sse_event(response: Any) -> dict[str, Any]:
+  line = response.readline()
+  assert line.startswith(b"data: "), line
+  event = json.loads(line[len(b"data: "):])
+  assert response.readline() == b"\n"
+  return event
+
+
+def test_opencode_fake_serves_api_and_uses_script_gates_and_spawn_record(
+    tmp_path: pathlib.Path, start_fake: Callable[..., subprocess.Popen]) -> None:
+  home = tmp_path / "home"
+  agent_dir = _write_script(
+      home, [
+          {
+              "emit":
+                  {
+                      "type": "session.text.delta",
+                      "data": {
+                          "assistantMessageID": "assistant-1",
+                          "ordinal": 0,
+                          "delta": "Synthetic answer."
+                      }
+                  }
+          }, {
+              "gate": "opencode-turn"
+          }
+      ],
+      name="opencode")
+  process = start_fake(home, "opencode", "serve", "--port", "0")
+  assert process.stdout is not None
+  listening = process.stdout.readline().strip()
+  assert listening.startswith("server listening on http://127.0.0.1:"), listening
+  base_url = listening.removeprefix("server listening on ")
+
+  with urllib.request.urlopen(f"{base_url}/api/info", timeout=2) as response:
+    assert json.loads(response.read()) == {"version": "2.0.32"}
+  stream = urllib.request.urlopen(f"{base_url}/api/event", timeout=2)
+  assert _read_sse_event(stream) == {"type": "server.connected", "data": {}}
+  request = urllib.request.Request(
+      f"{base_url}/api/session",
+      data=json.dumps({
+          "location": {
+              "directory": str(home)
+          }
+      }).encode("utf-8"),
+      headers={"Content-Type": "application/json"},
+      method="POST")
+  with urllib.request.urlopen(request, timeout=2) as response:
+    session_id = json.loads(response.read())["data"]["id"]
+  request = urllib.request.Request(
+      f"{base_url}/api/session/{session_id}/prompt",
+      data=json.dumps({
+          "text": "Synthetic manager prompt."
+      }).encode("utf-8"),
+      headers={"Content-Type": "application/json"},
+      method="POST")
+  with urllib.request.urlopen(request, timeout=2) as response:
+    assert response.status == 200
+  assert _read_sse_event(stream) == {"type": "session.execution.started", "data": {"sessionID": session_id}}
+  assert _read_sse_event(stream) == {
+      "type": "session.text.delta",
+      "data": {
+          "assistantMessageID": "assistant-1",
+          "ordinal": 0,
+          "delta": "Synthetic answer.",
+          "sessionID": session_id
+      }
+  }
+  _wait_for_file(agent_dir / "at-opencode-turn", process)
+  spawn = json.loads((agent_dir / "spawns.jsonl").read_text(encoding="utf-8"))
+  assert spawn["name"] == "opencode"
+  assert spawn["argv"] == ["opencode", "serve", "--port", "0"]
+  assert pathlib.Path(spawn["stdout_path"]).is_file()
+  assert pathlib.Path(spawn["stdout_path"]).with_name("agent.raw.cursor").read_text(encoding="utf-8") == "0"
+  (agent_dir / "open-opencode-turn").write_text("open\n", encoding="utf-8")
+  assert _read_sse_event(stream) == {"type": "session.execution.succeeded", "data": {"sessionID": session_id}}
+  stream.close()

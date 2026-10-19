@@ -129,7 +129,7 @@ mod tests {
 
   #[test]
   fn opencode_store_paths_derive_from_the_profile() {
-    // tests/test_charliebot_home.py::test_opencode_store_paths_derive_from_the_profile
+    // Python: tests/test_charliebot_home.py::test_opencode_store_paths_derive_from_the_profile
     let home = Path::new("/synthetic/profile");
     assert_eq!(opencode_store_in(home), PathBuf::from("/synthetic/profile/opencode"));
     assert_eq!(opencode_data_in(home), PathBuf::from("/synthetic/profile/opencode/data"));

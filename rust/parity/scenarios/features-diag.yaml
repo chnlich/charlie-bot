@@ -19,6 +19,28 @@ steps:
     event: diag_switch
     fields: {phase: completed, to_session: session-b, generation: "3"}
     timeout_seconds: 30
+  - name: unsigned 64-bit values above i64 max stay valid
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: completed
+      from_session: null
+      to_session: session-b
+      generation: 9223372036854775808
+      winner_generation: 18446744073709551615
+      elapsed_ms: 9223372036854775808
+      error: null
+      client_ts: "2026-02-13T10:00:00Z"
+    expect_status: 200
+  - kind: log_event
+    name: unsigned 64-bit values are logged without narrowing
+    event: diag_switch
+    fields:
+      phase: completed
+      generation: "9223372036854775808"
+      winner_generation: "18446744073709551615"
+      elapsed_ms: "9223372036854775808"
+    timeout_seconds: 30
   - name: an error longer than 300 code points is cut to its first 300
     method: POST
     path: /api/diag/switch-events

@@ -12,7 +12,6 @@ The Everything view keeps the full output of each turn for the user.
   - a new or changed item in **Waiting on you**;
   - the completion of a request that the user made in this session;
   - a result that the user asked you to report.
-- When a child session reports progress, put the progress in **Now**.
 - When a turn has none of these results, post no web reply.
 
 ## When to set the session status
@@ -20,6 +19,8 @@ The Everything view keeps the full output of each turn for the user.
 - Before the turn ends, compare the session status with the state that this turn read back.
 - When an item differs, set the new value before the turn ends.
 - When no item differs, leave the session status unchanged.
+- A child session keeps its own progress in its own **Now**.
+- When a child session reports progress that changes this session's next milestone, set the new **Now**.
 - When the user resolves a Waiting on you item, remove the item in the same turn.
 
 ## Form
@@ -28,12 +29,16 @@ The Everything view keeps the full output of each turn for the user.
 - Keep the web reply under 500 characters.
 - When the answer needs more detail, put it on a page, and link the page in the web reply.
 - Write the web reply and the session status in the language of your chat replies.
+- Write **Now** in one or two sentences.
+- Keep **Now** under 200 characters.
+- Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The status panel is the one home of the session status.
 - Write each Waiting on you item as one decision or one action, in one sentence.
 - Give each Waiting on you item the link to the place where the user answers it, when that place has a link.
 - List each Waiting on you item in the session where the user answers it.
 - When your approver is your parent node, keep Waiting on you empty: the user answers through your parent.
 - The status panel shows the Waiting on you items of your open descendant sessions below your items.
+- The status panel shows the **Now** of each open child session in a folded block below your items.
 
 ## Delivery
 
@@ -45,5 +50,8 @@ The Everything view keeps the full output of each turn for the user.
 - `waiting` is a list of objects with the keys `text` and `link`. Set `link` to null when the place has no link.
 - Then run `charliebot web status set --file <path>`.
 - The command replaces the items that the file names and keeps the other items. It prints the stored session status.
+- The printout also holds `now_chars` and `now_over_budget`.
+- When `now_over_budget` is true, shorten **Now** and set it again.
 - After a context reset, read the session status with `charliebot web status show`.
+- The command also prints the **Now** of each open child session.
 - Then read the For-you view with `charliebot web dialog`.

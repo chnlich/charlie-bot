@@ -1,8 +1,10 @@
 """A web session's status: the Goal, Now and Waiting on you items that ``charliebot web status`` sets and reads.
 
 A set replaces the items its file names, stores the status in the ``web_status`` metadata field, records one
-``web_status`` event and tells every ancestor page. A read lists the open descendants whose status holds Waiting on you
-items, newest first.
+``web_status`` event and tells every ancestor page. The set's return holds the stored status plus ``now_chars`` (the
+length of the stored Now) and ``now_over_budget``; the stored status and the event keep neither. A read lists two
+groups, both newest first: the open descendants whose status holds Waiting on you items (``descendants``), and the
+open direct children whose status holds a Now (``children``).
 """
 
 import datetime
@@ -28,6 +30,9 @@ LABELS = {"goal": "Goal", "now": "Now", "waiting": "Waiting on you"}
 
 # The non-persisted frame an ancestor's page receives when a descendant sets its status.
 SUBTREE_NOTICE_TYPE = "web_status_subtree"
+
+# The Now budget the set's now_over_budget flag measures; an over-budget Now still stores.
+NOW_BUDGET_CHARS = 200
 
 
 class StatusPatch(pydantic.BaseModel):
@@ -63,10 +68,11 @@ def parse_patch(text: str) -> StatusPatch:
 async def set_status(
     session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents,
     tree: task_sessions.TaskTreeManager) -> dict:
-  """Store the items that *text* names as the session's status and return the stored status.
+  """Store the items that *text* names as the session's status and return the stored status with the Now length.
 
   Refusals raise WebReplyError before anything is stored or recorded. A stored set records one web_status event and
-  sends the ancestor notice to every ancestor's page.
+  sends the ancestor notice to every ancestor's page. The return adds ``now_chars`` and ``now_over_budget`` to the
+  stored status; the event and the stored metadata keep neither.
   """
   meta = await reply.require_web_session(store, session_id)
   patch = parse_patch(text)
@@ -91,29 +97,43 @@ async def set_status(
             "source_session_id": session_id
         })
   logger.info("web_status_set", session=session_id, changed=changed)
-  return payload
+  now_chars = 0 if status.now is None else len(status.now)
+  return {**payload, "now_chars": now_chars, "now_over_budget": now_chars > NOW_BUDGET_CHARS}
+
+
+async def _open_statuses(
+    session_ids: list[str], store: session_store.SessionStore, tree: task_sessions.TaskTreeManager,
+    archived: set[str]) -> list[tuple[str, models.SessionMetadata, metadata.WebStatus]]:
+  """The sessions among *session_ids* that are not archived, have an open task, and hold a web status."""
+  listed: list[tuple[str, models.SessionMetadata, metadata.WebStatus]] = []
+  for session_id in session_ids:
+    child = await store.get_session(session_id)
+    if child is None:
+      continue  # deleted between the index read and this one
+    child_status = metadata_slots.fields_of(child, OWNER).web_status
+    if child_status is None:
+      continue
+    if child.status == models.SessionStatus.ARCHIVED or session_id in archived:
+      continue
+    if tree.task_state(session_id) != "open":
+      continue
+    listed.append((session_id, child, child_status))
+  return listed
 
 
 async def read_status(session_id: str, store: session_store.SessionStore, tree: task_sessions.TaskTreeManager) -> dict:
-  """The session's status and the Waiting on you items of its open descendants, newest first.
+  """The session's status, the Waiting on you items of its open descendants and the Now of its open children.
 
-  A descendant qualifies when its status holds at least one waiting item, its session is not archived, and its task is
-  open.
+  A descendant qualifies when its status holds at least one waiting item. A child qualifies when its status holds a
+  Now. Both groups need the session not archived and the task open, and both list newest first.
   """
   meta = await reply.require_web_session(store, session_id)
   stored = metadata_slots.fields_of(meta, OWNER).web_status
   archived = await tree.derived_archived_ids()
   rows: list[tuple[datetime.datetime, dict]] = []
-  for descendant_id in await tree.descendant_ids(session_id):
-    child = await store.get_session(descendant_id)
-    if child is None:
-      continue  # deleted between the index read and this one
-    child_status = metadata_slots.fields_of(child, OWNER).web_status
-    if child_status is None or not child_status.waiting:
-      continue
-    if child.status == models.SessionStatus.ARCHIVED or descendant_id in archived:
-      continue
-    if tree.task_state(descendant_id) != "open":
+  descendant_ids = await tree.descendant_ids(session_id)
+  for descendant_id, child, child_status in await _open_statuses(descendant_ids, store, tree, archived):
+    if not child_status.waiting:
       continue
     payload = child_status.model_dump(mode="json")
     row = {
@@ -124,8 +144,22 @@ async def read_status(session_id: str, store: session_store.SessionStore, tree: 
     }
     rows.append((child_status.updated_at, row))
   rows.sort(key=lambda entry: entry[0], reverse=True)
+  children: list[tuple[datetime.datetime, dict]] = []
+  for child_id, child, child_status in await _open_statuses(await tree.child_ids(session_id), store, tree, archived):
+    if child_status.now is None:
+      continue
+    payload = child_status.model_dump(mode="json")
+    row = {
+        "session_id": child_id,
+        "name": child.name,
+        "now": payload["now"],
+        "updated_at": payload["updated_at"],
+    }
+    children.append((child_status.updated_at, row))
+  children.sort(key=lambda entry: entry[0], reverse=True)
   return {
       "session_id": session_id,
       "web_status": None if stored is None else stored.model_dump(mode="json"),
       "descendants": [row for _, row in rows],
+      "children": [row for _, row in children],
   }

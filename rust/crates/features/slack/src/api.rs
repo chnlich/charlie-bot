@@ -40,7 +40,6 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
     Ok(config) => config,
     Err(error) => return responses::internal_error("ConfigError", error.to_string()),
   };
-  let _store = &features.store;
   let model = match body.validate(&SLACK_REPLY_BODY) {
     Ok(model) => model,
     Err(response) => return *response,
@@ -65,7 +64,6 @@ async fn ack(State(features): State<Arc<FeatureContext>>, request: Request<Body>
     Ok(config) => config,
     Err(error) => return responses::internal_error("ConfigError", error.to_string()),
   };
-  let _store = &features.store;
   let model = match body.validate(&SLACK_ACK_BODY) {
     Ok(model) => model,
     Err(response) => return *response,

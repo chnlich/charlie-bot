@@ -11,6 +11,7 @@ use crate::ledger::LedgerRow;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigSchema};
 use charliebot_registry::usage::{RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
 use charliebot_registry::{Registry, RegistryError};
+use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value, json};
 
 const HOST: &str = "fixture-host";
@@ -1882,6 +1883,132 @@ fn malformed_falsy_values_capture_the_rows_python_writes() {
   let native = row(&rows, "charlie-bot", "native-model");
   assert_eq!((native.calls, native.in_fresh.int(), native.output.int(), native.total.int()), (1, 5, 2, 7));
   assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-02", "2026-09-02"));
+}
+
+/// The five count columns of one stored row, in the order `in_fresh, cache_write, cache_read, in_unsplit, output`, as
+/// SQLite holds them.
+fn stored_counts(ledger: &UsageLedger, record_id: &str) -> Vec<SqlValue> {
+  ledger
+    .connection()
+    .query_row(
+      "SELECT in_fresh, cache_write, cache_read, in_unsplit, output FROM usage WHERE record_id = ?",
+      [record_id],
+      |row| (0..5).map(|index| row.get(index)).collect(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn malformed_count_shapes_capture_the_rows_python_writes() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  write_thread(
+    &home,
+    "s-count",
+    "claude",
+    Some(("claude-main", Some("vendor/claude-model"))),
+    &events(&[
+      r#"{"type": "result", "timestamp": "2026-09-11T20:00:00+00:00", "usage": {"input_tokens": 1.5, "cache_creation_input_tokens": true, "cache_read_input_tokens": 3, "output_tokens": 4}}"#,
+      r#"{"type": "result", "timestamp": "2026-09-11T20:00:01+00:00", "usage": {"input_tokens": true, "cache_creation_input_tokens": 2.0, "cache_read_input_tokens": 3, "output_tokens": 1.5}}"#,
+      r#"{"session_id": "claude-count"}"#,
+    ]),
+  );
+  write_thread(
+    &home,
+    "s-count",
+    "codex",
+    Some(("codex-main", Some("vendor/gpt-count"))),
+    &events(&[
+      r#"{"type": "result", "timestamp": "2026-09-11T20:00:00+00:00", "usage": {"input_tokens": 1.5, "cache_creation_input_tokens": [1], "cache_read_input_tokens": 3, "output_tokens": true}}"#,
+      r#"{"session_id": "codex-count"}"#,
+    ]),
+  );
+  write_thread(
+    &home,
+    "s-count",
+    "native",
+    Some(("charlie-code-native", Some("vendor/native-count"))),
+    &events(&[
+      r#"{"type": "result", "timestamp": "2026-09-11T20:00:00+00:00", "usage": {"input_tokens": 1.5, "cache_creation_input_tokens": [1], "cache_read_input_tokens": {"a": 1}, "output_tokens": 4}}"#,
+    ]),
+  );
+  write_run_json(
+    &home,
+    "run-session",
+    "run-claude",
+    r#"{"backend": "claude-main", "model": "vendor/claude-run-count", "started_at": "2026-09-11T20:00:00+00:00", "native_session_id": "claude-run-count"}"#,
+    &events(&[
+      r#"{"type": "result", "usage": {"input_tokens": 1.5, "cache_creation_input_tokens": false, "cache_read_input_tokens": 0.5, "output_tokens": true}}"#,
+    ]),
+  );
+  write_run_json(
+    &home,
+    "run-session",
+    "run-clc",
+    r#"{"backend": "charlie-code-native", "model": "vendor/native-run-count", "started_at": "2026-09-11T20:00:00+00:00"}"#,
+    &events(&[r#"{"type": "result", "usage": {"input_tokens": true, "cached_tokens": 1.5, "output_tokens": 4}}"#]),
+  );
+  write_run_json(
+    &home,
+    "run-session",
+    "run-codex",
+    r#"{"backend": "codex-main", "model": "vendor/gpt-run-count", "started_at": "2026-09-11T20:00:00+00:00"}"#,
+    &events(&[
+      r#"{"type": "turn.completed", "usage": {"input_tokens": 1.5, "cached_input_tokens": 0.5, "output_tokens": true}}"#,
+      r#"{"type": "thread.started", "thread_id": "codex-count-run"}"#,
+    ]),
+  );
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 7);
+  assert_eq!(
+    stored_counts(&ledger, "thread:s-count/claude/0"),
+    [SqlValue::Real(1.5), SqlValue::Integer(1), SqlValue::Integer(3), SqlValue::Integer(0), SqlValue::Integer(4)]
+  );
+  assert_eq!(
+    stored_counts(&ledger, "thread:s-count/claude/1"),
+    [SqlValue::Integer(1), SqlValue::Integer(2), SqlValue::Integer(3), SqlValue::Integer(0), SqlValue::Real(1.5)]
+  );
+  assert_eq!(
+    stored_counts(&ledger, "thread:s-count/codex/0"),
+    [SqlValue::Real(-1.5), SqlValue::Integer(0), SqlValue::Integer(3), SqlValue::Integer(0), SqlValue::Integer(1)]
+  );
+  assert_eq!(
+    stored_counts(&ledger, "thread:s-count/native/0"),
+    [SqlValue::Integer(0), SqlValue::Integer(0), SqlValue::Integer(0), SqlValue::Real(1.5), SqlValue::Integer(4)]
+  );
+  assert_eq!(
+    stored_counts(&ledger, "run:run-claude"),
+    [SqlValue::Real(1.5), SqlValue::Integer(0), SqlValue::Real(0.5), SqlValue::Integer(0), SqlValue::Integer(1)]
+  );
+  assert_eq!(
+    stored_counts(&ledger, "run:run-clc"),
+    [SqlValue::Real(-0.5), SqlValue::Integer(0), SqlValue::Real(1.5), SqlValue::Integer(0), SqlValue::Integer(4)]
+  );
+  assert_eq!(
+    stored_counts(&ledger, "run:run-codex"),
+    [SqlValue::Integer(1), SqlValue::Integer(0), SqlValue::Real(0.5), SqlValue::Integer(0), SqlValue::Integer(1)]
+  );
+  let rows = charlie_rows(&mut ledger);
+  let claude = row(&rows, "charlie-bot", "claude-model");
+  assert_eq!(
+    (claude.calls, claude.in_fresh, claude.cache_write, claude.cache_read, claude.output, claude.total),
+    (2, Count::Real(2.5), Count::Int(3), Count::Int(6), Count::Real(5.5), Count::Real(17.0))
+  );
+  // A list or map under a key the verdict stores or subtracts fails the bind or the arithmetic, so the capture raises.
+  let raising = [
+    r#"{"type": "result", "usage": {"input_tokens": 1, "output_tokens": [1]}}"#,
+    r#"{"type": "result", "usage": {"input_tokens": {"a": 1}}}"#,
+  ];
+  for line in raising {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (config, registry) = fixture(&home);
+    let session = r#"{"session_id": "raise-kept"}"#;
+    write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
+    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+  }
 }
 
 const TS_A: &str = "2026-01-10T08:00:00+00:00";

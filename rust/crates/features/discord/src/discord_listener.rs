@@ -241,7 +241,10 @@ pub async fn handle_message_create(
   let Some(guild_id) = guild_id else {
     if mentioned {
       client.create_message(channel_id, DM_NOTICE).await?;
-      tracing::info!(event = "discord_dm_notice_posted", channel = channel_id, user = ?author_id);
+      // An eligible author always carries its id in `allowed_users`, so `author_id` is `Some` here; the bare
+      // string (not the `Option` debug form) is the field the log consumer matches.
+      let author = author_id.unwrap_or_default();
+      tracing::info!(event = "discord_dm_notice_posted", channel = channel_id, user = author);
     }
     return Ok(None);
   };

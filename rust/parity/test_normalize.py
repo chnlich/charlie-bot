@@ -204,6 +204,25 @@ def test_a_chat_line_json_refuses_compares_as_malformed_text_without_raising() -
   assert different
 
 
+def test_a_chat_line_that_is_not_utf8_compares_as_text_on_both_paths() -> None:
+  """json.loads raises UnicodeDecodeError on a line with invalid UTF-8, which is no JSONDecodeError. The file
+  normalizer and the event-log diff both take that line as its text under malformed_jsonl_line and raise nothing."""
+  path = "sessions/synthetic-session/data/chat_events.jsonl"
+  finished = b"".join(json.dumps(event).encode() + b"\n" for event in _cancel_events("interrupted", finish_first=True))
+  rules = ((_cancel_event_rule(), _cancel_event_rule()),)
+
+  def contexts() -> tuple[normalize.Context, normalize.Context]:
+    # A context numbers the minted UUIDs it meets, so each comparison takes its own pair.
+    return normalize.Context(tree_root="/synthetic/base"), normalize.Context(tree_root="/synthetic/candidate")
+
+  bad_line = finished + b"\xff{\n"
+  value = compare._normalized_file(path, compare.Entry("file", bad_line), contexts()[0])
+  assert value[-1] == {"malformed_jsonl_line": b"\xff{".decode(errors="surrogateescape")}
+  assert compare.delta_diff(_raw_chat_delta(bad_line), _raw_chat_delta(bad_line), *contexts(), rules, False) == []
+  assert compare.delta_diff(
+      _raw_chat_delta(bad_line), _raw_chat_delta(finished + b"\xfe{\n"), *contexts(), rules, False)
+
+
 def test_status_and_shape_response_comparison_ignores_json_leaf_values() -> None:
   baseline = compare.Response(
       422,

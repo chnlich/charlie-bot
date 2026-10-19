@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use charliebot_core::config::{CharlieBotConfig, ConfigError, ConfigSchema, ConfigSection};
-use charliebot_core::metadata_slot::MetadataSlot;
+use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator};
 use charliebot_core::paths;
 
 use crate::backend::{
@@ -121,6 +121,7 @@ pub struct Registry {
   pub(crate) home_cards: Vec<HomeCard>,
   pub(crate) scheduled_handlers: Ledger<ScheduledHandlerFn>,
   pub(crate) metadata_slots: Vec<MetadataSlot>,
+  pub(crate) metadata_slot_validators: Vec<(&'static str, MetadataFile, MetadataSlotValidator)>,
   pub(crate) turn_contributions: Ledger<Arc<dyn TurnContribution>>,
   pub(crate) sidebar_contributions: Ledger<Arc<dyn SidebarContribution>>,
   pub(crate) usage_sources: Ledger<UsageSource>,
@@ -164,6 +165,7 @@ impl Registry {
       home_cards: Vec::new(),
       scheduled_handlers: Ledger::new("scheduled handler"),
       metadata_slots: Vec::new(),
+      metadata_slot_validators: Vec::new(),
       turn_contributions: Ledger::new("turn contribution"),
       sidebar_contributions: Ledger::new("sidebar contribution"),
       usage_sources: Ledger::new("usage source"),
@@ -247,6 +249,28 @@ impl Registry {
     }
     self.metadata_slots.push(slot);
     Ok(())
+  }
+
+  /// Register one metadata slot with the validation the owner's Pydantic model applies to its values.
+  pub fn metadata_slot_with_validator(
+    &mut self,
+    slot: MetadataSlot,
+    validator: MetadataSlotValidator,
+  ) -> Result<(), RegistryError> {
+    let owner = slot.owner;
+    let on = slot.on;
+    self.metadata_slot(slot)?;
+    self.metadata_slot_validators.push((owner, on, validator));
+    Ok(())
+  }
+
+  /// The validator registered for one slot, if that package supplied one.
+  pub fn metadata_slot_validator(&self, owner: &str, on: MetadataFile) -> Option<MetadataSlotValidator> {
+    self
+      .metadata_slot_validators
+      .iter()
+      .find(|(registered_owner, registered_on, _)| *registered_owner == owner && *registered_on == on)
+      .map(|(_, _, validator)| *validator)
   }
 
   /// The metadata slots in registration order. The store serializes the owners' keys in this order.

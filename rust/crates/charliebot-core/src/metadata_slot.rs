@@ -1,4 +1,6 @@
 /// One package's top-level keys in a metadata file (src/infra/metadata_slot_registration.py).
+pub type MetadataSlotValidator = fn(&mut serde_json::Map<String, serde_json::Value>) -> Option<String>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetadataFile {
   Session,

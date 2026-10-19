@@ -34,6 +34,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
+use serde_json::{Map, Value};
 
 use self::claude_lifecycle::ClaudeCodeLifecycle;
 use self::factory::ClaudeCodeFactory;
@@ -114,15 +115,18 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     legacy_keys: &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")],
     parse: claude_config::parse_accounts,
   })?;
-  registry.metadata_slot(charliebot_core::metadata_slot::MetadataSlot {
-    owner: "claude_code",
-    on: charliebot_core::metadata_slot::MetadataFile::Session,
-    after: Some("cc_session_started_at"),
-    fields: vec![charliebot_core::metadata_slot::SlotField {
-      name: "claude_account",
-      default: serde_json::Value::Null,
-    }],
-  })?;
+  registry.metadata_slot_with_validator(
+    charliebot_core::metadata_slot::MetadataSlot {
+      owner: "claude_code",
+      on: charliebot_core::metadata_slot::MetadataFile::Session,
+      after: Some("cc_session_started_at"),
+      fields: vec![charliebot_core::metadata_slot::SlotField {
+        name: "claude_account",
+        default: serde_json::Value::Null,
+      }],
+    },
+    validate_claude_session_fields,
+  )?;
   registry.metadata_slot(charliebot_core::metadata_slot::MetadataSlot {
     owner: "claude_code",
     on: charliebot_core::metadata_slot::MetadataFile::Thread,
@@ -143,6 +147,13 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
   registry.attribute_backend_type("cc-claude", USAGE_SOURCE)?;
   registry.config_check("check_claude_pools", claude_config::check_claude_pools)?;
   registry.turn_contribution("claude_code", Arc::new(turn_contribution::ClaudeCodeTurnContribution))
+}
+
+fn validate_claude_session_fields(values: &mut Map<String, Value>) -> Option<String> {
+  values
+    .get("claude_account")
+    .is_some_and(|value| !value.is_null() && !value.is_string())
+    .then(|| "claude_account must be a string or null".to_string())
 }
 
 /// Helpers for the unit tests of the Claude usage source: a synthetic host, and a config loaded through the registry.

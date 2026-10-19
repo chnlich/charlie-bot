@@ -29,7 +29,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
-use crate::detail::{response_metadata, session_detail_payload};
+use crate::detail::response_metadata;
 use crate::routes::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
@@ -66,7 +66,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("session_id", FieldType::NullableString),
   Field::optional("request_id", FieldType::NullableString),
   Field::optional("task_parent_id", FieldType::NullableString),
-  Field::optional("profile", FieldType::NullableEnum(PROFILE_CHOICES)),
+  Field::optional("profile", FieldType::NullableLiteral(PROFILE_CHOICES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
 ];
@@ -76,7 +76,7 @@ const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 const PATCH_FIELDS: &[Field] = &[
   Field::optional("name", FieldType::NullableString),
   Field::optional("task_parent_id", FieldType::NullableString),
-  Field::optional("profile", FieldType::NullableEnum(PROFILE_CHOICES)),
+  Field::optional("profile", FieldType::NullableLiteral(PROFILE_CHOICES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),
   Field::optional("node_prompt", FieldType::NullableString),
@@ -243,7 +243,7 @@ async fn create(
       group: fields.group,
       session_id: None,
     };
-    let meta = features.store.create_task(request, task_caller(caller), slot_values).await.map_err(store_error)?;
+    let meta = features.store.create_task(request, task_caller(caller), slot_values).await.map_err(task_http_error)?;
     tracing::info!(
       target: LOG_TARGET,
       session_id = %meta.id,
@@ -269,7 +269,7 @@ async fn create(
     group: fields.group,
     session_id: fields.session_id,
   };
-  features.store.create_task(request, task_caller(caller), slot_values).await.map_err(store_error)
+  features.store.create_task(request, task_caller(caller), slot_values).await.map_err(task_http_error)
 }
 
 /// The validated create body and the keys beyond its declared fields. Each extra key must be a registered session
@@ -282,17 +282,16 @@ fn create_fields(
   let RequestBody::Json(Value::Object(raw)) = body else {
     return Err(responses::internal_error("RuntimeError", "validated create body is not an object".to_string()));
   };
-  let slot_values: Map<String, Value> = raw
+  let mut slot_values: Map<String, Value> = raw
     .iter()
     .filter(|(key, _)| !CREATE_SESSION.declares(key))
     .map(|(key, value)| (key.clone(), value.clone()))
     .collect();
-  let registered: HashSet<String> = features
-    .registry
-    .metadata_slots()
-    .into_iter()
+  let slots = features.registry.metadata_slots();
+  let registered: HashSet<String> = slots
+    .iter()
     .filter(|slot| slot.on == MetadataFile::Session)
-    .flat_map(|slot| slot.fields.into_iter().map(|field| field.name.to_string()))
+    .flat_map(|slot| slot.fields.iter().map(|field| field.name.to_string()))
     .collect();
   let mut unknown: Vec<&str> =
     slot_values.keys().map(String::as_str).filter(|key| !registered.contains(*key)).collect();
@@ -304,6 +303,30 @@ fn create_fields(
       kind: validation::Kind::ValueError { message: format!("unknown keys {}", list_repr(&unknown)) },
     };
     return Err(validation::response(&[error]));
+  }
+  for slot in slots.iter().filter(|slot| slot.on == MetadataFile::Session) {
+    let mut owner_values: Map<String, Value> = slot
+      .fields
+      .iter()
+      .filter_map(|field| slot_values.get(field.name).map(|value| (field.name.to_string(), value.clone())))
+      .collect();
+    let Some(validate) = features.registry.metadata_slot_validator(slot.owner, MetadataFile::Session) else {
+      return Err(responses::internal_error(
+        "RuntimeError",
+        format!("metadata slot owner {:?} has no session request validator", slot.owner),
+      ));
+    };
+    if let Some(message) = validate(&mut owner_values) {
+      let error = validation::FieldError {
+        loc: vec![validation::Loc::Field("body".to_string())],
+        input: Value::Object(raw.clone()),
+        kind: validation::Kind::ValueError {
+          message: format!("invalid value for keys of {:?}: {message}", slot.owner),
+        },
+      };
+      return Err(validation::response(&[error]));
+    }
+    slot_values.extend(owner_values);
   }
   Ok((typed(values)?, slot_values))
 }
@@ -396,7 +419,7 @@ async fn patch(
     dispatch::dispatcher(features).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
   let meta =
     features.store.patch_task(session_id, patch, task_caller(caller), &*guards).await.map_err(task_http_error)?;
-  session_detail_payload(&features.store, &meta).await.map_err(task_http_error)
+  features.store.session_detail(&meta.id).map_err(task_http_error)
 }
 
 /// The name-only PATCH: the legacy rename, answered with the session detail form.
@@ -414,22 +437,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
   tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "session_renamed");
   features.store.invalidate_tree_index();
   features.store.notify_task_tree_changed(session_id, Some("task_updated")).await;
-  rename_form(&features.store, &meta).map_err(store_error)
-}
-
-/// `SessionDetailResponse(**meta.model_dump())`: the metadata with the detail defaults. An unprobed work state is
-/// idle, and the node is open and unarchived with no ancestors and no prompt rules.
-fn rename_form(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
-  let mut value = serde_json::to_value(response_metadata(store, meta)?)?;
-  let object = value.as_object_mut().expect("session metadata serializes to an object");
-  if object.get("work_state").is_none_or(Value::is_null) {
-    object.insert("work_state".to_string(), json!("idle"));
-  }
-  object.insert("task_state".to_string(), json!("open"));
-  object.insert("archived".to_string(), json!(false));
-  object.insert("ancestors".to_string(), json!([]));
-  object.insert("prompt_rules".to_string(), json!({}));
-  Ok(value)
+  features.store.session_detail(&meta.id).map_err(task_http_error)
 }
 
 /// Validate a body against `model` and return its declared fields. FastAPI's 422 answers any other shape.
@@ -550,18 +558,51 @@ fn model_response(store: &Store, meta: &SessionMetadata) -> Response {
 
 #[cfg(test)]
 mod tests {
+  use std::sync::{Arc, Mutex};
+
   use axum::body::to_bytes;
+  use charliebot_core::run_token::RunTokenClaims;
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
-  use charliebot_store::{ControlGuard, Store};
+  use charliebot_store::{ControlGuard, SIDEBAR_CHANNEL, Store, session_channel};
   use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
   use futures_util::future::BoxFuture;
   use http::header::{CONTENT_TYPE, HeaderValue};
+  use tracing::field::{Field, Visit};
+  use tracing::{Event, Subscriber};
+  use tracing_subscriber::Layer;
+  use tracing_subscriber::layer::{Context, SubscriberExt};
 
   use super::*;
   use crate::test_support::feature_context;
 
   /// The completion hooks of the dispatcher. The write-route tests reach none of them.
   struct NoCompletion;
+
+  struct LogMessage(Arc<Mutex<Vec<String>>>);
+
+  impl<S: Subscriber> Layer<S> for LogMessage {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+      let mut message = MessageField(String::new());
+      event.record(&mut message);
+      self.0.lock().expect("captured logs mutex").push(format!("{} {}", event.metadata().target(), message.0));
+    }
+  }
+
+  struct MessageField(String);
+
+  impl Visit for MessageField {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+      if field.name() == "message" {
+        self.0 = format!("{value:?}");
+      }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+      if field.name() == "message" {
+        self.0 = value.to_string();
+      }
+    }
+  }
 
   impl SequenceCompletion for NoCompletion {
     fn evaluate_automatic_completion<'a>(
@@ -635,7 +676,7 @@ mod tests {
       profile,
       task: None,
       name: Some(request_id.to_string()),
-      backend: Some("synthetic".to_string()),
+      backend: Some("synthetic-a".to_string()),
       group: None,
       session_id: None,
     };
@@ -653,6 +694,58 @@ mod tests {
     assert_eq!(detail, json!({"detail": "request_id is required for task creation"}));
   }
 
+  #[tokio::test(flavor = "current_thread")]
+  async fn legacy_create_returns_the_model_logs_and_notifies_after_publishing() {
+    let (_home, features) = feature_context();
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
+    let (headers, body) = json_request(json!({"name": "Synthetic root", "group": "Synthetic group"}));
+
+    let (status, result) = answer(create_session(State(features.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["name"], "Synthetic root");
+    assert_eq!(result["group"], "Synthetic group");
+    assert_eq!(result["backend"], "synthetic-a");
+    assert_eq!(result["profile"], "manager");
+    let session_id = result["id"].as_str().expect("created session id");
+    let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("task tree notification")).unwrap();
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": session_id, "fact_type": "task_created"}));
+    let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "task_created");
+    assert_eq!(events[0]["actor"], "user");
+    assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("creating_session")));
+  }
+
+  #[tokio::test(flavor = "current_thread")]
+  async fn v2_create_returns_the_task_and_logs_its_creation() {
+    let (_home, features) = feature_context();
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
+    let (headers, body) = json_request(json!({"request_id": "api-v2-root", "profile": "manager", "name": "V2 root"}));
+
+    let (status, result) = answer(create_session(State(features.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["name"], "V2 root");
+    assert_eq!(result["profile"], "manager");
+    assert_eq!(result["backend"], "synthetic-a");
+    let session_id = result["id"].as_str().expect("created task id");
+    let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("task tree notification")).unwrap();
+    assert_eq!(frame["type"], "task_tree_changed");
+    assert_eq!(frame["session_id"], session_id);
+    assert_eq!(frame["fact_type"], "task_created");
+    let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
+    assert_eq!(events[0]["type"], "task_created");
+    assert_eq!(events[0]["request_id"], "api-v2-root");
+    assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("task_created")));
+  }
+
   #[tokio::test]
   async fn create_refuses_a_key_no_slot_registered_as_a_model_error() {
     let (_home, features) = feature_context();
@@ -664,6 +757,30 @@ mod tests {
     assert_eq!(detail["detail"][0]["loc"], json!(["body"]));
     assert_eq!(detail["detail"][0]["type"], "value_error");
     assert_eq!(detail["detail"][0]["msg"], "Value error, unknown keys ['presentation']");
+  }
+
+  #[tokio::test]
+  async fn create_refuses_a_registered_slot_value_with_a_wrong_type() {
+    let (_home, features) = feature_context();
+    let (headers, body) = json_request(json!({"test_session_value": 4}));
+
+    let (status, detail) = answer(create_session(State(features), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail["detail"][0]["loc"], json!(["body"]));
+    assert_eq!(detail["detail"][0]["type"], "value_error");
+  }
+
+  #[tokio::test]
+  async fn create_profile_literal_errors_keep_the_python_error_type() {
+    let (_home, features) = feature_context();
+    let (headers, body) = json_request(json!({"request_id": "bad-profile", "profile": "reviewer"}));
+
+    let (status, detail) = answer(create_session(State(features), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail["detail"][0]["loc"], json!(["body", "profile"]));
+    assert_eq!(detail["detail"][0]["type"], "literal_error");
   }
 
   #[tokio::test]
@@ -700,7 +817,10 @@ mod tests {
     let (status, detail) =
       answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(detail["detail"].as_str().expect("detail text").starts_with("backend 'missing' is not a recognized"));
+    assert_eq!(
+      detail,
+      json!({"detail": "backend 'missing' is not a recognized backend id; valid ids: ['synthetic-a', 'synthetic-b']"})
+    );
 
     let (headers, body) = json_request(json!({}));
     let (status, detail) = answer(switch_backend(State(features), AxumPath(node.id), headers, body).await).await;
@@ -709,10 +829,106 @@ mod tests {
     assert_eq!(detail["detail"][0]["type"], "missing");
   }
 
+  #[tokio::test(flavor = "current_thread")]
+  async fn backend_switch_same_target_is_quiet_and_new_target_broadcasts_and_audits() {
+    let (_home, features) = feature_context();
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let node = create_node(&features.store, "switch-node", None, TaskProfile::Manager).await;
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
+    let mut session = features.store.subscribe(&session_channel(&node.id));
+
+    let (headers, body) = json_request(json!({"backend": "synthetic-a"}));
+    let (status, result) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["backend"], "synthetic-a");
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), sidebar.recv()).await.is_err());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), session.recv()).await.is_err());
+
+    let (headers, body) = json_request(json!({"backend": "synthetic-b"}));
+    let (status, result) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["backend"], "synthetic-b");
+    let sidebar_frame: Value = serde_json::from_str(&sidebar.recv().await.expect("backend sidebar broadcast")).unwrap();
+    assert_eq!(sidebar_frame, json!({"type": "backend_switched", "session_id": node.id, "backend": "synthetic-b"}));
+    let message_frame: Value =
+      serde_json::from_str(&session.recv().await.expect("backend switch message delta")).unwrap();
+    assert_eq!(message_frame["type"], "message");
+    let audit_frame: Value = serde_json::from_str(&session.recv().await.expect("backend audit broadcast")).unwrap();
+    assert_eq!(audit_frame["type"], "backend_switched");
+    assert_eq!(audit_frame["from"], "synthetic-a");
+    assert_eq!(audit_frame["to"], "synthetic-b");
+    let events = features.store.load_chat_events_sync(&node.id).expect("backend audit event");
+    let audit = events.iter().find(|event| event["type"] == "backend_switched").expect("audit event written");
+    assert_eq!(audit["from"], "synthetic-a");
+    assert_eq!(audit["to"], "synthetic-b");
+    assert_eq!(audit["previous_native_backend"], Value::Null);
+    assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("session_backend_switched")));
+  }
+
+  #[tokio::test]
+  async fn backend_switch_respects_a_dedicated_sequence_lock() {
+    let (_home, features) = feature_context();
+    let request = CreateTask {
+      request_id: "sequence-locked-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked node".to_string()),
+      backend: Some("synthetic-a".to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.unwrap();
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
+    let mut session = features.store.subscribe(&session_channel(&node.id));
+    let (headers, body) = json_request(json!({"backend": "synthetic-b"}));
+
+    let (status, detail) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(detail, json!({"detail": "backend 'synthetic-b' is locked by the session API test sequence"}));
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "synthetic-a");
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), sidebar.recv()).await.is_err());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), session.recv()).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn backend_switch_backfills_the_native_backend_before_auditing() {
+    let (_home, features) = feature_context();
+    let node = create_node(&features.store, "native-switch-node", None, TaskProfile::Manager).await;
+    features.store.persist_cc_session_id(&node.id, "native-conversation", None).await.unwrap();
+    let mut session = features.store.subscribe(&session_channel(&node.id));
+    let (headers, body) = json_request(json!({"backend": "synthetic-b"}));
+
+    let (status, result) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["backend"], "synthetic-b");
+    let message_frame: Value =
+      serde_json::from_str(&session.recv().await.expect("backend switch message delta")).unwrap();
+    assert_eq!(message_frame["type"], "message");
+    let event: Value = serde_json::from_str(&session.recv().await.expect("backend audit broadcast")).unwrap();
+    assert_eq!(event["type"], "backend_switched");
+    assert_eq!(event["previous_native_backend"], "synthetic-a");
+    assert_eq!(event["previous_native_session_id"], "native-conversation");
+    let metadata = features.store.read_metadata_fresh(&node.id).unwrap().unwrap();
+    assert_eq!(metadata.native_backend.as_deref(), Some("synthetic-a"));
+  }
+
   #[tokio::test]
   async fn rename_answers_the_session_detail_form() {
     let (_home, features) = feature_context();
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
+    let _subscriber = tracing::subscriber::set_default(subscriber);
     let node = create_node(&features.store, "node", None, TaskProfile::Manager).await;
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
     let (headers, body) = json_request(json!({"name": "Renamed"}));
 
     let (status, detail) =
@@ -724,6 +940,9 @@ mod tests {
     assert_eq!(detail["task_state"], "open");
     assert_eq!(detail["ancestors"], json!([]));
     assert_eq!(features.store.read_metadata_fresh(&node.id).expect("node read").expect("node").name, "Renamed");
+    let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("rename tree notification")).unwrap();
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "task_updated"}));
+    assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("session_renamed")));
   }
 
   #[tokio::test]
@@ -786,6 +1005,7 @@ mod tests {
     let (_home, features) = feature_context();
     install_dispatcher(&features);
     let node = create_node(&features.store, "node", None, TaskProfile::Manager).await;
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
     let (headers, body) = json_request(json!({"subtree_prompt": "synthetic rule\n"}));
 
     let (status, detail) =
@@ -796,5 +1016,56 @@ mod tests {
     assert_eq!(detail["prompt_rules"]["subtree"]["ref"], expected);
     assert_eq!(detail["task_state"], "open");
     assert_eq!(detail["name"], "node");
+    let frame: Value =
+      serde_json::from_str(&sidebar.recv().await.expect("prompt change tree notification")).unwrap();
+    assert_eq!(
+      frame,
+      json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "prompt_changed"})
+    );
+    let events = features.store.load_chat_events_sync(&node.id).expect("prompt change events");
+    assert!(events.iter().any(|event| event["type"] == event_types::PROMPT_CHANGED));
+  }
+
+  #[tokio::test]
+  async fn task_field_patch_refuses_an_agent_caller() {
+    let (_home, features) = feature_context();
+    install_dispatcher(&features);
+    let body = RequestBody::Json(json!({"task": {"goal": "Synthetic task"}}));
+    let caller = CallerIdentity::Agent {
+      claims: RunTokenClaims {
+        session_id: "agent-task".to_string(),
+        run_id: "agent-run".to_string(),
+        agent: "synthetic".to_string(),
+      },
+    };
+
+    let response = patch(&features, "agent-task", &caller, &body).await.unwrap_err();
+    let (status, detail) = answer(response).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(detail, json!({"detail": "task metadata mutations require operator credentials"}));
+  }
+
+  #[tokio::test]
+  async fn an_agent_create_outside_its_own_task_is_forbidden() {
+    let (_home, features) = feature_context();
+    let body = RequestBody::Json(json!({
+      "request_id": "agent-outside",
+      "task_parent_id": "foreign-task",
+      "profile": "worker",
+    }));
+    let caller = CallerIdentity::Agent {
+      claims: RunTokenClaims {
+        session_id: "agent-task".to_string(),
+        run_id: "agent-run".to_string(),
+        agent: "synthetic".to_string(),
+      },
+    };
+
+    let response = create(&features, &caller, &body).await.unwrap_err();
+    let (status, detail) = answer(response).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(detail, json!({"detail": AGENT_CREATE_SCOPE_REFUSAL}));
   }
 }

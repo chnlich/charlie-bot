@@ -1016,12 +1016,8 @@ mod tests {
     assert_eq!(detail["prompt_rules"]["subtree"]["ref"], expected);
     assert_eq!(detail["task_state"], "open");
     assert_eq!(detail["name"], "node");
-    let frame: Value =
-      serde_json::from_str(&sidebar.recv().await.expect("prompt change tree notification")).unwrap();
-    assert_eq!(
-      frame,
-      json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "prompt_changed"})
-    );
+    let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("prompt change tree notification")).unwrap();
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "prompt_changed"}));
     let events = features.store.load_chat_events_sync(&node.id).expect("prompt change events");
     assert!(events.iter().any(|event| event["type"] == event_types::PROMPT_CHANGED));
   }

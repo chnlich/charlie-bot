@@ -18,7 +18,9 @@ const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
 const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
 /// The refusal for an agent create outside its own open manager task (`task_sessions.AGENT_CREATE_SCOPE_REFUSAL`).
-const AGENT_CREATE_SCOPE_REFUSAL: &str = "an agent may only create a task directly under its own open manager task";
+pub const AGENT_CREATE_SCOPE_REFUSAL: &str = "an agent may only create a task directly under its own open manager task";
+/// The refusal for a task create without a request id (`task_sessions.TASK_CREATE_REQUEST_ID_REQUIRED`).
+pub const TASK_CREATE_REQUEST_ID_REQUIRED: &str = "request_id is required for task creation";
 
 /// One create request, including its stable identity inputs.
 #[derive(Clone, Debug)]
@@ -39,6 +41,30 @@ pub enum TaskCaller {
   Operator,
   System,
   Agent { session_id: String },
+}
+
+/// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing; `Some(None)` is an
+/// explicit null, which clears the field where the Python model allows it. `name` has no explicit null: a `None` name
+/// changes nothing.
+#[derive(Clone, Debug, Default)]
+pub struct PatchTask {
+  pub name: Option<String>,
+  pub task_parent_id: Option<Option<String>>,
+  pub profile: Option<Option<TaskProfile>>,
+  pub task: Option<Option<TaskSpec>>,
+  pub subtree_prompt: Option<Option<String>>,
+  pub node_prompt: Option<Option<String>>,
+}
+
+/// The structural guards that the task dispatcher answers for a node (`TaskTreeManager.pending_input_blockers` and
+/// `TaskInputDispatcher.undelivered_report_blockers`). The store does not own them: the dispatcher reads the input
+/// boundary and the report deliveries through the store, so the dispatcher implements this trait and the caller passes
+/// it in.
+pub trait StructuralBlockers: Send + Sync {
+  /// The blockers of the node's unprocessed task inputs; empty when it has none.
+  fn pending_input_blockers(&self, session_id: &str) -> StoreResult<Vec<String>>;
+  /// One blocker for each close report that the node still owes its fixed recipient.
+  fn undelivered_report_blockers(&self, session_id: &str) -> StoreResult<Vec<String>>;
 }
 
 /// The task lifecycle folded from a node's durable event history.
@@ -112,6 +138,13 @@ impl PromptScope {
     match self {
       Self::Subtree => meta.subtree_prompt_ref.as_deref(),
       Self::Node => meta.node_prompt_ref.as_deref(),
+    }
+  }
+
+  fn set_metadata_ref(self, meta: &mut SessionMetadata, value: Option<String>) {
+    match self {
+      Self::Subtree => meta.subtree_prompt_ref = value,
+      Self::Node => meta.node_prompt_ref = value,
     }
   }
 }
@@ -211,7 +244,7 @@ impl Store {
       }
     }
     if !closed.is_empty() {
-      return Err(StoreError::conflict(vec![format!("closed ancestor task(s): {}", closed.join(", "))]));
+      return Err(StoreError::conflict(vec![closed_ancestors_blocker(&closed)]));
     }
     Ok(ancestors)
   }
@@ -277,7 +310,7 @@ impl Store {
     slot_values: Map<String, Value>,
   ) -> StoreResult<SessionMetadata> {
     if request.request_id.is_empty() {
-      return Err(StoreError::invalid("request_id is required for task creation"));
+      return Err(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED));
     }
     if !matches!(request.profile, TaskProfile::Manager | TaskProfile::Worker) {
       return Err(StoreError::invalid("profile must be 'manager' or 'worker'"));
@@ -646,6 +679,7 @@ impl Store {
     Ok(archived)
   }
 
+<<<<<<< HEAD
   /// Permanently delete an empty, unreferenced task while holding the tree control lock.
   pub async fn delete_permanently(&self, session_id: &str, caller: TaskCaller) -> StoreResult<bool> {
     if caller != TaskCaller::Operator {
@@ -733,6 +767,159 @@ impl Store {
       self.invalidate_tree_index();
     }
     Ok(deleted)
+  }
+
+  /// Apply one operator PATCH of a task node with its structural guards (`TaskTreeManager.patch_task`).
+  ///
+  /// Operator scope only. Under the control lock the guards of every node that the change moves or restructures are
+  /// collected before any write, so a refusal writes nothing. The field write is a fresh read-modify-write, so a
+  /// rename that landed meanwhile is kept. Each prompt scope then swaps its reference and lands its fact.
+  pub async fn patch_task(
+    &self,
+    session_id: &str,
+    patch: PatchTask,
+    caller: TaskCaller,
+    guards: &dyn StructuralBlockers,
+  ) -> StoreResult<SessionMetadata> {
+    if caller != TaskCaller::Operator {
+      return Err(StoreError::forbidden("task metadata mutations require operator credentials"));
+    }
+    let guard = self.control_lock().await;
+    // Rebuild from disk under the lock: the cache can predate writes that another process made.
+    self.invalidate_tree_index();
+    let index = self.tree_index()?;
+    let meta = self.load_task_meta(session_id).await?;
+    let PatchTask { name, task_parent_id, profile, task, subtree_prompt, node_prompt } = patch;
+    let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
+    let structural = task.is_some() || profile.is_some() || task_parent_id.is_some();
+    let mut blockers = if structural { self.structural_blockers(session_id, guards)? } else { Vec::new() };
+    let children = index.children.get(&Some(session_id.to_string())).map_or(0, Vec::len);
+    if profile == Some(Some(TaskProfile::Worker)) && meta.profile != TaskProfile::Worker && children > 0 {
+      blockers.push("demotion to worker requires a task with no child tasks".to_string());
+    }
+    if let Some(parent) = task_parent_id.as_ref().filter(|parent| parent.as_deref() != meta.task_parent_id.as_deref()) {
+      blockers.extend(self.reparent_blockers(&index, session_id, parent.as_deref(), guards)?);
+    }
+    if !blockers.is_empty() {
+      blockers.sort();
+      blockers.dedup();
+      return Err(StoreError::conflict(blockers));
+    }
+
+    self
+      .mutate_fresh(session_id, false, true, move |meta| {
+        if let Some(name) = name {
+          meta.name = name;
+        }
+        if let Some(Some(profile)) = profile {
+          meta.profile = profile;
+        }
+        if let Some(task) = task {
+          meta.task = task;
+        }
+        if let Some(parent) = task_parent_id {
+          meta.task_parent_id = parent;
+        }
+        meta.schema_version = 2;
+        meta.updated_at = UtcDateTime::now();
+        Ok(true)
+      })
+      .await?
+      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+    self.invalidate_tree_index();
+
+    if let Some(body) = subtree_prompt {
+      self.apply_prompt_change(&guard, session_id, PromptScope::Subtree, body.as_deref()).await?;
+    }
+    if let Some(body) = node_prompt {
+      self.apply_prompt_change(&guard, session_id, PromptScope::Node, body.as_deref()).await?;
+    }
+    self.invalidate_tree_index();
+    let event_type = if prompt_changed { event_types::PROMPT_CHANGED } else { "task_updated" };
+    self.notify_task_tree_changed(session_id, Some(event_type)).await;
+    self.read_metadata_fresh(session_id)?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+  }
+
+  /// Swap one prompt scope's reference and land its fact. An interrupted earlier edit (metadata ahead of its fact) is
+  /// landed first, so a retry or a later edit never folds two transitions into one fact. Bodies are content-addressed,
+  /// so a retried PATCH stores the same bytes under the same reference.
+  async fn apply_prompt_change(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    scope: PromptScope,
+    body: Option<&str>,
+  ) -> StoreResult<()> {
+    let current = self.load_task_meta(session_id).await?;
+    self.ensure_prompt_changed_fact_locked(guard, session_id, &current, scope).await?;
+    let new_ref = body.map(|text| self.store_prompt_body(text)).transpose()?;
+    if new_ref.as_deref() == scope.metadata_ref(&current) {
+      return Ok(());
+    }
+    let fresh = self
+      .mutate_fresh(session_id, false, true, move |meta| {
+        scope.set_metadata_ref(meta, new_ref);
+        meta.updated_at = UtcDateTime::now();
+        Ok(true)
+      })
+      .await?
+      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+    self.invalidate_tree_index();
+    self.ensure_prompt_changed_fact_locked(guard, session_id, &fresh, scope).await
+  }
+
+  /// The structural blockers of one node: its unprocessed task inputs, then its unfinished runs.
+  fn structural_blockers(&self, session_id: &str, guards: &dyn StructuralBlockers) -> StoreResult<Vec<String>> {
+    let mut blockers = guards.pending_input_blockers(session_id)?;
+    blockers.extend(self.run_blockers(session_id)?.into_iter().map(|blocker| blocker.reason));
+    Ok(blockers)
+  }
+
+  /// The refusals for moving a node under `new_parent`: the target is an open manager, the move does not enter the
+  /// node's own subtree, and the target's ancestors are open. Every node in the moving subtree must also be idle, with
+  /// no undelivered close report.
+  fn reparent_blockers(
+    &self,
+    index: &TreeIndex,
+    session_id: &str,
+    new_parent: Option<&str>,
+    guards: &dyn StructuralBlockers,
+  ) -> StoreResult<Vec<String>> {
+    let mut blockers = Vec::new();
+    if let Some(parent_id) = new_parent {
+      let target = index_meta(index, parent_id)?;
+      if target.profile != TaskProfile::Manager {
+        blockers.push(format!("reparent target {parent_id} is not a manager task"));
+      }
+      let target_state = self.task_state(parent_id)?;
+      if target_state != "open" {
+        blockers.push(format!("reparent target {parent_id} is {target_state}"));
+      }
+      let chain = ancestor_ids(index, parent_id)?;
+      if session_id == parent_id || chain.iter().any(|id| id == session_id) {
+        blockers.push(format!("reparent target {parent_id} is inside {session_id}'s own subtree"));
+      } else {
+        let mut closed = Vec::new();
+        for ancestor in &chain {
+          if self.task_state(ancestor)? != "open" {
+            closed.push(ancestor.clone());
+          }
+        }
+        if !closed.is_empty() {
+          blockers.push(closed_ancestors_blocker(&closed));
+        }
+      }
+    }
+    let subtree = std::iter::once(session_id.to_string()).chain(descendant_ids(index, session_id)?);
+    for node in subtree {
+      for blocker in self.structural_blockers(&node, guards)? {
+        blockers.push(format!("{node}: {blocker}"));
+      }
+      for blocker in guards.undelivered_report_blockers(&node)? {
+        blockers.push(format!("{node}: {blocker}"));
+      }
+    }
+    Ok(blockers)
   }
 
   /// Move sequence bindings from an elone source and copy its scheduled-run bookkeeping.
@@ -1072,6 +1259,15 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
     });
   }
   Ok(TreeIndex { metas, children })
+}
+
+fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
+  index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+}
+
+/// The 409 blocker sentence naming a node's closed ancestor tasks.
+fn closed_ancestors_blocker(closed: &[String]) -> String {
+  format!("closed ancestor task(s): {}", closed.join(", "))
 }
 
 fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
@@ -2075,6 +2271,132 @@ mod tests {
     }
     assert_eq!(store.task_state(&root.id).unwrap(), "open");
     assert!(store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"] != "task_closed"));
+  }
+
+  /// Structural guards keyed by node: the dispatcher answers these in production.
+  #[derive(Default)]
+  struct StubGuards {
+    pending: HashMap<String, Vec<String>>,
+  }
+
+  impl StructuralBlockers for StubGuards {
+    fn pending_input_blockers(&self, session_id: &str) -> StoreResult<Vec<String>> {
+      Ok(self.pending.get(session_id).cloned().unwrap_or_default())
+    }
+
+    fn undelivered_report_blockers(&self, _session_id: &str) -> StoreResult<Vec<String>> {
+      Ok(Vec::new())
+    }
+  }
+
+  fn prompt_facts(store: &Store, session_id: &str) -> Vec<Value> {
+    store
+      .load_chat_events_sync(session_id)
+      .unwrap()
+      .into_iter()
+      .filter(|event| event["type"] == event_types::PROMPT_CHANGED)
+      .collect()
+  }
+
+  #[tokio::test]
+  async fn patch_task_refuses_structural_changes_under_guards_and_writes_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    let other = create_node(&store, "other", None, TaskProfile::Manager).await;
+    let worker = create_node(&store, "worker", Some(&root.id), TaskProfile::Worker).await;
+    let pending = format!("{} has an unprocessed input", worker.id);
+    let guards = StubGuards { pending: HashMap::from([(worker.id.clone(), vec![pending.clone()])]) };
+
+    let demotion = PatchTask { profile: Some(Some(TaskProfile::Worker)), ..Default::default() };
+    let error = store.patch_task(&root.id, demotion, TaskCaller::Operator, &guards).await.unwrap_err();
+    let blocker = "demotion to worker requires a task with no child tasks".to_string();
+    assert_eq!(error.status_code(), Some(409));
+    assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
+
+    // The node's own guard counts once for the structural change and once for the moving subtree, as Python's does.
+    let reparent = PatchTask { task_parent_id: Some(Some(other.id.clone())), ..Default::default() };
+    let error = store.patch_task(&worker.id, reparent, TaskCaller::Operator, &guards).await.unwrap_err();
+    let mut expected = vec![pending.clone(), format!("{}: {pending}", worker.id)];
+    expected.sort();
+    assert_eq!(error.blockers(), Some(expected.as_slice()));
+
+    let ghost = PatchTask { task_parent_id: Some(Some("ghost".to_string())), ..Default::default() };
+    let error = store.patch_task(&worker.id, ghost, TaskCaller::Operator, &guards).await.unwrap_err();
+    assert_eq!(error.status_code(), Some(404));
+    assert_eq!(error.to_string(), "task ghost not found");
+
+    let renamed = PatchTask { name: Some("renamed".to_string()), ..Default::default() };
+    let error = store.patch_task(&root.id, renamed, TaskCaller::System, &guards).await.unwrap_err();
+    assert_eq!(error.to_string(), "task metadata mutations require operator credentials");
+    assert_eq!(error.status_code(), Some(403));
+
+    let root_after = store.read_metadata_fresh(&root.id).unwrap().unwrap();
+    let worker_after = store.read_metadata_fresh(&worker.id).unwrap().unwrap();
+    assert_eq!(root_after.profile, TaskProfile::Manager);
+    assert_eq!(root_after.name, root.name);
+    assert_eq!(worker_after.task_parent_id.as_deref(), Some(root.id.as_str()));
+    assert!(prompt_facts(&store, &root.id).is_empty());
+  }
+
+  #[tokio::test]
+  async fn patch_task_lands_one_prompt_fact_per_scope_edit_and_is_idempotent() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    let subtree_ref = store.store_prompt_body("subtree rule\n").unwrap();
+    let node_ref = store.store_prompt_body("node rule\n").unwrap();
+    let edit = || PatchTask {
+      name: Some("renamed".to_string()),
+      subtree_prompt: Some(Some("subtree rule\n".to_string())),
+      node_prompt: Some(Some("node rule\n".to_string())),
+      ..Default::default()
+    };
+
+    let guards = StubGuards::default();
+    let patched = store.patch_task(&root.id, edit(), TaskCaller::Operator, &guards).await.unwrap();
+    assert_eq!(patched.name, "renamed");
+    assert_eq!(patched.subtree_prompt_ref.as_deref(), Some(subtree_ref.as_str()));
+    assert_eq!(patched.node_prompt_ref.as_deref(), Some(node_ref.as_str()));
+    assert_eq!(prompt_facts(&store, &root.id).len(), 2);
+
+    store.patch_task(&root.id, edit(), TaskCaller::Operator, &guards).await.unwrap();
+    assert_eq!(prompt_facts(&store, &root.id).len(), 2);
+
+    let cleared = PatchTask { node_prompt: Some(None), ..Default::default() };
+    let patched = store.patch_task(&root.id, cleared, TaskCaller::Operator, &guards).await.unwrap();
+    assert_eq!(patched.node_prompt_ref, None);
+    let facts = prompt_facts(&store, &root.id);
+    assert_eq!(facts.len(), 3);
+    assert_eq!(facts[2]["scope"], "node");
+    assert_eq!(facts[2]["previous_ref"], node_ref);
+    assert_eq!(facts[2]["new_ref"], Value::Null);
+  }
+
+  #[tokio::test]
+  async fn patch_task_lands_an_interrupted_prompt_edit_before_the_next_one() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
+    let interrupted_ref = store.store_prompt_body("interrupted rule\n").unwrap();
+    // A crash after the metadata swap and before its fact: the metadata is ahead of the fact stream.
+    store
+      .mutate_fresh(&root.id, false, true, |meta| {
+        meta.node_prompt_ref = Some(interrupted_ref.clone());
+        Ok(true)
+      })
+      .await
+      .unwrap();
+    assert!(prompt_facts(&store, &root.id).is_empty());
+
+    let next = PatchTask { node_prompt: Some(Some("next rule\n".to_string())), ..Default::default() };
+    store.patch_task(&root.id, next, TaskCaller::Operator, &StubGuards::default()).await.unwrap();
+
+    let facts = prompt_facts(&store, &root.id);
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0]["previous_ref"], Value::Null);
+    assert_eq!(facts[0]["new_ref"], interrupted_ref);
+    assert_eq!(facts[1]["previous_ref"], interrupted_ref);
   }
 
   #[tokio::test]

@@ -710,7 +710,7 @@ def test_websocket_send_reference_fails_only_its_step(tmp_path: pathlib.Path) ->
       ])
   manifest = {"sessions": {"atlas": "synthetic-session"}}
   scenario_file.check_references(scenario, manifest)
-  message = scenario_file.unresolved_reference(scenario.steps[0], manifest, {}, "/tree", "/tree/home")
+  message = scenario_file.unresolved_reference(scenario, scenario.steps[0], manifest, {}, "/tree", "/tree/home")
   assert message == "unresolved reference ${sessions.missing}"
 
 
@@ -739,8 +739,11 @@ def test_unresolved_capture_fails_only_its_step(tmp_path: pathlib.Path) -> None:
   scenario = _load(tmp_path, [send, wait, read])
   manifest = {"sessions": {"atlas": "synthetic-session"}}
   scenario_file.check_references(scenario, manifest)
-  messages = [scenario_file.unresolved_reference(step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps]
-  assert messages == [None, "unresolved reference ${capture.input_id}", None]
+  messages = [
+      scenario_file.unresolved_reference(scenario, step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps
+  ]
+  # The wait names the send step: its response lacked input_event_id, so that step never recorded the capture.
+  assert messages == [None, "unresolved reference ${capture.input_id}: step 'send' should have captured it", None]
   # A reference that names a dict is a malformed file, not an unresolved one: it still stops the run.
   malformed = _load(tmp_path, [{"name": "read", "method": "GET", "path": "/api/${sessions}"}])
   with pytest.raises(scenario_file.ScenarioError, match=re.escape("names a dict")):
@@ -776,8 +779,11 @@ def test_unresolved_references_in_multipart_and_collect_fail_their_steps(tmp_pat
   scenario = _load(tmp_path, [capture, multipart, collect])
   manifest = {"sessions": {"atlas": "synthetic-session"}}
   scenario_file.check_references(scenario, manifest)
-  messages = [scenario_file.unresolved_reference(step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps]
-  assert messages == [None, "unresolved reference ${capture.input_id}", "unresolved reference ${capture.input_id}"]
+  messages = [
+      scenario_file.unresolved_reference(scenario, step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps
+  ]
+  producer = "unresolved reference ${capture.input_id}: step 'capture' should have captured it"
+  assert messages == [None, producer, producer]
 
 
 def test_http_status_and_shape_compare_loads(tmp_path: pathlib.Path) -> None:

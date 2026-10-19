@@ -56,6 +56,10 @@ class ScenarioError(ValueError):
 class UnresolvedReferenceError(ScenarioError):
   """A manifest or capture value this run does not hold. It is a property of the step that names it, not of the file."""
 
+  def __init__(self, ref: str) -> None:
+    super().__init__(f"unresolved reference ${{{ref}}}")
+    self.capture = ref.split(".", 1)[1] if ref.startswith("capture.") else None
+
 
 @dataclasses.dataclass(frozen=True)
 class Step:
@@ -671,7 +675,7 @@ def _lookup(ref: str, manifest: dict, captures: dict[str, Any], tree_root: str, 
   value: Any = captures if parts[0] == "capture" else manifest
   for part in parts[1:] if parts[0] == "capture" else parts:
     if not isinstance(value, dict) or part not in value:
-      raise UnresolvedReferenceError(f"unresolved reference ${{{ref}}}")
+      raise UnresolvedReferenceError(ref)
     value = value[part]
   if isinstance(value, (dict, list)) or value is None:
     raise ScenarioError(f"reference ${{{ref}}} names a {type(value).__name__}, not a scalar")
@@ -727,10 +731,12 @@ def substitute(value: Any, manifest: dict, captures: dict[str, Any], tree_root: 
 
 
 def unresolved_reference(
-    step: Step, manifest: dict, captures: dict[str, Any], tree_root: str, tree_home: str) -> str | None:
+    scenario: Scenario, step: Step, manifest: dict, captures: dict[str, Any], tree_root: str,
+    tree_home: str) -> str | None:
   """The message of the first reference in *step*'s inputs that does not resolve here, or None when all of them do.
 
-  The inputs are the values a step's runner substitutes. Any other reference error still raises.
+  A capture this side never recorded names the nearest earlier step that captures it: that step did not record
+  it on this side. The inputs are the values a step's runner substitutes. Any other reference error still raises.
   """
   inputs = [
       step.path, step.query, step.headers, step.json_body, step.multipart,
@@ -739,8 +745,16 @@ def unresolved_reference(
   try:
     substitute(inputs, manifest, captures, tree_root, tree_home)
   except UnresolvedReferenceError as error:
-    return str(error)
+    if error.capture is None:
+      return str(error)
+    return f"{error}: step {_capture_producer(scenario, step, error.capture)!r} should have captured it"
   return None
+
+
+def _capture_producer(scenario: Scenario, step: Step, name: str) -> str:
+  """The name of the nearest step before *step* that captures *name*; check_references ensures one exists."""
+  position = next(index for index, candidate in enumerate(scenario.steps) if candidate is step)
+  return next(earlier.name for earlier in reversed(scenario.steps[:position]) if name in earlier.capture)
 
 
 def extract(document: Any, field: str) -> Any:

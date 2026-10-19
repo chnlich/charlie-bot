@@ -110,7 +110,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | GET | `/perfetto` | features/trace | ported |  |
 | GET | `/perfetto/merged` | features/trace | ported |  |
 | GET | `/api/ext-usage` | features/usage | ported | `{"error": ...}` until the first round writes an entry; HEAD and other methods answer 405 with `allow: GET` |
-| GET | `/token-usage` | features/usage | todo |  |
+| GET | `/token-usage` | features/usage | ported | HEAD and other methods answer 405; loading the page reads the ledger alone and never captures |
 | POST | `/api/voice/{session_id}/confirm` | features/voice | todo |  |
 | POST | `/api/voice/{session_id}` | features/voice | todo |  |
 | WS | `/ws/voice/{session_id}` | features/voice | ported | live preview relay and recording archive |
@@ -170,7 +170,7 @@ implemented.
 | pre-loop | `config.get_config` | foundation | ported | |
 | pre-loop | `config.require_backends` | foundation | ported | |
 | pre-loop | `v1_sessions.require_no_v1_sessions` | foundation | ported | Runs before bind. |
-| pre-loop | Registered startup checks | foundation | todo | The loop runs registered checks (`charliebot-server/src/main.rs:226`), but no cron or usage backend-reference check registers one. |
+| pre-loop | Registered startup checks | foundation | todo | The loop runs registered checks (`charliebot-server/src/main.rs:226`). Usage's `backend_ids` check is registered and ported; the cron check is not registered yet, so the row stays todo. |
 | pre-loop | Start server on configured host and port | foundation | ported | |
 | lifespan | 1. Read config | foundation | ported | |
 | lifespan | 2. Acquire home writer fence | foundation | ported | |

@@ -344,3 +344,20 @@ def test_an_upstream_supplied_id_stays_visible_on_the_proxy_route() -> None:
 def test_the_rule_applies_to_the_proxy_routes_only() -> None:
   assert normalize.mask_proxy_message_ids(MINTED_ID, "GET /api/sessions/{session_id}/bootstrap") == MINTED_ID
   assert normalize.mask_proxy_message_ids(MINTED_ID, "POST /api/anthropic-proxy/other/v1/messages") == MINTED_ID
+
+
+TOKEN_USAGE_ROUTE = "GET /token-usage"
+
+
+def test_the_token_usage_render_stamp_is_masked_and_the_as_of_text_stays() -> None:
+  body = b'<span class="mtag">generated &middot; 2026-10-19 09:41 UTC</span><p>ledger as of 2026-10-18 09:30 UTC</p>'
+  assert normalize.normalize_body_bytes(body, TOKEN_USAGE_ROUTE, _context()) == (
+      b'<span class="mtag">generated &middot; "<token-usage-render-stamp>"</span>'
+      b'<p>ledger as of 2026-10-18 09:30 UTC</p>')
+
+
+def test_the_token_usage_read_time_is_masked_and_the_rest_of_the_line_stays() -> None:
+  body = b'<p class="foot">Read from the ledger in <b>0.01&thinsp;s</b>; the ledger is as of 2026-10-18 09:30 UTC.</p>'
+  assert normalize.normalize_body_bytes(body, TOKEN_USAGE_ROUTE, _context()) == (
+      b'<p class="foot">Read from the ledger in <b>"<token-usage-read-time>"&thinsp;s</b>; '
+      b'the ledger is as of 2026-10-18 09:30 UTC.</p>')

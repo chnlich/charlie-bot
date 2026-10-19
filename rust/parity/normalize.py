@@ -269,7 +269,21 @@ RESPONSE_TEXT_RULES: tuple[TextRule, ...] = (
         target="GET /",
         pattern=r'"role": "run_delivery", "run_id": "[^"]*", "task_state": "[^"]*", "timestamp": (?P<value>"[^"]*")',
         reason=f"wall-clock time: {_DELIVERY_STAMP}",
-    ),)
+    ),
+    # The token usage page stamps the time it renders, and the time its ledger read took, each on the serving clock.
+    TextRule(
+        name="token-usage-render-stamp",
+        target="GET /token-usage",
+        pattern=r"generated &middot; (?P<value>[^<]*)</span>",
+        reason="wall-clock time: the page stamps the time it renders from the serving process's clock",
+    ),
+    TextRule(
+        name="token-usage-read-time",
+        target="GET /token-usage",
+        pattern=r"Read from the ledger in <b>(?P<value>[0-9.]+)&thinsp;s</b>",
+        reason="wall-clock time: the page reports how long its ledger read took on the serving process's clock",
+    ),
+)
 
 FILE_RULES: tuple[FieldRule, ...] = (
     FieldRule(

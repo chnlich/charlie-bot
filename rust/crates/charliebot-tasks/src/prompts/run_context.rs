@@ -8,6 +8,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use charliebot_agents::python_json;
 use charliebot_store::Store;
 use charliebot_store::control_events::sha256_hex;
 use serde_json::{Value, json};
@@ -105,43 +106,12 @@ fn stored_snapshot(path: &Path, reference: &str) -> Result<Value, ContextReadErr
       error.python_message(path)
     ))
   })?;
-  let stored: Value = serde_json::from_str(&text).map_err(|error| {
-    ContextReadError::internal(format!(
-      "stored prompt snapshot unreadable at {reference}: {}",
-      json_decode_error_text(&text, &error)
-    ))
+  let stored = python_json::loads_text(&text).map_err(|error| {
+    ContextReadError::internal(format!("stored prompt snapshot unreadable at {reference}: {error}"))
   })?;
   let snapshot =
     PromptSnapshot::from_json_dict(&stored).map_err(|error| ContextReadError::internal(error.to_string()))?;
   Ok(snapshot.to_json_dict())
-}
-
-/// The Python JSON decoder's message for invalid values and literals, common corrupt-file cases.
-fn json_decode_error_text(text: &str, error: &serde_json::Error) -> String {
-  let rendered = error.to_string();
-  let message = rendered.split_once(" at line ").map_or(rendered.as_str(), |(message, _)| message);
-  let invalid_literal = message == "expected ident";
-  if !matches!(message, "expected value" | "EOF while parsing a value") && !invalid_literal {
-    return rendered;
-  }
-  let line = error.line().max(1);
-  let column = error.column().saturating_sub(usize::from(invalid_literal)).max(1);
-  let mut line_start = 0;
-  for _ in 1..line {
-    let Some(newline) = text[line_start..].find('\n') else {
-      line_start = text.len();
-      break;
-    };
-    line_start += newline + 1;
-  }
-  let line_end = text[line_start..].find('\n').map_or(text.len(), |newline| line_start + newline);
-  let line_text = &text[line_start..line_end];
-  let mut byte_column = column.saturating_sub(1).min(line_text.len());
-  while !line_text.is_char_boundary(byte_column) {
-    byte_column -= 1;
-  }
-  let char_position = text[..line_start + byte_column].chars().count();
-  format!("Expecting value: line {line} column {column} (char {char_position})")
 }
 
 /// The legacy evidence of one raw launch-text file: its path, its sha256, and the note that it is limited evidence.

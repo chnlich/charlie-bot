@@ -554,8 +554,8 @@ def _socket_inodes(pid: int) -> set[int]:
   for descriptor in descriptors:
     try:
       target = os.readlink(descriptor)
-    except FileNotFoundError:
-      continue  # the descriptor closed during the scan
+    except (FileNotFoundError, PermissionError):
+      continue  # the descriptor closed during the scan, or it belongs to another user's process
     if target.startswith("socket:["):
       inodes.add(int(target[len("socket:["):-1]))
   return inodes

@@ -133,6 +133,8 @@ pub struct Store {
   pub(crate) thinking_state: ThinkingState,
   pub(crate) task_tree_index: StdMutex<Option<CachedTreeIndex>>,
   pub(crate) task_tree_generation: AtomicU64,
+  #[cfg(feature = "write-faults")]
+  pub(crate) write_faults: Arc<crate::write_faults::WriteFaults>,
 }
 
 impl Store {
@@ -186,6 +188,8 @@ impl Store {
       thinking_state: ThinkingState::default(),
       task_tree_index: StdMutex::new(None),
       task_tree_generation: AtomicU64::new(0),
+      #[cfg(feature = "write-faults")]
+      write_faults: Arc::default(),
     })
   }
 

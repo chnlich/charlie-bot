@@ -1123,7 +1123,10 @@ impl Store {
     let operation = (|| {
       let data_dir = temp_dir.join("data");
       fs::create_dir(&data_dir).map_err(|error| path_error(&data_dir, error))?;
-      crate::ndjson::append(&data_dir.join("chat_events.jsonl"), event)?;
+      let events_path = data_dir.join("chat_events.jsonl");
+      #[cfg(feature = "write-faults")]
+      self.fail_chat_append(&meta.id, event, &events_path)?;
+      crate::ndjson::append(&events_path, event)?;
       let metadata_path = temp_dir.join("metadata.json");
       fsutil::atomic_write_text(&metadata_path, &meta.to_json_string(&self.slots, true))
         .map_err(|error| path_error(&metadata_path, error))?;

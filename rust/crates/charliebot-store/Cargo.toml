@@ -16,7 +16,12 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[features]
+# The test-only write-fault seam (`write_faults`). Off by default; only a dev-dependency turns it on.
+write-faults = []
+
 [dev-dependencies]
+charliebot-store = { path = ".", features = ["write-faults"] }
 regex.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

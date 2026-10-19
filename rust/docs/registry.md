@@ -371,6 +371,13 @@ async fn upload(request: Request<Body>) -> Response {
 }
 ```
 
+A model declares pydantic's `extra='forbid'` with `BodyModel::required(FIELDS).forbid_extra()`. Each `Field`
+declares its bounds as builders: `ge`, `gt`, `le` and `lt` on an `Integer` or `Float` field, with a `Bound::Int` or
+`Bound::Float` bound, and `min_length` and `max_length` on a `String` or `StringList` field. `validate` reports the
+errors that pydantic 2.12.5 reports for the body, in pydantic's order: the declared fields in declaration order, then
+the forbidden keys in input order. A route takes these errors from `validate` and does not re-derive them. The module
+doc of `charliebot_compat::fastapi_body` gives the order in full.
+
 ## The typed startup state
 
 `FeatureContext` holds the config and credentials (`Arc<HotReload<_>>`), the store, the registry and the

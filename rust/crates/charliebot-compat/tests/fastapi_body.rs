@@ -12,6 +12,7 @@ use axum::response::Response;
 use axum::routing::post;
 use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType};
 use charliebot_compat::responses;
+use charliebot_compat::validation::Bound;
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
@@ -26,6 +27,14 @@ const FIELDS: &[Field] = &[
   Field::required("labels", FieldType::StringList),
 ];
 const MODEL: BodyModel = BodyModel::required(FIELDS);
+const BOUNDED_FIELDS: &[Field] = &[
+  Field::optional("offset", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("count", FieldType::Integer).ge(Bound::Int(1)).le(Bound::Int(100)),
+  Field::optional("ratio", FieldType::NullableFloat).gt(Bound::Float(0.0)).le(Bound::Float(1.0)),
+  Field::required("label", FieldType::String).min_length(1),
+  Field::required("tags", FieldType::StringList).max_length(2),
+];
+const BOUNDED_MODEL: BodyModel = BodyModel::required(BOUNDED_FIELDS).forbid_extra();
 
 struct Case {
   name: &'static str,
@@ -110,26 +119,18 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
 
   let python = PythonServer::start(python_address).await;
   let rust_server = tokio::spawn(async move {
-    axum::serve(rust_listener, Router::new().route("/items/{item_id}", post(read_item)))
-      .await
-      .expect("the axum test app serves requests");
+    let router =
+      Router::new().route("/items/{item_id}", post(read_item)).route("/bounds/{item_id}", post(read_bounded));
+    axum::serve(rust_listener, router).await.expect("the axum test app serves requests");
   });
 
   let client = Client::new();
-  let cases = corpus();
-  assert_eq!(cases.len(), 40);
-  for case in &cases {
-    let (python_status, python_body) = send(&client, python_address, case.item_id, case.content_type, &case.body).await;
-    let (rust_status, rust_body) = send(&client, rust_address, case.item_id, case.content_type, &case.body).await;
-
-    assert_eq!(python_status, case.expected_status, "FastAPI status for {}", case.name);
-    assert_eq!(rust_status, python_status, "status for {}", case.name);
-    if case.compare_body {
-      assert_eq!(rust_body, python_body, "body for {}", case.name);
-    } else if case.expected_status == StatusCode::UNPROCESSABLE_ENTITY {
-      assert_eq!(error_shape(&rust_body), error_shape(&python_body), "validation shape for {}", case.name);
-    }
-  }
+  let items = corpus();
+  assert_eq!(items.len(), 40);
+  compare_corpus(&client, python_address, rust_address, "/items", &items).await;
+  let bounded = bounded_corpus();
+  assert_eq!(bounded.len(), 27);
+  compare_corpus(&client, python_address, rust_address, "/bounds", &bounded).await;
 
   rust_server.abort();
   match rust_server.await {
@@ -141,6 +142,14 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
 }
 
 async fn read_item(request: Request<Body>) -> Response {
+  read_model(request, &MODEL).await
+}
+
+async fn read_bounded(request: Request<Body>) -> Response {
+  read_model(request, &BOUNDED_MODEL).await
+}
+
+async fn read_model(request: Request<Body>, model: &BodyModel) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match fastapi_body::read(&parts.headers, stream).await {
     Ok(body) => body,
@@ -150,7 +159,7 @@ async fn read_item(request: Request<Body>) -> Response {
   if item_id == "missing" {
     return responses::json(StatusCode::NOT_FOUND, &json!({"detail": "missing item"}));
   }
-  let body = match body.validate(&MODEL) {
+  let body = match body.validate(model) {
     Ok(Some(body)) => body,
     Ok(None) => unreachable!("the differential model body is required"),
     Err(response) => return *response,
@@ -158,14 +167,37 @@ async fn read_item(request: Request<Body>) -> Response {
   responses::json(StatusCode::OK, &body)
 }
 
+async fn compare_corpus(
+  client: &Client,
+  python_address: SocketAddr,
+  rust_address: SocketAddr,
+  route: &str,
+  cases: &[Case],
+) {
+  for case in cases {
+    let (python_status, python_body) =
+      send(client, python_address, route, case.item_id, case.content_type, &case.body).await;
+    let (rust_status, rust_body) = send(client, rust_address, route, case.item_id, case.content_type, &case.body).await;
+
+    assert_eq!(python_status, case.expected_status, "FastAPI status for {}", case.name);
+    assert_eq!(rust_status, python_status, "status for {}", case.name);
+    if case.compare_body {
+      assert_eq!(rust_body, python_body, "body for {}", case.name);
+    } else if case.expected_status == StatusCode::UNPROCESSABLE_ENTITY {
+      assert_eq!(error_shape(&rust_body), error_shape(&python_body), "validation shape for {}", case.name);
+    }
+  }
+}
+
 async fn send(
   client: &Client,
   address: SocketAddr,
+  route: &str,
   item_id: &str,
   content_type: Option<&str>,
   body: &[u8],
 ) -> (StatusCode, Value) {
-  let mut request = client.post(format!("http://{address}/items/{item_id}")).body(body.to_vec());
+  let mut request = client.post(format!("http://{address}{route}/{item_id}")).body(body.to_vec());
   if let Some(content_type) = content_type {
     request = request.header(header::CONTENT_TYPE, content_type);
   }
@@ -339,6 +371,73 @@ fn corpus() -> Vec<Case> {
       compare_body: false,
     },
   ]
+}
+
+/// The bounded model's corpus, sent to `/bounds`: each bound at, below and above its limit, null on each optional
+/// field, two extra keys, and the error order of a missing field, a wrong type and an extra key together.
+fn bounded_corpus() -> Vec<Case> {
+  vec![
+    json_ok_case("the valid body", bounded_value()),
+    json_ok_case("offset at its lower bound", bounded_with(&[("offset", json!(0))])),
+    json_value_case("offset below its lower bound", bounded_with(&[("offset", json!(-1))])),
+    json_ok_case("offset null", bounded_with(&[("offset", Value::Null)])),
+    json_ok_case("count at its lower bound", bounded_with(&[("count", json!(1))])),
+    json_value_case("count below its lower bound", bounded_with(&[("count", json!(0))])),
+    json_ok_case("count at its upper bound", bounded_with(&[("count", json!(100))])),
+    json_value_case("count above its upper bound", bounded_with(&[("count", json!(101))])),
+    json_ok_case("ratio at its upper bound as an integer", bounded_with(&[("ratio", json!(1))])),
+    json_value_case("ratio above its upper bound", bounded_with(&[("ratio", json!(1.5))])),
+    json_value_case("ratio at its lower bound", bounded_with(&[("ratio", json!(0.0))])),
+    json_value_case("ratio below its lower bound", bounded_with(&[("ratio", json!(-0.5))])),
+    json_ok_case("ratio null", bounded_with(&[("ratio", Value::Null)])),
+    json_ok_case("ratio as a numeric string", bounded_with(&[("ratio", json!("0.5"))])),
+    json_ok_case("ratio as a boolean", bounded_with(&[("ratio", json!(true))])),
+    json_value_case("ratio as a word", bounded_with(&[("ratio", json!("high"))])),
+    json_ok_case("label at its minimum length", bounded_with(&[("label", json!("a"))])),
+    json_value_case("label below its minimum length", bounded_with(&[("label", json!(""))])),
+    json_ok_case("tags at its maximum length", bounded_with(&[("tags", json!(["x", "y"]))])),
+    json_ok_case("tags empty", bounded_with(&[("tags", json!([]))])),
+    json_value_case("tags above its maximum length", bounded_with(&[("tags", json!(["x", "y", "z"]))])),
+    json_value_case("tags over the maximum with a wrong item", bounded_with(&[("tags", json!(["x", 3, "z"]))])),
+    json_value_case("tags with a wrong item within the maximum", bounded_with(&[("tags", json!(["x", 3]))])),
+    json_value_case("two extra keys in input order", bounded_with(&[("zeta", json!(1)), ("alpha", json!(2))])),
+    json_value_case(
+      "a missing field, a wrong type and an extra key",
+      json!({"offset": 3, "ratio": 0.5, "label": 5, "tags": ["x"], "colour": "red"}),
+    ),
+    json_value_case("a bound error and an extra key", bounded_with(&[("ratio", json!(2.0)), ("extra", json!(1))])),
+    json_value_case(
+      "bound errors in declaration order",
+      bounded_with(&[("count", json!(0)), ("label", json!("")), ("tags", json!(["x", "y", "z"]))]),
+    ),
+  ]
+}
+
+/// The bounded model's valid body: every bound holds, so a case moves one field out of its bound.
+fn bounded_value() -> Value {
+  json!({"offset": 3, "count": 50, "ratio": 0.5, "label": "a", "tags": ["x"]})
+}
+
+/// The valid bounded body with each `(field, value)` set. A name the model does not declare is an extra key, in the
+/// order given.
+fn bounded_with(changes: &[(&str, Value)]) -> Value {
+  let mut body = bounded_value();
+  let object = body.as_object_mut().expect("the model value is an object");
+  for (field, value) in changes {
+    object.insert(field.to_string(), value.clone());
+  }
+  body
+}
+
+fn json_ok_case(name: &'static str, value: Value) -> Case {
+  Case {
+    name,
+    item_id: "present",
+    body: json_bytes(&value),
+    content_type: Some("application/json"),
+    expected_status: StatusCode::OK,
+    compare_body: true,
+  }
 }
 
 fn json_error_case(name: &'static str, body: &[u8]) -> Case {

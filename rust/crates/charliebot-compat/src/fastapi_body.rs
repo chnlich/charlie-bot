@@ -22,6 +22,22 @@
 //! }
 //! ```
 
+//! ## Model options
+//!
+//! `BodyModel::forbid_extra()` matches pydantic's `extra='forbid'`. A `Field` accepts `ge`, `gt`, `le` and `lt` bounds
+//! for integer and float fields, and `min_length` and `max_length` bounds for string and list fields. Number bounds
+//! must use the corresponding `validation::Bound` variant. A bound applies only when an optional field has a value.
+//!
+//! The error order follows pydantic 2.12.5 (pydantic-core 2.41.5 in the worktree `.venv`): declared fields in
+//! declaration order, then forbidden extra keys in input order. A number that violates multiple bounds reports the
+//! first violated bound in the order `le`, `lt`, `ge`, `gt`. Lists report `max_length` before their items and
+//! `min_length` after their items.
+//!
+//! `RequestBody::check` returns the ordered `FieldError`s; `validate` wraps them in FastAPI's 422 response. A missing
+//! optional field stays absent from the returned object so the handler applies the Python default.
+
+use std::cmp::Ordering;
+
 use axum::body::{Body, to_bytes};
 use axum::response::Response;
 use bytes::Bytes;
@@ -99,6 +115,8 @@ pub enum FieldType {
   NullableString,
   Integer,
   NullableInteger,
+  Float,
+  NullableFloat,
   Boolean,
   Literal(&'static [&'static str]),
   NullableLiteral(&'static [&'static str]),
@@ -114,23 +132,91 @@ pub enum FieldType {
   },
 }
 
+impl FieldType {
+  /// Whether a number bound fits the field: an integer field takes `Bound::Int`, a float field `Bound::Float`.
+  const fn takes_number_bound(self, bound: validation::Bound) -> bool {
+    matches!(
+      (self, bound),
+      (FieldType::Integer | FieldType::NullableInteger, validation::Bound::Int(_))
+        | (FieldType::Float | FieldType::NullableFloat, validation::Bound::Float(_))
+    )
+  }
+
+  /// Whether a length bound fits the field: a string or a list.
+  const fn takes_length_bound(self) -> bool {
+    matches!(self, FieldType::String | FieldType::NullableString | FieldType::StringList)
+  }
+}
+
 /// One model field in declaration order.
 #[derive(Debug, Clone, Copy)]
 pub struct Field {
   name: &'static str,
   field_type: FieldType,
   required: bool,
+  bounds: Bounds,
+}
+
+/// The bounds a `Field(...)` declares; `None` for each bound the field does not declare.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Bounds {
+  gt: Option<validation::Bound>,
+  ge: Option<validation::Bound>,
+  lt: Option<validation::Bound>,
+  le: Option<validation::Bound>,
+  min_length: Option<usize>,
+  max_length: Option<usize>,
+}
+
+impl Bounds {
+  const NONE: Bounds = Bounds { gt: None, ge: None, lt: None, le: None, min_length: None, max_length: None };
 }
 
 impl Field {
   /// Declare a required field.
   pub const fn required(name: &'static str, field_type: FieldType) -> Self {
-    Self { name, field_type, required: true }
+    Self { name, field_type, required: true, bounds: Bounds::NONE }
   }
 
   /// Declare a field whose Python model has a default.
   pub const fn optional(name: &'static str, field_type: FieldType) -> Self {
-    Self { name, field_type, required: false }
+    Self { name, field_type, required: false, bounds: Bounds::NONE }
+  }
+
+  /// Declare pydantic's `gt`: the value must be greater than the bound.
+  pub const fn gt(self, bound: validation::Bound) -> Self {
+    assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
+    Self { bounds: Bounds { gt: Some(bound), ..self.bounds }, ..self }
+  }
+
+  /// Declare pydantic's `ge`: the value must be at least the bound.
+  pub const fn ge(self, bound: validation::Bound) -> Self {
+    assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
+    Self { bounds: Bounds { ge: Some(bound), ..self.bounds }, ..self }
+  }
+
+  /// Declare pydantic's `lt`: the value must be less than the bound.
+  pub const fn lt(self, bound: validation::Bound) -> Self {
+    assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
+    Self { bounds: Bounds { lt: Some(bound), ..self.bounds }, ..self }
+  }
+
+  /// Declare pydantic's `le`: the value must be at most the bound.
+  pub const fn le(self, bound: validation::Bound) -> Self {
+    assert!(self.field_type.takes_number_bound(bound), "a number bound must match the field's int or float type");
+    Self { bounds: Bounds { le: Some(bound), ..self.bounds }, ..self }
+  }
+
+  /// Declare pydantic's `min_length`: a string has at least this many characters, a list at least this many items.
+  pub const fn min_length(self, min_length: usize) -> Self {
+    assert!(self.field_type.takes_length_bound(), "min_length applies to a string or list field");
+    Self { bounds: Bounds { min_length: Some(min_length), ..self.bounds }, ..self }
+  }
+
+  /// Declare pydantic's `max_length`: a string has at most this many characters, a list at most this many items.
+  pub const fn max_length(self, max_length: usize) -> Self {
+    assert!(self.field_type.takes_length_bound(), "max_length applies to a string or list field");
+    Self { bounds: Bounds { max_length: Some(max_length), ..self.bounds }, ..self }
   }
 }
 
@@ -264,12 +350,21 @@ fn validate_object(
 
 fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
   let failure = |kind| Err(vec![validation::FieldError { loc: loc.to_vec(), input: value.clone(), kind }]);
-  match field.field_type {
+  if matches!(field.field_type, FieldType::StringList) {
+    return string_list(field, value, loc);
+  }
+  let validated = match field.field_type {
     FieldType::String if value.is_string() => Ok(value.clone()),
     FieldType::NullableString if value.is_null() || value.is_string() => Ok(value.clone()),
     FieldType::String | FieldType::NullableString => failure(validation::Kind::StringType),
     FieldType::Integer | FieldType::NullableInteger => {
       match integer_value(value, matches!(field.field_type, FieldType::NullableInteger)) {
+        Ok(value) => Ok(value),
+        Err(kind) => failure(kind),
+      }
+    }
+    FieldType::Float | FieldType::NullableFloat => {
+      match float_value(value, matches!(field.field_type, FieldType::NullableFloat)) {
         Ok(value) => Ok(value),
         Err(kind) => failure(kind),
       }
@@ -296,29 +391,112 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
       Some(value) => Ok(value),
       None => failure(validation::Kind::Enum(choices)),
     },
-    FieldType::StringList => match value.as_array() {
-      Some(items) => {
-        let mut errors = Vec::new();
-        for (index, item) in items.iter().enumerate() {
-          if !item.is_string() {
-            let mut item_loc = loc.to_vec();
-            item_loc.push(validation::Loc::Index(index));
-            errors.push(validation::FieldError {
-              loc: item_loc,
-              input: item.clone(),
-              kind: validation::Kind::StringType,
-            });
-          }
-        }
-        if errors.is_empty() { Ok(value.clone()) } else { Err(errors) }
-      }
-      None => failure(validation::Kind::ListType),
-    },
+    FieldType::StringList => unreachable!("a list field validates through string_list"),
     FieldType::NullableModel { class_name, model } => match value {
       Value::Null => Ok(Value::Null),
       Value::Object(object) => validate_object(object, model, loc),
       _ => failure(validation::Kind::ModelType { class_name }),
     },
+  };
+  validated.and_then(|checked| match field.bounds.violation(&checked) {
+    Some(kind) => failure(kind),
+    None => Ok(checked),
+  })
+}
+
+/// A `list[str]` field. pydantic checks `max_length` before the items and `min_length` after them.
+fn string_list(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
+  let failure = |kind| Err(vec![validation::FieldError { loc: loc.to_vec(), input: value.clone(), kind }]);
+  let Some(items) = value.as_array() else {
+    return failure(validation::Kind::ListType);
+  };
+  if let Some(max_length) = field.bounds.max_length
+    && items.len() > max_length
+  {
+    return failure(validation::Kind::ListTooLong { max_length, actual_length: items.len() });
+  }
+  let mut errors = Vec::new();
+  for (index, item) in items.iter().enumerate() {
+    if !item.is_string() {
+      let mut item_loc = loc.to_vec();
+      item_loc.push(validation::Loc::Index(index));
+      errors.push(validation::FieldError { loc: item_loc, input: item.clone(), kind: validation::Kind::StringType });
+    }
+  }
+  if !errors.is_empty() {
+    return Err(errors);
+  }
+  if let Some(min_length) = field.bounds.min_length
+    && items.len() < min_length
+  {
+    return failure(validation::Kind::ListTooShort { min_length, actual_length: items.len() });
+  }
+  Ok(value.clone())
+}
+
+impl Bounds {
+  /// The first bound that a scalar value violates, or `None` when it passes. A null passes every bound.
+  ///
+  /// A number is compared in its bound's type. Pydantic reports `le`, then `lt`, `ge` and `gt`.
+  fn violation(&self, value: &Value) -> Option<validation::Kind> {
+    match value {
+      Value::String(text) => {
+        let length = text.chars().count();
+        if let Some(min_length) = self.min_length
+          && length < min_length
+        {
+          return Some(validation::Kind::StringTooShort { min_length });
+        }
+        if let Some(max_length) = self.max_length
+          && length > max_length
+        {
+          return Some(validation::Kind::StringTooLong { max_length });
+        }
+        None
+      }
+      Value::Number(number) => {
+        if let Some(bound) = self.le
+          && order(number, bound) == Ordering::Greater
+        {
+          return Some(validation::Kind::LessThanEqual(bound));
+        }
+        if let Some(bound) = self.lt
+          && order(number, bound) != Ordering::Less
+        {
+          return Some(validation::Kind::LessThan(bound));
+        }
+        if let Some(bound) = self.ge
+          && order(number, bound) == Ordering::Less
+        {
+          return Some(validation::Kind::GreaterThanEqual(bound));
+        }
+        if let Some(bound) = self.gt
+          && order(number, bound) != Ordering::Greater
+        {
+          return Some(validation::Kind::GreaterThan(bound));
+        }
+        None
+      }
+      _ => None,
+    }
+  }
+}
+
+/// How a validated number compares with a bound. An integer field compares exactly, as i128. A float field compares
+/// as f64, where `-0.0` equals `0.0`, as in pydantic.
+fn order(number: &Number, bound: validation::Bound) -> Ordering {
+  match bound {
+    validation::Bound::Int(bound) => {
+      let value = number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+        .expect("an integer field holds an integer");
+      value.cmp(&i128::from(bound))
+    }
+    validation::Bound::Float(bound) => {
+      number.as_f64().expect("a JSON number reads as f64").partial_cmp(&bound).expect("a finite number compares")
+    }
   }
 }
 
@@ -350,6 +528,26 @@ fn integer_value(value: &Value, nullable: bool) -> Result<Value, validation::Kin
       .map_err(|error| error.kind),
     _ => Err(validation::Kind::IntType),
   }
+}
+
+/// A float field's value, read as pydantic's lax mode reads it: a number, a boolean or a numeric string.
+fn float_value(value: &Value, nullable: bool) -> Result<Value, validation::Kind> {
+  if value.is_null() && nullable {
+    return Ok(Value::Null);
+  }
+  let number = match value {
+    Value::Bool(value) => {
+      if *value {
+        1.0
+      } else {
+        0.0
+      }
+    }
+    Value::Number(number) => number.as_f64().expect("a JSON number reads as f64"),
+    Value::String(text) => validation::parse_float(validation::Source::Query, "body", text).map_err(|error| error.kind)?,
+    _ => return Err(validation::Kind::FloatType),
+  };
+  Ok(Value::Number(Number::from_f64(number).expect("a float field's number is finite")))
 }
 
 fn boolean_value(value: &Value) -> Result<Value, validation::Kind> {

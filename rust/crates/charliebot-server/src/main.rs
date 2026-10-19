@@ -180,7 +180,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       .with_graceful_shutdown(async move {
         // A dropped sender also stops the server.
         let _ = stop_receiver.await;
-        shutdown_store.close_subscribers();
+        shutdown_store.close_subscribers().await;
       })
       .await
   });

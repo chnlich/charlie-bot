@@ -7,7 +7,7 @@ use axum::response::Response;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_store::aggregator::MessageAggregator;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::streaming::{self, Subscription};
+use charliebot_store::streaming::{self, SocketHandle, Subscription};
 use charliebot_store::{RAW_EVENTS_REPLACED_BY_DELTAS, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
@@ -50,6 +50,7 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
   };
 
+  let mut socket = features.store.register_socket();
   let store = Arc::clone(&features.store);
   let load_store = Arc::clone(&store);
   let load_session_id = session_id.clone();
@@ -83,7 +84,8 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
   }
 
-  keepalive(&mut sender, &mut receiver, &mut session_subscription, &mut sidebar_subscription, &session_id).await;
+  keepalive(&mut sender, &mut receiver, &mut session_subscription, &mut sidebar_subscription, &mut socket, &session_id)
+    .await;
   features.store.unsubscribe(&mut session_subscription);
   features.store.unsubscribe(&mut sidebar_subscription);
   tracing::info!(session_id, "session_ws_disconnected");
@@ -324,6 +326,7 @@ async fn keepalive(
   receiver: &mut futures_util::stream::SplitStream<WebSocket>,
   session_subscription: &mut Subscription,
   sidebar_subscription: &mut Subscription,
+  socket: &mut SocketHandle,
   session_id: &str,
 ) {
   let keepalive = time::sleep(KEEPALIVE_TIMEOUT);
@@ -348,24 +351,23 @@ async fn keepalive(
           tracing::info!(session_id, reason = %error, "session_ws_closed");
           return;
         },
-        None => {
-          if let Err(error) = close_with_code(sender, 1000, "").await {
-            tracing::debug!(error = %error, "ws_close_on_shutdown_failed");
-          }
-          return;
-        }
+        None => unreachable!("the store keeps a subscriber's sender until this socket unsubscribes"),
       },
       frame = sidebar_subscription.recv() => match frame {
         Some(frame) => if let Err(error) = sender.send(Message::Text(frame.into())).await {
           tracing::info!(session_id, reason = %error, "session_ws_closed");
           return;
         },
-        None => {
-          if let Err(error) = close_with_code(sender, 1000, "").await {
-            tracing::debug!(error = %error, "ws_close_on_shutdown_failed");
-          }
+        None => unreachable!("the store keeps a subscriber's sender until this socket unsubscribes"),
+      },
+      request = socket.recv_close_request() => match request {
+        Some(reply) => {
+          let outcome = close_with_code(sender, 1000, "").await.map_err(|error| error.to_string());
+          // The shutdown waits on this reply. If it has stopped waiting, no one reads the outcome.
+          let _ = reply.send(outcome);
           return;
         }
+        None => unreachable!("the store keeps a socket's request sender until its handle drops"),
       },
       _ = &mut keepalive => {
         let ping = json!({"type": "ping"}).to_string();
@@ -830,22 +832,28 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn shutdown_drops_pending_frames_and_closes_the_session_socket_with_code_1000() {
+  async fn shutdown_drops_pending_frames_and_closes_every_session_socket_with_code_1000() {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
+    write_session(&features, "synthetic-second", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic").await;
-    send_cursor(&mut client, 0).await;
-    receive_catchup_complete(&mut client).await;
+    let mut first = connect(address, "synthetic").await;
+    send_cursor(&mut first, 0).await;
+    receive_catchup_complete(&mut first).await;
+    let mut second = connect(address, "synthetic-second").await;
+    send_cursor(&mut second, 0).await;
+    receive_catchup_complete(&mut second).await;
     let channel = streaming::session_channel("synthetic");
     features.store.broadcast(&channel, json!({"type": "stream", "sequence": 1})).await.unwrap();
-    assert_eq!(receive_json(&mut client).await["sequence"], 1);
+    assert_eq!(receive_json(&mut first).await["sequence"], 1);
     features.store.broadcast(&channel, json!({"type": "stream", "sequence": 2})).await.unwrap();
-    features.store.close_subscribers();
-    match time::timeout(Duration::from_secs(1), receive_frame(&mut client)).await.unwrap().unwrap() {
-      ServerFrame::Close(Some(1000)) => {}
-      ServerFrame::Close(code) => panic!("shutdown close code was {code:?}"),
-      ServerFrame::Text(text) => panic!("shutdown sent unexpected frame {text}"),
+    features.store.close_subscribers().await;
+    for client in [&mut first, &mut second] {
+      match time::timeout(Duration::from_secs(1), receive_frame(client)).await.unwrap().unwrap() {
+        ServerFrame::Close(Some(1000)) => {}
+        ServerFrame::Close(code) => panic!("shutdown close code was {code:?}"),
+        ServerFrame::Text(text) => panic!("shutdown sent unexpected frame {text}"),
+      }
     }
     server.abort();
     let _ = server.await;

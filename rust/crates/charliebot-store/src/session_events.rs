@@ -8,7 +8,7 @@ use charliebot_core::event_types;
 
 use crate::aggregator::MessageAggregator;
 use crate::projection::MessageProjection;
-use crate::streaming::{self, Subscription};
+use crate::streaming::{self, SocketHandle, Subscription};
 use crate::{ChatEvent, Store, StoreError, StoreResult};
 
 const PROJECTION_LRU_LIMIT: usize = 64;
@@ -180,9 +180,14 @@ impl Store {
     self.streaming_manager.unsubscribe(subscription);
   }
 
-  /// Close every subscriber and discard pending stream deltas.
-  pub fn close_subscribers(&self) {
-    self.streaming_manager.close_all();
+  /// Register one open WebSocket, so that the shutdown closes it.
+  pub fn register_socket(&self) -> SocketHandle {
+    self.streaming_manager.register_socket()
+  }
+
+  /// Discard pending stream deltas, then close every registered WebSocket and wait for each close frame.
+  pub async fn close_subscribers(&self) {
+    self.streaming_manager.close_all().await;
   }
 
   /// Build a message aggregator with the event renderers registered for this store.

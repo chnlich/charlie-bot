@@ -95,7 +95,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | GET | `/api/git/diff/files` | features/diff_view | todo |  |
 | GET | `/api/git/diff/file` | features/diff_view | todo |  |
 | GET | `/diff` | features/diff_view | todo |  |
-| POST | `/api/sessions/{session_id}/explain` | features/explain | ported | The one-shot agent's environment differs from Python's (shared one-shot path, `features-explain` shutdown). |
+| POST | `/api/sessions/{session_id}/explain` | features/explain | ported |  |
 | GET | `/api/sessions/{session_id}/explain` | features/explain | ported |  |
 | GET | `/api/sessions/{session_id}/explain/status` | features/explain | ported |  |
 | POST | `/api/internal/improve/stop` | features/improve | todo |  |

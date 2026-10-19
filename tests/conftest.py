@@ -1678,11 +1678,11 @@ CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.runtime.cli.common._maybe
 # loop picks it up from there.
 CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.infra.timeouts.CLI_CONNECT_TOTAL_TIMEOUT"
 
-# Import-path patch target for the logged-task spawner the shared thread core
-# (src/features/chat_threads/thread_entry.py) fires for the round side's ack-clear and nudge
-# tasks: thread_entry reads it through its home module at call time (`tasks.create_logged_task`),
-# so mock setattrs the stand-in on the src.infra.tasks module attribute.
-THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.infra.tasks.create_logged_task"
+# Import-path patch target for the logged-task spawner: every producer resolves
+# `tasks.create_logged_task` on the src.infra.tasks module attribute at call time, so mock
+# setattrs the stand-in on that attribute and intercepts every logged task the code under
+# test fires, whichever module fires it.
+TASKS_CREATE_LOGGED_TASK_PATCH_TARGET = "src.infra.tasks.create_logged_task"
 
 # Import-path patch target for the master wake the shared thread core's round-end audit fires
 # (the nudge): thread_entry reads it through its home module at call time
@@ -2446,8 +2446,7 @@ def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[mock.Async
   with contextlib.ExitStack() as stack:
     trigger = stack.enter_context(mock.patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()))
     if tasks is not None:
-      stack.enter_context(
-          mock.patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
+      stack.enter_context(mock.patch(TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     yield trigger
 
 

@@ -61,8 +61,7 @@ def _listener_seam(
     stack.enter_context(mock.patch(conftest.SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client))
     if tasks is not None:
       stack.enter_context(
-          mock.patch(
-              conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)))
+          mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)))
     if trigger is not None:
       stack.enter_context(mock.patch(conftest.THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, trigger))
     if queued is not None:

@@ -64,7 +64,7 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
   tasks: list[asyncio.Task] = []
 
   # The wake runs for real: the summon's round must start on the new root.
-  with mock.patch(conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)):
+  with mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)):
     session_id = await slack_listener.handle_app_mention(
         event, cfg, *conftest.thread_blocks(session_blocks), conftest.FakeSlackClient())
     await asyncio.gather(*tasks)

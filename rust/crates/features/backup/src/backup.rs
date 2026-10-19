@@ -2,8 +2,10 @@
 //! sibling directory, pruned by a tiered retention policy.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -14,7 +16,7 @@ use charliebot_store::run_records::THREADS_DIR_NAME;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use crate::tar_writer::{Member, finish, write_member};
+use crate::tar_writer::{Member, finish, python_code_points, write_member};
 
 /// The profile's opencode store directory name (`src/infra/home.py`).
 const OPENCODE_DIR_NAME: &str = "opencode";
@@ -35,32 +37,32 @@ pub fn charliebot_dir() -> anyhow::Result<PathBuf> {
 /// Where this profile's archives are written, a sibling of its home
 /// (`backup_dir`): the default home yields `~/.charliebot_backup`.
 pub fn backup_dir(home: &Path) -> anyhow::Result<PathBuf> {
-  let name = home
-    .file_name()
-    .and_then(|name| name.to_str())
-    .with_context(|| format!("the home has no usable name: {}", home.display()))?;
-  Ok(home.with_file_name(format!("{name}_backup")))
+  let name = home.file_name().with_context(|| format!("the home has no name: {}", home.display()))?;
+  let mut backup_name = name.to_os_string();
+  backup_name.push("_backup");
+  Ok(home.with_file_name(backup_name))
 }
 
-/// True if the archive member (a relative path) should be excluded (`_should_exclude`).
-pub fn should_exclude(arcname: &str) -> bool {
-  let parts: Vec<&str> = arcname.split('/').collect();
+/// True if the archive member (a relative path) should be excluded (`_should_exclude`). The name is judged
+/// as bytes: a byte outside UTF-8 never equals an ASCII name part, so the decision matches Python's.
+pub fn should_exclude(arcname: &[u8]) -> bool {
+  let parts: Vec<&[u8]> = arcname.split(|byte| *byte == b'/').collect();
   // The profile's opencode store is the top-level directory only; a deeper part with the same name stays.
-  if parts.first() == Some(&OPENCODE_DIR_NAME) {
+  if parts.first() == Some(&OPENCODE_DIR_NAME.as_bytes()) {
     return true;
   }
   for part in &parts {
     // CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
     // backup, which the retention policy keeps for up to 90 days.
-    if *part == ".git" || *part == ".claude" || *part == CREDENTIALS_FILENAME || *part == "__pycache__" {
+    if *part == b".git" || *part == b".claude" || *part == CREDENTIALS_FILENAME.as_bytes() || *part == b"__pycache__" {
       return true;
     }
-    if part.ends_with(".pyc") {
+    if part.ends_with(b".pyc") {
       return true;
     }
   }
   // Exclude sessions/*/threads and everything under it.
-  parts.len() >= 3 && parts[0] == "sessions" && parts[2] == THREADS_DIR_NAME
+  parts.len() >= 3 && parts[0] == b"sessions" && parts[2] == THREADS_DIR_NAME.as_bytes()
 }
 
 /// The local wall-clock time as its `struct tm` fields, through `localtime_r` as `datetime.now()` reads it.
@@ -146,12 +148,13 @@ fn group_name(gid: u32) -> anyhow::Result<String> {
   Ok(group.map(|group| group.name).unwrap_or_default())
 }
 
-/// The children of a directory, sorted (`sorted(path.iterdir())`): a read error anywhere in the listing fails it.
-fn sorted_children(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-  let mut paths =
-    fs::read_dir(dir)?.map(|entry| entry.map(|entry| entry.path())).collect::<std::io::Result<Vec<_>>>()?;
-  paths.sort();
-  Ok(paths)
+/// The names in a directory, sorted as Python sorts `iterdir()` (`sorted(path.iterdir())`): by the code points
+/// of each name, so a name that is not UTF-8 lands where Python puts it. A read error anywhere in the listing fails it.
+fn sorted_names(dir: &Path) -> std::io::Result<Vec<OsString>> {
+  let mut names =
+    fs::read_dir(dir)?.map(|entry| entry.map(|entry| entry.file_name())).collect::<std::io::Result<Vec<_>>>()?;
+  names.sort_by_cached_key(|name| python_code_points(name.as_bytes()));
+  Ok(names)
 }
 
 fn mtime_fields(metadata: &fs::Metadata) -> (i64, u32) {
@@ -186,23 +189,18 @@ pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
   // the compressed bytes may differ, the members may not.
   let mut out = GzEncoder::new(raw_out, Compression::new(1));
   let mut bytes_written: u64 = 0;
-  let mut hardlinks: HashMap<(u64, u64), String> = HashMap::new();
+  let mut hardlinks: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
 
   // An unreadable home gives an empty archive (`backup_root_iter_failed`).
-  let children = match sorted_children(home) {
+  let children = match sorted_names(home) {
     Ok(children) => children,
     Err(error) => {
       tracing::warn!(error = %error, "backup_root_iter_failed");
       Vec::new()
     }
   };
-  for child in children {
-    let name = child
-      .file_name()
-      .and_then(|name| name.to_str())
-      .with_context(|| format!("the home child has no usable name: {}", child.display()))?
-      .to_owned();
-    add_recursive(&mut out, &mut bytes_written, &mut hardlinks, &child, &name);
+  for name in children {
+    add_recursive(&mut out, &mut bytes_written, &mut hardlinks, &home.join(&name), name.as_bytes());
   }
   finish(&mut out, bytes_written)?;
   out.finish()?;
@@ -217,9 +215,9 @@ pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
 fn add_recursive<W: Write>(
   out: &mut W,
   bytes_written: &mut u64,
-  hardlinks: &mut HashMap<(u64, u64), String>,
+  hardlinks: &mut HashMap<(u64, u64), Vec<u8>>,
   path: &Path,
-  arcname: &str,
+  arcname: &[u8],
 ) {
   if should_exclude(arcname) {
     return;
@@ -240,20 +238,18 @@ fn add_recursive<W: Write>(
   if !is_dir {
     return;
   }
-  let children = match sorted_children(path) {
+  let children = match sorted_names(path) {
     Ok(children) => children,
     Err(error) => {
       tracing::warn!(path = %path.display(), error = %error, "backup_skip_dir");
       return;
     }
   };
-  for child in children {
-    let Some(name) = child.file_name().and_then(|name| name.to_str()).map(str::to_owned) else {
-      tracing::warn!(path = %child.display(), error = "not valid UTF-8", "backup_skip_dir");
-      continue;
-    };
-    let child_arcname = format!("{arcname}/{name}");
-    add_recursive(out, bytes_written, hardlinks, &child, &child_arcname);
+  for name in children {
+    let mut child_arcname = arcname.to_vec();
+    child_arcname.push(b'/');
+    child_arcname.extend_from_slice(name.as_bytes());
+    add_recursive(out, bytes_written, hardlinks, &path.join(&name), &child_arcname);
   }
 }
 
@@ -261,18 +257,18 @@ fn add_recursive<W: Write>(
 fn add_member<W: Write>(
   out: &mut W,
   bytes_written: &mut u64,
-  hardlinks: &mut HashMap<(u64, u64), String>,
+  hardlinks: &mut HashMap<(u64, u64), Vec<u8>>,
   path: &Path,
-  arcname: &str,
+  arcname: &[u8],
   metadata: &fs::Metadata,
 ) -> anyhow::Result<()> {
   let mode = metadata.mode();
   let (mtime_sec, mtime_nsec) = mtime_fields(metadata);
   let file_type = metadata.file_type();
-  let (typeflag, linkname, size): (u8, String, u64) = if file_type.is_symlink() {
-    (b'2', fs::read_link(path)?.to_string_lossy().into_owned(), 0)
+  let (typeflag, linkname, size): (u8, Vec<u8>, u64) = if file_type.is_symlink() {
+    (b'2', fs::read_link(path)?.into_os_string().into_vec(), 0)
   } else if metadata.is_dir() {
-    (b'5', String::new(), 0)
+    (b'5', Vec::new(), 0)
   } else if metadata.is_file() {
     // A hard link to an already archived inode becomes a LNKTYPE member, as Python's `tarfile` does.
     let inode = (metadata.dev(), metadata.ino());
@@ -280,25 +276,28 @@ fn add_member<W: Write>(
       if let Some(first) = hardlinks.get(&inode) {
         (b'1', first.clone(), 0)
       } else {
-        hardlinks.insert(inode, arcname.to_owned());
-        (b'0', String::new(), metadata.len())
+        hardlinks.insert(inode, arcname.to_vec());
+        (b'0', Vec::new(), metadata.len())
       }
     } else {
-      hardlinks.insert(inode, arcname.to_owned());
-      (b'0', String::new(), metadata.len())
+      hardlinks.insert(inode, arcname.to_vec());
+      (b'0', Vec::new(), metadata.len())
     }
   } else if metadata.file_type().is_char_device() {
-    (b'3', String::new(), 0)
+    (b'3', Vec::new(), 0)
   } else if file_type.is_block_device() {
-    (b'4', String::new(), 0)
+    (b'4', Vec::new(), 0)
   } else if file_type.is_fifo() {
-    (b'6', String::new(), 0)
+    (b'6', Vec::new(), 0)
   } else {
     // gettarinfo returns None for a socket, and tar.add skips it.
     return Ok(());
   };
   // Python's `get_info` writes a directory's name with its trailing slash.
-  let name = if typeflag == b'5' { format!("{arcname}/") } else { arcname.to_owned() };
+  let mut name = arcname.to_vec();
+  if typeflag == b'5' {
+    name.push(b'/');
+  }
   let uname = user_name(metadata.uid())?;
   let gname = group_name(metadata.gid())?;
   let member = Member {
@@ -311,8 +310,8 @@ fn add_member<W: Write>(
     mtime_nsec,
     typeflag,
     linkname: &linkname,
-    uname: &uname,
-    gname: &gname,
+    uname: uname.as_bytes(),
+    gname: gname.as_bytes(),
     devmajor: if typeflag == b'3' || typeflag == b'4' { (metadata.rdev() >> 8) as u32 } else { 0 },
     devminor: if typeflag == b'3' || typeflag == b'4' { (metadata.rdev() & 0xff) as u32 } else { 0 },
   };

@@ -65,10 +65,10 @@ def _field_error(path: pathlib.Path, field: str, expectation: str) -> RouterErro
   return RouterError(f"{path}: {field} must be {expectation}")
 
 
-def _required_text(root: dict, field: str, path: pathlib.Path) -> str:
+def _required_text(root: dict, field: str, path: pathlib.Path, prefix: str = "") -> str:
   value = root.get(field)
   if not isinstance(value, str) or not value.strip():
-    raise _field_error(path, field, "a non-empty string")
+    raise _field_error(path, prefix + field, "a non-empty string")
   return value.strip()
 
 
@@ -105,9 +105,9 @@ def load_config(path: pathlib.Path) -> RouterConfig:
     raise _field_error(path, "the document", "a mapping with jev, instructions, routine, design and strong")
   jev = _required_mapping(document, "jev", path)
   return RouterConfig(
-      url=_required_text(jev, "url", path),
-      model=_required_text(jev, "model", path),
-      credential=_required_text(jev, "credential", path),
+      url=_required_text(jev, "url", path, "jev."),
+      model=_required_text(jev, "model", path, "jev."),
+      credential=_required_text(jev, "credential", path, "jev."),
       instructions=_required_text(document, "instructions", path),
       routine=_required_text(document, "routine", path),
       design=_required_text(document, "design", path),

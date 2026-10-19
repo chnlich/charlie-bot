@@ -135,3 +135,15 @@ steps:
       trace: "${tree.root}/${extras.trace_cases.rank0}"
       slim: "invalid"
     expect_status: 422
+  - name: HEAD, viewer with one trace
+    method: HEAD
+    path: /perfetto
+    query:
+      trace: https://example.invalid/one-trace.json
+    expect_status: 405
+  - name: HEAD, merged direct pass
+    method: HEAD
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank0}"
+    expect_status: 405

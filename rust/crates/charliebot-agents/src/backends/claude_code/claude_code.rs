@@ -311,8 +311,8 @@ impl AgentBackend for ClaudeCodeBackend {
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
-  ) -> BoxFuture<'a, anyhow::Result<String>> {
-    Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await })
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    Some(Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await }))
   }
 }
 
@@ -395,7 +395,7 @@ impl AgentBackend for AnthropicEndpointBackend {
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
-  ) -> BoxFuture<'a, anyhow::Result<String>> {
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     self.backend.one_shot_text(base_env, prompt, system, timeout)
   }
 }

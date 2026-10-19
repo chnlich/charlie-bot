@@ -168,9 +168,9 @@ async fn generate_name(
   session_id: &str,
 ) -> anyhow::Result<String> {
   let launch = LaunchArgs { cgroup_session_id: Some(session_id.to_string()), ..LaunchArgs::default() };
-  let mut built = backend_types::build_backend(Arc::clone(&features.registry), option, cfg, launch)?;
+  let built = backend_types::build_backend(Arc::clone(&features.registry), option, cfg, launch)?;
   let base_env = features.startup.require::<AgentBaseEnvironment>()?;
-  built.backend.one_shot_text(&base_env.values, prompt, system_prompt, Some(LIGHT_ONESHOT_TIMEOUT)).await
+  charliebot_agents::one_shot_text(built, &base_env.values, prompt, system_prompt, Some(LIGHT_ONESHOT_TIMEOUT)).await
 }
 
 async fn apply_name_to_session(

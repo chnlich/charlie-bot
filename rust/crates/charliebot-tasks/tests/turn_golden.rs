@@ -181,9 +181,9 @@ impl AgentBackend for ScriptBackend {
     _prompt: &'a str,
     _system: &'a str,
     _timeout: Option<std::time::Duration>,
-  ) -> BoxFuture<'a, anyhow::Result<String>> {
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     let response = self.one_shot_response.clone();
-    Box::pin(async move { response.context("scripted backend has no one-shot response") })
+    Some(Box::pin(async move { response.context("scripted backend has no one-shot response") }))
   }
 }
 

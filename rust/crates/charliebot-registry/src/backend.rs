@@ -147,14 +147,17 @@ pub trait AgentBackend: Send {
   fn stdin_prompt(&self, prompt: &str) -> Option<String>;
   fn translator(&self) -> Box<dyn Translate>;
   fn transport(&self) -> TransportKind;
-  /// The CLI-native one-shot, tool-less. The tool-capable variant is the runner's free function.
+  /// The CLI-native one-shot, tool-less, or `None` when the backend has none. The dispatcher
+  /// `charliebot_agents::one_shot_text` runs the tool-capable one-shot for `None`.
   fn one_shot_text<'a>(
     &'a mut self,
-    base_env: &'a Env,
-    prompt: &'a str,
-    system: &'a str,
-    timeout: Option<Duration>,
-  ) -> BoxFuture<'a, anyhow::Result<String>>;
+    _base_env: &'a Env,
+    _prompt: &'a str,
+    _system: &'a str,
+    _timeout: Option<Duration>,
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    None
+  }
 }
 
 /// A launch refused by the backend: the run ends with `message`. `quota_exhausted` says a spent quota caused it, and

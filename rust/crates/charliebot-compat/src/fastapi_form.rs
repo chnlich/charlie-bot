@@ -115,23 +115,17 @@ impl FormBody {
   pub fn validate(&self, model: &FormModel) -> Result<(), Box<Response>> {
     let mut errors = Vec::new();
     for field in model.fields {
-      match (field.field_type, self.value(field.name)) {
+      // FastAPI's `_get_multidict_value` reads an empty string as an absent value for every `Form` field, and `File` is
+      // a `Form` field.
+      let value = self.value(field.name).filter(|value| !matches!(value, PartValue::Form(text) if text.is_empty()));
+      match (field.field_type, value) {
         (_, None) if field.required => errors.push(field_error(field.name, Value::Null, Kind::Missing)),
         (FieldType::File, Some(PartValue::File(_))) | (FieldType::Form, Some(PartValue::Form(_))) => {}
-        (FieldType::File, Some(PartValue::Form(value))) => {
-          // FastAPI's `_get_multidict_value` reads an empty string as an absent value before validation.
-          if value.is_empty() {
-            if field.required {
-              errors.push(field_error(field.name, Value::Null, Kind::Missing));
-            }
-          } else {
-            errors.push(field_error(
-              field.name,
-              Value::String(value.clone()),
-              Kind::ValueError { message: "Expected UploadFile, received: <class 'str'>".to_string() },
-            ));
-          }
-        }
+        (FieldType::File, Some(PartValue::Form(value))) => errors.push(field_error(
+          field.name,
+          Value::String(value.clone()),
+          Kind::ValueError { message: "Expected UploadFile, received: <class 'str'>".to_string() },
+        )),
         (FieldType::Form, Some(PartValue::File(_))) => {
           errors.push(field_error(field.name, json!({}), Kind::StringType));
         }

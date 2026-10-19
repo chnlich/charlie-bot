@@ -695,7 +695,7 @@ impl RunProcess for TurnProcess<'_> {
 }
 
 #[derive(Debug)]
-struct TurnCancelled;
+pub(crate) struct TurnCancelled;
 
 impl std::fmt::Display for TurnCancelled {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -941,7 +941,6 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let callback_cc_session_id = Arc::new(Mutex::new(metadata.cc_session_id.clone()));
   let mut exit_code = -1;
   let mut error_msg = None;
-  let cancelled = Arc::new(Mutex::new(false));
   let features = Arc::clone(&item.callbacks.features);
   let callbacks = item.callbacks.clone();
   let cfg = Arc::clone(&item.cfg);
@@ -993,8 +992,38 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   if let Err(error) = follow_result {
     error_msg = Some(error.to_string());
   }
-  *cancelled.lock().expect("resume cancellation mutex is not poisoned") = *item.cancel.borrow();
-  if !*cancelled.lock().expect("resume cancellation mutex is not poisoned") {
+  let cancelled = *item.cancel.borrow();
+  let restart_reattach = option
+    .as_ref()
+    .and_then(|option| features.registry.backend_type_of(&option.backend_type))
+    .is_some_and(|registration| registration.traits.restart_reattach);
+  let has_process_identity = record.pid.is_some() && record.pid_start.is_some();
+  let let_go = cancelled && restart_reattach && has_process_identity;
+  if cancelled {
+    // A resume follow owns no process handle. A covered run only drops this follower; an uncovered process is
+    // terminated using the persisted identity, as the fresh-turn cancellation path does.
+    error_msg = None;
+    exit_code = 1;
+    if !let_go {
+      let pid = record.pid.context("resumed run cancellation has no process id")?;
+      let host_boot = identity::read_host_boot_time().context("reading host boot time for resumed cancellation")?;
+      let alive = charliebot_agents::runs::run_alive_probe(
+        Some(pid),
+        record.pid_start.clone(),
+        Some(record.started_at.into_inner()),
+        host_boot,
+      );
+      if alive() {
+        charliebot_agents::transport::kill::kill_group_escalating(pid, alive).await;
+      }
+    }
+    tracing::warn!(
+      target: "charliebot_tasks",
+      session = %metadata.id,
+      action = if let_go { "let_go" } else { "terminate" },
+      "master_cc_resume_cancelled"
+    );
+  } else {
     let mut events = stream_events.lock().expect("resume event mutex is not poisoned").clone();
     // Replay from the start of the stored stream to preserve completion and manual-compaction evidence.
     let translate_scan = build_fresh_translate(&features, &cfg, option.as_ref());
@@ -1037,24 +1066,20 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
         charliebot_agents::transport::kill::kill_group_escalating(pid, alive).await;
       }
     }
-  } else {
-    tracing::warn!(target: "charliebot_tasks", session = %metadata.id, "master_cc_resume_cancelled");
-  }
-  if *item.cancel.borrow() {
-    *cancelled.lock().expect("resume cancellation mutex is not poisoned") = true;
   }
   let finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
   report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
-  mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;
+  if !let_go {
+    mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;
+  }
   tracing::info!(target: "charliebot_tasks", session = %metadata.id, exit_code, finish_extras = ?finish_extras, "master_cc_resume_finished");
   Ok(MasterRunOutcome {
     cc_session_id: callback_cc_session_id.lock().expect("native session id mutex is not poisoned").clone(),
     exit_code,
     error_msg,
     finish_extras,
-    cancelled: *cancelled.lock().expect("resume cancellation mutex is not poisoned"),
-    // A resumed turn keeps the generic cancellation error: the let-go of a resumed follow is not ported yet.
-    let_go: false,
+    cancelled,
+    let_go,
   })
 }
 

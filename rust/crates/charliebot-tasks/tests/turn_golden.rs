@@ -26,6 +26,7 @@ use charliebot_registry::backend::{
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+use charliebot_store::run_records;
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RunKind, RunRecord,
   SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
@@ -1524,6 +1525,7 @@ fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow:
 
 #[tokio::test]
 async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> anyhow::Result<()> {
+  // Python: tests/test_turn_contributions.py::test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn.
   let temp = tempfile::tempdir()?;
   let registry = registry();
   for (index, backend_type, backend_id, expected_unread) in
@@ -1595,5 +1597,174 @@ async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> any
       tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
     }
   }
+  Ok(())
+}
+
+async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: bool) -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let home = temp.path().join("home");
+  std::fs::create_dir_all(&home)?;
+  std::fs::write(home.join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-shutdown-access-key\n")?;
+  let started = temp.path().join("agent-started");
+  let release = temp.path().join("release-agent");
+  let exited = temp.path().join("agent-exited");
+  let event_lines = [
+    json!({"type":"system","subtype":"init","session_id":"synthetic-shutdown-session"}),
+    json!({"type":"assistant","message":{"content":[{"type":"text","text":"in-flight answer"}]}}),
+  ]
+  .iter()
+  .map(serde_json::to_string)
+  .collect::<Result<Vec<_>, _>>()?
+  .join("\n");
+  let result_line = serde_json::to_string(
+    &json!({"type":"result","subtype":"success","result":"","usage":{"input_tokens":1,"output_tokens":1}}),
+  )?;
+  let script = format!(
+    "touch '{}'\ncat <<'CB_EVENTS'\n{}\nCB_EVENTS\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\ncat <<'CB_RESULT'\n{}\nCB_RESULT\ntouch '{}'\n",
+    started.display(),
+    event_lines,
+    release.display(),
+    result_line,
+    exited.display(),
+  );
+  let option = backend_option_for("fake", backend_type, script, None);
+  let registry = registry();
+  let (cfg, features) = config_with_features(&home, Some(option), Arc::clone(&registry), false)?;
+  execution::pre_recovery_step(Arc::clone(&features)).await?;
+  let meta = features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "synthetic-shutdown-task".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Synthetic shutdown task".to_string()),
+        backend: Some("fake".to_string()),
+        group: None,
+        session_id: Some("synthetic-shutdown-task-session".to_string()),
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let dispatcher = dispatch::dispatcher(&features)?;
+  dispatcher.admit_input(&meta.id, event_types::USER, "in-flight input", "user", json!({})).await?;
+  let run_id = "synthetic-shutdown-run";
+  let guard = features.store.control_lock().await;
+  features
+    .store
+    .register_run_locked(
+      &guard,
+      &meta.id,
+      RunRecord {
+        id: run_id.to_string(),
+        session_id: meta.id.clone(),
+        kind: RunKind::ManagerTurn,
+        input_event_ids: Vec::new(),
+        task_spec_hash: None,
+        task_spec_ref: None,
+        prompt_snapshot_ref: None,
+        retry_of_run_id: None,
+        review_of_run_id: None,
+        backend: Some("fake".to_string()),
+        model: Some("fake-model".to_string()),
+        native_session_id: None,
+        pid: None,
+        pid_start: None,
+        started_at: None,
+        ended_at: None,
+        exit_code: None,
+        repo_path: None,
+        base_branch: None,
+        branch_name: None,
+        worktree_path: None,
+        sequence_ref: None,
+        raw_log_ref: None,
+        events_ref: None,
+        result_ref: None,
+      },
+      None,
+    )
+    .await?;
+  dispatcher.claim_input_batch_locked(&guard, &meta.id, run_id, None)?;
+  drop(guard);
+
+  let adapter = features.startup.require::<TaskExecutionAdapter>()?;
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  let task_session = meta.id.clone();
+  let task = tokio::spawn(async move { adapter.execute_run(&task_session, run_id).await });
+  let started_result = tokio::time::timeout(Duration::from_secs(5), async {
+    while !started.exists() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await;
+  if started_result.is_err() {
+    let _ = queue.shutdown().await;
+    let _ = task.await;
+    anyhow::bail!("task manager agent did not reach its shutdown gate");
+  }
+  tokio::time::timeout(Duration::from_secs(5), async {
+    loop {
+      if features
+        .store
+        .load_chat_events_sync(&meta.id)?
+        .iter()
+        .any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT))
+      {
+        break anyhow::Ok(());
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .context("task manager agent's in-flight event was not persisted")??;
+  let shutdown_result = queue.shutdown().await;
+  let task_result = task.await?;
+  let events = features.store.load_chat_events_sync(&meta.id)?;
+  let facts = features.store.load_all_facts(&meta.id)?;
+  let run = features.store.read_run_sync(&meta.id, run_id)?.context("shutdown run record disappeared")?;
+  let host_boot = charliebot_agents::transport::identity::read_host_boot_time()?;
+  let alive = charliebot_agents::runs::run_alive_probe(
+    run.pid,
+    run.pid_start.clone(),
+    run.started_at.map(UtcDateTime::into_inner),
+    host_boot,
+  )();
+  let has_unread = features.store.load_meta(&meta.id).await?.context("shutdown task metadata disappeared")?.has_unread;
+  std::fs::write(&release, "continue")?;
+  if alive {
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while !exited.exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .context("detached task manager agent did not finish after the test released it")?;
+  }
+  shutdown_result?;
+  let task_error = task_result.unwrap_err().to_string();
+  assert!(task_error.contains("manager turn"), "{task_error}");
+  assert_eq!(alive, !expected_unread, "the process state must match the covered/uncovered backend trait");
+  assert_eq!(has_unread, expected_unread, "only an uncovered run marks the task unread");
+  assert!(run.ended_at.is_none(), "shutdown must leave end metadata for startup recovery");
+  assert!(run_records::terminal_outcome(&facts, run_id)?.is_none(), "shutdown must not write a terminal run fact");
+  assert!(events.iter().all(|event| {
+    !matches!(
+      event.get("type").and_then(Value::as_str),
+      Some(event_types::MASTER_DONE | event_types::ASSISTANT_ERROR | event_types::RUN_FINISHED)
+    )
+  }));
+  drop(cfg);
+  Ok(())
+}
+
+#[tokio::test]
+async fn execution_shutdown_cancellation_keeps_both_run_shapes_nonterminal() -> anyhow::Result<()> {
+  // Python: tests/test_turn_contributions.py::test_a_let_go_turn_appends_no_master_done_and_runs_no_after_turn.
+  // The execution adapter must also avoid turning an uncovered shutdown into a launch failure.
+  assert_task_run_shutdown_shape("covered_script", false).await?;
+  assert_task_run_shutdown_shape("uncovered_script", true).await?;
   Ok(())
 }

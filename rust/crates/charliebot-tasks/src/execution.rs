@@ -267,7 +267,9 @@ impl TaskExecutionAdapter {
       );
     }
     if let Err(error) = self.execute_manager_turn(&cfg, &meta, &run, &option, &snapshot).await {
-      if error.downcast_ref::<master_run::TurnLetGo>().is_some() {
+      if error.downcast_ref::<master_run::TurnLetGo>().is_some()
+        || error.downcast_ref::<master_run::TurnCancelled>().is_some()
+      {
         return Err(error);
       }
       self.land_launch_failure(&meta, &run, &error, "RuntimeError").await;
@@ -284,13 +286,24 @@ impl TaskExecutionAdapter {
       let settlement = match result {
         Ok(settlement) => settlement,
         Err(error) => {
-          tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_execution_failed");
+          let shutdown_cancelled = error.downcast_ref::<master_run::TurnLetGo>().is_some()
+            || error.downcast_ref::<master_run::TurnCancelled>().is_some();
+          if !shutdown_cancelled {
+            tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_execution_failed");
+          }
           if is_out_of_space_error(error.as_ref()) {
             adapter.note_launch_out_of_space(&session_id, &run_id);
           }
           match adapter.terminal_outcome(&session_id, &run_id) {
             Ok(Some(outcome)) => LaunchSettlement { outcome: Some(outcome), withheld: None },
-            Ok(None) => LaunchSettlement { outcome: None, withheld: Some(format!("failed-to-start: {error}")) },
+            Ok(None) => LaunchSettlement {
+              outcome: None,
+              withheld: Some(if shutdown_cancelled {
+                "manager turn cancelled at server shutdown".to_string()
+              } else {
+                format!("failed-to-start: {error}")
+              }),
+            },
             Err(read_error) => {
               tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %read_error, "run_terminal_read_failed");
               LaunchSettlement { outcome: None, withheld: Some(format!("failed-to-start: {error}")) }

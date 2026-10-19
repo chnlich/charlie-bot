@@ -41,6 +41,7 @@ use crate::master_state::{MasterResumeRecord, MasterResumeRequest, ResumeLivenes
 /// The end-landing retry's cadence: the first round runs at once and later rounds every interval, with no round limit
 /// (`task_execution.py`, `RUN_END_LANDING_RETRY_INTERVAL_SECONDS`).
 pub const RUN_END_LANDING_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// The counters of one boot pass, logged with `task_tree_recovery_done`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -565,6 +566,7 @@ pub(crate) fn start_end_landing_retry(adapter: TaskExecutionAdapter, session_id:
     return;
   }
   tokio::spawn(async move {
+    wait_for_triggering_run_release(|| run.as_deref().is_some_and(|run_id| adapter.drives_run(&session, run_id))).await;
     let pass_adapter = adapter.clone();
     let pass_session = session.clone();
     let result = retry_while_out_of_space(RUN_END_LANDING_RETRY_INTERVAL, &session, run.as_deref(), move || {
@@ -582,6 +584,12 @@ pub(crate) fn start_end_landing_retry(adapter: TaskExecutionAdapter, session_id:
       tracing::error!(target: "charliebot_tasks", session_id = %session, error = %format!("{error:#}"), "task_recovery_node_failed");
     }
   });
+}
+
+async fn wait_for_triggering_run_release(mut is_driven: impl FnMut() -> bool) {
+  while is_driven() {
+    tokio::time::sleep(DRIVEN_RUN_RELEASE_POLL_INTERVAL).await;
+  }
 }
 
 /// Run `pass` until a round completes (`_run_end_landing_retry`). A round that fails for lack of space waits
@@ -769,5 +777,20 @@ mod tests {
     .await;
     assert!(result.is_err());
     assert_eq!(rounds, 1);
+  }
+
+  #[tokio::test]
+  async fn a_retry_waits_for_its_triggering_run_to_leave_the_launch_set() {
+    // Python: tests/test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives.
+    let driven = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let release = Arc::clone(&driven);
+    tokio::spawn(async move {
+      tokio::time::sleep(DRIVEN_RUN_RELEASE_POLL_INTERVAL * 2).await;
+      release.store(false, std::sync::atomic::Ordering::Release);
+    });
+
+    wait_for_triggering_run_release(|| driven.load(std::sync::atomic::Ordering::Acquire)).await;
+
+    assert!(!driven.load(std::sync::atomic::Ordering::Acquire));
   }
 }

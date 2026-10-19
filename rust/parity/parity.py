@@ -1024,12 +1024,6 @@ def main() -> int:
     raise SystemExit(f"parity: fake services require {authority.OPENSSL}")
   if any(scenario.name == "features-harness-terminal" for scenario in scenarios) and shutil.which("tmux") is None:
     raise SystemExit("parity: features-harness-terminal requires tmux on PATH")
-  # The servers run only on homes under /tmp, whatever TMPDIR says.
-  scratch.sweep()
-  scratch_root = pathlib.Path(tempfile.mkdtemp(prefix=scratch.SCRATCH_PREFIX, dir="/tmp"))
-  scratch.record_owner(scratch_root)
-  certificates = authority.generate(scratch_root / "certificates") if any(
-      scenario.fakes for scenario in scenarios) else None
   guard_report = guard.Report()
   output: list[str] = []
 
@@ -1039,7 +1033,16 @@ def main() -> int:
 
   results: list[StepResult] = []
   runs: list[dict] = []
+  scratch_root: pathlib.Path | None = None
   try:
+    # The servers run only on homes under /tmp, whatever TMPDIR says. The tree lives inside the cleanup
+    # scope, so an exception between mkdtemp and the first run (for example in authority.generate)
+    # removes it too.
+    scratch.sweep()
+    scratch_root = pathlib.Path(tempfile.mkdtemp(prefix=scratch.SCRATCH_PREFIX, dir="/tmp"))
+    scratch.record_owner(scratch_root)
+    certificates = authority.generate(scratch_root / "certificates") if any(
+        scenario.fakes for scenario in scenarios) else None
     for index, scenario in enumerate(scenarios):
       run_plans: list[tuple[str | None, list[str], list[str]]]
       if scenario.directions:
@@ -1076,7 +1079,8 @@ def main() -> int:
     failed = [result for result in results if not result.passed]
     # A run in progress leaves sys.exc_info() set in its finally block, so an exception counts as unclean too.
     clean = bool(results) and not failed and not guard_report.violations and sys.exc_info()[0] is None
-    scratch.finalize(scratch_root, args.keep, clean, runs)
+    if scratch_root is not None:
+      scratch.finalize(scratch_root, args.keep, clean, runs)
 
   emit(["", "Routes:", *_route_summary(results)])
   # Each trace path once, in the order the guard met it.

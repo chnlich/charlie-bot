@@ -21,6 +21,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 use super::pricing;
 use super::rollout::{self, mtime_ns, mtime_secs, token_count_payload, walk_files};
 use super::text::{EMPTY_OBJECT, object_or_empty, py_splitlines, py_strip, truthy};
+use crate::backends::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
 const PROVIDER_LABEL: &str = "Codex";
@@ -498,28 +499,6 @@ fn transform_response(
   Ok(usage)
 }
 
-/// `datetime.fromtimestamp(seconds, tz=UTC).isoformat()`.
-fn utc_isoformat(seconds: f64) -> anyhow::Result<String> {
-  let whole = seconds.floor();
-  let mut micros = ((seconds - whole) * 1e6).round_ties_even() as i64;
-  let mut instant = OffsetDateTime::from_unix_timestamp(whole as i64)
-    .with_context(|| format!("timestamp {seconds} is out of range"))?;
-  if micros == 1_000_000 {
-    instant += Duration::seconds(1);
-    micros = 0;
-  }
-  let fraction = if micros == 0 { String::new() } else { format!(".{micros:06}") };
-  Ok(format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}+00:00",
-    instant.year(),
-    u8::from(instant.month()),
-    instant.day(),
-    instant.hour(),
-    instant.minute(),
-    instant.second(),
-  ))
-}
-
 /// Logs one unrecognized limit shape the first time this process sees it.
 fn warn_unknown_limit_shape(account: &str, slot: &str, reason: &str) {
   static SEEN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -740,12 +719,6 @@ impl SpendMemo {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn utc_isoformat_matches_python_for_whole_and_fractional_seconds() {
-    assert_eq!(utc_isoformat(1_792_000_000.0).unwrap(), "2026-10-14T17:46:40+00:00");
-    assert_eq!(utc_isoformat(1_792_000_000.5).unwrap(), "2026-10-14T17:46:40.500000+00:00");
-  }
 
   #[test]
   fn naive_iso_timestamps_are_read_as_utc() {

@@ -24,6 +24,7 @@ import os
 import pathlib
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -87,6 +88,7 @@ class Side:
     self.port = port
     self.server: servers.ServerProcess | None = None
     self.server_processes: list[servers.ServerProcess] = []
+    self.processes: dict[str, subprocess.Popen[bytes]] = {}
     self.ctx = normalize.Context(tree_root=str(tree.root))
     self.captures: dict[str, object] = {}
     self.fake_set: fakes.FakeSet | None = None
@@ -631,6 +633,30 @@ def _run_step(
       else:
         payload = _substitute(side, step.payload, manifest)
         side.fake_set.push(step.fake, step.action, payload)
+  elif step.kind == "process":
+    if step.payload is None or step.action not in ("start", "stop"):
+      raise RuntimeError(f"process step {step.name!r} is not validated")
+    process_id = step.payload["process_id"]
+    owner = sides[0]
+    if step.action == "start":
+      if process_id in owner.processes:
+        raise RuntimeError(f"synthetic process {process_id!r} is already running")
+      process = subprocess.Popen(
+          ["/bin/sleep", "60"],
+          stdin=subprocess.DEVNULL,
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+          start_new_session=True)
+      owner.processes[process_id] = process
+      capture_name = next(iter(step.capture))
+      for side in sides:
+        side.captures[capture_name] = str(process.pid)
+    else:
+      process = owner.processes.pop(process_id)
+      if step.timeout_seconds:
+        time.sleep(step.timeout_seconds)
+      process.terminate()
+      process.wait(timeout=5)
   elif step.kind == "ws":
     outcomes = [_websocket_request(side, step, manifest) for side in sides]
     statuses = tuple(outcome[0] for outcome in outcomes)
@@ -693,6 +719,17 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
       except RuntimeError as error:
         lines.append(f"{side.label} server stop: {error}")
         side.server.kill()
+  for side in sides:
+    for process_id, process in list(side.processes.items()):
+      if process.poll() is None:
+        process.terminate()
+        try:
+          process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+          process.kill()
+          process.wait()
+        lines.append(f"{side.label} synthetic process {process_id!r} needed cleanup at scenario end")
+      del side.processes[process_id]
   for side in sides:
     if side.fake_set is not None:
       try:

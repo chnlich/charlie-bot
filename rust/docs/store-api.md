@@ -165,6 +165,7 @@ route accepts run-token identity. `records_generation` increments after each run
 | `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool>` | `src/runtime/task_sessions.py::archive_unsuccessful_worker` |
 | `archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>>` | `src/runtime/task_sessions.py::archive_subtree` |
 | `delete_permanently(&self, session_id: &str, caller: TaskCaller) -> StoreResult<bool>` | `src/runtime/task_sessions.py::delete_permanently`, `_deletion_blockers_locked` |
+| `patch_task(&self, session_id: &str, patch: PatchTask, caller: TaskCaller, guards: &dyn StructuralBlockers) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::patch_task` |
 | `ensure_prompt_changed_fact(&self, session_id: &str, meta: &SessionMetadata, scope: PromptScope) -> StoreResult<()>` | `src/runtime/task_sessions.py::_ensure_prompt_changed_fact` |
 | `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::load_meta`, `load_task_meta` |
 | `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<TaskFacts>` | `src/runtime/task_sessions.py::task_state`, `facts_of` |
@@ -190,6 +191,9 @@ those hashes. The store calls required sequence archive and binding-mover hooks 
 elone rebind. `archive_subtree` accepts only `TaskCaller::Operator`, and it takes the control lock itself.
 `mark_read` keeps `updated_at` and broadcasts `unread_changed` only when the unread flag flips. Permanent deletion removes
 the session directory, clears runtime state, and removes an empty session cgroup.
+`patch_task` accepts only `TaskCaller::Operator` too. Its pending-input and undelivered-report guards come through
+`StructuralBlockers`, which the task dispatcher implements: the dispatcher owns the input boundary, and the store cannot
+call it. The field write re-reads the row, so a rename that lands meanwhile is kept.
 The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
 launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 
@@ -270,7 +274,6 @@ exposed as `raw_metadata_scan`.
   window.
 - The session counter parses a signed 64-bit integer. Python's `int()` also accepts digit underscores and larger
   values; here such a counter takes the session-directory count.
-- Three explicit Python task-tree notifications have no sender in this crate. The metadata patch
-  (`task_sessions.py:1424`) has no Rust operation yet. A run's first launch (`runs.py:891`) is not sent by
-  `record_launch`. A fork (`session_fork.py:435`) belongs to the fork port. Each will send through
-  `notify_task_tree_changed`.
+- Two explicit Python task-tree notifications have no sender in this crate. A run's first launch (`runs.py:891`) is
+  not sent by `record_launch`. A fork (`session_fork.py:435`) belongs to the fork port. Each will send through
+  `notify_task_tree_changed`. The metadata patch (`task_sessions.py:1424`) sends from `patch_task`.

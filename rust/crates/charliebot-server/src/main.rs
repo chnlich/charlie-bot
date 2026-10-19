@@ -315,10 +315,12 @@ mod tests {
   use super::*;
 
   /// The `(name, value)` pairs of one event, in the order the event records them.
-  #[derive(Default)]
-  struct Fields(Vec<(String, String)>);
+  type Recorded = Vec<(String, String)>;
 
-  impl Visit for Fields {
+  #[derive(Default)]
+  struct Visitor(Recorded);
+
+  impl Visit for Visitor {
     fn record_u64(&mut self, field: &Field, value: u64) {
       self.0.push((field.name().to_string(), value.to_string()));
     }
@@ -328,13 +330,13 @@ mod tests {
     }
   }
 
-  struct Capture(Arc<Mutex<Vec<Vec<(String, String)>>>>);
+  struct Capture(Arc<Mutex<Vec<Recorded>>>);
 
   impl<S: Subscriber> Layer<S> for Capture {
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
-      let mut fields = Fields::default();
-      event.record(&mut fields);
-      self.0.lock().unwrap().push(fields.0);
+      let mut visitor = Visitor::default();
+      event.record(&mut visitor);
+      self.0.lock().unwrap().push(visitor.0);
     }
   }
 

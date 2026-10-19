@@ -416,8 +416,9 @@ def test_fake_group_kill_passes_a_start_whose_leader_and_group_are_gone() -> Non
   assert parity._kill_fake_group("baseline", record) == []
 
 
-def test_fake_group_kill_signals_only_the_pid_when_the_start_does_not_lead_its_group() -> None:
-  # Without start_new_session both children share the test's process group, which killpg must not touch.
+def test_fake_group_kill_signals_only_the_pid_when_the_start_does_not_lead_its_group(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  # Neither child calls setsid, so the member shares the test's process group, which must not be signalled.
   member = subprocess.Popen(
       [sys.executable, "-c", "import time; time.sleep(60)"],
       stdin=subprocess.DEVNULL,
@@ -429,6 +430,8 @@ def test_fake_group_kill_signals_only_the_pid_when_the_start_does_not_lead_its_g
       stdout=subprocess.PIPE,
       stderr=subprocess.DEVNULL,
       text=True)
+  signalled_groups: list[int] = []
+  monkeypatch.setattr(parity.os, "killpg", lambda pgid, signum: signalled_groups.append(pgid))
   try:
     assert start.stdout.readline() == "ready\n"
     record = _spawn_record(start)
@@ -437,7 +440,8 @@ def test_fake_group_kill_signals_only_the_pid_when_the_start_does_not_lead_its_g
 
     lines = parity._kill_fake_group("baseline", record)
 
-    assert start.wait(timeout=10) is not None
+    assert signalled_groups == []
+    assert start.wait(timeout=10) == -signal.SIGKILL
     assert parity.servers.process_identity(start.pid) is None
     assert member.poll() is None
     assert len(lines) == 1

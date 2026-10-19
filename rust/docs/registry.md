@@ -75,7 +75,8 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 ### File views
 
 - Python: `wiring.py:80` `register_file_view`
-- Rust: `file_view(name: &'static str, view: Arc<dyn FileView>)`. `FileView::view` answers a request path, or passes it on.
+- Rust: `file_view(name: &'static str, view: Arc<dyn FileView>)`. `FileView::view` receives the request's
+  `FeatureContext`, request parts and path. It answers the request or passes it on.
 - Example: `registry.file_view("artifacts", Arc::new(ArtifactView))?;`
 
 ### Startup checks

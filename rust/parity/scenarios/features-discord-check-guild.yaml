@@ -1,0 +1,20 @@
+stage: features
+name: features-discord-check-guild
+description: The check route names a guild that lacks every required permission.
+config:
+  discord:
+    allowed_users:
+      "900000000000000099": Synthetic user
+credentials:
+  discord:
+    bot_token: discord-parity-synthetic-token
+fakes:
+  discord:
+    guilds:
+      - {id: "900000000000000010", name: Synthetic Research, permissions: "0"}
+steps:
+  - name: check names the guild's missing permissions
+    method: POST
+    path: /api/internal/discord/check
+    json: {}
+    expect_status: 200

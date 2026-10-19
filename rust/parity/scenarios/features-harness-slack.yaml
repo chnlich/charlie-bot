@@ -38,6 +38,23 @@ fake_agent:
             total_cost_usd: 0.0
       exit_code: 0
 expect_starts: 2
+# Python does not order the round-end audit's nudge (agent_message) against the turn's run_finished. The nudge comes from
+# the Slack after_turn, which runs deliver_done (src/features/slack/turn_contribution.py:24-25), and each turn
+# contribution runs as its own task (src/runtime/session_events.py:156-161). run_finished comes from the finish callback,
+# which follows the master_done broadcast (src/runtime/master_cc_queue.py:304-309). The rule accepts either order for
+# this pair only: the nudge is the one agent_message with the nudge's content.
+comparison_rules:
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields:
+          content: |-
+            Slack thread: the round answering this mention ended without posting a reply. Decide now:
+            when the thread should hear something, post a reply; when there is nothing to say, end this
+            round and the thread gets a one-line notice pointing to this session.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
 steps:
   - kind: fake
     name: allowed app mention starts its Slack thread session

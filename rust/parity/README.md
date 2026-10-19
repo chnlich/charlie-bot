@@ -181,8 +181,11 @@ validity. A stdin that is not UTF-8 raises before the start writes its record, s
 exit marker.
 
 The scenario end runs on a failed step and on an exception too. It names each recorded start that is still alive,
-then SIGKILLs the process group of every recorded start in both trees, whether or not the start is still alive. A
-group that remains 10 s after its SIGKILL is a failure line that names it. The harness is the child subreaper, so a
+then ends every recorded start in both trees, whether or not the start is still alive. When a start leads its own
+process group (pgid == pid, what both servers produce with setsid), the scenario end SIGKILLs the whole group, and a
+group that remains 10 s after its SIGKILL is a failure line that names it. When a start does not lead its group, the
+group also holds unrelated processes, so the scenario end SIGKILLs only the start's pid (while it still has the
+recorded `/proc` start time) and records a failure line that names the start and its process group. The harness is the child subreaper, so a
 fake that outlives its server becomes the harness's child, and the scenario end reaps each recorded fake leader.
 Without that, the runner that started the harness keeps the zombie until the run ends.
 

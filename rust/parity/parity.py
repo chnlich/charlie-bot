@@ -868,13 +868,21 @@ def _reap_leader(pid: int, pid_start: str) -> None:
 
 
 def _kill_fake_group(label: str, record: dict) -> list[str]:
-  """SIGKILL the process group of one fake-agent start, then wait for the group to be gone.
+  """SIGKILL one fake-agent start and wait for it to be gone.
 
-  A leader that still has the recorded pid_start is the start, so its group is the start's. A gone leader keeps its
-  group only while kill(2) still reaches that group.
+  When the start leads its own process group (pgid == pid), SIGKILL the whole group: a leader that still has the
+  recorded pid_start is the start, so its group is the start's, and a gone leader keeps its group only while kill(2)
+  still reaches that group. When it does not lead its group, the group also holds unrelated processes (the server
+  that started it without setsid, or the harness itself), so only the pid alone gets SIGKILL, and only while it
+  still has the recorded pid_start; the step gets a failure line that names the record.
   """
   pid = int(record["pid"])
   pgid = int(record["pgid"])
+  if pgid != pid:
+    if servers.process_identity(pid) is not None and servers.process_identity(pid)[1] == record["pid_start"]:
+      with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+    return [f"{label} fake agent {pid} does not lead its own process group (pgid {pgid} != pid {pid}): {record}"]
   leader = servers.process_identity(pid)
   if (leader is not None and leader[1] == record["pid_start"]) or (leader is None and _group_exists(pgid)):
     with contextlib.suppress(ProcessLookupError):

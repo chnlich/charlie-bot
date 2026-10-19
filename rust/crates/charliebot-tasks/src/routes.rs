@@ -124,7 +124,7 @@ async fn send_message(
   tracing::info!(
     target: "charliebot_tasks",
     session = %session_id,
-    content_chars = request.content.len(),
+    content_chars = request.content.chars().count(),
     uploaded_files_count = files.len(),
     "send_message"
   );

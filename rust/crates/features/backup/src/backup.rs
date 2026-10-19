@@ -1,0 +1,417 @@
+//! The profile backup (`src/features/backup/backup.py`): a `.tar.gz` of the CharlieBot home in a
+//! sibling directory, pruned by a tiered retention policy.
+
+use std::collections::HashMap;
+use std::fs;
+use std::io::{Read, Write};
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
+use charliebot_core::config::CREDENTIALS_FILENAME;
+use charliebot_store::run_records::THREADS_DIR_NAME;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+
+use crate::tar_writer::{Member, finish, write_member};
+
+/// The profile's opencode store directory name (`src/infra/home.py`).
+const OPENCODE_DIR_NAME: &str = "opencode";
+
+const BACKUP_PREFIX: &str = "charliebot-";
+const BACKUP_SUFFIX: &str = ".tar.gz";
+
+// Age thresholds in days.
+pub(crate) const DAILY_THRESHOLD: i64 = 7;
+pub(crate) const WEEKLY_THRESHOLD: i64 = 30;
+pub(crate) const MONTHLY_THRESHOLD: i64 = 90;
+
+/// The state directory being backed up: this profile's home (`config.charliebot_home_dir`).
+pub fn charliebot_dir() -> anyhow::Result<PathBuf> {
+  Ok(charliebot_core::home::charliebot_home_dir()?)
+}
+
+/// Where this profile's archives are written, a sibling of its home
+/// (`backup_dir`): the default home yields `~/.charliebot_backup`.
+pub fn backup_dir(home: &Path) -> anyhow::Result<PathBuf> {
+  let name = home
+    .file_name()
+    .and_then(|name| name.to_str())
+    .with_context(|| format!("the home has no usable name: {}", home.display()))?;
+  Ok(home.with_file_name(format!("{name}_backup")))
+}
+
+/// True if the archive member (a relative path) should be excluded (`_should_exclude`).
+pub fn should_exclude(arcname: &str) -> bool {
+  let parts: Vec<&str> = arcname.split('/').collect();
+  // The profile's opencode store is the top-level directory only; a deeper part with the same name stays.
+  if parts.first() == Some(&OPENCODE_DIR_NAME) {
+    return true;
+  }
+  for part in &parts {
+    // CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
+    // backup, which the retention policy keeps for up to 90 days.
+    if *part == ".git" || *part == ".claude" || *part == CREDENTIALS_FILENAME || *part == "__pycache__" {
+      return true;
+    }
+    if part.ends_with(".pyc") {
+      return true;
+    }
+  }
+  // Exclude sessions/*/threads and everything under it.
+  parts.len() >= 3 && parts[0] == "sessions" && parts[2] == THREADS_DIR_NAME
+}
+
+/// The local wall-clock time as seconds since the epoch shifted like a naive local datetime, plus its
+/// `struct tm` fields, through `localtime_r` as `datetime.now()` reads the local time.
+pub(crate) fn local_now() -> libc::tm {
+  let now = unsafe { libc::time(std::ptr::null_mut()) };
+  let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+  let ok = unsafe { libc::localtime_r(&now, &mut tm) };
+  assert!(!ok.is_null(), "localtime_r failed");
+  tm
+}
+
+pub(crate) fn naive_epoch_from_tm(tm: &libc::tm) -> i64 {
+  days_from_civil(i64::from(1900 + tm.tm_year), i64::from(tm.tm_mon) + 1, i64::from(tm.tm_mday)) * 86_400
+    + i64::from(tm.tm_hour) * 3_600
+    + i64::from(tm.tm_min) * 60
+    + i64::from(tm.tm_sec)
+}
+
+/// Days since 1970-01-01 of a civil date (Howard Hinnant's `days_from_civil`).
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+  let y = year - if month <= 2 { 1 } else { 0 };
+  let era = y.div_euclid(400);
+  let yoe = y - era * 400;
+  let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+  let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  era * 146_097 + doe - 719_468
+}
+
+#[cfg(test)]
+/// The civil date of a day count since 1970-01-01 (Howard Hinnant's `civil_from_days`).
+pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
+  let z = days + 719_468;
+  let era = z.div_euclid(146_097);
+  let doe = z - era * 146_097;
+  let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+  let y = yoe + era * 400;
+  let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  let mp = (5 * doy + 2) / 153;
+  let d = doy - (153 * mp + 2) / 5 + 1;
+  let m = mp + if mp < 10 { 3 } else { -9 };
+  (y + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
+/// The Python `weekday()` (Monday 0) of a day count since 1970-01-01, a Thursday (weekday 3).
+pub(crate) fn weekday(days: i64) -> i64 {
+  (days + 3).rem_euclid(7)
+}
+
+/// The `charliebot-<YYYYMMDD-HHMMSS>.tar.gz` name for a naive local time given as its parts.
+pub(crate) fn archive_name(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> String {
+  format!("{BACKUP_PREFIX}{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}{BACKUP_SUFFIX}")
+}
+
+/// Parses the naive local datetime of a backup filename like `charliebot-20260101-120000.tar.gz`
+/// (`_parse_backup_date`), validating each field as `strptime` does.
+pub(crate) fn parse_backup_date(name: &str) -> Option<(i64, i64, i64, i64, i64, i64)> {
+  let ts = name.strip_prefix(BACKUP_PREFIX).and_then(|ts| ts.strip_suffix(BACKUP_SUFFIX))?;
+  let bytes = ts.as_bytes();
+  if bytes.len() != 15 || bytes[8] != b'-' {
+    return None;
+  }
+  let digits = |range: std::ops::Range<usize>| -> Option<i64> {
+    let slice = &ts[range];
+    if !slice.bytes().all(|byte| byte.is_ascii_digit()) {
+      return None;
+    }
+    slice.parse::<i64>().ok()
+  };
+  let year = digits(0..4)?;
+  let month = digits(4..6)?;
+  let day = digits(6..8)?;
+  let hour = digits(9..11)?;
+  let minute = digits(11..13)?;
+  let second = digits(13..15)?;
+  if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 || day < 1 {
+    return None;
+  }
+  let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(month - 1) as usize];
+  if day > month_days {
+    return None;
+  }
+  Some((year, month, day, hour, minute, second))
+}
+
+/// The user's login name for a uid, or "" when no passwd entry exists, as Python's `tarfile` does.
+fn uname(uid: u32) -> String {
+  nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok().flatten().map(|user| user.name).unwrap_or_default()
+}
+
+/// The group's name for a gid, or "" when no group entry exists, as Python's `tarfile` does.
+fn gname(gid: u32) -> String {
+  nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
+    .ok()
+    .flatten()
+    .map(|group| group.name)
+    .unwrap_or_default()
+}
+
+fn mtime_fields(metadata: &fs::Metadata) -> (i64, u32) {
+  let secs = metadata.mtime();
+  (secs, metadata.mtime_nsec() as u32)
+}
+
+/// Creates a compressed backup of this profile's state directory (`create_backup`): the archive
+/// `charliebot-<YYYYMMDD-HHMMSS>.tar.gz` (local time) in the sibling backup directory.
+pub fn create_backup() -> anyhow::Result<PathBuf> {
+  create_backup_in(&charliebot_dir()?)
+}
+
+/// [`create_backup`] against an explicit home, so tests pin the home without the process environment.
+pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
+  let target_dir = backup_dir(home)?;
+  fs::create_dir_all(&target_dir).with_context(|| format!("creating the backup directory {}", target_dir.display()))?;
+  let tm = local_now();
+  let archive_name = archive_name(
+    i64::from(1900 + tm.tm_year),
+    i64::from(tm.tm_mon) + 1,
+    i64::from(tm.tm_mday),
+    i64::from(tm.tm_hour),
+    i64::from(tm.tm_min),
+    i64::from(tm.tm_sec),
+  );
+  let archive_path = target_dir.join(archive_name);
+
+  let raw_out =
+    fs::File::create(&archive_path).with_context(|| format!("creating the archive {}", archive_path.display()))?;
+  // The tar stream rides one gzip stream at the fast level, as isal's `igzip` level 1 does in Python;
+  // the compressed bytes may differ, the members may not.
+  let mut out = GzEncoder::new(raw_out, Compression::new(1));
+  let mut bytes_written: u64 = 0;
+  let mut hardlinks: HashMap<(u64, u64), String> = HashMap::new();
+
+  // An unreadable home gives an empty archive (`backup_root_iter_failed`).
+  let children: Vec<PathBuf> = match fs::read_dir(home) {
+    Ok(entries) => {
+      let mut paths: Vec<PathBuf> = entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()).collect();
+      paths.sort();
+      paths
+    }
+    Err(error) => {
+      tracing::warn!(error = %error, "backup_root_iter_failed");
+      Vec::new()
+    }
+  };
+  for child in children {
+    let name = child
+      .file_name()
+      .and_then(|name| name.to_str())
+      .with_context(|| format!("the home child has no usable name: {}", child.display()))?
+      .to_owned();
+    add_recursive(&mut out, &mut bytes_written, &mut hardlinks, &child, &name);
+  }
+  finish(&mut out, bytes_written)?;
+  out.finish()?;
+
+  let size_mb = fs::metadata(&archive_path)?.len() as f64 / (1024.0 * 1024.0);
+  tracing::info!(path = %archive_path.display(), size_mb = (size_mb * 100.0).round() / 100.0, "backup_created");
+  Ok(archive_path)
+}
+
+/// Adds one entry without recursion, then descends when the path is a directory
+/// (`_add_recursive`; `is_dir` follows symlinks, as in Python).
+fn add_recursive<W: Write>(
+  out: &mut W,
+  bytes_written: &mut u64,
+  hardlinks: &mut HashMap<(u64, u64), String>,
+  path: &Path,
+  arcname: &str,
+) {
+  if should_exclude(arcname) {
+    return;
+  }
+  match fs::symlink_metadata(path) {
+    Ok(metadata) => {
+      if let Err(error) = add_member(out, bytes_written, hardlinks, path, arcname, &metadata) {
+        tracing::warn!(path = %path.display(), error = %error, "backup_skip_file");
+        return;
+      }
+    }
+    Err(error) => {
+      tracing::warn!(path = %path.display(), error = %error, "backup_skip_file");
+      return;
+    }
+  }
+  let is_dir = matches!(fs::metadata(path), Ok(metadata) if metadata.is_dir());
+  if !is_dir {
+    return;
+  }
+  let children: Vec<PathBuf> = match fs::read_dir(path) {
+    Ok(entries) => {
+      let mut paths: Vec<PathBuf> = entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()).collect();
+      paths.sort();
+      paths
+    }
+    Err(error) => {
+      tracing::warn!(path = %path.display(), error = %error, "backup_skip_dir");
+      return;
+    }
+  };
+  for child in children {
+    let Some(name) = child.file_name().and_then(|name| name.to_str()).map(str::to_owned) else {
+      tracing::warn!(path = %child.display(), error = "not valid UTF-8", "backup_skip_dir");
+      continue;
+    };
+    let child_arcname = format!("{arcname}/{name}");
+    add_recursive(out, bytes_written, hardlinks, &child, &child_arcname);
+  }
+}
+
+/// Adds one archive member with the metadata Python's `tarfile.add` records (`tarfile.gettarinfo`).
+fn add_member<W: Write>(
+  out: &mut W,
+  bytes_written: &mut u64,
+  hardlinks: &mut HashMap<(u64, u64), String>,
+  path: &Path,
+  arcname: &str,
+  metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+  let mode = metadata.mode();
+  let (mtime_sec, mtime_nsec) = mtime_fields(metadata);
+  let file_type = metadata.file_type();
+  let (typeflag, linkname, size): (u8, String, u64) = if file_type.is_symlink() {
+    (b'2', fs::read_link(path)?.to_string_lossy().into_owned(), 0)
+  } else if metadata.is_dir() {
+    (b'5', String::new(), 0)
+  } else if metadata.is_file() {
+    // A hard link to an already archived inode becomes a LNKTYPE member, as Python's `tarfile` does.
+    let inode = (metadata.dev(), metadata.ino());
+    if metadata.nlink() > 1 {
+      if let Some(first) = hardlinks.get(&inode) {
+        (b'1', first.clone(), 0)
+      } else {
+        hardlinks.insert(inode, arcname.to_owned());
+        (b'0', String::new(), metadata.len())
+      }
+    } else {
+      hardlinks.insert(inode, arcname.to_owned());
+      (b'0', String::new(), metadata.len())
+    }
+  } else if metadata.file_type().is_char_device() {
+    (b'3', String::new(), 0)
+  } else if file_type.is_block_device() {
+    (b'4', String::new(), 0)
+  } else if file_type.is_fifo() {
+    (b'6', String::new(), 0)
+  } else {
+    // gettarinfo returns None for a socket, and tar.add skips it.
+    return Ok(());
+  };
+  let member = Member {
+    name: arcname,
+    mode,
+    uid: metadata.uid(),
+    gid: metadata.gid(),
+    size,
+    mtime_sec,
+    mtime_nsec,
+    typeflag,
+    linkname: &linkname,
+    uname: &uname(metadata.uid()),
+    gname: &gname(metadata.gid()),
+    devmajor: if typeflag == b'3' || typeflag == b'4' { (metadata.rdev() >> 8) as u32 } else { 0 },
+    devminor: if typeflag == b'3' || typeflag == b'4' { (metadata.rdev() & 0xff) as u32 } else { 0 },
+  };
+  match typeflag {
+    b'0' => {
+      let file = fs::File::open(path)?;
+      let wrote = write_member(out, &member, Some(&mut Box::new(file) as &mut dyn Read))?;
+      *bytes_written += wrote;
+    }
+    _ => *bytes_written += write_member(out, &member, None)?,
+  }
+  Ok(())
+}
+
+/// Applies the tiered retention policy to this profile's backups (`apply_retention`).
+pub fn apply_retention() -> anyhow::Result<()> {
+  apply_retention_in(&charliebot_dir()?)
+}
+
+/// [`apply_retention`] against an explicit home, so tests pin the home without the process environment.
+pub fn apply_retention_in(home: &Path) -> anyhow::Result<()> {
+  let tm = local_now();
+  apply_retention_in_with_now(home, naive_epoch_from_tm(&tm));
+  Ok(())
+}
+
+/// [`apply_retention_in`] with the naive local now given in seconds, so tests pin the clock.
+pub fn apply_retention_in_with_now(home: &Path, now: i64) {
+  let Ok(target_dir) = backup_dir(home) else {
+    return;
+  };
+  if !target_dir.exists() {
+    return;
+  }
+  let entries: Vec<PathBuf> = match fs::read_dir(&target_dir) {
+    Ok(entries) => {
+      let mut paths: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+          path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(BACKUP_PREFIX) && name.ends_with(BACKUP_SUFFIX))
+        })
+        .collect();
+      paths.sort();
+      paths
+    }
+    Err(error) => {
+      tracing::warn!(path = %target_dir.display(), error = %error, "backup_root_iter_failed");
+      return;
+    }
+  };
+  for backup_file in entries {
+    let Some(name) = backup_file.file_name().and_then(|name| name.to_str()) else {
+      continue;
+    };
+    let Some(parsed) = parse_backup_date(name) else {
+      tracing::debug!(name, error = "not a backup timestamp", "backup_parse_date_failed");
+      tracing::debug!(name, "backup_retention_skip_unparseable");
+      continue;
+    };
+    let (year, month, day, hour, minute, second) = parsed;
+    let backup_naive = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second;
+    // Python's `timedelta.days` floors toward negative infinity.
+    let age = (now - backup_naive).div_euclid(86_400);
+    let keep = if age < DAILY_THRESHOLD {
+      true
+    } else if age < WEEKLY_THRESHOLD {
+      weekday(days_from_civil(year, month, day)) == 6 // Sunday
+    } else if age < MONTHLY_THRESHOLD {
+      day == 1 // 1st of month
+    } else {
+      false
+    };
+    if !keep {
+      match fs::remove_file(&backup_file) {
+        Ok(()) => tracing::info!(name, age_days = age, "backup_deleted"),
+        Err(error) => tracing::warn!(name, error = %error, "backup_delete_failed"),
+      }
+    }
+  }
+}
+
+/// The built-in cron handler body (`run_scheduled_backup`): create a backup and apply retention.
+pub fn run_backup_blocking() -> anyhow::Result<PathBuf> {
+  let archive = create_backup()?;
+  apply_retention()?;
+  Ok(archive)
+}

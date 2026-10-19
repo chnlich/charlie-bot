@@ -60,7 +60,7 @@ async def manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The spawn-style routes resolve backends through the config owner directly.
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   root = await tree.create_task(
       request_id="root",
       task_parent_id=None,

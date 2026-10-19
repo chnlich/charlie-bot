@@ -68,11 +68,11 @@ ports and a Landlock write fence. Run it with
 
 ```
 rust/
-  Cargo.toml                      workspace: charliebot-core, charliebot-compat, charliebot-registry, charliebot-server
+  Cargo.toml                      workspace: every crate under `crates/`
   PORT_BASELINE                   the Python commit the port reproduces
-  docs/PORT_STATUS.md             every Python route: method, path, stage, ported or todo
+  docs/PORT_STATUS.md             every Python route: method, path, stage, and status (`ported`, `todo` or `not ported`)
   docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
-  parity/parity.py                skeleton check: `uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton`
+  parity/parity.py                skeleton check: `uv run python rust/parity/parity.py --rust-bin rust/target/debug/charliebot-server --stage server-skeleton`
   scripts/fence_interop.py        cross-language fence exclusion check
   scripts/gen_mimetypes.py        regenerates mimetypes_table.rs from CPython's mimetypes
   scripts/gen_compat_fixtures.py  writes fixtures/python/ from the Python baseline

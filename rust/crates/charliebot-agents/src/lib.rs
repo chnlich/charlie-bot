@@ -13,6 +13,7 @@ pub mod transport;
 use charliebot_registry::{Registry, RegistryError};
 
 pub use backend_types::build_backend;
+pub use charliebot_compat::python_json;
 pub use one_shot::agent_one_shot_text;
 
 mod one_shot;

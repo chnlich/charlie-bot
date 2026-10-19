@@ -59,7 +59,7 @@ for line in sys.stdin:
     done
     for log in "$pkg_dir"/run-*.log; do
       total_executions=$((total_executions + 1))
-      if [ "$(head -c 1 "$log")" ] && ! grep -q "test result:" "$log"; then
+      if ! grep -q "test result:" "$log"; then
         echo "FAIL (crashed or hung): $pkg/$name ($(basename "$log"))"
         sed -n '1,40p' "$log"
         total_failures=$((total_failures + 1))

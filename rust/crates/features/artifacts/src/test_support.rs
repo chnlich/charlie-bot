@@ -1,12 +1,13 @@
 //! Fixtures for the artifacts tests: a store-backed feature context over a temporary home, with this package registered,
-//! and the fake headless Chrome that the renderer and the assertions launch.
+//! the fake headless Chrome that the renderer and the assertions launch, and the plan page the assertions accept.
 
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use charliebot_core::config::CREDENTIALS_FILENAME;
+use charliebot_core::RepoRoot;
+use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::context::StartupState;
@@ -16,6 +17,7 @@ use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use serde_json::{Value, json};
 
+use crate::headless_render;
 use crate::plans::PLANS_FILE;
 
 /// A fake headless Chrome that plays `steps`, the `chrome-stub` helper's steps (`src/bin/chrome_stub.rs`). The fake is
@@ -42,38 +44,81 @@ fn chrome_stub_helper() -> PathBuf {
     .expect("cargo builds the chrome-stub helper into the target directory that holds the test binary")
 }
 
+/// The charlie-bot checkout, which holds `prompts/plan_template.html` and the page packages.
+pub(crate) fn repo_root() -> PathBuf {
+  Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repository").to_path_buf()
+}
+
+/// A plan page that passes every plan assertion except the ones its tests break: the genre template's style block
+/// verbatim, six numbered sections, and a footer, with `goal` as the Problem / Goal body.
+pub(crate) fn plan_page(goal: &str) -> String {
+  let template = fs::read_to_string(repo_root().join("prompts/plan_template.html")).unwrap();
+  let style_start = template.find("<style>").unwrap();
+  let style_end = template.find("</style>").unwrap() + "</style>".len();
+  let style = &template[style_start..style_end];
+  let titles = ["Problem / Goal", "Context", "High Level Solution", "Detailed Design", "Trade-offs", "Other Details"];
+  let sections = titles
+    .iter()
+    .enumerate()
+    .map(|(index, title)| {
+      let body = if index == 0 { goal } else { *title };
+      format!(
+        "<section class=\"plan-section\"><h2><span class=\"n\">{}</span> {title}</h2><p>{body}</p></section>",
+        index + 1
+      )
+    })
+    .collect::<String>();
+  format!("<html><head>{style}</head><body>{sections}<div class=\"foot\"><p>How to respond.</p></div></body></html>")
+}
+
+/// Writes `source` as `artifacts/<name>` under the session directory and returns that plan-relative path.
+pub(crate) fn write_plan_artifact(features: &FeatureContext, session_id: &str, name: &str, source: &str) -> String {
+  let directory = features.store.session_dir(session_id).join("artifacts");
+  fs::create_dir_all(&directory).expect("the artifacts directory is created");
+  fs::write(directory.join(name), source).expect("the artifact is written");
+  format!("artifacts/{name}")
+}
+
 /// A feature context over a new temporary home, with the artifacts package registered. The home lives as long as the
 /// returned directory.
 pub(crate) fn features() -> (tempfile::TempDir, Arc<FeatureContext>) {
   let home = tempfile::tempdir().expect("a temporary home is available");
+  let features = features_in(home.path());
+  (home, features)
+}
+
+/// A feature context over the home at `home`, with the artifacts package registered and the checkout as the repo root.
+fn features_in(home: &Path) -> Arc<FeatureContext> {
   let mut registry = Registry::new();
   registry.register_package("src.features.artifacts", crate::register).expect("the artifacts package registers");
   let registry = Arc::new(registry);
-  let config_value = registry.load_config(home.path()).expect("the default config loads");
+  let config_value = registry.load_config(home).expect("the default config loads");
   let store = Arc::new(
     Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
       .expect("the store opens over the temporary home"),
   );
   let config_registry = Arc::clone(&registry);
-  let config_home = home.path().to_path_buf();
+  let config_home = home.to_path_buf();
   let config = Arc::new(HotReload::new(
     config_value.config_file(),
     "artifacts_test_config_reload_failed",
     Box::new(move || config_registry.load_config(&config_home)),
   ));
-  let credentials_home = home.path().to_path_buf();
+  let credentials_home = home.to_path_buf();
   let credentials = Arc::new(HotReload::new(
-    home.path().join(CREDENTIALS_FILENAME),
+    home.join(CREDENTIALS_FILENAME),
     "artifacts_test_credentials_reload_failed",
     Box::new(move || load_credentials(&credentials_home)),
   ));
+  let repo_root = repo_root();
   let startup = StartupState::default();
-  let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../");
   startup
     .insert(Templating::new(&repo_root, &["src.features.artifacts"]))
     .expect("the template engine enters startup state");
-  let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
-  (home, features)
+  startup
+    .insert(RepoRoot::new(Some(repo_root.clone().into_os_string())).expect("the checkout is a non-empty path"))
+    .expect("the repo root enters startup state");
+  Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) })
 }
 
 /// Writes a root session's metadata through the registered slots, so the store reads it back as the store writes it.
@@ -110,5 +155,22 @@ pub(crate) fn session_with_registry(session_id: &str, registry: &str) -> (tempfi
   let (home, features) = features();
   write_session(&features, session_id);
   fs::write(features.store.session_dir(session_id).join(PLANS_FILE), registry).expect("the registry is written");
+  (home, features)
+}
+
+/// A root session, its `plans.json` when `registry` is given, and a feature context whose config names a fake headless
+/// Chrome. The fake measures every page at 800 px, so the plan assertions run without a renderer. The home lives as long
+/// as the returned directory.
+pub(crate) fn plan_session(session_id: &str, registry: Option<&str>) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  let home = tempfile::tempdir().expect("a temporary home is available");
+  let chrome = chrome_program(home.path(), json!([{"exit": 0}]));
+  headless_render::set_test_height(&chrome, 800);
+  let config = format!("headless_chrome_bin: {}\n", json!(chrome.display().to_string()));
+  fs::write(home.path().join(CONFIG_FILENAME), config).expect("the config is written");
+  let features = features_in(home.path());
+  write_session(&features, session_id);
+  if let Some(registry) = registry {
+    fs::write(features.store.session_dir(session_id).join(PLANS_FILE), registry).expect("the registry is written");
+  }
   (home, features)
 }

@@ -855,31 +855,7 @@ mod tests {
   use serde_json::{Value, json};
 
   use super::*;
-  use crate::test_support::chrome_program;
-
-  fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repository").to_path_buf()
-  }
-
-  fn plan_page(goal: &str) -> String {
-    let template = fs::read_to_string(repo_root().join("prompts/plan_template.html")).unwrap();
-    let style_start = template.find("<style>").unwrap();
-    let style_end = template.find("</style>").unwrap() + "</style>".len();
-    let style = &template[style_start..style_end];
-    let titles = ["Problem / Goal", "Context", "High Level Solution", "Detailed Design", "Trade-offs", "Other Details"];
-    let sections = titles
-      .iter()
-      .enumerate()
-      .map(|(index, title)| {
-        let body = if index == 0 { goal } else { *title };
-        format!(
-          "<section class=\"plan-section\"><h2><span class=\"n\">{}</span> {title}</h2><p>{body}</p></section>",
-          index + 1
-        )
-      })
-      .collect::<String>();
-    format!("<html><head>{style}</head><body>{sections}<div class=\"foot\"><p>How to respond.</p></div></body></html>")
-  }
+  use crate::test_support::{chrome_program, plan_page, repo_root};
 
   fn write_page(directory: &Path, name: &str, source: &str) -> PathBuf {
     let path = directory.join(name);
@@ -892,10 +868,8 @@ mod tests {
   }
 
   fn run_plan_with_height(path: &Path, chrome: &str, height: i32) -> Vec<AssertionOutcome> {
-    headless_render::set_test_height(Some(height));
-    let outcomes = run_assertions_sync("plan", path, chrome, &repo_root()).unwrap();
-    headless_render::set_test_height(None);
-    outcomes
+    headless_render::set_test_height(Path::new(chrome), height);
+    run_assertions_sync("plan", path, chrome, &repo_root()).unwrap()
   }
 
   fn by_name<'a>(outcomes: &'a [AssertionOutcome], name: &str) -> Vec<&'a AssertionOutcome> {

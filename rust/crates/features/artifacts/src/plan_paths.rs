@@ -25,6 +25,34 @@ pub fn resolve_plan_file(session_dir: &Path, file: &str) -> (PathBuf, Option<Pat
   (candidate, relative)
 }
 
+/// `posixpath.normpath`: drops the `.` and empty parts of a POSIX path and folds each `..` into the part before it. Two
+/// leading slashes stay two, and three or more fold to one. The empty path is `.`.
+pub fn posix_normpath(path: &str) -> String {
+  if path.is_empty() {
+    return ".".to_string();
+  }
+  let initial_slashes = if path.starts_with("//") && !path.starts_with("///") {
+    2
+  } else if path.starts_with('/') {
+    1
+  } else {
+    0
+  };
+  let mut parts: Vec<&str> = Vec::new();
+  for part in path.split('/') {
+    if part.is_empty() || part == "." {
+      continue;
+    }
+    if part != ".." || (initial_slashes == 0 && parts.is_empty()) || parts.last() == Some(&"..") {
+      parts.push(part);
+    } else {
+      parts.pop();
+    }
+  }
+  let normalized = format!("{}{}", "/".repeat(initial_slashes), parts.join("/"));
+  if normalized.is_empty() { ".".to_string() } else { normalized }
+}
+
 /// A child-relative path for an artifact outside the parent session: the path below the sessions directory minus its
 /// session id, or `artifacts/<name>` when the artifact is not under a session.
 pub fn fallback_relative_path(session_dir: &Path, candidate: &Path) -> PathBuf {
@@ -44,6 +72,26 @@ mod tests {
   use std::os::unix::fs::symlink;
 
   use super::*;
+
+  #[test]
+  fn posix_normpath_matches_posixpath_normpath() {
+    let cases = [
+      ("", "."),
+      (".", "."),
+      ("./a/./b/../c", "a/c"),
+      ("/../x", "/x"),
+      ("//x", "//x"),
+      ("///x", "/x"),
+      ("a/../..", ".."),
+      ("../a", "../a"),
+      ("a//b/", "a/b"),
+      ("//", "//"),
+      ("/a/b/..", "/a"),
+    ];
+    for (path, normalized) in cases {
+      assert_eq!(posix_normpath(path), normalized, "normpath of {path:?}");
+    }
+  }
 
   #[test]
   fn a_symlink_loop_is_absent_like_pathlib_exists() {

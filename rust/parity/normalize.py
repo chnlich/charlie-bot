@@ -451,6 +451,13 @@ FILE_RULES: tuple[FieldRule, ...] = (
         when=(),
         reason="pipe inode: the kernel numbers each tree's pipe apart; a file path still compares",
     ),
+    FieldRule(
+        name="fake-agent-pgid",
+        target="fake-agent/spawns.jsonl",
+        field="pgid",
+        when=(),
+        reason="pid: each fake agent leads its own process group, so its pgid is its pid in each harness tree",
+    ),
 )
 
 # Response headers outside the comparison, each with the reason it cannot match or carries nothing a client

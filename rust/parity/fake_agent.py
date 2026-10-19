@@ -101,6 +101,7 @@ def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> 
       "cwd": os.getcwd(),
       "pid": pid,
       "pid_start": pid_start,
+      "pgid": os.getpgrp(),
       "stdout_path": os.readlink("/proc/self/fd/1"),
       "stdin_bytes": len(stdin_bytes),
       "stdin": _stdin_text(index, stdin_bytes),

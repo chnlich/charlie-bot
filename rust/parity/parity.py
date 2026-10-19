@@ -66,6 +66,9 @@ PROVISIONING_EVENTS = ("speech_models_ready", "speech_model_provisioning_failed"
 # The sherpa engine downloads two artifacts, and each download is bounded by the 60 s model download timeout on both
 # servers (src/infra/timeouts.py and rust/crates/features/voice/src/provisioning.rs).
 PROVISIONING_TIMEOUT_SECONDS = 120.0
+# A fake agent's process group must be gone this long after its SIGKILL. A zombie member keeps the group alive until
+# its parent reaps it, and the harness reaps only the fake leaders it adopted.
+FAKE_GROUP_EXIT_TIMEOUT_SECONDS = 10.0
 
 
 @dataclasses.dataclass
@@ -843,6 +846,44 @@ def _save_responses(log_dir: pathlib.Path, number: int, sides: list[Side], resul
        f"step{number:03d}.{side.label}.response").write_bytes("\n".join(head).encode() + response.decoded_body())
 
 
+def _group_exists(pgid: int) -> bool:
+  """Whether any process still belongs to the process group *pgid*. A zombie member counts until it is reaped."""
+  try:
+    os.killpg(pgid, 0)
+  except ProcessLookupError:
+    return False
+  return True
+
+
+def _reap_leader(pid: int) -> None:
+  """Reap a fake agent that this harness adopted, since a zombie keeps its process group alive for kill(2)."""
+  with contextlib.suppress(ChildProcessError):
+    os.waitpid(pid, os.WNOHANG)
+
+
+def _kill_fake_group(label: str, record: dict) -> list[str]:
+  """SIGKILL the process group of one fake-agent start, then wait for the group to be gone.
+
+  The leader's identity decides whether the group is the start's: a leader with the recorded pid_start is that start,
+  and a gone leader leaves its group only while kill(2) still reaches it.
+  """
+  pid = int(record["pid"])
+  pgid = int(record["pgid"])
+  leader = servers.process_identity(pid)
+  if (leader is not None and leader[1] == record["pid_start"]) or (leader is None and _group_exists(pgid)):
+    with contextlib.suppress(ProcessLookupError):
+      os.killpg(pgid, signal.SIGKILL)
+  deadline = time.monotonic() + FAKE_GROUP_EXIT_TIMEOUT_SECONDS
+  while True:
+    _reap_leader(pid)
+    if not _group_exists(pgid):
+      return []
+    if time.monotonic() >= deadline:
+      message = f"{label} fake-agent process group {pgid} remained {FAKE_GROUP_EXIT_TIMEOUT_SECONDS}s after SIGKILL"
+      return [f"{message}: {record}"]
+    time.sleep(servers.POLL_INTERVAL_SECONDS)
+
+
 def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
   lines = _exit_lines(sides, "before the shutdown step")
   notes = []
@@ -872,13 +913,12 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
         lines.append(f"{side.label} fake-service stop: {error}")
       for host, count in sorted(side.fake_set.refused_hosts().items()):
         notes.append(f"{side.label} fake proxy refused {host} x{count}")
-  survivors = [record for side in sides for record in _read_spawns(side.tree) if _process_alive(record)]
-  for record in survivors:
-    identity = servers.process_identity(int(record["pid"]))
-    if identity is not None and identity[1] == record["pid_start"] and identity[0] != "Z":
-      with contextlib.suppress(ProcessLookupError):
-        os.kill(int(record["pid"]), signal.SIGKILL)
-    lines.append(f"fake agent remained alive at scenario end and was killed: {record}")
+  starts = [(side, record) for side in sides for record in _read_spawns(side.tree)]
+  for _, record in starts:
+    if _process_alive(record):
+      lines.append(f"fake agent remained alive at scenario end and was killed: {record}")
+  for side, record in starts:
+    lines.extend(_kill_fake_group(side.label, record))
   for side in sides:
     for server in side.server_processes:
       try:
@@ -1078,6 +1118,7 @@ def main() -> int:
   args = parser.parse_args()
   rust_bin = args.rust_bin.resolve() if args.rust_bin else None
   _preflight(rust_bin)
+  servers.become_child_subreaper()
   candidate_argv = [str(rust_bin)] if rust_bin else [str(PYTHON), "server.py"]
   scenarios = scenario_file.load_all(args.stage)
   voice_model_dir = args.voice_models.expanduser().resolve()

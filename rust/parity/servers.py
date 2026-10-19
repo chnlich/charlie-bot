@@ -10,6 +10,7 @@ trace for writes outside each tree.
 
 import ast
 import contextlib
+import ctypes
 import dataclasses
 import fcntl
 import json
@@ -511,6 +512,22 @@ def process_identity(pid: int) -> tuple[str, str] | None:
     return None
   fields = stat.rsplit(")", 1)[1].split()
   return fields[0], fields[19]
+
+
+# prctl(2) option that makes the calling process the reaper of its orphaned descendants.
+PR_SET_CHILD_SUBREAPER = 36
+
+
+def become_child_subreaper() -> None:
+  """Adopt the orphans of this process's descendants, so the harness reaps the fake agents its servers leave.
+
+  A fake agent outlives the server that started it once the harness stops that server. Without this, the nearest
+  subreaper above the harness adopts the fake, and the harness never reaps it.
+  """
+  libc = ctypes.CDLL(None, use_errno=True)
+  if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+    error_number = ctypes.get_errno()
+    raise OSError(error_number, os.strerror(error_number))
 
 
 # The /proc/net/tcp state column of a listening socket.

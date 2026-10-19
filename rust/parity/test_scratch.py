@@ -51,7 +51,9 @@ def test_finalize_keeps_a_requested_tree_with_its_marker(tmp_path: pathlib.Path,
   scratch.finalize(tree, keep=True, clean=False, runs=runs)
   assert json.loads((tree / scratch.RUNS_MANIFEST).read_text()) == runs
   assert (tree / scratch.KEEP_MARKER).is_file()
-  assert "kept" in capsys.readouterr().out
+  out = capsys.readouterr().out
+  assert "kept" in out
+  assert "runs.json maps each run" in out
 
 
 def test_sweep_removes_a_tree_whose_owning_process_is_gone(tmp_path: pathlib.Path) -> None:

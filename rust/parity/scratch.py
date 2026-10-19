@@ -78,7 +78,7 @@ def finalize(scratch: pathlib.Path, keep: bool, clean: bool, runs: list[dict]) -
   if keep:
     (scratch / KEEP_MARKER).touch()
     (scratch / RUNS_MANIFEST).write_text(json.dumps(runs, indent=2) + "\n", encoding="utf-8")
-    print(f"\ntrees and logs kept in {scratch}; RUNS_MANIFEST maps each run to its scenario and trees")
+    print(f"\ntrees and logs kept in {scratch}; {RUNS_MANIFEST} maps each run to its scenario and trees")
     return
   shutil.rmtree(scratch)
   if not clean:

@@ -1,0 +1,40 @@
+# The plan registry's fork copy: a fork of a quiet worker whose plans.json names one artifact inside its session and one in
+# another session. The child keeps both versions and reads back as the parent does. The fork's bootstrap run exits 1, so
+# no round-end audit runs on either server.
+stage: features
+name: features-artifacts-plan-fork
+fixture_extras: [artifacts_plan_fork]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-successor}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic successor is ready.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 1
+expect_starts: 1
+steps:
+  - name: fork of the plan worker at a null index
+    method: POST
+    path: /api/sessions/${sessions.plan_fork_worker}/fork
+    json: {event_index: null}
+    capture: {fork: id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the fork's bootstrap run to finish
+    timeout_seconds: 30
+    until:
+      event: {session: "${capture.fork}", type: run_finished}
+  - name: plans of the fork
+    method: GET
+    path: /api/sessions/${capture.fork}/plans
+    expect_status: 200

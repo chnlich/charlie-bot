@@ -110,21 +110,27 @@ struct SessionText {
 }
 
 impl SessionText {
-  /// Validates the body against `SESSION_TEXT_BODY`, then refuses the keys the model does not declare. The shared model
-  /// ignores unknown keys, so `extra_forbidden` errors come only when the declared fields validate.
+  /// Validates the body against `SESSION_TEXT_BODY` and refuses the keys the model does not declare.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let Some(Value::Object(mut fields)) = body.validate(&SESSION_TEXT_BODY)? else {
+    let validated = body.validate(&SESSION_TEXT_BODY);
+    if let RequestBody::Json(Value::Object(raw)) = body {
+      let extras: Vec<FieldError> = raw
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "session_id" | "text"))
+        .map(|(key, value)| field_error(key, value.clone(), Kind::ExtraForbidden))
+        .collect();
+      if !extras.is_empty() {
+        let mut errors = match &validated {
+          Ok(_) => Vec::new(),
+          Err(_) => session_text_field_errors(raw),
+        };
+        errors.extend(extras);
+        return Err(Box::new(validation::response(&errors)));
+      }
+    }
+    let Some(Value::Object(mut fields)) = validated? else {
       unreachable!("a required model validates a body to its fields")
     };
-    let RequestBody::Json(Value::Object(raw)) = body else { unreachable!("a validated body is a JSON object") };
-    let extras: Vec<FieldError> = raw
-      .iter()
-      .filter(|(key, _)| !matches!(key.as_str(), "session_id" | "text"))
-      .map(|(key, value)| field_error(key, value.clone(), Kind::ExtraForbidden))
-      .collect();
-    if !extras.is_empty() {
-      return Err(Box::new(validation::response(&extras)));
-    }
     Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text") })
   }
 }
@@ -140,6 +146,19 @@ fn text_field(fields: &mut Map<String, Value>, name: &str) -> String {
 /// A validation error at `body.<field>`.
 fn field_error(field: &str, input: Value, kind: Kind) -> FieldError {
   FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(field.to_string())], input, kind }
+}
+
+/// The declared-field errors for an object body, used to retain them alongside forbidden extras.
+fn session_text_field_errors(fields: &Map<String, Value>) -> Vec<FieldError> {
+  let mut errors = Vec::new();
+  for name in ["session_id", "text"] {
+    match fields.get(name) {
+      None => errors.push(field_error(name, Value::Null, Kind::Missing)),
+      Some(Value::String(_)) => {}
+      Some(value) => errors.push(field_error(name, value.clone(), Kind::StringType)),
+    }
+  }
+  errors
 }
 
 #[cfg(test)]
@@ -174,5 +193,26 @@ mod tests {
     assert_eq!(detail["detail"][0]["loc"], json!(["body", "session_id"]));
     assert_eq!(detail["detail"][1]["type"], "string_type");
     assert_eq!(detail["detail"][1]["loc"], json!(["body", "text"]));
+  }
+
+  #[tokio::test]
+  async fn extra_keys_are_reported_alongside_missing_and_mistyped_fields() {
+    let home = Home::new();
+    let body = json!({"text": 5, "extra": 1});
+
+    for path in ["/api/internal/web/reply", "/api/internal/web/status"] {
+      let (status, detail) = home.send(Method::POST, path, Some(body.clone())).await;
+      assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{path}");
+      assert_eq!(
+        detail["detail"].as_array().unwrap().iter().map(|error| error["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["missing", "string_type", "extra_forbidden"],
+        "{path}"
+      );
+      assert_eq!(
+        detail["detail"].as_array().unwrap().iter().map(|error| error["loc"].clone()).collect::<Vec<_>>(),
+        [json!(["body", "session_id"]), json!(["body", "text"]), json!(["body", "extra"])],
+        "{path}"
+      );
+    }
   }
 }

@@ -56,6 +56,12 @@ steps:
     json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", colour: red}
     expect_status: 422
     compare: status_and_shape
+  - name: a wrong field type and an extra field on the reply path are both refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: 5, colour: red}
+    expect_status: 422
+    compare: status_and_shape
   - name: a wrong field type for a missing session is refused before the session check
     method: POST
     path: /api/internal/web/reply
@@ -120,6 +126,12 @@ steps:
     method: POST
     path: /api/internal/web/status
     json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Checking the gauges\"}", colour: red}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type and an extra field on the status path are both refused
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: 5, colour: red}
     expect_status: 422
     compare: status_and_shape
   - name: a wrong field type for a missing session is refused before the session check

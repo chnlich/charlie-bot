@@ -431,6 +431,20 @@ FILE_RULES: tuple[FieldRule, ...] = (
             reason=f"wall-clock time: the trigger store records {field} on each server's clock",
         ) for field in ("created_at", "fire_at", "fired_at")),
     FieldRule(
+        name="plan-takeoff-time",
+        target="home/sessions/*/plans.json",
+        field="plans[*].takeoff.at",
+        when=(),
+        reason="wall-clock time: each server stamps its own plan approval on its own clock",
+    ),
+    FieldRule(
+        name="plan-close-time",
+        target="home/sessions/*/plans.json",
+        field="plans[*].closed.at",
+        when=(),
+        reason="wall-clock time: each server stamps its own plan close on its own clock",
+    ),
+    FieldRule(
         name="explain-result-requested-time",
         target="home/sessions/*/data/explain_results.json",
         field="*.requested_at",

@@ -26,6 +26,7 @@ struct Case {
   item_id: &'static str,
   body: Vec<u8>,
   content_type: String,
+  cookie: Option<String>,
   expected_status: StatusCode,
   compare_body: bool,
 }
@@ -111,12 +112,11 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
 
   let client = Client::new();
   let cases = corpus();
-  assert_eq!(cases.len(), 12);
+  assert_eq!(cases.len(), 15);
   eprintln!("multipart differential corpus: {} cases", cases.len());
   for case in &cases {
-    let (python_status, python_body) =
-      send(&client, python_address, case.item_id, &case.content_type, &case.body).await;
-    let (rust_status, rust_body) = send(&client, rust_address, case.item_id, &case.content_type, &case.body).await;
+    let (python_status, python_body) = send(&client, python_address, case).await;
+    let (rust_status, rust_body) = send(&client, rust_address, case).await;
 
     assert_eq!(python_status, case.expected_status, "FastAPI status for {}", case.name);
     assert_eq!(rust_status, python_status, "status for {}", case.name);
@@ -154,20 +154,15 @@ async fn read_item(request: Request<Body>) -> Response {
   responses::json(StatusCode::OK, &json!({"filename": file.filename(), "size": file.size(), "note": note}))
 }
 
-async fn send(
-  client: &Client,
-  address: SocketAddr,
-  item_id: &str,
-  content_type: &str,
-  body: &[u8],
-) -> (StatusCode, Vec<u8>) {
-  let response = client
-    .post(format!("http://{address}/items/{item_id}"))
-    .header(header::CONTENT_TYPE, content_type)
-    .body(body.to_vec())
-    .send()
-    .await
-    .expect("the server accepts the request");
+async fn send(client: &Client, address: SocketAddr, case: &Case) -> (StatusCode, Vec<u8>) {
+  let mut request = client
+    .post(format!("http://{address}/items/{}", case.item_id))
+    .header(header::CONTENT_TYPE, &case.content_type)
+    .body(case.body.clone());
+  if let Some(cookie) = &case.cookie {
+    request = request.header(header::COOKIE, cookie);
+  }
+  let response = request.send().await.expect("the server accepts the request");
   let status = response.status();
   let body = response.bytes().await.expect("the response body is readable").to_vec();
   (status, body)
@@ -201,6 +196,7 @@ fn corpus() -> Vec<Case> {
       ]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::OK,
+      cookie: None,
       compare_body: true,
     },
     Case {
@@ -209,6 +205,7 @@ fn corpus() -> Vec<Case> {
       body: multipart_body(vec![form_part("note", b"synthetic note")]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
       compare_body: false,
     },
     Case {
@@ -217,6 +214,7 @@ fn corpus() -> Vec<Case> {
       body: multipart_body(vec![form_part("file", b"plain field"), form_part("note", b"synthetic note")]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
       compare_body: false,
     },
     Case {
@@ -228,6 +226,7 @@ fn corpus() -> Vec<Case> {
       ]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::OK,
+      cookie: None,
       compare_body: true,
     },
     Case {
@@ -236,6 +235,7 @@ fn corpus() -> Vec<Case> {
       body: multipart_body(vec![file_part("file", "", b"empty name"), form_part("note", b"synthetic note")]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::OK,
+      cookie: None,
       compare_body: true,
     },
     Case {
@@ -247,6 +247,7 @@ fn corpus() -> Vec<Case> {
       ]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::OK,
+      cookie: None,
       compare_body: true,
     },
     Case {
@@ -259,6 +260,7 @@ fn corpus() -> Vec<Case> {
       ]),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::OK,
+      cookie: None,
       compare_body: true,
     },
     Case {
@@ -267,6 +269,7 @@ fn corpus() -> Vec<Case> {
       body: b"multipart body".to_vec(),
       content_type: "multipart/form-data".to_string(),
       expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
       compare_body: false,
     },
     Case {
@@ -275,6 +278,7 @@ fn corpus() -> Vec<Case> {
       body: truncated,
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
       expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
       compare_body: false,
     },
     Case {
@@ -286,15 +290,44 @@ fn corpus() -> Vec<Case> {
       ]),
       content_type: "application/octet-stream".to_string(),
       expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
       compare_body: false,
     },
     Case {
-      name: "request header over the server limit",
+      name: "boundary the body does not open with",
       item_id: "present",
       body: oversized_body,
       content_type: std::mem::take(&mut oversized_content_type),
       expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
       compare_body: false,
+    },
+    Case {
+      name: "valid upload with a 20 KiB cookie header",
+      item_id: "present",
+      body: valid_body(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::OK,
+      cookie: Some(format!("a={}", "x".repeat(20 * 1024))),
+      compare_body: true,
+    },
+    Case {
+      name: "text before the opening boundary",
+      item_id: "present",
+      body: [b"preamble\r\n".to_vec(), valid_body()].concat(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "CRLF before the opening boundary",
+      item_id: "present",
+      body: [b"\r\n".to_vec(), valid_body()].concat(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::OK,
+      cookie: None,
+      compare_body: true,
     },
     Case {
       name: "malformed body for a missing item",
@@ -302,9 +335,14 @@ fn corpus() -> Vec<Case> {
       body: b"malformed multipart body".to_vec(),
       content_type: "multipart/form-data".to_string(),
       expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
       compare_body: false,
     },
   ]
+}
+
+fn valid_body() -> Vec<u8> {
+  multipart_body(vec![file_part("file", "synthetic.bin", b"file data"), form_part("note", b"synthetic note")])
 }
 
 fn multipart_body(parts: Vec<Vec<u8>>) -> Vec<u8> {

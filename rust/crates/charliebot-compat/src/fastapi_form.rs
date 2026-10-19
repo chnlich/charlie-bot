@@ -5,14 +5,14 @@
 
 use crate::responses;
 use crate::validation::{self, FieldError, Kind, Loc};
-use axum::body::Body;
+use axum::body::{Body, BodyDataStream, Bytes};
 use axum::response::Response;
+use futures_util::{StreamExt, stream};
 use http::{HeaderMap, StatusCode, header};
 use serde_json::{Value, json};
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 
-const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;
 const MAX_FILES: usize = 1000;
 const MAX_FIELDS: usize = 1000;
 const MAX_PART_SIZE: usize = 1024 * 1024;
@@ -151,10 +151,9 @@ impl FormBody {
 }
 
 /// Read a multipart request before dependencies, returning an empty form for other content types.
+///
+/// A body whose opening does not match its boundary is a parse error, as python-multipart reports it.
 pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Response>> {
-  if header_block_size(headers) > MAX_REQUEST_HEADER_BYTES {
-    return Err(multipart_error("There was an error parsing the body"));
-  }
   let Some(content_type) = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()) else {
     return Ok(FormBody::default());
   };
@@ -166,7 +165,9 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Respo
     Err(_) => return Err(multipart_error("Missing boundary in multipart.")),
   };
 
-  let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+  let (opening, rest) = read_opening(body.into_data_stream(), &boundary).await?;
+  let stream = stream::iter([Ok::<_, axum::Error>(Bytes::from(opening))]).chain(rest);
+  let mut multipart = multer::Multipart::new(stream, boundary);
   let mut form = FormBody::default();
   let mut file_count = 0;
   let mut field_count = 0;
@@ -237,8 +238,40 @@ fn is_incomplete(error: &multer::Error) -> bool {
   )
 }
 
-fn header_block_size(headers: &HeaderMap) -> usize {
-  headers.iter().map(|(name, value)| name.as_str().len() + value.as_bytes().len() + 4).sum()
+/// Read the bytes python-multipart checks before the first part, and return them with the rest of the body.
+///
+/// python-multipart skips leading CR and LF bytes, then requires `--<boundary>` followed by CRLF or `--`. A body that
+/// ends inside that opening is not an error for python-multipart, so it goes on to multer, which reads it as truncated.
+async fn read_opening(mut stream: BodyDataStream, boundary: &str) -> Result<(Vec<u8>, BodyDataStream), Box<Response>> {
+  let marker = format!("--{boundary}");
+  let mut opening = Vec::new();
+  while opening.len() < marker.len() + 2 && !opening_mismatch(&opening, marker.as_bytes()) {
+    let Some(chunk) = stream.next().await else {
+      break;
+    };
+    let chunk = chunk.map_err(|_| multipart_error("There was an error parsing the body"))?;
+    let skipped =
+      if opening.is_empty() { chunk.iter().take_while(|byte| matches!(byte, b'\r' | b'\n')).count() } else { 0 };
+    opening.extend_from_slice(&chunk[skipped..]);
+  }
+  if opening_mismatch(&opening, marker.as_bytes()) {
+    return Err(multipart_error("There was an error parsing the body"));
+  }
+  Ok((opening, stream))
+}
+
+/// Whether `opening` already differs from `marker` followed by CRLF or `--`. Bytes not read yet never differ.
+fn opening_mismatch(opening: &[u8], marker: &[u8]) -> bool {
+  if opening.len() <= marker.len() {
+    return opening != &marker[..opening.len()];
+  }
+  if &opening[..marker.len()] != marker {
+    return true;
+  }
+  !matches!(
+    (opening[marker.len()], opening.get(marker.len() + 1)),
+    (b'\r', Some(b'\n')) | (b'-', Some(b'-')) | (b'\r' | b'-', None)
+  )
 }
 
 fn decode_text(bytes: &[u8]) -> String {

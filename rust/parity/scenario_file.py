@@ -34,7 +34,7 @@ _SCENARIO_KEYS = {
 }
 _HTTP_STEP_KEYS = {
     "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "expect_status",
-    "capture", "defer_files"
+    "compare", "capture", "defer_files"
 }
 _WS_STEP_KEYS = {
     "kind", "name", "path", "query", "auth", "send", "collect", "until", "timeout_seconds", "compare", "expect_reject",
@@ -69,6 +69,7 @@ class Step:
   multipart: dict | None
   auth: str
   expect_status: int | None
+  http_compare: str | None
   capture: dict[str, str]
   defer_files: bool
   timeout_seconds: float | None
@@ -321,6 +322,7 @@ def _step(raw: Any, where: str) -> Step:
   multipart_fields = None
   auth = "none"
   expect_status = None
+  http_compare = None
   capture: dict[str, str] = {}
   defer_files = False
   timeout_seconds = None
@@ -351,6 +353,12 @@ def _step(raw: Any, where: str) -> Step:
     expect_status = raw.get("expect_status")
     if expect_status is not None and (not isinstance(expect_status, int) or isinstance(expect_status, bool)):
       raise ScenarioError(f"{where}: expect_status must be an integer")
+    if "compare" in raw:
+      http_compare = raw["compare"]
+      if http_compare != "status_and_shape":
+        raise ScenarioError(f"{where}.compare must be status_and_shape")
+      if expect_status is None or expect_status < 400:
+        raise ScenarioError(f"{where}.compare requires an expect_status of at least 400")
     defer_files = raw.get("defer_files", False)
     if not isinstance(defer_files, bool):
       raise ScenarioError(f"{where}: defer_files must be a boolean")
@@ -463,6 +471,7 @@ def _step(raw: Any, where: str) -> Step:
       multipart=multipart_fields,
       auth=auth,
       expect_status=expect_status,
+      http_compare=http_compare,
       capture=capture,
       defer_files=defer_files,
       timeout_seconds=timeout_seconds,

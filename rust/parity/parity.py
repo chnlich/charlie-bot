@@ -682,7 +682,10 @@ def _run_step(
   _prepare_contexts(sides, after)
   lines.extend(_exit_lines(sides, f"during step {step.name!r}"))
   if baseline is not None and candidate is not None:
-    lines.extend(compare.response_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
+    if step.kind == "http" and step.http_compare == "status_and_shape":
+      lines.extend(compare.status_and_shape_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
+    else:
+      lines.extend(compare.response_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
   deltas = None
   if not step.defer_files:

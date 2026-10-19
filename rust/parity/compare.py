@@ -417,3 +417,38 @@ def response_diff(
   else:
     lines.extend(f"body {line}" for line in json_diff(left_body, right_body))
   return lines
+
+
+def status_and_shape_diff(
+    route: str, left: Response, right: Response, left_ctx: normalize.Context,
+    right_ctx: normalize.Context) -> list[str]:
+  """The malformed-input comparison: the status, then each 422 error's type and loc, nothing else.
+
+  For a body whose ``detail`` is a list, it compares the list length and each item's ``type`` and ``loc``; the
+  error text may differ. For any other body, it only requires both sides to be JSON objects with a ``detail``
+  key, or both to be non-JSON.
+  """
+  lines: list[str] = []
+  if left.status != right.status:
+    lines.append(f"status: {left.status} != {right.status}")
+  left_body = _normalized_body(left, route, left_ctx)
+  right_body = _normalized_body(right, route, right_ctx)
+  if isinstance(left_body, bytes) or isinstance(right_body, bytes):
+    if isinstance(left_body, bytes) != isinstance(right_body, bytes):
+      lines.append("body: JSON on one side only")
+    return lines
+  left_detail = left_body.get("detail") if isinstance(left_body, dict) else None
+  right_detail = right_body.get("detail") if isinstance(right_body, dict) else None
+  if isinstance(left_detail, list) and isinstance(right_detail, list):
+    if len(left_detail) != len(right_detail):
+      lines.append(f"body detail: {len(left_detail)} errors != {len(right_detail)} errors")
+    for index, (left_item, right_item) in enumerate(zip(left_detail, right_detail)):
+      left_shape = {key: left_item.get(key) for key in ("type", "loc")} if isinstance(left_item, dict) else None
+      right_shape = {key: right_item.get(key) for key in ("type", "loc")} if isinstance(right_item, dict) else None
+      lines.extend(f"body detail[{index}] {line}" for line in json_diff(left_shape, right_shape))
+    return lines
+  left_object = isinstance(left_body, dict) and "detail" in left_body
+  right_object = isinstance(right_body, dict) and "detail" in right_body
+  if left_object != right_object:
+    lines.append("body: one side is a JSON object with a detail key, the other side is not")
+  return lines

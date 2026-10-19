@@ -300,6 +300,20 @@ Step fields:
   contain at most one of `json`, `body_file` and `multipart`.
 - `auth` is `bearer` (the default), `cookie` or `none`.
 - `expect_status` (optional) is the status both servers must return.
+- `compare: status_and_shape` (optional, requires an `expect_status` of 400 or more) narrows the comparison for a
+  malformed-input step to the status code and the error shape: for a body whose `detail` is a list, the list
+  length and each item's `type` and `loc`; for any other body, only that both sides are JSON objects with a
+  `detail` key, or both are not JSON. The error text may differ:
+
+  ```yaml
+  - name: invalid-json
+    method: POST
+    path: /api/sessions/
+    body_file: malformed.json
+    expect_status: 422
+    compare: status_and_shape
+  ```
+
 - `capture` maps a name to a dotted field of each server's own JSON response. A later step references the value
   as `${capture.name}`, so a cursor a server issued goes back to that server.
 - `defer_files: true` skips this HTTP step's file comparison. The next step compares changes since before the request.

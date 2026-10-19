@@ -8,6 +8,10 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 - **Status** is `ported` when `charliebot-server` answers the route as the Python server does, else
   `todo`. A `todo` route answers as an unknown path: 404 with the key, 401 without it.
 
+Malformed input (a request that no client sends, such as invalid JSON or a wrong field type) keeps Python's
+status code, and for a 422 answer the `type` and `loc` of each error; the error text may differ. Parity steps
+for such input set `compare: status_and_shape`.
+
 | Method | Path | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
 | GET, HEAD | `/openapi.json` | api-docs | todo |  |

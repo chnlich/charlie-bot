@@ -273,6 +273,13 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         when=(("repo_path", "<tree>/workspace/worker-repo"),),
         reason="the canonical task spec includes the repository path inside each independent parity tree",
     ),
+    FieldRule(
+        name="plan-version-response-created-time",
+        target="GET /api/sessions/{session_id}/plans",
+        field="plans[*].versions[*].created_at",
+        when=(),
+        reason="wall-clock time: each server stamps its own plan version on its own clock",
+    ),
 )
 
 WS_FRAME_RULES: dict[str, tuple[FieldRule, ...]] = {}
@@ -478,6 +485,13 @@ FILE_RULES: tuple[FieldRule, ...] = (
         field="plans[*].closed.at",
         when=(),
         reason="wall-clock time: each server stamps its own plan close on its own clock",
+    ),
+    FieldRule(
+        name="plan-version-created-time",
+        target="home/sessions/*/plans.json",
+        field="plans[*].versions[*].created_at",
+        when=(),
+        reason="wall-clock time: each server stamps its own plan version on its own clock",
     ),
     FieldRule(
         name="explain-result-requested-time",

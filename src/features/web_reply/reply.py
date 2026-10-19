@@ -21,7 +21,9 @@ REPLY_BUDGET_CHARS = 500
 RULES_FILE = "web_reply.md"
 
 # The audit's nudge: the agent's input when a user message woke a turn that ended without a reply.
-NUDGE_TEXT = "Post the web reply now."
+NUDGE_TEXT = (
+    "Web reply nudge: your last turn woke on a user message and ended without a web reply. The For-you view "
+    "hides your turn output. Post your whole answer as the web reply now.")
 # The notice the user reads when the nudge turn also ended without a reply.
 NOTICE_TEXT = "No reply was posted for this message. The Everything view shows this turn's output."
 # The sender name the nudge carries in the chat log.

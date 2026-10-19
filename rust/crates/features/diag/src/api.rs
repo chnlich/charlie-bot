@@ -14,7 +14,7 @@ use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// The point logs at most this many code points of `error`, as Python's `error[:MAX_ERROR_CHARS]` keeps.
 pub const MAX_ERROR_CHARS: usize = 300;
@@ -83,16 +83,14 @@ impl SwitchEvent {
       phase: string(&values, "phase"),
       from_session: optional_string(&values, "from_session"),
       to_session: string(&values, "to_session"),
-      generation: integer(&values, "generation"),
-      winner_generation: optional_integer(&values, "winner_generation"),
-      elapsed_ms: optional_integer(&values, "elapsed_ms"),
+      generation: integer(&values, "generation")?.expect("a required integer validates to a value"),
+      winner_generation: integer(&values, "winner_generation")?,
+      elapsed_ms: integer(&values, "elapsed_ms")?,
       error: optional_string(&values, "error"),
       client_ts: string(&values, "client_ts"),
     })
   }
 }
-
-use serde_json::Value;
 
 fn string(values: &serde_json::Map<String, Value>, name: &str) -> String {
   match values.get(name) {
@@ -109,15 +107,21 @@ fn optional_string(values: &serde_json::Map<String, Value>, name: &str) -> Optio
   }
 }
 
-fn integer(values: &serde_json::Map<String, Value>, name: &str) -> i64 {
-  match values.get(name).and_then(Value::as_i64) {
-    Some(value) => value,
-    None => unreachable!("the validated body carries an integer {name}"),
+/// An integer field of the validated body, `None` when the field is absent or null. The body reader accepts an integer
+/// up to the unsigned 64-bit maximum and the record stores a signed one, so a larger value answers 500, as
+/// `rust/docs/PORT_STATUS.md` states for a route that stores a signed 64-bit integer.
+fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Result<Option<i64>, Box<Response>> {
+  match values.get(name) {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::Number(number)) => match number.as_i64() {
+      Some(value) => Ok(Some(value)),
+      None => {
+        let detail = format!("{name} is above the signed 64-bit maximum");
+        Err(Box::new(responses::internal_error("OverflowError", detail)))
+      }
+    },
+    other => unreachable!("the validated body carries an integer or null {name}, got {other:?}"),
   }
-}
-
-fn optional_integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i64> {
-  values.get(name).and_then(Value::as_i64)
 }
 
 /// `error` cut to its first `MAX_ERROR_CHARS` code points, as Python's `error[:MAX_ERROR_CHARS]` keeps.

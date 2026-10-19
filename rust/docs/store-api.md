@@ -197,6 +197,22 @@ call it. The field write re-reads the row, so a rename that lands meanwhile is k
 The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
 launch starts a fresh native context; the planned four-argument method is the continuing-context form.
 
+## Session fork and elone (S3, implemented)
+
+| Rust API | Python source |
+| --- | --- |
+| `fork_session(&self, parent_id: &str, event_index: Option<i64>, backend: Option<&str>) -> StoreResult<SessionMetadata>` | `src/runtime/session_fork.py::SessionFork.fork_session`, `_spawn_with_history` |
+| `elone_session(&self, parent_id: &str, event_index: i64, backend: Option<&str>, redelivery: &dyn CloseReportRedelivery) -> StoreResult<SessionMetadata>` | `src/runtime/session_fork.py::SessionFork.elone_session`; `src/runtime/task_sessions.py::run_elone_replacement` |
+| `CloseReportRedelivery::redeliver_close_reports_locked(&self, guard: &ControlGuard, session_id: &str) -> StoreHookFuture<'_, ()>` (implemented by `Dispatcher`) | `src/runtime/task_sessions.py::run_elone_replacement`, subtree close-report redelivery |
+| `RuntimeEventHooks::copy_on_fork(&self, parent_dir: &Path, child_dir: &Path) -> StoreResult<()>` | `src/runtime/session_fork.py::_copy_on_fork_sync` |
+| `FORK_BOOTSTRAP_OPENER`, `ELONE_BOOTSTRAP_OPENER`, `HISTORY_LOCATION_NOTE` | the bootstrap constants in `src/runtime/session_fork.py` |
+
+The child's chat log is born whole: the parent's raw lines for `[0, end)`, then the `clone_start` marker and the child's
+`task_created` fact, written as one atomic stream. Elone runs under the control lock: it validates the blockers, redelivers
+the subtree's close reports through `CloseReportRedelivery`, moves the source's children, closes the source as archived,
+and archives it. The session-api route resolves the backend before either call, and it admits the bootstrap prompt and
+dispatches the successor's run after the call returns.
+
 ## Task errors (S3)
 
 Every task-tree refusal is a `StoreError` variant that names the Python class its route maps. The routes set the HTTP
@@ -305,6 +321,7 @@ exposed as `raw_metadata_scan`.
   window.
 - The session counter parses a signed 64-bit integer. Python's `int()` also accepts digit underscores and larger
   values; here such a counter takes the session-directory count.
-- Two explicit Python task-tree notifications have no sender in this crate. A run's first launch (`runs.py:891`) is
-  not sent by `record_launch`. A fork (`session_fork.py:435`) belongs to the fork port. Each will send through
-  `notify_task_tree_changed`. The metadata patch (`task_sessions.py:1424`) sends from `patch_task`.
+- One explicit Python task-tree notification has no sender in this crate. A run's first launch (`runs.py:891`) is
+  not sent by `record_launch`. It will send through `notify_task_tree_changed`. A fork sends its own
+  `broadcast_task_tree_changed` for the child (`session_fork.py:435`; `session_fork.rs:302`), and
+  the metadata patch (`task_sessions.py:1424`) sends from `patch_task`.

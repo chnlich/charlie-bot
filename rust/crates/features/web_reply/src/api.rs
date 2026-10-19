@@ -11,12 +11,14 @@ use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, header};
 use axum::response::Response;
+use charliebot_compat::python_json::{self, LoadError};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Kind, Loc, Source};
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
+use crate::json_input::replace_unrepresentable_numbers;
 use crate::reply::{self, WebReplyError};
 use crate::status;
 
@@ -145,7 +147,18 @@ fn read_body(headers: &HeaderMap, body: &[u8]) -> Result<Value, Vec<FieldError>>
   if !json_body {
     return Ok(Value::String(String::from_utf8_lossy(body).into_owned()));
   }
-  serde_json::from_slice(body).map_err(|error| {
+  let parsed = match serde_json::from_slice(body) {
+    Ok(value) => Ok(value),
+    Err(error) => match python_json::loads(body) {
+      Ok(value) => Ok(value),
+      Err(LoadError::Unrepresentable(_)) => match std::str::from_utf8(body) {
+        Ok(text) => serde_json::from_str(&replace_unrepresentable_numbers(text)).map_err(|_| error),
+        Err(_) => Err(error),
+      },
+      Err(LoadError::Value(_)) => Err(error),
+    },
+  };
+  parsed.map_err(|error| {
     // The position is serde's own (line and column), counted in characters; the message is serde's, not CPython's.
     let mut loc = body_loc(None);
     loc.push(Loc::Index(char_position(body, &error)));

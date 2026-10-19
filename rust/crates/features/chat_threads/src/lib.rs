@@ -3,6 +3,8 @@
 //! that the platform turn contributions share is in `thread_entry`.
 
 mod api;
+pub mod backfill;
+pub mod channel_service;
 mod sidebar;
 pub mod thread_entry;
 mod thread_sessions;

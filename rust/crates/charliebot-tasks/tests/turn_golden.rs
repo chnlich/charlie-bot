@@ -50,6 +50,9 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
+
+mod process_guard;
+use process_guard::ProcessGroupGuard;
 static CANCEL_ROUTE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Deserialize)]
@@ -591,6 +594,18 @@ async fn run_turn(
   event_id: String,
   option: BackendOption,
 ) -> anyhow::Result<Option<String>> {
+  run_turn_with_spawn(queue, cfg, meta, callbacks, event_id, option, noop_task_spawn()).await
+}
+
+async fn run_turn_with_spawn(
+  queue: Arc<master_queue::MasterQueue>,
+  cfg: Arc<CharlieBotConfig>,
+  meta: SessionMetadata,
+  callbacks: SessionCallbacks,
+  event_id: String,
+  option: BackendOption,
+  on_task_spawn: TaskSpawnCallback,
+) -> anyhow::Result<Option<String>> {
   let run_id = format!("run-{event_id}");
   let transport_dir = cfg.sessions_dir().join(&meta.id).join("runs").join(&run_id);
   std::fs::create_dir_all(&transport_dir)?;
@@ -603,7 +618,7 @@ async fn run_turn(
       user_event_ids: vec![event_id],
       task_instructions: "synthetic instructions".to_string(),
       task_run: TaskRunBinding { session_id: meta.id, run_id, transport_dir, fresh_native_context: false },
-      on_task_spawn: noop_task_spawn(),
+      on_task_spawn,
       on_task_finish: noop_task_finish(),
       auto_trigger: false,
       backend_option: Some(option),
@@ -664,6 +679,7 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
 {
   const ACCESS_KEY: &str = "synthetic-manager-access-key";
   let temp = tempfile::tempdir()?;
+  let guard = ProcessGroupGuard::new();
   let home = temp.path().join("manager-adapter-home");
   std::fs::create_dir_all(&home)?;
   std::fs::write(home.join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))?;
@@ -673,10 +689,11 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
   let release_first = home.join("release-first");
   let mut script = "printf '%s\\n' \"$CHARLIEBOT_RUN_TOKEN\" >> \"$CHARLIEBOT_HOME/run-tokens\"\n".to_string();
   script.push_str(&format!(
-    "if [ ! -e '{}' ]; then touch '{}'; while [ ! -e '{}' ]; do /bin/sleep 0.01; done; else touch '{}'; fi\n",
+    "if [ ! -e '{}' ]; then touch '{}'; while [ ! -e '{}' ] && [ -d '{}' ]; do /bin/sleep 0.01; done; else touch '{}'; fi\n",
     first_started.display(),
     first_started.display(),
     release_first.display(),
+    temp.path().display(),
     second_started.display(),
   ));
   script.push_str(&scripted_process(
@@ -737,7 +754,7 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
   .context("first manager child did not reach its gate")?;
   let launched =
     features.store.read_run_sync(&meta.id, &first_run_id)?.context("first run record disappeared after launch")?;
-  assert!(launched.pid.is_some());
+  guard.track(launched.pid.context("first manager child did not persist a pid")?);
   assert!(launched.pid_start.is_some());
   let token = std::fs::read_to_string(home.join("run-tokens"))?;
   let token = token.lines().next().context("manager child did not receive a run token")?;
@@ -795,6 +812,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
   const ITERATIONS: usize = 50;
 
   let temp = tempfile::tempdir()?;
+  let guard = ProcessGroupGuard::new();
   let home = temp.path().join("home");
   std::fs::create_dir_all(&home)?;
   std::fs::write(home.join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))?;
@@ -804,7 +822,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
   std::fs::create_dir_all(&fake_bin)?;
   let fake_agent = fake_bin.join("fake-agent");
   let script = format!(
-    "counter=0; if [ -f '{0}/count' ]; then counter=$(/bin/cat '{0}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{0}/count'; touch '{0}/started-'\"$counter\"; printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"synthetic-native-session\"}}'; while [ ! -e '{0}/release-'\"$counter\" ]; do /bin/sleep 0.01; done",
+    "counter=0; if [ -f '{0}/count' ]; then counter=$(/bin/cat '{0}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{0}/count'; touch '{0}/started-'\"$counter\"; printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"synthetic-native-session\"}}'; while [ ! -e '{0}/release-'\"$counter\" ] && [ -d '{0}' ]; do /bin/sleep 0.01; done",
     control_dir.display()
   );
   std::fs::write(&fake_agent, script)?;
@@ -859,10 +877,11 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
     })
     .await
     .with_context(|| format!("fake agent {iteration} did not reach its gate"))?;
-    assert!(
-      features.store.read_run_sync(SESSION_ID, &run_id)?.is_some_and(|run| run.pid.is_some()),
-      "iteration {iteration} did not persist the child pid before its gate"
-    );
+    let run = features
+      .store
+      .read_run_sync(SESSION_ID, &run_id)?
+      .context("iteration {iteration} lost its run record before its gate")?;
+    guard.track(run.pid.context("iteration {iteration} did not persist the child pid before its gate")?);
 
     let (uri, body) = if chat_cancel {
       (format!("/api/chat/{SESSION_ID}/cancel"), String::new())
@@ -909,6 +928,30 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
     })
     .await
     .with_context(|| format!("manager run {run_id} did not finish with the required event order"))??;
+  }
+
+  let tracked = guard.tracked();
+  drop(guard);
+  tokio::time::timeout(Duration::from_secs(10), async {
+    loop {
+      let all_gone = tracked.iter().all(|group| {
+        let alive = unsafe { libc::kill(-*group, 0) };
+        alive == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+      });
+      if all_gone {
+        break anyhow::Ok(());
+      }
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+  })
+  .await
+  .context("fake agents outlived the guard")??;
+  for group in tracked {
+    let alive = unsafe { libc::kill(-group, 0) };
+    assert!(
+      alive == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+      "process group {group} still has a member after its run finished"
+    );
   }
 
   features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;
@@ -1239,19 +1282,23 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
 #[tokio::test]
 async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_alive() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
+  let guard = Arc::new(ProcessGroupGuard::new());
+  let spawn_guard = Arc::clone(&guard);
   let registry = registry();
   let home = temp.path().join("translate-error-home");
   let gate = home.join("release-translation-error");
   let gate_text = gate.to_str().context("synthetic gate path is not UTF-8")?;
+  let home_text = home.to_str().context("synthetic home path is not UTF-8")?;
   let thinking = json!({"type":"thinking","content":"private thought"});
   let result = json!({"type":"result","usage":{"input_tokens":1,"output_tokens":1}});
   let translation_error = json!({"type":"translate_error"});
   let first_script = format!(
-    "cat <<'CB_EVENTS'\n{}\n{}\nCB_EVENTS\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\ncat <<'CB_FAILURE'\n{}\nCB_FAILURE\n",
+    "cat <<'CB_EVENTS'\n{}\n{}\nCB_EVENTS\nwhile [ ! -e '{gate}' ] && [ -d '{home}' ]; do /bin/sleep 0.01; done\ncat <<'CB_FAILURE'\n{}\nCB_FAILURE\n",
     serde_json::to_string(&thinking)?,
     serde_json::to_string(&result)?,
-    gate_text,
     serde_json::to_string(&translation_error)?,
+    gate = gate_text,
+    home = home_text,
   );
   let assistant = json!({"type":"assistant","message":{"content":[{"type":"text","text":"next turn answer"}]}});
   let next_result = json!({"type":"result","subtype":"success"});
@@ -1264,13 +1311,22 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
   save_session_metadata(&features, &registry, &meta)?;
   let queue = features.startup.require::<master_queue::MasterQueue>()?;
   let unread = Arc::new(Mutex::new(Vec::new()));
-  let first = tokio::spawn(run_turn(
+  let callback_guard = Arc::clone(&spawn_guard);
+  let first_spawn: TaskSpawnCallback = Arc::new(move |pid, _start| {
+    let spawn_guard = Arc::clone(&callback_guard);
+    Box::pin(async move {
+      spawn_guard.track(pid);
+      Ok(())
+    })
+  });
+  let first = tokio::spawn(run_turn_with_spawn(
     Arc::clone(&queue),
     Arc::clone(&cfg),
     meta.clone(),
     callbacks(Arc::clone(&features), Arc::clone(&unread)),
     "failing-input".to_string(),
     failing_option,
+    first_spawn,
   ));
   tokio::time::timeout(std::time::Duration::from_secs(2), async {
     loop {

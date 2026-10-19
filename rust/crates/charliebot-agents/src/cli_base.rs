@@ -9,6 +9,8 @@ use anyhow::{Context, bail};
 use charliebot_registry::backend::Env;
 use serde_json::{Map, Value};
 
+use crate::one_shot::frame_system_prompt;
+
 /// Local addresses that bypass an injected proxy (`base.LOCAL_NO_PROXY_ENTRIES`).
 pub const LOCAL_NO_PROXY_ENTRIES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
@@ -109,6 +111,14 @@ pub fn apply_proxy_env(env: &mut Env, proxy_url: &str) {
   env.insert("HTTPS_PROXY".to_string(), proxy_url.to_string());
   let no_proxy = merge_local_no_proxy(env.get("NO_PROXY").map_or("", String::as_str));
   env.insert("NO_PROXY".to_string(), no_proxy);
+}
+
+/// The prompt with the instructions framed in, as `_effective_prompt` does for a backend with no system-prompt flag.
+pub fn framed_prompt(instructions_content: Option<&str>, prompt: &str) -> String {
+  match instructions_content {
+    Some(content) => frame_system_prompt(content, prompt),
+    None => prompt.to_string(),
+  }
 }
 
 /// A copy of `env` without the Google API-key variables (`base.strip_google_api_keys`). A Google CLI that inherits one

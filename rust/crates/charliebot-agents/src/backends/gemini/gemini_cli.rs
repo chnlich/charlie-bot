@@ -5,8 +5,7 @@ use std::path::Path;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 
 use super::translate::GeminiTranslator;
-use crate::cli_base::strip_google_api_keys;
-use crate::one_shot::frame_system_prompt;
+use crate::cli_base::{framed_prompt, strip_google_api_keys};
 
 /// The `gemini` stream-json backend of one launch.
 pub struct GeminiBackend {
@@ -29,23 +28,15 @@ impl GeminiBackend {
     }
   }
 
-  /// The prompt with the instructions framed in. Gemini has no system-prompt flag, so the framing rides the prompt.
-  fn effective_prompt(&self, prompt: &str) -> String {
-    match &self.instructions_content {
-      Some(content) => frame_system_prompt(content, prompt),
-      None => prompt.to_string(),
-    }
-  }
-
   /// The stream-json command. The prompt follows `-p` as one argv element, so a prompt that begins with a dash stays
-  /// a prompt.
+  /// a prompt. Gemini has no system-prompt flag, so the instructions are framed into the prompt.
   fn argv(&self, prompt: &str) -> Vec<String> {
     let mut command = vec![
       self.gemini_bin.clone(),
       "-m".to_string(),
       self.model.clone(),
       "-p".to_string(),
-      self.effective_prompt(prompt),
+      framed_prompt(self.instructions_content.as_deref(), prompt),
       "-o".to_string(),
       "stream-json".to_string(),
       "-y".to_string(),

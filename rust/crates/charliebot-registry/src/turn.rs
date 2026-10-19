@@ -38,6 +38,10 @@ pub type EventRenderer = fn(&Value) -> Value;
 
 /// One package's part in a master turn. Every step defaults to adding nothing.
 pub trait TurnContribution: Send + Sync {
+  /// The Python class this contribution ports, named as `type(contribution).__name__` names it. The store names the
+  /// contribution's after-turn task by it: `after-turn-<class name>-<session id>`.
+  fn class_name(&self) -> &'static str;
+
   /// Segments for the managed instructions of a run of `kind`. They follow the model overlay segments and precede
   /// the local rule segments, in registration order. A contribution reads its prompt docs through `repo`.
   fn instruction_segments(

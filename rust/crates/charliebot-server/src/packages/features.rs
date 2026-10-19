@@ -24,6 +24,10 @@ fn render_scheduled_run_skipped(event: &Value) -> Value {
 }
 
 impl TurnContribution for CronTurnContribution {
+  fn class_name(&self) -> &'static str {
+    "CronTurnContribution"
+  }
+
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     vec![(charliebot_core::event_types::SCHEDULED_RUN_SKIPPED, render_scheduled_run_skipped)]
   }

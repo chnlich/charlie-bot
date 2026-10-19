@@ -26,6 +26,10 @@ const DELIVERY_FULL: &str = "full";
 pub struct WebReplyTurnContribution;
 
 impl TurnContribution for WebReplyTurnContribution {
+  fn class_name(&self) -> &'static str {
+    "WebReplyTurnContribution"
+  }
+
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,

@@ -17,6 +17,10 @@ pub fn render_login_required(_event: &Value) -> Value {
 }
 
 impl TurnContribution for ClaudeCodeTurnContribution {
+  fn class_name(&self) -> &'static str {
+    "ClaudeCodeTurnContribution"
+  }
+
   fn event_renderers(&self) -> Vec<(&'static str, charliebot_registry::turn::EventRenderer)> {
     vec![(CLAUDE_ACCOUNT_LOGIN_REQUIRED, render_login_required)]
   }

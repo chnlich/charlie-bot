@@ -101,6 +101,15 @@ SUBPROCESS_GIT_SHA_TIMEOUT = 2.0  # seconds
 HTTP_MODEL_DOWNLOAD_TIMEOUT = 60  # seconds
 
 # ---------------------------------------------------------------------------
+# Router's Jev choice (src/features/router/routing.py)
+# ---------------------------------------------------------------------------
+
+# One HTTP attempt to Jev. The caller bounds a whole routing call at 25 s, so one
+# attempt, the rate-limit wait and one retry (5 + 10 + 5) must fit inside it.
+ROUTER_JEV_REQUEST_TIMEOUT = 5.0  # seconds — one attempt
+ROUTER_JEV_RATE_LIMIT_WAIT = 10.0  # seconds — pause before the single retry after HTTP 429
+
+# ---------------------------------------------------------------------------
 # CLI detached-launch ssh start and kill (ssh + setsid), src/runtime/cli/launcher.py
 # ---------------------------------------------------------------------------
 

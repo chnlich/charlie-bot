@@ -20,12 +20,14 @@ pub fn make_master_done_event(exit_code: i32, still_thinking: bool) -> Value {
   })
 }
 
+/// The result event of one call. `cost` is the JSON value of `total_cost_usd`: a float, null, or an integer such as the
+/// `0` that Python's default carries, which a float would serialize as `0.0`.
 pub fn make_result_event(
   input_tokens: i64,
   output_tokens: i64,
   cache_read: i64,
   cache_creation: i64,
-  cost: Option<f64>,
+  cost: Value,
   context_snapshot: Option<Value>,
 ) -> Value {
   let mut event = Map::from_iter([
@@ -40,7 +42,7 @@ pub fn make_result_event(
         event_types::USAGE_CACHE_CREATION_INPUT_TOKENS: cache_creation
       }),
     ),
-    (event_types::RESULT_TOTAL_COST_USD.to_string(), json!(cost)),
+    (event_types::RESULT_TOTAL_COST_USD.to_string(), cost),
   ]);
   if let Some(snapshot) = context_snapshot {
     event.insert("context_snapshot".to_string(), snapshot);

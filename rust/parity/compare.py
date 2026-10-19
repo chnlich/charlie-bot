@@ -452,6 +452,6 @@ def status_and_shape_diff(
     return lines
   left_object = isinstance(left_body, dict) and "detail" in left_body
   right_object = isinstance(right_body, dict) and "detail" in right_body
-  if left_object != right_object:
-    lines.append("body: one side is a JSON object with a detail key, the other side is not")
+  if not (left_object and right_object):
+    lines.append("body: both sides must be JSON objects with a detail key")
   return lines

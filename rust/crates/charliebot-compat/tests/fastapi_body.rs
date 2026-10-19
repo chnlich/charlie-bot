@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::validation::Bound;
 use reqwest::Client;
@@ -55,6 +55,42 @@ const ATTACHMENTS_FIELDS: &[Field] =
     .min_length(2)
     .max_length(3)];
 const ATTACHMENTS: BodyModel = BodyModel::required(ATTACHMENTS_FIELDS);
+const LOCAL_PID_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(&["local_pid"])),
+  Field::required("pid", FieldType::Integer),
+  Field::optional("exit_file", FieldType::NullableString),
+  Field::optional("log", FieldType::NullableString),
+];
+const LOCAL_PID: BodyModel = BodyModel::optional(LOCAL_PID_FIELDS);
+const REMOTE_PID_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(&["remote_pid"])),
+  Field::required("host", FieldType::String),
+  Field::required("pid", FieldType::Integer),
+  Field::optional("exit_file", FieldType::NullableString),
+  Field::optional("log", FieldType::NullableString),
+];
+const REMOTE_PID: BodyModel = BodyModel::optional(REMOTE_PID_FIELDS);
+const SLURM_JOB_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(&["slurm_job"])),
+  Field::optional("host", FieldType::NullableString),
+  Field::required("job_id", FieldType::Integer),
+];
+const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
+const WATCH_TARGETS: &[TaggedVariant] = &[
+  TaggedVariant { tag: "local_pid", class_name: "LocalPid", model: &LOCAL_PID },
+  TaggedVariant { tag: "remote_pid", class_name: "RemotePid", model: &REMOTE_PID },
+  TaggedVariant { tag: "slurm_job", class_name: "SlurmJob", model: &SLURM_JOB },
+];
+const TRIGGER_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("delay_seconds", FieldType::Integer),
+  Field::required("message", FieldType::String).max_length(200),
+  Field::optional(
+    "watch_targets",
+    FieldType::NullableTaggedUnionList { discriminator: "kind", variants: WATCH_TARGETS },
+  ),
+];
+const TRIGGER: BodyModel = BodyModel::required(TRIGGER_FIELDS).forbid_extra();
 
 struct Case {
   name: &'static str,
@@ -143,7 +179,8 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
       .route("/items/{item_id}", post(read_item))
       .route("/bounds/{item_id}", post(read_bounded))
       .route("/messages/{item_id}", post(read_message))
-      .route("/attachments/{item_id}", post(read_attachments));
+      .route("/attachments/{item_id}", post(read_attachments))
+      .route("/triggers/{item_id}", post(read_trigger));
     axum::serve(rust_listener, router).await.expect("the axum test app serves requests");
   });
 
@@ -160,6 +197,9 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
   let attachments = attachment_corpus();
   assert_eq!(attachments.len(), 20);
   compare_corpus(&client, python_address, rust_address, "/attachments", &attachments).await;
+  let triggers = trigger_corpus();
+  assert_eq!(triggers.len(), 32);
+  compare_corpus(&client, python_address, rust_address, "/triggers", &triggers).await;
 
   rust_server.abort();
   match rust_server.await {
@@ -184,6 +224,10 @@ async fn read_message(request: Request<Body>) -> Response {
 
 async fn read_attachments(request: Request<Body>) -> Response {
   read_model(request, &ATTACHMENTS).await
+}
+
+async fn read_trigger(request: Request<Body>) -> Response {
+  read_model(request, &TRIGGER).await
 }
 
 async fn read_model(request: Request<Body>, model: &BodyModel) -> Response {
@@ -594,6 +638,108 @@ fn attachments_value() -> Value {
 
 fn attachments_with(changes: &[(&str, Value)]) -> Value {
   with_changes(attachments_value(), changes)
+}
+
+/// The trigger model's corpus, sent to `/triggers`: one valid item of each variant, null and empty lists, each non-list
+/// value and each kind of bad item, the tag errors (missing, unknown, not a string), a member's own field errors, and
+/// the errors of a wrong message or a second bad item beside another error.
+fn trigger_corpus() -> Vec<Case> {
+  let long_message = "x".repeat(201);
+  vec![
+    json_ok_case("the valid trigger without watch targets", trigger_value()),
+    json_ok_case("a local_pid item", trigger_with(&[("watch_targets", json!([{"kind": "local_pid", "pid": 10}]))])),
+    json_ok_case(
+      "a remote_pid item with its optional fields",
+      trigger_with(&[(
+        "watch_targets",
+        json!([{"kind": "remote_pid", "host": "h1", "pid": 11, "exit_file": "/x", "log": "/y"}]),
+      )]),
+    ),
+    json_ok_case(
+      "a slurm_job item with a null host",
+      trigger_with(&[("watch_targets", json!([{"kind": "slurm_job", "host": null, "job_id": 12}]))]),
+    ),
+    json_ok_case(
+      "a slurm_job item without a host",
+      trigger_with(&[("watch_targets", json!([{"kind": "slurm_job", "job_id": 12}]))]),
+    ),
+    json_ok_case(
+      "one item of each variant",
+      trigger_with(&[(
+        "watch_targets",
+        json!([
+          {"kind": "local_pid", "pid": 1},
+          {"kind": "remote_pid", "host": "h1", "pid": 2},
+          {"kind": "slurm_job", "job_id": 3},
+        ]),
+      )]),
+    ),
+    json_ok_case("watch_targets null", trigger_with(&[("watch_targets", Value::Null)])),
+    json_ok_case("watch_targets empty", trigger_with(&[("watch_targets", json!([]))])),
+    json_ok_case(
+      "an extra key in an item is ignored",
+      trigger_with(&[("watch_targets", json!([{"kind": "local_pid", "pid": 1, "zzz": 2}]))]),
+    ),
+    json_value_case("watch_targets as a string", trigger_with(&[("watch_targets", json!("x"))])),
+    json_value_case("watch_targets as a number", trigger_with(&[("watch_targets", json!(5))])),
+    json_value_case("watch_targets as an object", trigger_with(&[("watch_targets", json!({"kind": "local_pid"}))])),
+    json_value_case("an item missing its kind", trigger_with(&[("watch_targets", json!([{"pid": 10}]))])),
+    json_value_case("an item with an unknown kind", trigger_with(&[("watch_targets", json!([{"kind": "pidfile"}]))])),
+    json_value_case("an item with kind unknown", trigger_with(&[("watch_targets", json!([{"kind": "unknown"}]))])),
+    json_value_case("an item with kind as a number", trigger_with(&[("watch_targets", json!([{"kind": 5}]))])),
+    json_value_case("an item with kind null", trigger_with(&[("watch_targets", json!([{"kind": null}]))])),
+    json_value_case(
+      "a local_pid with a string pid",
+      trigger_with(&[("watch_targets", json!([{"kind": "local_pid", "pid": "x"}]))]),
+    ),
+    json_value_case("a local_pid without a pid", trigger_with(&[("watch_targets", json!([{"kind": "local_pid"}]))])),
+    json_value_case(
+      "a remote_pid with a number host",
+      trigger_with(&[("watch_targets", json!([{"kind": "remote_pid", "host": 3, "pid": 1}]))]),
+    ),
+    json_value_case(
+      "a remote_pid with neither host nor pid",
+      trigger_with(&[("watch_targets", json!([{"kind": "remote_pid"}]))]),
+    ),
+    json_value_case(
+      "a slurm_job with a fractional job_id",
+      trigger_with(&[("watch_targets", json!([{"kind": "slurm_job", "job_id": 1.5}]))]),
+    ),
+    json_value_case(
+      "a local_pid with two field errors",
+      trigger_with(&[("watch_targets", json!([{"kind": "local_pid", "pid": "x", "log": 3}]))]),
+    ),
+    json_value_case("an item that is a string", trigger_with(&[("watch_targets", json!(["abc"]))])),
+    json_value_case("an item that is a number", trigger_with(&[("watch_targets", json!([7]))])),
+    json_value_case("an item that is a list", trigger_with(&[("watch_targets", json!([["local_pid", 1]]))])),
+    json_value_case("an item that is null", trigger_with(&[("watch_targets", json!([null]))])),
+    json_value_case(
+      "a wrong message with a bad item",
+      trigger_with(&[("message", json!(5)), ("watch_targets", json!([{"pid": 1}]))]),
+    ),
+    json_value_case("a message over its maximum length", trigger_with(&[("message", json!(long_message))])),
+    json_value_case(
+      "two bad items",
+      trigger_with(&[("watch_targets", json!([{"kind": "pidfile"}, {"kind": "local_pid"}]))]),
+    ),
+    json_value_case(
+      "a valid item beside a slurm_job without its job_id",
+      trigger_with(&[("watch_targets", json!([{"kind": "local_pid", "pid": 1}, {"kind": "slurm_job"}]))]),
+    ),
+    json_value_case(
+      "an extra key after a bad item",
+      with_changes(trigger_value(), &[("watch_targets", json!([{"pid": 1}])), ("zzz", json!(1))]),
+    ),
+  ]
+}
+
+/// The trigger model's valid body without `watch_targets`: the three required fields.
+fn trigger_value() -> Value {
+  json!({"session_id": "s1", "delay_seconds": 5, "message": "hi"})
+}
+
+fn trigger_with(changes: &[(&str, Value)]) -> Value {
+  with_changes(trigger_value(), changes)
 }
 
 /// `body` with each `(field, value)` set, in the order given. A name the body does not declare is an extra key.

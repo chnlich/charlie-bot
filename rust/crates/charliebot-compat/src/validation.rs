@@ -108,6 +108,17 @@ pub enum Kind {
   ValueError {
     message: String,
   },
+  /// `union_tag_not_found`: a tagged-union item has no value under its discriminator key.
+  UnionTagNotFound {
+    discriminator: &'static str,
+  },
+  /// `union_tag_invalid`: the item's discriminator value names no variant. `tag` is the value's Python `str()`, and
+  /// `expected_tags` lists the union's tags in declaration order.
+  UnionTagInvalid {
+    discriminator: &'static str,
+    tag: String,
+    expected_tags: Vec<&'static str>,
+  },
 }
 
 impl Kind {
@@ -141,6 +152,8 @@ impl Kind {
       Kind::ExtraForbidden => "extra_forbidden",
       Kind::JsonInvalid { .. } => "json_invalid",
       Kind::ValueError { .. } => "value_error",
+      Kind::UnionTagNotFound { .. } => "union_tag_not_found",
+      Kind::UnionTagInvalid { .. } => "union_tag_invalid",
     }
   }
 
@@ -181,6 +194,14 @@ impl Kind {
       Kind::ExtraForbidden => "Extra inputs are not permitted".to_string(),
       Kind::JsonInvalid { .. } => "JSON decode error".to_string(),
       Kind::ValueError { message } => format!("Value error, {message}"),
+      Kind::UnionTagNotFound { discriminator } => {
+        format!("Unable to extract tag using discriminator {}", pyfmt::str_repr(discriminator))
+      }
+      Kind::UnionTagInvalid { discriminator, tag, expected_tags } => format!(
+        "Input tag '{tag}' found using {} does not match any of the expected tags: {}",
+        pyfmt::str_repr(discriminator),
+        quoted_list(expected_tags)
+      ),
     }
   }
 
@@ -204,6 +225,12 @@ impl Kind {
       Kind::ModelType { class_name } => Some(json!({"class_name": class_name})),
       // FastAPI's jsonable_encoder writes the ValueError object as an empty mapping (FastAPI 0.135.2).
       Kind::ValueError { .. } => Some(json!({"error": {}})),
+      Kind::UnionTagNotFound { discriminator } => Some(json!({"discriminator": pyfmt::str_repr(discriminator)})),
+      Kind::UnionTagInvalid { discriminator, tag, expected_tags } => Some(json!({
+        "discriminator": pyfmt::str_repr(discriminator),
+        "tag": tag,
+        "expected_tags": quoted_list(expected_tags),
+      })),
       _ => None,
     }
   }
@@ -215,6 +242,11 @@ fn characters(count: usize) -> &'static str {
 
 fn items(count: usize) -> &'static str {
   if count == 1 { "item" } else { "items" }
+}
+
+/// pydantic's expected-tags text: each tag repr-quoted, joined by `, ` with no `or`.
+fn quoted_list(choices: &[&str]) -> String {
+  choices.iter().map(|choice| pyfmt::str_repr(choice)).collect::<Vec<_>>().join(", ")
 }
 
 /// pydantic's expected-choices text: `'a'`, `'a' or 'b'`, `'a', 'b' or 'c'`.

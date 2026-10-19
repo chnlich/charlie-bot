@@ -45,7 +45,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.backends.charlie_code", backends::charlie_code), // stub: src.backends.charlie_code
   ("src.backends.claude_code", backends::claude_code), // stub: src.backends.claude_code
   ("src.backends.codex", charliebot_agents::backends::codex::register),
-  ("src.backends.gemini", backends::gemini), // stub: src.backends.gemini
+  ("src.backends.gemini", charliebot_agents::backends::gemini::register),
   ("src.backends.kimi", charliebot_agents::backends::kimi::register),
   ("src.backends.opencode", backends::opencode), // stub: src.backends.opencode
   ("src.features.files", charliebot_files::register),

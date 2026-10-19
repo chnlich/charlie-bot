@@ -75,13 +75,6 @@ pub fn claude_code(registry: &mut Registry) -> Result<(), RegistryError> {
   charliebot_agents::backends::claude_code::register(registry)
 }
 
-/// `src/backends/gemini`: the type, then its two retired secret keys.
-pub fn gemini(registry: &mut Registry) -> Result<(), RegistryError> {
-  register_type(registry, "gemini", plain(ResumeStyle::NativeId, true), None, false)?;
-  registry
-    .legacy_keys(&[("credentials: gemini_api_key", "gemini.api_key"), ("credentials: gemini_model", "gemini.model")])
-}
-
 pub fn opencode(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "opencode", plain(ResumeStyle::NativeId, false), None, false)
 }

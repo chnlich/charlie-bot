@@ -73,7 +73,7 @@ fn query_value(query: &str, key: &str) -> Option<String> {
   url::form_urlencoded::parse(query.as_bytes())
     .filter(|(name, _)| name == key)
     .map(|(_, value)| value.into_owned())
-    .next()
+    .last()
 }
 
 fn resolve_target(sessions_dir: &Path, path: &str, diff_param: Option<&str>) -> ViewResult<Option<(PathBuf, String)>> {
@@ -295,6 +295,13 @@ mod tests {
   #[test]
   fn session_ids_use_python_json_ascii_escaping() {
     assert_eq!(python_json_string("计划😀"), r#""\u8ba1\u5212\ud83d\ude00""#);
+  }
+
+  #[test]
+  fn a_repeated_diff_parameter_takes_its_last_value_like_starlette() {
+    let parts = request("/?diff=a&diff=b");
+    let query = parts.uri.query().expect("the request has a query");
+    assert_eq!(query_value(query, "diff").as_deref(), Some("b"));
   }
 
   #[tokio::test]

@@ -4,20 +4,38 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{FromRequestParts, Path, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
+use charliebot_compat::validation::{self, FieldError, Kind, Loc};
+
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
+use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{self, RunOutcomeKind};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
+use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
 use crate::task_sessions;
+
+struct RequiredTaskSession(SessionMetadata);
+
+impl FromRequestParts<Arc<FeatureContext>> for RequiredTaskSession {
+  type Rejection = Response;
+
+  async fn from_request_parts(parts: &mut Parts, features: &Arc<FeatureContext>) -> Result<Self, Self::Rejection> {
+    let Path(session_id) =
+      Path::<String>::from_request_parts(parts, features).await.map_err(IntoResponse::into_response)?;
+    features.store.require_session(&session_id).await.map(Self).map_err(task_http_error)
+  }
+}
 
 /// Build the four task orchestration routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
@@ -26,6 +44,10 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/chat/{session_id}/cancel", post_only(cancel_chat))
     .route("/api/sessions/{session_id}/retry", post_only(retry_run))
     .route("/api/sessions/{session_id}/runs/{run_id}/cancel", post_only(cancel_run))
+    .route("/api/sessions/{session_id}/complete", post_only(complete_task))
+    .route("/api/sessions/{session_id}/cancel", post_only(cancel_task))
+    .route("/api/sessions/{session_id}/task-inputs/acknowledge", post_only(acknowledge_task_inputs))
+    .route("/api/sessions/{session_id}/unarchive", post_only(unarchive_task))
     .with_state(Arc::clone(features))
 }
 
@@ -36,6 +58,8 @@ pub fn matches(path: &str) -> bool {
     ["", "api", "chat", session_id, "message" | "cancel"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "retry"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
+    ["", "api", "sessions", session_id, "complete" | "cancel" | "unarchive"] => !session_id.is_empty(),
+    ["", "api", "sessions", session_id, "task-inputs", "acknowledge"] => !session_id.is_empty(),
     _ => false,
   }
 }
@@ -272,6 +296,191 @@ async fn cancel_run(
   )
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompleteTaskRequest {
+  request_id: String,
+  #[serde(default)]
+  summary: String,
+  #[serde(default)]
+  result_refs: Vec<String>,
+  #[serde(default)]
+  run_ids: Vec<String>,
+}
+
+async fn complete_task(
+  State(features): State<Arc<FeatureContext>>,
+  RequiredTaskSession(meta): RequiredTaskSession,
+  caller: CallerIdentity,
+  Json(request): Json<CompleteTaskRequest>,
+) -> Response {
+  let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
+    return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
+  };
+  let evidence = CompletionEvidence {
+    summary: request.summary,
+    result_refs: request.result_refs,
+    run_ids: request.run_ids,
+    ..CompletionEvidence::default()
+  };
+  let (status, payload) = match completion.complete_task(&meta.id, &request.request_id, &evidence, &caller).await {
+    Ok(result) => result,
+    Err(error) => return task_http_error(error),
+  };
+  if status == 202 {
+    return responses::json(StatusCode::ACCEPTED, &payload);
+  }
+  let detail = match features.store.session_detail(&meta.id) {
+    Ok(detail) => detail,
+    Err(error) => return task_http_error(error),
+  };
+  responses::json(StatusCode::OK, &detail)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelTaskRequest {
+  request_id: String,
+  reason: String,
+}
+
+async fn cancel_task(
+  State(features): State<Arc<FeatureContext>>,
+  RequiredTaskSession(meta): RequiredTaskSession,
+  caller: CallerIdentity,
+  Json(request): Json<CancelTaskRequest>,
+) -> Response {
+  let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
+    return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
+  };
+  if let Err(error) = completion.cancel_task(&meta.id, &request.request_id, &request.reason, &caller).await {
+    return task_http_error(error);
+  }
+  match features.store.session_detail(&meta.id) {
+    Ok(detail) => responses::json(StatusCode::OK, &detail),
+    Err(error) => task_http_error(error),
+  }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcknowledgeTaskInputsRequest {
+  request_id: String,
+  input_ids: Vec<String>,
+  #[serde(default)]
+  note: String,
+}
+
+fn acknowledge_request_error(field: &str, input: Value, kind: Kind) -> FieldError {
+  FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(field.to_string())], input, kind }
+}
+
+fn parse_acknowledge_task_inputs_request(body: Value) -> Result<AcknowledgeTaskInputsRequest, Vec<FieldError>> {
+  let Some(fields) = body.as_object() else {
+    return Err(vec![FieldError {
+      loc: vec![Loc::Field("body".to_string())],
+      input: body,
+      kind: Kind::ModelAttributesType,
+    }]);
+  };
+
+  let mut errors = Vec::new();
+  let request_id = match fields.get("request_id") {
+    Some(Value::String(value)) => Some(value.clone()),
+    Some(value) => {
+      errors.push(acknowledge_request_error("request_id", value.clone(), Kind::StringType));
+      None
+    }
+    None => {
+      errors.push(acknowledge_request_error("request_id", Value::Null, Kind::Missing));
+      None
+    }
+  };
+  let input_ids = match fields.get("input_ids") {
+    Some(Value::Array(items)) => {
+      let mut input_ids = Vec::with_capacity(items.len());
+      for (index, item) in items.iter().enumerate() {
+        match item.as_str() {
+          Some(value) => input_ids.push(value.to_string()),
+          None => errors.push(FieldError {
+            loc: vec![Loc::Field("body".to_string()), Loc::Field("input_ids".to_string()), Loc::Index(index)],
+            input: item.clone(),
+            kind: Kind::StringType,
+          }),
+        }
+      }
+      Some(input_ids)
+    }
+    Some(value) => {
+      errors.push(acknowledge_request_error("input_ids", value.clone(), Kind::ListType));
+      None
+    }
+    None => {
+      errors.push(acknowledge_request_error("input_ids", Value::Null, Kind::Missing));
+      None
+    }
+  };
+  let note = match fields.get("note") {
+    None => Some(String::new()),
+    Some(Value::String(value)) => Some(value.clone()),
+    Some(value) => {
+      errors.push(acknowledge_request_error("note", value.clone(), Kind::StringType));
+      None
+    }
+  };
+  for (field, value) in fields {
+    if !matches!(field.as_str(), "request_id" | "input_ids" | "note") {
+      errors.push(acknowledge_request_error(field, value.clone(), Kind::ExtraForbidden));
+    }
+  }
+  if !errors.is_empty() {
+    return Err(errors);
+  }
+  Ok(AcknowledgeTaskInputsRequest {
+    request_id: request_id.expect("valid request_id is present"),
+    input_ids: input_ids.expect("valid input_ids are present"),
+    note: note.expect("valid note is present"),
+  })
+}
+
+async fn acknowledge_task_inputs(
+  State(features): State<Arc<FeatureContext>>,
+  RequiredTaskSession(meta): RequiredTaskSession,
+  caller: CallerIdentity,
+  Json(body): Json<Value>,
+) -> Response {
+  let request = match parse_acknowledge_task_inputs_request(body) {
+    Ok(request) => request,
+    Err(errors) => return validation::response(&errors),
+  };
+  let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
+    return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
+  };
+  match completion.acknowledge_inputs(&meta.id, &request.request_id, &request.input_ids, &request.note, &caller).await {
+    Ok(response) => responses::json(StatusCode::OK, &response),
+    Err(error) => task_http_error(error),
+  }
+}
+
+async fn unarchive_task(
+  State(features): State<Arc<FeatureContext>>,
+  RequiredTaskSession(meta): RequiredTaskSession,
+  caller: CallerIdentity,
+) -> Response {
+  if !caller.is_operator() {
+    return responses::json(
+      StatusCode::FORBIDDEN,
+      &json!({ "detail": "unarchiving a task requires operator credentials" }),
+    );
+  }
+  let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
+    return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
+  };
+  match completion.restore_task(&meta.id, &Uuid::new_v4().to_string(), "sidebar unarchive", &caller).await {
+    Ok(response) => responses::json(StatusCode::OK, &json!({ "restored": response["restored"] })),
+    Err(error) => task_http_error(error),
+  }
+}
 #[cfg(test)]
 mod tests {
   use std::sync::Arc;
@@ -340,6 +549,10 @@ mod tests {
       ("/api/chat/synthetic-session/cancel", ""),
       ("/api/sessions/synthetic-session/retry", r#"{"request_id":"synthetic-request","run_id":"synthetic-run"}"#),
       ("/api/sessions/synthetic-session/runs/synthetic-run/cancel", r#"{"request_id":"synthetic-request"}"#),
+      ("/api/sessions/synthetic-session/complete", r#"{"request_id":"synthetic-request"}"#),
+      ("/api/sessions/synthetic-session/cancel", r#"{"request_id":"synthetic-request","reason":"synthetic"}"#),
+      ("/api/sessions/synthetic-session/task-inputs/acknowledge", r#"{"request_id":"synthetic-request","input_ids":[]}"#),
+      ("/api/sessions/synthetic-session/unarchive", "{}"),
     ];
 
     for (path, post_body) in route_cases {

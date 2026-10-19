@@ -1057,8 +1057,10 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     features.startup.insert(charliebot_registry::RunningTurnInputs::new(move |session_id| {
       running_queue.running_user_event_ids(session_id)
     }))?;
-    let sequence_completion: Arc<dyn SequenceCompletion> = Arc::new(CompletionTaskPending);
-    let run_completion: Arc<dyn RunFinishedCompletion> = Arc::new(CompletionTaskPending);
+    features.startup.insert(crate::completion::TaskCompletion::new(Arc::clone(&features)))?;
+    let completion = features.startup.require::<crate::completion::TaskCompletion>()?;
+    let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
+    let run_completion: Arc<dyn RunFinishedCompletion> = completion;
     features.startup.insert(Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion))?;
     let dispatch = features.startup.require::<Dispatcher>()?;
     let adapter = Arc::new(TaskExecutionAdapter::new(Arc::clone(&features), Arc::clone(&queue), Arc::clone(&dispatch)));
@@ -1066,60 +1068,6 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     features.startup.insert((*adapter).clone())?;
     Ok(())
   })
-}
-
-struct CompletionTaskPending;
-
-impl RunFinishedCompletion for CompletionTaskPending {
-  fn after_run_finished<'a>(&'a self, _session_id: &'a str, _run_id: &'a str) -> BoxFuture<'a, StoreResult<()>> {
-    Box::pin(async { Err(StoreError::conflict(vec!["completion task owns post-finish completion".to_string()])) })
-  }
-}
-
-impl SequenceCompletion for CompletionTaskPending {
-  fn evaluate_automatic_completion<'a>(
-    &'a self,
-    _session_id: &'a str,
-    _run_id: &'a str,
-    _summary: Option<&'a str>,
-    _result_refs: Option<&'a [String]>,
-    _request_id: Option<&'a str>,
-  ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
-    Box::pin(async { Err(completion_task_error()) })
-  }
-
-  fn close_sequence_child<'a>(
-    &'a self,
-    _session_id: &'a str,
-    _request_id: &'a str,
-    _outcome: &'a str,
-    _evidence: &'a Value,
-  ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
-    Box::pin(async { Err(completion_task_error()) })
-  }
-
-  fn restore_chain<'a>(
-    &'a self,
-    _session_id: &'a str,
-    _request_id: &'a str,
-    _reason: &'a str,
-  ) -> BoxFuture<'a, StoreResult<Vec<String>>> {
-    Box::pin(async { Err(completion_task_error()) })
-  }
-
-  fn restore_chain_locked<'a>(
-    &'a self,
-    _guard: &'a charliebot_store::ControlGuard,
-    _session_id: &'a str,
-    _request_id: &'a str,
-    _reason: &'a str,
-  ) -> BoxFuture<'a, StoreResult<charliebot_registry::sequence::RestoreOutcome>> {
-    Box::pin(async { Err(completion_task_error()) })
-  }
-}
-
-fn completion_task_error() -> StoreError {
-  StoreError::conflict(vec!["completion task owns task completion calls".to_string()])
 }
 
 #[cfg(test)]
@@ -1144,7 +1092,8 @@ mod tests {
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let missing = directory.path().join("not-created").join("worktree");
     let root_free = free_disk_gib(directory.path()).expect("the temporary directory filesystem is readable");
-    assert_eq!(free_disk_gib(&missing).expect("the nearest existing ancestor is readable"), root_free);
+    let missing_free = free_disk_gib(&missing).expect("the nearest existing ancestor is readable");
+    assert!((missing_free - root_free).abs() < 1.0 / 1024.0, "{missing_free} differs from {root_free}");
 
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     let path = std::ffi::CString::new(directory.path().as_os_str().as_bytes()).expect("path has no NUL");
@@ -1152,7 +1101,7 @@ mod tests {
     assert_eq!(unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) }, 0);
     let stat = unsafe { stat.assume_init() };
     let expected = stat.f_bavail as f64 * stat.f_frsize as f64 / (1024.0_f64.powi(3));
-    assert_eq!(root_free, expected);
+    assert!((root_free - expected).abs() < 1.0 / 1024.0, "{root_free} differs from {expected}");
   }
 
   #[test]

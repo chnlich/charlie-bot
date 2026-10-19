@@ -50,6 +50,32 @@ shutdown and re-attachment into server lifespan.
 | `routes::routes`, `routes::matches`, and `register` | `src/runtime/api/chat.py:48-131`; `src/runtime/api/sessions.py:1689-1715`, `:1829-1857` |
 | `dispatch::input_event_type_for_caller`, `agent_provenance` | `src/runtime/session_dispatch.py:812-850` |
 | `Dispatcher::pending_inputs` input-id deduplication | `src/runtime/session_dispatch.py:374-379` |
+| `Dispatcher::deliver_child_report_locked_as_actor` | `src/runtime/task_completion.py:752` |
+
+## Task completion
+
+| Rust item | Python source |
+| --- | --- |
+| `completion::LandingEvidence` and its fields | `src/runtime/task_completion.py:128` |
+| `completion::CompletionEvidence` and its fields | `src/runtime/task_completion.py:143` |
+| `completion::SequenceCloseOutcome` | `src/runtime/task_completion.py:764` |
+| `completion::TaskCompletion` and `TaskCompletion::new` | `src/runtime/task_completion.py:168` |
+| `TaskCompletion::complete_task` | `src/runtime/task_completion.py:490` |
+| `TaskCompletion::cancel_task` | `src/runtime/task_completion.py:1176` |
+| `TaskCompletion::restore_task`, `restore_chain`, and `restore_chain_locked` | `src/runtime/task_completion.py:1264`, `:1287`, `:1297` |
+| `TaskCompletion::acknowledge_inputs` | `src/runtime/task_completion.py:1074` |
+| `TaskCompletion::close_sequence_child` | `src/runtime/task_completion.py:764` |
+| `TaskCompletion::recheck_close_requests` | `src/runtime/task_completion.py:870` |
+| `TaskCompletion::evaluate_automatic_completion` | `src/runtime/task_completion.py:950` |
+| `TaskCompletion::after_run_finished` | `src/runtime/task_completion.py:1023` |
+| `TaskCompletion::pause_reason` | `src/runtime/task_completion.py:1005` |
+| `RunFinishedCompletion for TaskCompletion` | `src/runtime/task_completion.py:1023-1055` |
+| `SequenceCompletion for TaskCompletion` | `src/runtime/task_completion.py:764-868`, `:950-1023`, `:1264-1312` |
+| `completion::task_completion` | `src/runtime/task_completion.py:168` |
+| `completion::recheck_close_requests` | `src/runtime/task_completion.py:870` |
+| `completion::after_run_finished` | `src/runtime/task_completion.py:1023` |
+| `completion::pause_reason` | `src/runtime/task_completion.py:1005` |
+| `git::git_verify_commit_landed` | `src/infra/git.py:683` |
 
 ## Input dispatch and master triggers
 

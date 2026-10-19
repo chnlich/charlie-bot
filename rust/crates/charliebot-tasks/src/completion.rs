@@ -1,0 +1,1242 @@
+//! Task close, cancel, reopen, acknowledgement, and completion evidence.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::Arc;
+
+use charliebot_core::event_types;
+use charliebot_registry::caller::CallerIdentity;
+use charliebot_registry::context::{FeatureContext, StateError};
+use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
+use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
+use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunRecord};
+use charliebot_store::{ControlGuard, StoreError, StoreResult};
+use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::dispatch::{self, Dispatcher, RunFinishedCompletion};
+use crate::git;
+use crate::review_text;
+
+const RUN_REF_PREFIX: &str = "run:";
+const SPEC_REF_PREFIX: &str = "spec:";
+const REVIEW_REF_PREFIX: &str = "review:";
+const LANDING_REF_PREFIX: &str = "landed:";
+type DeliveryRunOutcomes = (HashMap<String, RunRecord>, HashMap<String, Option<String>>);
+const RESTORE_CHAIN_HOP_LIMIT: usize = 1000;
+
+/// The target branch and commit offered as landing evidence.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandingEvidence {
+  pub branch: String,
+  pub commit: String,
+  #[serde(default)]
+  pub repo_path: Option<String>,
+}
+
+/// Evidence supplied for an operator, automatic, or sequence completion.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompletionEvidence {
+  #[serde(default)]
+  pub summary: String,
+  #[serde(default)]
+  pub result_refs: Vec<String>,
+  #[serde(default)]
+  pub run_ids: Vec<String>,
+  #[serde(default)]
+  pub review_run_ids: Vec<String>,
+  #[serde(default)]
+  pub landing: Option<LandingEvidence>,
+}
+
+/// The sequence outcome written onto its worker child's close fact and report.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SequenceCloseOutcome {
+  Completed,
+  Blocked,
+  Failed,
+  Cancelled,
+}
+
+impl SequenceCloseOutcome {
+  fn as_str(self) -> &'static str {
+    match self {
+      Self::Completed => "completed",
+      Self::Blocked => "blocked",
+      Self::Failed => "failed",
+      Self::Cancelled => "cancelled",
+    }
+  }
+}
+
+/// The owner of close, cancel, reopen, acknowledgement, and close evidence for one server.
+pub struct TaskCompletion {
+  features: Arc<FeatureContext>,
+}
+
+impl TaskCompletion {
+  /// Build the completion owner over the server's shared feature context.
+  pub fn new(features: Arc<FeatureContext>) -> Self {
+    Self { features }
+  }
+
+  fn store(&self) -> &charliebot_store::Store {
+    &self.features.store
+  }
+
+  fn dispatcher(&self) -> StoreResult<Arc<Dispatcher>> {
+    dispatch::dispatcher(&self.features).map_err(|error| StoreError::new(error.to_string()))
+  }
+
+  fn execution_blockers(&self, session_id: &str, exclude_run_ids: &HashSet<String>) -> StoreResult<Vec<String>> {
+    let mut blockers = self
+      .store()
+      .run_blockers(session_id)?
+      .into_iter()
+      .filter(|blocker| !exclude_run_ids.contains(&blocker.run_id))
+      .map(|blocker| blocker.reason)
+      .collect::<Vec<_>>();
+    for descendant in self.store().descendant_ids(session_id)? {
+      if self.store().task_state(&descendant)? == "open" {
+        blockers.push(format!("has open descendant task {descendant}"));
+      }
+    }
+    Ok(blockers)
+  }
+
+  fn completion_blockers(
+    &self,
+    session_id: &str,
+    exclude_run_ids: &HashSet<String>,
+    exclude_input_ids: &HashSet<String>,
+  ) -> StoreResult<Vec<String>> {
+    let mut blockers = self.execution_blockers(session_id, exclude_run_ids)?;
+    let pending = self
+      .dispatcher()?
+      .pending_inputs(session_id)?
+      .into_iter()
+      .filter(|event| event.get("id").and_then(Value::as_str).is_none_or(|id| !exclude_input_ids.contains(id)))
+      .collect::<Vec<_>>();
+    if !pending.is_empty() {
+      blockers.insert(0, dispatch::unprocessed_input_blocker(&pending));
+    }
+    Ok(blockers)
+  }
+
+  fn cancellation_blockers(&self, session_id: &str) -> StoreResult<Vec<String>> {
+    self.execution_blockers(session_id, &HashSet::new())
+  }
+
+  fn delivery_run_outcomes(&self, meta: &SessionMetadata) -> StoreResult<DeliveryRunOutcomes> {
+    let mut records = HashMap::new();
+    let mut outcomes = HashMap::new();
+    for run in self.store().list_run_records_sync(&meta.id)? {
+      outcomes.insert(run.id.clone(), self.store().facts_of(&meta.id)?.run_outcomes.get(&run.id).cloned());
+      records.insert(run.id.clone(), run);
+    }
+    for child_id in self.store().child_ids(&meta.id)? {
+      let facts = self.store().facts_of(&child_id)?;
+      for run in self.store().list_run_records_sync(&child_id)? {
+        outcomes.insert(run.id.clone(), facts.run_outcomes.get(&run.id).cloned());
+        records.insert(run.id.clone(), run);
+      }
+    }
+    Ok((records, outcomes))
+  }
+
+  fn evidence_blockers(&self, meta: &SessionMetadata, evidence: &CompletionEvidence) -> StoreResult<Vec<String>> {
+    self.evidence_blockers_with_success(meta, evidence, &HashSet::new())
+  }
+
+  fn evidence_blockers_with_success(
+    &self,
+    meta: &SessionMetadata,
+    evidence: &CompletionEvidence,
+    succeeding_run_ids: &HashSet<String>,
+  ) -> StoreResult<Vec<String>> {
+    let mut blockers = Vec::new();
+    if evidence.summary.trim().is_empty() {
+      blockers.push("completion requires a non-empty summary".to_string());
+    }
+    if evidence.result_refs.is_empty() {
+      blockers.push("completion requires result evidence (result_refs)".to_string());
+    }
+    let (records, mut outcomes) = self.delivery_run_outcomes(meta)?;
+    for run_id in succeeding_run_ids {
+      outcomes.insert(run_id.clone(), Some("success".to_string()));
+    }
+    let facts = self.store().facts_of(&meta.id)?;
+    let mut claimed = HashSet::new();
+    for run_id in &evidence.run_ids {
+      let Some(run) = records.get(run_id) else {
+        blockers.push(format!("run {run_id} is not a Run of task {} or its children", meta.id));
+        continue;
+      };
+      claimed.insert(run_id.as_str());
+      if outcomes.get(run_id).and_then(Option::as_deref) != Some("success") {
+        let bare_exit = if run.exit_code == Some(0) { " (a bare exit code is not evidence)" } else { "" };
+        blockers.push(format!("run {run_id} has no successful run_finished fact{bare_exit}"));
+      }
+    }
+    if !evidence.run_ids.is_empty() && claimed.is_empty() {
+      blockers.push("completion evidence names no delivery Run of this task".to_string());
+    }
+    if evidence.run_ids.is_empty() {
+      if outcomes.values().any(|outcome| outcome.as_deref() == Some("success")) {
+        blockers.push("completion requires delivery run evidence (run_ids)".to_string());
+      } else if outcomes.values().any(|outcome| outcome.as_deref() == Some("failed")) {
+        blockers.push(
+          "completion requires delivery run evidence (run_ids); failed Runs are not completion evidence".to_string(),
+        );
+      }
+    }
+    for result_ref in &evidence.result_refs {
+      blockers.extend(self.structured_ref_blockers(meta, result_ref, &records, &facts, evidence));
+    }
+
+    let claimed_work_ids = evidence.run_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    for review_id in &evidence.review_run_ids {
+      let Some(review) = records.get(review_id).filter(|run| run.kind == RunKind::Review && run.session_id == meta.id)
+      else {
+        blockers.push(format!("run {review_id} is not a review Run of task {}", meta.id));
+        continue;
+      };
+      if facts.run_outcomes.get(review_id).map(String::as_str) != Some("success") {
+        blockers.push(format!("review run {review_id} has no successful run_finished fact"));
+        continue;
+      }
+      if let Some(review_of) = review.review_of_run_id.as_deref() {
+        if !claimed_work_ids.contains(review_of) {
+          blockers.push(format!(
+            "review run {review_id} reviews work run {review_of}, which this completion claim does not name"
+          ));
+        }
+      } else if !claimed_work_ids.is_empty() {
+        blockers.push(format!(
+          "review run {review_id} is not chained to a work Run (review_of_run_id is unset; it cannot prove which work it reviewed)"
+        ));
+      }
+    }
+    if meta.task.as_ref().is_some_and(|task| task.task_type == Some(TaskType::Implement)) {
+      let successful_reviews = evidence.review_run_ids.iter().any(|review_id| {
+        records.get(review_id).is_some_and(|run| {
+          run.kind == RunKind::Review
+            && run.session_id == meta.id
+            && facts.run_outcomes.get(review_id).map(String::as_str) == Some("success")
+            && run.review_of_run_id.as_deref().is_none_or(|run_id| evidence.run_ids.contains(&run_id.to_string()))
+        })
+      });
+      let has_review_ref = evidence.result_refs.iter().any(|result_ref| result_ref.starts_with(REVIEW_REF_PREFIX));
+      if !successful_reviews && !has_review_ref {
+        blockers.push("implement completion requires a successful review run of this task".to_string());
+      }
+      if meta.task.as_ref().is_some_and(|task| task.repo_path.is_some())
+        && evidence.landing.is_none()
+        && !evidence.result_refs.iter().any(|result_ref| result_ref.starts_with(LANDING_REF_PREFIX))
+      {
+        blockers.push("implement completion requires target-branch landing evidence".to_string());
+      }
+    }
+    Ok(blockers)
+  }
+
+  fn structured_ref_blockers(
+    &self,
+    meta: &SessionMetadata,
+    result_ref: &str,
+    records: &HashMap<String, RunRecord>,
+    facts: &charliebot_store::TaskFacts,
+    evidence: &CompletionEvidence,
+  ) -> Vec<String> {
+    let mut blockers = Vec::new();
+    if let Some(run_id) = result_ref.strip_prefix(RUN_REF_PREFIX) {
+      if !records.contains_key(run_id) {
+        blockers.push(format!("result ref {result_ref} does not name a Run of task {}", meta.id));
+      }
+    } else if let Some(spec_hash) = result_ref.strip_prefix(SPEC_REF_PREFIX) {
+      let claimed_ids = if evidence.run_ids.is_empty() {
+        records.keys().map(String::as_str).collect::<Vec<_>>()
+      } else {
+        evidence.run_ids.iter().map(String::as_str).collect::<Vec<_>>()
+      };
+      let pinned = claimed_ids
+        .iter()
+        .filter_map(|run_id| records.get(*run_id).and_then(|run| run.task_spec_hash.as_deref()))
+        .collect::<HashSet<_>>();
+      if !pinned.contains(spec_hash) {
+        blockers.push(format!("result ref {result_ref} does not match the task spec pinned by this task's runs"));
+      }
+    } else if let Some(review_id) = result_ref.strip_prefix(REVIEW_REF_PREFIX) {
+      match records.get(review_id) {
+        Some(run) if run.kind == RunKind::Review && run.session_id == meta.id => {
+          if facts.run_outcomes.get(review_id).map(String::as_str) != Some("success") {
+            blockers.push(format!("result ref {result_ref} names a review without a successful run_finished fact"));
+          }
+        }
+        _ => blockers.push(format!("result ref {result_ref} does not name a review Run of task {}", meta.id)),
+      }
+    } else if let Some(body) = result_ref.strip_prefix(LANDING_REF_PREFIX) {
+      let (branch, commit) = body.split_once('@').unwrap_or((body, ""));
+      if branch.is_empty() || commit.is_empty() {
+        blockers.push(format!("result ref {result_ref} must be landed:<branch>@<commit>"));
+      } else {
+        let mut base_branches =
+          records.values().filter_map(|run| run.base_branch.as_deref()).map(str::to_string).collect::<HashSet<_>>();
+        if let Some(base_branch) = meta.task.as_ref().and_then(|task| task.base_branch.as_deref()) {
+          base_branches.insert(base_branch.to_string());
+        }
+        let targets = base_branches
+          .iter()
+          .flat_map(|base| [base.clone(), review_text::review_landing_target(base)])
+          .collect::<HashSet<_>>();
+        if !base_branches.is_empty() && !targets.contains(branch) {
+          let mut bases = base_branches.into_iter().collect::<Vec<_>>();
+          bases.sort();
+          blockers
+            .push(format!("result ref {result_ref} lands on {branch}; this task's runs target {}", bases.join(", ")));
+        }
+      }
+    }
+    blockers
+  }
+
+  fn landing_claims(&self, evidence: &CompletionEvidence) -> Vec<(String, String, Option<String>)> {
+    let mut claims = Vec::new();
+    if let Some(landing) = &evidence.landing {
+      claims.push((landing.branch.clone(), landing.commit.clone(), landing.repo_path.clone()));
+    }
+    for result_ref in &evidence.result_refs {
+      if let Some(body) = result_ref.strip_prefix(LANDING_REF_PREFIX)
+        && let Some((branch, commit)) =
+          body.split_once('@').filter(|(branch, commit)| !branch.is_empty() && !commit.is_empty())
+      {
+        claims.push((branch.to_string(), commit.to_string(), None));
+      }
+    }
+    claims
+  }
+
+  async fn landing_blockers(&self, meta: &SessionMetadata, evidence: &CompletionEvidence) -> StoreResult<Vec<String>> {
+    let mut blockers = Vec::new();
+    let claims = self.landing_claims(evidence);
+    if claims.is_empty() {
+      return Ok(blockers);
+    }
+    let mut fallback_repo = meta.task.as_ref().and_then(|task| task.repo_path.clone());
+    if fallback_repo.is_none() {
+      fallback_repo = self.store().list_run_records_sync(&meta.id)?.into_iter().find_map(|run| run.repo_path);
+    }
+    for (branch, commit, repo_override) in claims {
+      let Some(repo) = repo_override.or_else(|| fallback_repo.clone()) else {
+        blockers.push(format!(
+          "landing {branch}@{commit} cannot be verified: no repository is recorded for this task or its runs"
+        ));
+        continue;
+      };
+      let (landed, reason) = git::git_verify_commit_landed(Path::new(&repo), &branch, &commit).await;
+      if !landed {
+        blockers.push(format!("landing evidence unverified in {repo}: {branch}@{commit}: {reason}"));
+      }
+    }
+    Ok(blockers)
+  }
+
+  async fn verified_evidence_blockers(
+    &self,
+    meta: &SessionMetadata,
+    evidence: &CompletionEvidence,
+  ) -> StoreResult<Vec<String>> {
+    let mut blockers = self.evidence_blockers(meta, evidence)?;
+    blockers.extend(self.landing_blockers(meta, evidence).await?);
+    Ok(blockers)
+  }
+
+  /// Complete a task after evidence checks, or save an agent's own-manager close request for run finish.
+  pub async fn complete_task(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    evidence: &CompletionEvidence,
+    caller: &CallerIdentity,
+  ) -> StoreResult<(usize, Value)> {
+    if request_id.is_empty() {
+      return Err(StoreError::invalid("request_id is required for completion"));
+    }
+    if let CallerIdentity::Agent { claims } = caller {
+      if claims.session_id != session_id {
+        return Err(StoreError::forbidden("an agent may only request closure of its own task"));
+      }
+      let meta = self.store().load_task_meta(session_id).await?;
+      if meta.profile != TaskProfile::Manager {
+        return Err(StoreError::forbidden("own-run closure requests come from manager tasks only"));
+      }
+      let run = self
+        .store()
+        .read_run_sync(session_id, &claims.run_id)?
+        .ok_or_else(|| StoreError::invalid(format!("caller run {} not found in task {session_id}", claims.run_id)))?;
+      let events = self.store().load_all_facts(session_id)?;
+      if run_records::terminal_outcome(&events, &run.id)?.is_some()
+        || self.store().run_display_state(session_id, &run.id)? != RunDisplayState::Running
+      {
+        return Err(StoreError::conflict(vec![format!(
+          "caller run {} is not active; it cannot request closure",
+          claims.run_id
+        )]));
+      }
+      if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+        return Ok(replay);
+      }
+      let blockers = self.own_run_close_blockers(session_id, &run, evidence).await?;
+      if !blockers.is_empty() {
+        return Err(StoreError::conflict(sorted_unique(blockers)));
+      }
+      return self.save_close_request(session_id, request_id, &claims.run_id, evidence).await;
+    }
+
+    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+      return Ok(replay);
+    }
+    self.close_now(session_id, request_id, evidence, ACTOR_USER, &HashSet::new(), &HashSet::new()).await
+  }
+
+  fn replay_close_request(&self, session_id: &str, request_id: &str) -> StoreResult<Option<(usize, Value)>> {
+    let events = self.store().load_all_facts(session_id)?;
+    for event in &events {
+      if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSE_REQUESTED)
+        && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+      {
+        return Ok(Some((
+          202,
+          json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}),
+        )));
+      }
+    }
+    for event in &events {
+      if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED)
+        && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+      {
+        return Ok(Some((200, json!({"session_id": session_id, "closed_event_id": event.get("id")}))));
+      }
+    }
+    Ok(None)
+  }
+
+  async fn own_run_close_blockers(
+    &self,
+    session_id: &str,
+    run: &RunRecord,
+    evidence: &CompletionEvidence,
+  ) -> StoreResult<Vec<String>> {
+    let blockers = {
+      let _guard = self.store().control_lock().await;
+      let meta = self.store().load_task_meta(session_id).await?;
+      let excluded_runs = HashSet::from([run.id.clone()]);
+      let excluded_inputs = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
+      let mut blockers = self.completion_blockers(session_id, &excluded_runs, &excluded_inputs)?;
+      blockers.extend(self.evidence_blockers_with_success(&meta, evidence, &excluded_runs)?);
+      blockers
+    };
+    let meta = self.store().load_task_meta(session_id).await?;
+    let mut blockers = blockers;
+    blockers.extend(self.landing_blockers(&meta, evidence).await?);
+    Ok(blockers)
+  }
+
+  async fn save_close_request(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    owner_run_id: &str,
+    evidence: &CompletionEvidence,
+  ) -> StoreResult<(usize, Value)> {
+    let guard = self.store().control_lock().await;
+    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+      return Ok(replay);
+    }
+    let event = control_events::build_control_event(
+      event_types::TASK_CLOSE_REQUESTED,
+      ACTOR_SYSTEM,
+      session_id,
+      Some(&control_events::stable_close_request_event_id(session_id, request_id)),
+      None,
+      [
+        ("request_id".to_string(), json!(request_id)),
+        ("owner_run_id".to_string(), json!(owner_run_id)),
+        ("summary".to_string(), json!(evidence.summary)),
+        ("result_refs".to_string(), json!(evidence.result_refs)),
+        ("run_ids".to_string(), json!(evidence.run_ids)),
+      ],
+    );
+    self.store().append_control_fact(&guard, session_id, event).await?;
+    drop(guard);
+    tracing::info!(target: "charliebot_tasks", session_id, request_id, owner_run_id, "task_close_requested");
+    Ok((202, json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"})))
+  }
+
+  async fn close_now(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    evidence: &CompletionEvidence,
+    actor: &str,
+    exclude_run_ids: &HashSet<String>,
+    exclude_input_ids: &HashSet<String>,
+  ) -> StoreResult<(usize, Value)> {
+    let (meta, blockers) = {
+      let _guard = self.store().control_lock().await;
+      let meta = self.store().load_task_meta(session_id).await?;
+      let blockers = self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?;
+      (meta, blockers)
+    };
+    if !blockers.is_empty() {
+      return Err(StoreError::conflict(sorted_unique(blockers)));
+    }
+    let evidence_blockers = self.verified_evidence_blockers(&meta, evidence).await?;
+    if !evidence_blockers.is_empty() {
+      return Err(StoreError::conflict(sorted_unique(evidence_blockers)));
+    }
+
+    let child_epoch = self.store().prime_aggregator(session_id).await?;
+    let parent_epoch = match meta.task_parent_id.as_deref() {
+      Some(parent_id) => Some(self.store().prime_aggregator(parent_id).await?),
+      None => None,
+    };
+    let (fresh_meta, close_event, report, report_created) = {
+      let guard = self.store().control_lock().await;
+      if self.store().task_state(session_id)? != "open" {
+        return Err(StoreError::conflict(vec![format!("task {session_id} is no longer open")]));
+      }
+      let fresh_meta = self.store().load_task_meta(session_id).await?;
+      let mut blockers = self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?;
+      blockers.extend(self.evidence_blockers(&fresh_meta, evidence)?);
+      let blockers = sorted_unique(blockers);
+      if !blockers.is_empty() {
+        return Err(StoreError::conflict(blockers));
+      }
+      let (close_event, report, report_created) = self
+        .append_closed(
+          &guard,
+          session_id,
+          &fresh_meta,
+          request_id,
+          "completed",
+          &evidence.summary,
+          &evidence.result_refs,
+          &evidence.run_ids,
+          actor,
+          None,
+        )
+        .await?;
+      (fresh_meta, close_event, report, report_created)
+    };
+    self.store().announce_appended_event(session_id, &close_event, child_epoch).await?;
+    if report_created && let (Some(parent_id), Some(epoch)) = (fresh_meta.task_parent_id.as_deref(), parent_epoch) {
+      self.store().announce_appended_event(parent_id, &report, epoch).await?;
+    }
+    if report_created
+      && let Some(parent_id) = fresh_meta.task_parent_id.as_deref()
+      && let Err(error) = self.dispatcher()?.wake_parent(parent_id, &report).await
+    {
+      tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "close_parent_wake_failed");
+    }
+    Ok((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id")})))
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  async fn append_closed(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    meta: &SessionMetadata,
+    request_id: &str,
+    outcome: &str,
+    summary: &str,
+    result_refs: &[String],
+    run_ids: &[String],
+    actor: &str,
+    sequence_outcome: Option<&str>,
+  ) -> StoreResult<(Value, Value, bool)> {
+    let mut payload = vec![
+      ("request_id".to_string(), json!(request_id)),
+      ("outcome".to_string(), json!(outcome)),
+      ("summary".to_string(), json!(summary)),
+      ("result_refs".to_string(), json!(result_refs)),
+      ("run_ids".to_string(), json!(run_ids)),
+      ("report_to".to_string(), meta.task_parent_id.as_ref().map_or(Value::Null, |parent| json!(parent))),
+    ];
+    if let Some(sequence_outcome) = sequence_outcome {
+      payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
+    }
+    let close_event = control_events::build_control_event(
+      event_types::TASK_CLOSED,
+      actor,
+      session_id,
+      Some(&control_events::stable_close_event_id(session_id, request_id)),
+      None,
+      payload,
+    );
+    let close_event = self.store().append_control_fact(guard, session_id, close_event).await?;
+    let report_outcome = sequence_outcome.unwrap_or(outcome);
+    let (report, report_created) = self
+      .dispatcher()?
+      .deliver_child_report_locked_as_actor(
+        guard,
+        session_id,
+        close_event.clone(),
+        report_outcome,
+        summary,
+        Some(result_refs),
+        meta.task_parent_id.as_deref(),
+        ACTOR_SYSTEM,
+      )
+      .await?;
+    self.store().invalidate_tree_index();
+    Ok((close_event, report, report_created))
+  }
+
+  /// Cancel an open task without stopping its runs or descendants.
+  pub async fn cancel_task(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    reason: &str,
+    caller: &CallerIdentity,
+  ) -> StoreResult<Value> {
+    let actor = match caller {
+      CallerIdentity::Operator { .. } => ACTOR_USER,
+      CallerIdentity::Agent { claims } => {
+        let target = self.store().load_task_meta(session_id).await?;
+        if target.task_parent_id.as_deref() != Some(claims.session_id.as_str()) {
+          return Err(StoreError::forbidden("an agent may only cancel a direct child of its own task"));
+        }
+        ACTOR_AGENT
+      }
+    };
+    if request_id.is_empty() {
+      return Err(StoreError::invalid("request_id is required for cancellation"));
+    }
+    if reason.trim().is_empty() {
+      return Err(StoreError::invalid("cancellation requires a reason"));
+    }
+    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+      return Ok(replay.1);
+    }
+    let meta = self.store().load_task_meta(session_id).await?;
+    let child_epoch = self.store().prime_aggregator(session_id).await?;
+    let parent_epoch = match meta.task_parent_id.as_deref() {
+      Some(parent_id) => Some(self.store().prime_aggregator(parent_id).await?),
+      None => None,
+    };
+    let (fresh_meta, close_event, report, report_created) = {
+      let guard = self.store().control_lock().await;
+      let state = self.store().task_state(session_id)?;
+      if state != "open" {
+        return Err(StoreError::conflict(vec![format!(
+          "task {session_id} is {state}; only an open task can be cancelled"
+        )]));
+      }
+      if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+        return Ok(replay.1);
+      }
+      let fresh_meta = self.store().load_task_meta(session_id).await?;
+      let blockers = sorted_unique(self.cancellation_blockers(session_id)?);
+      if !blockers.is_empty() {
+        return Err(StoreError::conflict(blockers));
+      }
+      let (close_event, report, report_created) = self
+        .append_closed(&guard, session_id, &fresh_meta, request_id, "cancelled", reason, &[], &[], actor, None)
+        .await?;
+      (fresh_meta, close_event, report, report_created)
+    };
+    self.store().announce_appended_event(session_id, &close_event, child_epoch).await?;
+    if report_created && let (Some(parent_id), Some(epoch)) = (fresh_meta.task_parent_id.as_deref(), parent_epoch) {
+      self.store().announce_appended_event(parent_id, &report, epoch).await?;
+    }
+    if report_created
+      && let Some(parent_id) = fresh_meta.task_parent_id.as_deref()
+      && let Err(error) = self.dispatcher()?.wake_parent(parent_id, &report).await
+    {
+      tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "cancel_parent_wake_failed");
+    }
+    Ok(json!({"session_id": session_id, "closed_event_id": close_event.get("id")}))
+  }
+
+  /// Restore one archived task node and its archived ancestors.
+  pub async fn restore_task(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    reason: &str,
+    caller: &CallerIdentity,
+  ) -> StoreResult<Value> {
+    if !caller.is_operator() {
+      return Err(StoreError::forbidden("task restore requires operator credentials"));
+    }
+    if request_id.is_empty() {
+      return Err(StoreError::invalid("request_id is required for restore"));
+    }
+    let restored = self.restore_chain(session_id, request_id, reason).await?;
+    Ok(json!({"session_id": session_id, "restored": restored}))
+  }
+
+  /// Restore the target and each archived ancestor, topmost first.
+  pub async fn restore_chain(&self, session_id: &str, request_id: &str, reason: &str) -> StoreResult<Vec<String>> {
+    let (restored, announcements) = {
+      let guard = self.store().control_lock().await;
+      self.restore_chain_locked(&guard, session_id, request_id, reason).await?
+    };
+    for (node_id, event, epoch) in announcements {
+      self.store().announce_appended_event(&node_id, &event, epoch).await?;
+    }
+    Ok(restored)
+  }
+
+  /// Restore an archived chain while the caller holds the control lock.
+  pub async fn restore_chain_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    request_id: &str,
+    reason: &str,
+  ) -> StoreResult<RestoreOutcome> {
+    let mut chain = Vec::new();
+    let mut current = session_id.to_string();
+    let mut seen = HashSet::new();
+    loop {
+      let meta = self.store().load_task_meta(&current).await?;
+      if self.store().task_state(&current)? == "open" {
+        break;
+      }
+      chain.push(current.clone());
+      if meta.task_parent_id.is_none() || meta.task_parent_id.as_ref().is_some_and(|parent| seen.contains(parent)) {
+        break;
+      }
+      seen.insert(current);
+      current = meta.task_parent_id.expect("parent id is present after the prior check");
+      if chain.len() > RESTORE_CHAIN_HOP_LIMIT {
+        return Err(StoreError::conflict(vec![format!(
+          "ancestor chain of {session_id} exceeds {RESTORE_CHAIN_HOP_LIMIT} hops"
+        )]));
+      }
+    }
+    if chain.is_empty() {
+      return Ok((Vec::new(), Vec::new()));
+    }
+    let mut restored = Vec::new();
+    let mut announcements = Vec::new();
+    for node_id in chain.into_iter().rev() {
+      let history = self.store().load_all_facts(&node_id)?;
+      let lifecycle = history
+        .iter()
+        .filter(|event| {
+          matches!(
+            event.get("type").and_then(Value::as_str),
+            Some(event_types::TASK_CLOSED | event_types::TASK_REOPENED)
+          )
+        })
+        .collect::<Vec<_>>();
+      if lifecycle.last().is_some_and(|event| {
+        event.get("type").and_then(Value::as_str) == Some(event_types::TASK_REOPENED)
+          && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+      }) {
+        restored.push(node_id);
+        continue;
+      }
+      let last_close =
+        history.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED));
+      let close_id = last_close.and_then(|event| event.get("id")).and_then(Value::as_str);
+      let event_scope = close_id.map_or_else(|| request_id.to_string(), |close_id| format!("{request_id}:{close_id}"));
+      let event = control_events::build_control_event(
+        event_types::TASK_REOPENED,
+        ACTOR_USER,
+        &node_id,
+        Some(&control_events::stable_reopen_event_id(&node_id, &event_scope)),
+        None,
+        [
+          ("request_id".to_string(), json!(request_id)),
+          ("closed_event_id".to_string(), close_id.map_or(Value::Null, |id| json!(id))),
+          ("reason".to_string(), json!(reason)),
+        ],
+      );
+      let epoch = self.store().prime_aggregator(&node_id).await?;
+      let event = self.store().append_control_fact(guard, &node_id, event).await?;
+      restored.push(node_id.clone());
+      announcements.push((node_id, event, epoch));
+    }
+    self.store().invalidate_tree_index();
+    Ok((restored, announcements))
+  }
+
+  /// Acknowledge the exact pending inputs an operator handled out of band.
+  pub async fn acknowledge_inputs(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    input_ids: &[String],
+    note: &str,
+    caller: &CallerIdentity,
+  ) -> StoreResult<Value> {
+    if !caller.is_operator() {
+      return Err(StoreError::forbidden("acknowledging task input requires operator credentials"));
+    }
+    if request_id.is_empty() {
+      return Err(StoreError::invalid("request_id is required for input acknowledgement"));
+    }
+    if input_ids.is_empty() {
+      return Err(StoreError::invalid("input_ids is required and must name at least one input"));
+    }
+    if input_ids.iter().collect::<HashSet<_>>().len() != input_ids.len() {
+      return Err(StoreError::invalid("input_ids must not repeat an id"));
+    }
+    if let Some(replay) = self.replay_input_ack(session_id, request_id)? {
+      return Ok(replay);
+    }
+    let epoch = self.store().prime_aggregator(session_id).await?;
+    let (event, response) = {
+      let guard = self.store().control_lock().await;
+      self.store().load_task_meta(session_id).await?;
+      if let Some(replay) = self.replay_input_ack(session_id, request_id)? {
+        return Ok(replay);
+      }
+      let pending = self.dispatcher()?.pending_inputs(session_id)?;
+      let acknowledged = self.store().facts_of(session_id)?.confirmed_input_ids;
+      let pending_ids =
+        pending.iter().filter_map(|event| event.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
+      let unknown = input_ids
+        .iter()
+        .filter(|input_id| !pending_ids.contains(input_id.as_str()) && !acknowledged.contains(input_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+      if !unknown.is_empty() {
+        return Err(StoreError::conflict(vec![dispatch::inputs_not_pending_conflict(session_id, &unknown)]));
+      }
+      let acked_now =
+        input_ids.iter().filter(|input_id| pending_ids.contains(input_id.as_str())).cloned().collect::<Vec<_>>();
+      if acked_now.is_empty() {
+        return Ok(json!({
+          "session_id": session_id,
+          "acknowledged_event_id": null,
+          "input_ids": [],
+          "already_acknowledged": input_ids,
+        }));
+      }
+      let event = control_events::build_control_event(
+        event_types::TASK_INPUT_ACKNOWLEDGED,
+        ACTOR_USER,
+        session_id,
+        Some(&control_events::stable_input_ack_event_id(session_id, request_id)),
+        None,
+        [
+          ("request_id".to_string(), json!(request_id)),
+          ("input_ids".to_string(), json!(acked_now)),
+          ("note".to_string(), json!(note)),
+        ],
+      );
+      let event = self.store().append_control_fact(&guard, session_id, event).await?;
+      self.store().invalidate_tree_index();
+      let already_acknowledged = input_ids.iter().filter(|id| !acked_now.contains(id)).cloned().collect::<Vec<_>>();
+      let response = json!({
+        "session_id": session_id,
+        "acknowledged_event_id": event.get("id"),
+        "input_ids": acked_now,
+        "already_acknowledged": already_acknowledged,
+      });
+      (event, response)
+    };
+    self.store().announce_appended_event(session_id, &event, epoch).await?;
+    Ok(response)
+  }
+
+  fn replay_input_ack(&self, session_id: &str, request_id: &str) -> StoreResult<Option<Value>> {
+    let event_id = control_events::stable_input_ack_event_id(session_id, request_id);
+    for event in self.store().load_all_facts(session_id)? {
+      if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_INPUT_ACKNOWLEDGED)
+        && event.get("id").and_then(Value::as_str) == Some(event_id.as_str())
+      {
+        return Ok(Some(json!({
+          "session_id": session_id,
+          "acknowledged_event_id": event_id,
+          "input_ids": event.get("input_ids").and_then(Value::as_array).cloned().unwrap_or_default(),
+          "already_acknowledged": [],
+        })));
+      }
+    }
+    Ok(None)
+  }
+
+  /// Close an ended sequence's worker child and report the sequence outcome.
+  pub async fn close_sequence_child(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    outcome: SequenceCloseOutcome,
+    evidence: &CompletionEvidence,
+  ) -> StoreResult<(usize, Value)> {
+    if request_id.is_empty() {
+      return Err(StoreError::invalid("request_id is required for sequence close"));
+    }
+    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+      return Ok(replay);
+    }
+    let sequence_outcome = outcome.as_str();
+    let completing = outcome == SequenceCloseOutcome::Completed && !evidence.run_ids.is_empty();
+    let pre_meta = self.store().load_task_meta(session_id).await?;
+    let blockers = {
+      let _guard = self.store().control_lock().await;
+      if self.store().task_state(session_id)? != "open" {
+        return Err(StoreError::conflict(vec![format!("task {session_id} is no longer open")]));
+      }
+      self.cancellation_blockers(session_id)?
+    };
+    if !blockers.is_empty() {
+      return Err(StoreError::conflict(sorted_unique(blockers)));
+    }
+    if completing {
+      let blockers = self.verified_evidence_blockers(&pre_meta, evidence).await?;
+      if !blockers.is_empty() {
+        return Err(StoreError::conflict(sorted_unique(blockers)));
+      }
+    }
+    let child_epoch = self.store().prime_aggregator(session_id).await?;
+    let parent_epoch = match pre_meta.task_parent_id.as_deref() {
+      Some(parent_id) => Some(self.store().prime_aggregator(parent_id).await?),
+      None => None,
+    };
+    let (fresh_meta, close_event, report, report_created) = {
+      let guard = self.store().control_lock().await;
+      if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+        return Ok(replay);
+      }
+      if self.store().task_state(session_id)? != "open" {
+        return Err(StoreError::conflict(vec![format!("task {session_id} is no longer open")]));
+      }
+      let fresh_meta = self.store().load_task_meta(session_id).await?;
+      let mut blockers = self.cancellation_blockers(session_id)?;
+      if completing {
+        blockers.extend(self.evidence_blockers(&fresh_meta, evidence)?);
+      }
+      let blockers = sorted_unique(blockers);
+      if !blockers.is_empty() {
+        return Err(StoreError::conflict(blockers));
+      }
+      let lifecycle_outcome = if completing { "completed" } else { "cancelled" };
+      let (close_event, report, report_created) = self
+        .append_closed(
+          &guard,
+          session_id,
+          &fresh_meta,
+          request_id,
+          lifecycle_outcome,
+          &evidence.summary,
+          &evidence.result_refs,
+          &evidence.run_ids,
+          ACTOR_SYSTEM,
+          Some(sequence_outcome),
+        )
+        .await?;
+      (fresh_meta, close_event, report, report_created)
+    };
+    self.store().announce_appended_event(session_id, &close_event, child_epoch).await?;
+    if report_created && let (Some(parent_id), Some(epoch)) = (fresh_meta.task_parent_id.as_deref(), parent_epoch) {
+      self.store().announce_appended_event(parent_id, &report, epoch).await?;
+    }
+    if report_created
+      && let Some(parent_id) = fresh_meta.task_parent_id.as_deref()
+      && let Err(error) = self.dispatcher()?.wake_parent(parent_id, &report).await
+    {
+      tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "sequence_close_parent_wake_failed");
+    }
+    Ok((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id")})))
+  }
+
+  /// Recheck saved own-run close requests after the matching run succeeds.
+  pub async fn recheck_close_requests(&self, session_id: &str, run_id: &str) -> StoreResult<Vec<String>> {
+    let facts = self.store().facts_of(session_id)?;
+    if facts.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
+      return Ok(Vec::new());
+    }
+    let mut remaining = Vec::new();
+    for request in facts.close_requests {
+      if request.get("owner_run_id").and_then(Value::as_str) != Some(run_id) {
+        continue;
+      }
+      let Some(request_id) = request.get("request_id").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+        continue;
+      };
+      if self.replay_close_request(session_id, request_id)?.is_some_and(|(status, _)| status == 200) {
+        continue;
+      }
+      let evidence = evidence_from_close_request(&request)?;
+      let run = self.store().read_run_sync(session_id, run_id)?;
+      let claimed = run.map(|run| run.input_event_ids.into_iter().collect()).unwrap_or_default();
+      match self
+        .close_now(session_id, request_id, &evidence, ACTOR_SYSTEM, &HashSet::from([run_id.to_string()]), &claimed)
+        .await
+      {
+        Ok(_) => {}
+        Err(StoreError::Conflict(blockers)) => {
+          remaining.extend(blockers.iter().cloned());
+          tracing::info!(target: "charliebot_tasks", session_id, request_id, blockers = ?blockers, "task_close_request_still_blocked");
+          if self.store().task_state(session_id)? == "open" {
+            self.notify_close_request_blocked(session_id, request_id, &blockers).await?;
+          }
+        }
+        Err(error) => return Err(error),
+      }
+    }
+    Ok(remaining)
+  }
+
+  async fn notify_close_request_blocked(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    blockers: &[String],
+  ) -> StoreResult<()> {
+    let lines = blockers.iter().map(|blocker| format!("- {blocker}")).collect::<Vec<_>>().join("\n");
+    let content = format!(
+      "Closure request {request_id} did not close this task. Blockers:\n{lines}\nResolve them, then send a new closure request."
+    );
+    let notice_id = control_events::stable_close_blocked_notice_id(session_id, request_id);
+    match self
+      .dispatcher()?
+      .admit_input(session_id, event_types::SCHEDULED_TRIGGER, &content, ACTOR_SYSTEM, json!({"input_id": notice_id}))
+      .await
+    {
+      Ok(_) => self.dispatcher()?.dispatch_pending(session_id).await.map(|_| ()),
+      Err(StoreError::Archived(message)) => {
+        tracing::info!(target: "charliebot_tasks", session_id, error = %message, "close_blocked_notice_skipped_archived");
+        Ok(())
+      }
+      Err(error) => Err(error),
+    }
+  }
+
+  /// Build the delivery pause reason from pending triggers and unprocessed input.
+  pub fn pause_reason(&self, session_id: &str) -> StoreResult<Option<String>> {
+    let triggers_dir = self.store().session_dir(session_id).join("triggers");
+    let (pending_triggers, _next_fire) = charliebot_store::trigger_files::pending_trigger_state(triggers_dir);
+    if pending_triggers > 0 {
+      return Ok(Some(format!("has {pending_triggers} pending trigger(s)")));
+    }
+    let pending = self.dispatcher()?.pending_inputs(session_id)?;
+    if !pending.is_empty() {
+      return Ok(Some(dispatch::unprocessed_input_blocker(&pending)));
+    }
+    Ok(None)
+  }
+
+  /// Apply successful-run close requests and ordinary worker delivery follow-ups.
+  pub async fn after_run_finished(&self, session_id: &str, run_id: &str) -> StoreResult<()> {
+    let meta = self.store().load_task_meta(session_id).await?;
+    self.recheck_close_requests(session_id, run_id).await?;
+    let facts = self.store().facts_of(session_id)?;
+    if facts.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
+      return Ok(());
+    }
+    let Some(run) = self.store().read_run_sync(session_id, run_id)? else {
+      return Ok(());
+    };
+    if meta.profile != TaskProfile::Worker || run.kind != RunKind::Work {
+      return Ok(());
+    }
+    if meta.task.as_ref().is_some_and(|task| task.task_type == Some(TaskType::Implement)) {
+      tracing::info!(target: "charliebot_tasks", session_id, run_id, "worker_delivery_awaits_review");
+      return Ok(());
+    }
+    if meta.task.as_ref().is_some_and(|task| task.task_type == Some(TaskType::ColdRead)) {
+      tracing::info!(target: "charliebot_tasks", session_id, run_id, "cold_read_delivery_awaits_report");
+      return Ok(());
+    }
+    if let Some(reason) = self.pause_reason(session_id)? {
+      tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "worker_delivery_paused");
+      return Ok(());
+    }
+    match self.evaluate_automatic_completion(session_id, run_id, None, None, None, None).await {
+      Ok(_) => Ok(()),
+      Err(StoreError::Conflict(blockers)) => {
+        tracing::info!(target: "charliebot_tasks", session_id, run_id, blockers = ?blockers, "automatic_worker_completion_blocked");
+        Ok(())
+      }
+      Err(error) => Err(error),
+    }
+  }
+
+  /// Close a successful worker run with its default or caller-supplied evidence.
+  pub async fn evaluate_automatic_completion(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    summary: Option<&str>,
+    result_refs: Option<&[String]>,
+    request_id: Option<&str>,
+    evidence: Option<&CompletionEvidence>,
+  ) -> StoreResult<(usize, Value)> {
+    let meta = self.store().load_task_meta(session_id).await?;
+    if meta.profile != TaskProfile::Worker {
+      return Err(StoreError::forbidden("automatic completion applies to worker tasks"));
+    }
+    let facts = self.store().facts_of(session_id)?;
+    if facts.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
+      return Err(StoreError::conflict(vec![format!(
+        "run {run_id} has no successful run_finished fact; failed or interrupted evidence keeps the task open"
+      )]));
+    }
+    let run = self
+      .store()
+      .read_run_sync(session_id, run_id)?
+      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in task {session_id}")))?;
+    let effective_evidence = if let Some(evidence) = evidence {
+      evidence.clone()
+    } else {
+      let mut refs = result_refs.map(<[String]>::to_vec).unwrap_or_else(|| vec![format!("{RUN_REF_PREFIX}{run_id}")]);
+      if let Some(spec_hash) = run.task_spec_hash {
+        refs.push(format!("{SPEC_REF_PREFIX}{spec_hash}"));
+      }
+      CompletionEvidence {
+        summary: summary
+          .filter(|summary| !summary.is_empty())
+          .map_or_else(|| format!("Run {run_id} completed"), str::to_string),
+        result_refs: refs,
+        run_ids: vec![run_id.to_string()],
+        ..CompletionEvidence::default()
+      }
+    };
+    let effective_request_id =
+      request_id.filter(|request_id| !request_id.is_empty()).map_or_else(|| format!("auto:{run_id}"), str::to_string);
+    if let Some(replay) = self.replay_close_request(session_id, &effective_request_id)? {
+      return Ok(replay);
+    }
+    self
+      .close_now(session_id, &effective_request_id, &effective_evidence, ACTOR_SYSTEM, &HashSet::new(), &HashSet::new())
+      .await
+  }
+}
+
+impl RunFinishedCompletion for TaskCompletion {
+  fn after_run_finished<'a>(&'a self, session_id: &'a str, run_id: &'a str) -> BoxFuture<'a, StoreResult<()>> {
+    Box::pin(async move { TaskCompletion::after_run_finished(self, session_id, run_id).await })
+  }
+}
+
+impl SequenceCompletion for TaskCompletion {
+  fn evaluate_automatic_completion<'a>(
+    &'a self,
+    session_id: &'a str,
+    run_id: &'a str,
+    summary: Option<&'a str>,
+    result_refs: Option<&'a [String]>,
+    request_id: Option<&'a str>,
+  ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
+    Box::pin(async move {
+      TaskCompletion::evaluate_automatic_completion(self, session_id, run_id, summary, result_refs, request_id, None)
+        .await
+    })
+  }
+
+  fn close_sequence_child<'a>(
+    &'a self,
+    session_id: &'a str,
+    request_id: &'a str,
+    outcome: &'a str,
+    evidence: &'a Value,
+  ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
+    Box::pin(async move {
+      let outcome = match outcome {
+        "completed" => SequenceCloseOutcome::Completed,
+        "blocked" => SequenceCloseOutcome::Blocked,
+        "failed" => SequenceCloseOutcome::Failed,
+        "cancelled" => SequenceCloseOutcome::Cancelled,
+        _ => return Err(StoreError::invalid(format!("unknown sequence close outcome {outcome:?}"))),
+      };
+      let evidence: CompletionEvidence = serde_json::from_value(evidence.clone())
+        .map_err(|error| StoreError::invalid(format!("invalid sequence close evidence: {error}")))?;
+      TaskCompletion::close_sequence_child(self, session_id, request_id, outcome, &evidence).await
+    })
+  }
+
+  fn restore_chain<'a>(
+    &'a self,
+    session_id: &'a str,
+    request_id: &'a str,
+    reason: &'a str,
+  ) -> BoxFuture<'a, StoreResult<Vec<String>>> {
+    Box::pin(async move { TaskCompletion::restore_chain(self, session_id, request_id, reason).await })
+  }
+
+  fn restore_chain_locked<'a>(
+    &'a self,
+    guard: &'a ControlGuard,
+    session_id: &'a str,
+    request_id: &'a str,
+    reason: &'a str,
+  ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
+    Box::pin(async move { TaskCompletion::restore_chain_locked(self, guard, session_id, request_id, reason).await })
+  }
+}
+
+/// Return the completion owner installed in startup state.
+pub fn task_completion(features: &FeatureContext) -> Result<Arc<TaskCompletion>, StateError> {
+  features.startup.require::<TaskCompletion>()
+}
+
+/// Recheck saved close requests for one successfully finished run.
+pub async fn recheck_close_requests(
+  features: &FeatureContext,
+  session_id: &str,
+  run_id: &str,
+) -> StoreResult<Vec<String>> {
+  task_completion(features)
+    .map_err(|error| StoreError::new(error.to_string()))?
+    .recheck_close_requests(session_id, run_id)
+    .await
+}
+
+/// Apply completion follow-ups for one finished run.
+pub async fn after_run_finished(features: &FeatureContext, session_id: &str, run_id: &str) -> StoreResult<()> {
+  task_completion(features)
+    .map_err(|error| StoreError::new(error.to_string()))?
+    .after_run_finished(session_id, run_id)
+    .await
+}
+
+/// Return the pending-trigger or pending-input pause reason for one task.
+pub fn pause_reason(features: &FeatureContext, session_id: &str) -> StoreResult<Option<String>> {
+  task_completion(features).map_err(|error| StoreError::new(error.to_string()))?.pause_reason(session_id)
+}
+
+fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidence> {
+  let string_field = |name: &str| request.get(name).and_then(Value::as_str).map(str::to_string).unwrap_or_default();
+  let strings_field = |name: &str| -> StoreResult<Vec<String>> {
+    match request.get(name) {
+      None | Some(Value::Null) => Ok(Vec::new()),
+      Some(Value::Array(values)) => values
+        .iter()
+        .map(|value| {
+          value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| StoreError::new(format!("saved close request {name} must contain strings")))
+        })
+        .collect(),
+      Some(_) => Err(StoreError::new(format!("saved close request {name} must be an array"))),
+    }
+  };
+  Ok(CompletionEvidence {
+    summary: string_field("summary"),
+    result_refs: strings_field("result_refs")?,
+    run_ids: strings_field("run_ids")?,
+    ..CompletionEvidence::default()
+  })
+}
+
+fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
+  values.sort();
+  values.dedup();
+  values
+}

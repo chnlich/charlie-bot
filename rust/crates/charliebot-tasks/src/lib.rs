@@ -2,8 +2,10 @@
 
 pub mod autonamer;
 pub mod cold_read;
+pub mod completion;
 pub mod dispatch;
 pub mod execution;
+pub mod git;
 pub mod master_queue;
 pub mod master_run;
 pub mod master_state;

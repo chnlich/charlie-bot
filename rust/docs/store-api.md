@@ -40,6 +40,7 @@ that was checked, so a concurrent write's cached result stays current.
 | `Store::list_archived_page(&self, group: Option<&str>, limit: usize, before: Option<&str>, before_id: Option<&str>) -> StoreResult<ArchivedPage>` | `src/runtime/session_listing.py::list_archived_page` |
 | `Store::archived_context_rows(&self, rows: &[SessionMetadata]) -> StoreResult<Vec<SessionMetadata>>` | `src/runtime/session_listing.py::archived_context_rows` |
 | `trigger_files::iter_trigger_file_stats(triggers_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBuf, Metadata)>>` | `src/runtime/trigger_files.py::iter_trigger_file_stats` |
+| `trigger_files::pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<UtcDateTime>)` | `src/runtime/session_sidebar.py:157` |
 | `Store::raw_metadata_scan(&self) -> StoreResult<Vec<RawMetadata>>` | `src/features/usage/storage_cool.py` raw metadata scan |
 
 Session listings apply `Store::derived_archived_ids` after stored-status reads. This overlay reads task-tree facts and leaves metadata unchanged. `SequenceListingFields` supplies controller fields and subtree ownership.
@@ -148,6 +149,7 @@ route accepts run-token identity. `records_generation` increments after each run
 
 | Rust API (implemented) | Python source |
 | --- | --- |
+| `Store::session_detail(&self, session_id: &str) -> StoreResult<Value>` | `src/runtime/task_sessions.py:987` |
 | `create_task(&self, request: CreateTask, caller: TaskCaller, slot_values: Map<String, Value>) -> StoreResult<SessionMetadata>` | `src/runtime/task_sessions.py::create_task` |
 | `runtime_gate(&self, request: &CreateTask, caller: &TaskCaller) -> StoreResult<()>` | `src/runtime/task_sessions.py` create-task runtime gate |
 | `set_node_backend_locked(&self, guard: &ControlGuard, session_id: &str, backend: &str) -> StoreResult<()>` | `src/runtime/task_sessions.py::set_node_backend` |

@@ -15,6 +15,10 @@ pub const LOCAL_NO_PROXY_ENTRIES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 /// The Google API-key variables a Google CLI must not inherit (`base.strip_google_api_keys`).
 const GOOGLE_API_KEY_VARS: [&str; 2] = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
 
+/// The image extensions a backend passes as image input, with their MIME types (`base.IMAGE_MIME_BY_EXT`).
+pub const IMAGE_MIME_BY_EXT: [(&str, &str); 5] =
+  [("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("gif", "image/gif"), ("webp", "image/webp")];
+
 /// The process environment the CLI backend types read at registration: PATH to find a CLI binary, and HOME for the
 /// user-local bin directory the vendor installers target.
 #[derive(Clone, Debug)]

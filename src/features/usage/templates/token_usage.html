@@ -82,7 +82,7 @@
   <p class="sub">Across the <b>{{ window[0] }}</b> to <b>{{ window[1] }}</b> range covered by this
   host&rsquo;s local logs, <b>{{ ctx.rows|length }}</b> models consumed <b>{{ ctx.tot_compact }}</b> tokens in total.
   The top model by total is <b>{{ ctx.top_escaped }}</b> (<code>{{ ctx.top_compact }}</code>); of that,
-  <b>{{ "%.1f"%cache_share }}%</b> was cache reads (cached input tokens, cheapest per token), while output tokens
+  <b>{{ "%.1f"|format(cache_share) }}%</b> was cache reads (cached input tokens, cheapest per token), while output tokens
   billed for real were only {{ ctx.out_compact }} in total, with the top rank going to <b>{{ ctx.top_out_escaped }}</b>
   (<code>{{ ctx.top_out_compact }}</code>). Usage for the same model is merged into one row across subscription accounts and across the
   different spellings the sources give it.</p>
@@ -102,10 +102,10 @@
       <p class="foot">= input {{ ctx.in_compact }} + output {{ ctx.out_compact }}</p>
     </div>
     <div class="tiles">
-      <div class="tile"><p class="lab">output tokens</p><div class="val">{{ ctx.out_compact }}</div><p class="foot">{{ "%.2f"%(ctx.out_share*100) }}% of the total</p></div>
-      <div class="tile"><p class="lab">cache read share</p><div class="val">{{ "%.1f"%cache_share }}%</div><p class="foot">cached input {{ ctx.cr_compact }}</p></div>
+      <div class="tile"><p class="lab">output tokens</p><div class="val">{{ ctx.out_compact }}</div><p class="foot">{{ "%.2f"|format(ctx.out_share*100) }}% of the total</p></div>
+      <div class="tile"><p class="lab">cache read share</p><div class="val">{{ "%.1f"|format(cache_share) }}%</div><p class="foot">cached input {{ ctx.cr_compact }}</p></div>
       <div class="tile"><p class="lab">cache write</p><div class="val">{{ ctx.cw_compact }}</div><p class="foot">written to cache; Claude Code only</p></div>
-      <div class="tile"><p class="lab">fresh input</p><div class="val">{{ ctx.fresh_compact }}</div><p class="foot">cache miss, {{ "%.1f"%ctx.fresh_percent }}% of the total</p></div>
+      <div class="tile"><p class="lab">fresh input</p><div class="val">{{ ctx.fresh_compact }}</div><p class="foot">cache miss, {{ "%.1f"|format(ctx.fresh_percent) }}% of the total</p></div>
     </div>
   </div>
 
@@ -115,10 +115,10 @@
       {%- for src in ctx.usage_sources -%}
         {%- set ps = ctx.per_src[src] -%}
         {{- " " if loop.first else ", " -}}
-        {{- src }} {{ ps["t_comp"] }} ({{"%.0f"%ps["share"]}}%, {{ ps["models"] }} models){{ "." if loop.last }}
+        {{- src }} {{ ps["t_comp"] }} ({{"%.0f"|format(ps["share"])}}%, {{ ps["models"] }} models){{ "." if loop.last }}
       {%- endfor -%}
     </li>
-    <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"%cache_share }}% of tokens were cache reads,
+    <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"|format(cache_share) }}% of tokens were cache reads,
       because a long session re-reads its whole context every turn. Ranking by output tokens reflects real production,
       and the two rankings do not agree.</li>
     <li><b>Self-hosted endpoints may not report cache hits:</b> their input is counted entirely as fresh input,
@@ -167,7 +167,7 @@
     <li><b>Cost:</b> this reports tokens only and does not convert to money — these calls run on subscriptions, not per-token.</li>
   </ul>
 
-  <p class="foot">Read from the ledger in <b>{{ "%.2f"%ctx.elapsed_s }}&thinsp;s</b>; the ledger is {{ as_of }}. A capture refreshes it; this page never captures.</p>
+  <p class="foot">Read from the ledger in <b>{{ "%.2f"|format(ctx.elapsed_s) }}&thinsp;s</b>; the ledger is {{ as_of }}. A capture refreshes it; this page never captures.</p>
 </div>
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>

@@ -35,7 +35,7 @@ impl Store {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let path = self.chat_events_path(session_id);
-    #[cfg(feature = "write-faults")]
+    #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     ndjson::append(&path, &event)?;
     if let Some(cached) = cache.as_mut() {

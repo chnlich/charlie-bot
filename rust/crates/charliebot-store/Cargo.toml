@@ -21,7 +21,6 @@ uuid.workspace = true
 write-faults = []
 
 [dev-dependencies]
-charliebot-store = { path = ".", features = ["write-faults"] }
 regex.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

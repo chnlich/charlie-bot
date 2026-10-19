@@ -1,32 +1,28 @@
-//! `src/features/slack`: registers the `slack:` config section, the Slack fields of each session and the turn
-//! contribution that carries the thread reply contract in manager runs and renders `slack_reply` events. The rest of
-//! the package is not ported yet.
+//! `src/features/slack`: the Socket Mode summon listener, thread reply routes, service, session fields, and turn hooks.
 
+mod api;
+mod config;
 mod event_types;
 pub mod metadata;
+mod service;
+mod slack_client;
+pub mod slack_listener;
 mod thread_contract;
 mod turn_contribution;
 
 use std::sync::Arc;
 
-use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{Registry, RegistryError};
 use serde_json::{Map, Value};
+use service::SlackService;
 use turn_contribution::SlackTurnContribution;
 
-/// `src/features/slack`: the `slack:` section, then the Slack fields of each session, then the turn contribution.
+/// Register in the Python package order, omitting its Python-only CLI command.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(ConfigSection {
-    key: "slack",
-    legacy_keys: &[
-      ("slack_allowed_user_ids", "slack.allowed_user_ids"),
-      ("credentials: slack_bot_token", "slack.bot_token"),
-      ("credentials: slack_app_token", "slack.app_token"),
-      ("credentials: slack_user_token", "slack.user_token"),
-    ],
-    parse: raw_section,
-  })?;
+  registry.service(Arc::new(SlackService::default()))?;
+  registry.router(api::routes, api::matches)?;
+  registry.config_section(config::section())?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
       owner: "slack",
@@ -66,7 +62,5 @@ fn valid_origin(value: &mut Value, fields: &[&str]) -> bool {
   valid
 }
 
-/// A config section kept as its YAML value until the owning package's port types it.
-fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
-  Ok(Arc::new(value.clone()))
-}
+#[cfg(test)]
+mod test_support;

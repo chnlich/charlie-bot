@@ -9,22 +9,115 @@ credentials:
     app_token: xapp-parity-synthetic-token
 fakes:
   slack: {}
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-slack-summon}
+        - gate: slack-summon-start
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic Slack summon round ended silently.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+        - gate: slack-summon-result
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-slack-nudge}
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
 steps:
   - kind: fake
-    name: acknowledged message subtype is dropped
+    name: allowed app mention starts its Slack thread session
+    fake: slack
+    action: socket_event
+    payload:
+      type: app_mention
+      team: T0PARITY
+      channel: C_SUMMON
+      user: U0PARITY
+      ts: "1767600000.000100"
+  - kind: wait
+    name: summon event is stored in the deterministic session
+    timeout_seconds: 30
+    until:
+      event:
+        session: 99321c63-7e39-5a53-b87a-c369370b035d
+        type: agent_message
+        fields:
+          content: Slack 线程召唤
+          slack: {channel_id: C_SUMMON, thread_ts: "1767600000.000100", mention_ts: "1767600000.000100"}
+  - kind: wait
+    name: summon agent reaches its start gate
+    timeout_seconds: 30
+    until: {at_gate: slack-summon-start}
+  - kind: gate
+    name: release summon agent to finish its round
+    open: slack-summon-start
+  - kind: fake
+    name: app mention from another user is dropped
+    fake: slack
+    action: socket_event
+    payload:
+      type: app_mention
+      team: T0PARITY
+      channel: C_OTHER
+      user: U_OTHER
+      ts: "1767600000.000300"
+  - kind: fake
+    name: eligible follow message arms the thread trigger
     fake: slack
     action: socket_event
     payload:
       type: message
-      subtype: message_changed
-      channel: C0PARITY
+      team: T0PARITY
+      channel: C_SUMMON
       user: U0PARITY
-      ts: 1767600000.000200
-      thread_ts: 1767600000.000100
-  - name: reply to the fixture Slack thread
-    method: POST
-    path: /api/internal/slack/reply
-    json:
-      session_id: ${sessions.delta}
-      text: Synthetic Slack parity reply.
-    expect_status: 200
+      ts: "1767600000.000200"
+      thread_ts: "1767600000.000100"
+  - kind: log_event
+    name: follow trigger stores its message floor
+    event: slack_follow_trigger_armed
+    fields:
+      session: 99321c63-7e39-5a53-b87a-c369370b035d
+    timeout_seconds: 30
+  - kind: wait
+    name: summon agent emits its silent result
+    timeout_seconds: 30
+    until: {at_gate: slack-summon-result}
+  - kind: gate
+    name: release summon agent after its result
+    open: slack-summon-result
+  - kind: wait
+    name: the silent summon round records its nudge
+    timeout_seconds: 30
+    until:
+      event:
+        session: 99321c63-7e39-5a53-b87a-c369370b035d
+        type: agent_message
+        count: 2
+  - kind: log_event
+    name: the silent nudge round posts its thread notice
+    event: slack_reply_notice
+    fields:
+      session: 99321c63-7e39-5a53-b87a-c369370b035d
+    timeout_seconds: 30
+  - kind: wait
+    name: the no-reply notice is persisted
+    timeout_seconds: 30
+    until:
+      event:
+        session: 99321c63-7e39-5a53-b87a-c369370b035d
+        type: assistant_error

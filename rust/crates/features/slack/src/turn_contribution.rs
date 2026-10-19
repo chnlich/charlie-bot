@@ -1,13 +1,15 @@
-//! The Slack package's turn contribution (`src/features/slack/turn_contribution.py`). It carries the thread reply
-//! contract in a manager run of a Slack thread session, and renders `slack_reply` events as chat lines. The round-end
-//! audit and the other turn steps are not ported yet.
+//! The Slack package's after-turn audit, thread reply contract, and `slack_reply` chat renderer.
 
-use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
+use std::sync::Arc;
+
+use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
+use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
 use crate::event_types::SLACK_REPLY;
@@ -44,6 +46,21 @@ impl TurnContribution for SlackTurnContribution {
 
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     vec![(SLACK_REPLY, slack_reply_message)]
+  }
+
+  fn after_turn<'a>(
+    &'a self,
+    meta: &'a SessionMetadata,
+    done_event: &'a Value,
+    _cfg: &'a CharlieBotConfig,
+    features: &'a Arc<FeatureContext>,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      let adapter: Arc<dyn ThreadAdapter> =
+        Arc::new(crate::slack_listener::SlackThreadAdapter::lazy(Arc::clone(features)));
+      thread_entry::deliver_done(&adapter, features, &meta.id, done_event).await?;
+      Ok(())
+    })
   }
 }
 
@@ -144,7 +161,7 @@ mod tests {
   }
 
   #[test]
-  fn the_contract_part_names_the_thread_the_origin_points_at() {
+  fn contract_part_carries_the_platform_line_the_address_and_the_rules() {
     let part = thread_contract_part(&synthetic_origin());
     assert!(part.contains("C1") && part.contains(ORIGIN_TS), "{part}");
   }

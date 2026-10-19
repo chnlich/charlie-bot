@@ -85,8 +85,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/cron/tasks/{name}/run` | features/cron | todo |  |
 | DELETE | `/api/cron/tasks/{name}` | features/cron | todo |  |
 | POST | `/api/diag/switch-events` | features/diag | todo |  |
-| POST | `/api/internal/slack/reply` | features/slack | todo |  |
-| POST | `/api/internal/slack/ack` | features/slack | todo |  |
+| POST | `/api/internal/slack/reply` | features/slack | ported |  |
+| POST | `/api/internal/slack/ack` | features/slack | ported |  |
 | POST | `/api/internal/discord/reply` | features/discord | todo |  |
 | POST | `/api/internal/discord/read` | features/discord | todo |  |
 | POST | `/api/internal/discord/check` | features/discord | todo |  |
@@ -189,7 +189,7 @@ implemented.
 | lifespan | 12. Stop services and close shared clients | services | ported | Services stop in reverse registration order, then the let-go steps run (`charliebot-registry/src/lifespan.rs:142`). The shared HTTP client then closes and is timed as `http_client_ms` on the `charliebot_shutdown` line (`charliebot-compat/src/http_client.rs:34`, `charliebot-server/src/main.rs:208`; Python `server.py:305`). The open session WebSockets close next, with code 1000, and are timed as `ws_close_ms` (`Lifespan::shutdown`, `charliebot-store/src/streaming.rs` `close_all`; Python `server.py:306`, `src/runtime/streaming.py:131`). Uvicorn sends close code 1012 to each open WebSocket before the lifespan shutdown starts (`uvicorn/server.py`, `Server.shutdown`). The port closes each socket with code 1000 at the `ws_close_ms` step. The web UI reconnects on any close and does not read the code (`web/static/js/websocket.js`, `socket.onclose`). The writer-fence release is implemented. The usage quota builds its own client, so it is not closed here. |
 | lifespan | 13. Release home writer fence | foundation | ported | |
 | service | `scheduler` | features/cron | todo | |
-| service | `slack` | features/slack | todo | |
+| service | `slack` | features/slack | ported | Starts Socket Mode and the lost-summon backfill when both Slack tokens and an allowed-user id are configured. |
 | service | `discord` | features/discord | todo | |
 | service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
@@ -205,7 +205,7 @@ implemented.
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
 | registration | router `/api/internal` (`web_reply`) | features/web_reply | ported | The four web reply routes above. The round-end audit (`audit.py`) and the turn contribution's `after_turn` are not ported: the thread-core task owns them. |
-| registration | turn contribution `slack`: instruction segments | features/slack | ported | Adds the thread reply contract to a manager run of a Slack thread session. The thread core it reads (`thread_entry.py`) is ported in `features/chat_threads`; the Slack listener is the `slack` service above. |
+| registration | turn contribution `slack` | features/slack | ported | Adds the thread reply contract to manager runs, renders `slack_reply`, and runs the round-end audit from `after_turn`. The thread core it calls (`thread_entry.py`) is ported in `features/chat_threads`. |
 | registration | turn contribution `discord`: instruction segments | features/discord | ported | Adds the thread reply contract to a manager run of a Discord thread session. The thread core it reads (`thread_entry.py`) is ported in `features/chat_threads`; the Discord listener is the `discord` service above. |
 | component | thread core (`thread_entry.py`) | features/chat_threads | ported | Reply posting and retries, the round audit, lost-summon backfill, follow triggers, and the file-server link checks. Each platform supplies its own `ThreadAdapter`; none is registered yet. |
 | component | `ChannelService` (`channel_service.py`) | features/chat_threads | ported | Starts a platform's listener and its boot backfill on the server's `ServiceContext`, and stops both by cancelling and awaiting them. No listener is registered yet: the `slack` and `discord` services above are `todo`. |

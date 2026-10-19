@@ -663,14 +663,26 @@ name = "charliebot-slack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "charliebot-chat-threads",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-sched",
  "charliebot-store",
+ "charliebot-tasks",
+ "futures-util",
+ "http",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

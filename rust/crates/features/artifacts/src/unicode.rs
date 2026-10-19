@@ -105,6 +105,11 @@ pub(crate) fn is_python_digit(character: char) -> bool {
   DIGIT_RANGES.iter().any(|&(start, end)| (start..=end).contains(&code_point))
 }
 
+/// Python's `str.isdigit`: a non-empty string whose every character is a digit.
+pub(crate) fn isdigit(text: &str) -> bool {
+  !text.is_empty() && text.chars().all(is_python_digit)
+}
+
 pub(crate) fn python_decimal_value(character: char) -> Option<u8> {
   let code_point = character as u32;
   DECIMAL_ZEROES.iter().find_map(|&zero| (zero..zero + 10).contains(&code_point).then(|| (code_point - zero) as u8))

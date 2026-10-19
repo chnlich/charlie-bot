@@ -359,7 +359,7 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
   }
   let mut values = Vec::new();
   for (heading, number) in numbered {
-    if !number.chars().all(unicode::is_python_digit) {
+    if !unicode::isdigit(&number) {
       return Ok(vec![outcome(
         SECTIONS_NUMBERED,
         false,
@@ -691,7 +691,7 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
           continue;
         }
         let rest = &code_text.text[found.end()..];
-        if GLOSS.is_match(rest)? || (trim_chars(before, " -—·1234567890").is_empty() && COLON_GLOSS.is_match(rest)?)
+        if GLOSS.is_match(rest)? || (trim_chars(before, " -—·1234567890.").is_empty() && COLON_GLOSS.is_match(rest)?)
         {
           named.insert(ordinal_label(kind));
           continue;
@@ -797,7 +797,7 @@ fn ordinal_label(kind: &str) -> String {
 }
 
 fn ordinal_number(number: &str) -> anyhow::Result<Option<usize>> {
-  if number.chars().all(unicode::is_python_digit) {
+  if unicode::isdigit(number) {
     return Ok(python_decimal_integer(number).ok().and_then(|value| value.parse().ok()));
   }
   if number == "十" {
@@ -1052,6 +1052,24 @@ mod tests {
   fn test_byte_integrity_fails_on_non_lf_control_byte() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
+  #[test]
+  fn plan_section_number_span_must_hold_digits() {
+    let directory = tempfile::tempdir().unwrap();
+    let chrome = stub_chrome(directory.path(), 800);
+    let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix.").replace(">1</span>", "></span>"));
+    let outcomes = run_plan(&page, chrome.to_str().unwrap());
+    assert_eq!(by_name(&outcomes, SECTIONS_NUMBERED)[0].detail, "h2 'Problem / Goal' span.n reads '', not an integer");
+  }
+
+  #[test]
+  fn ordinal_label_after_a_list_marker_takes_the_colon_gloss() {
+    let directory = tempfile::tempdir().unwrap();
+    let chrome = stub_chrome(directory.path(), 800);
+    let page = write_page(directory.path(), "plan.html", &plan_page("2. Plan 3: ship the fix."));
+    let outcomes = run_plan(&page, chrome.to_str().unwrap());
+    assert!(by_name(&outcomes, ORDINAL_NAMED)[0].passed);
+  }
+
     for (damaged, hex_name) in [('\t', "0x09"), ('\u{000c}', "0x0c"), ('\r', "0x0d")] {
       let source = plan_page(&format!("Before{damaged}After"));
       let page = write_page(directory.path(), "plan.html", &source);

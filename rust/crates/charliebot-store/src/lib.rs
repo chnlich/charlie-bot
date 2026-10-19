@@ -38,7 +38,10 @@ pub use store::{
   StoreHookFuture, StoreHooks,
 };
 pub use streaming::{SIDEBAR_CHANNEL, STREAM_COALESCE_INTERVAL, StreamingManager, Subscription, session_channel};
-pub use task_tree::{CreateTask, PromptScope, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, is_read_only_exempt};
+pub use task_tree::{
+  AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, PromptScope, StructuralBlockers, TASK_CREATE_REQUEST_ID_REQUIRED,
+  TaskCaller, TaskFacts, TaskState, TaskTreeActivity, is_read_only_exempt,
+};
 
 use std::fmt;
 

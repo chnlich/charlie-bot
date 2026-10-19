@@ -478,7 +478,8 @@ async fn fail(
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::os::unix::fs::PermissionsExt;
+  use std::os::unix::fs::symlink;
+  use std::path::PathBuf;
   use std::sync::{Arc, Mutex};
 
   use charliebot_registry::Registry;
@@ -493,17 +494,13 @@ mod tests {
     registry.load_config(home).unwrap()
   }
 
-  fn fake_env(bin: &Path, home: &Path, config_dir: &Path, transcript: &Path, root: &Path) -> Env {
+  fn fake_env(bin: &Path, home: &Path, config_dir: &Path) -> Env {
     let inherited = Env::from([
       ("HOME".to_string(), home.to_string_lossy().into_owned()),
       ("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display())),
       ("CLAUDECODE".to_string(), "nested".to_string()),
       ("CLAUDE_CONFIG_DIR".to_string(), "/synthetic/inherited".to_string()),
       (crate::launch_loop::SESSION_ID_ENV.to_string(), "parent-session".to_string()),
-      ("ARG_LOG".to_string(), root.join("arguments.txt").to_string_lossy().into_owned()),
-      ("PROMPT_LOG".to_string(), root.join("prompt.txt").to_string_lossy().into_owned()),
-      ("TRANSCRIPT".to_string(), transcript.to_string_lossy().into_owned()),
-      ("FAKE_MODE".to_string(), "success".to_string()),
     ]);
     let env = compaction_env_from(config_dir, &inherited).unwrap();
     assert!(!env.contains_key("CLAUDECODE"));
@@ -512,6 +509,26 @@ mod tests {
     assert_eq!(env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY").unwrap(), "1");
     assert!(inherited.contains_key("CLAUDECODE"));
     env
+  }
+
+  /// Stages the fake `claude` for one run: it records its argv and stdin under `root`, then plays the steps of `mode`.
+  fn stage_claude(bin: &Path, root: &Path, mode: Vec<Value>) {
+    let mut steps =
+      vec![json!({"record_argv": root.join("arguments.txt")}), json!({"record_stdin": root.join("prompt.txt")})];
+    steps.extend(mode);
+    fs::write(bin.join("probe.json"), json!({"claude": steps}).to_string()).unwrap();
+  }
+
+  /// The fake-program helper that cargo builds beside this test binary. Unit tests cannot name it with
+  /// `CARGO_BIN_EXE_*`, so the path comes from the target directory.
+  fn fake_program_bin() -> PathBuf {
+    let exe = std::env::current_exe().expect("the test binary path");
+    exe
+      .ancestors()
+      .skip(1)
+      .map(|directory| directory.join("fake_program"))
+      .find(|candidate| candidate.is_file())
+      .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
   }
 
   fn emit_sink() -> (EmitFn, Arc<Mutex<Vec<Value>>>) {
@@ -564,11 +581,19 @@ mod tests {
     fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     fs::create_dir_all(&cwd).unwrap();
     fs::write(&transcript, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
-    fs::write(bin.join("claude"), include_str!("../../../tests/fake_claude_compaction.sh")).unwrap();
-    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    symlink(fake_program_bin(), bin.join("claude")).unwrap();
     let (emit, events) = emit_sink();
-    let inherited = fake_env(&bin, &home, &account, &transcript, root.path());
+    let inherited = fake_env(&bin, &home, &account);
 
+    stage_claude(
+      &bin,
+      root.path(),
+      vec![
+        json!({"append": {"path": transcript, "text": "{\"type\":\"system\",\"subtype\":\"compact_boundary\"}\n"}}),
+        json!({"stdout": "{\"is_error\":false,\"modelUsage\":{\"claude-sonnet-5\":{\"inputTokens\":1}}}\n"}),
+        json!({"exit": 0}),
+      ],
+    );
     let success_env = inherited.clone();
     let succeeded = compact_with_sonnet_inner(
       call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(30)),
@@ -585,8 +610,12 @@ mod tests {
     assert_eq!(events.lock().unwrap()[0]["compact_metadata"]["pre_tokens"], 125_000);
 
     fs::write(&transcript, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
-    let mut failure_env = inherited.clone();
-    failure_env.insert("FAKE_MODE".to_string(), "failure".to_string());
+    stage_claude(
+      &bin,
+      root.path(),
+      vec![json!({"stdout": "{\"is_error\":true,\"result\":\"synthetic compaction failure\"}\n"}), json!({"exit": 7})],
+    );
+    let failure_env = inherited.clone();
     let failed = compact_with_sonnet_inner(
       call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(30)),
       move |path| compaction_env_from(path, &failure_env),
@@ -597,8 +626,8 @@ mod tests {
     assert_eq!(events.lock().unwrap()[1]["type"], charliebot_core::event_types::CONTEXT_COMPACT_FAILED);
 
     fs::write(&transcript, "{\"type\":\"user\",\"message\":{}}\n").unwrap();
-    let mut timeout_env = inherited;
-    timeout_env.insert("FAKE_MODE".to_string(), "timeout".to_string());
+    stage_claude(&bin, root.path(), vec![json!({"sleep_ms": 5000}), json!({"exit": 0})]);
+    let timeout_env = inherited;
     let timed_out = compact_with_sonnet_inner(
       call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_millis(100)),
       move |path| compaction_env_from(path, &timeout_env),

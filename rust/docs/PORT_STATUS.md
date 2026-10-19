@@ -24,7 +24,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | GET | `/home` | pages | ported |  |
 | GET | `/` | foundation | ported |  |
 | GET | `/api/sessions/` | sessions | ported |  |
-| POST | `/api/sessions/` | sessions | todo |  |
+| POST | `/api/sessions/` | sessions | ported | Registered slot values are checked for their keys only; a value of the wrong type is accepted. |
 | GET | `/api/sessions/archived` | sessions | ported |  |
 | GET | `/api/sessions/starred` | sessions | ported |  |
 | GET | `/api/sessions/groups` | sessions | ported |  |
@@ -41,7 +41,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | GET | `/api/sessions/{session_id}/transcript` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/fork` | sessions | todo |  |
 | POST | `/api/sessions/{session_id}/elone` | sessions | todo |  |
-| POST | `/api/sessions/{session_id}/backend` | sessions | todo |  |
+| POST | `/api/sessions/{session_id}/backend` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}/permanent` | sessions | ported |  |
@@ -49,7 +49,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | POST | `/api/sessions/{session_id}/star` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/unstar` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/rounds/{round_id}/rate` | sessions | ported |  |
-| PATCH | `/api/sessions/{session_id}` | sessions | todo |  |
+| PATCH | `/api/sessions/{session_id}` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/group` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}/events.jsonl` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}/runs` | sessions | ported |  |

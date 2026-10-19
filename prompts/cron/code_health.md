@@ -200,18 +200,22 @@ An open `main-repair/*` pull request means the repair is in flight: end this run
 with no change. Otherwise this run repairs main:
 
 1. Read the failure with `gh run view --log-failed <run-id>`.
-2. When the failure names its fix, branch `main-repair/<short-topic>` from the
+2. A first-attempt run may hold a flaky failure: when
+   `gh run view <run-id> --json attempt` reads 1, rerun the failed jobs once
+   with `gh run rerun <run-id> --failed` and watch the run. A green rerun
+   returns to the sending step with main green; a red rerun continues below.
+3. When the failure names its fix, branch `main-repair/<short-topic>` from the
    failing main sha and apply the fix. A ruff rule with a named transform names
    its fix. An import order or formatter drift names its fix. A failing test
    without its expected value in the log does not. Name the branch outside
    `code-health/*` so Step 0 leaves the repair pull request to this run.
-3. Push the branch and open a pull request. Watch its checks. A red check follows
+4. Push the branch and open a pull request. Watch its checks. A red check follows
    the failure-inside-this-diff rules with the same two-fix budget.
-4. Confirm the repair still carries a diff against a fresh `origin/main`. Close an
+5. Confirm the repair still carries a diff against a fresh `origin/main`. Close an
    emptied repair pull request and return to the sending step.
-5. Merge the repair pull request with `gh pr merge --squash` once green. Wait for
+6. Merge the repair pull request with `gh pr merge --squash` once green. Wait for
    the merge's main run with `gh run watch`, then return to the sending step.
-6. When the failure names no fix, or the repair pull request is abandoned, return
+7. When the failure names no fix, or the repair pull request is abandoned, return
    to the sending step with main still failed.
 
 When the newest comment of an adopted pull request starts `code-health-waiting:`, read main's CI state first:

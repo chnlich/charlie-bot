@@ -1,7 +1,10 @@
 //! `src/features/artifacts`: registers the `publish:` config section. The rest of the package is not ported yet.
 
+pub mod artifact_check;
 mod artifact_view;
+mod headless_render;
 pub mod plan_diff;
+mod unicode;
 
 use std::fs;
 use std::path::Path;
@@ -9,6 +12,7 @@ use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_registry::{Registry, RegistryError, sidebar::SidebarContribution};
+use futures_util::future::BoxFuture;
 use serde_json::Value;
 
 /// `src/features/artifacts`: the `publish:` section.
@@ -19,7 +23,22 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],
     parse: raw_section,
   })?;
-  registry.sidebar_contribution("artifacts", Arc::new(ArtifactsSidebar))
+  registry.sidebar_contribution("artifacts", Arc::new(ArtifactsSidebar))?;
+  registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
+}
+
+/// Close the process-wide headless renderer.
+pub fn close_renderer() -> anyhow::Result<()> {
+  headless_render::close_renderer()
+}
+
+fn close_headless_renderer_at_shutdown(
+  _features: Arc<charliebot_registry::FeatureContext>,
+) -> BoxFuture<'static, anyhow::Result<()>> {
+  Box::pin(async move {
+    tokio::task::spawn_blocking(close_renderer).await??;
+    Ok(())
+  })
 }
 
 struct ArtifactsSidebar;

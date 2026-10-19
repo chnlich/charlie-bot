@@ -250,21 +250,26 @@ dependencies = [
 name = "charliebot-artifacts"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-pyhtml",
  "charliebot-registry",
  "charliebot-store",
+ "fancy-regex",
  "futures-util",
  "http",
  "regex",
+ "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
  "tokio",
  "tracing",
+ "tungstenite",
  "url",
+ "uuid",
 ]
 
 [[package]]

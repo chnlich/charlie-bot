@@ -81,6 +81,7 @@ tokio-rustls = "0.26"
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic"] }
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 url = "2"

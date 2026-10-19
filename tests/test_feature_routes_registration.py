@@ -61,6 +61,10 @@ MOVED_ROUTES = [
     MovedRoute(WEB_REPLY, "GET", "/api/internal/web/dialog?session_id={session_id}", {}, 404, SESSION_NOT_FOUND),
     MovedRoute(WEB_REPLY, "POST", "/api/internal/web/status", _session_body(text="{}"), 404, SESSION_NOT_FOUND),
     MovedRoute(WEB_REPLY, "GET", "/api/internal/web/status?session_id={session_id}", {}, 404, SESSION_NOT_FOUND),
+    MovedRoute(WEB_REPLY, "POST", "/api/internal/web/status/unread", _session_body(text="{}"), 404, SESSION_NOT_FOUND),
+    MovedRoute(
+        WEB_REPLY, "POST", "/api/internal/web/ask-check", _session_body(item={"text": "t"}, backend="b", answer="a"),
+        404, SESSION_NOT_FOUND),
     MovedRoute(DISCORD, "POST", "/api/internal/discord/read", _session_body(), 404, SESSION_NOT_FOUND),
     MovedRoute(DISCORD, "POST", "/api/internal/discord/check", {}, 409, ""),
     MovedRoute(

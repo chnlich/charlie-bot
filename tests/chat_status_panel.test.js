@@ -497,3 +497,74 @@ test('a platform.onChange switch redraws the panel in the new layout', async () 
   switchLayout(rig, 'desktop');
   assert.deepEqual(rowKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
+
+test('a waiting item context is a fold closed under the item text', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Decide the size', context: 'The sweep costs $5 an hour.', link: null}],
+  }});
+  const item = waitingItems(rig.panel)[0];
+  const toggle = item.querySelector('[data-context-toggle]');
+  const body = item.querySelector('[data-context-body]');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(body.classList.contains('hidden'), true);
+  assert.equal(body.textContent, 'The sweep costs $5 an hour.');
+});
+
+test('clicking the context fold opens it and clicking again closes it', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Decide the size', context: 'The sweep costs $5 an hour.', link: null}],
+  }});
+  const item = waitingItems(rig.panel)[0];
+  const toggle = item.querySelector('[data-context-toggle]');
+  const body = item.querySelector('[data-context-body]');
+
+  toggle.onclick();
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(body.classList.contains('hidden'), false);
+
+  toggle.onclick();
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(body.classList.contains('hidden'), true);
+});
+
+test('a link inside an item context becomes an anchor through safeLink', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{
+      text: 'Decide the size',
+      context: 'Evidence: https://example.com/plan and /absolute_filepath/tmp/page.html',
+      link: null,
+    }],
+  }});
+  const body = waitingItems(rig.panel)[0].querySelector('[data-context-body]');
+  const anchors = allElements(body).filter((el) => el.tagName === 'A');
+  assert.deepEqual(anchors.map((el) => el.href), ['https://example.com/plan', '/absolute_filepath/tmp/page.html']);
+});
+
+test('an item without context renders no fold', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Approve the deploy', link: null}]}});
+  const item = waitingItems(rig.panel)[0];
+  assert.equal(item.querySelectorAll('[data-context]').length, 0);
+});
+
+test('a descendant item context is a fold closed under the item text', async () => {
+  const rig = panelRig();
+  rig.page.descendants = [{
+    session_id: CHILD_ID,
+    name: 'Child one',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting: [{text: 'Decide the size', context: 'Why the decision comes now.', link: null}],
+  }];
+  await openSession(rig, {web_status: STATUS});
+  childToggle(rig.panel).onclick();
+  const item = childItems(rig.panel)[0];
+  const body = item.querySelector('[data-context-body]');
+  assert.equal(body.classList.contains('hidden'), true);
+  assert.equal(body.textContent, 'Why the decision comes now.');
+});

@@ -23,11 +23,11 @@ from fastapi import testclient
 from src.features.chat_threads import thread_sessions
 from src.features.discord import metadata as discord_metadata
 from src.features.slack import metadata as slack_metadata
-from src.features.web_reply import audit, reply
+from src.features.web_reply import audit, metadata, reply, status
 from src.features.web_reply import turn_contribution as web_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import master_cc_state, streaming, task_prompts
+from src.runtime import file_urls, master_cc_state, streaming, task_prompts
 from src.runtime.api import deps, message_utils
 from src.runtime.cli import common
 
@@ -852,6 +852,240 @@ async def test_a_status_event_leaves_the_unread_mark_unchanged(tmp_path: pathlib
   await blocks.lifecycle.mark_unread(sid)
   _set(client, sid, json.dumps({"now": "Done"}))
   assert (await blocks.store.get_session(sid)).has_unread
+
+
+# ---------------------------------------------------------------------------
+# The cold read: the item digest, the unread query and the ask-check record
+# ---------------------------------------------------------------------------
+
+_ASK_CHECK_URL = "/api/internal/web/ask-check"
+_UNREAD_URL = "/api/internal/web/status/unread"
+
+
+def _ask_check(
+    client: testclient.TestClient,
+    session_id: str,
+    item: dict,
+    *,
+    backend: str = "haiku",
+    answer: str = "(1) Decide.\n(2) NOT STATED.") -> httpx.Response:
+  return client.post(
+      _ASK_CHECK_URL, json={
+          "session_id": session_id,
+          "item": item,
+          "backend": backend,
+          "answer": answer
+      })
+
+
+def _unread(client: testclient.TestClient, session_id: str, text: str) -> httpx.Response:
+  return client.post(_UNREAD_URL, json={"session_id": session_id, "text": text})
+
+
+def _ask_checks(blocks: conftest.SessionBlocks, sid: str) -> list[dict]:
+  return _of_type(_events(blocks, sid), ET.WEB_ASK_CHECK)
+
+
+def _host_file_link(path: pathlib.Path) -> str:
+  return file_urls.FILE_SERVER_MOUNTS[0] + str(path)
+
+
+@pytest.mark.asyncio
+async def test_a_status_set_stores_context_when_given_and_an_item_without_one_unchanged(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  with_context = {
+      "text": "Pick a layout",
+      "context": "The panel is one row per item. Options: fold the line or show it. Fold is recommended.",
+      "link": None,
+  }
+  without_context = {"text": "Approve the deploy"}
+
+  resp = _set(client, sid, json.dumps({"waiting": [with_context, without_context]}))
+
+  assert resp.status_code == 200
+  stored = (await _stored_status(blocks, sid))["waiting"]
+  assert stored == [with_context, {"text": "Approve the deploy", "link": None}]
+  assert _status_events(blocks, sid)[-1]["web_status"]["waiting"] == stored
+
+
+def test_the_item_digest_names_the_item_and_every_part_and_the_linked_file_change_it(tmp_path: pathlib.Path) -> None:
+  page = tmp_path / "page.html"
+  page.write_text("first", encoding="utf-8")
+  item = metadata.WaitingItem(
+      text="Pick a layout", context="Why now: the panel ships today.", link=_host_file_link(page))
+
+  digest = status.item_sha256(item)
+
+  assert digest == status.item_sha256(item.model_copy())
+  assert len(digest) == 64
+  changed = {
+      status.item_sha256(item.model_copy(update={"text": "Pick a colour"})),
+      status.item_sha256(item.model_copy(update={"context": "Why now: the panel ships tomorrow."})),
+      status.item_sha256(item.model_copy(update={"link": None})),
+  }
+  page.write_text("second", encoding="utf-8")
+  changed.add(status.item_sha256(item))
+  assert digest not in changed
+  assert len(changed) == 4
+
+
+def test_the_item_digest_reads_a_bare_absolute_path_and_ignores_a_remote_link(tmp_path: pathlib.Path) -> None:
+  page = tmp_path / "page.html"
+  page.write_text("first", encoding="utf-8")
+  bare = metadata.WaitingItem(text="Pick a layout", link=str(page))
+  served = metadata.WaitingItem(text="Pick a layout", link=_host_file_link(page))
+  remote = metadata.WaitingItem(text="Pick a layout", link="https://github.com/org/repo/pull/1")
+  route = metadata.WaitingItem(text="Pick a layout", link="/?session=abc")
+
+  assert len(status.item_sha256(bare)) == 64
+  assert status.item_sha256(bare) != status.item_sha256(served)
+  assert len(status.item_sha256(remote)) == 64
+  assert len(status.item_sha256(route)) == 64
+
+
+def test_the_item_digest_raises_for_a_missing_host_file(tmp_path: pathlib.Path) -> None:
+  missing = metadata.WaitingItem(text="Pick a layout", link=_host_file_link(tmp_path / "missing.html"))
+
+  with pytest.raises(FileNotFoundError):
+    status.item_sha256(missing)
+
+
+@pytest.mark.asyncio
+async def test_ask_check_records_one_event_with_the_digest_and_the_for_you_layer_hides_it(
+    tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  item = {"text": "Pick a layout", "context": "The panel folds context.", "link": None}
+  answer = "(1) Pick a layout.\n(2) NOT STATED."
+
+  resp = _ask_check(client, sid, item, backend="haiku", answer=answer)
+
+  assert resp.status_code == 200
+  assert resp.json() == {"item_sha256": status.item_sha256(metadata.WaitingItem.model_validate(item))}
+  checks = _ask_checks(blocks, sid)
+  assert len(checks) == 1
+  assert {
+      key: checks[0][key] for key in ("type", "content", "item_sha256", "backend", "answer")
+  } == {
+      "type": ET.WEB_ASK_CHECK,
+      "content": "Cold read of a Waiting on you item",
+      "item_sha256": resp.json()["item_sha256"],
+      "backend": "haiku",
+      "answer": answer,
+  }
+  assert reply.for_you_entries(_events(blocks, sid)) == []
+  assert ET.WEB_ASK_CHECK in [message["role"] for message in message_utils.events_to_messages(_events(blocks, sid))]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case, item, status_code", [
+        ("unknown", {
+            "text": "Decide"
+        }, 404),
+        ("thread", {
+            "text": "Decide"
+        }, 409),
+        ("worker", {
+            "text": "Decide"
+        }, 409),
+        ("blank", {
+            "text": " "
+        }, 422),
+        ("extra", {
+            "text": "Decide",
+            "due": "today"
+        }, 422),
+    ])
+async def test_a_refused_ask_check_records_nothing(
+    tmp_path: pathlib.Path, case: str, item: dict, status_code: int) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks, slack_origin=_SLACK_ORIGIN if case == "thread" else None)
+  if case == "worker":
+    await blocks.store.update_field(sid, "profile", "worker", "test_worker_profile")
+  client = _status_client(blocks)
+
+  resp = _ask_check(client, "no-such-session" if case == "unknown" else sid, item)
+
+  assert resp.status_code == status_code
+  assert _ask_checks(blocks, sid) == []
+
+
+@pytest.mark.asyncio
+async def test_the_unread_query_lists_an_item_until_ask_check_names_it_and_again_when_the_file_changes(
+    tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  page = tmp_path / "page.html"
+  page.write_text("first", encoding="utf-8")
+  item = {
+      "text": "Decide the sample size",
+      "context": "The sweep costs $5 an hour. Options: 1k or 10k; 1k is recommended.",
+      "link": _host_file_link(page),
+  }
+  text = json.dumps({"waiting": [item]})
+
+  before = _unread(client, sid, text)
+  assert before.status_code == 200 and before.json() == {"unread": [item]}
+
+  digest = status.item_sha256(metadata.WaitingItem.model_validate(item))
+  assert _ask_check(client, sid, item).json() == {"item_sha256": digest}
+  assert _unread(client, sid, text).json() == {"unread": []}
+
+  page.write_text("second", encoding="utf-8")
+  assert _unread(client, sid, text).json() == {"unread": [item]}
+
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
+  assert len(_ask_checks(blocks, sid)) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_unread_query_of_a_file_without_waiting_lists_nothing(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+
+  resp = _unread(_status_client(blocks), sid, json.dumps({"now": "Running"}))
+
+  assert resp.status_code == 200
+  assert resp.json() == {"unread": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case, text, status_code", [
+        ("unknown", json.dumps({"waiting": [{
+            "text": "Decide"
+        }]}), 404),
+        ("thread", json.dumps({"waiting": [{
+            "text": "Decide"
+        }]}), 409),
+        ("worker", json.dumps({"waiting": [{
+            "text": "Decide"
+        }]}), 409),
+        ("bad json", "not json", 422),
+        ("names no item", "{}", 422),
+        ("invalid item", json.dumps({"waiting": [{
+            "text": " "
+        }]}), 422),
+    ])
+async def test_a_refused_unread_query_records_nothing(
+    tmp_path: pathlib.Path, case: str, text: str, status_code: int) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks, slack_origin=_SLACK_ORIGIN if case == "thread" else None)
+  if case == "worker":
+    await blocks.store.update_field(sid, "profile", "worker", "test_worker_profile")
+  client = _status_client(blocks)
+  before = _events(blocks, sid)
+
+  resp = _unread(client, "no-such-session" if case == "unknown" else sid, text)
+
+  assert resp.status_code == status_code
+  assert _events(blocks, sid) == before
 
 
 @pytest.mark.parametrize("stdin", [False, True])

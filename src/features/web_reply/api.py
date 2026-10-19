@@ -21,11 +21,21 @@ class WebReplyRequest(pydantic.BaseModel):
 
 
 class WebStatusRequest(pydantic.BaseModel):
-  """Request body for the internal web/status endpoint: the calling session sets its status from *text*, a JSON file."""
+  """Request body for the internal web/status endpoints: the calling session and *text*, a status file's JSON."""
   model_config = pydantic.ConfigDict(extra="forbid")
 
   session_id: str
   text: str
+
+
+class WebAskCheckRequest(pydantic.BaseModel):
+  """Request body for the internal web/ask-check endpoint: one cold read of a Waiting on you item."""
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  session_id: str
+  item: dict
+  backend: str
+  answer: str
 
 
 @router.post("/web/reply")
@@ -75,6 +85,39 @@ async def web_status_set(
   """
   try:
     return await status.set_status(req.session_id, req.text, store, events, tree)
+  except reply.WebReplyError as exc:
+    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/web/status/unread")
+async def web_status_unread(
+    req: WebStatusRequest,
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+) -> dict:
+  """Return the status file's waiting items that no cold read of this session has read as they stand.
+
+  The file parses and validates as a set's does; refusals match the set's. Nothing is stored or recorded.
+  """
+  try:
+    return await status.unread_waiting(req.session_id, req.text, store, events)
+  except reply.WebReplyError as exc:
+    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/web/ask-check")
+async def web_ask_check(
+    req: WebAskCheckRequest,
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+) -> dict:
+  """Record one cold read of a Waiting on you item and return its digest.
+
+  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session or a worker, 422 an invalid item.
+  Nothing is recorded on a refusal.
+  """
+  try:
+    return await status.record_ask_check(req.session_id, req.item, req.backend, req.answer, store, events)
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 

@@ -5,17 +5,25 @@ A set replaces the items its file names, stores the status in the ``web_status``
 length of the stored Now) and ``now_over_budget``; the stored status and the event keep neither. A read lists two
 groups, both newest first: the open descendants whose status holds Waiting on you items (``descendants``), and the
 open direct children whose status holds a Now (``children``).
+
+The cold-read side keeps one digest of a Waiting on you item and two queries over it: the unread query lists the items
+of a status file that no ``web_ask_check`` event names, and the ask-check record persists one such event. The set does
+not consult either; commit B's CLI gates the store.
 """
 
+import asyncio
 import datetime
+import hashlib
 import json
+import pathlib
+import urllib.parse
 
 import pydantic
 
 from src.features.web_reply import metadata, reply
 from src.infra import event_types as ET
 from src.infra import log_once, metadata_slots, models
-from src.runtime import session_events, session_store, streaming, task_sessions
+from src.runtime import file_urls, session_events, session_store, streaming, task_sessions
 
 logger = log_once.LazyStructlogLogger()
 
@@ -33,6 +41,13 @@ SUBTREE_NOTICE_TYPE = "web_status_subtree"
 
 # The Now budget the set's now_over_budget flag measures; an over-budget Now still stores.
 NOW_BUDGET_CHARS = 200
+
+# The content of the one web_ask_check event a cold read records.
+ASK_CHECK_CONTENT = "Cold read of a Waiting on you item"
+# The event's wire keys: the item digest, the answering backend and the raw answer.
+ITEM_SHA256 = "item_sha256"
+BACKEND = "backend"
+ANSWER = "answer"
 
 
 class StatusPatch(pydantic.BaseModel):
@@ -99,6 +114,88 @@ async def set_status(
   logger.info("web_status_set", session=session_id, changed=changed)
   now_chars = 0 if status.now is None else len(status.now)
   return {**payload, "now_chars": now_chars, "now_over_budget": now_chars > NOW_BUDGET_CHARS}
+
+
+def _host_file(link: str | None) -> pathlib.Path | None:
+  """The host file *link* names, or None when it names no file on this host.
+
+  A file-server path names the absolute path after the mount (``file_urls.FILE_SERVER_MOUNTS``), whatever scheme or
+  host precedes the path. A bare absolute path (with no query or fragment, so an application route like
+  ``/?session=...`` names none) names itself. A link to another host names no local file.
+  """
+  if not link:
+    return None
+  parts = urllib.parse.urlsplit(link)
+  path = urllib.parse.unquote(parts.path)
+  for mount in file_urls.FILE_SERVER_MOUNTS:
+    if path.startswith(mount + "/"):
+      return pathlib.Path(path[len(mount):])
+  if not parts.scheme and not parts.netloc and not parts.query and not parts.fragment and path.startswith("/"):
+    return pathlib.Path(path)
+  return None
+
+
+def item_sha256(item: metadata.WaitingItem) -> str:
+  """The digest that names *item* as it stands: its three fields and the bytes of the host file its link names.
+
+  A link to a missing host file raises: the digest would otherwise name a read of a page that is gone.
+  """
+  payload = json.dumps(
+      {
+          "text": item.text,
+          "context": item.context,
+          "link": item.link
+      }, sort_keys=True, ensure_ascii=False)
+  digest = hashlib.sha256(payload.encode("utf-8"))
+  path = _host_file(item.link)
+  if path is not None:
+    digest.update(path.read_bytes())
+  return digest.hexdigest()
+
+
+def parse_item(raw: object) -> metadata.WaitingItem:
+  """The Waiting on you item that *raw* holds; WebReplyError 422 when it is not one."""
+  try:
+    return metadata.WaitingItem.model_validate(raw)
+  except pydantic.ValidationError as exc:
+    raise reply.WebReplyError(422, f"Waiting item is invalid: {_error_summary(exc)}") from exc
+
+
+async def record_ask_check(
+    session_id: str, raw_item: object, backend: str, answer: str, store: session_store.SessionStore,
+    events: session_events.SessionEvents) -> dict:
+  """Record one cold read of *raw_item* and return the item's digest.
+
+  Refusals raise WebReplyError before anything is recorded: 404 an unknown session, 409 a thread session or a worker,
+  422 an invalid item.
+  """
+  await reply.require_web_session(store, session_id)
+  item = parse_item(raw_item)
+  digest = item_sha256(item)
+  await events.persist_and_broadcast(
+      session_id, {
+          "type": ET.WEB_ASK_CHECK,
+          "content": ASK_CHECK_CONTENT,
+          ITEM_SHA256: digest,
+          BACKEND: backend,
+          ANSWER: answer,
+      })
+  logger.info("web_ask_check_recorded", session=session_id, backend=backend)
+  return {ITEM_SHA256: digest}
+
+
+async def unread_waiting(
+    session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents) -> dict:
+  """The waiting items of the status file *text* that no web_ask_check event of the session names.
+
+  The file is parsed and validated as a set parses it; refusals match the set's. Nothing is stored or recorded.
+  """
+  await reply.require_web_session(store, session_id)
+  patch = parse_patch(text)
+  loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
+  read = {ev.get(ITEM_SHA256) for ev in loaded if ev.get("type") == ET.WEB_ASK_CHECK}
+  unread = [item for item in patch.waiting if item_sha256(item) not in read]
+  return {"unread": [item.model_dump(mode="json") for item in unread]}
 
 
 async def _open_statuses(

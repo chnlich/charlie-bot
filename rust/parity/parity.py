@@ -637,6 +637,11 @@ def _run_step(
         lines.append(f"{side.label} status {response.status}, scenario expects {step.expect_status}")
   elif step.kind == "wait":
     lines.extend(_wait_for_sides(sides, step, manifest))
+  elif step.kind == "log_event":
+    if step.log_event is None or step.timeout_seconds is None:
+      raise RuntimeError(f"log_event step {step.name!r} has no validated event or timeout")
+    lines.extend(
+        servers.wait_for_log_events(_server_logs(sides), (step.log_event,), step.log_fields, step.timeout_seconds))
   elif step.kind == "gate":
     if step.open is None:
       raise RuntimeError(f"gate step {step.name!r} has no validated open name")

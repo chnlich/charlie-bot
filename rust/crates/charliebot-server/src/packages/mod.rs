@@ -30,7 +30,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.diag", charliebot_diag::register), // stub: src.features.diag
   ("src.features.slack", charliebot_slack::register),
   ("src.features.discord", charliebot_discord::register), // stub: src.features.discord
-  ("src.features.web_reply", charliebot_web_reply::register), // stub: src.features.web_reply
+  ("src.features.web_reply", charliebot_web_reply::register),
   ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),
   ("src.features.explain", charliebot_explain::register),

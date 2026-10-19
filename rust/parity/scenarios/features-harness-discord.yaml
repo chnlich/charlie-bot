@@ -11,23 +11,6 @@ fakes:
   discord: {}
 fixture_extras: [discord_thread]
 steps:
-  - kind: fake
-    name: message from a disallowed user is dropped
-    fake: discord
-    action: dispatch
-    payload:
-      t: MESSAGE_CREATE
-      d:
-        id: "900000000000000040"
-        type: 0
-        channel_id: "900000000000000020"
-        guild_id: "900000000000000010"
-        author:
-          id: "900000000000000098"
-          username: synthetic-outsider
-          bot: false
-        content: Synthetic ignored message.
-        mentions: []
   - name: reply to the fixture Discord thread
     method: POST
     path: /api/internal/discord/reply

@@ -104,7 +104,12 @@ impl RunRequest {
     Ok(Self::new(prompt, cwd, agent_environment.as_ref().clone(), cgroup_base, Arc::clone(&features.registry)))
   }
 
-  /// Hold the spawned shell until `on_spawn` has durably registered its process identity.
+  /// Keep the spawned child stopped until `on_spawn` has recorded its process identity.
+  ///
+  /// Python has no such gate: `base.py:919-933` runs `on_spawn` while the child runs. Without the gate, a crash in
+  /// that window leaves an agent that acts with no recorded identity, and the recovery relaunch then starts a second
+  /// one beside it. With the gate the child cannot act before its identity is durable. The test
+  /// `gated_child_waits_until_spawn_callback_finishes` fails without the gate.
   pub fn gate_child_until_on_spawn(&mut self) {
     self.child_waits_for_spawn_callback = true;
   }
@@ -248,8 +253,13 @@ impl AgentRunner {
       if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null },
     )
     .await?;
-    if request.child_waits_for_spawn_callback {
-      spawn::wait_until_stopped(&mut spawned.child).await?;
+    if request.child_waits_for_spawn_callback
+      && let Err(error) = spawn::wait_until_stopped(&mut spawned.child).await
+    {
+      if let Err(terminate_error) = kill::terminate_child(&mut spawned.child).await {
+        tracing::warn!(target: "charliebot_agents", error = %terminate_error, "backend_terminate_timeout");
+      }
+      return Err(error.into());
     }
     let stdin = spawned.child.stdin.take();
     let stdin_task = match stdin_prompt {

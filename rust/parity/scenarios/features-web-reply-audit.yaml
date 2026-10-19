@@ -37,6 +37,30 @@ fake_agent:
             total_cost_usd: 0.0
       exit_code: 0
 expect_starts: 2
+comparison_rules:
+  # The nudge (agent_message from "Web reply") and the run_finished of the turn it audits. Python does not order them:
+  # that turn's after_turn runs as its own task (src/runtime/session_events.py:156-161), and its finish callback writes
+  # run_finished after the master_done broadcast (src/runtime/master_cc_queue.py:304-309). The after_turn is
+  # src/features/web_reply/turn_contribution.py:27-31; the nudge is written by src/features/web_reply/audit.py:44-51.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Web reply"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+  # The no-reply notice and the run_finished of the nudged turn. Python does not order them, for the same reasons:
+  # that turn's after_turn runs as its own task (src/runtime/session_events.py:156-161), and its finish callback writes
+  # run_finished after the master_done broadcast (src/runtime/master_cc_queue.py:304-309). The after_turn is
+  # src/features/web_reply/turn_contribution.py:27-31; the notice is written by src/features/web_reply/audit.py:69-77.
+  - either_order_of_adjacent_events:
+      first:
+        type: web_reply_notice
+        match_fields:
+          content: "No reply was posted for this message. The Everything view shows this turn's output."
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
 steps:
   - name: a user message that no reply answers
     method: POST

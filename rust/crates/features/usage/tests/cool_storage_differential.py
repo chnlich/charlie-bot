@@ -5,7 +5,9 @@ Each side does one real run at the same instant: no dry run, no session scope, n
 once under a temporary root and copied for each side. Both copies sit at the same absolute path, because a Claude
 transcript directory's name encodes that path. A run must delete exactly the fixture's expected files. The comparison
 covers the remaining file trees (paths and bytes), the usage ledger's tables and the summary line. A control run appends
-a line to one remaining file in the Rust copy after its run, and the script must report exactly that difference.
+a line to one remaining file in the Rust copy after its run, and the script must report exactly that difference. A
+second home, whose session metadata is a JSON list, must make both sweeps refuse it with their own error and delete
+nothing.
 
 usage: cool_storage_differential.py <cool-storage-sweep binary>
 """
@@ -58,6 +60,16 @@ CODEX_WARM = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
 CODEX_ORPHAN = "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f"
 CODEX_FRESH = "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f80"
 OPENCODE_COLD = "ses_cold0000000000000000000000000000"
+SID_NUMERIC = "dddddddd-eeee-4fff-8000-111111111111"
+SID_UNREADABLE = "eeeeeeee-ffff-4000-8111-222222222222"
+SID_NAIVE = "ffffffff-0000-4111-8222-333333333333"
+SID_OFFSET = "00000000-1111-4222-8333-444444444444"
+SID_RECENT_OFFSET = "11111111-2222-4333-8444-555555555556"
+SID_LINKED = "12121212-3434-4565-8787-898989898989"
+SID_REFUSED = "13131313-3434-4565-8787-898989898989"
+# The error each sweep raises for a session whose metadata is a JSON list: the cold rule calls `.get` on it.
+PYTHON_REFUSAL = "'list' object has no attribute 'get'"
+RUST_REFUSAL = f"session {SID_REFUSED} metadata is not a JSON object"
 OPENCODE_ORPHAN = "ses_orphan000000000000000000000000"
 
 CLAUDE_HOME = "home/.claude/projects"
@@ -271,6 +283,34 @@ def build_fixture(root: pathlib.Path) -> set[str]:
   ):
     write(f"{CODEX_DAY}/rollout-2026-08-01T00-00-00-{thread}.jsonl", _rollout(thread), age_days=age, gone=gone)
 
+  # Cold, with a Unicode-digit rotation suffix: `str.isdigit` counts it, so it goes. A vulgar fraction is not a digit.
+  run_dir = f"{cold}/data/master_runs/{MASTER_OLD}"
+  write(f"{run_dir}/agent.raw.ndjson.\u0663", b"rotation in Arabic-Indic digits", gone=True)
+  write(f"{run_dir}/agent.raw.ndjson.\u2153", b"a vulgar fraction", gone=False)
+
+  # Cold, with a numeric cc_session_id: its str() text is the reference, so the session still parses.
+  numeric = session(SID_NUMERIC, {"status": "archived", "updated_at": OLD, "cc_session_id": 12345})
+  transport(numeric, MASTER_OLD, None, gone=True)
+
+  # Unreadable metadata: a directory where metadata.json belongs. The session is skipped, so its files stay.
+  unreadable = f"charlie/sessions/{SID_UNREADABLE}"
+  (root / unreadable / "metadata.json").mkdir(parents=True)
+  transport(unreadable, MASTER_OLD, None, gone=False)
+
+  # A naive updated_at is UTC, and an offset one is its instant: both are cold; the recent offset one is not.
+  naive = session(SID_NAIVE, {"status": "archived", "updated_at": "2026-08-01T00:00:00"})
+  transport(naive, MASTER_OLD, None, gone=True)
+  offset = session(SID_OFFSET, {"status": "archived", "updated_at": "2026-08-01T09:00:00+09:00"})
+  transport(offset, MASTER_OLD, None, gone=True)
+  recent_offset = session(SID_RECENT_OFFSET, {"status": "archived", "updated_at": "2026-10-18T09:00:00+09:00"})
+  transport(recent_offset, MASTER_OLD, None, gone=False)
+
+  # A master_runs directory that is a symlink is not managed: the files behind the link stay.
+  linked = session(SID_LINKED, {"status": "archived", "updated_at": OLD})
+  write(f"charlie/linked-runs/{MASTER_OLD}/agent.raw.ndjson", b"behind a link", gone=False)
+  (root / linked / "data").mkdir(parents=True)
+  os.symlink(os.path.relpath(root / "charlie/linked-runs", root / linked / "data"), root / linked / "data/master_runs")
+
   write(
       "charlie/config.yaml", (
           f"paths:\n  worktree_dir: '{root}/worktrees'\n"
@@ -281,6 +321,18 @@ def build_fixture(root: pathlib.Path) -> set[str]:
           "      model: vendor/claude-model\n").encode())
   _write_opencode_store(root / "charlie/opencode/data/opencode/opencode.db")
   return deleted
+
+
+def build_refusal(root: pathlib.Path) -> None:
+  """A home whose session metadata is a JSON list: the cold rule fails on it, before any deletion."""
+  refused = root / "charlie/sessions" / SID_REFUSED
+  refused.mkdir(parents=True)
+  (refused / "metadata.json").write_bytes(b"[1, 2]")
+  cold = root / "charlie/sessions" / SID_COLD
+  (cold / "data/master_runs" / MASTER_OLD).mkdir(parents=True)
+  (cold / "data/master_runs" / MASTER_OLD / "agent.raw.ndjson").write_bytes(b"kept: the run refuses")
+  (cold / "metadata.json").write_bytes(json.dumps({"status": "archived", "updated_at": OLD}).encode())
+  (root / "charlie/config.yaml").write_bytes(b"paths:\n  worktree_dir: '" + str(root / "worktrees").encode() + b"'\n")
 
 
 def _assert_inside(root: pathlib.Path, path: pathlib.Path) -> None:
@@ -331,8 +383,8 @@ def _summary_line(output: str) -> str:
   return summary
 
 
-def run_python(root: pathlib.Path) -> str:
-  completed = subprocess.run(
+def _python_child(root: pathlib.Path) -> subprocess.CompletedProcess[str]:
+  return subprocess.run(
       [sys.executable, str(pathlib.Path(__file__).resolve()), "python-sweep",
        str(root)],
       cwd=REPO_ROOT,
@@ -341,19 +393,27 @@ def run_python(root: pathlib.Path) -> str:
       text=True,
       check=False,
   )
-  if completed.returncode != 0:
-    raise SystemExit(f"the Python sweep failed:\n{completed.stderr}")
-  return _summary_line(completed.stdout)
 
 
-def run_rust(binary: pathlib.Path, root: pathlib.Path) -> str:
-  completed = subprocess.run(
+def _rust_child(binary: pathlib.Path, root: pathlib.Path) -> subprocess.CompletedProcess[str]:
+  return subprocess.run(
       [str(binary), str(root), NOW_TEXT],
       env=_side_environment(root),
       capture_output=True,
       text=True,
       check=False,
   )
+
+
+def run_python(root: pathlib.Path) -> str:
+  completed = _python_child(root)
+  if completed.returncode != 0:
+    raise SystemExit(f"the Python sweep failed:\n{completed.stderr}")
+  return _summary_line(completed.stdout)
+
+
+def run_rust(binary: pathlib.Path, root: pathlib.Path) -> str:
+  completed = _rust_child(binary, root)
   if completed.returncode != 0:
     raise SystemExit(f"the Rust sweep failed:\n{completed.stderr}")
   return _summary_line(completed.stdout)
@@ -434,7 +494,39 @@ def differences(left: dict, right: dict) -> list[str]:
 def _fresh_copy(snapshot: pathlib.Path, root: pathlib.Path) -> None:
   if root.exists():
     shutil.rmtree(root)
-  shutil.copytree(snapshot, root)
+  shutil.copytree(snapshot, root, symlinks=True)
+
+
+def check_refusal(binary: pathlib.Path, scratch: pathlib.Path) -> None:
+  """Both sweeps refuse a home whose session metadata is a JSON list, with their own error, and delete nothing."""
+  run = scratch / "refusal"
+  snapshot = scratch / "refusal-snapshot"
+  run.mkdir()
+  build_refusal(run)
+  before = file_tree(run)
+  shutil.copytree(run, snapshot, symlinks=True)
+
+  _fresh_copy(snapshot, run)
+  python = _python_child(run)
+  _assert_refused("Python", python, PYTHON_REFUSAL, run, before)
+
+  _fresh_copy(snapshot, run)
+  rust = _rust_child(binary, run)
+  _assert_refused("Rust", rust, RUST_REFUSAL, run, before)
+
+  print("refusal: a home whose session metadata is a JSON list; both sweeps refuse it and delete nothing")
+  print(f"  python: exit {python.returncode}; {python.stderr.strip().splitlines()[-1]}")
+  print(f"  rust:   exit {rust.returncode}; {rust.stderr.strip().splitlines()[-1]}")
+
+
+def _assert_refused(
+    side: str, completed: subprocess.CompletedProcess[str], reason: str, run: pathlib.Path,
+    before: dict[str, bytes]) -> None:
+  # The reason must appear in stderr: a sandbox-guard failure also exits non-zero, and must not pass as a refusal.
+  if completed.returncode == 0 or reason not in completed.stderr:
+    raise SystemExit(
+        f"the {side} sweep must refuse with {reason!r}; it exited {completed.returncode}:\n{completed.stderr}")
+  _check_deleted(before, file_tree(run), set(), side)
 
 
 def main(argv: list[str]) -> int:
@@ -450,7 +542,7 @@ def main(argv: list[str]) -> int:
     run.mkdir()
     expected = build_fixture(run)
     before = file_tree(run)
-    shutil.copytree(run, snapshot)
+    shutil.copytree(run, snapshot, symlinks=True)
 
     _fresh_copy(snapshot, run)
     python_summary = run_python(run)
@@ -480,6 +572,7 @@ def main(argv: list[str]) -> int:
     for line in control:
       print(f"  difference: {line}")
     print(f"  differences: {len(control)}")
+    check_refusal(binary, pathlib.Path(scratch))
 
   if found or len(control) != 1 or not control[0].startswith(f"bytes differ: {planted.as_posix()}"):
     print("FAILED: the differential must report zero differences, and the control must report its planted one")

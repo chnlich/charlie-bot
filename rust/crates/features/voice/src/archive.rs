@@ -68,6 +68,20 @@ pub(crate) fn write_wav(path: &Path, pcm_bytes: &[u8]) -> io::Result<()> {
   wav.write_all(pcm_bytes)
 }
 
+/// Persist an upload's recording as `sessions/{id}/voice/<stem>.wav` before it is decoded, and return its path.
+pub(crate) fn persist_recording(cfg: &CharlieBotConfig, session_id: &str, pcm_bytes: &[u8]) -> io::Result<PathBuf> {
+  let voice_dir = cfg.sessions_dir().join(session_id).join("voice");
+  fs::create_dir_all(&voice_dir)?;
+  let audio_path = voice_dir.join(format!("{}.wav", voice_stem()));
+  write_wav(&audio_path, pcm_bytes)?;
+  Ok(audio_path)
+}
+
+/// The transcript beside a recording: the `.txt` with the recording's stem, UTF-8.
+pub(crate) fn write_transcript(audio_path: &Path, text: &str) -> io::Result<()> {
+  fs::write(audio_path.with_extension("txt"), text.as_bytes())
+}
+
 fn voice_stem() -> String {
   let now = OffsetDateTime::now_utc();
   let random = Uuid::new_v4().simple().to_string();

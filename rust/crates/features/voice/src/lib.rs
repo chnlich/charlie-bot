@@ -1,11 +1,16 @@
-//! Live voice previews: the Gemini and Muse streams, the browser relay, and its recording archive.
+//! Voice input: the live preview relay, the upload fallback, the sherpa speech models and their offline decode.
 
+mod api;
 mod archive;
 mod audio;
 mod config;
+#[doc(hidden)]
+pub mod differential;
 pub(crate) mod provisioning;
 mod relay;
+mod transcriber;
 mod transcription;
+mod wav;
 
 use std::sync::Arc;
 
@@ -18,6 +23,7 @@ const VOICE_INPUT_MODE: &str = "voice";
 const VOICE_NOTE: &str = "[Voice input: this message was dictated via speech transcription and may contain recognition errors. Interpret unclear words from context; ask only when the intent is genuinely ambiguous.]";
 
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.router(api::routes, api::matches)?;
   registry.websocket("/ws/voice/*", relay::handler)?;
   registry.turn_contribution("voice", Arc::new(VoiceTurnContribution))?;
   registry.service(Arc::new(provisioning::SpeechService::default()))?;

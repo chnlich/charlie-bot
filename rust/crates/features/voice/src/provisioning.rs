@@ -4,7 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use bzip2::read::BzDecoder;
@@ -18,8 +18,9 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::config::{VoiceEngine, VoiceSettings};
+use crate::transcriber;
 
-const QWEN3_ASR_DIR_NAME: &str = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25";
+pub(crate) const QWEN3_ASR_DIR_NAME: &str = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25";
 const QWEN3_ASR_ARCHIVE_NAME: &str = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2";
 const QWEN3_ASR_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2";
 const QWEN3_ASR_SHA256: &str = "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96";
@@ -57,6 +58,12 @@ fn provisioning_state() -> &'static Mutex<ProvisioningState> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpeechModelsNotReadyError(String);
 
+impl SpeechModelsNotReadyError {
+  pub(crate) fn new(message: String) -> Self {
+    Self(message)
+  }
+}
+
 impl std::fmt::Display for SpeechModelsNotReadyError {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     formatter.write_str(&self.0)
@@ -65,8 +72,9 @@ impl std::fmt::Display for SpeechModelsNotReadyError {
 
 impl std::error::Error for SpeechModelsNotReadyError {}
 
-fn voice_model_paths(cfg: &CharlieBotConfig) -> VoiceModelPaths {
-  let cache_dir = cfg.charliebot_home.join("models");
+/// The speech asset paths under `cache_dir` (`<home>/models`).
+pub(crate) fn voice_model_paths(cache_dir: &Path) -> VoiceModelPaths {
+  let cache_dir = cache_dir.to_path_buf();
   let qwen3_dir = cache_dir.join(QWEN3_ASR_DIR_NAME);
   VoiceModelPaths {
     qwen3_archive: cache_dir.join(QWEN3_ASR_ARCHIVE_NAME),
@@ -80,7 +88,6 @@ fn voice_model_paths(cfg: &CharlieBotConfig) -> VoiceModelPaths {
   }
 }
 
-#[allow(dead_code)]
 pub(crate) fn get_ready_model_paths() -> Result<VoiceModelPaths, SpeechModelsNotReadyError> {
   get_ready_model_paths_from(provisioning_state())
 }
@@ -98,6 +105,19 @@ fn get_ready_model_paths_from(state: &Mutex<ProvisioningState>) -> Result<VoiceM
 
 fn provision_models(cfg: &CharlieBotConfig) {
   provision_models_with(provisioning_state(), || ensure_models_cached(cfg));
+}
+
+/// `service.py`'s warm-up, run after provisioning on the same thread: the resident bundle, then one synthetic decode
+/// per recognizer. A failure logs and leaves readiness as provisioning published it.
+fn warm_up(cfg: &CharlieBotConfig) {
+  let started = Instant::now();
+  match transcriber::get_transcription_bundle(cfg).and_then(|bundle| transcriber::warm_up_bundle(&bundle)) {
+    Ok(()) => {
+      let elapsed_ms = (started.elapsed().as_secs_f64() * 1000.0).round() as u64;
+      tracing::info!(elapsed_ms, "voice_warmup_complete");
+    }
+    Err(error) => tracing::error!(exception = %format!("{error:#}"), "voice_warmup_failed"),
+  }
 }
 
 fn provision_models_with(state: &Mutex<ProvisioningState>, ensure: impl FnOnce() -> anyhow::Result<VoiceModelPaths>) {
@@ -129,7 +149,7 @@ fn provision_models_with(state: &Mutex<ProvisioningState>, ensure: impl FnOnce()
 }
 
 fn ensure_models_cached(cfg: &CharlieBotConfig) -> anyhow::Result<VoiceModelPaths> {
-  let paths = voice_model_paths(cfg);
+  let paths = voice_model_paths(&cfg.charliebot_home.join("models"));
   ensure_engine_cached(&paths, cfg.section::<VoiceSettings>("voice").engine, &Settings::from_env())
 }
 
@@ -318,7 +338,10 @@ impl Service for SpeechService {
     Box::pin(async move {
       let cfg = ctx.features.config.get().map_err(|error| anyhow::anyhow!(error.to_string()))?;
       let cfg = cfg.as_ref().clone();
-      let worker = tokio::task::spawn_blocking(move || provision_models(&cfg));
+      let worker = tokio::task::spawn_blocking(move || {
+        provision_models(&cfg);
+        warm_up(&cfg);
+      });
       let monitor = tokio::spawn(async move {
         if let Err(error) = worker.await {
           tracing::error!(exception = %error, "speech_model_provisioning_failed");

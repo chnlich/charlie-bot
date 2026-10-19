@@ -307,6 +307,7 @@ pub(crate) fn warm_up_bundle(bundle: &SpeechModelBundle) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::fs;
   use std::time::Duration;
 
   /// Decodes a window's first sample (times 32768) as its marker `w<marker>`, after the delay the test gives that
@@ -400,5 +401,29 @@ mod tests {
     let (second, _) = stub(&[], Some(2));
     let error = decode_windows(&[first, second], &feed, &windows).expect_err("the failing window fails the call");
     assert!(error.to_string().contains("window w2 decode failed"), "unexpected error: {error}");
+  }
+
+  /// The sherpa-onnx release that the vendored sys crate pins is the release that uv.lock locks for the Python wheel.
+  /// The pin is a constant in a build script, which this crate cannot link to, so the test reads its text.
+  #[test]
+  fn sherpa_pin_is_the_release_the_python_wheel_locks() {
+    let uv_lock =
+      fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../uv.lock")).expect("read uv.lock");
+    let locked = uv_lock
+      .split("[[package]]\n")
+      .find(|block| block.starts_with("name = \"sherpa-onnx-core\"\n"))
+      .expect("uv.lock locks sherpa-onnx-core")
+      .lines()
+      .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+      .expect("the sherpa-onnx-core block has a version");
+    let build_script = include_str!("../../../../vendor/sherpa-onnx-sys/build.rs");
+    let pinned = build_script
+      .split("const PIN: Pin = Pin {")
+      .nth(1)
+      .expect("the build script has the pin table")
+      .lines()
+      .find_map(|line| line.trim().strip_prefix("version: \"")?.strip_suffix("\","))
+      .expect("the pin table has a version");
+    assert_eq!(pinned, locked);
   }
 }

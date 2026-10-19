@@ -191,9 +191,33 @@ Main's CI state is the newest CI run on main:
 
 When that main run is still in progress, wait for it with `gh run watch <run-id>`.
 
+When that main run failed, repair main before anything else on this run. Another
+run may hold the repair already:
+
+    gh pr list --state open --json headRefName --jq '.[].headRefName' | grep '^main-repair/'
+
+An open `main-repair/*` pull request means the repair is in flight: end this run
+with no change. Otherwise this run repairs main:
+
+1. Read the failure with `gh run view --log-failed <run-id>`.
+2. When the failure names its fix, branch `main-repair/<short-topic>` from the
+   failing main sha and apply the fix. A ruff rule with a named transform names
+   its fix. An import order or formatter drift names its fix. A failing test
+   without its expected value in the log does not. Name the branch outside
+   `code-health/*` so Step 0 leaves the repair pull request to this run.
+3. Push the branch and open a pull request. Watch its checks. A red check follows
+   the failure-inside-this-diff rules with the same two-fix budget.
+4. Confirm the repair still carries a diff against a fresh `origin/main`. Close an
+   emptied repair pull request and return to the sending step.
+5. Merge the repair pull request with `gh pr merge --squash` once green. Wait for
+   the merge's main run with `gh run watch`, then return to the sending step.
+6. When the failure names no fix, or the repair pull request is abandoned, return
+   to the sending step with main still failed.
+
 When the newest comment of an adopted pull request starts `code-health-waiting:`, read main's CI state first:
 
-- When the main run failed, end this code-health run with no change.
+- When the main run failed, repair main by the main-repair steps above. When the
+  repair returns with main still failed, end this code-health run with no change.
 - When the main run passed, start at step 1 of the outside-diff steps below.
 
 For any other red check, read the failure with `gh run view --log-failed`.
@@ -219,7 +243,9 @@ A failure outside this diff takes these steps:
    `gh run rerun <run-id> --failed`. Watch the checks again.
 3. When the checks pass, go to the merge above.
 4. When the check is red again, read main's CI state.
-5. When the main run failed, leave the pull request open with this comment:
+5. When the main run failed, repair main by the main-repair steps above. When the
+   repair merged, start these outside-diff steps again at step 1. When the repair
+   returns with main still failed, leave the pull request open with this comment:
 
        gh pr comment <PR> --body 'code-health-waiting: main fails <check> at <sha>, run <run-id>'
 

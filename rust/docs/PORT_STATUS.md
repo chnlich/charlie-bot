@@ -13,6 +13,8 @@ Malformed input (a request that no client sends, such as invalid JSON or a wrong
 status code, and for a 422 answer the `type` and `loc` of each error; the error text may differ. Parity steps
 for such input set `compare: status_and_shape`. The port refuses integers outside the signed 64-bit range and non-finite floats (`NaN`, `Infinity`, `1e400`), with 400 for a JSON literal and 422 for a string value; Python's answer to these values depends on the route, so the port treats them as undefined.
 
+The order of a web reply audit nudge (`agent_message` from `Web reply`) and the turn's `run_finished` is undefined. Both are written as unrelated events. Python wrote the nudge first in all 40 logs of 20 kept runs. The port follows that sequence, but in 1 of 5 kept runs after the change the nudge still landed after `run_finished`, so the port does not promise either order. A parity step that compares the pair can use the `either_order_of_adjacent_events` rule, which accepts both orders (see `rust/parity/README.md`).
+
 | Method | Path | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
 | GET, HEAD | `/openapi.json` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |

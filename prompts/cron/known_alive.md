@@ -26,7 +26,11 @@ Known-alive symbols:
   (e.g. `/rounds/{id}/rate` from `chat/ratings.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
-  because its URL is built inside the Python registry rather than `web/`.
+  because its URL is built inside the Python registry rather than `web/`. The class also extends
+  past the `api.py` file name: `src/app/pages.py` (`events_viewer`, `home_page`), the feature
+  `page.py` modules (`diff_viewer` in `src/features/diff_view/page.py`) and
+  `src/features/usage/ext_usage.py` (`get_ext_usage`) hold routers the same inclusion paths
+  serve, and vulture flags those handlers on the same evidence.
 - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
   `_fresh_user_agent_cache`, `_fresh_claude_accounts`, `_fresh_codex_account` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
@@ -76,11 +80,14 @@ Known-alive symbols:
   and `stop_service` (each module named in a `wiring.register_service` call), `ws_router` and
   `mounted_router` (the router attributes named in a `wiring.register_router` call), and
   `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call), and
-  `check_backend_refs` (the attribute named in a `wiring.register_startup_check` call), and
+  `check_backend_refs` (`src/features/cron/backend_refs.py`) and `check_backend_ids`
+  (`src/features/usage/backend_ids.py`) (the attributes named in `wiring.register_startup_check`
+  calls), and
   `setup_step` (the attribute named in a `wiring.register_setup_step` call) — reached by
   string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`,
   `wiring.startup_checks()`, `wiring.setup_steps()` and the router loop in `server.py` import the module from its
-  path string and read the attribute by name. The names have zero whole-repo matches outside their definitions, so vulture flags them as
+  path string and read the attribute by name. The names have zero whole-repo matches outside their definitions (`check_backend_ids`
+  also rides a descriptive mention in `src/infra/config.py`), so vulture flags them as
   unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/features/cron/config.py`, registered with pydantic at class-definition time and invoked during
@@ -429,9 +436,46 @@ Known-alive symbols:
   injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
   swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep
   finds only the definition and that test file, so vulture flags it as an unused function.
-- `PoolNodeMetadata` (`src/runtime/backend_pool.py`) — reached by string: the backend_pool
+- `PoolNodeMetadata` (`src/runtime/backend_pool.py`), `CronMetadata`
+  (`src/features/cron/metadata.py`), `SlackSessionFields` (`src/features/slack/metadata.py`) and
+  `WebReplyMetadata` (`src/features/web_reply/metadata.py`) — reached by string: each owning
   package's `register()` passes its "module:Class" string to
-  `metadata_slot_registration.register_metadata_fields("backend_pool",
-  "src.runtime.backend_pool:PoolNodeMetadata")` (`src/features/backend_pool/__init__.py`), and
+  `metadata_slot_registration.register_metadata_fields` (for example `("backend_pool",
+  "src.runtime.backend_pool:PoolNodeMetadata")` in `src/features/backend_pool/__init__.py`), and
   `metadata_slots` imports the model from that string on its first call. A whole-repo grep finds
-  only the definition and the registration, so vulture flags the class as unused.
+  only the definitions and the registrations, so vulture flags each class as unused.
+  `DiscordSessionFields` (`src/features/discord/metadata.py`) and the claude_code pair
+  (`ClaudeSessionFields`, `ClaudeThreadFields` in `src/backends/claude_code/claude_metadata.py`)
+  register through the same call; a direct reference (`cast` in `discord_commands.py`, the
+  module's own `isinstance` checks) keeps vulture silent on them today.
+- `__getattr__` (`src/features/explain/explain.py`, `src/infra/constants.py`,
+  `src/infra/models.py`) — the PEP 562 lazy-attribute hooks, same class as the
+  worker/autonamer entry above. The explain hook serves the deferred `base_one_shot_text` and
+  `build_backend` loaders; the constants hook builds `REPO_ROOT` on first read so the CLI
+  import floor pays no pathlib chain; the models hook binds the `_BACKEND_REEXPORTS` names
+  (`BackendOption`, `option_default_model`) from `src.infra.backend_models` on first read,
+  keeping the backend stack off the session-model import path. Vulture flags each hook as an
+  unused function at 60% confidence.
+- `CONTRIBUTION` (the module-level turn-contribution instance of
+  `src/backends/claude_code/turn_contribution.py` and of the `turn_contribution.py` in the
+  `src/features/` packages `chat_threads`, `cron`, `discord`, `memory`, `slack`, `voice` and
+  `web_reply`) — reached by string: each package's `register()` passes
+  "src.<package>.turn_contribution:CONTRIBUTION" to
+  `turn_contributions.register_turn_contribution`, and the hook imports the attribute from that
+  string when a turn is composed (`src/runtime/hooks/turn_contributions.py`). Vulture flags
+  each instance as an unused variable at 60% confidence.
+- `ClaudeCodeLifecycle` (`src/backends/claude_code/claude_lifecycle.py`) and
+  `CodexUsageResolver` (`src/backends/codex/codex_usage.py`) — reached by string: the claude_code
+  `register()` passes `lifecycle="src.backends.claude_code.claude_lifecycle:ClaudeCodeLifecycle"`
+  to `backend_type_registration.register_backend_type`, and the codex `register()` passes
+  `"src.backends.codex.codex_usage:CodexUsageResolver"` to
+  `backend_lifecycle_registration.register_usage_resolver`; each registry resolves the class from
+  its string, the lifecycle at backend launch and the resolver at a usage read. Vulture flags
+  each class as unused at 60% confidence.
+- `code_server_enabled` (`src/features/code_server/api.py`), `voice_backends` and
+  `voice_default_backend` (`src/features/voice/page_globals.py`) — reached by string: each
+  package's `register()` passes the module path plus `attr=` to
+  `page_render.register_template_global` (`src/features/code_server/__init__.py`,
+  `src/features/voice/__init__.py`), and the page render binds the template global as
+  `getattr(import_module(module), attr)`. Vulture flags each function as an unused function at
+  60% confidence.

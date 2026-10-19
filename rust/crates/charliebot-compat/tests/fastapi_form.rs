@@ -112,7 +112,7 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
 
   let client = Client::new();
   let cases = corpus();
-  assert_eq!(cases.len(), 22);
+  assert_eq!(cases.len(), 27);
   eprintln!("multipart differential corpus: {} cases", cases.len());
   for case in &cases {
     let (python_status, python_body) = send(&client, python_address, case).await;
@@ -384,11 +384,56 @@ fn corpus() -> Vec<Case> {
       compare_body: false,
     },
     Case {
-      name: "boundary without a following CRLF",
+      name: "opening boundary without a following CRLF",
+      item_id: "present",
+      body: format!("--{BOUNDARY}Note: x\r\n\r\nvalue\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "boundary text without a CRLF inside a part is data",
       item_id: "present",
       body: [file_part("file", "open.bin", b"open data"), format!("--{BOUNDARY}Note: x\r\n\r\nvalue\r\n").into_bytes()]
         .concat(),
       content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "urlencoded body with a semicolon before a file value",
+      item_id: "present",
+      body: b"note=a;file=x".to_vec(),
+      content_type: "application/x-www-form-urlencoded".to_string(),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "form field with an empty value",
+      item_id: "present",
+      body: multipart_body(vec![file_part("file", "synthetic.bin", b"file data"), form_part("note", b"")]),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "file part with a semicolon in its quoted filename",
+      item_id: "present",
+      body: multipart_body(vec![file_part("file", "a; b.bin", b"file data"), form_part("note", b"synthetic note")]),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::OK,
+      cookie: None,
+      compare_body: true,
+    },
+    Case {
+      name: "multipart media type with capital letters and a boundary",
+      item_id: "present",
+      body: valid_body(),
+      content_type: format!("Multipart/Form-Data; boundary={BOUNDARY}"),
       expected_status: StatusCode::UNPROCESSABLE_ENTITY,
       cookie: None,
       compare_body: false,

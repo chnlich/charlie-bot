@@ -137,3 +137,19 @@ steps:
     method: GET
     path: /api/sessions/${sessions.explain}/explain/status
     expect_status: 200
+  - name: HEAD, explain, the POST route names the allow list
+    method: HEAD
+    path: /api/sessions/${sessions.explain}/explain
+    expect_status: 405
+  - name: PUT, explain, the POST route names the allow list
+    method: PUT
+    path: /api/sessions/${sessions.explain}/explain
+    expect_status: 405
+  - name: HEAD, status, a GET-only route
+    method: HEAD
+    path: /api/sessions/${sessions.explain}/explain/status
+    expect_status: 405
+  - name: PUT, status, a GET-only route
+    method: PUT
+    path: /api/sessions/${sessions.explain}/explain/status
+    expect_status: 405

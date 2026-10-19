@@ -17,6 +17,7 @@ fancy-regex = "0.16"
 futures-util.workspace = true
 http.workspace = true
 libc.workspace = true
+nix.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -339,6 +339,7 @@ fn an_http_error_returns_the_python_status_error_text() {
 
 #[test]
 fn quota_accounts_returns_the_config_derivation_error() {
+  let _path_guard: MutexGuard<'_, ()> = PATH_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
   let fixture = Fixture::new(FRESH, vec![], vec![]);
   let config = fixture.config_with_pool_dir("relative-login");
   let source = ClaudeLogs::new(fixture.host(), Arc::clone(&fixture.state), fixture.http());

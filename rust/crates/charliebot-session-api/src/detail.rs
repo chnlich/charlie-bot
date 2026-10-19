@@ -68,12 +68,6 @@ pub fn build_bootstrap_payload(
   } else if let Some(projection) = store.get_message_projection(&meta.id)? {
     let (messages, oldest, has_more) = projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
     (messages, projection.pending_draft().cloned(), projection.event_count(), oldest, has_more)
-  } else if meta.archive_offset == 0 {
-    let events = store.load_chat_events_shared_sync(&meta.id)?;
-    let event_count = events.len();
-    let oldest = event_count.saturating_sub(BOOTSTRAP_MESSAGE_LIMIT);
-    let (messages, pending_draft) = store.events_to_view_at(&events[oldest..], oldest)?;
-    (messages, pending_draft, event_count, oldest, oldest > 0)
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
     let (events, total_count, has_more) = store.load_chat_events_tail(&meta.id, BOOTSTRAP_MESSAGE_LIMIT)?;

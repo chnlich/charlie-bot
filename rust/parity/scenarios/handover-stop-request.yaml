@@ -1,0 +1,48 @@
+# The first server records a stop request that its exit wait cannot finish: the agent ignores SIGTERM until the first gate
+# opens. The second server's recovery signals the run again under the default disposition and records its exit.
+stage: agent-orchestration
+name: handover-stop-request
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stop-request}
+        - sigterm: ignore
+        - gate: stop-first
+        - sigterm: default
+        - gate: stop-second
+        - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
+      exit_code: 0
+expect_starts: 1  # One dispatch: the stop request reaches the agent by signal, and the agent is never relaunched.
+directions: [python-to-candidate, candidate-to-python]
+steps:
+  - name: retry a failed manager run to start the stop target
+    method: POST
+    path: /api/sessions/${sessions.atlas}/retry
+    json: {request_id: synthetic-stop-request-run, run_id: "${runs.atlas_t3.run}"}
+    capture: {run_id: run_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait for the stop target at its first gate
+    timeout_seconds: 30
+    until: {at_gate: stop-first}
+  - name: request the stop of the gated run; the agent ignores the signal
+    method: POST
+    path: /api/sessions/${sessions.atlas}/runs/${capture.run_id}/cancel
+    json: {request_id: synthetic-stop-request}
+    expect_status: 200
+    defer_files: true
+  - kind: handover
+    name: hand over the run whose recorded stop is unfinished
+    agent_after_stop: alive
+    open_while_stopped: stop-first
+    timeout_seconds: 30
+  - kind: wait
+    name: wait for the second server to finish the recorded stop
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {run_id: "${capture.run_id}", outcome: interrupted}

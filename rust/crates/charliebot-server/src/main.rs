@@ -5,9 +5,9 @@
 //! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture the build identity,
 //! initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the
 //! configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests finish for up to five seconds,
-//! stops the lifespan's services, runs its let-go steps and closes the shared HTTP client, releases the fence, logs
-//! `charliebot_shutdown`, then raises the signal again under its default disposition, so the process ends killed by
-//! that signal as uvicorn's does.
+//! stops the lifespan's services, runs its let-go steps, closes the shared HTTP client and the open WebSockets,
+//! releases the fence, logs `charliebot_shutdown`, then raises the signal again under its default disposition, so the
+//! process ends killed by that signal as uvicorn's does.
 //!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
 //! page packages and `configs/` the server serves; the Python server derives the same root from its own file location.
@@ -150,7 +150,6 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_STARTUP);
     }
   };
-  let shutdown_store = Arc::clone(&features.store);
   let state = Arc::new(AppState {
     features,
     build_info,
@@ -180,7 +179,6 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       .with_graceful_shutdown(async move {
         // A dropped sender also stops the server.
         let _ = stop_receiver.await;
-        shutdown_store.close_subscribers().await;
       })
       .await
   });
@@ -214,6 +212,7 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings) {
   tracing::info!(
     shutdown_ms = round_ms(shutdown_started.elapsed()),
     http_client_ms = round_ms(closes.http_client),
+    ws_close_ms = round_ms(closes.ws_close),
     "charliebot_shutdown"
   );
 }
@@ -346,18 +345,20 @@ mod tests {
   }
 
   #[test]
-  fn shutdown_line_reports_the_shutdown_and_the_http_client_close() {
+  fn shutdown_line_reports_the_shutdown_and_each_close() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = Registry::default().with(Capture(Arc::clone(&events)));
     tracing::subscriber::with_default(subscriber, || {
-      log_shutdown(Instant::now(), CloseTimings { http_client: Duration::from_millis(3) });
+      let closes = CloseTimings { http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
+      log_shutdown(Instant::now(), closes);
     });
 
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1);
     let names: Vec<&str> = events[0].iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["message", "shutdown_ms", "http_client_ms"]);
+    assert_eq!(names, ["message", "shutdown_ms", "http_client_ms", "ws_close_ms"]);
     assert_eq!(events[0][0].1, "charliebot_shutdown");
     assert_eq!(events[0][2].1, "3");
+    assert_eq!(events[0][3].1, "5");
   }
 }

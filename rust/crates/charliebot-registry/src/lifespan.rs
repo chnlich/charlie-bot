@@ -65,6 +65,8 @@ pub struct Lifespan {
 pub struct CloseTimings {
   /// Closing the shared HTTP client (`http_client_ms`).
   pub http_client: Duration,
+  /// Closing every open session WebSocket (`ws_close_ms`).
+  pub ws_close: Duration,
 }
 
 /// The outcome of [`Lifespan::shutdown`]. Every stop runs even when one fails, so the closes are timed either way.
@@ -137,8 +139,8 @@ impl Lifespan {
   }
 
   /// Stops the started services (ready ones in reverse order, then early ones in reverse), runs the let-go steps in
-  /// registration order, then closes the shared HTTP client. Every step runs even when an earlier one fails; the first
-  /// failure is returned with the close timings.
+  /// registration order, then closes the shared HTTP client and the open WebSockets. Every step runs even when an
+  /// earlier one fails; the first failure is returned with the close timings.
   pub async fn shutdown(self) -> Shutdown {
     let mut first_error: Option<anyhow::Error> = None;
     for phase in [Phase::Ready, Phase::Early] {
@@ -155,9 +157,12 @@ impl Lifespan {
         first_error.get_or_insert(error);
       }
     }
-    let started = Instant::now();
+    let http_started = Instant::now();
     charliebot_compat::http_client::close_shared_client();
-    let closes = CloseTimings { http_client: started.elapsed() };
+    let http_client = http_started.elapsed();
+    let ws_started = Instant::now();
+    self.features.store.close_subscribers().await;
+    let closes = CloseTimings { http_client, ws_close: ws_started.elapsed() };
     Shutdown { closes, error: first_error }
   }
 }

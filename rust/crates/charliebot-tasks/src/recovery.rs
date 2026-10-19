@@ -58,6 +58,42 @@ pub struct PassCounters {
 pub(crate) struct RecoveryState {
   pub(crate) resume_follows: Mutex<HashSet<(String, String)>>,
   landing_retries: Mutex<HashSet<String>>,
+  #[cfg(feature = "test-hooks")]
+  landing_retry_interval: Mutex<Option<Duration>>,
+}
+
+impl RecoveryState {
+  /// The end-landing retry's interval: the production constant unless a test hook replaced it.
+  fn landing_retry_interval(&self) -> Duration {
+    #[cfg(feature = "test-hooks")]
+    {
+      let replaced = *self.landing_retry_interval.lock().expect("landing retry interval is not poisoned");
+      if let Some(interval) = replaced {
+        return interval;
+      }
+    }
+    RUN_END_LANDING_RETRY_INTERVAL
+  }
+}
+
+/// Test hooks over the recovery state (feature `test-hooks`): a shorter end-landing retry interval, and read access to
+/// the nodes with a live retry task and to the resume follows this process holds.
+#[cfg(feature = "test-hooks")]
+impl TaskExecutionAdapter {
+  /// Replace the end-landing retry interval for every retry this adapter starts from now on.
+  pub fn set_landing_retry_interval(&self, interval: Duration) {
+    *self.recovery.landing_retry_interval.lock().expect("landing retry interval is not poisoned") = Some(interval);
+  }
+
+  /// The nodes that have a live end-landing retry task.
+  pub fn landing_retry_nodes(&self) -> HashSet<String> {
+    self.recovery.landing_retries.lock().expect("landing retry set is not poisoned").clone()
+  }
+
+  /// The (session, run) pairs whose resume follow this process holds.
+  pub fn resume_follows(&self) -> HashSet<(String, String)> {
+    self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").clone()
+  }
 }
 
 /// The startup recovery step (`_run_task_recovery`): a pass error is logged and the server starts anyway, as Python's
@@ -571,11 +607,12 @@ pub(crate) fn start_end_landing_retry(adapter: TaskExecutionAdapter, session_id:
   if !inserted {
     return;
   }
+  let interval = adapter.recovery.landing_retry_interval();
   tokio::spawn(async move {
     wait_for_triggering_run_release(|| run.as_deref().is_some_and(|run_id| adapter.drives_run(&session, run_id))).await;
     let pass_adapter = adapter.clone();
     let pass_session = session.clone();
-    let result = retry_while_out_of_space(RUN_END_LANDING_RETRY_INTERVAL, &session, run.as_deref(), move || {
+    let result = retry_while_out_of_space(interval, &session, run.as_deref(), move || {
       let adapter = pass_adapter.clone();
       let session = pass_session.clone();
       async move {

@@ -333,3 +333,40 @@ async def test_the_trigger_path_starts_one_idle_run_on_the_sessions_own_command_
   assert (run["trigger"], run["failure_trigger"]) == ("idle", "idle")
   assert (run["model"], run["family"]) == ("claude-fable-5-1", "fable")
   assert claude_idle_compaction._running == {}
+
+
+@pytest.mark.asyncio
+async def test_an_unpooled_session_uses_its_default_login_directory(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  option = _option()
+  cfg = config.CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      backends={"options": [option]},
+  )
+  default_dir = tmp_path / "default-claude"
+  conftest.make_transcript(default_dir, CC_ID)
+  monkeypatch.setattr(claude_idle_compaction.login_dirs, "claude_config_dir", lambda: default_dir)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+
+  ctx = _round_ctx(tmp_path, option, last_request_at=LAST_REQUEST, context_tokens=120_000)
+  claude_metadata.set_account(ctx.session_meta, None)
+  meta = ctx.session_meta
+  monkeypatch.setattr(claude_idle_compaction.session_store, "store", lambda: _FakeStore(meta))
+  monkeypatch.setattr(claude_idle_compaction.session_events, "events", _FakeEvents)
+  runs: list[dict[str, Any]] = []
+
+  async def run_compaction(**kwargs: Any) -> claude_compaction.CompactionOutcome:
+    runs.append(kwargs)
+    return claude_compaction.CompactionOutcome(ok=True, post_tokens=9_111, cache_read_tokens=118_000)
+
+  monkeypatch.setattr(claude_compaction, "run_compaction", run_compaction)
+  await claude_idle_compaction.arm(ctx)
+
+  started = await claude_idle_compaction.fire(SESSION_ID, now=LAST_REQUEST + datetime.timedelta(minutes=55))
+  assert started is not None
+  await started
+
+  [run] = runs
+  assert run["config_dir"] == str(default_dir)
+  assert run["env"][config.CLAUDE_CONFIG_DIR_ENV_VAR] == str(default_dir)
+  assert run["log_context"]["account"] == "default"

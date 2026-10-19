@@ -1692,19 +1692,8 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   let queue = features.startup.require::<master_queue::MasterQueue>()?;
   let task_session = meta.id.clone();
   let task = tokio::spawn(async move { adapter.execute_run(&task_session, run_id).await });
-  let started_result = tokio::time::timeout(Duration::from_secs(5), async {
-    while !started.exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await;
-  if started_result.is_err() {
-    let _ = queue.shutdown().await;
-    let _ = task.await;
-    anyhow::bail!("task manager agent did not reach its shutdown gate");
-  }
-  // Record the group while the pid is alive. A covered agent is detached and keeps running past shutdown, so the guard
-  // must be able to reap it.
+  // Record the group as soon as the launch callback persists the pid. A failure to reach the script's gate must still
+  // leave the drop guard able to kill the process.
   let pid = tokio::time::timeout(Duration::from_secs(5), async {
     loop {
       if let Some(pid) = features.store.read_run_sync(&meta.id, run_id)?.and_then(|run| run.pid) {
@@ -1716,6 +1705,17 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   .await
   .context("task manager agent's pid was not persisted")??;
   groups.track(pid);
+  let started_result = tokio::time::timeout(Duration::from_secs(5), async {
+    while !started.exists() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await;
+  if started_result.is_err() {
+    let _ = queue.shutdown().await;
+    let _ = task.await;
+    anyhow::bail!("task manager agent did not reach its shutdown gate");
+  }
   tokio::time::timeout(Duration::from_secs(5), async {
     loop {
       if features

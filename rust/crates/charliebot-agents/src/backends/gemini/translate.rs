@@ -7,7 +7,7 @@ use charliebot_core::pyfmt::python_str;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
-use crate::cli_base::truthy;
+use crate::cli_base::{int_field, str_field, truthy};
 use crate::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
@@ -106,23 +106,6 @@ impl GeminiTranslator {
 impl Translate for GeminiTranslator {
   fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
     self.translate_event(&raw)
-  }
-}
-
-/// The string field `key`, or `default` when the event lacks it (`ev.get(key, default)`).
-fn str_field<'a>(event: &'a Map<String, Value>, key: &str, default: &'a str) -> anyhow::Result<&'a str> {
-  match event.get(key) {
-    None => Ok(default),
-    Some(Value::String(text)) => Ok(text),
-    Some(other) => bail!("gemini event field {key} must be a string, got {other}"),
-  }
-}
-
-/// The integer field `key` of `stats`, or 0 when it lacks the field (`stats.get(key, 0)`).
-fn int_field(stats: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
-  match stats.get(key) {
-    None => Ok(0),
-    Some(value) => value.as_i64().ok_or_else(|| anyhow::anyhow!("gemini stats {key} must be an integer, got {value}")),
   }
 }
 

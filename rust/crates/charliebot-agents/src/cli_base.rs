@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_registry::backend::Env;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Local addresses that bypass an injected proxy (`base.LOCAL_NO_PROXY_ENTRIES`).
 pub const LOCAL_NO_PROXY_ENTRIES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
@@ -117,9 +117,19 @@ pub fn strip_google_api_keys(env: &Env) -> Env {
   stripped
 }
 
-/// Python's `str.strip()`: trims the characters `str.isspace` accepts, which include U+001C to U+001F.
+/// Python's `str.isspace` for one character: Unicode whitespace, which includes U+001C to U+001F.
+pub fn py_is_space(c: char) -> bool {
+  c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
+
+/// Python's `str.strip()`: trims the characters `str.isspace` accepts.
 pub fn py_strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+  text.trim_matches(py_is_space)
+}
+
+/// Python's `str.split()` with no separator: the non-empty runs between `str.isspace` characters.
+pub fn py_split_whitespace(text: &str) -> impl Iterator<Item = &str> {
+  text.split(py_is_space).filter(|part| !part.is_empty())
 }
 
 /// Python truthiness of a JSON value: null, false, zero, and empty strings, arrays and objects are false.
@@ -131,6 +141,33 @@ pub fn truthy(value: &Value) -> bool {
     Value::String(text) => !text.is_empty(),
     Value::Array(items) => !items.is_empty(),
     Value::Object(members) => !members.is_empty(),
+  }
+}
+
+/// The string field `key` of a JSON object, or `default` when the object lacks it (`ev.get(key, default)`).
+pub fn str_field<'a>(fields: &'a Map<String, Value>, key: &str, default: &'a str) -> anyhow::Result<&'a str> {
+  match fields.get(key) {
+    None => Ok(default),
+    Some(Value::String(text)) => Ok(text),
+    Some(other) => bail!("event field {key} must be a string, got {other}"),
+  }
+}
+
+/// The string field `key` of a JSON object, which the object must carry (`ev[key]`).
+pub fn required_str<'a>(fields: &'a Map<String, Value>, key: &str) -> anyhow::Result<&'a str> {
+  match fields.get(key) {
+    None => bail!("event lacks field {key}"),
+    Some(Value::String(text)) => Ok(text),
+    Some(other) => bail!("event field {key} must be a string, got {other}"),
+  }
+}
+
+/// The integer field `key` of a JSON object, or 0 when the object lacks it (`stats.get(key, 0)`). A value that is not an
+/// integer is an error, where Python would carry it into the event.
+pub fn int_field(fields: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
+  match fields.get(key) {
+    None => Ok(0),
+    Some(value) => value.as_i64().with_context(|| format!("event field {key} must be an integer, got {value}")),
   }
 }
 

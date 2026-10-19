@@ -10,7 +10,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 
 Malformed input (a request that no client sends, such as invalid JSON or a wrong field type) keeps Python's
 status code, and for a 422 answer the `type` and `loc` of each error; the error text may differ. Parity steps
-for such input set `compare: status_and_shape`.
+for such input set `compare: status_and_shape`. The port refuses integers outside the signed 64-bit range and non-finite floats (`NaN`, `Infinity`, `1e400`), with 400 for a JSON literal and 422 for a string value; Python's answer to these values depends on the route, so the port treats them as undefined.
 
 | Method | Path | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
@@ -20,29 +20,29 @@ for such input set `compare: status_and_shape`.
 | GET, HEAD | `/redoc` | api-docs | todo |  |
 | GET | `/api/sessions/chat-threads` | features/chat_threads | ported |  |
 | GET | `/api/auth/status` | foundation | ported |  |
-| GET | `/sessions/{session_id}/events` | pages | todo |  |
-| GET | `/home` | pages | todo |  |
-| GET | `/` | foundation | ported | renders the empty-sessions context; a home with sessions answers 500 until the sessions stage |
-| GET | `/api/sessions/` | sessions | todo |  |
+| GET | `/sessions/{session_id}/events` | pages | ported |  |
+| GET | `/home` | pages | ported |  |
+| GET | `/` | foundation | ported |  |
+| GET | `/api/sessions/` | sessions | ported |  |
 | POST | `/api/sessions/` | sessions | todo |  |
-| GET | `/api/sessions/archived` | sessions | todo |  |
-| GET | `/api/sessions/starred` | sessions | todo |  |
-| GET | `/api/sessions/groups` | sessions | todo |  |
+| GET | `/api/sessions/archived` | sessions | ported |  |
+| GET | `/api/sessions/starred` | sessions | ported |  |
+| GET | `/api/sessions/groups` | sessions | ported |  |
 | POST | `/api/sessions/groups/rename` | sessions | todo |  |
 | POST | `/api/sessions/groups/delete` | sessions | todo |  |
-| GET | `/api/sessions/status` | sessions | todo |  |
-| GET | `/api/sessions/tree` | sessions | todo |  |
-| GET | `/api/sessions/search` | sessions | todo |  |
+| GET | `/api/sessions/status` | sessions | ported |  |
+| GET | `/api/sessions/tree` | sessions | ported |  |
+| GET | `/api/sessions/search` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}/pending-triggers` | sessions | ported |  |
-| GET | `/api/sessions/{session_id}/bootstrap` | sessions | todo |  |
+| GET | `/api/sessions/{session_id}/bootstrap` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/read` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/usage` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/events` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/transcript` | sessions | todo |  |
+| GET | `/api/sessions/{session_id}/usage` | sessions | ported |  |
+| GET | `/api/sessions/{session_id}/events` | sessions | ported |  |
+| GET | `/api/sessions/{session_id}/transcript` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/fork` | sessions | todo |  |
 | POST | `/api/sessions/{session_id}/elone` | sessions | todo |  |
 | POST | `/api/sessions/{session_id}/backend` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}` | sessions | todo |  |
+| GET | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}` | sessions | todo |  |
 | DELETE | `/api/sessions/{session_id}/permanent` | sessions | todo |  |
 | POST | `/api/sessions/{session_id}/unarchive` | sessions | ported |  |
@@ -51,12 +51,12 @@ for such input set `compare: status_and_shape`.
 | POST | `/api/sessions/{session_id}/rounds/{round_id}/rate` | sessions | todo |  |
 | PATCH | `/api/sessions/{session_id}` | sessions | todo |  |
 | POST | `/api/sessions/{session_id}/group` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/events.jsonl` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/runs` | sessions | todo |  |
-| GET | `/api/sessions/{session_id}/effective-prompt` | sessions | todo | Reply segments from web_reply, Slack and Discord are not ported. |
-| GET | `/api/sessions/{session_id}/runs/{run_id}/context` | sessions | todo | Missing-run detail differs in the minted ID until R2a lands. |
+| GET | `/api/sessions/{session_id}/events.jsonl` | sessions | ported |  |
+| GET | `/api/sessions/{session_id}/runs` | sessions | ported |  |
+| GET | `/api/sessions/{session_id}/effective-prompt` | sessions | ported |  |
+| GET | `/api/sessions/{session_id}/runs/{run_id}/context` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/retry` | sessions | ported |  |
-| GET | `/api/sessions/{session_id}/task-inputs/pending` | sessions | todo |  |
+| GET | `/api/sessions/{session_id}/task-inputs/pending` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/task-inputs/acknowledge` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/complete` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/cancel` | sessions | ported |  |

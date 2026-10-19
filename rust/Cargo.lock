@@ -678,7 +678,6 @@ name = "charliebot-store"
 version = "0.1.0"
 dependencies = [
  "charliebot-core",
- "charliebot-store",
  "nix",
  "regex",
  "serde",

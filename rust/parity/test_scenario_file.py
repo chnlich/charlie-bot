@@ -416,6 +416,39 @@ def test_fake_group_kill_passes_a_start_whose_leader_and_group_are_gone() -> Non
   assert parity._kill_fake_group("baseline", record) == []
 
 
+def test_fake_group_kill_signals_only_the_pid_when_the_start_does_not_lead_its_group() -> None:
+  # Without start_new_session both children share the test's process group, which killpg must not touch.
+  member = subprocess.Popen(
+      [sys.executable, "-c", "import time; time.sleep(60)"],
+      stdin=subprocess.DEVNULL,
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL)
+  start = subprocess.Popen(
+      [sys.executable, "-c", _LEADER_IGNORING_SIGTERM],
+      stdin=subprocess.DEVNULL,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.DEVNULL,
+      text=True)
+  try:
+    assert start.stdout.readline() == "ready\n"
+    record = _spawn_record(start)
+    record["pgid"] = os.getpgid(member.pid)
+    assert record["pgid"] != record["pid"]
+
+    lines = parity._kill_fake_group("baseline", record)
+
+    assert start.wait(timeout=10) is not None
+    assert parity.servers.process_identity(start.pid) is None
+    assert member.poll() is None
+    assert len(lines) == 1
+    assert "does not lead its own process group" in lines[0]
+  finally:
+    for process in (member, start):
+      if process.poll() is None:
+        process.kill()
+      process.wait()
+
+
 def test_scenario_cleanup_kills_a_fake_group_that_ignores_sigterm(
     tmp_path: pathlib.Path, sigterm_leader: subprocess.Popen) -> None:
   side = parity.Side("candidate", parity.servers.Tree(label="candidate", root=tmp_path), port=18600)

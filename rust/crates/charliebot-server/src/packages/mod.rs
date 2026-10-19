@@ -25,14 +25,14 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.backup", charliebot_backup::register),
   ("src.features.backend_pool", charliebot_agents::backend_pool::register),
   ("src.features.chat_threads", charliebot_chat_threads::register), // stub: src.features.chat_threads
-  ("src.features.code_server", charliebot_code_server::register),   // stub: src.features.code_server
-  ("src.features.cron", features::cron),                            // stub: src.features.cron
-  ("src.features.diag", charliebot_diag::register),                 // stub: src.features.diag
-  ("src.features.slack", charliebot_slack::register),               // stub: src.features.slack
-  ("src.features.discord", charliebot_discord::register),           // stub: src.features.discord
-  ("src.features.web_reply", charliebot_web_reply::register),       // stub: src.features.web_reply
+  ("src.features.code_server", charliebot_code_server::register),
+  ("src.features.cron", features::cron),                  // stub: src.features.cron
+  ("src.features.diag", charliebot_diag::register),       // stub: src.features.diag
+  ("src.features.slack", charliebot_slack::register),     // stub: src.features.slack
+  ("src.features.discord", charliebot_discord::register), // stub: src.features.discord
+  ("src.features.web_reply", charliebot_web_reply::register), // stub: src.features.web_reply
   ("src.features.host_auth", charliebot_host_auth::register),
-  ("src.features.diff_view", charliebot_diff_view::register), // stub: src.features.diff_view
+  ("src.features.diff_view", charliebot_diff_view::register),
   ("src.features.explain", charliebot_explain::register),
   ("src.features.improve", stub), // stub: src.features.improve
   ("src.features.memory", charliebot_memory::register),

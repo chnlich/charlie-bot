@@ -73,7 +73,7 @@ fn query_value(query: &str, key: &str) -> Option<String> {
   url::form_urlencoded::parse(query.as_bytes())
     .filter(|(name, _)| name == key)
     .map(|(_, value)| value.into_owned())
-    .last()
+    .next()
 }
 
 fn resolve_target(sessions_dir: &Path, path: &str, diff_param: Option<&str>) -> ViewResult<Option<(PathBuf, String)>> {

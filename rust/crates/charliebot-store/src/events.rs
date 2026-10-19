@@ -322,68 +322,6 @@ impl Store {
     cache.as_ref().map(|cached| Arc::clone(&cached.events))
   }
 
-  /// Return the latest persisted context reading and the newest assistant/result request time.
-  pub fn context_state(&self, session_id: &str) -> StoreResult<(Option<i64>, Option<UtcDateTime>)> {
-    let events = self.load_chat_events_sync(session_id)?;
-    let mut reading_kind = "";
-    let mut context_tokens = None;
-    let mut post_compact_tokens = None;
-    let mut last_request_at = None;
-    for event in &events {
-      let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
-      if matches!(event_type, "assistant" | "result")
-        && let Some(raw) = event.get("timestamp").and_then(Value::as_str)
-        && let Ok(parsed) = UtcDateTime::parse(raw)
-      {
-        last_request_at = Some(parsed);
-      }
-      if event_type == "assistant" && !truthy(event.get("parent_tool_use_id")) {
-        let usage = event.get("message").and_then(|message| message.get("usage"));
-        let prompt_tokens = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
-          .iter()
-          .map(|key| usage.and_then(|usage| usage.get(*key)).and_then(Value::as_i64).unwrap_or(0))
-          .sum::<i64>();
-        if prompt_tokens > 0 {
-          context_tokens = Some(prompt_tokens);
-          post_compact_tokens = None;
-          reading_kind = "assistant";
-        }
-      } else if event_type == "system" {
-        match event.get("subtype").and_then(Value::as_str) {
-          Some("compact_boundary") if reading_kind == "assistant" => {
-            // A boundary without an integer post_tokens leaves the earlier boundary's count in place.
-            if let Some(tokens) =
-              event.get("compact_metadata").and_then(|value| value.get("post_tokens")).and_then(Value::as_i64)
-            {
-              post_compact_tokens = Some(tokens);
-            }
-          }
-          Some("context_reading") => {
-            if let Some(reading) = event.get("context_reading").and_then(Value::as_object) {
-              reading_kind = "resolved";
-              context_tokens = reading.get("context_tokens").and_then(Value::as_i64);
-            }
-          }
-          _ => {}
-        }
-      } else if event_type == "result"
-        && let Some(snapshot) = event.get("context_snapshot").and_then(Value::as_object)
-      {
-        let tokens = snapshot.get("tokens").and_then(Value::as_object);
-        let sum = ["input", "output", "reasoning", "cache_read", "cache_write"]
-          .iter()
-          .map(|key| tokens.and_then(|tokens| tokens.get(*key)).and_then(Value::as_i64).unwrap_or(0))
-          .sum::<i64>();
-        reading_kind = "snapshot";
-        context_tokens = Some(sum);
-      }
-    }
-    if reading_kind == "assistant" {
-      context_tokens = post_compact_tokens.or(context_tokens);
-    }
-    Ok((context_tokens, last_request_at))
-  }
-
   /// Archive the oldest consecutive events before `cutoff` and advance metadata `archive_offset`.
   pub async fn archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>> {
     let live_path = self.chat_events_path(session_id);
@@ -516,17 +454,6 @@ impl Store {
 /// Take the physical-line slots in `[start, end)`, dropping the slots that parsed to nothing.
 fn slice_live_lines(lines: &[Option<ChatEvent>], start: usize, end: usize) -> Vec<ChatEvent> {
   lines.iter().skip(start).take(end.saturating_sub(start)).flatten().cloned().collect()
-}
-
-fn truthy(value: Option<&Value>) -> bool {
-  match value {
-    None | Some(Value::Null) | Some(Value::Bool(false)) => false,
-    Some(Value::String(text)) => !text.is_empty(),
-    Some(Value::Number(number)) => number.as_f64().is_some_and(|number| number != 0.0),
-    Some(Value::Array(items)) => !items.is_empty(),
-    Some(Value::Object(items)) => !items.is_empty(),
-    Some(Value::Bool(true)) => true,
-  }
 }
 
 fn python_event_timestamp(value: UtcDateTime) -> String {
@@ -986,103 +913,6 @@ mod tests {
       let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
       std::io::Write::write_all(&mut file, b"{\"i\": 5}\n").unwrap();
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 6);
-    }
-
-    /// `test_session_usage.py::test_claude_tier_uses_assistant_event_tokens_not_result_cumulative`
-    /// and `test_claude_tier_ignores_subagent_and_synthetic_assistant_events`, read through
-    /// `context_state`: assistant prompt tokens decide the reading, subagent and usage-less
-    /// synthetic events never do, and cumulative result usage without a context snapshot never
-    /// reaches the readout.
-    #[tokio::test]
-    async fn context_state_reads_assistant_usage_and_ignores_subagents_and_result_cumulatives() {
-      let home = tempfile::tempdir().unwrap();
-      let store = test_store(home.path());
-      let session_id = "synthetic-session";
-      seed_metadata(&store, session_id);
-      let events = vec![
-        json!({
-          "type": "result", "timestamp": "2025-02-03T00:00:01+00:00",
-          "total_cost_usd": 0.5,
-          "usage": {"input_tokens": 1_000_000},
-        }),
-        json!({
-          "type": "assistant", "timestamp": "2025-02-03T00:00:02+00:00",
-          "parent_tool_use_id": "tool-1",
-          "message": {"usage": {"input_tokens": 500}},
-        }),
-        json!({
-          "type": "assistant", "timestamp": "2025-02-03T00:00:03+00:00",
-          "message": {"usage": {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30}},
-        }),
-        json!({"type": "assistant", "timestamp": "2025-02-03T00:00:04+00:00", "message": {"content": "hello"}}),
-      ];
-      for event in events {
-        store.append_chat_event(session_id, event).await.unwrap();
-      }
-      let (context_tokens, last_request_at) = store.context_state(session_id).unwrap();
-      assert_eq!(context_tokens, Some(150));
-      assert_eq!(last_request_at.map(|value| value.to_python_string()), Some("2025-02-03T00:00:04Z".to_string()));
-    }
-
-    /// `test_session_usage.py::test_context_reading_tier_beats_cumulative_result_usage`, read
-    /// through `context_state`: cumulative result usage without a context snapshot never reaches
-    /// the readout, and the newest persisted context_reading event decides it.
-    #[tokio::test]
-    async fn context_state_prefers_the_newest_context_reading_event() {
-      let home = tempfile::tempdir().unwrap();
-      let store = test_store(home.path());
-      let session_id = "synthetic-session";
-      seed_metadata(&store, session_id);
-      let events = vec![
-        json!({"type": "result", "total_cost_usd": 0.10, "usage": {"input_tokens": 1_000_000}}),
-        json!({"type": "result", "total_cost_usd": 0.20, "usage": {"input_tokens": 2_000_000}}),
-        json!({
-          "type": "system", "subtype": "context_reading",
-          "context_reading": {"model": "old/model", "context_tokens": 10_000, "context_full": 100_000},
-        }),
-        json!({
-          "type": "system", "subtype": "context_reading",
-          "context_reading": {"model": "k3/model", "context_tokens": 118_234, "context_full": 262_144},
-        }),
-      ];
-      for event in events {
-        store.append_chat_event(session_id, event).await.unwrap();
-      }
-      let (context_tokens, _) = store.context_state(session_id).unwrap();
-      assert_eq!(context_tokens, Some(118_234));
-    }
-
-    /// `test_session_usage.py::test_empty_slot_keeps_context_unknown`, read through
-    /// `context_state`: no usage-bearing event leaves the reading unknown, and cumulative result
-    /// usage does not fill it.
-    #[tokio::test]
-    async fn context_state_without_usage_bearing_events_stays_unknown() {
-      let home = tempfile::tempdir().unwrap();
-      let store = test_store(home.path());
-      let session_id = "synthetic-session";
-      seed_metadata(&store, session_id);
-      store
-        .append_chat_event(
-          session_id,
-          json!({
-            "type": "assistant", "timestamp": "2025-02-03T00:00:01+00:00",
-            "message": {"content": [{"type": "text", "text": "hello"}]},
-          }),
-        )
-        .await
-        .unwrap();
-      store
-        .append_chat_event(
-          session_id,
-          json!({
-            "type": "result", "total_cost_usd": 0.5, "usage": {"input_tokens": 999_999},
-            "timestamp": "2025-02-03T00:00:02+00:00",
-          }),
-        )
-        .await
-        .unwrap();
-      let (context_tokens, _) = store.context_state(session_id).unwrap();
-      assert_eq!(context_tokens, None);
     }
   }
 }

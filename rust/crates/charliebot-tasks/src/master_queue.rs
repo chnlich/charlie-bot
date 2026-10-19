@@ -11,6 +11,7 @@ use charliebot_core::event_types;
 use charliebot_registry::backend::BackendLifecycle;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, oneshot, watch};
@@ -26,8 +27,11 @@ pub type PersistNativeIdFn =
   Arc<dyn Fn(String, String, Option<String>) -> BoxFuture<'static, anyhow::Result<Option<String>>> + Send + Sync>;
 pub type PersistAccountLabelFn =
   Arc<dyn Fn(String, String) -> BoxFuture<'static, anyhow::Result<Option<String>>> + Send + Sync>;
-pub type ContextStateFn =
-  Arc<dyn Fn(String) -> BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>> + Send + Sync>;
+pub type ContextStateFn = Arc<
+  dyn Fn(String, SessionMetadata) -> BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
+    + Send
+    + Sync,
+>;
 pub type TaskTreeActivityFn = Arc<dyn Fn(&str) -> anyhow::Result<(bool, String)> + Send + Sync>;
 pub type AfterRoundFn =
   Arc<dyn Fn(Arc<CharlieBotConfig>, String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
@@ -119,10 +123,12 @@ impl MasterQueue {
         as BoxFuture<'static, anyhow::Result<Option<String>>>
     });
     let context_features = Arc::clone(&features);
-    let context_state = Arc::new(move |session_id: String| {
+    let context_state = Arc::new(move |session_id: String, session_meta: SessionMetadata| {
       let features = Arc::clone(&context_features);
-      Box::pin(async move { Ok(features.store.context_state(&session_id)?) })
-        as BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
+      Box::pin(async move {
+        let usage = features.startup.require::<SessionUsage>()?;
+        Ok(usage.context_state(&session_id, &session_meta)?)
+      }) as BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
     });
     let after_features = Arc::clone(&features);
     let pool = Arc::clone(&self.backend_pool);
@@ -655,11 +661,85 @@ async fn broadcast_running_changed(
 
 #[cfg(test)]
 mod tests {
+  use std::path::Path;
+
   use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
   use charliebot_agents::backends::claude_code::claude_metadata;
+  use charliebot_core::config::BackendOption;
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::backend::UsageResolver;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks;
+  use charliebot_registry::{Registry, RegistryError};
+  use charliebot_store::Store;
   use charliebot_store::metadata::TaskProfile;
+  use serde_json::Map;
 
   use super::*;
+
+  struct SyntheticUsageResolver;
+
+  impl UsageResolver for SyntheticUsageResolver {
+    fn resolve(
+      &self,
+      _session_id: &str,
+      _meta: &SessionMetadata,
+      _events: &[Value],
+    ) -> anyhow::Result<Option<Map<String, Value>>> {
+      Ok(Some(Map::from_iter([("context_tokens".to_string(), json!(321))])))
+    }
+  }
+
+  fn register_synthetic_usage(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.usage_resolver("synthetic_usage", Arc::new(|_host| Arc::new(SyntheticUsageResolver)))
+  }
+
+  fn context_features(home: &Path) -> Arc<FeatureContext> {
+    let mut registry = Registry::new();
+    registry.register_package("tests.synthetic_usage", register_synthetic_usage).unwrap();
+    let registry = Arc::new(registry);
+    let mut config = registry.load_config(home).unwrap();
+    config.backends.options.push(BackendOption {
+      id: "synthetic-resolver".to_string(),
+      label: "Synthetic resolver".to_string(),
+      model: "synthetic-model".to_string(),
+      prompt_overlay: None,
+      backend_type: "synthetic_usage".to_string(),
+      type_fields: serde_yaml::Mapping::new(),
+    });
+    let store_config = config.clone();
+    let reload_config = config.clone();
+    let config = Arc::new(HotReload::new(
+      config.config_file(),
+      "master_queue_test_config_reload_failed",
+      Box::new(move || Ok(reload_config.clone())),
+    ));
+    let store = Arc::new(
+      Store::new(store_config, registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry))).unwrap(),
+    );
+    let credential_home = home.to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.join("credentials.yaml"),
+      "master_queue_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let startup = Arc::new(StartupState::default());
+    startup.insert(SessionUsage::new(Arc::clone(&config), Arc::clone(&store), Arc::clone(&registry))).unwrap();
+    Arc::new(FeatureContext { config, credentials, store, registry, startup })
+  }
+
+  async fn append_events(store: &Store, session_id: &str, events: &[Value]) {
+    for event in events {
+      store.append_chat_event(session_id, event.clone()).await.unwrap();
+    }
+  }
+
+  fn manager_metadata(session_id: &str, backend: &str) -> SessionMetadata {
+    let mut meta = SessionMetadata::new(session_id, "Synthetic session", TaskProfile::Manager);
+    meta.backend = backend.to_string();
+    meta
+  }
 
   #[test]
   fn running_turn_snapshot_reads_the_shared_metadata_object() {
@@ -707,5 +787,113 @@ mod tests {
     assert_eq!(account_label.label, "synthetic-a");
     assert_eq!(account_label.read_back, Some(Some("synthetic-a".to_string())));
     assert_eq!(*persisted.lock().unwrap(), [("running".to_string(), "synthetic-a".to_string())]);
+  }
+
+  #[tokio::test]
+  async fn context_state_callback_uses_the_resolver_and_event_fold() {
+    let home = tempfile::tempdir().unwrap();
+    let features = context_features(home.path());
+    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let callbacks = queue.session_callbacks(Arc::clone(&features), Arc::new(|_| Ok((false, String::new()))));
+    let context_state = callbacks.context_state.as_ref().unwrap();
+
+    append_events(
+      &features.store,
+      "resolver-session",
+      &[
+        json!({
+          "type": "system", "subtype": "context_reading",
+          "context_reading": {"context_tokens": 11},
+        }),
+        json!({"type": "result", "timestamp": "2026-10-18T10:00:00Z"}),
+      ],
+    )
+    .await;
+    let (context_tokens, last_request_at) =
+      context_state("resolver-session".to_string(), manager_metadata("resolver-session", "synthetic-resolver"))
+        .await
+        .unwrap();
+    assert_eq!(context_tokens, Some(321));
+    assert_eq!(last_request_at.map(|value| value.to_python_string()), Some("2026-10-18T10:00:00Z".to_string()));
+
+    append_events(
+      &features.store,
+      "assistant-session",
+      &[
+        json!({
+          "type": "result", "timestamp": "2026-10-18T10:00:01Z",
+          "usage": {"input_tokens": 1_000_000},
+        }),
+        json!({
+          "type": "assistant", "timestamp": "2026-10-18T10:00:02Z", "parent_tool_use_id": "tool-1",
+          "message": {"usage": {"input_tokens": 500}},
+        }),
+        json!({
+          "type": "assistant", "timestamp": "2026-10-18T10:00:03Z",
+          "message": {"usage": {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30}},
+        }),
+        json!({"type": "assistant", "timestamp": "2026-10-18T10:00:04Z", "message": {"content": "hello"}}),
+      ],
+    )
+    .await;
+    let (context_tokens, last_request_at) =
+      context_state("assistant-session".to_string(), manager_metadata("assistant-session", "unregistered-backend"))
+        .await
+        .unwrap();
+    assert_eq!(context_tokens, Some(150));
+    assert_eq!(last_request_at.map(|value| value.to_python_string()), Some("2026-10-18T10:00:04Z".to_string()));
+
+    append_events(
+      &features.store,
+      "reading-session",
+      &[
+        json!({"type": "result", "usage": {"input_tokens": 1_000_000}}),
+        json!({
+          "type": "system", "subtype": "context_reading",
+          "context_reading": {"context_tokens": 10_000},
+        }),
+        json!({
+          "type": "system", "subtype": "context_reading",
+          "context_reading": {"context_tokens": 118_234},
+        }),
+      ],
+    )
+    .await;
+    let (context_tokens, _) =
+      context_state("reading-session".to_string(), manager_metadata("reading-session", "unregistered-backend"))
+        .await
+        .unwrap();
+    assert_eq!(context_tokens, Some(118_234));
+
+    append_events(
+      &features.store,
+      "compact-session",
+      &[
+        json!({"type": "assistant", "message": {"usage": {"input_tokens": 500}}}),
+        json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"post_tokens": 120}}),
+        json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {}}),
+      ],
+    )
+    .await;
+    let (context_tokens, _) =
+      context_state("compact-session".to_string(), manager_metadata("compact-session", "unregistered-backend"))
+        .await
+        .unwrap();
+    assert_eq!(context_tokens, Some(120));
+
+    append_events(
+      &features.store,
+      "unknown-session",
+      &[
+        json!({"type": "assistant", "message": {"content": "hello"}}),
+        json!({"type": "result", "usage": {"input_tokens": 999_999}}),
+      ],
+    )
+    .await;
+    let (context_tokens, _) =
+      context_state("unknown-session".to_string(), manager_metadata("unknown-session", "unregistered-backend"))
+        .await
+        .unwrap();
+    assert_eq!(context_tokens, None);
   }
 }

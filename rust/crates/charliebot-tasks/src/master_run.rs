@@ -14,9 +14,11 @@ use charliebot_agents::runner::{AgentRunner, EventFn, RunRequest};
 use charliebot_agents::transport::{cursor, follow, identity, recovery};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
-use charliebot_registry::backend::{Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle};
+use charliebot_registry::backend::{
+  ContextStateFn as TurnContextStateFn, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, ResumeStyle,
+};
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -401,18 +403,11 @@ fn turn_launch_context(
       Ok(())
     }) as BoxFuture<'static, anyhow::Result<()>>
   });
-  let callbacks = item.callbacks.clone();
-  let session_id = item.session_metadata().id;
-  let context_state = Arc::new(move || {
-    let callbacks = callbacks.clone();
-    let session_id = session_id.clone();
-    Box::pin(async move {
-      match &callbacks.context_state {
-        Some(read) => read(session_id).await,
-        None => Ok((None, None)),
-      }
-    }) as BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
-  });
+  let context_state = turn_context_state(
+    item.callbacks.context_state.clone(),
+    item.session_metadata().id,
+    Arc::clone(&item.session_meta),
+  );
   Ok(LaunchContext {
     cfg: Arc::clone(&item.cfg),
     option,
@@ -434,6 +429,25 @@ fn turn_launch_context(
     record_account,
     context_state,
     running_turns: Some(Arc::new(move || running_queue.running_turns_except(&running_session_id))),
+  })
+}
+
+fn turn_context_state(
+  read: Option<crate::master_queue::ContextStateFn>,
+  session_id: String,
+  session_meta: Arc<Mutex<SessionMetadata>>,
+) -> TurnContextStateFn {
+  Arc::new(move || {
+    let read = read.clone();
+    let session_id = session_id.clone();
+    let session_meta = Arc::clone(&session_meta);
+    Box::pin(async move {
+      let session_meta = { session_meta.lock().expect("work item metadata mutex is not poisoned").clone() };
+      match read {
+        Some(read) => read(session_id, session_meta).await,
+        None => Ok((None, None)),
+      }
+    }) as BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
   })
 }
 
@@ -1028,6 +1042,7 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_store::metadata::TaskProfile;
 
   #[test]
   fn resume_session_routing_matches_backend_style() {
@@ -1040,5 +1055,22 @@ mod tests {
       (Vec::new(), Some("synthetic-native-id".to_string()))
     );
     assert_eq!(route_resume_session_style(ResumeStyle::NativeId, Some("")).unwrap(), (Vec::new(), None));
+  }
+
+  #[tokio::test]
+  async fn turn_context_state_reads_the_current_shared_metadata() {
+    let session_meta =
+      Arc::new(Mutex::new(SessionMetadata::new("synthetic-session", "Synthetic", TaskProfile::Manager)));
+    let read: crate::master_queue::ContextStateFn = Arc::new(|_, meta| {
+      Box::pin(async move {
+        let tokens = (meta.backend == "synthetic-updated-backend").then_some(17);
+        Ok((tokens, None))
+      })
+    });
+    let context_state = turn_context_state(Some(read), "synthetic-session".to_string(), Arc::clone(&session_meta));
+
+    session_meta.lock().unwrap().backend = "synthetic-updated-backend".to_string();
+
+    assert_eq!(context_state().await.unwrap(), (Some(17), None));
   }
 }

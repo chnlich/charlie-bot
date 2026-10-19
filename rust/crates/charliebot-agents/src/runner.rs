@@ -791,6 +791,7 @@ mod tests {
     }
     fn one_shot_text<'a>(
       &'a mut self,
+      _: &'a Env,
       _: &'a str,
       _: &'a str,
       _: Option<Duration>,

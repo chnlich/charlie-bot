@@ -186,6 +186,9 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   `translate_fallback`. At most one type holds the translate fallback. A type without a lifecycle runs one process per
   run.
 - Example: `registry.backend_type(BackendTypeRegistration { type_name: "codex", traits, option_model, factory, lifecycle: None, translate_fallback: false })?;`
+- `AgentBackend::one_shot_text(base_env: &Env, prompt: &str, system: &str, timeout: Option<Duration>)` receives the
+  base agent environment explicitly.
+- `LaunchContext.base_env: Arc<Env>` carries that environment into lifecycle launches and compaction.
 
 ### Running turns
 
@@ -296,6 +299,9 @@ answer from a route uses this function.
 `StartupState`. The state holds one value per Rust type: a lifespan step or service inserts its value with `insert`, a
 second value of one type fails, and a route handler reads it with `get` or `require`. A pre-recovery step that
 fills a value makes it visible to a ready service, which reads it at start.
+`AgentBaseEnvironment` is the startup state's one owner of the base agent environment. Code with a `FeatureContext`
+reads it through `features.startup.require::<AgentBaseEnvironment>()?`; one-shot calls and launch contexts carry the
+environment explicitly.
 
 ## Rendering pages
 

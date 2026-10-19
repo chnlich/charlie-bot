@@ -224,11 +224,17 @@ impl ClaudeCodeBackend {
     Ok(env)
   }
 
-  async fn run_one_shot(&self, prompt: &str, system: &str, timeout: Option<Duration>) -> anyhow::Result<String> {
+  async fn run_one_shot(
+    &self,
+    base_env: &Env,
+    prompt: &str,
+    system: &str,
+    timeout: Option<Duration>,
+  ) -> anyhow::Result<String> {
     let model =
       self.model.as_deref().filter(|value| !value.is_empty()).context("cc-claude one-shot requires a model")?;
     let command = one_shot_command(model, system);
-    let environment = crate::agent_environment::startup_agent_environment()?.values.clone();
+    let environment = base_env.clone();
     let mut child = Command::new(&command[0]);
     child
       .args(&command[1..])
@@ -301,11 +307,12 @@ impl AgentBackend for ClaudeCodeBackend {
 
   fn one_shot_text<'a>(
     &'a mut self,
+    base_env: &'a Env,
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
   ) -> BoxFuture<'a, anyhow::Result<String>> {
-    Box::pin(async move { self.run_one_shot(prompt, system, timeout).await })
+    Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await })
   }
 }
 

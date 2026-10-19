@@ -166,6 +166,7 @@ impl AgentBackend for ScriptBackend {
 
   fn one_shot_text<'a>(
     &'a mut self,
+    _base_env: &'a Env,
     _prompt: &'a str,
     _system: &'a str,
     _timeout: Option<std::time::Duration>,

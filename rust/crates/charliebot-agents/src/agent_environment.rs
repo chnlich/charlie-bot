@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
@@ -19,7 +19,6 @@ use crate::transport::cgroup;
 pub use charliebot_core::venv::VENV_BIN_ENV;
 pub const ENTRY_POINT_RELATIVE: &str = "src/runtime/agent_entry_points";
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
-static STARTUP_STATE: OnceLock<Arc<StartupState>> = OnceLock::new();
 
 /// The server environment after removing its virtualenv activation for agent children.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,20 +76,11 @@ pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<
   Ok(startup.require::<AgentBaseEnvironment>()?)
 }
 
-/// Read the agent environment inserted into the server's startup state.
-pub fn startup_agent_environment() -> anyhow::Result<Arc<AgentBaseEnvironment>> {
-  let startup = STARTUP_STATE.get().context("agent startup state has not been installed")?;
-  require_agent_base_environment(startup)
-}
-
 /// Insert the one typed agent environment before recovery starts.
 pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let values = process_environment()?;
     insert_agent_environment(&features.startup, &values)?;
-    STARTUP_STATE
-      .set(Arc::clone(&features.startup))
-      .map_err(|_| anyhow::anyhow!("agent startup state has already been installed"))?;
     Ok(())
   })
 }
@@ -251,6 +241,36 @@ mod tests {
     let rewritten = startup.require::<AgentBaseEnvironment>().unwrap();
     assert_eq!(rewritten.values[VENV_BIN_ENV], venv_bin.display().to_string());
     assert!(rewritten.values["PATH"].starts_with(&root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
+  }
+
+  #[test]
+  fn separate_startup_states_build_their_own_agent_base_environments() {
+    let first_root = tempfile::tempdir().unwrap();
+    let first_venv_bin = first_root.path().join("venv/bin");
+    fs::create_dir_all(&first_venv_bin).unwrap();
+    let first_startup = StartupState::default();
+    first_startup.insert(VenvBin::new(Some(first_venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
+    first_startup.insert(RepoRoot::new(Some(first_root.path().as_os_str().to_os_string())).unwrap()).unwrap();
+
+    let second_root = tempfile::tempdir().unwrap();
+    let second_venv_bin = second_root.path().join("venv/bin");
+    fs::create_dir_all(&second_venv_bin).unwrap();
+    let second_startup = StartupState::default();
+    second_startup.insert(VenvBin::new(Some(second_venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
+    second_startup.insert(RepoRoot::new(Some(second_root.path().as_os_str().to_os_string())).unwrap()).unwrap();
+
+    insert_agent_environment(&first_startup, &Env::from([("PATH".to_string(), "/first/system".to_string())])).unwrap();
+    insert_agent_environment(&second_startup, &Env::from([("PATH".to_string(), "/second/system".to_string())]))
+      .unwrap();
+
+    let first = first_startup.require::<AgentBaseEnvironment>().unwrap();
+    let second = second_startup.require::<AgentBaseEnvironment>().unwrap();
+    assert_eq!(first.values[VENV_BIN_ENV], first_venv_bin.display().to_string());
+    assert_eq!(second.values[VENV_BIN_ENV], second_venv_bin.display().to_string());
+    assert!(first.values["PATH"].starts_with(&first_root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
+    assert!(second.values["PATH"].starts_with(&second_root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
+    assert!(first.values["PATH"].ends_with("/first/system"));
+    assert!(second.values["PATH"].ends_with("/second/system"));
   }
 
   #[test]

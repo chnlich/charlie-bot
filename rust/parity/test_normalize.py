@@ -361,3 +361,32 @@ def test_the_token_usage_read_time_is_masked_and_the_rest_of_the_line_stays() ->
   assert normalize.normalize_body_bytes(body, TOKEN_USAGE_ROUTE, _context()) == (
       b'<p class="foot">Read from the ledger in <b>"<token-usage-read-time>"&thinsp;s</b>; '
       b'the ledger is as of 2026-10-18 09:30 UTC.</p>')
+
+
+PLAN_REGISTRY = "home/sessions/synthetic-session/plans.json"
+
+
+def _plan_registry(takeoff: dict | None, closed: dict | None) -> dict:
+  return {"plans": [{"id": 1, "title": "Synthetic plan", "takeoff": takeoff, "closed": closed}]}
+
+
+def _masked_plan_registry(registry: dict) -> dict:
+  return normalize.normalize_json(registry, normalize.file_rules(PLAN_REGISTRY), _context())
+
+
+def test_plan_takeoff_time_masks_only_the_stamp_and_its_version_still_differs() -> None:
+  earlier = _plan_registry({"v": 1, "at": "2026-10-19T09:41:00+00:00"}, None)
+  later = _plan_registry({"v": 1, "at": "2026-10-19T09:42:07.512904+00:00"}, None)
+  assert _masked_plan_registry(earlier) == _masked_plan_registry(later)
+  assert _masked_plan_registry(earlier)["plans"][0]["takeoff"] == {"v": 1, "at": "<plan-takeoff-time>"}
+  other_version = _plan_registry({"v": 2, "at": "2026-10-19T09:42:07.512904+00:00"}, None)
+  assert _masked_plan_registry(later) != _masked_plan_registry(other_version)
+
+
+def test_plan_close_time_masks_only_the_stamp_and_its_mode_still_differs() -> None:
+  earlier = _plan_registry(None, {"as": "completed", "at": "2026-10-19T09:41:00+00:00"})
+  later = _plan_registry(None, {"as": "completed", "at": "2026-10-19T09:42:07.512904+00:00"})
+  assert _masked_plan_registry(earlier) == _masked_plan_registry(later)
+  assert _masked_plan_registry(earlier)["plans"][0]["closed"] == {"as": "completed", "at": "<plan-close-time>"}
+  other_mode = _plan_registry(None, {"as": "abandoned", "at": "2026-10-19T09:42:07.512904+00:00"})
+  assert _masked_plan_registry(later) != _masked_plan_registry(other_mode)

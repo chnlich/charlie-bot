@@ -22,8 +22,6 @@ import pytest
 
 from src.runtime.cli import schedule_trigger
 
-POST_PATCH_TARGET = "src.runtime.cli.common.post_internal_api"
-
 
 def _cfg(tmp_path: pathlib.Path) -> types.SimpleNamespace:
   return types.SimpleNamespace(sessions_dir=tmp_path / "sessions")
@@ -55,7 +53,7 @@ def test_cmd_exit_3_writes_the_launch_record_and_the_exit_file(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv("--cmd", "exit 3"))
   calls: list[dict] = []
-  monkeypatch.setattr(POST_PATCH_TARGET, conftest.registering_post(cfg, "s1", calls))
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, conftest.registering_post(cfg, "s1", calls))
 
   schedule_trigger.main()
 
@@ -91,7 +89,7 @@ def test_registered_target_carries_exit_file_and_log(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv("--cmd", "exit 0"))
   calls: list[dict] = []
-  monkeypatch.setattr(POST_PATCH_TARGET, conftest.registering_post(cfg, "s1", calls))
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, conftest.registering_post(cfg, "s1", calls))
 
   schedule_trigger.main()
 
@@ -134,7 +132,7 @@ def test_usage_errors(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv(*extra))
   post = mock.MagicMock()
-  monkeypatch.setattr(POST_PATCH_TARGET, post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, post)
 
   with pytest.raises(SystemExit) as exc_info:
     schedule_trigger.main()
@@ -161,7 +159,7 @@ def test_rejected_registration_kills_the_process_group(
     print(json.dumps({"error": reason}), file=sys.stderr)
     raise SystemExit(2)
 
-  monkeypatch.setattr(POST_PATCH_TARGET, rejecting_post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, rejecting_post)
 
   with pytest.raises(SystemExit) as exc_info:
     schedule_trigger.main()
@@ -186,7 +184,7 @@ def test_failed_readback_kills_the_process_group(
     pids.append(payload["watch_targets"][0]["pid"])
     return {"trigger_id": "trig-1", "fire_at": "2026-10-08T00:11:00+00:00"}  # persists nothing
 
-  monkeypatch.setattr(POST_PATCH_TARGET, silent_post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, silent_post)
 
   with pytest.raises(SystemExit) as exc_info:
     schedule_trigger.main()
@@ -209,7 +207,7 @@ def test_ssh_failure_exits_3_and_posts_nothing(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv("--cmd", "echo hi", "--host", "nonexistent.invalid"))
   post = mock.MagicMock()
-  monkeypatch.setattr(POST_PATCH_TARGET, post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, post)
 
   with pytest.raises(SystemExit) as exc_info:
     schedule_trigger.main()
@@ -224,7 +222,7 @@ def test_unparseable_remote_pid_exits_3_and_posts_nothing(
   cfg = _cfg(tmp_path)
   _patch_cli(monkeypatch, cfg, _argv("--cmd", "echo hi", "--host", "remote.example.com"))
   post = mock.MagicMock()
-  monkeypatch.setattr(POST_PATCH_TARGET, post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, post)
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="not-a-pid\n", stderr="")
 
   with mock.patch("subprocess.run", return_value=fake_proc), pytest.raises(SystemExit) as exc_info:

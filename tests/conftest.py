@@ -1672,6 +1672,12 @@ CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.runtime.cli.common._sessions_dir"
 # time, so mock setattrs the stand-in on the src.runtime.cli.common module attribute.
 CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.runtime.cli.common._maybe_version_skew_hint"
 
+# Import-path patch target for the CLI's internal POST helper. Each verb module binds
+# src/runtime/cli/common as a module (`from src.runtime.cli import common as cli_common`) and
+# reads post_internal_api off it at call time, so mock setattrs the stand-in on the
+# src.runtime.cli.common module attribute and intercepts every verb's POST.
+CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET = "src.runtime.cli.common.post_internal_api"
+
 # Import-path patch target for the CLI connect-retry budget. src/runtime/cli/common.py reads the
 # budget through the timeouts module at call time (`timeouts.CLI_CONNECT_TOTAL_TIMEOUT`), so mock
 # setattrs the test budget on the src.infra.timeouts module attribute and post_internal_api's retry

@@ -1,22 +1,82 @@
-//! The opencode backend package (`src/backends/opencode/__init__.py`), as far as this crate ports it: its usage source.
-//! The backend type, its factory and its reading limits stay with the opencode backend port.
+//! The opencode backend package (`src/backends/opencode/__init__.py`): its shared server, session backend, usage source
+//! and snapshot reading limits.
 
+pub(crate) mod backend;
+mod opencode_limits;
+mod options;
+pub(crate) mod server;
 pub mod usage_logs;
 pub mod usage_sweep;
 
 #[cfg(test)]
 mod test_store;
 
+#[cfg(test)]
+mod test_backend;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use charliebot_core::home;
+use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError};
 use usage_logs::OpencodeLogs;
 
+use self::backend::OpenCodeFactory;
+pub use backend::{OpenCodeBackend, OpenCodeTranslator, option_default_model};
+pub use options::OpenCodeOption;
+pub use server::{
+  OpenCodeHost, OpenCodeProgram, OpenCodeServer, OpenCodeServerPool, ServerTimeouts, Turn, headless_config,
+};
+
 /// The usage source's name: the ledger's source value and the usage page's card title.
 pub const USAGE_SOURCE: &str = "opencode";
+
+/// Register the backend type, shared server factory, usage source and snapshot reading limits.
+pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  let host = OpenCodeHost::from_process()
+    .map_err(|error| RegistryError { package: "src.backends.opencode", message: format!("{error:#}") })?;
+  register_with_host(registry, host, ServerTimeouts::default())
+}
+
+fn register_with_host(
+  registry: &mut Registry,
+  host: OpenCodeHost,
+  timeouts: ServerTimeouts,
+) -> Result<(), RegistryError> {
+  register_backend_type(registry, host, timeouts)?;
+  register_source(
+    registry,
+    home::opencode_db()
+      .map_err(|error| RegistryError { package: "src.backends.opencode", message: error.to_string() })?,
+    PathBuf::from("/proc"),
+  )?;
+  registry.reading_limits("snapshot", opencode_limits::snapshot_reading_limits)
+}
+
+fn register_backend_type(
+  registry: &mut Registry,
+  host: OpenCodeHost,
+  timeouts: ServerTimeouts,
+) -> Result<(), RegistryError> {
+  let pool = OpenCodeServerPool::new(host.clone(), timeouts);
+  registry.backend_type(BackendTypeRegistration {
+    type_name: "opencode",
+    traits: BackendTraits {
+      resume: ResumeStyle::NativeId,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: options::option_model,
+    factory: Arc::new(OpenCodeFactory::new(host, pool)),
+    lifecycle: None,
+    translate_fallback: false,
+  })
+}
 
 /// Registers the opencode usage source and attributes the `opencode` backend type to it (`__init__.py:24-30`). The
 /// database is the profile's `opencode_db()`, resolved once here.
@@ -38,17 +98,27 @@ fn register_source(registry: &mut Registry, db: PathBuf, proc_root: PathBuf) -> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
   use charliebot_registry::usage::UsageOps;
 
   use super::*;
 
-  fn register_synthetic(registry: &mut Registry) -> Result<(), RegistryError> {
+  pub(super) fn register_synthetic(registry: &mut Registry) -> Result<(), RegistryError> {
+    let host = OpenCodeHost::with_program(
+      PathBuf::from("/synthetic/opencode/bin/opencode"),
+      Vec::new(),
+      PathBuf::from("/synthetic/opencode/bin/opencode"),
+      PathBuf::from("/synthetic/repo"),
+      PathBuf::from("/synthetic/home"),
+      charliebot_registry::backend::Env::new(),
+    );
+    register_backend_type(registry, host, ServerTimeouts::default())?;
     register_source(
       registry,
       PathBuf::from("/synthetic/home/opencode/data/opencode/opencode.db"),
       PathBuf::from("/synthetic/proc"),
-    )
+    )?;
+    registry.reading_limits("snapshot", opencode_limits::snapshot_reading_limits)
   }
 
   #[test]

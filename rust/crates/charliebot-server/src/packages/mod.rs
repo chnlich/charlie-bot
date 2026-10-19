@@ -5,7 +5,6 @@
 //! metadata slots, its backend types) registers that data; a stub with no data makes no registration. The list keeps
 //! every package, so the page parts, the static mounts and the template search path follow the Python order.
 
-mod backends;
 mod features;
 
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
@@ -48,7 +47,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.backends.codex", charliebot_agents::backends::codex::register),
   ("src.backends.gemini", charliebot_agents::backends::gemini::register),
   ("src.backends.kimi", charliebot_agents::backends::kimi::register),
-  ("src.backends.opencode", backends::opencode), // stub: src.backends.opencode
+  ("src.backends.opencode", charliebot_agents::backends::opencode::register),
   ("src.features.files", charliebot_files::register),
 ];
 

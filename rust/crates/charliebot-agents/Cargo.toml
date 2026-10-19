@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
@@ -16,7 +17,7 @@ futures-util.workspace = true
 libc.workspace = true
 nix.workspace = true
 regex.workspace = true
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "query", "stream"] }
 rusqlite.workspace = true
 serde_json.workspace = true
 serde.workspace = true

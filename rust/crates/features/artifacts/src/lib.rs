@@ -1,8 +1,8 @@
 //! `src/features/artifacts`: the `publish:` config section, the session plan registry's read side with its route and
 //! sidebar contribution, and the artifact file view. The plan verbs and the artifact and plan CLIs are not ported yet.
 
-pub mod artifact_check;
 mod api;
+pub mod artifact_check;
 mod artifact_view;
 mod headless_render;
 pub mod plan_diff;
@@ -11,6 +11,7 @@ pub mod plans;
 mod sidebar;
 #[cfg(test)]
 mod test_support;
+mod unicode;
 
 use std::sync::Arc;
 

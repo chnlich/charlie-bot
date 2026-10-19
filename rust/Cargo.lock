@@ -272,6 +272,7 @@ dependencies = [
  "futures-util",
  "http",
  "libc",
+ "nix",
  "regex",
  "serde",
  "serde_json",

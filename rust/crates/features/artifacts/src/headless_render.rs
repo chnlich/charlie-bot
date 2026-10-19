@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::net::TcpStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -10,6 +11,9 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use charliebot_core::pyfmt;
 use charliebot_core::pystr;
+use nix::errno::Errno;
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 use serde_json::{Map, Value, json};
 use tempfile::{Builder, TempDir};
 use tungstenite::client::IntoClientRequest;
@@ -148,6 +152,8 @@ impl WarmRenderer {
       .arg("about:blank")
       .stdout(Stdio::null())
       .stderr(Stdio::from(stderr))
+      // The browser leads its own process group, so `close` stops the child processes that Chrome forks.
+      .process_group(0)
       .spawn();
     self.process = match child {
       Ok(child) => Some(child),
@@ -346,9 +352,7 @@ impl WarmRenderer {
       drop(socket);
     }
     if let Some(mut process) = self.process.take() {
-      if process.try_wait()?.is_none() {
-        process.kill()?;
-      }
+      kill_browser_group(process.id())?;
       let deadline = Instant::now() + HEADLESS_TEARDOWN_WAIT;
       while process.try_wait()?.is_none() {
         if Instant::now() >= deadline {
@@ -449,9 +453,20 @@ fn charliebot_python_whitespace(character: char) -> bool {
   pystr::is_python_whitespace(character)
 }
 
+/// SIGKILL to the browser's process group, which `launch` made the browser's own. The group has members while Chrome's
+/// child processes run, and it has none once they are gone, which is not an error.
+fn kill_browser_group(pid: u32) -> anyhow::Result<()> {
+  let group = Pid::from_raw(i32::try_from(pid)?);
+  match signal::killpg(group, Signal::SIGKILL) {
+    Ok(()) | Err(Errno::ESRCH) => Ok(()),
+    Err(error) => Err(error.into()),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::io::{BufRead, BufReader};
   use std::thread::JoinHandle;
 
   use serde_json::{Value, json};
@@ -560,6 +575,36 @@ mod tests {
     );
   }
 
+  /// Whether `pid` still runs. A zombie has exited, and a missing `/proc` entry has been reaped.
+  fn process_alive(pid: i32) -> bool {
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
+    let state = stat.rsplit_once(')').and_then(|(_, fields)| fields.trim_start().chars().next());
+    !matches!(state, Some('Z' | 'X'))
+  }
+
+  #[test]
+  fn renderer_close_kills_the_whole_process_group() {
+    let mut browser = Command::new("sh")
+      .args(["-c", "sleep 300 & echo $!; wait"])
+      .process_group(0)
+      .stdout(Stdio::piped())
+      .spawn()
+      .expect("the shell starts");
+    let mut line = String::new();
+    BufReader::new(browser.stdout.take().expect("the shell's output is piped"))
+      .read_line(&mut line)
+      .expect("the shell reports its background child");
+    let child: i32 = line.trim().parse().expect("the background child's pid is a number");
+    let mut renderer = WarmRenderer::new(PathBuf::from("unused"));
+    renderer.process = Some(browser);
+    renderer.close().expect("close stops the browser's group");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_alive(child) && Instant::now() < deadline {
+      thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!process_alive(child), "close left the browser's child {child} running");
+  }
+
   #[test]
   fn renderer_close_drops_the_child_and_profile() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
@@ -569,6 +614,8 @@ mod tests {
     let server = cdp_server(listener, 1, "800");
     let mut renderer = WarmRenderer::new(chrome);
     assert_eq!(renderer.render_height("file:///synthetic/page.html").unwrap(), 800);
+    let browser = Pid::from_raw(renderer.process.as_ref().unwrap().id().try_into().unwrap());
+    assert_eq!(nix::unistd::getpgid(Some(browser)).unwrap(), browser, "close kills the browser's own group");
     let profile = renderer.user_data_dir.as_ref().unwrap().path().to_path_buf();
     renderer.close().unwrap();
     server.join().unwrap();

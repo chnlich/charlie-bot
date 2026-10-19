@@ -3,9 +3,24 @@
 stage: session-stream
 name: session-stream
 fixture_extras: [explain_cases, session_stream_cases]
-expect_starts: 5
+expect_starts: 6
 fake_agent:
   starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
     - name: claude
       steps:
         - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
@@ -191,7 +206,7 @@ steps:
     path: /api/internal/schedule-trigger
     json:
       session_id: ${sessions.fable}
-      delay_seconds: 4
+      delay_seconds: 12
       message: Wake the synthetic sidebar socket.
     capture: {trigger_b1: trigger_id}
     expect_status: 200
@@ -201,7 +216,7 @@ steps:
     path: /api/internal/schedule-trigger
     json:
       session_id: ${sessions.garnet}
-      delay_seconds: 9
+      delay_seconds: 17
       message: Wake the synthetic sidebar socket again.
     capture: {trigger_b2: trigger_id}
     expect_status: 200
@@ -211,9 +226,19 @@ steps:
     path: /api/internal/schedule-trigger
     json:
       session_id: ${sessions.ember}
-      delay_seconds: 14
+      delay_seconds: 22
       message: Wake the synthetic sidebar socket a third time.
     capture: {trigger_b3: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - name: schedule the fourth live sidebar trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas_survey}
+      delay_seconds: 27
+      message: Wake the synthetic sidebar socket a fourth time.
+    capture: {trigger_b4: trigger_id}
     expect_status: 200
     defer_files: true
   - kind: ws
@@ -245,6 +270,6 @@ steps:
     timeout_seconds: 60
     until:
       file_field:
-        path: sessions/${sessions.ember}/triggers/${capture.trigger_b3}.json
+        path: sessions/${sessions.atlas_survey}/triggers/${capture.trigger_b4}.json
         field: status
         equals: fired

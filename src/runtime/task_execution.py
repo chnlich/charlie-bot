@@ -2295,12 +2295,16 @@ class TaskExecutionAdapter:
       # base; an unproven landing is a blocked report, not a close.
       landing, reason = await self._landing_for_work(work_run)
       if landing is None:
+        # A review that stopped before its push states its verdict in its closing words; the report quotes them.
+        events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
+        closing_words = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
+        verdict = closing_words or "The review run left no closing words, so its verdict is unknown."
         await self._report_failure_to_parent(
             session_id,
             work_run,
             "blocked",
-            summary=f"work run {work_run.id} passed review but its branch did not land on "
-            f"{work_run.base_branch or 'the requested base'}: {reason}",
+            summary=f"review run {run.id} ended without landing work run {work_run.id} on "
+            f"{work_run.base_branch or 'the requested base'}: {reason}\n\nReview verdict:\n{verdict}",
             deciding_run=run)
         return
       branch, commit, repo_path = landing

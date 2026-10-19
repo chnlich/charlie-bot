@@ -47,7 +47,10 @@ The modules:
 | `fakes/discord.py` | Discord REST and gateway fake |
 | `fakes/gemini.py` | Gemini Live transcription fake |
 | `fakes/muse.py` | Muse realtime transcription fake |
+| `fakes/nsight/bin/ncu` | synthetic `ncu` for `--import <file> --csv --page details`: prints the report's `csv` key |
+| `fakes/nsight/extras/python/ncu_report.py` | synthetic `ncu_report` module: loads the JSON reports of `fixture_extras/ncu_reports.py`, and a `refuse` key fails the load |
 | `fixture_extras/discord_thread.py` | synthetic Discord-origin session for thread reply scenarios |
+| `fixture_extras/ncu_reports.py` | two-kernel, refused and empty Nsight reports for `features-ncu` |
 | `fixture_extras/sample_files.py` | workspace file for the file-route scenario |
 | `fixture_extras/trace_files.py` | small Chrome traces for `features-harness-trace-merge` |
 | `data/generate_silence.py` | generator for the one-second synthetic voice audio |
@@ -104,8 +107,10 @@ differing step.
 Each process under test (the fixture generator and each server) runs with:
 
 - `HOME` set to its tree, `CHARLIEBOT_HOME` to `<tree>/home` and `TMPDIR` to `<tree>/tmp`;
-- `PATH` set to `<tree>/fake-bin:/usr/bin:/bin`. Each fake-bin wrapper starts `fake_agent.py` with
-  `/usr/bin/python3 -I` for `claude`, `codex`, `opencode`, `charlie-code`, `gemini` or `agy`;
+- `PATH` set to `<tree>/fake-bin:<repo>/rust/parity/fakes/nsight/bin:/usr/bin:/bin`. Each fake-bin wrapper starts
+  `fake_agent.py` with `/usr/bin/python3 -I` for `claude`, `codex`, `opencode`, `charlie-code`, `gemini` or `agy`.
+  The Nsight fake's `ncu` is the only `ncu` on that path, and its install's `extras/python` holds the fake
+  `ncu_report` module, so both servers take the module path for `GET /ncu`;
 - every proxy variable pointed at a closed loopback port, except that a scenario declaring `fakes` sends HTTPS
   requests through its own loopback-only CONNECT proxy. That proxy terminates TLS for declared fake hosts and
   refuses every other CONNECT target with 403; it has no outbound connection path. The server trusts the

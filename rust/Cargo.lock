@@ -411,7 +411,12 @@ dependencies = [
 name = "charliebot-diag"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "charliebot-compat",
  "charliebot-registry",
+ "http",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

@@ -9,7 +9,8 @@ of rule live here:
   and the ETags and revisions derived from them still compare exactly);
 - the minted UUID rule leaves fixture UUIDs intact and maps each other UUID by first appearance in sorted paths
   and document order, because requests and runs create different random ids in each tree;
-- field rules mask one JSON field of one route's response body or of one home file;
+- field rules mask one JSON field of one route's response body or of one home file, or only the digits of a
+  value of one form;
 - text rules mask one pattern in one route's non-JSON body (a page that embeds JSON in its HTML);
 - header rules name the response headers the comparison leaves out.
 
@@ -30,6 +31,7 @@ _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
+_PIPE_INODE = re.compile(r"pipe:\[(?P<value>\d+)\]")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -78,7 +80,8 @@ class FieldRule:
   *target* is a route template ("GET /api/internal/version") for a response rule, or a glob over the
   tree-relative path ("home/state/writer_identity.json") of a JSON, JSONL or YAML file for a file rule.
   *field* is a dotted path; ``[*]`` steps into every list element and ``*`` into every mapping value. With
-  *when*, the field is masked only in an object whose own fields hold those values.
+  *when*, the field is masked only in an object whose own fields hold those values. With *pattern*, only the
+  group ``value`` of a string that fully matches it is masked, and any other value compares as it is.
   """
 
   name: str
@@ -86,10 +89,19 @@ class FieldRule:
   field: str
   reason: str
   when: tuple[tuple[str, str], ...]
+  pattern: re.Pattern[str] | None = None
 
   @property
   def placeholder(self) -> str:
     return f"<{self.name}>"
+
+  def mask(self, value: Any) -> Any:
+    if self.pattern is None:
+      return self.placeholder
+    match = self.pattern.fullmatch(value)
+    if match is None:
+      return value
+    return value[:match.start("value")] + self.placeholder + value[match.end("value"):]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -431,6 +443,14 @@ FILE_RULES: tuple[FieldRule, ...] = (
         when=(),
         reason="pid: each fake agent has a different /proc start time in clock ticks",
     ),
+    FieldRule(
+        name="fake-agent-stdout-inode",
+        target="fake-agent/spawns.jsonl",
+        field="stdout_path",
+        pattern=_PIPE_INODE,
+        when=(),
+        reason="pipe inode: the kernel numbers each tree's pipe apart; a file path still compares",
+    ),
 )
 
 # Response headers outside the comparison, each with the reason it cannot match or carries nothing a client
@@ -634,7 +654,7 @@ def _normalize_strings(value: Any, ctx: Context) -> Any:
 
 def _mask(value: Any, segments: list[str], rule: FieldRule) -> Any:
   if not segments:
-    return rule.placeholder
+    return rule.mask(value)
   head, rest = segments[0], segments[1:]
   if head == "[*]":
     return [_mask(item, rest, rule) for item in value] if isinstance(value, list) else value

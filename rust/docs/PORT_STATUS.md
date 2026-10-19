@@ -104,7 +104,7 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | WS | `/ws/terminal` | features/terminal | ported |  |
 | GET | `/perfetto` | features/trace | ported |  |
 | GET | `/perfetto/merged` | features/trace | ported |  |
-| GET | `/api/ext-usage` | features/usage | todo |  |
+| GET | `/api/ext-usage` | features/usage | ported | `{"error": ...}` until the first round writes an entry; HEAD and other methods answer 405 with `allow: GET` |
 | GET | `/token-usage` | features/usage | todo |  |
 | POST | `/api/voice/{session_id}/confirm` | features/voice | todo |  |
 | POST | `/api/voice/{session_id}` | features/voice | todo |  |
@@ -186,7 +186,7 @@ implemented.
 | service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
 | service | `usage_tally` | features/usage | todo | |
-| service | `ext_usage` | features/usage | todo | |
+| service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
 | service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf provisioning is not ported`; warm-up events are deferred. |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |

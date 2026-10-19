@@ -1,7 +1,8 @@
 //! Usage's startup check (`src/features/usage/backend_ids.py`): every `backends.options` id attributes to its type's
-//! usage source. The usage page attributes a charlie-bot row's account ids to the CLI that ran the call: a registered id
-//! through its config type, an id that left the config through the id prefix its source registers. An id outside every
-//! registered prefix would fail the page once it leaves the config, so the server refuses such an option at start.
+//! usage source. The usage page attributes a charlie-bot row's account ids to the CLI that ran the call: a registered
+//! id through its config type, an id that left the config through the id prefix its source registers. An id outside
+//! every registered prefix would fail the page once it leaves the config, so the server refuses such an option at
+//! start.
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::{paths, pyfmt};
@@ -19,15 +20,14 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
         "{config_file}: backends.options[{index}] id '{}' type '{}' attributes to no usage source",
         option.id, option.backend_type
       )),
-      Some(source) if !source.id_prefixes.iter().any(|prefix| option.id.starts_with(prefix)) => {
-        problems.push(format!(
-          "{config_file}: backends.options[{index}] id '{}' type '{}' starts with none of the id prefixes {} registers {}",
-          option.id,
-          option.backend_type,
-          source.name,
-          python_tuple(source.id_prefixes)
-        ))
-      }
+      Some(source) if !source.id_prefixes.iter().any(|prefix| option.id.starts_with(prefix)) => problems.push(format!(
+        "{config_file}: backends.options[{index}] id '{}' type '{}' starts with none of the id prefixes {} \
+           registers {}",
+        option.id,
+        option.backend_type,
+        source.name,
+        python_tuple(source.id_prefixes)
+      )),
       Some(_) => {}
     }
   }
@@ -35,7 +35,8 @@ pub fn check_backend_ids(registry: &Registry, cfg: &CharlieBotConfig) -> Result<
     return Ok(());
   }
   Err(format!(
-    "backend option ids must attribute to their type's usage source (id rule: BackendsConfig in src/infra/config.py):\n{}",
+    "backend option ids must attribute to their type's usage source \
+     (id rule: BackendsConfig in src/infra/config.py):\n{}",
     problems.iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   ))
 }
@@ -55,58 +56,11 @@ mod tests {
   use std::path::Path;
 
   use charliebot_core::config::{self, ConfigSchema};
-  use charliebot_registry::RegistryError;
-  use charliebot_registry::usage::UsageSource;
 
   use super::*;
+  use crate::test_support::registry;
 
   const BACKEND_TYPES: &[&str] = &["charlie-code", "codex", "cc-claude", "opencode", "antigravity", "gemini"];
-
-  /// The usage sources the server registers, with their config types, so the check reads the same attributions.
-  fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.usage_source(UsageSource {
-      name: "Codex",
-      id_prefixes: &["codex-"],
-      run_logs_only: false,
-      implementation: None,
-    })?;
-    registry.attribute_backend_type("codex", "Codex")?;
-    registry.usage_source(UsageSource {
-      name: "Claude Code",
-      id_prefixes: &["claude-"],
-      run_logs_only: false,
-      implementation: None,
-    })?;
-    registry.attribute_backend_type("cc-claude", "Claude Code")?;
-    registry.usage_source(UsageSource {
-      name: "opencode",
-      id_prefixes: &["opencode-", "oc-"],
-      run_logs_only: false,
-      implementation: None,
-    })?;
-    registry.attribute_backend_type("opencode", "opencode")?;
-    registry.usage_source(UsageSource {
-      name: "CLC",
-      id_prefixes: &["charlie-code-", "clc-"],
-      run_logs_only: true,
-      implementation: None,
-    })?;
-    registry.attribute_backend_type("charlie-code", "CLC")?;
-    registry.usage_source(UsageSource {
-      name: "Antigravity",
-      id_prefixes: &["antigravity-", "agy-"],
-      run_logs_only: true,
-      implementation: None,
-    })?;
-    registry.attribute_backend_type("antigravity", "Antigravity")?;
-    Ok(())
-  }
-
-  fn registry() -> Registry {
-    let mut registry = Registry::new();
-    registry.register_package("test.usage_sources", register_sources).expect("the sources register");
-    registry
-  }
 
   /// The config of one home, with `options` as its `backends.options` entries, each `(id, type, model)`.
   fn config(home: &Path, options: &[(&str, &str, &str)]) -> CharlieBotConfig {

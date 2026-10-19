@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde_yaml.workspace = true
 sha2.workspace = true
+sherpa-onnx.workspace = true
 time.workspace = true
 tar.workspace = true
 tokio.workspace = true
@@ -30,3 +31,4 @@ uuid.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
+tracing-subscriber.workspace = true

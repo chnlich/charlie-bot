@@ -219,6 +219,7 @@ dependencies = [
  "nix",
  "regex",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",

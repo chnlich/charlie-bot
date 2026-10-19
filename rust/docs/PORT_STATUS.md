@@ -75,8 +75,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | WS | `/ws/sessions/{session_id}` | session-stream | ported |  |
 | POST | `/api/internal/plan/present` | features/artifacts | todo |  |
 | POST | `/api/internal/plan/amend` | features/artifacts | todo |  |
-| POST | `/api/internal/plan/approve` | features/artifacts | todo |  |
-| POST | `/api/internal/plan/close` | features/artifacts | todo |  |
+| POST | `/api/internal/plan/approve` | features/artifacts | ported |  |
+| POST | `/api/internal/plan/close` | features/artifacts | ported |  |
 | GET | `/api/sessions/{session_id}/plans` | features/artifacts | ported |  |
 | GET | `/api/code-server/open` | features/code_server | ported |  |
 | GET | `/api/cron/tasks` | features/cron | todo |  |
@@ -275,7 +275,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/launches/<launch_id>/metadata.json` | foundation | not applicable | Written by the Python CLI (`src/runtime/cli/schedule_trigger.py:309`), which stays (Trade-off 2). |
 | `sessions/<sid>/launches/<launch_id>/log` | foundation | not applicable | Written by the Python CLI's local launch (`src/runtime/cli/schedule_trigger.py:326`), which stays (Trade-off 2). |
 | `sessions/<sid>/launches/<launch_id>/exit` | foundation | not applicable | Written by the Python CLI's local launch (`src/runtime/cli/schedule_trigger.py:326`), which stays (Trade-off 2). |
-| `sessions/<sid>/plans.json` | features/artifacts | todo | The read and the fork copy are ported; the four plan verbs (present, amend, approve, close) are not. |
+| `sessions/<sid>/plans.json` | features/artifacts | todo | The read, the fork copy, and the approve and close verbs are ported; present and amend are not. |
 | session artifact pages | features/artifacts | ported | |
 | `sessions/<sid>/uploads/<filename>` | chat | ported | |
 | `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | ported | 16 kHz mono PCM16 WAV |

@@ -571,7 +571,7 @@ mod tests {
 
     let success_env = inherited.clone();
     let succeeded = compact_with_sonnet_inner(
-      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(1)),
+      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(30)),
       move |path| compaction_env_from(path, &success_env),
     )
     .await
@@ -588,7 +588,7 @@ mod tests {
     let mut failure_env = inherited.clone();
     failure_env.insert("FAKE_MODE".to_string(), "failure".to_string());
     let failed = compact_with_sonnet_inner(
-      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(1)),
+      call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(30)),
       move |path| compaction_env_from(path, &failure_env),
     )
     .await

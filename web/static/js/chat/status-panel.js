@@ -3,13 +3,14 @@
 // ---------------------------------------------------------------------------
 // The panel under the view toggle, above the message list, shows a web session's
 // Goal, Now and Waiting on you, and in a parent session the Waiting on you items
-// of its open descendant sessions. A web session is one that Chat.ForYou.isWebSession
-// (for-you.js) accepts. A thread session and a worker session show no panel. On a
-// phone (platform.isMobile) the panel is one toggle row until a tap expands it.
+// of its open descendant sessions and a folded block of the Now of its open direct
+// children. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
+// A thread session and a worker session show no panel. On a phone (platform.isMobile)
+// the panel is one toggle row until a tap expands it.
 //
 // The status is the session's web_status at open, then the web_status messages of
 // this session, live or in history: the newest updated_at wins, so an older page
-// of history never moves the panel back. The descendant rows come from
+// of history never moves the panel back. The descendant and child rows come from
 // GET /api/internal/web/status, fetched at open and on each web_status_subtree
 // notice (websocket-handlers.js).
 (function() {
@@ -27,6 +28,8 @@
   let panelStatus = null;
   let panelDescendants = [];
   let panelChildrenOpen = false;
+  let panelChildren = [];
+  let panelChildrenNowOpen = false;
   let panelExpanded = false;
   let panelFetchGen = 0;
 
@@ -176,6 +179,41 @@
     return block;
   }
 
+  function childNowItem(row) {
+    const el = document.createElement('div');
+    el.className = 'flex gap-2 pl-6 break-words text-slate-200';
+    el.dataset.childNowItem = 'true';
+    el.appendChild(textSpan('min-w-0', row.name + ' · ' + row.session_id.slice(0, 8) + ': ' + row.now));
+    const updated = textSpan('whitespace-nowrap text-slate-500', 'updated ' + relativeTime(row.updated_at));
+    updated.dataset.statusUpdated = row.updated_at;
+    el.appendChild(updated);
+    el.appendChild(openLink('/?session=' + encodeURIComponent(row.session_id)));
+    return el;
+  }
+
+  // The folded block of the open direct children's Now, one row each when opened. It starts folded.
+  function childrenNowBlock() {
+    const block = document.createElement('div');
+    block.className = 'space-y-1 pt-1';
+    block.dataset.statusRow = 'children-now';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'flex items-center gap-2 w-full text-left text-slate-400 hover:text-slate-200 transition-colors';
+    toggle.dataset.childCount = String(panelChildren.length);
+    toggle.setAttribute('aria-expanded', String(panelChildrenNowOpen));
+    toggle.onclick = () => {
+      panelChildrenNowOpen = !panelChildrenNowOpen;
+      renderPanel();
+    };
+    toggle.appendChild(textSpan('w-3 text-center', panelChildrenNowOpen ? '▾' : '▸'));
+    toggle.appendChild(textSpan('', "Child sessions' Now · " + panelChildren.length));
+    block.appendChild(toggle);
+    if (panelChildrenNowOpen) {
+      for (const row of panelChildren) block.appendChild(childNowItem(row));
+    }
+    return block;
+  }
+
   function renderPanel() {
     const el = document.getElementById(PANEL_ID);
     if (!el) return;
@@ -200,6 +238,7 @@
       el.appendChild(row);
     }
     if (panelDescendants.length) el.appendChild(childrenBlock());
+    if (panelChildren.length) el.appendChild(childrenNowBlock());
   }
 
   // A web_status message's status replaces the panel's, unless the panel already
@@ -228,6 +267,7 @@
     }
     if (gen !== panelFetchGen || sessionId !== panelSessionId) return;
     panelDescendants = body.descendants;
+    panelChildren = body.children;
     renderPanel();
   }
 
@@ -242,6 +282,8 @@
     panelStatus = session.web_status || null;
     panelDescendants = [];
     panelChildrenOpen = false;
+    panelChildren = [];
+    panelChildrenNowOpen = false;
     absorbWebStatusMessages(messages);
     renderPanel();
     fetchDescendants(session.id);
@@ -251,6 +293,7 @@
     panelSessionId = null;
     panelStatus = null;
     panelDescendants = [];
+    panelChildren = [];
     renderPanel();
   }
 

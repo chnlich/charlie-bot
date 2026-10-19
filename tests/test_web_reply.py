@@ -556,6 +556,11 @@ def _waiting_set(text: str) -> str:
   return json.dumps({"waiting": [{"text": text}]})
 
 
+def _without_budget(status: dict) -> dict:
+  """The set's return without the two keys that the Now budget adds to it."""
+  return {key: value for key, value in status.items() if key not in ("now_chars", "now_over_budget")}
+
+
 async def _stored_status(blocks: conftest.SessionBlocks, sid: str) -> dict | None:
   return (await blocks.store.get_session(sid)).model_dump(mode="json")["web_status"]
 
@@ -586,11 +591,40 @@ async def test_a_status_set_of_now_alone_keeps_the_other_items_and_records_one_e
   assert stored["now"] == "Running"
   assert stored["waiting"] == [{"text": "Pick a layout", "link": "/p"}]
   assert stored["updated_at"] != first.json()["updated_at"]
-  assert await _stored_status(blocks, sid) == stored
+  assert await _stored_status(blocks, sid) == _without_budget(stored)
   events = _status_events(blocks, sid)
   assert [ev["web_status_changed"] for ev in events] == [["goal", "waiting"], ["now"]]
   assert events[-1]["content"] == "Status updated: Now"
-  assert events[-1]["web_status"] == stored
+  assert events[-1]["web_status"] == _without_budget(stored)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chars, over_budget", [(200, False), (201, True)])
+async def test_a_status_set_reports_the_now_length_and_flags_a_now_over_the_budget(
+    tmp_path: pathlib.Path, chars: int, over_budget: bool) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+
+  resp = _set(client, sid, json.dumps({"now": "n" * chars}))
+
+  assert resp.status_code == 200
+  assert resp.json()["now_chars"] == chars
+  assert resp.json()["now_over_budget"] is over_budget
+  assert "now_chars" not in _status_events(blocks, sid)[-1]["web_status"]
+  assert "now_over_budget" not in await _stored_status(blocks, sid)
+
+
+@pytest.mark.asyncio
+async def test_a_status_set_naming_no_now_on_a_session_without_one_reports_zero_chars(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+
+  resp = _set(client, sid, _waiting_set("Pick a layout"))
+
+  assert resp.json()["now_chars"] == 0
+  assert resp.json()["now_over_budget"] is False
 
 
 @pytest.mark.asyncio
@@ -758,6 +792,39 @@ async def test_the_status_read_lists_open_waiting_descendants_newest_first(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_the_status_read_lists_the_open_direct_children_with_a_now_newest_first(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  root_id = await _session(blocks)
+  tree = blocks.tree
+  old = await conftest.create_task(tree, parent=root_id, request_id="old", name="Old")
+  new = await conftest.create_task(tree, parent=root_id, request_id="new", name="New")
+  deep = await conftest.create_task(tree, parent=old.id, request_id="deep", name="Deep")
+  no_now = await conftest.create_task(tree, parent=root_id, request_id="no-now", name="No Now")
+  closed = await conftest.create_task(tree, parent=root_id, request_id="closed", name="Closed")
+  archived = await conftest.create_task(tree, parent=root_id, request_id="archived", name="Archived")
+  client = _status_client(blocks)
+  for child, text in [
+      (old, json.dumps({"now": "Old step"})),
+      (new, json.dumps({"now": "New step"})),
+      (deep, json.dumps({"now": "Deep step"})),
+      (no_now, _waiting_set("No Now decision")),
+      (closed, json.dumps({"now": "Closed step"})),
+      (archived, json.dumps({"now": "Archived step"})),
+  ]:
+    _set(client, child.id, text)
+  await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)
+  await blocks.lifecycle.archive_session(archived.id)
+
+  body = client.get(_STATUS_URL, params={"session_id": root_id}).json()
+
+  assert [(row["session_id"], row["name"], row["now"]) for row in body["children"]] == [
+      (new.id, "New", "New step"),
+      (old.id, "Old", "Old step"),
+  ]
+  assert set(body["children"][0]) == {"session_id", "name", "now", "updated_at"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("case, status", [("unknown", 404), ("thread", 409), ("worker", 409)])
 async def test_the_status_read_refuses_an_unknown_thread_or_worker_session(
     tmp_path: pathlib.Path, case: str, status: int) -> None:
@@ -837,7 +904,7 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
 
   def fake_get(endpoint: str, params: dict | None = None) -> dict:
     calls.append((endpoint, params or {}))
-    return {"session_id": "abc", "web_status": web_status, "descendants": [child]}
+    return {"session_id": "abc", "web_status": web_status, "descendants": [child], "children": []}
 
   monkeypatch.setattr(common, "get_api", fake_get)
   monkeypatch.setattr(sys, "argv", ["web", "status", "show"])
@@ -849,3 +916,56 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
   assert ("No status yet" in out) is (not has_status)
   assert "Panel child (d7645e8f)" in out
   assert out.index("Panel child (d7645e8f)") < out.index("Answer plan 5 (/x)")
+
+
+@pytest.mark.parametrize("has_children", [False, True])
+def test_the_cli_status_show_prints_the_now_of_each_open_child_in_one_block_and_no_block_without_children(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    has_children: bool) -> None:
+  conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  children = [
+      {
+          "session_id": "d7645e8f-0000-4000-8000-000000000000",
+          "name": "Now child",
+          "now": "Running the sweep",
+          "updated_at": "2026-10-16T21:05:00+00:00",
+      }
+  ] if has_children else []
+  monkeypatch.setattr(
+      common,
+      "get_api",
+      lambda endpoint, params=None: {
+          "session_id": "abc",
+          "web_status": None,
+          "descendants": [],
+          "children": children
+      })
+  monkeypatch.setattr(sys, "argv", ["web", "status", "show"])
+
+  importlib.import_module("src.features.web_reply.cli").main()
+
+  out = capsys.readouterr().out
+  if has_children:
+    assert out == (
+        "No status yet\n\nChild sessions' Now:\n"
+        "Now child (d7645e8f): Running the sweep (updated 2026-10-16T21:05:00+00:00)\n")
+  else:
+    assert out == "No status yet\n"
+
+
+def test_the_reply_rules_add_the_now_sentences_and_drop_the_progress_sentence() -> None:
+  rules = (conftest.ROOT / "prompts" / reply.RULES_FILE).read_text(encoding="utf-8")
+  added = (
+      "A child session keeps its own progress in its own **Now**.",
+      "When a child session reports progress that changes this session's next milestone, set the new **Now**.",
+      "Write **Now** in one or two sentences.",
+      "Keep **Now** under 200 characters.",
+      "Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.",
+      "The status panel shows the **Now** of each open child session in a folded block below your items.",
+      "The printout also holds `now_chars` and `now_over_budget`.",
+      "When `now_over_budget` is true, shorten **Now** and set it again.",
+      "The command also prints the **Now** of each open child session.",
+  )
+  for sentence in added:
+    assert sentence in rules
+  assert "put the progress in **Now**" not in rules

@@ -15,9 +15,11 @@ as ``Reply:`` and each notice as ``Notice:``. The session resolves per ``resolve
 prompts/web_reply.md.
 
 ``status set`` stores the items that the file's JSON object names (any of ``goal``, ``now``, ``waiting``) through the
-internal web/status endpoint and prints the stored status as one JSON line. A refusal exits non-zero with a JSON error
-on stderr and stores nothing. ``status show`` prints the session's status as plain text, then the waiting items of
-its open child sessions, one block per child.
+internal web/status endpoint and prints the stored status as one JSON line, with ``now_chars`` (the stored Now's length,
+0 without a Now) and ``now_over_budget`` (past the 200-character Now budget). An over-budget Now still stores. A refusal
+exits non-zero with a JSON error on stderr and stores nothing. ``status show`` prints the session's status as plain
+text, then the waiting items of its open child sessions, one block per child, then one line of Now per open child
+session that holds a Now, newest first.
 """
 
 import argparse
@@ -87,7 +89,8 @@ def _item_line(item: dict) -> str:
 
 
 def _render_status(result: dict) -> str:
-  """The GET result as plain text: the session's Goal, Now and Waiting on you, then one block per child session."""
+  """The GET result as plain text: the session's Goal, Now and Waiting on you, one block per child with waiting items,
+  then the Now of each open child."""
   lines: list[str] = []
   status = result["web_status"]
   if status is None:
@@ -104,6 +107,12 @@ def _render_status(result: dict) -> str:
     lines.append("")
     lines.append(f"{row['name']} ({row['session_id'][:8]})")
     lines.extend(_item_line(item) for item in row["waiting"])
+  if result["children"]:
+    lines.append("")
+    lines.append("Child sessions' Now:")
+    lines.extend(
+        f"{row['name']} ({row['session_id'][:8]}): {row['now']} (updated {row['updated_at']})"
+        for row in result["children"])
   return "\n".join(lines)
 
 

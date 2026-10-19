@@ -302,8 +302,20 @@ fn coerce(raw: Option<&str>) -> Result<Cell, ParseError> {
     let digits = unsigned.trim_start_matches('0');
     let digits = if digits.is_empty() { "0" } else { digits };
     let canonical = if negative && digits != "0" { format!("-{digits}") } else { digits.to_string() };
-    let value: Value = serde_json::from_str(&canonical).expect("a canonical integer is valid JSON");
-    return Ok(Cell::Int(value.as_number().expect("a canonical integer is a JSON number").clone()));
+    // Python keeps arbitrary-precision integers; JSON cannot, so a value past the 64-bit range fails loudly.
+    let number = if let Ok(value) = canonical.parse::<i64>() {
+      Number::from(value)
+    } else if let Ok(value) = canonical.parse::<u64>() {
+      Number::from(value)
+    } else {
+      return Err(ParseError::Internal {
+        kind: "ValueError",
+        detail: format!(
+          "integer {raw_text:?} is out of the signed and unsigned 64-bit range and cannot be stored exactly"
+        ),
+      });
+    };
+    return Ok(Cell::Int(number));
   }
   match text.parse::<f64>() {
     Ok(value) if value.is_finite() => Ok(Cell::Float(value)),
@@ -445,6 +457,25 @@ mod tests {
     assert_eq!(coerce(Some(" n/a ")).unwrap(), Cell::Text(" n/a ".to_string()));
     assert_eq!(coerce(None).unwrap(), Cell::Null);
     assert_eq!(coerce(Some("9223372036854775808")).unwrap().to_value(), json!(9_223_372_036_854_775_808_u64));
+  }
+
+  #[test]
+  fn integers_within_the_64_bit_range_store_exactly() {
+    assert_eq!(coerce(Some("9223372036854775807")).unwrap().to_value(), json!(i64::MAX));
+    assert_eq!(coerce(Some("-9223372036854775808")).unwrap().to_value(), json!(i64::MIN));
+    assert_eq!(coerce(Some("18446744073709551615")).unwrap().to_value(), json!(u64::MAX));
+  }
+
+  #[test]
+  fn an_integer_past_the_64_bit_range_is_an_internal_value_error() {
+    for text in ["18446744073709551616", "-9223372036854775809"] {
+      let error = coerce(Some(text)).unwrap_err();
+      let ParseError::Internal { kind, detail } = error else {
+        panic!("expected an internal error, got {error:?}");
+      };
+      assert_eq!(kind, "ValueError");
+      assert!(detail.contains(text) && detail.contains("64-bit"), "{detail}");
+    }
   }
 
   #[test]

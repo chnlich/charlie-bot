@@ -656,7 +656,17 @@ dependencies = [
 name = "charliebot-usage-page"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-compat",
  "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "http",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

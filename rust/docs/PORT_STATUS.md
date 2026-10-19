@@ -265,7 +265,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/launches/<launch_id>/log` | foundation | todo | |
 | `sessions/<sid>/launches/<launch_id>/exit` | foundation | todo | |
 | `sessions/<sid>/plans.json` | features/artifacts | todo | |
-| session artifact pages | features/artifacts | todo | |
+| session artifact pages | features/artifacts | ported | |
 | `sessions/<sid>/uploads/<filename>` | chat | todo | |
 | `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | ported | 16 kHz mono PCM16 WAV |
 | `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | ported | final transcript |

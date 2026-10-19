@@ -28,6 +28,29 @@ class BoundedRequest(pydantic.BaseModel):
   tags: list[str] = pydantic.Field(max_length=2)
 
 
+class UploadedFileRef(pydantic.BaseModel):
+  filename: str
+  path: str
+  size: int | None = None
+
+
+class SendMessageRequest(pydantic.BaseModel):
+  content: str
+  uploaded_files: list[UploadedFileRef] = pydantic.Field(default_factory=list)
+  input_mode: str | None = None
+
+
+class StrictFileRef(pydantic.BaseModel):
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  filename: str
+  size: int | None = None
+
+
+class AttachmentsRequest(pydantic.BaseModel):
+  attachments: list[StrictFileRef] | None = pydantic.Field(default=None, min_length=2, max_length=3)
+
+
 async def require_item(item_id: str) -> str:
   if item_id == "missing":
     raise fastapi.HTTPException(status_code=404, detail="missing item")
@@ -42,6 +65,17 @@ async def read_item(body: RequestModel, item_id: str = fastapi.Depends(require_i
 @app.post("/bounds/{item_id}")
 async def read_bounded(body: BoundedRequest, item_id: str = fastapi.Depends(require_item)) -> dict:
   return body.model_dump(mode="json")
+
+
+# The list routes echo only the keys the body sent, as the Rust validated object holds them.
+@app.post("/messages/{item_id}")
+async def read_message(body: SendMessageRequest, item_id: str = fastapi.Depends(require_item)) -> dict:
+  return body.model_dump(mode="json", exclude_unset=True)
+
+
+@app.post("/attachments/{item_id}")
+async def read_attachments(body: AttachmentsRequest, item_id: str = fastapi.Depends(require_item)) -> dict:
+  return body.model_dump(mode="json", exclude_unset=True)
 
 
 if __name__ == "__main__":

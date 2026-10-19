@@ -33,6 +33,13 @@
 //! first violated bound in the order `le`, `lt`, `ge`, `gt`. Lists report `max_length` before their items and
 //! `min_length` after their items.
 //!
+//! `FieldType::ModelList` declares a `list[M]` field and `FieldType::NullableModelList` a `list[M] | None` field. Each
+//! item is validated as the model `M`. FastAPI validates bodies with `from_attributes`, so a non-object item reports
+//! `model_attributes_type` at its index, with no context. An item's own errors sit under its index, in the same order
+//! as a top-level model's (fields, then extra keys). A value that is not a list reports `list_type` at the field; only
+//! the nullable type takes null. The validated list holds each item as a validated object, and a missing optional item
+//! field stays absent.
+//!
 //! `RequestBody::check` returns the ordered `FieldError`s; `validate` wraps them in FastAPI's 422 response. A missing
 //! optional field stays absent from the returned object so the handler applies the Python default.
 
@@ -130,6 +137,17 @@ pub enum FieldType {
     class_name: &'static str,
     model: &'static BodyModel,
   },
+  /// A `list[M]` field whose items are each validated as the nested model `M`. `class_name` names `M`, but FastAPI
+  /// reports a non-object item as `model_attributes_type`, which names no model, so no error reads it.
+  ModelList {
+    class_name: &'static str,
+    model: &'static BodyModel,
+  },
+  /// A `list[M] | None` field: null is valid, and a list is validated as `ModelList`.
+  NullableModelList {
+    class_name: &'static str,
+    model: &'static BodyModel,
+  },
 }
 
 impl FieldType {
@@ -144,7 +162,14 @@ impl FieldType {
 
   /// Whether a length bound fits the field: a string or a list.
   const fn takes_length_bound(self) -> bool {
-    matches!(self, FieldType::String | FieldType::NullableString | FieldType::StringList)
+    matches!(
+      self,
+      FieldType::String
+        | FieldType::NullableString
+        | FieldType::StringList
+        | FieldType::ModelList { .. }
+        | FieldType::NullableModelList { .. }
+    )
   }
 }
 
@@ -350,9 +375,6 @@ fn validate_object(
 
 fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
   let failure = |kind| Err(vec![validation::FieldError { loc: loc.to_vec(), input: value.clone(), kind }]);
-  if matches!(field.field_type, FieldType::StringList) {
-    return string_list(field, value, loc);
-  }
   let validated = match field.field_type {
     FieldType::String if value.is_string() => Ok(value.clone()),
     FieldType::NullableString if value.is_null() || value.is_string() => Ok(value.clone()),
@@ -391,7 +413,10 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
       Some(value) => Ok(value),
       None => failure(validation::Kind::Enum(choices)),
     },
-    FieldType::StringList => unreachable!("a list field validates through string_list"),
+    FieldType::StringList => list_field(field, value, loc, string_item),
+    FieldType::ModelList { model, .. } => model_list(field, value, loc, model),
+    FieldType::NullableModelList { .. } if value.is_null() => Ok(Value::Null),
+    FieldType::NullableModelList { model, .. } => model_list(field, value, loc, model),
     FieldType::NullableModel { class_name, model } => match value {
       Value::Null => Ok(Value::Null),
       Value::Object(object) => validate_object(object, model, loc),
@@ -404,8 +429,41 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
   })
 }
 
-/// A `list[str]` field. pydantic checks `max_length` before the items and `min_length` after them.
-fn string_list(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
+/// A `list[M]` field: each item is an object validated as `model`. A non-object item reports `model_attributes_type`
+/// at its index, as FastAPI's body validation does.
+fn model_list(
+  field: &Field,
+  value: &Value,
+  loc: &[validation::Loc],
+  model: &BodyModel,
+) -> Result<Value, Vec<validation::FieldError>> {
+  list_field(field, value, loc, |item, item_loc| match item {
+    Value::Object(object) => validate_object(object, model, item_loc),
+    _ => Err(vec![validation::FieldError {
+      loc: item_loc.to_vec(),
+      input: item.clone(),
+      kind: validation::Kind::ModelAttributesType,
+    }]),
+  })
+}
+
+/// A `list[str]` item: a string, or a `string_type` error at the item's index.
+fn string_item(item: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
+  if item.is_string() {
+    return Ok(item.clone());
+  }
+  Err(vec![validation::FieldError { loc: loc.to_vec(), input: item.clone(), kind: validation::Kind::StringType }])
+}
+
+/// A list field. pydantic checks `max_length` before the items and `min_length` after them, and a list with an
+/// invalid item reports only the items' errors. `item` validates each item at its index; the list holds the items'
+/// validated values in order.
+fn list_field(
+  field: &Field,
+  value: &Value,
+  loc: &[validation::Loc],
+  item: impl Fn(&Value, &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>>,
+) -> Result<Value, Vec<validation::FieldError>> {
   let failure = |kind| Err(vec![validation::FieldError { loc: loc.to_vec(), input: value.clone(), kind }]);
   let Some(items) = value.as_array() else {
     return failure(validation::Kind::ListType);
@@ -415,12 +473,14 @@ fn string_list(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<
   {
     return failure(validation::Kind::ListTooLong { max_length, actual_length: items.len() });
   }
+  let mut values = Vec::with_capacity(items.len());
   let mut errors = Vec::new();
-  for (index, item) in items.iter().enumerate() {
-    if !item.is_string() {
-      let mut item_loc = loc.to_vec();
-      item_loc.push(validation::Loc::Index(index));
-      errors.push(validation::FieldError { loc: item_loc, input: item.clone(), kind: validation::Kind::StringType });
+  for (index, child) in items.iter().enumerate() {
+    let mut item_loc = loc.to_vec();
+    item_loc.push(validation::Loc::Index(index));
+    match item(child, &item_loc) {
+      Ok(item_value) => values.push(item_value),
+      Err(mut item_errors) => errors.append(&mut item_errors),
     }
   }
   if !errors.is_empty() {
@@ -431,7 +491,7 @@ fn string_list(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<
   {
     return failure(validation::Kind::ListTooShort { min_length, actual_length: items.len() });
   }
-  Ok(value.clone())
+  Ok(Value::Array(values))
 }
 
 impl Bounds {

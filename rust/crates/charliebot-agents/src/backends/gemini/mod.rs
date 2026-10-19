@@ -1,7 +1,7 @@
 //! The `gemini` backend type (`src/backends/gemini`): the gemini CLI in stream-json mode, and the two credential keys it
 //! retired, which the config migrates to their replacements.
 
-mod factory;
+pub mod factory;
 mod gemini_cli;
 mod options;
 mod translate;

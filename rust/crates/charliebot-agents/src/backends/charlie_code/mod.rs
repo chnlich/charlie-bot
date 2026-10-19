@@ -2,7 +2,7 @@
 //! endpoint. CLC's usage lives only in CharlieBot's own run logs, so its usage source has no log reader.
 
 mod charlie_code_cli;
-mod factory;
+pub mod factory;
 mod options;
 mod translate;
 

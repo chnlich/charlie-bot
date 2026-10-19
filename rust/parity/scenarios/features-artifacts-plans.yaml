@@ -1,0 +1,50 @@
+# The plan registry's read: the plans route over each corrupt registry shape and over a registry with awaiting,
+# approved and closed plans, and the session listing that carries the pending-approval flag.
+stage: features
+name: features-artifacts-plans
+fixture_extras: [artifacts_plans]
+steps:
+  - name: plans, BOM before the registry
+    method: GET
+    path: /api/sessions/${sessions.plans_bom_prefix}/plans
+    expect_status: 200
+  - name: plans, top level is a list
+    method: GET
+    path: /api/sessions/${sessions.plans_top_list}/plans
+    expect_status: 200
+  - name: plans, plans is a map
+    method: GET
+    path: /api/sessions/${sessions.plans_as_map}/plans
+    expect_status: 200
+  - name: plans, plans is a string
+    method: GET
+    path: /api/sessions/${sessions.plans_as_string}/plans
+    expect_status: 200
+  - name: plans, a plan is not a map
+    method: GET
+    path: /api/sessions/${sessions.plan_not_map}/plans
+    expect_status: 200
+  - name: plans, empty versions
+    method: GET
+    path: /api/sessions/${sessions.plan_empty_versions}/plans
+    expect_status: 200
+  - name: plans, a version is not a map
+    method: GET
+    path: /api/sessions/${sessions.version_not_map}/plans
+    expect_status: 200
+  - name: plans, unknown closed.as
+    method: GET
+    path: /api/sessions/${sessions.closed_unknown_as}/plans
+    expect_status: 200
+  - name: plans, takeoff is a string
+    method: GET
+    path: /api/sessions/${sessions.takeoff_as_string}/plans
+    expect_status: 200
+  - name: plans, awaiting, approved and closed plans
+    method: GET
+    path: /api/sessions/${sessions.plans_lineages}/plans
+    expect_status: 200
+  - name: session listing, pending plan approval flags
+    method: GET
+    path: /api/sessions/
+    expect_status: 200

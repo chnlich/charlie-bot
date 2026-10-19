@@ -27,7 +27,7 @@ from src.features.backup import backup  # noqa: E402
 python_archive = backup.create_backup()
 
 
-def load(archive_path):
+def load(archive_path: pathlib.Path) -> tuple[list[tarfile.TarInfo], dict[str, bytes | None]]:
   with tarfile.open(archive_path, "r:gz") as tar:
     members = tar.getmembers()
     contents = {member.name: tar.extractfile(member).read() if member.isfile() else None for member in members}

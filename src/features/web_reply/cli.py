@@ -110,8 +110,9 @@ def _render_status(result: dict) -> str:
   if result["children"]:
     lines.append("")
     lines.append("Child sessions' Now:")
-    for row in result["children"]:
-      lines.append(f"{row['name']} ({row['session_id'][:8]}): {row['now']} (updated {row['updated_at']})")
+    lines.extend(
+        f"{row['name']} ({row['session_id'][:8]}): {row['now']} (updated {row['updated_at']})"
+        for row in result["children"])
   return "\n".join(lines)
 
 

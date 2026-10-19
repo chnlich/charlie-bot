@@ -1,7 +1,8 @@
 //! Startup recovery: the node pass and the boot pass over crash windows, ported from the Python startup-recovery tests.
 //!
 //! A replay step whose owning task has not landed fails the node pass with the named error of `README.md`'s table, and
-//! the boot pass logs it as `task_recovery_node_failed`. Each test names the Python case it follows.
+//! the boot pass logs it as `task_recovery_node_failed`. Each ported test names its Python case; tests without a
+//! store-level write-fault seam exercise the corresponding boot retry at the completion boundary.
 
 #[allow(dead_code)]
 mod process_guard;
@@ -1006,6 +1007,9 @@ async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_dr
   stack.launch(&child, "iter-run-1", 424_902, "1-424000").await?;
   stage_raw_result(&stack.store().run_dir(&child, "iter-run-1"), Duration::from_secs(3600))?;
 
+  let error = stack.node_pass(&child).await.expect_err("the iteration drain belongs to the worker-run task");
+  assert_named_error(&error, "worker-run");
+
   stack.boot().await?;
 
   assert_eq!(stack.read_marker(&child)?.status, "interrupted");
@@ -1032,6 +1036,9 @@ async fn startup_leaves_a_live_iterations_child_open_until_its_finish() -> anyho
   guard.track(live.id());
   let pid_start = identity::pin_process_identity(live.id()).pid_start.expect("the live process has a stat line");
   stack.launch(&child, "iter-run-1", live.id(), &pid_start).await?;
+
+  let error = stack.node_pass(&child).await.expect_err("the iteration re-attach belongs to the worker-run task");
+  assert_named_error(&error, "worker-run");
 
   stack.boot().await?;
 
@@ -1060,12 +1067,10 @@ async fn settle_until(condition: impl Fn() -> anyhow::Result<bool>) -> anyhow::R
   Ok(())
 }
 
-/// `test_task_execution.py::test_parent_report_enospc_retry_delivers_report_once`: a success whose follow-up failed out
-/// of space keeps its end record. The retry, here the boot pass's replay, delivers the success-based report exactly
-/// once.
+/// A boot replay whose post-finish follow-up fails out of space keeps its end record. The retry delivers the
+/// success-based report exactly once.
 #[tokio::test]
-async fn retry_delivers_the_parent_report_once_after_an_out_of_space_follow_up() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_parent_report_enospc_retry_delivers_report_once.
+async fn boot_retry_delivers_the_parent_report_once_after_a_follow_up_failure() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
@@ -1087,14 +1092,10 @@ async fn retry_delivers_the_parent_report_once_after_an_out_of_space_follow_up()
   Ok(())
 }
 
-/// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata`, its retry half, and
-/// `test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry`: the end record is empty and the boot
-/// pass's repair fails out of space. The node is handed to the end-landing retry, whose first round completes the
-/// follow-up, and the end time stays the raw log's last write.
+/// The end record is empty and a boot follow-up fails out of space. The node is handed to the end-landing retry, whose
+/// first round completes the follow-up, and the end time stays the raw log's last write.
 #[tokio::test]
-async fn retry_repairs_a_half_written_end_record_once_space_returns() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata.
-  // Python: tests/test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry.
+async fn boot_retry_repairs_a_half_written_end_record_after_a_follow_up_failure() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -1119,12 +1120,10 @@ async fn retry_repairs_a_half_written_end_record_once_space_returns() -> anyhow:
   Ok(())
 }
 
-/// `test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry`, the boot form:
-/// a follow-up that fails for a reason other than space starts no retry. The node stays open until a later pass
+/// A boot follow-up that fails for a reason other than space starts no retry. The node stays open until a later pass
 /// completes it.
 #[tokio::test]
-async fn non_space_end_failure_starts_no_retry() -> anyhow::Result<()> {
-  // Python: tests/test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry.
+async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -1147,14 +1146,15 @@ async fn non_space_end_failure_starts_no_retry() -> anyhow::Result<()> {
 }
 
 /// `test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives`:
-/// a node pass that a retry runs skips the runs its process already drives, so no second follower or review starts.
-/// Without the driver, the same pass follows the launched run, which belongs to the worker-run task.
+/// a node pass that a retry runs skips the worker and manager runs its process already drives, so no second follower
+/// or review starts. Without the driver, the same pass follows the launched worker run, which belongs to worker-run.
 #[tokio::test]
 async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives.
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
   for (run_id, pid) in [("run-inflight", 424_811), ("run-followed", 424_812)] {
     stack.queue_run(&worker.id, run_id, RunKind::Work).await?;
@@ -1179,6 +1179,17 @@ async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::R
     assert!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, run_id)?.is_none());
   }
   assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?, ["review-pending"], "no second review");
+
+  stack.queue_run(&manager.id, "run-manager-followed", RunKind::ManagerTurn).await?;
+  stack.launch(&manager.id, "run-manager-followed", 424_813, "1-424000").await?;
+  let manager_driven = |run: &RunRecord| run.id == "run-manager-followed";
+  let manager_filter: &(dyn Fn(&RunRecord) -> bool + Sync) = &manager_driven;
+  let mut counters = PassCounters::default();
+  recovery::reconcile_node(&stack.features, &stack.adapter, &manager.id, &mut counters, Some(manager_filter)).await?;
+  let manager_run =
+    stack.store().read_run_sync(&manager.id, "run-manager-followed")?.expect("the queued manager follow is recorded");
+  assert!(manager_run.pid.is_some());
+  assert!(run_records::terminal_outcome(&stack.run_events(&manager.id)?, &manager_run.id)?.is_none());
 
   let undriven: &(dyn Fn(&RunRecord) -> bool + Sync) = &|_: &RunRecord| false;
   let mut counters = PassCounters::default();

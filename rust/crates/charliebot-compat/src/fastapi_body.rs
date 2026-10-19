@@ -544,7 +544,9 @@ fn float_value(value: &Value, nullable: bool) -> Result<Value, validation::Kind>
       }
     }
     Value::Number(number) => number.as_f64().expect("a JSON number reads as f64"),
-    Value::String(text) => validation::parse_float(validation::Source::Query, "body", text).map_err(|error| error.kind)?,
+    Value::String(text) => {
+      validation::parse_float(validation::Source::Query, "body", text).map_err(|error| error.kind)?
+    }
     _ => return Err(validation::Kind::FloatType),
   };
   Ok(Value::Number(Number::from_f64(number).expect("a float field's number is finite")))

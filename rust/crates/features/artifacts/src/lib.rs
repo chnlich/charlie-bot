@@ -1,6 +1,6 @@
-//! `src/features/artifacts`: the `publish:` config section, the session plan registry with its routes, the `approve` and
-//! `close` verbs, and its sidebar contribution, and the artifact file view. The `present` and `amend` verbs and the artifact
-//! and plan CLIs are not ported yet.
+//! `src/features/artifacts`: the `publish:` config section, the session plan registry with its routes and its four verbs
+//! `present`, `amend`, `approve` and `close`, its sidebar contribution, and the artifact file view. The artifact and plan
+//! CLIs are not ported; the Python CLI keeps them.
 
 mod api;
 pub mod artifact_check;

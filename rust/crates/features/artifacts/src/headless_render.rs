@@ -22,10 +22,10 @@ const HEADLESS_TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 
 static RENDERER: OnceLock<Mutex<Option<WarmRenderer>>> = OnceLock::new();
 
+/// The page heights that tests fake, keyed by the Chrome path that measures them. Verbs run the assertions on the
+/// blocking pool, so a fake set on the test thread would not reach them; a path is unique to one test's fixture.
 #[cfg(test)]
-thread_local! {
-  static TEST_HEIGHT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
-}
+static TEST_HEIGHTS: Mutex<Vec<(PathBuf, i32)>> = Mutex::new(Vec::new());
 
 struct WarmRenderer {
   chrome_bin: PathBuf,
@@ -376,7 +376,7 @@ impl WarmRenderer {
 
 pub(crate) fn render_height(chrome_bin: &Path, probe_uri: &str) -> Result<i32, String> {
   #[cfg(test)]
-  if let Some(height) = TEST_HEIGHT.with(std::cell::Cell::get) {
+  if let Some(height) = test_height(chrome_bin) {
     return Ok(height);
   }
   let renderer = RENDERER.get_or_init(|| Mutex::new(None));
@@ -391,8 +391,14 @@ pub(crate) fn render_height(chrome_bin: &Path, probe_uri: &str) -> Result<i32, S
 }
 
 #[cfg(test)]
-pub(crate) fn set_test_height(height: Option<i32>) {
-  TEST_HEIGHT.with(|value| value.set(height));
+fn test_height(chrome_bin: &Path) -> Option<i32> {
+  let heights = TEST_HEIGHTS.lock().expect("the test height table is not poisoned");
+  heights.iter().find(|(path, _)| path.as_path() == chrome_bin).map(|(_, height)| *height)
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_height(chrome_bin: &Path, height: i32) {
+  TEST_HEIGHTS.lock().expect("the test height table is not poisoned").push((chrome_bin.to_path_buf(), height));
 }
 
 pub(crate) fn close_renderer() -> anyhow::Result<()> {

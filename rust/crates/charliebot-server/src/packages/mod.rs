@@ -20,7 +20,7 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
 
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
-  ("src.features.artifacts", charliebot_artifacts::register), // stub: src.features.artifacts
+  ("src.features.artifacts", charliebot_artifacts::register),
   ("src.features.backup", charliebot_backup::register),
   ("src.features.backend_pool", charliebot_agents::backend_pool::register),
   ("src.features.chat_threads", charliebot_chat_threads::register),

@@ -1,6 +1,6 @@
 //! The plan routes (`src/features/artifacts/api.py`): `GET /api/sessions/{session_id}/plans`, the session's plan registry
-//! with derived states and read errors, and the internal `plan/approve` and `plan/close` verbs that `charliebot plan`
-//! calls.
+//! with derived states and read errors, and the internal `plan/present`, `plan/amend`, `plan/approve` and `plan/close`
+//! verbs that `charliebot plan` calls.
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
 use serde_json::{Map, Value, json};
 
-use crate::plan_verbs::{self, SessionLocks, VerbError};
+use crate::plan_verbs::{self, Amendment, SessionLocks, VerbError};
 use crate::plans::{self, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED, PLAN_CLOSE_SUPERSEDED, PLANS_FILE};
 
 /// The state of the plan routes: the feature context, and the session locks that the verbs share.
@@ -30,6 +30,8 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   let state = PlanRoutes { features: Arc::clone(features), locks: Arc::default() };
   Router::new()
     .route("/api/sessions/{session_id}/plans", get_only(list_plans))
+    .route("/api/internal/plan/present", post_only(plan_present))
+    .route("/api/internal/plan/amend", post_only(plan_amend))
     .route("/api/internal/plan/approve", post_only(plan_approve))
     .route("/api/internal/plan/close", post_only(plan_close))
     .with_state(state)
@@ -37,7 +39,13 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 
 /// Whether a path is one of the plan routes, for the server's trailing-slash redirect.
 pub(crate) fn matches(path: &str) -> bool {
-  if matches!(path, "/api/internal/plan/approve" | "/api/internal/plan/close") {
+  if matches!(
+    path,
+    "/api/internal/plan/present"
+      | "/api/internal/plan/amend"
+      | "/api/internal/plan/approve"
+      | "/api/internal/plan/close"
+  ) {
     return true;
   }
   let Some(rest) = path.strip_prefix("/api/sessions/") else {
@@ -62,6 +70,42 @@ async fn list_plans(State(state): State<PlanRoutes>, AxumPath(session_id): AxumP
     Ok(read) => responses::fast_json(StatusCode::OK, &read.into_json()),
     Err(error) => responses::internal_error(error.kind, error.detail),
   }
+}
+
+/// `POST /api/internal/plan/present`: the body, then the session check, then the registration.
+async fn plan_present(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match PresentRequest::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  if let Some(response) = require_session(&state.features, &model.session_id).await {
+    return response;
+  }
+  answer(
+    plan_verbs::present(&state.features, &state.locks, &model.session_id, &model.file, model.title, model.base).await,
+  )
+}
+
+/// `POST /api/internal/plan/amend`: the body, then the session check, then the amendment.
+async fn plan_amend(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match AmendRequest::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  if let Some(response) = require_session(&state.features, &model.session_id).await {
+    return response;
+  }
+  answer(plan_verbs::amend(&state.features, &state.locks, &model.session_id, &model.file, model.amendment).await)
 }
 
 /// `POST /api/internal/plan/approve`: the body, then the session check, then the approval.
@@ -96,6 +140,95 @@ async fn plan_close(State(state): State<PlanRoutes>, request: Request<Body>) -> 
     return response;
   }
   answer(plan_verbs::close(&state.features, &state.locks, &model.session_id, model.plan_id, model.close_as).await)
+}
+
+/// The fields of `PlanPresentRequest`, in the model's order. The base fields default to `None`.
+const PRESENT_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("file", FieldType::String),
+  Field::required("title", FieldType::String),
+  Field::optional("base_repo", FieldType::NullableString),
+  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional("base_sha", FieldType::NullableString),
+];
+const PRESENT_BODY: BodyModel = BodyModel::required(PRESENT_FIELDS).forbid_extra();
+
+/// The triggers of `PlanAmendTrigger`, and the fields of `PlanAmendRequest` in the model's order. `trigger` defaults to
+/// `feedback`, `note` is required, and the base fields default to `None`.
+const AMEND_TRIGGERS: &[&str] = &["auto_amend", "feedback"];
+const AMEND_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("file", FieldType::String),
+  Field::optional("plan_id", FieldType::NullableInteger),
+  Field::optional("trigger", FieldType::Literal(AMEND_TRIGGERS)),
+  Field::required("note", FieldType::String),
+  Field::optional("base_repo", FieldType::NullableString),
+  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional("base_sha", FieldType::NullableString),
+];
+const AMEND_BODY: BodyModel = BodyModel::required(AMEND_FIELDS).forbid_extra();
+
+/// The validated `PlanPresentRequest`. `base` is `null` when the request names no base field.
+struct PresentRequest {
+  session_id: String,
+  file: String,
+  title: String,
+  base: Value,
+}
+
+impl PresentRequest {
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&PRESENT_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    Ok(Self {
+      session_id: take_string(&mut fields, "session_id"),
+      file: take_string(&mut fields, "file"),
+      title: take_string(&mut fields, "title"),
+      base: build_base(&mut fields),
+    })
+  }
+}
+
+/// The validated `PlanAmendRequest`. `trigger` is `feedback` when the body omits it.
+struct AmendRequest {
+  session_id: String,
+  file: String,
+  amendment: Amendment,
+}
+
+impl AmendRequest {
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&AMEND_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    let session_id = take_string(&mut fields, "session_id");
+    let file = take_string(&mut fields, "file");
+    let plan_id = match fields.remove("plan_id") {
+      None | Some(Value::Null) => None,
+      Some(plan_id) => Some(plan_id),
+    };
+    let trigger = match fields.remove("trigger") {
+      None => "feedback".to_string(),
+      Some(Value::String(trigger)) => trigger,
+      Some(_) => unreachable!("a validated trigger is one of the triggers"),
+    };
+    let amendment =
+      Amendment { plan_id, trigger, note: take_string(&mut fields, "note"), base: build_base(&mut fields) };
+    Ok(Self { session_id, file, amendment })
+  }
+}
+
+/// `_build_base(req)`: the base a version records, `null` when the request names none of the three base fields.
+fn build_base(fields: &mut Map<String, Value>) -> Value {
+  let repo = fields.remove("base_repo").unwrap_or(Value::Null);
+  let branch = fields.remove("base_branch").unwrap_or(Value::Null);
+  let sha = fields.remove("base_sha").unwrap_or(Value::Null);
+  if repo.is_null() && branch.is_null() && sha.is_null() {
+    Value::Null
+  } else {
+    json!({"repo": repo, "branch": branch, "sha": sha})
+  }
 }
 
 /// The fields of `PlanApproveRequest`, in the model's order. `plan_id` defaults to `None`.
@@ -186,7 +319,9 @@ mod tests {
   use tower::ServiceExt;
 
   use super::*;
-  use crate::test_support::{AWAITING_REGISTRY, features, session_with_registry, write_session};
+  use crate::test_support::{
+    AWAITING_REGISTRY, features, plan_page, plan_session, session_with_registry, write_plan_artifact, write_session,
+  };
 
   /// The status and the raw body of one GET to the plans route.
   async fn get(features: &Arc<FeatureContext>, uri: &str) -> (StatusCode, Vec<u8>) {
@@ -283,10 +418,109 @@ mod tests {
   }
 
   #[test]
-  fn the_route_claims_the_approve_and_close_paths() {
+  fn the_route_claims_the_present_amend_approve_and_close_paths() {
+    assert!(matches("/api/internal/plan/present"));
+    assert!(matches("/api/internal/plan/amend"));
     assert!(matches("/api/internal/plan/approve"));
     assert!(matches("/api/internal/plan/close"));
-    assert!(!matches("/api/internal/plan/present"));
+    assert!(!matches("/api/internal/plan/extra"));
+  }
+
+  #[tokio::test]
+  async fn plan_present_endpoint_happy_path() {
+    let (_home, features) = plan_session("sess", None);
+    write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
+    let (status, body) = post(
+      &features,
+      "/api/internal/plan/present",
+      json!({"session_id": "sess", "file": "artifacts/plan_01.html", "title": "P1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"plan": 1, "v": 1, "state": "awaiting approval"}));
+  }
+
+  #[tokio::test]
+  async fn plan_amend_endpoint_happy_path() {
+    let (_home, features) = plan_session("sess", None);
+    write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
+    plan_verbs::present(
+      &features,
+      &SessionLocks::default(),
+      "sess",
+      "artifacts/plan_01.html",
+      "P1".to_string(),
+      Value::Null,
+    )
+    .await
+    .expect("the presentation succeeds");
+    write_plan_artifact(&features, "sess", "plan_02.html", &plan_page("Ship the fix."));
+    let (status, body) = post(
+      &features,
+      "/api/internal/plan/amend",
+      json!({
+        "session_id": "sess",
+        "file": "artifacts/plan_02.html",
+        "plan_id": 1,
+        "note": "split the executor into its own deployment",
+      }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"plan": 1, "v": 2, "state": "awaiting approval"}));
+    let (status, listing) = get(&features, "/api/sessions/sess/plans").await;
+    assert_eq!(status, StatusCode::OK);
+    let listing: Value = serde_json::from_slice(&listing).expect("the listing is JSON");
+    let versions = &listing["plans"][0]["versions"];
+    assert_eq!(versions[0]["note"], Value::Null);
+    assert_eq!(versions[1]["note"], "split the executor into its own deployment");
+  }
+
+  #[tokio::test]
+  async fn plan_amend_rejects_422_missing_note() {
+    let (_home, features) = plan_session("sess", Some(AWAITING_REGISTRY));
+    let (status, body) = post(
+      &features,
+      "/api/internal/plan/amend",
+      json!({"session_id": "sess", "file": "artifacts/plan_02.html", "plan_id": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"][0]["type"], "missing");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "note"]));
+  }
+
+  #[tokio::test]
+  async fn plan_amend_rejects_422_initial_trigger() {
+    let (_home, features) = plan_session("sess", Some(AWAITING_REGISTRY));
+    let (status, body) = post(
+      &features,
+      "/api/internal/plan/amend",
+      json!({
+        "session_id": "sess",
+        "file": "artifacts/plan_02.html",
+        "plan_id": 1,
+        "note": "why changed",
+        "trigger": "initial",
+      }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"][0]["type"], "literal_error");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "trigger"]));
+  }
+
+  #[tokio::test]
+  async fn plan_present_rejects_unknown_session_404() {
+    let (_home, features) = features();
+    let (status, body) = post(
+      &features,
+      "/api/internal/plan/present",
+      json!({"session_id": "nonexistent", "file": "f.html", "title": "P1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"detail": "Session not found"}));
   }
 
   #[tokio::test]

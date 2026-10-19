@@ -384,8 +384,9 @@ fn turn_launch_context(
   option: BackendOption,
   cwd: PathBuf,
   held_native_id: Option<String>,
-) -> LaunchContext {
+) -> anyhow::Result<LaunchContext> {
   let callbacks = item.callbacks.clone();
+  let base_env = callbacks.features.startup.require::<AgentBaseEnvironment>()?;
   let session_id = item.session_metadata().id;
   let running_session_id = session_id.clone();
   let shared_metadata = Arc::clone(&item.session_meta);
@@ -412,12 +413,13 @@ fn turn_launch_context(
       }
     }) as BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
   });
-  LaunchContext {
+  Ok(LaunchContext {
     cfg: Arc::clone(&item.cfg),
     option,
     session_meta: shared_metadata,
     kind: LaunchKind::Turn,
     cwd,
+    base_env: Arc::new(base_env.values.clone()),
     held_native_id,
     preassigned_native_id: None,
     emit: Arc::new({
@@ -432,7 +434,7 @@ fn turn_launch_context(
     record_account,
     context_state,
     running_turns: Some(Arc::new(move || running_queue.running_turns_except(&running_session_id))),
-  }
+  })
 }
 
 struct StreamEvent {
@@ -764,7 +766,7 @@ pub(crate) async fn run_cc(
   let metadata = item.session_metadata();
   let held_native_id = (!fresh_native).then(|| metadata.cc_session_id.clone()).flatten();
   let cwd = item.cfg.sessions_dir().join(&metadata.id);
-  let context = turn_launch_context(Arc::clone(&queue), item, option.clone(), cwd.clone(), held_native_id.clone());
+  let context = turn_launch_context(Arc::clone(&queue), item, option.clone(), cwd.clone(), held_native_id.clone())?;
   let env = build_master_env(item);
   let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, &option.backend_type, Some(&option.model))));
   let log_dir = item.task_run.transport_dir.clone();

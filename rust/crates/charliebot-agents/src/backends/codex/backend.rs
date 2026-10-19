@@ -18,7 +18,6 @@ use tokio::process::{Child, ChildStderr, ChildStdout};
 use super::options::CodexOptions;
 use super::text::{py_strip, truthy};
 use super::translate::CodexTranslator;
-use crate::agent_environment;
 use crate::one_shot::{assistant_text, frame_system_prompt};
 use crate::transport::cgroup::system_cgroup_base_dir;
 use crate::transport::kill::{kill_process_group, python_exit_code};
@@ -146,11 +145,17 @@ impl CodexBackend {
   ///
   /// Codex has no system-prompt flag, so the system prompt is framed into the prompt. The text is the assistant
   /// messages of the agent_message items. A structured error event, a nonzero exit or an empty answer fails the call.
-  async fn run_one_shot(&self, prompt: &str, system: &str, timeout: Option<Duration>) -> anyhow::Result<String> {
+  async fn run_one_shot(
+    &self,
+    base_env: &Env,
+    prompt: &str,
+    system: &str,
+    timeout: Option<Duration>,
+  ) -> anyhow::Result<String> {
     let mut command = self.exec_command_head();
     command.push("--".to_string());
     command.push(frame_system_prompt(system, prompt));
-    let env = self.prepare_env(agent_environment::startup_agent_environment()?.values.clone());
+    let env = self.prepare_env(base_env.clone());
     let spec = SpawnSpec::new(
       command[0].clone(),
       command[1..].iter().map(OsString::from).collect(),
@@ -238,11 +243,12 @@ impl AgentBackend for CodexBackend {
 
   fn one_shot_text<'a>(
     &'a mut self,
+    base_env: &'a Env,
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
   ) -> BoxFuture<'a, anyhow::Result<String>> {
-    Box::pin(async move { self.run_one_shot(prompt, system, timeout).await })
+    Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await })
   }
 }
 

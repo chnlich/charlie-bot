@@ -179,12 +179,7 @@ pub fn compaction_command(session_id: &str) -> Vec<String> {
   ]
 }
 
-pub fn compaction_env(config_dir: &Path) -> anyhow::Result<Env> {
-  let inherited = crate::agent_environment::startup_agent_environment()?.values.clone();
-  compaction_env_from(config_dir, &inherited)
-}
-
-/// Build the compaction environment from the startup agent environment and selected account directory.
+/// Build the compaction environment from the launch environment and selected account directory.
 pub fn compaction_env_from(config_dir: &Path, inherited: &Env) -> anyhow::Result<Env> {
   let mut env = inherited.clone();
   env.remove(crate::launch_loop::SESSION_ID_ENV);
@@ -283,6 +278,7 @@ pub async fn compact_with_sonnet(
   session_id: &str,
   cwd: &Path,
   config_dir: &Path,
+  base_env: &Env,
   pre_tokens: Option<i64>,
   emit: &EmitFn,
   cfg: &CharlieBotConfig,
@@ -304,7 +300,7 @@ pub async fn compact_with_sonnet(
       trigger,
       timeout_duration,
     },
-    compaction_env,
+    |config_dir| compaction_env_from(config_dir, base_env),
   )
   .await
 }

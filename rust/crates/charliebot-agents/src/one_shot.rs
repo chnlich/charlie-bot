@@ -13,23 +13,13 @@ use crate::backend_types::BuiltBackend;
 use crate::launch_loop::ChildEnvPolicy;
 use crate::runner::{AgentRunner, RunRequest};
 
-/// Run a built backend in a temporary working directory and collect its assistant text.
+/// Run a built backend with `base_env` in a temporary working directory and collect its assistant text.
 pub async fn agent_one_shot_text(
-  built: BuiltBackend,
-  prompt: &str,
-  system_prompt: &str,
-  timeout: Option<Duration>,
-) -> anyhow::Result<String> {
-  let agent_environment = crate::agent_environment::startup_agent_environment()?.as_ref().clone();
-  agent_one_shot_text_with_environment(built, prompt, system_prompt, timeout, agent_environment).await
-}
-
-async fn agent_one_shot_text_with_environment(
   mut built: BuiltBackend,
+  base_env: &charliebot_registry::backend::Env,
   prompt: &str,
   system_prompt: &str,
   timeout: Option<Duration>,
-  agent_environment: crate::agent_environment::AgentBaseEnvironment,
 ) -> anyhow::Result<String> {
   built.launch.instructions_file = None;
   built.launch.instructions_content = None;
@@ -55,7 +45,7 @@ async fn agent_one_shot_text_with_environment(
   let mut request = RunRequest::new(
     frame_system_prompt(system_prompt, prompt),
     cwd.path().to_path_buf(),
-    agent_environment,
+    crate::agent_environment::AgentBaseEnvironment { values: base_env.clone() },
     crate::transport::cgroup::system_cgroup_base_dir(),
     built.registry,
   );
@@ -144,6 +134,7 @@ mod tests {
 
     fn one_shot_text<'a>(
       &'a mut self,
+      _base_env: &'a Env,
       _prompt: &'a str,
       _system: &'a str,
       _timeout: Option<Duration>,
@@ -193,20 +184,11 @@ mod tests {
       registry: Arc::new(Registry::new()),
     };
 
-    let answer = agent_one_shot_text_with_environment(
-      built,
-      "prompt",
-      "system",
-      None,
-      crate::agent_environment::AgentBaseEnvironment {
-        values: Env::from([
-          ("PATH".to_string(), "/synthetic/agent-entry-points:/synthetic/system-bin:/bin:/usr/bin".to_string()),
-          ("PYDANTIC_DISABLE_PLUGINS".to_string(), "__all__".to_string()),
-        ]),
-      },
-    )
-    .await
-    .unwrap();
+    let base_env = Env::from([
+      ("PATH".to_string(), "/synthetic/agent-entry-points:/synthetic/system-bin:/bin:/usr/bin".to_string()),
+      ("PYDANTIC_DISABLE_PLUGINS".to_string(), "__all__".to_string()),
+    ]);
+    let answer = agent_one_shot_text(built, &base_env, "prompt", "system", None).await.unwrap();
 
     assert_eq!(answer, "first");
     assert!(!instructions_file.exists());

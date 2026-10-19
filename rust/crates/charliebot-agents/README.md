@@ -39,7 +39,7 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `backend_pool::{QUOTA_ERROR_PATTERNS, DEFAULT_COOLDOWN, is_quota_error, BackendPool}` | `src/runtime/backend_pool.py` |
 | `backend_pool::{backend_pool, pre_recovery_step, register}` | `src/runtime/backend_pool.py`; `src/features/backend_pool/__init__.py` |
 | `pre_recovery_step`, `run_session_cgroup_startup`, `session_cgroup_step`, `register_runtime` | `server.py:262-273`; `src/runtime/agent_environment.py:121-153` |
-| `agent_one_shot_text(built: BuiltBackend, prompt: &str, system_prompt: &str, timeout: Option<Duration>) -> anyhow::Result<String>` | `src/runtime/agent_process/base.py:712`, `:1156-1189` |
+| `agent_one_shot_text(built: BuiltBackend, base_env: &Env, prompt: &str, system_prompt: &str, timeout: Option<Duration>) -> anyhow::Result<String>` | `src/runtime/agent_process/base.py:712`, `:1156-1189` |
 | `BuiltBackend` and its `backend` and `launch` fields; `backend_types::build_backend`, root `build_backend`, `build_translate_fallback` | `src/runtime/hooks/backend_types.py:33-60` |
 | `backends::claude_code` and `backends::claude_code::register` | `src/backends/claude_code/__init__.py:17-75` |
 | `ClaudeCodeBackend`, `ClaudeCodeBackend::build_command`, and its `AgentBackend` methods | `src/backends/claude_code/claude_code.py:240-292`; `src/runtime/agent_process/base.py:641-770` |

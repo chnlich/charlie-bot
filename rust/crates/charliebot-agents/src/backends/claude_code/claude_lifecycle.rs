@@ -490,6 +490,7 @@ mod tests {
       session_meta,
       kind,
       cwd: PathBuf::from("/synthetic/cwd"),
+      base_env: Arc::new(charliebot_registry::backend::Env::new()),
       held_native_id: held_native_id.map(str::to_string),
       preassigned_native_id: Some("task-session".to_string()),
       emit,

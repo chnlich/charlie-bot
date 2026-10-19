@@ -150,6 +150,7 @@ pub trait AgentBackend: Send {
   /// The CLI-native one-shot, tool-less. The tool-capable variant is the runner's free function.
   fn one_shot_text<'a>(
     &'a mut self,
+    base_env: &'a Env,
     prompt: &'a str,
     system: &'a str,
     timeout: Option<Duration>,
@@ -198,6 +199,8 @@ pub struct LaunchContext {
   pub session_meta: Arc<Mutex<SessionMetadata>>,
   pub kind: LaunchKind,
   pub cwd: PathBuf,
+  /// The base agent environment owned by the startup state.
+  pub base_env: Arc<Env>,
   /// The conversation this run may resume. `None` starts fresh.
   pub held_native_id: Option<String>,
   /// For a task run, the conversation id the runtime chose for its first process.

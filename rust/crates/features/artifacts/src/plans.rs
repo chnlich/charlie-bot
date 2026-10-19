@@ -24,9 +24,9 @@ pub const PLANS_FILE: &str = "plans.json";
 pub const AWAITING_APPROVAL_STATE: &str = "awaiting approval";
 const APPROVED_STATE: &str = "approved";
 // A closed plan's state is its close mode's spelling (`constants.py`).
-const PLAN_CLOSE_SUPERSEDED: &str = "superseded";
-const PLAN_CLOSE_ABANDONED: &str = "abandoned";
-const PLAN_CLOSE_COMPLETED: &str = "completed";
+pub(crate) const PLAN_CLOSE_SUPERSEDED: &str = "superseded";
+pub(crate) const PLAN_CLOSE_ABANDONED: &str = "abandoned";
+pub(crate) const PLAN_CLOSE_COMPLETED: &str = "completed";
 
 /// The plan fields the registry persists, in the order it emits them.
 const PLAN_FIELDS: [&str; 5] = ["id", "title", "versions", "takeoff", "closed"];
@@ -230,6 +230,13 @@ pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
   })
 }
 
+/// `_project_registry(data)`: the registry a save writes. Each plan is projected to the persisted fields, and the top
+/// level keeps only `plans`, so keys the schema does not know are dropped on save.
+pub(crate) fn project_registry(plans: &[Value]) -> Result<Value, String> {
+  let projected = plans.iter().map(|plan| project_plan(plan).map(Value::Object)).collect::<Result<Vec<_>, _>>()?;
+  Ok(json!({"plans": projected}))
+}
+
 /// `json_utils.write_json_atomically(path, registry, indent=2)`: the bytes of a registry file. The fork copy and the
 /// plan verbs both write through it, so a registry has one spelling on disk.
 pub(crate) fn registry_text(registry: &Value) -> String {
@@ -266,7 +273,7 @@ fn file_error(session_id: &str, error: String) -> ReadError {
 }
 
 /// An `OSError` the read does not catch, as `Path.exists()` raises it.
-fn os_escape(error: &io::Error, path: &Path) -> EscapedError {
+pub(crate) fn os_escape(error: &io::Error, path: &Path) -> EscapedError {
   let kind = match error.kind() {
     io::ErrorKind::PermissionDenied => "PermissionError",
     _ => "OSError",
@@ -314,7 +321,7 @@ pub(crate) fn py_type_name(value: &Value) -> &'static str {
 }
 
 /// `repr(value)` of a JSON value that `json.loads` produced: strings quoted, the rest as `str` prints them.
-fn py_repr(value: &Value) -> String {
+pub(crate) fn py_repr(value: &Value) -> String {
   match value {
     Value::String(text) => pyfmt::str_repr(text),
     other => pyfmt::python_str(other),

@@ -1,5 +1,6 @@
-//! `src/features/artifacts`: the `publish:` config section, the session plan registry's read side with its route and
-//! sidebar contribution, and the artifact file view. The plan verbs and the artifact and plan CLIs are not ported yet.
+//! `src/features/artifacts`: the `publish:` config section, the session plan registry with its routes, the `approve` and
+//! `close` verbs, and its sidebar contribution, and the artifact file view. The `present` and `amend` verbs and the artifact
+//! and plan CLIs are not ported yet.
 
 mod api;
 pub mod artifact_check;
@@ -7,6 +8,7 @@ mod artifact_view;
 mod headless_render;
 pub mod plan_diff;
 mod plan_paths;
+mod plan_verbs;
 pub mod plans;
 mod sidebar;
 #[cfg(test)]

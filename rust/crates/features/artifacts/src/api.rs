@@ -1,25 +1,45 @@
-//! `GET /api/sessions/{session_id}/plans`: the session's plan registry (`src/features/artifacts/api.py` `list_plans`).
+//! The plan routes (`src/features/artifacts/api.py`): `GET /api/sessions/{session_id}/plans`, the session's plan registry
+//! with derived states and read errors, and the internal `plan/approve` and `plan/close` verbs that `charliebot plan`
+//! calls.
 
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
 use axum::response::Response;
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
-use charliebot_compat::routing::get_only;
+use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
-use crate::plans::{self, PLANS_FILE};
+use crate::plan_verbs::{self, SessionLocks, VerbError};
+use crate::plans::{self, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED, PLAN_CLOSE_SUPERSEDED, PLANS_FILE};
+
+/// The state of the plan routes: the feature context, and the session locks that the verbs share.
+#[derive(Clone)]
+pub(crate) struct PlanRoutes {
+  features: Arc<FeatureContext>,
+  locks: Arc<SessionLocks>,
+}
 
 /// The route table, built with the shared feature context.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route("/api/sessions/{session_id}/plans", get_only(list_plans)).with_state(Arc::clone(features))
+  let state = PlanRoutes { features: Arc::clone(features), locks: Arc::default() };
+  Router::new()
+    .route("/api/sessions/{session_id}/plans", get_only(list_plans))
+    .route("/api/internal/plan/approve", post_only(plan_approve))
+    .route("/api/internal/plan/close", post_only(plan_close))
+    .with_state(state)
 }
 
-/// Whether a path is the plans route, for the server's trailing-slash redirect.
+/// Whether a path is one of the plan routes, for the server's trailing-slash redirect.
 pub(crate) fn matches(path: &str) -> bool {
+  if matches!(path, "/api/internal/plan/approve" | "/api/internal/plan/close") {
+    return true;
+  }
   let Some(rest) = path.strip_prefix("/api/sessions/") else {
     return false;
   };
@@ -28,11 +48,11 @@ pub(crate) fn matches(path: &str) -> bool {
 
 /// The plan registry of a session with derived states and read errors. A missing session answers 404; a corrupt
 /// registry answers 200 with its error entries.
-async fn list_plans(State(features): State<Arc<FeatureContext>>, AxumPath(session_id): AxumPath<String>) -> Response {
-  if let Some(response) = require_session(&features, &session_id).await {
+async fn list_plans(State(state): State<PlanRoutes>, AxumPath(session_id): AxumPath<String>) -> Response {
+  if let Some(response) = require_session(&state.features, &session_id).await {
     return response;
   }
-  let plans_path = features.store.session_dir(&session_id).join(PLANS_FILE);
+  let plans_path = state.features.store.session_dir(&session_id).join(PLANS_FILE);
   let read_session = session_id.clone();
   let read = match tokio::task::spawn_blocking(move || plans::read_plans_tolerant(&plans_path, &read_session)).await {
     Ok(read) => read,
@@ -41,6 +61,108 @@ async fn list_plans(State(features): State<Arc<FeatureContext>>, AxumPath(sessio
   match read {
     Ok(read) => responses::fast_json(StatusCode::OK, &read.into_json()),
     Err(error) => responses::internal_error(error.kind, error.detail),
+  }
+}
+
+/// `POST /api/internal/plan/approve`: the body, then the session check, then the approval.
+async fn plan_approve(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match ApproveRequest::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  if let Some(response) = require_session(&state.features, &model.session_id).await {
+    return response;
+  }
+  answer(plan_verbs::approve(&state.features, &state.locks, &model.session_id, model.plan_id).await)
+}
+
+/// `POST /api/internal/plan/close`: the body, then the session check, then the close.
+async fn plan_close(State(state): State<PlanRoutes>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match CloseRequest::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  if let Some(response) = require_session(&state.features, &model.session_id).await {
+    return response;
+  }
+  answer(plan_verbs::close(&state.features, &state.locks, &model.session_id, model.plan_id, model.close_as).await)
+}
+
+/// The fields of `PlanApproveRequest`, in the model's order. `plan_id` defaults to `None`.
+const APPROVE_FIELDS: &[Field] =
+  &[Field::required("session_id", FieldType::String), Field::optional("plan_id", FieldType::NullableInteger)];
+const APPROVE_BODY: BodyModel = BodyModel::required(APPROVE_FIELDS).forbid_extra();
+
+/// The close modes of `PlanCloseMode`, and the fields of `PlanCloseRequest` in the model's order.
+const CLOSE_MODES: &[&str] = &[PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED];
+const CLOSE_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("plan_id", FieldType::Integer),
+  Field::required("close_as", FieldType::Literal(CLOSE_MODES)),
+];
+const CLOSE_BODY: BodyModel = BodyModel::required(CLOSE_FIELDS).forbid_extra();
+
+/// The validated `PlanApproveRequest`. `plan_id` is `None` when the body omits it or sends null.
+struct ApproveRequest {
+  session_id: String,
+  plan_id: Option<Value>,
+}
+
+impl ApproveRequest {
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&APPROVE_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    let plan_id = match fields.remove("plan_id") {
+      None | Some(Value::Null) => None,
+      Some(plan_id) => Some(plan_id),
+    };
+    Ok(Self { session_id: take_string(&mut fields, "session_id"), plan_id })
+  }
+}
+
+/// The validated `PlanCloseRequest`. `plan_id` is the request's integer, kept as sent.
+struct CloseRequest {
+  session_id: String,
+  plan_id: Value,
+  close_as: String,
+}
+
+impl CloseRequest {
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&CLOSE_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    let session_id = take_string(&mut fields, "session_id");
+    let plan_id = fields.remove("plan_id").unwrap_or_else(|| unreachable!("a validated plan_id is present"));
+    Ok(Self { session_id, plan_id, close_as: take_string(&mut fields, "close_as") })
+  }
+}
+
+/// A string field of a validated model.
+fn take_string(fields: &mut Map<String, Value>, name: &str) -> String {
+  match fields.remove(name) {
+    Some(Value::String(text)) => text,
+    _ => unreachable!("a validated {name} is a string"),
+  }
+}
+
+/// A verb's answer: its body with 200, a refusal as 400 with the message as `detail`, or the unhandled-exception 500.
+fn answer(result: Result<Value, VerbError>) -> Response {
+  match result {
+    Ok(body) => responses::json(StatusCode::OK, &body),
+    Err(VerbError::Refused(detail)) => responses::json(StatusCode::BAD_REQUEST, &json!({"detail": detail})),
+    Err(VerbError::Failed { kind, detail }) => responses::internal_error(kind, detail),
   }
 }
 
@@ -60,23 +182,11 @@ mod tests {
   use std::fs;
 
   use axum::body::{Body, to_bytes};
-  use axum::http::Request;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-  use serde_json::Value;
+  use axum::http::{Method, Request, header};
   use tower::ServiceExt;
 
   use super::*;
-  use crate::test_support::features;
-
-  /// Writes a root session through the registered slots, so its metadata file reads back as the store writes it.
-  fn write_session(features: &FeatureContext, session_id: &str) {
-    let slots = features.registry.metadata_slots();
-    let meta = SessionMetadata::new(session_id, session_id, TaskProfile::Manager);
-    let path = features.store.metadata_path(session_id);
-    fs::create_dir_all(path.parent().expect("a session file has a directory"))
-      .expect("the session directory is created");
-    fs::write(path, meta.to_json_string(&slots, true)).expect("the metadata is written");
-  }
+  use crate::test_support::{AWAITING_REGISTRY, features, session_with_registry, write_session};
 
   /// The status and the raw body of one GET to the plans route.
   async fn get(features: &Arc<FeatureContext>, uri: &str) -> (StatusCode, Vec<u8>) {
@@ -85,6 +195,20 @@ mod tests {
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
     (status, body.to_vec())
+  }
+
+  /// The status and the JSON body of one POST with a JSON body.
+  async fn post(features: &Arc<FeatureContext>, uri: &str, body: Value) -> (StatusCode, Value) {
+    let request = Request::builder()
+      .method(Method::POST)
+      .uri(uri)
+      .header(header::CONTENT_TYPE, "application/json")
+      .body(Body::from(body.to_string()))
+      .expect("the request builds");
+    let response = routes(features).oneshot(request).await.expect("the router is infallible");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+    (status, serde_json::from_slice(&bytes).expect("the body is JSON"))
   }
 
   #[tokio::test]
@@ -156,5 +280,63 @@ mod tests {
     assert!(!matches("/api/sessions//plans"));
     assert!(!matches("/api/sessions/sess/plans/extra"));
     assert!(!matches("/api/sessions/sess"));
+  }
+
+  #[test]
+  fn the_route_claims_the_approve_and_close_paths() {
+    assert!(matches("/api/internal/plan/approve"));
+    assert!(matches("/api/internal/plan/close"));
+    assert!(!matches("/api/internal/plan/present"));
+  }
+
+  #[tokio::test]
+  async fn plan_approve_endpoint_happy_path() {
+    let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
+    let (status, body) = post(&features, "/api/internal/plan/approve", json!({"session_id": "sess"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"plan": 1, "v": 1, "state": "approved"}));
+  }
+
+  #[tokio::test]
+  async fn plan_close_endpoint_happy_path() {
+    let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
+    let (status, body) = post(
+      &features,
+      "/api/internal/plan/close",
+      json!({"session_id": "sess", "plan_id": 1, "close_as": "superseded"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"plan": 1, "state": "superseded"}));
+  }
+
+  #[tokio::test]
+  async fn plan_close_rejects_already_closed_400() {
+    let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
+    let close_superseded = json!({"session_id": "sess", "plan_id": 1, "close_as": "superseded"});
+    post(&features, "/api/internal/plan/close", close_superseded).await;
+    let (status, body) =
+      post(&features, "/api/internal/plan/close", json!({"session_id": "sess", "plan_id": 1, "close_as": "abandoned"}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body, json!({"detail": "plan 1 is already closed ('superseded')"}));
+  }
+
+  #[tokio::test]
+  async fn the_verbs_answer_404_for_an_unknown_session() {
+    let (_home, features) = features();
+    let (status, body) = post(&features, "/api/internal/plan/approve", json!({"session_id": "no-such"})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"detail": "Session not found"}));
+  }
+
+  #[tokio::test]
+  async fn a_body_the_model_refuses_answers_422_before_the_session_check() {
+    let (_home, features) = features();
+    let (status, body) =
+      post(&features, "/api/internal/plan/approve", json!({"session_id": "no-such", "extra": 1})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"][0]["type"], "extra_forbidden");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "extra"]));
   }
 }

@@ -30,8 +30,6 @@ from collections.abc import Callable, Iterator
 
 import yaml
 
-import compare
-
 # The fixed synthetic access key both servers accept. It guards nothing but the two temporary servers.
 ACCESS_KEY = "parity-access-key-7c1e4b"
 PORT_RANGE = range(18600, 18700)
@@ -45,6 +43,8 @@ FAKE_AGENT = pathlib.Path(__file__).resolve().with_name("fake_agent.py")
 CLOSED_PROXY = "http://127.0.0.1:9"
 # The tree entries the harness itself writes; the file comparison skips them.
 HARNESS_ENTRIES = (".opencode", "fake-agent", "fake-bin", "fixture-manifest.json", "logs")
+# The name prefix of the headless Chrome profile that each server makes under its tree's tmp/ (its TMPDIR).
+HEADLESS_PROFILE_PREFIX = "headless-render-"
 # Syscalls that change a file or directory. openat/open/creat count only with a write flag (guard.py checks).
 TRACED_SYSCALLS = (
     "open", "openat", "openat2", "creat", "mkdir", "mkdirat", "mknod", "mknodat", "rename", "renameat", "renameat2",
@@ -435,7 +435,7 @@ class ServerProcess:
 
   def _stop_headless_browsers(self) -> None:
     """Stop the headless Chrome that a server left running after SIGTERM, so the server's strace can exit."""
-    profile = f"--user-data-dir={self.tree.tmp / compare.HEADLESS_PROFILE_PREFIX}".encode()
+    profile = f"--user-data-dir={self.tree.tmp / HEADLESS_PROFILE_PREFIX}".encode()
     self._stop_processes(self._processes_matching(lambda pid, command: profile in command), "headless browsers")
 
   def _processes_matching(self, matches: Callable[[int, bytes], bool]) -> dict[int, str]:

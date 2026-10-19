@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 import normalize
+import servers
 import yaml
 
 # Lines one difference listing prints before it summarizes the rest.
@@ -25,8 +26,6 @@ MAX_LISTED = 25
 VALUE_WIDTH = 160
 SETTLE_QUIET_SECONDS = 0.3
 SETTLE_TIMEOUT_SECONDS = 15.0
-# A headless Chrome profile under a tree's tmp/ is named at random and holds per-run browser state: not compared.
-HEADLESS_PROFILE_PREFIX = "headless-render-"
 
 # -- JSON -------------------------------------------------------------------
 
@@ -133,7 +132,8 @@ def snapshot(root: pathlib.Path, skip: tuple[str, ...]) -> Snapshot:
       dirnames[:] = [name for name in dirnames if name not in skip]
       filenames = [name for name in filenames if name not in skip]
     elif relative_dir == "tmp":
-      dirnames[:] = [name for name in dirnames if not name.startswith(HEADLESS_PROFILE_PREFIX)]
+      # A headless Chrome profile is named at random and holds per-run browser state: not compared.
+      dirnames[:] = [name for name in dirnames if not name.startswith(servers.HEADLESS_PROFILE_PREFIX)]
     dirnames.sort()
     for name in list(dirnames):
       path = os.path.join(dirpath, name)

@@ -82,10 +82,6 @@ pub fn gemini(registry: &mut Registry) -> Result<(), RegistryError> {
     .legacy_keys(&[("credentials: gemini_api_key", "gemini.api_key"), ("credentials: gemini_model", "gemini.model")])
 }
 
-pub fn kimi(registry: &mut Registry) -> Result<(), RegistryError> {
-  register_type(registry, "cc-kimi", plain(ResumeStyle::CliFlag, true), None, false)
-}
-
 pub fn opencode(registry: &mut Registry) -> Result<(), RegistryError> {
   register_type(registry, "opencode", plain(ResumeStyle::NativeId, false), None, false)
 }

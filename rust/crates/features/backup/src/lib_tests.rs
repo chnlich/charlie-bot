@@ -1,14 +1,16 @@
-//! The behavior cases of `tests/test_backup.py`, plus retention cases over synthetic archive names at
-//! each age boundary.
+//! The behavior cases of `tests/test_backup.py`, retention cases pinned to calendar dates at each age
+//! boundary, and the member fields Python's `tarfile` records.
 
 use std::fs;
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use tempfile::tempdir;
 
 use crate::backup::*;
+use crate::tar_writer::{Member, write_member};
 
 /// Reads one member's content out of a `.tar.gz` archive, by name.
 fn member_content(archive: &Path, name: &str) -> Option<Vec<u8>> {
@@ -111,105 +113,138 @@ fn create_backup_names_the_archive_by_local_time() {
   assert!(parse_backup_date(name).is_some());
 }
 
-/// A backup archive name for `days_ago` days before `now`, at midnight, in naive local time.
-fn name_for_days_ago(now: i64, days_ago: i64) -> String {
-  let (year, month, day) = civil_from_days((now - days_ago * 86_400).div_euclid(86_400));
-  archive_name(year, month, day, 0, 0, 0)
+#[test]
+fn create_backup_records_the_permission_bits_and_directory_slashes() {
+  let home = tempdir().unwrap();
+  let config = home.path().join("config.yaml");
+  fs::write(&config, "server: {}\n").unwrap();
+  fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).unwrap();
+  fs::create_dir(home.path().join("sub")).unwrap();
+
+  let archive = create_backup_in(home.path()).unwrap();
+  let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&archive).unwrap()));
+  let mut members = Vec::new();
+  for entry in tar.entries().unwrap() {
+    let entry = entry.unwrap();
+    members.push((entry.path_bytes().into_owned(), entry.header().mode().unwrap()));
+  }
+
+  // Python's `get_info` stores the permission bits only, and a directory's name ends with a slash.
+  assert!(members.contains(&(b"config.yaml".to_vec(), 0o640)));
+  assert!(members.iter().any(|(name, _)| name.as_slice() == b"sub/"));
+}
+
+#[test]
+fn write_member_moves_a_uid_past_the_ustar_field_to_a_pax_record() {
+  let member = Member {
+    name: "owned.txt",
+    mode: 0o100644,
+    uid: 2_097_152,
+    gid: 0,
+    size: 0,
+    mtime_sec: 1_700_000_000,
+    mtime_nsec: 0,
+    typeflag: b'0',
+    linkname: "",
+    uname: "",
+    gname: "",
+    devmajor: 0,
+    devminor: 0,
+  };
+  let mut out = Vec::new();
+  write_member(&mut out, &member, None).unwrap();
+
+  // The member's own header ends the output: its uid field holds 0, and the PAX entry before it carries the uid.
+  let header = &out[out.len() - 512..];
+  assert_eq!(&header[108..116], b"0000000\0");
+  assert!(String::from_utf8_lossy(&out).contains("uid=2097152\n"));
+}
+
+/// Writes the archives named `names` into a fresh backup directory, runs one retention pass at `now`, and
+/// returns the names that survive, sorted.
+fn surviving_after_retention(now: i64, names: &[&str]) -> Vec<String> {
+  let root = tempdir().unwrap();
+  let home = root.path().join("profile");
+  let backups = backup_dir(&home).unwrap();
+  fs::create_dir_all(&backups).unwrap();
+  for name in names {
+    write_archive(&backups, name);
+  }
+
+  apply_retention_in_with_now(&home, now);
+
+  let mut kept: Vec<String> =
+    fs::read_dir(&backups).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect();
+  kept.sort();
+  kept
 }
 
 fn write_archive(dir: &Path, name: &str) {
   fs::write(dir.join(name), b"archive").unwrap();
 }
 
+/// Noon of a local calendar date, in the naive-local seconds the retention pass compares against.
+fn noon(year: i64, month: i64, day: i64) -> i64 {
+  days_from_civil(year, month, day) * 86_400 + 12 * 3_600
+}
+
 #[test]
-fn retention_keeps_archives_younger_than_seven_days() {
-  let home = tempdir().unwrap();
-  let now = naive_now_for_tests();
-  let backups = backup_dir(home.path()).unwrap();
-  fs::create_dir_all(&backups).unwrap();
-  write_archive(&backups, &name_for_days_ago(now, 0));
-  write_archive(&backups, &name_for_days_ago(now, 6));
-
-  apply_retention_in_with_now(home.path(), now);
-
-  let kept: Vec<_> = fs::read_dir(&backups).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
-  assert_eq!(kept.len(), 2);
+fn retention_keeps_every_archive_younger_than_seven_days() {
+  // Sunday 2026-10-18 at noon: the archives of 10-12 (age 6) and 10-18 (age 0).
+  let now = noon(2026, 10, 18);
+  let names = ["charliebot-20261012-000000.tar.gz", "charliebot-20261018-000000.tar.gz"];
+  assert_eq!(surviving_after_retention(now, &names), names);
 }
 
 #[test]
 fn retention_keeps_only_sundays_from_seven_to_thirty_days() {
-  let home = tempdir().unwrap();
-  let now = naive_now_for_tests();
-  let today = now.div_euclid(86_400);
-  let sunday = (8..WEEKLY_THRESHOLD).find(|days| weekday(today - days) == 6).unwrap();
-  let non_sunday = (8..WEEKLY_THRESHOLD).find(|days| weekday(today - days) != 6).unwrap();
-  let backups = backup_dir(home.path()).unwrap();
-  fs::create_dir_all(&backups).unwrap();
-  write_archive(&backups, &name_for_days_ago(now, sunday));
-  write_archive(&backups, &name_for_days_ago(now, non_sunday));
-
-  apply_retention_in_with_now(home.path(), now);
-
-  let kept: Vec<_> = fs::read_dir(&backups).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
-  assert_eq!(kept, vec![name_for_days_ago(now, sunday)]);
+  // Sunday 2026-10-18 at noon. Ages: 7 (Sun 10-11), 8 (Sat 10-10), 14 (Sun 10-04), 28 (Sun 09-20), 29 (Sat 09-19).
+  let now = noon(2026, 10, 18);
+  let names = [
+    "charliebot-20260919-000000.tar.gz",
+    "charliebot-20260920-000000.tar.gz",
+    "charliebot-20261004-000000.tar.gz",
+    "charliebot-20261010-000000.tar.gz",
+    "charliebot-20261011-000000.tar.gz",
+  ];
+  let kept =
+    ["charliebot-20260920-000000.tar.gz", "charliebot-20261004-000000.tar.gz", "charliebot-20261011-000000.tar.gz"];
+  assert_eq!(surviving_after_retention(now, &names), kept);
 }
 
 #[test]
 fn retention_keeps_only_month_starts_from_thirty_to_ninety_days() {
-  let home = tempdir().unwrap();
-  let now = naive_now_for_tests();
-  let today = now.div_euclid(86_400);
-  let month_start = (30..MONTHLY_THRESHOLD).find(|days| civil_from_days(today - days).2 == 1).unwrap();
-  let mid_month = (30..MONTHLY_THRESHOLD).find(|days| civil_from_days(today - days).2 != 1).unwrap();
-  let backups = backup_dir(home.path()).unwrap();
-  fs::create_dir_all(&backups).unwrap();
-  write_archive(&backups, &name_for_days_ago(now, month_start));
-  write_archive(&backups, &name_for_days_ago(now, mid_month));
-
-  apply_retention_in_with_now(home.path(), now);
-
-  let kept: Vec<_> = fs::read_dir(&backups).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
-  assert_eq!(kept, vec![name_for_days_ago(now, month_start)]);
-}
-
-#[test]
-fn retention_deletes_everything_ninety_days_old() {
-  let home = tempdir().unwrap();
-  let now = naive_now_for_tests();
-  let backups = backup_dir(home.path()).unwrap();
-  fs::create_dir_all(&backups).unwrap();
-  write_archive(&backups, &name_for_days_ago(now, 89));
-  write_archive(&backups, &name_for_days_ago(now, 90));
-  write_archive(&backups, &name_for_days_ago(now, 400));
-
-  apply_retention_in_with_now(home.path(), now);
-
-  assert_eq!(fs::read_dir(&backups).unwrap().count(), 0);
+  // Tuesday 2026-10-20 at noon. Ages: 30 (Sun 09-20, not the 1st, so the Sunday rule does not apply),
+  // 49 (09-01), 80 (08-01), 89 (07-23), 90 (07-22), 111 (07-01).
+  let now = noon(2026, 10, 20);
+  let names = [
+    "charliebot-20260701-000000.tar.gz",
+    "charliebot-20260722-000000.tar.gz",
+    "charliebot-20260723-000000.tar.gz",
+    "charliebot-20260801-000000.tar.gz",
+    "charliebot-20260901-000000.tar.gz",
+    "charliebot-20260920-000000.tar.gz",
+  ];
+  let kept = ["charliebot-20260801-000000.tar.gz", "charliebot-20260901-000000.tar.gz"];
+  assert_eq!(surviving_after_retention(now, &names), kept);
 }
 
 #[test]
 fn retention_skips_unparseable_names() {
-  let home = tempdir().unwrap();
-  let now = naive_now_for_tests();
-  let backups = backup_dir(home.path()).unwrap();
-  fs::create_dir_all(&backups).unwrap();
-  write_archive(&backups, "charliebot-not-a-date.tar.gz");
-  write_archive(&backups, "charliebot-20260230-120000.tar.gz");
-  write_archive(&backups, "other-file.tar.gz");
-
-  apply_retention_in_with_now(home.path(), now);
-
-  assert_eq!(fs::read_dir(&backups).unwrap().count(), 3);
+  // Kept, with no delete attempt: a year 0 that `datetime` rejects, a date `strptime` rejects, and a
+  // name with no timestamp.
+  let now = noon(2026, 10, 18);
+  let names = [
+    "charliebot-00000101-000000.tar.gz",
+    "charliebot-20260230-120000.tar.gz",
+    "charliebot-not-a-date.tar.gz",
+    "other-file.tar.gz",
+  ];
+  assert_eq!(surviving_after_retention(now, &names), names);
 }
 
 #[test]
 fn retention_without_a_backup_directory_is_a_no_op() {
   let home = tempdir().unwrap();
-  apply_retention_in_with_now(home.path(), naive_now_for_tests());
-}
-
-/// The naive local now the retention tests pin their clock against.
-fn naive_now_for_tests() -> i64 {
-  let tm = local_now();
-  naive_epoch_from_tm(&tm)
+  apply_retention_in_with_now(home.path(), noon(2026, 10, 18));
 }

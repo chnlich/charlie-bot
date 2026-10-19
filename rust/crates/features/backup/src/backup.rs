@@ -63,8 +63,7 @@ pub fn should_exclude(arcname: &str) -> bool {
   parts.len() >= 3 && parts[0] == "sessions" && parts[2] == THREADS_DIR_NAME
 }
 
-/// The local wall-clock time as seconds since the epoch shifted like a naive local datetime, plus its
-/// `struct tm` fields, through `localtime_r` as `datetime.now()` reads the local time.
+/// The local wall-clock time as its `struct tm` fields, through `localtime_r` as `datetime.now()` reads it.
 pub(crate) fn local_now() -> libc::tm {
   let now = unsafe { libc::time(std::ptr::null_mut()) };
   let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -88,21 +87,6 @@ pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
   let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
   let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
   era * 146_097 + doe - 719_468
-}
-
-#[cfg(test)]
-/// The civil date of a day count since 1970-01-01 (Howard Hinnant's `civil_from_days`).
-pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
-  let z = days + 719_468;
-  let era = z.div_euclid(146_097);
-  let doe = z - era * 146_097;
-  let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-  let y = yoe + era * 400;
-  let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  let mp = (5 * doy + 2) / 153;
-  let d = doy - (153 * mp + 2) / 5 + 1;
-  let m = mp + if mp < 10 { 3 } else { -9 };
-  (y + if m <= 2 { 1 } else { 0 }, m, d)
 }
 
 /// The Python `weekday()` (Monday 0) of a day count since 1970-01-01, a Thursday (weekday 3).
@@ -136,7 +120,8 @@ pub(crate) fn parse_backup_date(name: &str) -> Option<(i64, i64, i64, i64, i64, 
   let hour = digits(9..11)?;
   let minute = digits(11..13)?;
   let second = digits(13..15)?;
-  if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 || day < 1 {
+  // `datetime` has no year 0, so strptime rejects `0000` as it rejects any other out-of-range field.
+  if year < 1 || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 || day < 1 {
     return None;
   }
   let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
@@ -147,18 +132,26 @@ pub(crate) fn parse_backup_date(name: &str) -> Option<(i64, i64, i64, i64, i64, 
   Some((year, month, day, hour, minute, second))
 }
 
-/// The user's login name for a uid, or "" when no passwd entry exists, as Python's `tarfile` does.
-fn uname(uid: u32) -> String {
-  nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok().flatten().map(|user| user.name).unwrap_or_default()
+/// The user's login name for a uid, or "" when no passwd entry exists (`KeyError`), as Python's `tarfile` does.
+fn user_name(uid: u32) -> anyhow::Result<String> {
+  let user = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+    .with_context(|| format!("looking up the passwd entry of uid {uid}"))?;
+  Ok(user.map(|user| user.name).unwrap_or_default())
 }
 
-/// The group's name for a gid, or "" when no group entry exists, as Python's `tarfile` does.
-fn gname(gid: u32) -> String {
-  nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
-    .ok()
-    .flatten()
-    .map(|group| group.name)
-    .unwrap_or_default()
+/// The group's name for a gid, or "" when no group entry exists (`KeyError`), as Python's `tarfile` does.
+fn group_name(gid: u32) -> anyhow::Result<String> {
+  let group = nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
+    .with_context(|| format!("looking up the group entry of gid {gid}"))?;
+  Ok(group.map(|group| group.name).unwrap_or_default())
+}
+
+/// The children of a directory, sorted (`sorted(path.iterdir())`): a read error anywhere in the listing fails it.
+fn sorted_children(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+  let mut paths =
+    fs::read_dir(dir)?.map(|entry| entry.map(|entry| entry.path())).collect::<std::io::Result<Vec<_>>>()?;
+  paths.sort();
+  Ok(paths)
 }
 
 fn mtime_fields(metadata: &fs::Metadata) -> (i64, u32) {
@@ -196,12 +189,8 @@ pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
   let mut hardlinks: HashMap<(u64, u64), String> = HashMap::new();
 
   // An unreadable home gives an empty archive (`backup_root_iter_failed`).
-  let children: Vec<PathBuf> = match fs::read_dir(home) {
-    Ok(entries) => {
-      let mut paths: Vec<PathBuf> = entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()).collect();
-      paths.sort();
-      paths
-    }
+  let children = match sorted_children(home) {
+    Ok(children) => children,
     Err(error) => {
       tracing::warn!(error = %error, "backup_root_iter_failed");
       Vec::new()
@@ -251,12 +240,8 @@ fn add_recursive<W: Write>(
   if !is_dir {
     return;
   }
-  let children: Vec<PathBuf> = match fs::read_dir(path) {
-    Ok(entries) => {
-      let mut paths: Vec<PathBuf> = entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()).collect();
-      paths.sort();
-      paths
-    }
+  let children = match sorted_children(path) {
+    Ok(children) => children,
     Err(error) => {
       tracing::warn!(path = %path.display(), error = %error, "backup_skip_dir");
       return;
@@ -312,8 +297,12 @@ fn add_member<W: Write>(
     // gettarinfo returns None for a socket, and tar.add skips it.
     return Ok(());
   };
+  // Python's `get_info` writes a directory's name with its trailing slash.
+  let name = if typeflag == b'5' { format!("{arcname}/") } else { arcname.to_owned() };
+  let uname = user_name(metadata.uid())?;
+  let gname = group_name(metadata.gid())?;
   let member = Member {
-    name: arcname,
+    name: &name,
     mode,
     uid: metadata.uid(),
     gid: metadata.gid(),
@@ -322,8 +311,8 @@ fn add_member<W: Write>(
     mtime_nsec,
     typeflag,
     linkname: &linkname,
-    uname: &uname(metadata.uid()),
-    gname: &gname(metadata.gid()),
+    uname: &uname,
+    gname: &gname,
     devmajor: if typeflag == b'3' || typeflag == b'4' { (metadata.rdev() >> 8) as u32 } else { 0 },
     devminor: if typeflag == b'3' || typeflag == b'4' { (metadata.rdev() & 0xff) as u32 } else { 0 },
   };

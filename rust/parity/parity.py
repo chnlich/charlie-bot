@@ -606,7 +606,7 @@ def _unresolved_result(
   lines = []
   for side in sides:
     message = scenario_file.unresolved_reference(
-        step, manifest, side.captures, str(side.tree.root), str(side.tree.home))
+        scenario, step, manifest, side.captures, str(side.tree.root), str(side.tree.home))
     if message is not None:
       lines.append(f"{side.label}: {message}")
   if not lines:

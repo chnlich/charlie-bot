@@ -57,10 +57,10 @@
     return a;
   }
 
-  // A link run inside an item's context: a web URL or a host path. safeLink still decides
-  // whether it becomes an anchor, so the context cannot introduce a scheme the item's link
-  // could not.
-  const CONTEXT_LINK = /https?:\/\/[^\s<>"']+|\/[^\s<>"']+/g;
+  // A link run inside an item's context: a web URL or a host path that starts a word (so
+  // "and/or" is prose) and does not end in punctuation. safeLink still decides whether it
+  // becomes an anchor, so the context cannot introduce a scheme the item's link could not.
+  const CONTEXT_LINK = /(?:https?:\/\/|(?<=^|[\s(])\/)[^\s<>"']*[^\s<>"'.,;:!?)\]]/g;
 
   // The context text, with each link run rendered through safeLink.
   function appendContextText(parent, text) {

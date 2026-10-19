@@ -396,6 +396,50 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
           }
       }) + _line({"session_id": "counts-kept"}),
   )
+  # A non-string timestamp: Python binds it as the number or boolean it is, and the TEXT column stores it as text.
+  _thread(
+      home,
+      "session-timestamps",
+      "stamps",
+      "claude-main",
+      "vendor/claude-timestamps",
+      _line({
+          "type": "result",
+          "timestamp": 7,
+          "usage": {
+              "input_tokens": 10,
+              "output_tokens": 4
+          }
+      }) + _line({
+          "type": "result",
+          "timestamp": 1.5,
+          "usage": {
+              "input_tokens": 10,
+              "output_tokens": 4
+          }
+      }) + _line({
+          "type": "result",
+          "timestamp": True,
+          "usage": {
+              "input_tokens": 10,
+              "output_tokens": 4
+          }
+      }) + _line({
+          "type": "result",
+          "timestamp": 2.0,
+          "usage": {
+              "input_tokens": 10,
+              "output_tokens": 4
+          }
+      }) + _line({
+          "type": "result",
+          "timestamp": 0,
+          "usage": {
+              "input_tokens": 10,
+              "output_tokens": 4
+          }
+      }) + _line({"session_id": "timestamps-kept"}),
+  )
   return live_ids
 
 

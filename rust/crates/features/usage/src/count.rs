@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 
 use anyhow::anyhow;
 use rusqlite::ToSql;
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Count {
@@ -87,6 +87,15 @@ impl FromSql for Count {
       ValueRef::Integer(number) => Ok(Count::Int(number)),
       ValueRef::Real(number) => Ok(Count::Real(number)),
       _ => Err(FromSqlError::InvalidType),
+    }
+  }
+}
+
+impl From<Count> for Value {
+  fn from(count: Count) -> Self {
+    match count {
+      Count::Int(number) => Value::Integer(number),
+      Count::Real(number) => Value::Real(number),
     }
   }
 }

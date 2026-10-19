@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::response::Response;
-use axum::routing::get;
-use charliebot_compat::responses;
+use charliebot_compat::{responses, routing};
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use http::StatusCode;
@@ -24,7 +23,7 @@ pub fn matches(path: &str) -> bool {
 }
 
 fn router() -> Router {
-  Router::new().route("/api/ext-usage", get(get_ext_usage).head(get_not_allowed).fallback(get_not_allowed))
+  Router::new().route("/api/ext-usage", routing::get_only(get_ext_usage))
 }
 
 async fn get_ext_usage() -> Response {
@@ -38,10 +37,6 @@ fn snapshot(panel: &Panel, now: UtcDateTime) -> Value {
     return json!({"error": "Usage data not yet available"});
   }
   json!({"providers": providers})
-}
-
-async fn get_not_allowed() -> Response {
-  responses::method_not_allowed("GET")
 }
 
 #[cfg(test)]

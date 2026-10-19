@@ -36,9 +36,38 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+/// The source of a failed `json.loads(body)` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadFailure {
+  /// The scanner rejected JSON at a code-point offset.
+  JsonDecode { message: String, position: usize, text: String },
+  /// Python could not decode the body's detected character encoding.
+  Decode(String),
+  /// Python loaded a value that this port cannot represent.
+  Unrepresentable(String),
+}
+
+impl LoadFailure {
+  fn into_load_error(self) -> LoadError {
+    match self {
+      LoadFailure::JsonDecode { text, .. } | LoadFailure::Decode(text) => LoadError::Value(text),
+      LoadFailure::Unrepresentable(text) => LoadError::Unrepresentable(text),
+    }
+  }
+}
+
 /// `json.loads(body)` for a body of bytes: the codec `detect_encoding` picks, then the scanner.
 pub fn loads(body: &[u8]) -> Result<Value, LoadError> {
-  loads_code_points(&decode(body)?)
+  loads_classified(body).map_err(LoadFailure::into_load_error)
+}
+
+/// `json.loads(body)` with the distinction FastAPI uses between JSON and body-decoding failures.
+pub fn loads_classified(body: &[u8]) -> Result<Value, LoadFailure> {
+  let code_points = decode(body).map_err(|error| match error {
+    LoadError::Value(text) => LoadFailure::Decode(text),
+    LoadError::Unrepresentable(text) => LoadFailure::Unrepresentable(text),
+  })?;
+  loads_code_points(&code_points)
 }
 
 /// `json.loads(text)` for a `str`. Python refuses a leading byte-order mark here, where the bytes path has already
@@ -48,7 +77,7 @@ pub fn loads_text(text: &str) -> Result<Value, LoadError> {
     return Err(LoadError::Value(format_error("Unexpected UTF-8 BOM (decode using utf-8-sig)", &[], 0)));
   }
   let code_points: Vec<u32> = text.chars().map(u32::from).collect();
-  loads_code_points(&code_points)
+  loads_code_points(&code_points).map_err(LoadFailure::into_load_error)
 }
 
 /// A failed scan. `Stop` is `StopIteration(pos)`, which `raw_decode` reports as "Expecting value" at `pos`.
@@ -70,27 +99,31 @@ struct Scanner<'a> {
   unrepresentable: Option<String>,
 }
 
-fn loads_code_points(text: &[u32]) -> Result<Value, LoadError> {
+fn loads_code_points(text: &[u32]) -> Result<Value, LoadFailure> {
   let mut scanner = Scanner { text, depth: 0, unrepresentable: None };
   let start = scanner.skip_ws(0);
   let (value, end) = match scanner.scan_once(start) {
     Ok(found) => found,
-    Err(Fail::Stop(pos)) => return Err(LoadError::Value(format_error("Expecting value", text, pos))),
-    Err(Fail::Decode(message, pos)) => return Err(LoadError::Value(format_error(message, text, pos))),
+    Err(Fail::Stop(pos)) => return Err(json_decode_failure("Expecting value", text, pos)),
+    Err(Fail::Decode(message, pos)) => return Err(json_decode_failure(message, text, pos)),
     Err(Fail::Nested) => return Err(nested_refusal()),
   };
   let end = scanner.skip_ws(end);
   if end != text.len() {
-    return Err(LoadError::Value(format_error("Extra data", text, end)));
+    return Err(json_decode_failure("Extra data", text, end));
   }
   match scanner.unrepresentable {
-    Some(what) => Err(LoadError::Unrepresentable(what)),
+    Some(what) => Err(LoadFailure::Unrepresentable(what)),
     None => Ok(value),
   }
 }
 
-fn nested_refusal() -> LoadError {
-  LoadError::Unrepresentable(format!("JSON nested deeper than {MAX_DEPTH} levels"))
+fn nested_refusal() -> LoadFailure {
+  LoadFailure::Unrepresentable(format!("JSON nested deeper than {MAX_DEPTH} levels"))
+}
+
+fn json_decode_failure(message: &str, text: &[u32], position: usize) -> LoadFailure {
+  LoadFailure::JsonDecode { message: message.to_string(), position, text: format_error(message, text, position) }
 }
 
 /// `JSONDecodeError.__init__`: the message, then the 1-based line and column and the code point index of `pos`.

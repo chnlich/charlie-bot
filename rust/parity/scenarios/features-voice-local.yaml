@@ -1,0 +1,93 @@
+stage: features
+name: features-voice-local
+voice_models: true
+steps:
+  - kind: log_event
+    name: speech models are ready on both sides
+    event: speech_models_ready
+    timeout_seconds: 120
+  - kind: log_event
+    name: speech warm-up completes on both sides
+    event: voice_warmup_complete
+    timeout_seconds: 120
+  - name: confirm decodes the silence
+    method: POST
+    path: /api/voice/${sessions.atlas}/confirm
+    body_file: audio/silence.wav
+    expect_status: 200
+  - name: confirm decodes the synthetic tone
+    method: POST
+    path: /api/voice/${sessions.atlas}/confirm
+    body_file: audio/voice-tone.wav
+    expect_status: 200
+  - name: upload without a backend field decodes locally
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      devices: &devices '{"input_device": "Synthetic microphone", "capture_settings": {"echoCancellation": true, "noiseSuppression": false, "autoGainControl": true, "sampleRate": 16000}, "output_device": "Synthetic speakers", "communications_output_device": "Synthetic headset", "device_error": null}'
+    expect_status: 200
+  - kind: log_event
+    name: voice_transcribed records an absent backend field
+    event: voice_transcribed
+    fields:
+      backend: local
+      selected_backend: "null"
+      input_device: Synthetic microphone
+      output_device: Synthetic speakers
+      device_error: "null"
+    timeout_seconds: 30
+  - name: upload with the local backend decodes locally
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: local
+      devices: *devices
+    expect_status: 200
+  - kind: log_event
+    name: voice_transcribed records the local backend
+    event: voice_transcribed
+    fields:
+      backend: local
+      selected_backend: local
+      input_device: Synthetic microphone
+      output_device: Synthetic speakers
+      device_error: "null"
+    timeout_seconds: 30
+  - name: upload with an unknown backend id decodes locally
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: no-such-backend
+      devices: *devices
+    expect_status: 200
+  - kind: log_event
+    name: voice_transcribed records the unknown backend id
+    event: voice_transcribed
+    fields:
+      backend: local
+      selected_backend: no-such-backend
+      input_device: Synthetic microphone
+      output_device: Synthetic speakers
+      device_error: "null"
+    timeout_seconds: 30
+  - name: upload with a live backend id decodes locally
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: gemini
+      devices: *devices
+    expect_status: 200
+  - kind: log_event
+    name: voice_transcribed records the live backend id
+    event: voice_transcribed
+    fields:
+      backend: local
+      selected_backend: gemini
+      input_device: Synthetic microphone
+      output_device: Synthetic speakers
+      device_error: "null"
+    timeout_seconds: 30

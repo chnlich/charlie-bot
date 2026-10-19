@@ -326,6 +326,7 @@ EXPLICIT_REQUEST_HEADERS: dict[str, tuple[str, ...]] = {
     "discord": ("authorization", "user-agent"),
     "gemini": (),
     "muse": (),
+    "openai_compatible": ("authorization",),
 }
 
 # Request headers compared by media type, lowercased and without parameters.
@@ -516,6 +517,22 @@ def normalize_body_bytes(body: bytes, route: str, ctx: Context) -> bytes:
 
       body = re.sub(rule.pattern.encode(), mask, body)
   return body
+
+
+# The message id the proxy mints for each answer: `msg_` and 32 lowercase hex digits, from uuid4. It is the `id` of a
+# proxy response's JSON answer and of a stream's message_start frame, and each server mints its own, so the rule masks
+# it there and nowhere else. An id the upstream supplies has another form and stays visible: a proxy that copied the
+# upstream's id would still show as a difference.
+PROXY_MESSAGE_ID = re.compile(rb'"id":"msg_[0-9a-f]{32}"')
+PROXY_MESSAGE_ID_PLACEHOLDER = b'"id":"<proxy-message-id>"'
+PROXY_ROUTE_PREFIX = "POST /api/anthropic-proxy/"
+
+
+def mask_proxy_message_ids(body: bytes, route: str) -> bytes:
+  """Mask each message id a proxy route minted in its body; the other routes' bodies are returned unchanged."""
+  if not route.startswith(PROXY_ROUTE_PREFIX):
+    return body
+  return PROXY_MESSAGE_ID.sub(PROXY_MESSAGE_ID_PLACEHOLDER, body)
 
 
 def response_rules(route: str) -> tuple[FieldRule, ...]:

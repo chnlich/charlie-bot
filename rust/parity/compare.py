@@ -387,6 +387,7 @@ def _normalized_body(response: Response, route: str, ctx: normalize.Context) -> 
   body = response.decoded_body()
   if not body:
     return body
+  body = normalize.mask_proxy_message_ids(body, route)
   if _is_json(response):
     return normalize.normalize_json(json.loads(body), normalize.response_rules(route), ctx)
   return normalize.normalize_body_bytes(body, route, ctx)

@@ -69,3 +69,25 @@ def test_stdin_text_difference_names_the_stdin_field(tmp_path: pathlib.Path, mon
   lines = parity._spawns_diff([baseline, candidate], expect_starts=1)
   assert len(lines) == 1
   assert lines[0].startswith("fake-agent spawns $[0].stdin:")
+
+
+PROXY_ROUTE = "POST /api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages"
+MINTED_ID = b'"id":"msg_0123456789abcdef0123456789abcdef"'
+
+
+def test_a_proxy_route_masks_the_message_id_it_minted_in_json_and_in_a_stream() -> None:
+  answer = b'{"id":"msg_0123456789abcdef0123456789abcdef","type":"message"}'
+  frame = b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_0123456789abcdef0123456789abcdef"}}'
+  assert normalize.mask_proxy_message_ids(answer, PROXY_ROUTE) == b'{"id":"<proxy-message-id>","type":"message"}'
+  assert b'"message":{"id":"<proxy-message-id>"}' in normalize.mask_proxy_message_ids(frame, PROXY_ROUTE)
+
+
+def test_an_upstream_supplied_id_stays_visible_on_the_proxy_route() -> None:
+  upstream_id = b'{"id":"chatcmpl-synthetic","type":"message"}'
+  quoted_text = b'{"type":"text_delta","text":"see \\"id\\":\\"msg_0123456789abcdef0123456789abcdef\\""}'
+  assert normalize.mask_proxy_message_ids(upstream_id, PROXY_ROUTE) == upstream_id
+  assert normalize.mask_proxy_message_ids(quoted_text, PROXY_ROUTE) == quoted_text
+
+
+def test_the_rule_applies_to_the_proxy_routes_only() -> None:
+  assert normalize.mask_proxy_message_ids(MINTED_ID, "GET /api/sessions/{session_id}/bootstrap") == MINTED_ID

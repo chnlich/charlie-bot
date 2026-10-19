@@ -42,6 +42,8 @@ pub type EventFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<()>> +
 /// Inputs owned by the runtime for one backend process.
 pub struct RunRequest {
   pub prompt: String,
+  /// The attachment refs of the user message, as the message's `uploaded_files` lists them.
+  pub uploaded_files: Vec<Value>,
   pub cwd: PathBuf,
   pub agent_environment: AgentBaseEnvironment,
   pub child_env_policy: ChildEnvPolicy,
@@ -70,6 +72,7 @@ impl RunRequest {
   ) -> Self {
     Self {
       prompt,
+      uploaded_files: Vec::new(),
       cwd,
       agent_environment,
       child_env_policy: ChildEnvPolicy::RegisteredEdits,
@@ -105,15 +108,30 @@ impl RunRequest {
   }
 }
 
-/// Process status and artifacts recorded after the run finishes.
+/// Process status and artifacts recorded after the run finishes. `identity` and `follow` are `None` when the run
+/// ended before its process started.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunOutcome {
   pub exit_code: Option<i32>,
   pub stderr_text: String,
   pub cgroup_exit_report: Option<String>,
   pub hang_diagnostics: Option<Value>,
-  pub identity: ProcessIdentity,
-  pub follow: FollowSummary,
+  pub identity: Option<ProcessIdentity>,
+  pub follow: Option<FollowSummary>,
+}
+
+impl RunOutcome {
+  /// The outcome of a run that ended before any process started: no exit code, as `AgentRunner` never spawned.
+  fn without_process() -> Self {
+    Self {
+      exit_code: None,
+      stderr_text: String::new(),
+      cgroup_exit_report: None,
+      hang_diagnostics: None,
+      identity: None,
+      follow: None,
+    }
+  }
 }
 
 struct ActiveProcess {
@@ -147,6 +165,11 @@ impl AgentRunner {
   pub async fn run(&self, request: RunRequest) -> anyhow::Result<RunOutcome> {
     if self.started.swap(true, Ordering::AcqRel) {
       bail!("an AgentRunner can run only once");
+    }
+    let accepted = self.backend.lock().await.accept_uploads(&request.uploaded_files);
+    if let Err(message) = accepted {
+      (request.on_event)(crate::event_builders::make_error_event(&message)).await?;
+      return Ok(RunOutcome::without_process());
     }
     prepare_cwd(&self.launch, &request.cwd, self.backend.lock().await.as_ref().instructions_target()).await?;
 
@@ -274,8 +297,8 @@ impl AgentRunner {
         stderr_text: String::new(),
         cgroup_exit_report: None,
         hang_diagnostics: None,
-        identity,
-        follow,
+        identity: Some(identity),
+        follow: Some(follow),
       });
     }
     let stdin_error = finish_stdin(stdin_task, request.cleanup_timeout, pid).await.err();
@@ -299,7 +322,14 @@ impl AgentRunner {
     if let Some(error) = stdin_error {
       return Err(error);
     }
-    Ok(RunOutcome { exit_code, stderr_text, cgroup_exit_report, hang_diagnostics, identity, follow })
+    Ok(RunOutcome {
+      exit_code,
+      stderr_text,
+      cgroup_exit_report,
+      hang_diagnostics,
+      identity: Some(identity),
+      follow: Some(follow),
+    })
   }
 
   /// Send SIGTERM to the process group and escalate to SIGKILL after five seconds.
@@ -488,6 +518,8 @@ fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
   use std::fs;
+
+  use serde_json::json;
 
   use super::*;
 
@@ -721,6 +753,38 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn refused_uploads_end_the_run_with_one_error_event_and_no_process() {
+    let root = tempfile::tempdir().unwrap();
+    let spawned = root.path().join("spawned");
+    let runner = AgentRunner::new(
+      Box::new(ShellBackend::refusing_uploads(format!("touch {}", spawned.display()), "image refused")),
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::clone(&seen);
+    let mut request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([("PATH".to_string(), "/bin".to_string())]),
+      root.path().join("cgroups"),
+    );
+    request.uploaded_files = vec![json!({"filename": "shot.png", "path": "/synthetic/shot.png"})];
+    request.on_event = Arc::new(move |event| {
+      let events = Arc::clone(&events);
+      Box::pin(async move {
+        events.lock().unwrap().push(event);
+        Ok(())
+      })
+    });
+
+    let outcome = runner.run(request).await.unwrap();
+
+    assert_eq!(outcome.exit_code, None);
+    assert_eq!(*seen.lock().unwrap(), vec![crate::event_builders::make_error_event("image refused")]);
+    assert!(!spawned.exists());
+  }
+
+  #[tokio::test]
   async fn detach_stops_following_without_signalling_the_child() {
     let root = tempfile::tempdir().unwrap();
     let finished = root.path().join("finished");
@@ -816,11 +880,16 @@ mod tests {
 
   struct ShellBackend {
     script: String,
+    refusal: Option<String>,
   }
 
   impl ShellBackend {
     fn new(script: impl Into<String>) -> Self {
-      Self { script: script.into() }
+      Self { script: script.into(), refusal: None }
+    }
+
+    fn refusing_uploads(script: impl Into<String>, refusal: &str) -> Self {
+      Self { script: script.into(), refusal: Some(refusal.to_string()) }
     }
   }
 
@@ -830,6 +899,12 @@ mod tests {
     }
     fn prepare_transport(&mut self, _: &Path) -> anyhow::Result<()> {
       Ok(())
+    }
+    fn accept_uploads(&mut self, _: &[Value]) -> Result<(), String> {
+      match &self.refusal {
+        Some(message) => Err(message.clone()),
+        None => Ok(()),
+      }
     }
     fn build_command(&self, _: &str) -> anyhow::Result<Vec<String>> {
       Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])

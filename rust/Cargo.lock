@@ -351,7 +351,16 @@ dependencies = [
 name = "charliebot-diff-view"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "charliebot-compat",
+ "charliebot-core",
  "charliebot-registry",
+ "http",
+ "nix",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

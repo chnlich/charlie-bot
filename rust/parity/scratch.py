@@ -55,18 +55,22 @@ def sweep(root: pathlib.Path = SCRATCH_ROOT, now: float | None = None) -> None:
   for path in sorted(root.glob(SCRATCH_PREFIX + "*")):
     if path.name == PORT_LOCK_DIR.name or not path.is_dir():
       continue
-    info = path.stat()
-    if info.st_uid != os.getuid():
-      continue
-    if (path / KEEP_MARKER).exists():
-      continue
-    owner = _read_owner(path, path)
-    if owner is not None:
-      if process_start_time(owner["pid"]) == owner["start_time"]:
+    try:
+      info = path.stat()
+      if info.st_uid != os.getuid():
         continue
-    elif now - info.st_mtime < UNRECORDED_MAX_AGE_SECONDS:
+      if (path / KEEP_MARKER).exists():
+        continue
+      owner = _read_owner(path, path)
+      if owner is not None:
+        if process_start_time(owner["pid"]) == owner["start_time"]:
+          continue
+      elif now - info.st_mtime < UNRECORDED_MAX_AGE_SECONDS:
+        continue
+      shutil.rmtree(path)
+    except FileNotFoundError:
+      # Two runs can start together and both sweep the same stale tree; the one that comes second finds it gone.
       continue
-    shutil.rmtree(path)
 
 
 def _read_owner(scratch: pathlib.Path, tree: pathlib.Path) -> dict | None:

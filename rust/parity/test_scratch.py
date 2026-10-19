@@ -89,6 +89,19 @@ def test_sweep_removes_an_unrecorded_tree_older_than_six_hours(tmp_path: pathlib
   assert not tree.exists()
 
 
+def test_sweep_skips_a_tree_already_removed(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # Two runs that start together both see the stale tree; the second to remove it finds it gone.
+  tree = _make_tree(tmp_path)
+  old = time.time() - AGE
+  os.utime(tree, (old, old))
+
+  def gone(path: pathlib.Path) -> None:
+    raise FileNotFoundError(path)
+
+  monkeypatch.setattr(scratch.shutil, "rmtree", gone)
+  scratch.sweep(root=tmp_path)
+
+
 def test_sweep_keeps_a_fresh_unrecorded_tree(tmp_path: pathlib.Path) -> None:
   # A run between mkdtemp and its owner record has no record yet and must survive a concurrent sweep.
   tree = _make_tree(tmp_path)

@@ -446,26 +446,30 @@ fn charliebot_python_whitespace(character: char) -> bool {
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::os::unix::fs::PermissionsExt;
   use std::thread::JoinHandle;
 
-  use serde_json::Value;
+  use serde_json::{Value, json};
   use tungstenite::accept;
 
   use super::*;
+  use crate::test_support::chrome_program;
 
+  /// A fake Chrome that records each launch in `launches_path`, writes the DevTools port into the profile it is given,
+  /// and runs until it is killed.
   fn chrome_stub(directory: &Path, port: u16, launches_path: &Path) -> PathBuf {
-    let script = directory.join("chrome-stub.sh");
-    let source = format!(
-      "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --user-data-dir=*) udd=${{arg#--user-data-dir=}} ;;\n  esac\ndone\nprintf '%s\\n' launch >> '{}'\nprintf '%s\\n%s\\n' '{}' '/devtools/browser/stub' > \"$udd/DevToolsActivePort\"\nexec sleep 60\n",
-      launches_path.display(),
-      port
-    );
-    fs::write(&script, source).expect("the Chrome stub writes");
-    let mut permissions = fs::metadata(&script).expect("the Chrome stub metadata reads").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions).expect("the Chrome stub becomes executable");
-    script
+    chrome_program(
+      directory,
+      json!([
+        {"append": {"path": launches_path.display().to_string(), "text": "launch\n"}},
+        {"write_in_arg_dir": {
+          "arg_prefix": "--user-data-dir=",
+          "file": "DevToolsActivePort",
+          "text": format!("{port}\n/devtools/browser/stub\n"),
+        }},
+        {"sleep_ms": 60000},
+        {"exit": 0},
+      ]),
+    )
   }
 
   fn cdp_server(listener: std::net::TcpListener, count: usize, height: &str) -> JoinHandle<()> {
@@ -538,12 +542,7 @@ mod tests {
   #[test]
   fn chrome_launch_failure_reports_the_python_message_and_stderr_tail() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
-    let chrome = directory.path().join("chrome-fails.sh");
-    fs::write(&chrome, "#!/bin/sh\nprintf '%s\\n' 'synthetic renderer failure' >&2\nexit 1\n")
-      .expect("the failing Chrome stub writes");
-    let mut permissions = fs::metadata(&chrome).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&chrome, permissions).unwrap();
+    let chrome = chrome_program(directory.path(), json!([{"stderr": "synthetic renderer failure\n"}, {"exit": 1}]));
     let mut renderer = WarmRenderer::new(chrome.clone());
     let error = renderer.render_height("file:///synthetic/page.html").unwrap_err();
     assert_eq!(

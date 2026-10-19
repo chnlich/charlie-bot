@@ -1,6 +1,9 @@
-//! Fixtures for the artifacts tests: a store-backed feature context over a temporary home, with this package registered.
+//! Fixtures for the artifacts tests: a store-backed feature context over a temporary home, with this package registered,
+//! and the fake headless Chrome that the renderer and the assertions launch.
 
-use std::path::Path;
+use std::fs;
+use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use charliebot_core::config::CREDENTIALS_FILENAME;
@@ -10,6 +13,31 @@ use charliebot_registry::context::StartupState;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, store_hooks};
 use charliebot_store::Store;
+use serde_json::{Value, json};
+
+/// A fake headless Chrome that plays `steps`, the `chrome-stub` helper's steps (`src/bin/chrome_stub.rs`). The fake is
+/// a new `stub` directory under `directory`, holding a symlink named `chrome` to the helper and a `probe.json` with the
+/// steps. Returns the symlink's path. Nothing is written as an executable, so no test thread's fork can hold one open.
+pub(crate) fn chrome_program(directory: &Path, steps: Value) -> PathBuf {
+  let stub = directory.join("stub");
+  fs::create_dir(&stub).expect("the stub directory is created");
+  let program = stub.join("chrome");
+  symlink(chrome_stub_helper(), &program).expect("the fake links to the helper");
+  fs::write(stub.join("probe.json"), json!({"chrome": steps}).to_string()).expect("the fake's steps are written");
+  program
+}
+
+/// The `chrome-stub` helper that cargo builds beside this test binary. Unit tests cannot name it with `CARGO_BIN_EXE_*`,
+/// so the path comes from the target directory.
+fn chrome_stub_helper() -> PathBuf {
+  let exe = std::env::current_exe().expect("the test binary path");
+  exe
+    .ancestors()
+    .skip(1)
+    .map(|directory| directory.join("chrome-stub"))
+    .find(|candidate| candidate.is_file())
+    .expect("cargo builds the chrome-stub helper into the target directory that holds the test binary")
+}
 
 /// A feature context over a new temporary home, with the artifacts package registered. The home lives as long as the
 /// returned directory.

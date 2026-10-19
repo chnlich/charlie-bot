@@ -205,6 +205,9 @@ def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> N
         {
             "voice_models": True
         },
+        {
+            "headless_chrome": True
+        },
     ])
 def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}], **fields)
@@ -1055,6 +1058,9 @@ def test_tree_references_use_route_placeholders(tmp_path: pathlib.Path) -> None:
         ({
             "voice_models": "yes"
         }, "scenario.yaml.voice_models must be a boolean"),
+        ({
+            "headless_chrome": "yes"
+        }, "scenario.yaml.headless_chrome must be a boolean"),
     ])
 def test_invalid_scenario_overlay_keys_name_the_file(
     tmp_path: pathlib.Path, fields: dict[str, Any], message: str) -> None:
@@ -1296,3 +1302,12 @@ def test_open_while_stopped_settles_on_an_exit_or_a_new_gate_marker(tmp_path: pa
 
   assert lines == []
   assert (agent_dir / "open-first").is_file()
+
+
+def test_absent_headless_chrome_exits_naming_the_flag_only_for_a_scenario_that_needs_it(
+    tmp_path: pathlib.Path) -> None:
+  request = [{"name": "http", "method": "GET", "path": "/api/auth/status"}]
+  parity._check_headless_chrome([_load(tmp_path, request)], tmp_path / "missing" / "headless_shell")
+  needing = _load(tmp_path, request, headless_chrome=True)
+  with pytest.raises(SystemExit, match=r"missing headless Chrome .*; provide it with --headless-chrome PATH"):
+    parity._check_headless_chrome([needing], tmp_path / "missing" / "headless_shell")

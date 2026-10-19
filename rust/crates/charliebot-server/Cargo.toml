@@ -32,6 +32,7 @@ charliebot-registry.workspace = true
 charliebot-slack.workspace = true
 charliebot-store.workspace = true
 charliebot-session-api.workspace = true
+charliebot-tasks.workspace = true
 charliebot-terminal.workspace = true
 charliebot-trace.workspace = true
 charliebot-usage.workspace = true

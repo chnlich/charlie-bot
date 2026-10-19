@@ -12,7 +12,6 @@ import unittest
 
 from differential import build_fixture, python_capture, run_rust_capture, snapshot
 
-
 RUST_BIN = pathlib.Path(sys.argv.pop(1)).resolve()
 HOST = "fixture-host"
 TRIGGER_NAMES = (
@@ -27,8 +26,7 @@ TRIGGER_NAMES = (
 def trigger_and_aggregate(path: pathlib.Path) -> tuple[list[tuple[str, str]], list[tuple]]:
   connection = sqlite3.connect(path)
   try:
-    triggers = connection.execute(
-        "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name").fetchall()
+    triggers = connection.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name").fetchall()
     aggregate = connection.execute("SELECT * FROM usage_agg ORDER BY source, model, account, kind, day").fetchall()
     return triggers, aggregate
   finally:
@@ -84,6 +82,7 @@ def create_mismatched_ledger(path: pathlib.Path) -> None:
 
 
 class SharedUsageLedgerTests(unittest.TestCase):
+
   def test_python_created_ledger_opens_in_rust_without_trigger_or_aggregate_changes(self) -> None:
     with tempfile.TemporaryDirectory(prefix="usage-python-ledger-") as temporary:
       path = pathlib.Path(temporary) / "ledger.sqlite3"
@@ -109,7 +108,8 @@ class SharedUsageLedgerTests(unittest.TestCase):
       python_result = python_capture(home, root / "python" / "ledger.sqlite3", live_ids)
       rust_result = run_rust_capture(RUST_BIN, home, root / "rust" / "ledger.sqlite3", live_ids)
       self.assertEqual(python_result["rows"], rust_result["rows"])
-      self.assertEqual(snapshot(home, root / "python" / "ledger.sqlite3"), snapshot(home, root / "rust" / "ledger.sqlite3"))
+      self.assertEqual(
+          snapshot(home, root / "python" / "ledger.sqlite3"), snapshot(home, root / "rust" / "ledger.sqlite3"))
 
   def test_python_and_rust_open_swap_five_trigger_bodies_and_reprice_aggregate(self) -> None:
     with tempfile.TemporaryDirectory(prefix="usage-trigger-refresh-") as temporary:

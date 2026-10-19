@@ -795,7 +795,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
     let runner = AgentRunner::new(
-      Box::new(ShellBackend::new(r#"printf '%s\n' '{"type":"result"}'; exec sleep 5"#)),
+      Box::new(ShellBackend::new(r#"printf '%s\n' '{"type":"result"}'; kill -STOP $$"#)),
       LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
     );
     let mut request = test_request(

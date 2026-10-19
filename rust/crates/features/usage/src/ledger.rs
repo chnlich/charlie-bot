@@ -5,62 +5,105 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use charliebot_registry::usage::{RecordKind, UsageRecord};
+use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::count::Count;
 use crate::sql;
 
 const LOCK_WAIT_SECONDS: u64 = 30;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LedgerAccount {
   pub name: String,
   pub calls: i64,
-  pub output: i64,
-  pub total: i64,
+  pub output: Count,
+  pub total: Count,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LedgerRow {
   pub source: String,
   pub model: String,
-  pub in_fresh: i64,
-  pub cache_write: i64,
-  pub cache_read: i64,
-  pub in_unsplit: i64,
-  pub output: i64,
+  pub in_fresh: Count,
+  pub cache_write: Count,
+  pub cache_read: Count,
+  pub in_unsplit: Count,
+  pub output: Count,
   pub calls: i64,
-  pub total: i64,
+  pub total: Count,
   pub first: String,
   pub last: String,
   pub fallback_calls: i64,
-  pub fallback_output: i64,
+  pub fallback_output: Count,
   pub accounts: Vec<LedgerAccount>,
+}
+
+/// One usage row as the ledger binds it. The counts and the timestamp keep the SQLite type that the capture binds for
+/// them, which `UsageRecord`'s integer and text fields cannot hold.
+#[derive(Clone, Debug)]
+pub struct StoredRecord {
+  pub record_id: String,
+  pub kind: RecordKind,
+  pub source: String,
+  pub model: String,
+  pub account: String,
+  pub ts: Value,
+  pub in_fresh: Count,
+  pub cache_write: Count,
+  pub cache_read: Count,
+  pub output: Count,
+  pub in_unsplit: Count,
+  pub sessions: Vec<String>,
+}
+
+impl From<&UsageRecord> for StoredRecord {
+  fn from(record: &UsageRecord) -> Self {
+    Self {
+      record_id: record.record_id.clone(),
+      kind: record.kind,
+      source: record.source.clone(),
+      model: record.model.clone(),
+      account: record.account.clone(),
+      ts: Value::Text(record.ts.clone()),
+      in_fresh: Count::Int(record.in_fresh),
+      cache_write: Count::Int(record.cache_write),
+      cache_read: Count::Int(record.cache_read),
+      output: Count::Int(record.output),
+      in_unsplit: Count::Int(record.in_unsplit),
+      sessions: record.sessions.clone(),
+    }
+  }
 }
 
 #[derive(Default)]
 struct Sum {
   calls: i64,
-  in_fresh: i64,
-  cache_write: i64,
-  cache_read: i64,
-  in_unsplit: i64,
-  output: i64,
+  in_fresh: Count,
+  cache_write: Count,
+  cache_read: Count,
+  in_unsplit: Count,
+  output: Count,
 }
 
 impl Sum {
-  fn add(&mut self, row: &GroupRow) {
+  fn add(&mut self, row: &GroupRow) -> anyhow::Result<()> {
     self.calls += row.calls;
-    self.in_fresh += row.in_fresh;
-    self.cache_write += row.cache_write;
-    self.cache_read += row.cache_read;
-    self.in_unsplit += row.in_unsplit;
-    self.output += row.output;
+    self.in_fresh = self.in_fresh.add(row.in_fresh, "usage total")?;
+    self.cache_write = self.cache_write.add(row.cache_write, "usage total")?;
+    self.cache_read = self.cache_read.add(row.cache_read, "usage total")?;
+    self.in_unsplit = self.in_unsplit.add(row.in_unsplit, "usage total")?;
+    self.output = self.output.add(row.output, "usage total")?;
+    Ok(())
   }
 
-  fn total(&self) -> i64 {
-    self.in_fresh + self.cache_write + self.cache_read + self.in_unsplit + self.output
+  fn total(&self) -> anyhow::Result<Count> {
+    let total = self.in_fresh.add(self.cache_write, "usage total")?;
+    let total = total.add(self.cache_read, "usage total")?;
+    let total = total.add(self.in_unsplit, "usage total")?;
+    total.add(self.output, "usage total")
   }
 }
 
@@ -68,7 +111,7 @@ impl Sum {
 struct ModelSum {
   sums: Sum,
   fallback_calls: i64,
-  fallback_output: i64,
+  fallback_output: Count,
   first: String,
   last: String,
   native_first: String,
@@ -81,11 +124,11 @@ struct GroupRow {
   account: String,
   kind: RecordKind,
   calls: i64,
-  in_fresh: i64,
-  cache_write: i64,
-  cache_read: i64,
-  in_unsplit: i64,
-  output: i64,
+  in_fresh: Count,
+  cache_write: Count,
+  cache_read: Count,
+  in_unsplit: Count,
+  output: Count,
   first: Option<String>,
   last: Option<String>,
 }
@@ -128,6 +171,17 @@ impl UsageLedger {
   }
 
   pub fn record_file(&mut self, host: &str, path: &str, sig: &str, records: &[UsageRecord]) -> anyhow::Result<usize> {
+    let stored = records.iter().map(StoredRecord::from).collect::<Vec<_>>();
+    self.record_stored_file(host, path, sig, &stored)
+  }
+
+  pub(crate) fn record_stored_file(
+    &mut self,
+    host: &str,
+    path: &str,
+    sig: &str,
+    records: &[StoredRecord],
+  ) -> anyhow::Result<usize> {
     let captured_at = python_utc_isoformat(OffsetDateTime::now_utc())?;
     self.conn.execute_batch("SAVEPOINT record_file")?;
     let write_result = (|| -> anyhow::Result<()> {
@@ -221,7 +275,7 @@ impl UsageLedger {
       Some(accs) => accs,
       None => self.grouped_accs(sql::MODEL_ROWS_SQL)?,
     };
-    Ok(rows_from_accs(accs))
+    rows_from_accs(accs)
   }
 
   fn refresh_agg_triggers(&mut self) -> anyhow::Result<()> {
@@ -311,7 +365,7 @@ impl UsageLedger {
     let mut accs = BTreeMap::new();
     for row in rows {
       let row = row?;
-      fold_grouped_row(&mut accs, row);
+      fold_grouped_row(&mut accs, row)?;
     }
     Ok(accs)
   }
@@ -367,10 +421,10 @@ fn read_group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRow> {
   })
 }
 
-fn fold_grouped_row(accs: &mut BTreeMap<(String, String), ModelSum>, row: GroupRow) {
+fn fold_grouped_row(accs: &mut BTreeMap<(String, String), ModelSum>, row: GroupRow) -> anyhow::Result<()> {
   let key = (row.source.clone(), row.model.clone());
   let acc = accs.entry(key).or_default();
-  acc.sums.add(&row);
+  acc.sums.add(&row)?;
   if let Some(first) = row.first.as_deref().filter(|first| !first.is_empty())
     && (acc.first.is_empty() || first < acc.first.as_str())
   {
@@ -383,7 +437,7 @@ fn fold_grouped_row(accs: &mut BTreeMap<(String, String), ModelSum>, row: GroupR
   }
   if row.kind == RecordKind::Fallback {
     acc.fallback_calls += row.calls;
-    acc.fallback_output += row.output;
+    acc.fallback_output = acc.fallback_output.add(row.output, "fallback output total")?;
   }
   if row.kind == RecordKind::Native
     && let Some(first) = row.first.as_deref().filter(|first| !first.is_empty())
@@ -391,52 +445,56 @@ fn fold_grouped_row(accs: &mut BTreeMap<(String, String), ModelSum>, row: GroupR
   {
     acc.native_first = first.to_string();
   }
-  acc.accounts.entry(row.account.clone()).or_default().add(&row);
+  acc.accounts.entry(row.account.clone()).or_default().add(&row)?;
+  Ok(())
 }
 
-fn rows_from_accs(accs: BTreeMap<(String, String), ModelSum>) -> (Vec<LedgerRow>, BTreeMap<String, String>) {
+fn rows_from_accs(
+  accs: BTreeMap<(String, String), ModelSum>,
+) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String, String>)> {
   let mut starts = BTreeMap::new();
-  let mut rows = accs
-    .into_iter()
-    .map(|((source, model), acc)| {
-      if !acc.native_first.is_empty() {
-        starts
-          .entry(source.clone())
-          .and_modify(|start: &mut String| {
-            if acc.native_first.as_str() < start.as_str() {
-              *start = acc.native_first.clone();
-            }
-          })
-          .or_insert_with(|| acc.native_first.clone());
-      }
-      let mut accounts = acc
-        .accounts
-        .into_iter()
-        .map(|(name, sums)| LedgerAccount { name, calls: sums.calls, output: sums.output, total: sums.total() })
-        .collect::<Vec<_>>();
-      accounts.sort_by(|left, right| right.total.cmp(&left.total).then_with(|| left.name.cmp(&right.name)));
-      LedgerRow {
-        source,
-        model,
-        in_fresh: acc.sums.in_fresh,
-        cache_write: acc.sums.cache_write,
-        cache_read: acc.sums.cache_read,
-        in_unsplit: acc.sums.in_unsplit,
-        output: acc.sums.output,
-        calls: acc.sums.calls,
-        total: acc.sums.total(),
-        first: acc.first,
-        last: acc.last,
-        fallback_calls: acc.fallback_calls,
-        fallback_output: acc.fallback_output,
-        accounts,
-      }
-    })
-    .collect::<Vec<_>>();
+  let mut rows = Vec::with_capacity(accs.len());
+  for ((source, model), acc) in accs {
+    if !acc.native_first.is_empty() {
+      starts
+        .entry(source.clone())
+        .and_modify(|start: &mut String| {
+          if acc.native_first.as_str() < start.as_str() {
+            *start = acc.native_first.clone();
+          }
+        })
+        .or_insert_with(|| acc.native_first.clone());
+    }
+    let mut accounts = Vec::with_capacity(acc.accounts.len());
+    for (name, sums) in acc.accounts {
+      accounts.push(LedgerAccount { name, calls: sums.calls, output: sums.output, total: sums.total()? });
+    }
+    accounts.sort_by(|left, right| right.total.compare(left.total).then_with(|| left.name.cmp(&right.name)));
+    rows.push(LedgerRow {
+      source,
+      model,
+      in_fresh: acc.sums.in_fresh,
+      cache_write: acc.sums.cache_write,
+      cache_read: acc.sums.cache_read,
+      in_unsplit: acc.sums.in_unsplit,
+      output: acc.sums.output,
+      calls: acc.sums.calls,
+      total: acc.sums.total()?,
+      first: acc.first,
+      last: acc.last,
+      fallback_calls: acc.fallback_calls,
+      fallback_output: acc.fallback_output,
+      accounts,
+    });
+  }
   rows.sort_by(|left, right| {
-    right.total.cmp(&left.total).then_with(|| left.source.cmp(&right.source)).then_with(|| left.model.cmp(&right.model))
+    right
+      .total
+      .compare(left.total)
+      .then_with(|| left.source.cmp(&right.source))
+      .then_with(|| left.model.cmp(&right.model))
   });
-  (rows, starts)
+  Ok((rows, starts))
 }
 
 fn python_utc_isoformat(now: OffsetDateTime) -> anyhow::Result<String> {

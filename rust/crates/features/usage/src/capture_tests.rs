@@ -714,14 +714,20 @@ fn capture_usage_rows_are_absolutely_correct() {
   let rows = page_rows(&mut ledger);
   let claude = row(&rows, "Claude Code", NAME);
   assert_eq!(claude.calls, 2); // one original + one subagent; the replay is deduped
-  assert_eq!((claude.in_fresh, claude.cache_write, claude.cache_read, claude.output), (150, 30, 40, 35));
-  assert_eq!(claude.total, claude.in_fresh + claude.cache_write + claude.cache_read + claude.output);
+  assert_eq!(
+    (claude.in_fresh.int(), claude.cache_write.int(), claude.cache_read.int(), claude.output.int()),
+    (150, 30, 40, 35)
+  );
+  assert_eq!(
+    claude.total.int(),
+    claude.in_fresh.int() + claude.cache_write.int() + claude.cache_read.int() + claude.output.int()
+  );
   assert_eq!((claude.first.as_str(), claude.last.as_str()), ("2024-01-01", "2024-01-02"));
-  assert_eq!(claude.accounts.iter().map(|account| account.total).sum::<i64>(), claude.total);
+  assert_eq!(claude.accounts.iter().map(|account| account.total.int()).sum::<i64>(), claude.total.int());
   let codex = row(&rows, "Codex", "codex-some");
-  assert_eq!((codex.in_fresh, codex.cache_read, codex.output), (40, 20, 7));
+  assert_eq!((codex.in_fresh.int(), codex.cache_read.int(), codex.output.int()), (40, 20, 7));
   assert_eq!((codex.first.as_str(), codex.last.as_str()), ("2024-01-03", "2024-01-03"));
-  assert_eq!(codex.total, 40 + 20 + 7);
+  assert_eq!(codex.total.int(), 40 + 20 + 7);
 }
 
 #[test]
@@ -738,7 +744,7 @@ fn appends_are_visible() {
   cli_file(&home, "claude", "sess2", &[call("m2", NAME, "2024-01-02T00:00:00Z", [1000, 0, 0, 2], &["sess2"])]);
   capture_round(&mut ledger, &config, &registry);
   let after = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!(after.total, before.total + 1002);
+  assert_eq!(after.total.int(), before.total.int() + 1002);
   assert_eq!(after.calls, before.calls + 1);
 }
 
@@ -756,7 +762,7 @@ fn replays_are_not_double_counted() {
   fs::copy(home.join("cli/claude/sess1.json"), home.join("cli/claude/sess2.json")).unwrap();
   capture_round(&mut ledger, &config, &registry);
   let after = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!(after.total, before.total);
+  assert_eq!(after.total.int(), before.total.int());
   assert_eq!(after.calls, before.calls);
 }
 
@@ -781,12 +787,12 @@ fn a_rewritten_file_reads_whole() {
   );
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 2);
   let row_now = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!((row_now.calls, row_now.total), (2, 29));
+  assert_eq!((row_now.calls, row_now.total.int()), (2, 29));
 
   cli_file(&home, "claude", "sess1", &[call("m2", NAME, "2024-01-02T00:00:00Z", [3, 0, 0, 3], &["sess1"])]);
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 1);
   let row_now = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!((row_now.calls, row_now.total), (3, 35)); // m2 joins the records the ledger keeps
+  assert_eq!((row_now.calls, row_now.total.int()), (3, 35)); // m2 joins the records the ledger keeps
 }
 
 #[test]
@@ -866,14 +872,14 @@ fn charliebot_thread_row_takes_the_recorded_model_first() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 3);
   let rows = page_rows(&mut ledger);
   let recorded = row(&rows, "charlie-bot", "GLM-5.3-Flash");
-  assert_eq!((recorded.calls, recorded.total), (1, 105));
+  assert_eq!((recorded.calls, recorded.total.int()), (1, 105));
   assert_eq!(
     recorded.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(),
     ["charlie-code-glm-flash"]
   );
-  assert_eq!(row(&rows, "charlie-bot", "GLM-5.4-Flash").total, 205);
+  assert_eq!(row(&rows, "charlie-bot", "GLM-5.4-Flash").total.int(), 205);
   let retired = row(&rows, "charlie-bot", "kimi-k3");
-  assert_eq!(retired.total, 305);
+  assert_eq!(retired.total.int(), 305);
   assert_eq!(
     retired.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(),
     ["charlie-code-kimi-k3"]
@@ -930,7 +936,7 @@ fn appended_line_is_captured_and_second_dir_replay_counts_once() {
   cli_file(&home, "claude", "sess1", &[original, appended]);
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 2);
   let after = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!((after.calls, after.output), (2, 7));
+  assert_eq!((after.calls, after.output.int()), (2, 7));
   assert_eq!((after.first.as_str(), after.last.as_str()), ("2024-01-01", "2024-01-02"));
 }
 
@@ -999,17 +1005,17 @@ fn charliebot_capture_rows() {
   assert_eq!(
     (
       recorded.calls,
-      recorded.in_fresh,
-      recorded.cache_write,
-      recorded.cache_read,
-      recorded.in_unsplit,
-      recorded.output
+      recorded.in_fresh.int(),
+      recorded.cache_write.int(),
+      recorded.cache_read.int(),
+      recorded.in_unsplit.int(),
+      recorded.output.int()
     ),
     (1, 0, 0, 0, 100, 5)
   );
   // t2's input is unsplit like t1's; the master's carries no cached reads.
   let merged = row(&rows, "charlie-bot", "GLM-5.4-Flash");
-  assert_eq!((merged.calls, merged.in_fresh, merged.in_unsplit, merged.output), (2, 300, 200, 6 + 7));
+  assert_eq!((merged.calls, merged.in_fresh.int(), merged.in_unsplit.int(), merged.output.int()), (2, 300, 200, 6 + 7));
 }
 
 #[test]
@@ -1026,8 +1032,11 @@ fn charliebot_codex_thread_counts_its_cached_reads_once() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "gpt-5");
-  assert_eq!((row.calls, row.in_fresh, row.cache_write, row.cache_read, row.output), (1, 60373, 0, 846080, 4104));
-  assert_eq!(row.total, 906453 + 4104); // the envelope's input counted once, cached part included
+  assert_eq!(
+    (row.calls, row.in_fresh.int(), row.cache_write.int(), row.cache_read.int(), row.output.int()),
+    (1, 60373, 0, 846080, 4104)
+  );
+  assert_eq!(row.total.int(), 906453 + 4104); // the envelope's input counted once, cached part included
 }
 
 #[test]
@@ -1050,10 +1059,17 @@ fn charliebot_clc_thread_lands_whole_in_unsplit() {
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
   assert_eq!(
-    (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output),
+    (
+      row.calls,
+      row.in_fresh.int(),
+      row.cache_write.int(),
+      row.cache_read.int(),
+      row.in_unsplit.int(),
+      row.output.int()
+    ),
     (1, 0, 0, 0, 4677324, 39171)
   );
-  assert_eq!(row.total, 4677324 + 39171);
+  assert_eq!(row.total.int(), 4677324 + 39171);
 }
 
 #[test]
@@ -1071,7 +1087,14 @@ fn charliebot_cc_claude_thread_keeps_the_claude_split() {
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "claude-opus-5-5");
   assert_eq!(
-    (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output),
+    (
+      row.calls,
+      row.in_fresh.int(),
+      row.cache_write.int(),
+      row.cache_read.int(),
+      row.in_unsplit.int(),
+      row.output.int()
+    ),
     (1, 100, 20, 40, 0, 5)
   );
 }
@@ -1098,10 +1121,17 @@ fn charliebot_master_counts_its_cached_reads_once() {
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.4-Flash");
   assert_eq!(
-    (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output),
+    (
+      row.calls,
+      row.in_fresh.int(),
+      row.cache_write.int(),
+      row.cache_read.int(),
+      row.in_unsplit.int(),
+      row.output.int()
+    ),
     (1, 9811, 0, 1283200, 0, 8712)
   );
-  assert_eq!(row.total, 1293011 + 8712);
+  assert_eq!(row.total.int(), 1293011 + 8712);
 }
 
 #[test]
@@ -1158,7 +1188,7 @@ fn charliebot_fallback_rows_count_until_the_cli_log_is_captured() {
   let rows = page_rows(&mut ledger);
   let codex_fallback = row(&rows, "charlie-bot", "gpt-5");
   assert_eq!(
-    (codex_fallback.calls, codex_fallback.fallback_calls, codex_fallback.in_fresh, codex_fallback.output),
+    (codex_fallback.calls, codex_fallback.fallback_calls, codex_fallback.in_fresh.int(), codex_fallback.output.int()),
     (1, 1, 100, 5)
   );
   let claude_fallback = row(&rows, "charlie-bot", "claude-sonnet-4");
@@ -1233,7 +1263,7 @@ fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the bare pair is no current signature
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
-  assert_eq!((row.calls, row.in_fresh, row.in_unsplit, row.output), (1, 0, 100, 5)); // same id, corrected values
+  assert_eq!((row.calls, row.in_fresh.int(), row.in_unsplit.int(), row.output.int()), (1, 0, 100, 5)); // same id, corrected values
   assert!(ledger.captured_sigs(HOST).unwrap()[path.to_str().unwrap()].starts_with("p2:"));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the p2 signature serves
 }
@@ -1259,7 +1289,7 @@ fn capture_runs_clc_run_is_native_with_the_cached_split() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
-  assert_eq!((row.calls, row.in_fresh, row.cache_read, row.output), (1, 60, 40, 5));
+  assert_eq!((row.calls, row.in_fresh.int(), row.cache_read.int(), row.output.int()), (1, 60, 40, 5));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the unchanged run file is skipped
 }
 
@@ -1301,7 +1331,14 @@ fn capture_runs_cc_claude_fallback_retires_when_the_transcript_is_captured() {
   let rows = page_rows(&mut ledger);
   let first = row(&rows, "charlie-bot", "claude-opus-5-5");
   assert_eq!(
-    (first.calls, first.fallback_calls, first.in_fresh, first.cache_write, first.cache_read, first.output),
+    (
+      first.calls,
+      first.fallback_calls,
+      first.in_fresh.int(),
+      first.cache_write.int(),
+      first.cache_read.int(),
+      first.output.int()
+    ),
     (2, 2, 8, 20, 200, 14)
   );
 
@@ -1351,7 +1388,10 @@ fn capture_runs_codex_sums_turns_and_retires_on_the_captured_rollout() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // r2 has no turn.completed line
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "gpt-5");
-  assert_eq!((row.calls, row.fallback_calls, row.in_fresh, row.cache_read, row.output), (1, 1, 120, 30, 8));
+  assert_eq!(
+    (row.calls, row.fallback_calls, row.in_fresh.int(), row.cache_read.int(), row.output.int()),
+    (1, 1, 120, 30, 8)
+  );
 
   cli_file(
     &home,
@@ -1390,7 +1430,7 @@ fn capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothing() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // only the result-bearing run records
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
-  assert_eq!((row.calls, row.in_fresh, row.output), (1, 20, 2));
+  assert_eq!((row.calls, row.in_fresh.int(), row.output.int()), (1, 20, 2));
   let captured = ledger.captured_sigs(HOST).unwrap().into_keys().collect::<BTreeSet<_>>();
   let expected = [lost, done].iter().map(|path| path.to_string_lossy().into_owned()).collect::<BTreeSet<_>>();
   assert_eq!(captured, expected); // the resultless file is marked captured too: never re-parsed
@@ -1426,7 +1466,7 @@ fn capture_runs_second_capture_skips_by_stat_and_recaptures_an_append() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the append moved the stat: re-parsed
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
-  assert_eq!((row.calls, row.in_fresh, row.cache_read, row.output), (1, 190, 10, 9));
+  assert_eq!((row.calls, row.in_fresh.int(), row.cache_read.int(), row.output.int()), (1, 190, 10, 9));
 }
 
 #[test]
@@ -1542,7 +1582,7 @@ fn capture_runs_opencode_run_is_a_fallback_through_the_claude_envelope_keys() {
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "qwen3");
   assert_eq!(
-    (row.calls, row.fallback_calls, row.in_fresh, row.cache_write, row.cache_read, row.output),
+    (row.calls, row.fallback_calls, row.in_fresh.int(), row.cache_write.int(), row.cache_read.int(), row.output.int()),
     (1, 1, 4, 10, 100, 7)
   );
 
@@ -1645,18 +1685,28 @@ fn malformed_type_shapes_capture_the_rows_python_writes() {
   assert_eq!(rows.len(), 3);
   let claude = row(&rows, "charlie-bot", "claude-model");
   assert_eq!(
-    (claude.calls, claude.in_fresh, claude.cache_write, claude.cache_read, claude.output, claude.total),
+    (
+      claude.calls,
+      claude.in_fresh.int(),
+      claude.cache_write.int(),
+      claude.cache_read.int(),
+      claude.output.int(),
+      claude.total.int()
+    ),
     (1, 10, 2, 3, 4, 19)
   );
   assert_eq!((claude.first.as_str(), claude.last.as_str(), claude.fallback_calls), ("2026-09-11", "2026-09-11", 1));
   assert_eq!(claude.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["claude-main"]);
   assert_eq!(fallback_sessions(&ledger, "thread:s-type/t1/0"), ["claude-kept", "null-type-sid"]);
   let native = row(&rows, "charlie-bot", "native-model");
-  assert_eq!((native.calls, native.in_fresh, native.cache_read, native.output, native.total), (1, 16, 4, 7, 27));
+  assert_eq!(
+    (native.calls, native.in_fresh.int(), native.cache_read.int(), native.output.int(), native.total.int()),
+    (1, 16, 4, 7, 27)
+  );
   assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-01", "2026-09-01"));
   let gpt = row(&rows, "charlie-bot", "gpt-run");
   assert_eq!(
-    (gpt.calls, gpt.in_fresh, gpt.cache_read, gpt.output, gpt.total, gpt.fallback_calls),
+    (gpt.calls, gpt.in_fresh.int(), gpt.cache_read.int(), gpt.output.int(), gpt.total.int(), gpt.fallback_calls),
     (1, 40, 20, 8, 68, 1)
   );
   assert_eq!(gpt.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["codex-main"]);
@@ -1722,10 +1772,10 @@ fn malformed_session_shapes_capture_the_rows_python_writes() {
   let rows = charlie_rows(&mut ledger);
   assert_eq!(rows.len(), 2);
   let claude = row(&rows, "charlie-bot", "claude-model");
-  assert_eq!((claude.calls, claude.total), (1, 19));
+  assert_eq!((claude.calls, claude.total.int()), (1, 19));
   assert_eq!(fallback_sessions(&ledger, "thread:s-sid/t1/0"), ["claude-kept"]);
   let gpt = row(&rows, "charlie-bot", "gpt-run");
-  assert_eq!((gpt.calls, gpt.total), (1, 68));
+  assert_eq!((gpt.calls, gpt.total.int()), (1, 68));
   assert_eq!(fallback_sessions(&ledger, "run:run-sid"), ["run-sid-thread"]);
   assert_eq!(ledger.captured_sigs(HOST).unwrap().len(), 5);
 }
@@ -1823,11 +1873,14 @@ fn malformed_falsy_values_capture_the_rows_python_writes() {
   let rows = charlie_rows(&mut ledger);
   assert_eq!(rows.len(), 2);
   let claude = row(&rows, "charlie-bot", "claude-model");
-  assert_eq!((claude.calls, claude.in_fresh, claude.output, claude.total, claude.fallback_calls), (3, 13, 6, 19, 3));
+  assert_eq!(
+    (claude.calls, claude.in_fresh.int(), claude.output.int(), claude.total.int(), claude.fallback_calls),
+    (3, 13, 6, 19, 3)
+  );
   assert_eq!((claude.first.as_str(), claude.last.as_str()), ("", ""));
   assert_eq!(claude.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["claude-main"]);
   let native = row(&rows, "charlie-bot", "native-model");
-  assert_eq!((native.calls, native.in_fresh, native.output, native.total), (1, 5, 2, 7));
+  assert_eq!((native.calls, native.in_fresh.int(), native.output.int(), native.total.int()), (1, 5, 2, 7));
   assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-02", "2026-09-02"));
 }
 

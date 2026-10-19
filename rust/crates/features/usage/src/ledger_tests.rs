@@ -29,7 +29,7 @@ fn record(record_id: &str, kind: RecordKind, sessions: &[&str]) -> UsageRecord {
 }
 
 fn table_rows(ledger: &UsageLedger) -> Vec<LedgerRow> {
-  rows_from_accs(ledger.grouped_accs(sql::MODEL_ROWS_SQL).unwrap()).0
+  rows_from_accs(ledger.grouped_accs(sql::MODEL_ROWS_SQL).unwrap()).unwrap().0
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn record_ids_are_deduplicated_across_hosts_and_capture_signatures_replace() {
   assert_eq!(ledger.record_file("host-a", "/logs/a.jsonl", "sig-a", std::slice::from_ref(&rec)).unwrap(), 1);
   assert_eq!(ledger.record_file("host-b", "/logs/b.jsonl", "sig-b", std::slice::from_ref(&rec)).unwrap(), 1);
   let rows = ledger.model_rows().unwrap();
-  assert_eq!((rows[0].calls, rows[0].output, rows[0].total), (1, 5, 20));
+  assert_eq!((rows[0].calls, rows[0].output.int(), rows[0].total.int()), (1, 5, 20));
   ledger.record_file("host-a", "/logs/a.jsonl", "sig-new", &[]).unwrap();
   assert_eq!(ledger.captured_sigs("host-a").unwrap(), BTreeMap::from([("/logs/a.jsonl".into(), "sig-new".into())]));
 }
@@ -90,7 +90,7 @@ fn model_rows_sort_accounts_and_spans_while_native_starts_ignore_fallbacks_and_e
   assert_eq!(starts, BTreeMap::from([(SOURCE.into(), "2026-01-11".into())]));
   assert_eq!((rows[0].first.as_str(), rows[0].last.as_str(), rows[0].calls), ("2026-01-10", "2026-01-11", 3));
   assert_eq!(rows[0].fallback_calls, 1);
-  assert_eq!(rows[0].fallback_output, 7);
+  assert_eq!(rows[0].fallback_output.int(), 7);
   assert_eq!(rows[0].accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["acct-a", "acct-b"]);
 }
 
@@ -108,7 +108,7 @@ fn ts_conflicts_keep_the_earlier_nonempty_value_and_unsplit_counts_on_all_reads(
   assert_eq!(stored, TS_A);
   ledger.model_rows().unwrap();
   let served = ledger.model_rows().unwrap();
-  assert_eq!((served[0].in_unsplit, served[0].total), (7, 27));
+  assert_eq!((served[0].in_unsplit.int(), served[0].total.int()), (7, 27));
   assert_eq!(table_rows(&ledger), served);
 }
 
@@ -256,7 +256,7 @@ fn models(rows: &[LedgerRow]) -> Vec<&str> {
 
 fn agg_rows(ledger: &mut UsageLedger) -> Vec<LedgerRow> {
   let accs = ledger.agg_accs().unwrap().expect("the aggregate has been backfilled and serves");
-  rows_from_accs(accs).0
+  rows_from_accs(accs).unwrap().0
 }
 
 fn assert_served_on_the_table(ledger: &mut UsageLedger) {
@@ -413,7 +413,7 @@ fn one_record_id_from_two_hosts_counts_once() {
   assert_eq!(ledger.record_file("host-b", "/logs/b.jsonl", "sig-b", std::slice::from_ref(&rec)).unwrap(), 1);
   let rows = ledger.model_rows().unwrap();
   assert_eq!(rows.len(), 1);
-  assert_eq!((rows[0].calls, rows[0].output, rows[0].total), (1, 5, 20));
+  assert_eq!((rows[0].calls, rows[0].output.int(), rows[0].total.int()), (1, 5, 20));
 }
 
 #[test]
@@ -426,7 +426,7 @@ fn fallback_excluded_once_any_session_is_native() {
   ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb", &[fallback]).unwrap();
   let rows = ledger.model_rows().unwrap();
   assert_eq!(models(&rows), ["model-fb"]);
-  assert_eq!((rows[0].fallback_calls, rows[0].fallback_output), (1, 5));
+  assert_eq!((rows[0].fallback_calls, rows[0].fallback_output.int()), (1, 5));
   let mut native = record("rec-native", RecordKind::Native, &["sess-a"]);
   native.model = "model-native".into();
   ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", &[native]).unwrap();
@@ -457,10 +457,10 @@ fn rows_equal_for_either_write_order() {
   assert_eq!(native_first, fallback_first);
   assert_eq!(native_first.len(), 1);
   let row = &native_first[0];
-  assert_eq!((row.calls, row.total), (2, 42));
+  assert_eq!((row.calls, row.total.int()), (2, 42));
   assert_eq!((row.first.as_str(), row.last.as_str()), ("2026-01-10", "2026-01-11"));
-  assert_eq!((row.fallback_calls, row.fallback_output), (1, 7));
-  let accounts = row.accounts.iter().map(|account| (account.name.as_str(), account.total)).collect::<Vec<_>>();
+  assert_eq!((row.fallback_calls, row.fallback_output.int()), (1, 7));
+  let accounts = row.accounts.iter().map(|account| (account.name.as_str(), account.total.int())).collect::<Vec<_>>();
   assert_eq!(accounts, [("acct-b", 22), ("acct-a", 20)]);
 }
 
@@ -719,7 +719,7 @@ fn backfilled_aggregate_counts_later_same_group_day_writes() {
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", &[second, third]).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
-  assert_eq!(served.iter().map(|row| (row.calls, row.output)).collect::<Vec<_>>(), [(3, 18)]);
+  assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(3, 18)]);
 }
 
 #[test]
@@ -738,7 +738,7 @@ fn rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table() {
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", &[rewritten]).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
-  assert_eq!(served.iter().map(|row| (row.calls, row.output)).collect::<Vec<_>>(), [(3, 60)]);
+  assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(3, 60)]);
 }
 
 #[test]
@@ -885,19 +885,19 @@ fn in_unsplit_shows_on_every_read_path() {
   let mut ledger = UsageLedger::open(&path).unwrap();
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[first]).unwrap();
   let table = table_rows(&ledger);
-  assert_eq!(table.iter().map(|row| (row.in_unsplit, row.total)).collect::<Vec<_>>(), [(7, 27)]);
+  assert_eq!(table.iter().map(|row| (row.in_unsplit.int(), row.total.int())).collect::<Vec<_>>(), [(7, 27)]);
   ledger.model_rows().unwrap(); // the first read runs the backfill
   ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", &[second]).unwrap();
   let (served, _) = ledger.model_rows_with_native_starts().unwrap();
   let model_b = served.iter().find(|row| row.model == "model-b").unwrap();
-  assert_eq!((model_b.in_unsplit, model_b.total), (7, 27));
+  assert_eq!((model_b.in_unsplit.int(), model_b.total.int()), (7, 27));
   {
     let mut foreign = UsageLedger::open(&path).unwrap(); // another process's shape: its own connection
     foreign.record_file(HOST, "/logs/c.jsonl", "sig-c", &[third]).unwrap();
   }
   let served = ledger.model_rows().unwrap();
   assert_eq!(served, table_rows(&ledger));
-  let shape = served.iter().map(|row| (row.model.as_str(), row.in_unsplit, row.total)).collect::<Vec<_>>();
+  let shape = served.iter().map(|row| (row.model.as_str(), row.in_unsplit.int(), row.total.int())).collect::<Vec<_>>();
   assert_eq!(shape, [("model-a", 7, 27), ("model-b", 7, 27), ("model-c", 7, 27)]);
 }
 
@@ -913,7 +913,7 @@ fn in_unsplit_only_rewrite_keeps_the_aggregate_on_the_table() {
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", &[rewritten]).unwrap();
   let rows = ledger.model_rows().unwrap();
   assert_eq!(rows, table_rows(&ledger));
-  assert_eq!(rows.iter().map(|row| (row.in_unsplit, row.total)).collect::<Vec<_>>(), [(7, 27)]);
+  assert_eq!(rows.iter().map(|row| (row.in_unsplit.int(), row.total.int())).collect::<Vec<_>>(), [(7, 27)]);
 }
 
 #[test]
@@ -957,11 +957,11 @@ fn open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
   let mut ledger = UsageLedger::open(&path).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
-  assert_eq!(served.iter().map(|row| (row.calls, row.output)).collect::<Vec<_>>(), [(2, 11)]);
+  assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(2, 11)]);
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", &[third]).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
-  assert_eq!(served.iter().map(|row| (row.calls, row.output)).collect::<Vec<_>>(), [(3, 18)]);
+  assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(3, 18)]);
   // A reopen whose trigger bodies now match runs nothing: the snapshot and the triggers stay the same.
   ledger.model_rows().unwrap();
   let (before, triggers) = (snapshot(ledger.connection()), trigger_sqls(ledger.connection()));

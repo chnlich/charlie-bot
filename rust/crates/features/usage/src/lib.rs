@@ -3,6 +3,7 @@
 
 mod api;
 pub mod capture;
+mod count;
 mod ext_usage;
 pub mod ledger;
 mod ndjson;
@@ -17,6 +18,7 @@ use charliebot_registry::{Registry, RegistryError};
 use futures_util::FutureExt;
 
 pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage};
+pub use count::Count;
 pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 
 /// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the `ext_usage` service in phase

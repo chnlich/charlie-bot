@@ -15,8 +15,8 @@ mod test_support;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::MethodFilter;
-use charliebot_compat::responses;
+use axum::routing::post;
+use charliebot_compat::routing::{get_only, refuse_other_methods};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 
 /// `register` (`src/features/explain/__init__.py`): the router under `/api/sessions`.
@@ -30,15 +30,9 @@ fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(
       "/api/sessions/{session_id}/explain",
-      axum::routing::on(MethodFilter::POST, api::post_explain)
-        .on(MethodFilter::GET, api::get_explain)
-        .fallback(|| async { responses::method_not_allowed("POST") }),
+      refuse_other_methods(post(api::post_explain).get(api::get_explain), "POST"),
     )
-    .route(
-      "/api/sessions/{session_id}/explain/status",
-      axum::routing::on(MethodFilter::GET, api::get_explain_status)
-        .fallback(|| async { responses::method_not_allowed("GET") }),
-    )
+    .route("/api/sessions/{session_id}/explain/status", get_only(api::get_explain_status))
     .with_state(Arc::clone(features))
 }
 

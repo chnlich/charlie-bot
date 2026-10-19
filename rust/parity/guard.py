@@ -32,6 +32,8 @@ _WRITE_OPEN_FLAGS = ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC")
 
 _LINE = re.compile(r"^(?P<pid>\d+)\s+(?P<rest>.*)$")
 _SHARED_MEMORY_SEMAPHORE = re.compile(r"/dev/shm/sem\.[^/]+")
+# Chromium's anonymous shared memory: a file in /dev/shm that Chromium unlinks as soon as it is made.
+_CHROMIUM_SHARED_MEMORY = re.compile(r"/dev/shm/\.org\.chromium\.Chromium\.[A-Za-z0-9]{6}")
 _UNFINISHED = re.compile(r"^(?P<call>.*) <unfinished \.\.\.>$")
 _RESUMED = re.compile(r"^<\.\.\. (?P<name>\w+|\?\?\?) resumed>(?P<tail>.*)$")
 _CALL = re.compile(r"^(?P<name>\w+|\?\?\?)\((?P<args>.*)\)\s+= (?P<ret>.*)$", re.DOTALL)
@@ -120,6 +122,11 @@ def _merged_calls(lines: list[str], trace_log: pathlib.Path) -> list[tuple[int, 
       raise ValueError(f"unparsed strace line in {trace_log}: {line!r}")
     pid, rest = int(match["pid"]), match["rest"]
     if rest.startswith(("---", "+++")):
+      continue
+    if rest == "???( <detached ...>":
+      # strace detached from a thread killed inside a call whose number it could not read: an undecodable call.
+      pending.pop(pid, None)
+      calls.append((pid, "???()  = ?"))
       continue
     unfinished = _UNFINISHED.match(rest)
     if unfinished:
@@ -254,9 +261,11 @@ def _outcome(ret: str) -> str | None:
 
 
 def _inside(path: str, roots: tuple[str, ...]) -> bool:
-  # POSIX semaphores are process-pool coordination files, not application data.
+  # POSIX semaphores are process-pool coordination files, not application data; Chromium's shared memory lives
+  # only until its unlink, so a headless browser's allocations leave no file behind.
   return path in EXEMPT_PATHS or path.startswith(EXEMPT_PREFIXES) or _SHARED_MEMORY_SEMAPHORE.fullmatch(
-      path) is not None or any(path == root or path.startswith(root + "/") for root in roots)
+      path) is not None or _CHROMIUM_SHARED_MEMORY.fullmatch(path) is not None or any(
+          path == root or path.startswith(root + "/") for root in roots)
 
 
 def scan(trace_log: pathlib.Path, roots: tuple[pathlib.Path, ...], start_cwd: pathlib.Path, report: Report) -> None:

@@ -155,6 +155,57 @@ node pass cannot replay it`. Startup logs each one as `task_recovery_node_failed
 
 `tests/recovery.rs` drives each row through the full execution stack; its `// Python:` comments name the cases it follows.
 
+## Task-run worker
+
+`worker::Worker` runs one task run's process (`src/runtime/worker.py`). A run is one process, or a chain of processes
+when the backend lifecycle relays it through `launch_loop::run_launches`. Each process's events pass through a run
+sink: they are appended to the run's events log and broadcast on the thread's channel, and the compaction events the
+Python path synthesizes follow each one. The terminal events close the run: hang diagnostics, stderr, the cgroup
+report, then `complete` or `error`. Nothing outside the tests constructs `Worker` yet.
+
+| Rust item | Python source |
+| --- | --- |
+| `worker::Worker` and `Worker::new(Arc<FeatureContext>, WorkerSpec)` | `src/runtime/worker.py:78`, `:88-128` |
+| `worker::WorkerSpec` and its fields | `src/runtime/worker.py:88-128` (`Worker.__init__` arguments) |
+| `Worker::set_on_session_event`, `SessionEventFn` | `src/runtime/worker.py:88-128` (`on_session_event`) |
+| `Worker::account_relays` | `src/runtime/worker.py:130` |
+| `Worker::run` | `src/runtime/worker.py:223-310` |
+| `Worker::resume` | `src/runtime/worker.py:311-376` |
+| `Worker::terminate`, `Worker::detach` | `src/runtime/worker.py:446-455` |
+| `Worker::build_backend` (private) | `src/runtime/worker.py:133-194` |
+| `Worker::launch_context` (private) | `src/runtime/worker.py:195-222` |
+| `Worker::persist_and_broadcast` (private) | `src/runtime/worker.py:377-382` |
+| `Worker::emit_terminal_events` (private) | `src/runtime/worker.py:388-445` |
+| `handle_event` (private; `Worker._process_event`) | `src/runtime/worker.py:456-520` |
+| `handle_compaction_events` (private) | `src/runtime/streaming.py:161` (`handle_compaction_events`) |
+| `worker::QuotaExhaustedError`, `QuotaExhaustedError::new`, `resets_at` | `src/runtime/worker.py:33-39` |
+| `worker::event_line` | `src/runtime/worker.py:54-56` (`_event_line`) |
+| `worker::HARNESS_INSTRUCTIONS_NAME` | `src/runtime/runs.py:52` |
+| `worker::HANG_DIAGNOSTICS_NAME` | `src/runtime/worker.py:399` |
+| `worker::NO_OUTPUT_REPORT_THRESHOLD` (private) | `src/infra/timeouts.py:167` |
+| `worker::STDERR_LOG_CHARS` (private) | `src/runtime/worker.py:426` |
+| `worker::GIT_STASH_GUARD_DIR` (private) | `src/runtime/worker.py:25` |
+| `worker::QUOTA_MESSAGE_FALLBACK` (private) | `src/runtime/worker.py:513` |
+
+`run_support` is crate-private. It holds the helpers that `master_run` and `worker` share: the runner's event channel
+(`StreamEvent`, `stream_event_channel`), the stderr tail, the subprocess buffer limit, the resume routing of a backend
+type, and a launch's extra flags.
+
+Test hooks under the `test-hooks` feature: `Worker::with_hang_timeouts` shortens the follow after a result, and
+`Worker::build_process_backend_for_test` and `Worker::process_event_for_test` expose the build and event paths. The
+Python tests reach the same paths through mocks, so the hooks have no Python counterpart.
+
+Known divergences from Python:
+
+- `Worker::resume` returns an error and leaves the process running when the process is still alive after the follow.
+  Python captures the process's diagnostics (`base._capture_proc_diagnostics`) and kills its group. The capture is
+  `charliebot-agents` `runner::capture_process_diagnostics`, which is private to that module.
+- The hang-diagnostics, stderr and cgroup terminal events are appended through the run's held events-log handle with
+  `sync_data`, not through `charliebot-store`'s `ndjson::append`, which is crate-private. The line bytes are the same
+  compact JSON.
+- A process ended by a signal reports the signal as its exit code (`-15` for SIGTERM). The Python hang test injects an
+  exit code of 143 with its fake backend.
+
 ## Prompt assembly
 
 `prompts` assembles the managed instructions of every agent run. For the same sources it produces the same blocks,
@@ -256,3 +307,13 @@ write-fault seam (`write-faults` feature) and a live `/bin/sh` turn, with the re
 `tests/test_home_writer_fence.py` and the startup cases of `tests/test_task_sequences.py` are not ported yet.
 The cases that replay a named follow-up above (cold-read, failed-run report, review spawn) need that replay
 before they can pass, and the rest need a store fixture with live run processes.
+
+`tests/worker.rs` ports the cases of `tests/test_worker_account_relay.py`, `tests/test_worker_backend_build.py`,
+`tests/test_worker_diagnostics.py`, `tests/test_worker_event_line.py` and `tests/test_worker_quota_scan.py`, and the
+non-Claude build case of `tests/test_backend_hooks.py`. Each test carries its `// Python:` comment. It runs scripted
+`/bin/sh` processes, which the process-group guard kills when a test ends, and it starts no agent CLI. Twenty of the
+twenty-one cases pass. `test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes` is not ported:
+it swaps `claude_accounts.select` for a stub, and `select` is a `charliebot-agents` function with no seam in this crate.
+Two cases differ in what they check. The hang-diagnostics case checks the written file's shape rather than its content,
+since the runner captures the diagnostics itself. The compaction case checks the events log, not a spy on
+`compact_with_sonnet`.

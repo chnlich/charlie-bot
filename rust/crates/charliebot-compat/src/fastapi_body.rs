@@ -100,6 +100,7 @@ pub enum FieldType {
   NullableInteger,
   Boolean,
   Literal(&'static [&'static str]),
+  NullableLiteral(&'static [&'static str]),
   StringList,
 }
 
@@ -206,6 +207,11 @@ fn validate_field(field: &Field, value: &Value) -> Result<Value, Vec<validation:
       Some(value) if choices.contains(&value) => Ok(value.into()),
       _ => failure(validation::Kind::Literal(choices)),
     },
+    FieldType::NullableLiteral(_) if value.is_null() => Ok(Value::Null),
+    FieldType::NullableLiteral(choices) => match value.as_str() {
+      Some(value) if choices.contains(&value) => Ok(value.into()),
+      _ => failure(validation::Kind::Literal(choices)),
+    },
     FieldType::StringList => match value.as_array() {
       Some(items) => {
         let mut errors = Vec::new();
@@ -283,6 +289,34 @@ fn model_attributes_error(input: Value) -> Box<Response> {
     input,
     kind: validation::Kind::ModelAttributesType,
   }]))
+}
+
+#[cfg(test)]
+mod nullable_literal_tests {
+  use axum::body::to_bytes;
+  use axum::http::StatusCode;
+  use serde_json::{Value, json};
+
+  use super::{BodyModel, Field, FieldType, RequestBody};
+
+  const FIELDS: &[Field] = &[Field::required("rating", FieldType::NullableLiteral(&["thumbs_up", "thumbs_down"]))];
+  const MODEL: BodyModel = BodyModel::required(FIELDS);
+
+  #[test]
+  fn nullable_literal_accepts_null() {
+    let value = RequestBody::Json(json!({"rating": null})).validate(&MODEL).unwrap().unwrap();
+    assert_eq!(value, json!({"rating": null}));
+  }
+
+  #[tokio::test]
+  async fn nullable_literal_rejects_other_values_with_literal_error_shape() {
+    let response = RequestBody::Json(json!({"rating": "neutral"})).validate(&MODEL).unwrap_err();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["detail"][0]["type"], "literal_error");
+    assert_eq!(value["detail"][0]["loc"], json!(["body", "rating"]));
+  }
 }
 
 fn body_parse_error() -> Response {

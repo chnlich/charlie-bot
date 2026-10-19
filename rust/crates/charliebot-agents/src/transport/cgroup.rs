@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-const SESSION_CGROUP_PREFIX: &str = "charliebot-sess-";
+use charliebot_core::cgroup::SESSION_CGROUP_PREFIX;
 
 static DEGRADED_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -32,19 +32,17 @@ impl SessionCgroup {
 
 /// Return the delegated systemd `app.slice` directory for this user.
 pub fn system_cgroup_base_dir() -> PathBuf {
-  let uid = unsafe { libc::getuid() };
-  PathBuf::from(format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/app.slice"))
+  charliebot_core::cgroup::system_cgroup_base_dir()
 }
 
 /// Return the session cgroup directory name.
 pub fn session_cgroup_name(session_id: &str) -> String {
-  let prefix: String = session_id.chars().take(8).collect();
-  format!("{SESSION_CGROUP_PREFIX}{prefix}")
+  charliebot_core::cgroup::session_cgroup_name(session_id)
 }
 
 /// Join a session cgroup name to its caller-supplied base directory.
 pub fn session_cgroup_path(base_dir: &Path, session_id: &str) -> PathBuf {
-  base_dir.join(session_cgroup_name(session_id))
+  charliebot_core::cgroup::session_cgroup_path(base_dir, session_id)
 }
 
 /// Create or refresh cgroup limits, returning `None` with one warning per error string on failure.
@@ -164,18 +162,7 @@ pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
 
 /// Remove an empty session cgroup; a populated or unavailable directory is retained.
 pub fn cleanup_session_cgroup(base_dir: &Path, session_id: &str) -> bool {
-  let path = session_cgroup_path(base_dir, session_id);
-  match fs::remove_dir(&path) {
-    Ok(()) => {
-      tracing::info!(target: "charliebot_agents", path = %path.display(), "session_cgroup_removed");
-      true
-    }
-    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-    Err(error) => {
-      tracing::debug!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_cleanup_retained");
-      false
-    }
-  }
+  charliebot_core::cgroup::cleanup_session_cgroup(base_dir, session_id)
 }
 
 /// Remove empty stale session cgroups and retain nonempty ones with a warning.

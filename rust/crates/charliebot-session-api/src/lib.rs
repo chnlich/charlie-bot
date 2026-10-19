@@ -8,6 +8,7 @@ mod search;
 mod sidebar;
 mod tree;
 mod worker_transcript;
+mod writes;
 
 use std::sync::Arc;
 

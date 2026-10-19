@@ -42,11 +42,15 @@ const OPS: &[&str] = &[
   "persist_account_label",
   "update_thinking_state",
   "mark_unread",
+  "mark_read",
   "rename_session",
   "set_group",
+  "rename_group",
+  "delete_group",
   "switch_backend",
   "archive_session",
   "unarchive_session",
+  "delete_session_permanently",
   "update_slot_fields",
   "event_append",
 ];
@@ -64,8 +68,10 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
     let python_store = make_store(&python_home);
     let initial = rust_store.get_session(SESSION_ID).await.unwrap().unwrap();
     assert_eq!(initial.extra("left_by_deleted_package").unwrap()["text"], "你好");
-    let python_metadata = python_store.read_metadata_fresh(SESSION_ID).unwrap().unwrap();
-    assert_eq!(python_metadata.extra("left_by_deleted_package").unwrap()["values"][1], 2.5);
+    if *operation != "delete_session_permanently" {
+      let python_metadata = python_store.read_metadata_fresh(SESSION_ID).unwrap().unwrap();
+      assert_eq!(python_metadata.extra("left_by_deleted_package").unwrap()["values"][1], 2.5);
+    }
 
     if *operation == "event_append" {
       let python_events = python_store.load_chat_events_sync(SESSION_ID).unwrap();
@@ -119,11 +125,20 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
         "mark_unread" => {
           assert!(rust_store.mark_unread(SESSION_ID).await.unwrap().unwrap().has_unread);
         }
+        "mark_read" => {
+          assert!(!rust_store.mark_read(SESSION_ID).await.unwrap().unwrap().has_unread);
+        }
         "rename_session" => {
           rust_store.rename_session_at(SESSION_ID, "renamed session", fixed).await.unwrap();
         }
         "set_group" => {
           rust_store.set_group_at(SESSION_ID, Some("new-group"), fixed).await.unwrap();
+        }
+        "rename_group" => {
+          assert_eq!(rust_store.rename_group_at("old-group", "new-group", fixed).await.unwrap(), 1);
+        }
+        "delete_group" => {
+          assert_eq!(rust_store.delete_group_at("old-group", fixed).await.unwrap(), 1);
         }
         "switch_backend" => {
           rust_store.switch_backend_at(SESSION_ID, "new-backend", fixed).await.unwrap();
@@ -134,6 +149,9 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
         "unarchive_session" => {
           rust_store.unarchive_session_at(SESSION_ID, fixed).await.unwrap();
         }
+        "delete_session_permanently" => {
+          assert!(rust_store.delete_session_permanently(SESSION_ID).await.unwrap());
+        }
         "update_slot_fields" => {
           let mut values = Map::new();
           values.insert("slack_watermark_ts".to_string(), json!("new-slack-watermark"));
@@ -143,19 +161,26 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
       }
     }
 
-    let rust_metadata_path = rust_store.metadata_path(SESSION_ID);
-    let python_metadata_path = python_store.metadata_path(SESSION_ID);
-    assert_eq!(fs::read(&rust_metadata_path).unwrap(), fs::read(&python_metadata_path).unwrap(), "{operation}");
-    assert!(rust_store.read_metadata_fresh(SESSION_ID).unwrap().unwrap().extra("left_by_deleted_package").is_some());
-    if *operation == "event_append" {
-      assert_eq!(
-        fs::read(rust_store.chat_events_path(SESSION_ID)).unwrap(),
-        fs::read(python_store.chat_events_path(SESSION_ID)).unwrap()
-      );
+    if *operation == "delete_session_permanently" {
+      assert!(!rust_store.session_dir(SESSION_ID).exists());
+      assert!(!python_store.session_dir(SESSION_ID).exists());
+    } else {
+      let rust_metadata_path = rust_store.metadata_path(SESSION_ID);
+      let python_metadata_path = python_store.metadata_path(SESSION_ID);
+      assert_eq!(fs::read(&rust_metadata_path).unwrap(), fs::read(&python_metadata_path).unwrap(), "{operation}");
     }
-    let thread_path = rust_store.thread_metadata_path(SESSION_ID, THREAD_ID);
-    let thread = rust_store.read_thread_metadata(&thread_path).unwrap().unwrap();
-    assert_eq!(thread.extra.get("left_by_deleted_package").unwrap()["kept"], true);
+    if *operation != "delete_session_permanently" {
+      assert!(rust_store.read_metadata_fresh(SESSION_ID).unwrap().unwrap().extra("left_by_deleted_package").is_some());
+      if *operation == "event_append" {
+        assert_eq!(
+          fs::read(rust_store.chat_events_path(SESSION_ID)).unwrap(),
+          fs::read(python_store.chat_events_path(SESSION_ID)).unwrap()
+        );
+      }
+      let thread_path = rust_store.thread_metadata_path(SESSION_ID, THREAD_ID);
+      let thread = rust_store.read_thread_metadata(&thread_path).unwrap().unwrap();
+      assert_eq!(thread.extra.get("left_by_deleted_package").unwrap()["kept"], true);
+    }
     if *operation == OPS[0] {
       let mut rust_thread: ThreadMetadata = serde_json::from_value(json!({
         "id": THREAD_ID,

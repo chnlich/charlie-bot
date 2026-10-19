@@ -646,6 +646,95 @@ impl Store {
     Ok(archived)
   }
 
+  /// Permanently delete an empty, unreferenced task while holding the tree control lock.
+  pub async fn delete_permanently(&self, session_id: &str, caller: TaskCaller) -> StoreResult<bool> {
+    if caller != TaskCaller::Operator {
+      return Err(StoreError::forbidden("permanent delete requires operator credentials"));
+    }
+    let _guard = self.control_lock().await;
+    self.invalidate_tree_index();
+    let index = self.tree_index()?;
+    if !index.metas.contains_key(session_id) {
+      return Err(StoreError::not_found(format!("task {session_id} not found")));
+    }
+
+    let mut blockers = Vec::new();
+    let children = index.children.get(&Some(session_id.to_string())).cloned().unwrap_or_default();
+    if !children.is_empty() {
+      blockers.push(format!("has child task(s): {}", children.join(", ")));
+    }
+    let runs = self.list_run_records_sync(session_id)?;
+    if !runs.is_empty() {
+      blockers
+        .push(format!("has run record(s): {}", runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>().join(", ")));
+    }
+    let triggers_dir = self.session_dir(session_id).join("triggers");
+    if triggers_dir.is_dir() {
+      let mut has_trigger = false;
+      for entry in fs::read_dir(&triggers_dir).map_err(|error| path_error(&triggers_dir, error))? {
+        let entry = entry.map_err(|error| path_error(&triggers_dir, error))?;
+        if entry.file_name().to_string_lossy().ends_with(".json") {
+          has_trigger = true;
+          break;
+        }
+      }
+      if has_trigger {
+        blockers.push("has saved trigger reference(s)".to_string());
+      }
+    }
+
+    let facts = self.facts_of(session_id)?;
+    let mut substance = facts
+      .events_by_id
+      .values()
+      .filter(|event| event.get("type").and_then(Value::as_str) != Some(event_types::TASK_CREATED))
+      .map(|event| event.get("type").and_then(Value::as_str).unwrap_or("None").to_string())
+      .collect::<Vec<_>>();
+    substance.sort();
+    substance.dedup();
+    if !substance.is_empty() {
+      blockers.push(format!("has preserved conversation/evidence: {}", substance.join(", ")));
+    }
+
+    for (other_id, other) in &index.metas {
+      if other_id == session_id {
+        continue;
+      }
+      let mut refs = Vec::new();
+      if other.parent_session_id.as_deref() == Some(session_id) {
+        refs.push("parent_session_id");
+      }
+      if other.successor_session_id.as_deref() == Some(session_id) {
+        refs.push("successor_session_id");
+      }
+      if other.origin_ref.as_ref().is_some_and(|reference| reference.session_id == session_id) {
+        refs.push("origin_ref");
+      }
+      if other.created_by_event.as_ref().is_some_and(|reference| reference.session_id == session_id) {
+        refs.push("created_by_event");
+      }
+      if !refs.is_empty() {
+        blockers.push(format!("referenced by task {other_id} ({})", refs.join(", ")));
+        continue;
+      }
+      let other_facts = self.facts_of(other_id)?;
+      if other_facts.delivered_reports.iter().any(|(child_id, _)| child_id == session_id) {
+        blockers.push(format!("referenced by a child report in task {other_id}"));
+      }
+    }
+
+    blockers.sort();
+    blockers.dedup();
+    if !blockers.is_empty() {
+      return Err(StoreError::conflict(blockers));
+    }
+    let deleted = self.delete_session_permanently(session_id).await?;
+    if deleted {
+      self.invalidate_tree_index();
+    }
+    Ok(deleted)
+  }
+
   /// Move sequence bindings from an elone source and copy its scheduled-run bookkeeping.
   pub async fn rebind_elone_bindings_locked(
     &self,
@@ -1986,6 +2075,100 @@ mod tests {
     }
     assert_eq!(store.task_state(&root.id).unwrap(), "open");
     assert!(store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"] != "task_closed"));
+  }
+
+  #[tokio::test]
+  async fn delete_permanently_refuses_every_saved_task_reference_and_evidence() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+
+    let parent = create_node(&store, "delete-parent", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "delete-child", Some(&parent.id), TaskProfile::Worker).await;
+    let error = store.delete_permanently(&parent.id, TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), format!("has child task(s): {}", child.id));
+
+    let with_run = create_node(&store, "delete-with-run", None, TaskProfile::Manager).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &with_run.id, queued_run(&with_run.id, "delete-run"), None).await.unwrap();
+    drop(guard);
+    let error = store.delete_permanently(&with_run.id, TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), "has run record(s): delete-run");
+
+    let with_trigger = create_node(&store, "delete-with-trigger", None, TaskProfile::Manager).await;
+    let triggers_dir = store.session_dir(&with_trigger.id).join("triggers");
+    fs::create_dir_all(&triggers_dir).unwrap();
+    fs::write(triggers_dir.join("trigger-a.json"), "{}\n").unwrap();
+    let error = store.delete_permanently(&with_trigger.id, TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), "has saved trigger reference(s)");
+
+    let with_evidence = create_node(&store, "delete-with-evidence", None, TaskProfile::Manager).await;
+    append(&store, &with_evidence.id, json!({"type": "user", "content": "preserve this"})).await;
+    let error = store.delete_permanently(&with_evidence.id, TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), "has preserved conversation/evidence: user");
+
+    for (request_id, reference_kind) in [
+      ("delete-parent-reference", "parent_session_id"),
+      ("delete-successor-reference", "successor_session_id"),
+      ("delete-origin-reference", "origin_ref"),
+      ("delete-created-reference", "created_by_event"),
+    ] {
+      let target = create_node(&store, request_id, None, TaskProfile::Manager).await;
+      let reference = create_node(&store, &format!("{request_id}-other"), None, TaskProfile::Manager).await;
+      let _guard = store.lock_for(&reference.id).await;
+      let mut meta = store.read_metadata_fresh(&reference.id).unwrap().unwrap();
+      match reference_kind {
+        "parent_session_id" => meta.parent_session_id = Some(target.id.clone()),
+        "successor_session_id" => meta.successor_session_id = Some(target.id.clone()),
+        "origin_ref" => {
+          meta.origin_ref =
+            Some(EventRef { session_id: target.id.clone(), event_id: Some("origin-event".to_string()) });
+        }
+        "created_by_event" => {
+          meta.created_by_event =
+            Some(EventRef { session_id: target.id.clone(), event_id: Some("created-event".to_string()) });
+        }
+        _ => unreachable!(),
+      }
+      store.save_metadata_locked(&mut meta, false).unwrap();
+      drop(_guard);
+
+      let error = store.delete_permanently(&target.id, TaskCaller::Operator).await.unwrap_err();
+      assert_eq!(error.to_string(), format!("referenced by task {} ({reference_kind})", reference.id));
+    }
+
+    let report_target = create_node(&store, "delete-report-target", None, TaskProfile::Manager).await;
+    let reporter = create_node(&store, "delete-report-source", None, TaskProfile::Manager).await;
+    append(
+      &store,
+      &reporter.id,
+      json!({
+        "type": "child_report",
+        "child_session_id": report_target.id,
+        "child_event_id": "reported-event",
+      }),
+    )
+    .await;
+    let error = store.delete_permanently(&report_target.id, TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), format!("referenced by a child report in task {}", reporter.id));
+  }
+
+  #[tokio::test]
+  async fn delete_permanently_is_operator_only_reports_missing_tasks_and_removes_an_empty_task() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "delete-empty", None, TaskProfile::Manager).await;
+
+    let error =
+      store.delete_permanently(&root.id, TaskCaller::Agent { session_id: root.id.clone() }).await.unwrap_err();
+    assert_eq!(error.to_string(), "permanent delete requires operator credentials");
+    assert_eq!(error.status_code(), Some(403));
+    let error = store.delete_permanently("missing-task", TaskCaller::Operator).await.unwrap_err();
+    assert_eq!(error.to_string(), "task missing-task not found");
+    assert_eq!(error.status_code(), Some(404));
+
+    assert!(store.delete_permanently(&root.id, TaskCaller::Operator).await.unwrap());
+    assert!(!store.session_dir(&root.id).exists());
+    assert!(store.read_metadata_fresh(&root.id).unwrap().is_none());
   }
 
   #[tokio::test]

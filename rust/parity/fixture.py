@@ -848,8 +848,8 @@ def check_event_coverage(b: Builder) -> None:
 async def check_recovery_fixed_point(b: Builder) -> None:
   """Run the server's startup reconcile on the finished home: it must write nothing and launch nothing.
 
-  The one node allowed to reach the executor is the retired-backend node: its dispatch raises inside the
-  executor's backend resolution, before the reservation writes anything.
+  Nodes with an unconfigured backend may reach the executor: backend resolution raises before the reservation writes
+  anything.
   """
   from src.runtime import task_recovery
 

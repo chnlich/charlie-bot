@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::aggregator::builtin_event_types;
 use crate::control::ControlLock;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
-use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
 use crate::task_tree::CachedTreeIndex;
@@ -553,7 +553,11 @@ impl Store {
 
   /// Assign the session to a group and update its activity timestamp.
   pub async fn set_group(&self, session_id: &str, group: Option<&str>) -> StoreResult<Option<SessionMetadata>> {
-    self.set_group_at(session_id, group, UtcDateTime::now()).await
+    let meta = self.set_group_at(session_id, group, UtcDateTime::now()).await?;
+    if meta.is_some() {
+      tracing::info!(session_id, group = ?group, "session_group_set");
+    }
+    Ok(meta)
   }
 
   /// Set a group with an explicit activity timestamp for deterministic replay.
@@ -573,6 +577,163 @@ impl Store {
         updated_at,
       )
       .await
+  }
+
+  /// Star a session and update its activity timestamp.
+  pub async fn star_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+    let meta = self
+      .update_field(
+        session_id,
+        |meta| {
+          meta.starred = true;
+          Ok(())
+        },
+        UtcDateTime::now(),
+      )
+      .await?;
+    if meta.is_some() {
+      tracing::info!(session_id, "session_starred");
+    }
+    Ok(meta)
+  }
+
+  /// Remove a session star and update its activity timestamp.
+  pub async fn unstar_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+    let meta = self
+      .update_field(
+        session_id,
+        |meta| {
+          meta.starred = false;
+          Ok(())
+        },
+        UtcDateTime::now(),
+      )
+      .await?;
+    if meta.is_some() {
+      tracing::info!(session_id, "session_unstarred");
+    }
+    Ok(meta)
+  }
+
+  /// Set or clear one round's rating and update the session's activity timestamp.
+  pub async fn rate_round(
+    &self,
+    session_id: &str,
+    round_id: &str,
+    rating: Option<RoundRating>,
+  ) -> StoreResult<Option<SessionMetadata>> {
+    let meta = self
+      .update_field(
+        session_id,
+        |meta| {
+          meta.round_ratings.set(round_id.to_string(), rating);
+          Ok(())
+        },
+        UtcDateTime::now(),
+      )
+      .await?;
+    if meta.is_some() {
+      let rating_name = rating.map(|rating| match rating {
+        RoundRating::ThumbsUp => "thumbs_up",
+        RoundRating::ThumbsDown => "thumbs_down",
+      });
+      tracing::info!(session_id, round_id, rating = ?rating_name, "round_rated");
+    }
+    Ok(meta)
+  }
+
+  /// Rename one group across all matching sessions.
+  pub async fn rename_group(&self, old_name: &str, new_name: &str) -> StoreResult<usize> {
+    let count = self.rewrite_group(old_name, Some(new_name), None).await?;
+    if count > 0 {
+      tracing::info!(old_name, new_name, count, "group_renamed");
+    }
+    Ok(count)
+  }
+
+  /// Rename one group with an explicit activity timestamp for deterministic replay.
+  pub async fn rename_group_at(&self, old_name: &str, new_name: &str, updated_at: UtcDateTime) -> StoreResult<usize> {
+    self.rewrite_group(old_name, Some(new_name), Some(updated_at)).await
+  }
+
+  /// Clear one group from every matching session.
+  pub async fn delete_group(&self, group: &str) -> StoreResult<usize> {
+    let count = self.rewrite_group(group, None, None).await?;
+    if count > 0 {
+      tracing::info!(group, count, "group_deleted");
+    }
+    Ok(count)
+  }
+
+  /// Clear one group with an explicit activity timestamp for deterministic replay.
+  pub async fn delete_group_at(&self, group: &str, updated_at: UtcDateTime) -> StoreResult<usize> {
+    self.rewrite_group(group, None, Some(updated_at)).await
+  }
+
+  async fn rewrite_group(
+    &self,
+    old_name: &str,
+    new_name: Option<&str>,
+    updated_at: Option<UtcDateTime>,
+  ) -> StoreResult<usize> {
+    let sessions = self.load_session_metas(None)?;
+    let mut count = 0;
+    for snapshot in sessions {
+      if snapshot.group.as_deref() != Some(old_name) {
+        continue;
+      }
+      let _guard = self.lock_for(&snapshot.id).await;
+      let Some(mut fresh) = self.read_metadata_fresh(&snapshot.id)? else { continue };
+      if fresh.group.as_deref() != Some(old_name) {
+        continue;
+      }
+      fresh.group = new_name.map(str::to_string);
+      fresh.updated_at = updated_at.unwrap_or_else(UtcDateTime::now);
+      self.save_metadata_locked(&mut fresh, false)?;
+      count += 1;
+    }
+    Ok(count)
+  }
+
+  /// Clear the unread flag without changing activity time and notify the sidebar only after a flip.
+  pub async fn mark_read(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+    let meta = {
+      let _guard = self.lock_for(session_id).await;
+      let Some(mut meta) = self.read_metadata_fresh(session_id)? else { return Ok(None) };
+      if !meta.has_unread {
+        return Ok(Some(meta));
+      }
+      meta.has_unread = false;
+      self.save_metadata_locked(&mut meta, false)?;
+      self.read_metadata_fresh(session_id)?
+    };
+    let Some(meta) = meta else { return Ok(None) };
+    let mut fields = Map::new();
+    fields.insert("has_unread".to_string(), Value::Bool(false));
+    self.broadcast_sidebar(session_id, charliebot_core::event_types::UNREAD_CHANGED, fields).await?;
+    Ok(Some(meta))
+  }
+
+  /// Remove a session directory and its empty cgroup, then clear its runtime state.
+  pub async fn delete_session_permanently(&self, session_id: &str) -> StoreResult<bool> {
+    let _guard = self.lock_for(session_id).await;
+    let session_dir = self.session_dir(session_id);
+    if !session_dir.exists() {
+      return Ok(false);
+    }
+    let remove_dir = session_dir.clone();
+    tokio::task::spawn_blocking(move || fs::remove_dir_all(&remove_dir))
+      .await
+      .map_err(|error| StoreError::new(format!("{}: {error}", session_dir.display())))?
+      .map_err(|error| StoreError::new(format!("{}: {error}", session_dir.display())))?;
+    let base_dir = charliebot_core::cgroup::system_cgroup_base_dir();
+    charliebot_core::cgroup::cleanup_session_cgroup(&base_dir, session_id);
+    self.drop_session_runtime_state(session_id);
+    self.invalidate_cache(session_id);
+    crate::sidebar_state::mark_sidebar_dirty(session_id);
+    self.metadata_locks.lock().expect("metadata lock map mutex is not poisoned").remove(session_id);
+    tracing::info!(session_id, "session_deleted_permanently");
+    Ok(true)
   }
 
   /// Switch the session's selected backend and update its activity timestamp.

@@ -43,7 +43,6 @@ static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| Mutex::n
 /// Register the session detail, transcript, usage, events, and task-read routes.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
-    .route("/api/sessions/{session_id}", get_only(session_detail))
     .route("/api/sessions/{session_id}/pending-triggers", get_only(pending_triggers))
     .route("/api/sessions/{session_id}/bootstrap", get_only(session_bootstrap))
     .route("/api/sessions/{session_id}/usage", get_only(session_usage))
@@ -89,7 +88,7 @@ pub fn build_bootstrap_payload(
   Ok(Value::Object(payload))
 }
 
-async fn session_detail(
+pub(crate) async fn session_detail(
   State(features): State<Arc<FeatureContext>>,
   AxumPath(session_id): AxumPath<String>,
 ) -> Response {

@@ -349,6 +349,7 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
  "hmac",
+ "libc",
  "nix",
  "serde",
  "serde_json",
@@ -604,7 +605,9 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

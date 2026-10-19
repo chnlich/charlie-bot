@@ -40,6 +40,19 @@ where
   get(handler).fallback(refuse("GET, HEAD"))
 }
 
+/// A path whose first FastAPI route is GET and whose later route is DELETE. GET is served, DELETE is served, and all
+/// other methods answer 405 with the first route's `allow: GET` value.
+pub fn get_and_delete<HGet, TGet, HDelete, TDelete, S>(get_handler: HGet, delete_handler: HDelete) -> MethodRouter<S>
+where
+  HGet: Handler<TGet, S>,
+  TGet: 'static,
+  HDelete: Handler<TDelete, S>,
+  TDelete: 'static,
+  S: Clone + Send + Sync + 'static,
+{
+  get(get_handler).delete(delete_handler).head(refuse("GET")).fallback(refuse("GET"))
+}
+
 /// A FastAPI POST route: POST is served. HEAD and every other method answer 405 with `allow: POST`.
 pub fn post_only<H, T, S>(handler: H) -> MethodRouter<S>
 where
@@ -111,6 +124,15 @@ mod tests {
     assert_served(router(), Method::GET).await;
     assert_served(router(), Method::HEAD).await;
     assert_refused(router(), Method::POST, "GET, HEAD").await;
+  }
+
+  #[tokio::test]
+  async fn get_and_delete_serves_both_and_refuses_with_the_first_route_allow() {
+    let router = || Router::<()>::new().route("/r", get_and_delete(ok, ok));
+    assert_served(router(), Method::GET).await;
+    assert_served(router(), Method::DELETE).await;
+    assert_refused(router(), Method::HEAD, "GET").await;
+    assert_refused(router(), Method::PUT, "GET").await;
   }
 
   #[tokio::test]

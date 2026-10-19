@@ -143,6 +143,22 @@ pub enum RoundRating {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RoundRatings(Vec<(String, RoundRating)>);
 
+impl RoundRatings {
+  /// Set or clear one rating while preserving dictionary insertion order.
+  pub fn set(&mut self, round_id: String, rating: Option<RoundRating>) {
+    if let Some(index) = self.0.iter().position(|(key, _)| key == &round_id) {
+      match rating {
+        Some(rating) => self.0[index].1 = rating,
+        None => {
+          self.0.remove(index);
+        }
+      }
+    } else if let Some(rating) = rating {
+      self.0.push((round_id, rating));
+    }
+  }
+}
+
 impl Serialize for RoundRatings {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
   where
@@ -645,6 +661,23 @@ mod tests {
         SlotField { name: "probe_count", default: json!(0) },
       ],
     }]
+  }
+
+  #[test]
+  fn round_ratings_preserve_order_when_set_and_readded() {
+    let mut ratings = RoundRatings(vec![
+      ("round-a".to_string(), RoundRating::ThumbsUp),
+      ("round-b".to_string(), RoundRating::ThumbsDown),
+    ]);
+
+    ratings.set("round-a".to_string(), Some(RoundRating::ThumbsDown));
+    ratings.set("round-b".to_string(), None);
+    ratings.set("round-b".to_string(), Some(RoundRating::ThumbsUp));
+
+    assert_eq!(
+      ratings.0,
+      vec![("round-a".to_string(), RoundRating::ThumbsDown), ("round-b".to_string(), RoundRating::ThumbsUp),]
+    );
   }
 
   #[test]

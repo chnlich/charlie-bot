@@ -157,6 +157,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | template global | `voice_default_backend` | features/voice | ported | |
 | turn contribution | `voice` | features/voice | ported | dictated input preamble |
 | turn contribution | `chat_threads` | features/chat_threads | ported | names `thread_session.md` for a Slack or Discord thread session |
+| let-go step | `artifacts.headless_renderer` | features/artifacts | ported | closes the warm Chrome process at shutdown |
 
 ## Services and lifespan
 
@@ -193,6 +194,7 @@ implemented.
 | service | `usage_tally` | features/usage | not applicable | It only preloads Python modules; Rust has no import cost to hide. |
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
 | service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf` provisioning is not ported; warm-up events are deferred. |
+| service | `headless_renderer` | features/artifacts | ported | Lazy per-process Chrome renderer; the artifacts let-go step closes it. |
 | registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | usage source `opencode` | backends/opencode | ported | Registers the source with id prefixes `opencode-` and `oc-`, and attributes the `opencode` backend type to it (`charliebot-agents/src/backends/opencode/mod.rs`). The log side reads the store's database (`usage_logs.rs`); the sweep vacuums it and reports its freelist (`usage_sweep.rs`). The backend type itself is not ported. |
@@ -291,11 +293,11 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `<publish.dir>/<token>/<basename>` | CLI publish | todo | Outside the home. |
 | one-shot backend temporary directories | backends | todo | Outside the home. |
 | explain temporary directories | features/explain | ported | Outside the home. A read-only history copy per run, removed when the run ends. |
-| headless-render temporary directories | features/artifacts | todo | Outside the home. |
+| headless-render temporary directories | features/artifacts | ported | Outside the home. Removed when a renderer closes or a measurement fails. |
 | trace-merge temporary directories | features/trace | todo | Outside the home. |
 | memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |
 | SSH ControlMaster sockets | foundation | ported | Outside the home. The control directory (mode 0700), `ControlPath`, `ControlPersist`, `ConnectTimeout` and `BatchMode` match Python (`charliebot-core/src/ssh.rs:17`, `:23`, `:35`; Python `src/infra/ssh.py:17-24`, `:27-53`). The host-auth probe and the sched launcher build their argv through it (`features/host_auth/src/probe.rs:57`, `charliebot-sched/src/triggers.rs:624`). |
-| artifact page-height probe files | features/artifacts | todo | Beside an artifact. |
+| artifact page-height probe files | features/artifacts | ported | Beside an artifact. Removed after every measurement outcome. |
 | tmux socket `charliebot` | features/terminal | ported | Outside the home. |
 | tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |
 | repo config examples and prompt inputs | foundation | reader-only | Not written by the server. |

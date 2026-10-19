@@ -1,0 +1,114 @@
+# The plan verbs approve and close: the refusals of each state, each close mode, the bare approve and the listing's pending
+# flag after it, the unknown and corrupt sessions, and the request shapes the models refuse. The lineage session's plans
+# move through their states in step order, so each answer depends on the steps before it. The shape steps come last.
+stage: features
+name: features-artifacts-plan-verbs
+fixture_extras: [artifacts_plan_verbs]
+steps:
+  - name: approve with several open plans and no plan id refuses and names each
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}"}
+    expect_status: 400
+  - name: approve plan 2 by its id
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 2}
+    expect_status: 200
+  - name: approve plan 2 again refuses as already approved
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 2}
+    expect_status: 400
+  - name: close plan 3 as abandoned
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 3, close_as: abandoned}
+    expect_status: 200
+  - name: approve closed plan 3 refuses as closed
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 3}
+    expect_status: 400
+  - name: close closed plan 3 again refuses as already closed
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 3, close_as: completed}
+    expect_status: 400
+  - name: close plan 1 as superseded
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 1, close_as: superseded}
+    expect_status: 200
+  - name: close plan 4 as completed
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 4, close_as: completed}
+    expect_status: 200
+  - name: approve a plan id the session does not hold refuses
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 99}
+    expect_status: 400
+  - name: approve with no plan id and no open plan refuses
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}"}
+    expect_status: 400
+  - name: session listing before the approval shows the pending plan
+    method: GET
+    path: /api/sessions/
+    expect_status: 200
+  - name: approve the one open plan without a plan id
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_single}"}
+    expect_status: 200
+  - name: session listing after the approval clears the pending plan
+    method: GET
+    path: /api/sessions/
+    expect_status: 200
+  - name: approve on an unknown session answers 404
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${missing_session}"}
+    expect_status: 404
+  - name: close on an unknown session answers 404
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${missing_session}", plan_id: 1, close_as: completed}
+    expect_status: 404
+  - name: approve on a registry that is not JSON answers 400 with the decode message
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_corrupt}"}
+    expect_status: 400
+  - name: close on a registry that is not JSON answers 400 with the decode message
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_corrupt}", plan_id: 1, close_as: completed}
+    expect_status: 400
+  - name: approve with an extra key answers 422
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 2, extra: true}
+    expect_status: 422
+    compare: status_and_shape
+  - name: close without a plan id answers 422
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_lineages}", close_as: completed}
+    expect_status: 422
+    compare: status_and_shape
+  - name: close with a mode the model does not hold answers 422
+    method: POST
+    path: /api/internal/plan/close
+    json: {session_id: "${sessions.verbs_lineages}", plan_id: 2, close_as: retired}
+    expect_status: 422
+    compare: status_and_shape
+  - name: approve on an unknown session with an extra key answers 422 before the session check
+    method: POST
+    path: /api/internal/plan/approve
+    json: {session_id: "${missing_session}", extra: true}
+    expect_status: 422
+    compare: status_and_shape

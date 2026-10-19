@@ -383,6 +383,25 @@ def test_plan_takeoff_time_masks_only_the_stamp_and_its_version_still_differs() 
   assert _masked_plan_registry(later) != _masked_plan_registry(other_version)
 
 
+def test_plan_version_created_time_masks_each_stamp_and_each_version_number_still_differs() -> None:
+  def registry(stamp: str, numbers: tuple[int, int]) -> dict:
+    versions = [{"v": number, "created_at": stamp} for number in numbers]
+    return {
+        "plans": [{"id": plan_id, "title": "Synthetic plan", "versions": versions} for plan_id in (1, 2)],
+    }
+
+  earlier = _masked_plan_registry(registry("2026-10-19T09:41:00+00:00", (1, 2)))
+  later = _masked_plan_registry(registry("2026-10-19T09:42:07.512904+00:00", (1, 2)))
+  assert earlier == later
+  assert [[version["created_at"] for version in plan["versions"]] for plan in earlier["plans"]] == [
+      ["<plan-version-created-time>"] * 2,
+      ["<plan-version-created-time>"] * 2,
+  ]
+  assert [[version["v"] for version in plan["versions"]] for plan in earlier["plans"]] == [[1, 2], [1, 2]]
+  renumbered = _masked_plan_registry(registry("2026-10-19T09:42:07.512904+00:00", (1, 3)))
+  assert later != renumbered
+
+
 def test_plan_close_time_masks_only_the_stamp_and_its_mode_still_differs() -> None:
   earlier = _plan_registry(None, {"as": "completed", "at": "2026-10-19T09:41:00+00:00"})
   later = _plan_registry(None, {"as": "completed", "at": "2026-10-19T09:42:07.512904+00:00"})

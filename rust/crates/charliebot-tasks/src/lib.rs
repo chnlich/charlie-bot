@@ -11,6 +11,7 @@ pub mod master_run;
 pub mod master_state;
 pub mod master_trigger;
 pub mod prompts;
+pub mod recovery;
 pub mod review_text;
 pub mod routes;
 pub mod session_anchors;
@@ -25,5 +26,7 @@ use charliebot_registry::{Registry, RegistryError};
 /// Register task orchestration routes and the execution startup step.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes::routes, routes::matches)?;
-  registry.pre_recovery_step("task_execution", execution::pre_recovery_step)
+  registry.pre_recovery_step("task_execution", execution::pre_recovery_step)?;
+  registry.recovery_step("task_recovery", recovery::recovery_step)?;
+  registry.let_go_step("task_execution", recovery::let_go_step)
 }

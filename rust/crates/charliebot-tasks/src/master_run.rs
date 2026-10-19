@@ -882,7 +882,7 @@ fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
   item.cfg.backends.options.first().cloned()
 }
 
-fn build_fresh_translate(
+pub(crate) fn build_fresh_translate(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   option: Option<&BackendOption>,

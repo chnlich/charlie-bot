@@ -6,7 +6,7 @@ use std::ffi::CString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ use charliebot_registry::backend::Env;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
 use charliebot_store::control_events::{self, ACTOR_SYSTEM};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::BoxFuture;
@@ -30,9 +30,10 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
-use crate::master_queue::MasterQueue;
+use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
 use crate::prompts::{self, PromptEnv, PromptSnapshot, TaskPromptError};
+use crate::recovery::{self, RecoveryState};
 use crate::session_anchors;
 use crate::spawner_backends;
 
@@ -48,7 +49,7 @@ pub struct LaunchSettlement {
 type LaunchKey = (String, String);
 
 #[derive(Default)]
-struct LaunchState {
+pub(crate) struct LaunchState {
   inflight: HashSet<LaunchKey>,
   settlements: HashMap<LaunchKey, watch::Sender<Option<LaunchSettlement>>>,
 }
@@ -56,16 +57,23 @@ struct LaunchState {
 /// The manager execution adapter for durable task runs.
 #[derive(Clone)]
 pub struct TaskExecutionAdapter {
-  features: Arc<FeatureContext>,
-  queue: Arc<MasterQueue>,
-  dispatch: Arc<Dispatcher>,
-  launches: Arc<Mutex<LaunchState>>,
+  pub(crate) features: Arc<FeatureContext>,
+  pub(crate) queue: Arc<MasterQueue>,
+  pub(crate) dispatch: Arc<Dispatcher>,
+  pub(crate) launches: Arc<Mutex<LaunchState>>,
+  pub(crate) recovery: Arc<RecoveryState>,
 }
 
 impl TaskExecutionAdapter {
   /// Build the adapter that dispatches manager turns on `queue`.
   pub fn new(features: Arc<FeatureContext>, queue: Arc<MasterQueue>, dispatch: Arc<Dispatcher>) -> Self {
-    Self { features, queue, dispatch, launches: Arc::new(Mutex::new(LaunchState::default())) }
+    Self {
+      features,
+      queue,
+      dispatch,
+      launches: Arc::new(Mutex::new(LaunchState::default())),
+      recovery: Arc::new(RecoveryState::default()),
+    }
   }
 
   /// Reserve one fresh input batch or schedule one queued run.
@@ -221,7 +229,7 @@ impl TaskExecutionAdapter {
     if let Some((reason, settle_closed)) = withheld {
       self.record_launch_withheld(&meta, &run, &reason).await?;
       if settle_closed {
-        self.features.store.request_stop(session_id, run_id, &format!("closed-task:{run_id}")).await?;
+        self.features.store.request_stop(session_id, run_id, &recovery::closed_task_stop_request_id(run_id)).await?;
       }
       return Ok(LaunchSettlement { outcome: None, withheld: Some(format!("withheld: {reason}")) });
     }
@@ -295,7 +303,7 @@ impl TaskExecutionAdapter {
     });
   }
 
-  fn resolve_run_backend(&self, cfg: &CharlieBotConfig, run: &RunRecord) -> anyhow::Result<BackendOption> {
+  pub(crate) fn resolve_run_backend(&self, cfg: &CharlieBotConfig, run: &RunRecord) -> anyhow::Result<BackendOption> {
     let backend = run
       .backend
       .as_deref()
@@ -411,13 +419,8 @@ impl TaskExecutionAdapter {
       "manager_turn_launching"
     );
 
-    let features = Arc::clone(&self.features);
     let queue = Arc::clone(&self.queue);
-    let tree_activity: crate::master_queue::TaskTreeActivityFn = Arc::new(move |id| {
-      let activity = features.store.task_tree_activity(id)?;
-      Ok((activity.has_running_tasks, activity.work_state))
-    });
-    let callbacks = queue.session_callbacks(Arc::clone(&self.features), tree_activity);
+    let callbacks = self.turn_callbacks();
     let spawn_features = Arc::clone(&self.features);
     let spawn_meta = meta.clone();
     let spawn_snapshot_hash = snapshot.prompt_hash();
@@ -449,72 +452,14 @@ impl TaskExecutionAdapter {
         Ok(())
       })
     });
-    let finish_features = Arc::clone(&self.features);
-    let finish_dispatch = Arc::clone(&self.dispatch);
-    let persist_done = Arc::clone(&callbacks.persist_and_broadcast);
-    let finish_session = session_id.to_string();
-    let finish_run_id = run_id.to_string();
-    let finish_option = option.clone();
-    let raw_log = run_dir.join(run_records::RAW_LOG_NAME);
-    let on_task_finish: TaskFinishCallback = Arc::new(move |native_session_id, exit_code, extras, done_event| {
-      let features = Arc::clone(&finish_features);
-      let dispatch = Arc::clone(&finish_dispatch);
-      let persist_done = Arc::clone(&persist_done);
-      let session_id = finish_session.clone();
-      let run_id = finish_run_id.clone();
-      let option = finish_option.clone();
-      let raw_log = raw_log.clone();
-      Box::pin(async move {
-        features
-          .store
-          .record_observation(
-            &session_id,
-            &run_id,
-            Map::from_iter([
-              ("native_session_id".to_string(), json!(native_session_id)),
-              (
-                "model".to_string(),
-                json!(
-                  extras
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .filter(|model| !model.is_empty())
-                    .unwrap_or(&option.model)
-                ),
-              ),
-              ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
-              ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
-            ]),
-          )
-          .await?;
-
-        let guard = features.store.control_lock().await;
-        let facts = features.store.load_all_facts(&session_id)?;
-        let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
-        let outcome = if stop_requested {
-          let mut outcome = RunOutcome::new(RunOutcomeKind::Interrupted);
-          outcome.exit_code = Some(exit_code);
-          outcome
-        } else {
-          let mut outcome =
-            RunOutcome::new(if exit_code == 0 { RunOutcomeKind::Success } else { RunOutcomeKind::Failed });
-          outcome.exit_code = Some(exit_code);
-          outcome
-        };
-        if stop_requested {
-          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-          persist_done(session_id.clone(), done_event).await?;
-        } else {
-          persist_done(session_id.clone(), done_event).await?;
-          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-        }
-        drop(guard);
-
-        dispatch.finish_run(&session_id, &run_id, outcome).await?;
-        dispatch.dispatch_pending(&session_id).await?;
-        Ok(true)
-      })
-    });
+    let on_task_finish = self.manager_finish_recorder(
+      session_id,
+      run_id,
+      option,
+      run_dir.join(run_records::RAW_LOG_NAME),
+      None,
+      Arc::clone(&callbacks.persist_and_broadcast),
+    );
     let env = self.child_env(session_id, run_id, meta.name.as_str())?;
     queue
       .run_message(MasterTurnRequest {
@@ -544,7 +489,103 @@ impl TaskExecutionAdapter {
     Ok(())
   }
 
-  fn child_env(&self, session_id: &str, run_id: &str, agent: &str) -> StoreResult<Env> {
+  /// The session callbacks of a manager turn, with the task-tree activity read the queue consults.
+  pub(crate) fn turn_callbacks(&self) -> SessionCallbacks {
+    let features = Arc::clone(&self.features);
+    let tree_activity: TaskTreeActivityFn = Arc::new(move |id| {
+      let activity = features.store.task_tree_activity(id)?;
+      Ok((activity.has_running_tasks, activity.work_state))
+    });
+    self.queue.session_callbacks(Arc::clone(&self.features), tree_activity)
+  }
+
+  /// The finish recorder both manager-turn paths hand the master queue (`task_execution.py:1203`,
+  /// `_manager_finish_recorder`): it records the run's evidence, lands the terminal fact with the observed exit, and
+  /// dispatches the node's pending inputs. `ended_at` is the drain rule's end time for a turn that ended unseen; None
+  /// keeps the observed write time.
+  pub(crate) fn manager_finish_recorder(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    option: &BackendOption,
+    raw_log: PathBuf,
+    ended_at: Option<UtcDateTime>,
+    persist_done: PersistAndBroadcastFn,
+  ) -> TaskFinishCallback {
+    let features = Arc::clone(&self.features);
+    let dispatch = Arc::clone(&self.dispatch);
+    let session_id = session_id.to_string();
+    let run_id = run_id.to_string();
+    let option = option.clone();
+    Arc::new(move |native_session_id, exit_code, extras, done_event| {
+      let features = Arc::clone(&features);
+      let dispatch = Arc::clone(&dispatch);
+      let persist_done = Arc::clone(&persist_done);
+      let session_id = session_id.clone();
+      let run_id = run_id.clone();
+      let option = option.clone();
+      let raw_log = raw_log.clone();
+      Box::pin(async move {
+        features
+          .store
+          .record_observation(
+            &session_id,
+            &run_id,
+            Map::from_iter([
+              ("native_session_id".to_string(), json!(native_session_id)),
+              (
+                "model".to_string(),
+                json!(
+                  extras
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|model| !model.is_empty())
+                    .unwrap_or(&option.model)
+                ),
+              ),
+              ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
+              ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
+            ]),
+          )
+          .await?;
+
+        let guard = features.store.control_lock().await;
+        let facts = features.store.load_all_facts(&session_id)?;
+        let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
+        let kind = if stop_requested {
+          RunOutcomeKind::Interrupted
+        } else if exit_code == 0 {
+          RunOutcomeKind::Success
+        } else {
+          RunOutcomeKind::Failed
+        };
+        let mut outcome = RunOutcome::new(kind);
+        outcome.exit_code = Some(exit_code);
+        outcome.ended_at = ended_at;
+        if stop_requested {
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+          persist_done(session_id.clone(), done_event).await?;
+        } else {
+          persist_done(session_id.clone(), done_event).await?;
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+        }
+        drop(guard);
+
+        dispatch.finish_run(&session_id, &run_id, outcome).await?;
+        dispatch.dispatch_pending(&session_id).await?;
+        Ok(true)
+      })
+    })
+  }
+
+  /// Whether this process already drives `run_id`: its launch is in flight, or a resume follow holds it.
+  pub(crate) fn drives_run(&self, session_id: &str, run_id: &str) -> bool {
+    let key = (session_id.to_string(), run_id.to_string());
+    self.launches.lock().expect("task execution launch state is not poisoned").inflight.contains(&key)
+      || self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").contains(&key)
+  }
+
+  pub(crate) fn child_env(&self, session_id: &str, run_id: &str, agent: &str) -> StoreResult<Env> {
     let key = self
       .features
       .credentials
@@ -680,7 +721,7 @@ impl TaskExecutionAdapter {
     if let Err(landing_error) = landing {
       tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %landing_error, "task_run_launch_failure_landing_failed");
       if is_out_of_space_error(landing_error.as_ref()) {
-        self.start_run_end_landing_retry(session_id, run_id);
+        self.start_run_end_landing_retry(session_id, Some(run_id));
       }
     }
   }
@@ -778,11 +819,12 @@ impl TaskExecutionAdapter {
   }
 
   fn note_launch_out_of_space(&self, session_id: &str, run_id: &str) {
-    self.start_run_end_landing_retry(session_id, run_id);
+    self.start_run_end_landing_retry(session_id, Some(run_id));
   }
 
-  fn start_run_end_landing_retry(&self, session_id: &str, run_id: &str) {
-    tracing::error!(target: "charliebot_tasks", session_id, run_id, "run_end_landing_retry_unavailable");
+  /// Start the node's end-landing retry task; a second request for the node is a no-op.
+  pub(crate) fn start_run_end_landing_retry(&self, session_id: &str, run_id: Option<&str>) {
+    recovery::start_end_landing_retry(self.clone(), session_id, run_id);
   }
 }
 

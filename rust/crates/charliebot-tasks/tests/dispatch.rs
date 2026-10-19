@@ -581,7 +581,7 @@ async fn user_message_lifts_a_node_ahead_of_one_that_only_received_a_scheduled_t
 }
 
 #[tokio::test]
-async fn a_finished_manager_turn_persists_master_done_before_its_observation_and_run_finished() {
+async fn a_finished_manager_turn_persists_its_observation_before_master_done_and_run_finished() {
   let harness = Harness::new();
   let task = harness.create_task("manager", None, TaskProfile::Manager, "Manager").await;
   register_run(&harness, &task.id, "run-turn").await;
@@ -595,7 +595,7 @@ async fn a_finished_manager_turn_persists_master_done_before_its_observation_and
     backend_type: "synthetic".to_string(),
     type_fields: serde_yaml::Mapping::new(),
   };
-  // The run's raw log is unset until the observation is written, so each master_done records whether it came first.
+  // The run's raw log is set by the observation, so each master_done records whether it came after it.
   let raw_log_at_master_done = Arc::new(Mutex::new(Vec::new()));
   let persist_done: PersistAndBroadcastFn = {
     let store = Arc::clone(&harness.store);
@@ -618,7 +618,7 @@ async fn a_finished_manager_turn_persists_master_done_before_its_observation_and
     on_finish(Some("native-session".to_string()), 0, Map::new(), make_master_done_event(0, false)).await.unwrap();
 
   assert!(handled);
-  assert_eq!(*raw_log_at_master_done.lock().unwrap(), [None]);
+  assert_eq!(*raw_log_at_master_done.lock().unwrap(), [Some("raw-log.jsonl".to_string())]);
   let order = harness
     .store
     .load_all_facts(&task.id)

@@ -1336,39 +1336,44 @@ pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxF
 }
 
 /// Build the schedule request from the fields the body model validated, in the model's declaration order.
-fn schedule_request(payload: &Value) -> ScheduleTriggerRequest {
-  ScheduleTriggerRequest {
+fn schedule_request(payload: &Value) -> anyhow::Result<ScheduleTriggerRequest> {
+  Ok(ScheduleTriggerRequest {
     session_id: payload["session_id"].as_str().expect("validated string field").to_string(),
-    delay_seconds: payload["delay_seconds"].as_i64().expect("validated integer field"),
+    delay_seconds: integer_field(payload, "delay_seconds")?,
     message: payload["message"].as_str().expect("validated string field").to_string(),
     watch_targets: match payload.get("watch_targets") {
       None | Some(Value::Null) => None,
-      Some(Value::Array(items)) => Some(items.iter().map(watch_target).collect()),
+      Some(Value::Array(items)) => Some(items.iter().map(watch_target).collect::<anyhow::Result<_>>()?),
       other => unreachable!("validated watch targets are null or a list, not {other:?}"),
     },
-  }
+  })
 }
 
 /// Build one watched target from a validated member of the tagged union.
-fn watch_target(value: &Value) -> WatchTarget {
-  match value["kind"].as_str().expect("validated tag") {
+fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
+  Ok(match value["kind"].as_str().expect("validated tag") {
     "local_pid" => WatchTarget::LocalPid {
-      pid: value["pid"].as_i64().expect("validated integer field"),
+      pid: integer_field(value, "pid")?,
       exit_file: optional_string(value, "exit_file"),
       log: optional_string(value, "log"),
     },
     "remote_pid" => WatchTarget::RemotePid {
       host: value["host"].as_str().expect("validated string field").to_string(),
-      pid: value["pid"].as_i64().expect("validated integer field"),
+      pid: integer_field(value, "pid")?,
       exit_file: optional_string(value, "exit_file"),
       log: optional_string(value, "log"),
     },
-    "slurm_job" => WatchTarget::SlurmJob {
-      host: optional_string(value, "host"),
-      job_id: value["job_id"].as_i64().expect("validated integer field"),
-    },
+    "slurm_job" => {
+      WatchTarget::SlurmJob { host: optional_string(value, "host"), job_id: integer_field(value, "job_id")? }
+    }
     other => unreachable!("validated watch target kind {other}"),
-  }
+  })
+}
+
+/// A validated integer field as the 64-bit field it is stored in. The validator reads any integer up to `u64::MAX`, as
+/// pydantic reads any `int`; a value past `i64::MAX` has no stored form.
+fn integer_field(value: &Value, field: &str) -> anyhow::Result<i64> {
+  value[field].as_i64().ok_or_else(|| anyhow!("{field} {} is past the 64-bit integer range", value[field]))
 }
 
 /// An optional validated string field: null and absent are both `None`.
@@ -1391,13 +1396,16 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     Ok(None) => unreachable!("a required request body validates to an object"),
     Err(response) => return *response,
   };
-  let request = schedule_request(&payload);
-
-  match features.store.get_session(&request.session_id).await {
+  let session_id = payload["session_id"].as_str().expect("validated string field");
+  match features.store.get_session(session_id).await {
     Ok(Some(_)) => {}
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   }
+  let request = match schedule_request(&payload) {
+    Ok(request) => request,
+    Err(error) => return responses::internal_error("OverflowError", error.to_string()),
+  };
   if let Some(targets) = &request.watch_targets {
     if targets.is_empty() {
       return responses::json(
@@ -2562,6 +2570,26 @@ mod tests {
       record["watch_targets"],
       json!([{ "kind": "local_pid", "pid": 7, "exit_file": Value::Null, "log": Value::Null }])
     );
+  }
+
+  #[tokio::test]
+  // Python: src/runtime/triggers.py::create_trigger (timedelta overflows past the 64-bit range, after the 404)
+  async fn schedule_route_answers_500_for_an_integer_past_the_64_bit_range() {
+    let (_home, features) = feature_context();
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let missing = r#"{"session_id":"synthetic-missing-session","delay_seconds":9223372036854775808,"message":"wake"}"#;
+    let response = send(&routes(&features), Method::POST, "/api/internal/schedule-trigger", missing).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    add_session(&features, SESSION_ID);
+    let bodies = [
+      r#"{"session_id":"synthetic-trigger-session","delay_seconds":9223372036854775808,"message":"wake"}"#,
+      r#"{"session_id":"synthetic-trigger-session","delay_seconds":60,"message":"wake","watch_targets":[{"kind":"local_pid","pid":9223372036854775808}]}"#,
+    ];
+    for body in bodies {
+      let response = send(&routes(&features), Method::POST, "/api/internal/schedule-trigger", body).await;
+      assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
   }
 
   #[tokio::test]

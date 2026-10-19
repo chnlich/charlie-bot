@@ -200,6 +200,7 @@ FROM usage u
 WHERE NOT EXISTS (
   SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
   WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)
+
 GROUP BY source, model, account, kind
 "#;
 
@@ -228,6 +229,7 @@ FROM usage u
 WHERE NOT EXISTS (
   SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
   WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)
+
 GROUP BY source, model, account, kind, day
 "#;
 

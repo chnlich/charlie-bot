@@ -14,8 +14,6 @@ use charliebot_agents::backends::{claude_code, codex, opencode};
 use charliebot_core::home;
 use charliebot_core::paths::realpath;
 use charliebot_registry::Registry;
-use charliebot_registry::store_hooks::store_hooks;
-use charliebot_store::Store;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_usage_page::cool_storage::{format_sweep_line, run_cool_sweep};
 
@@ -43,8 +41,7 @@ fn main() -> anyhow::Result<()> {
   }
 
   let registry = Arc::new(registry);
-  let store = Store::new((*cfg).clone(), registry.metadata_slots(), store_hooks(Arc::clone(&registry)))?;
-  let categories = run_cool_sweep(cfg, &store, &registry, now)?;
+  let categories = run_cool_sweep(cfg, &registry, now)?;
   println!("{}", format_sweep_line(&categories));
   Ok(())
 }

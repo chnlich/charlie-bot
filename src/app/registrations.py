@@ -30,6 +30,7 @@ PACKAGES = (
     "src.features.improve",
     "src.features.memory",
     "src.features.ncu",
+    "src.features.router",
     "src.features.terminal",
     "src.features.trace",
     "src.features.usage",

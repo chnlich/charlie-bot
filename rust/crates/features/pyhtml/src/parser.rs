@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::LazyLock;
 
+use charliebot_core::pystr;
 use fancy_regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -343,7 +344,7 @@ impl<'a> Parser<'a> {
       cursor = whole.end();
     }
 
-    let end = trim_python_whitespace(&self.source[cursor..endpos]);
+    let end = pystr::strip(&self.source[cursor..endpos]);
     if end != ">" && end != "/>" {
       self.emit_data(raw, i);
       return Ok(Some(endpos));
@@ -646,22 +647,4 @@ fn char_offset_from_end(source: &str, count: usize) -> usize {
 
 fn matching_quote(value: &str) -> bool {
   matches!((value.chars().next(), value.chars().last()), (Some('\''), Some('\'')) | (Some('"'), Some('"')))
-}
-
-fn trim_python_whitespace(value: &str) -> &str {
-  let start = value.char_indices().find(|(_, ch)| !is_python_whitespace(*ch)).map_or(value.len(), |(index, _)| index);
-  let end = value
-    .char_indices()
-    .rev()
-    .find(|(_, ch)| !is_python_whitespace(*ch))
-    .map_or(start, |(index, ch)| index + ch.len_utf8());
-  &value[start..end]
-}
-
-fn is_python_whitespace(ch: char) -> bool {
-  matches!(
-    ch,
-    '\u{9}'..='\u{d}' | '\u{1c}'..='\u{20}' | '\u{85}' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' |
-      '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
-  )
 }

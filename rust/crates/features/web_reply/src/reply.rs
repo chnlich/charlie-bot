@@ -10,6 +10,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPLY, WEB_REPLY_NOTICE};
+use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, StoreError};
@@ -163,7 +164,7 @@ pub fn noticed(events: &[Value], user_event_id: &str) -> bool {
 /// nothing when the running turn has neither. A refusal records nothing and marks nothing.
 pub async fn post_web_reply(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
-  if py_strip(text).is_empty() {
+  if pystr::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
   let loaded = load_events(features, session_id).await?;
@@ -198,11 +199,6 @@ pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, We
       .map(|message| json!({"role": message["role"].clone(), "content": message["content"].clone()}))
       .collect(),
   )
-}
-
-/// Python's `str.strip()`: trims what `char::is_whitespace` trims, plus the information separators U+001C to U+001F.
-pub fn py_strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
 #[cfg(test)]
@@ -362,8 +358,8 @@ mod tests {
 
   #[test]
   fn py_strip_trims_the_information_separators_as_python_does() {
-    assert_eq!(py_strip(" \u{1c}x\u{1f}\n"), "x");
-    assert_eq!(py_strip(" \t\n"), "");
+    assert_eq!(pystr::strip(" \u{1c}x\u{1f}\n"), "x");
+    assert_eq!(pystr::strip(" \t\n"), "");
   }
 
   #[test]

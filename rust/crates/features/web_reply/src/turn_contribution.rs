@@ -11,6 +11,7 @@ use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
+use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, PromptSource, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
@@ -86,7 +87,7 @@ impl TurnContribution for WebReplyTurnContribution {
 /// missing or unreadable doc fails.
 fn rules_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-  Ok(reply::py_strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
+  Ok(pystr::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
 }
 
 /// `_web_reply_message`: the chat line of a `web_reply` event.

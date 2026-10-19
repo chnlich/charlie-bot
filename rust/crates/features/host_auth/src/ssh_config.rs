@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use anyhow::bail;
+use charliebot_core::pystr;
 
 use crate::pytext;
 
@@ -15,12 +16,12 @@ pub fn parse_hosts(text: &str) -> anyhow::Result<Vec<(String, String)>> {
   let mut seen = HashSet::new();
   let mut block = Block::default();
   for raw_line in pytext::splitlines(text) {
-    let line = pytext::strip(raw_line.split_once('#').map_or(raw_line, |(before, _)| before));
+    let line = pystr::strip(raw_line.split_once('#').map_or(raw_line, |(before, _)| before));
     if line.is_empty() {
       continue;
     }
     let separated = line.replace('=', " ");
-    let tokens = pytext::split_whitespace(&separated);
+    let tokens = pystr::split_whitespace(&separated);
     let Some(&keyword) = tokens.first() else {
       bail!("ssh config line {line:?} has no keyword");
     };

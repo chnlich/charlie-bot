@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context, bail};
 use charliebot_core::pyfmt::str_repr;
+use charliebot_core::pystr;
 
 const TOPICS_FILENAME: &str = "topics";
 const ENTRIES_DIRNAME: &str = "entries";
@@ -228,7 +229,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
     }
     let value = match key {
       "title" => {
-        let title = py_strip(value);
+        let title = pystr::strip(value);
         if title.is_empty() {
           return Err(MemoryFormatError(format!("{location}: line {line_no}: empty 'title' header value")));
         }
@@ -258,7 +259,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
     topic: header.get("topic").cloned(),
     slug: entry_path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default(),
     scope: header.get("scope").cloned(),
-    audience: header.get("audience").map(|raw| raw.split(',').map(|part| py_strip(part).to_string()).collect()),
+    audience: header.get("audience").map(|raw| raw.split(',').map(|part| pystr::strip(part).to_string()).collect()),
     title: title.clone(),
     body: body_lines.join("\n"),
   })
@@ -296,11 +297,6 @@ fn is_topic_name(name: &str) -> bool {
   let mut chars = name.chars();
   chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
-/// Python's `str.strip()` with no argument: whitespace per `str.isspace`, which also takes U+001C to U+001F.
-fn py_strip(text: &str) -> &str {
-  text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
 /// One vocabulary line, `name` or `name resident` (`_TOPIC_LINE_RE`).

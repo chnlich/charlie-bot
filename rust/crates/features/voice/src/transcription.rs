@@ -6,6 +6,7 @@ use base64::Engine;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::credentials::Credentials;
 use charliebot_core::pyfmt::{self, PYTHON_JSON_DEFAULT};
+use charliebot_core::pystr;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -752,11 +753,6 @@ fn is_cjk(char: char) -> bool {
   .any(|(low, high)| (*low..=*high).contains(&code))
 }
 
-/// Python's `str.isspace` for one character, the set `str.split()` and `str.strip()` cut at.
-pub(crate) fn python_whitespace(char: char) -> bool {
-  matches!(char as u32, 0x09..=0x0d | 0x1c..=0x1f) || char.is_whitespace()
-}
-
 fn normalize_transcript(text: String) -> String {
   let source: Vec<char> = text.chars().collect();
   let mut compact = Vec::with_capacity(source.len());
@@ -780,7 +776,7 @@ fn normalize_transcript(text: String) -> String {
       }
       if let Some(mark) = compact.get(index).copied() {
         let closes_clause = is_clause_mark(mark)
-          && compact.get(index + 1).is_none_or(|next| python_whitespace(*next) || !next.is_ascii());
+          && compact.get(index + 1).is_none_or(|next| pystr::is_python_whitespace(*next) || !next.is_ascii());
         if closes_clause {
           continue;
         }

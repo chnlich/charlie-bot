@@ -84,7 +84,7 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/cron/tasks` | features/cron | todo |  |
 | POST | `/api/cron/tasks/{name}/run` | features/cron | todo |  |
 | DELETE | `/api/cron/tasks/{name}` | features/cron | todo |  |
-| POST | `/api/diag/switch-events` | features/diag | todo |  |
+| POST | `/api/diag/switch-events` | features/diag | ported |  |
 | POST | `/api/internal/slack/reply` | features/slack | ported |  |
 | POST | `/api/internal/slack/ack` | features/slack | ported |  |
 | POST | `/api/internal/discord/reply` | features/discord | ported |  |

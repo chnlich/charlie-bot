@@ -27,7 +27,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.chat_threads", charliebot_chat_threads::register),
   ("src.features.code_server", charliebot_code_server::register),
   ("src.features.cron", features::cron),            // stub: src.features.cron
-  ("src.features.diag", charliebot_diag::register), // stub: src.features.diag
+  ("src.features.diag", charliebot_diag::register),
   ("src.features.slack", charliebot_slack::register),
   ("src.features.discord", charliebot_discord::register), // stub: src.features.discord
   ("src.features.web_reply", charliebot_web_reply::register),

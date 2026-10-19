@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Test-only hooks over the end-landing retry and the resume follows (`recovery`). Off by default; only the
+# dev-dependency below turns it on, so production builds keep the 30 s retry interval and expose neither set.
+test-hooks = []
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
@@ -25,6 +30,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-tasks = { path = ".", features = ["test-hooks"] }
 charliebot-web-reply.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

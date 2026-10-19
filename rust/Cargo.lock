@@ -701,6 +701,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "charliebot-tasks",
  "charliebot-usage",
  "charliebot-web-reply",
  "futures-util",

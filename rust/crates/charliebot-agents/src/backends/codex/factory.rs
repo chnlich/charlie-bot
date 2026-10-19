@@ -42,7 +42,7 @@ impl BackendFactory for CodexFactory {
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::os::unix::fs::PermissionsExt;
+  use std::os::unix::fs::symlink;
 
   use super::*;
 
@@ -55,8 +55,8 @@ mod tests {
     fs::create_dir_all(&fallback).unwrap();
     fs::write(fallback.join("codex"), "").unwrap();
     assert_eq!(resolve_binary("codex", &on_path.to_string_lossy(), &fallback).unwrap(), fallback.join("codex"));
-    fs::write(on_path.join("codex"), "#!/bin/sh\n").unwrap();
-    fs::set_permissions(on_path.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
+    // resolve_binary checks only that the entry is an executable file, and nothing runs this link.
+    symlink("/bin/sh", on_path.join("codex")).unwrap();
     assert_eq!(resolve_binary("codex", &on_path.to_string_lossy(), &fallback).unwrap(), on_path.join("codex"));
     assert!(resolve_binary("codex", "", &root.path().join("missing")).is_err());
   }

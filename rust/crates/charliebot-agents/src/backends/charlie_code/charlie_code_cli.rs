@@ -222,7 +222,7 @@ fn path_text(path: &Path) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-  use std::os::unix::fs::PermissionsExt;
+  use std::os::unix::fs::symlink;
 
   use serde_json::json;
 
@@ -235,8 +235,11 @@ mod tests {
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let binary = bin.join("charlie-code");
-    fs::write(&binary, "").unwrap();
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    // The binary is never run by these tests, so a link to an executable that exists stands in for it. A test calls
+    // `host` more than once per root, so the link may already be there.
+    if !binary.exists() {
+      symlink("/bin/sh", &binary).unwrap();
+    }
     CliHost { path: bin.to_string_lossy().into_owned(), home: root.join("home") }
   }
 

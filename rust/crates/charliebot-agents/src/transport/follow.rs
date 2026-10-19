@@ -161,7 +161,13 @@ where
       break;
     }
     if !is_alive() {
-      break;
+      // The child can no longer write, so one final metadata check drains the
+      // lines it wrote just before exiting instead of breaking with them unread.
+      let final_size = file.metadata().await?.len();
+      if final_size == read_to {
+        break;
+      }
+      continue;
     }
     if let Some(callback) = on_silence.as_mut()
       && !silence_reported

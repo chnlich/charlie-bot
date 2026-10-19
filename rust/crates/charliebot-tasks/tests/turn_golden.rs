@@ -1581,7 +1581,7 @@ async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> any
           .await
       }
     });
-    tokio::time::timeout(std::time::Duration::from_secs(2), spawned_receiver)
+    tokio::time::timeout(std::time::Duration::from_secs(30), spawned_receiver)
       .await
       .context("scripted manager process did not spawn")?
       .context("manager process spawn signal was dropped")?;

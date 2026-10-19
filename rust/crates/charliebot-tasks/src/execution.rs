@@ -33,6 +33,7 @@ use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use crate::master_queue::MasterQueue;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
 use crate::prompts::{self, PromptEnv, PromptSnapshot, TaskPromptError};
+use crate::session_anchors;
 use crate::spawner_backends;
 
 /// The launch result visible to sequence callers.
@@ -168,7 +169,7 @@ impl TaskExecutionAdapter {
   }
 
   /// Recheck a registered run and execute its manager turn.
-  pub async fn execute_run(&self, session_id: &str, run_id: &str) -> StoreResult<LaunchSettlement> {
+  pub async fn execute_run(&self, session_id: &str, run_id: &str) -> anyhow::Result<LaunchSettlement> {
     let initial_meta = self.features.store.load_task_meta(session_id).await?;
     refuse_worker(&initial_meta)?;
     let meta;
@@ -184,11 +185,14 @@ impl TaskExecutionAdapter {
         .read_run_sync(session_id, run_id)?
         .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
       if run.kind != RunKind::ManagerTurn {
-        return Err(StoreError::invalid(format!(
-          "run {run_id} (profile={}, kind={}) has no executable adapter",
-          profile_name(meta.profile),
-          kind_name(run.kind)
-        )));
+        return Err(
+          StoreError::invalid(format!(
+            "run {run_id} (profile={}, kind={}) has no executable adapter",
+            profile_name(meta.profile),
+            kind_name(run.kind)
+          ))
+          .into(),
+        );
       }
       let state = self.features.store.task_state(session_id)?;
       if state != "open" {
@@ -219,7 +223,7 @@ impl TaskExecutionAdapter {
       if settle_closed {
         self.features.store.request_stop(session_id, run_id, &format!("closed-task:{run_id}")).await?;
       }
-      return Ok(LaunchSettlement { outcome: None, withheld: Some(reason) });
+      return Ok(LaunchSettlement { outcome: None, withheld: Some(format!("withheld: {reason}")) });
     }
 
     let cfg = self.features.config.get().map_err(|error| StoreError::new(error.to_string()))?;
@@ -227,7 +231,7 @@ impl TaskExecutionAdapter {
       Ok(option) => option,
       Err(error) => {
         self.land_launch_failure(&meta, &run, &error, "ValueError").await;
-        return Err(StoreError::new(error.to_string()));
+        return Err(error);
       }
     };
     let snapshot = match self.prepare_launch_snapshot(&cfg, &meta, &run, &option).await {
@@ -236,23 +240,26 @@ impl TaskExecutionAdapter {
         tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = "manager_turn", error = %error, "task_prompt_preparation_failed");
         let reason = format!("prompt preparation failed: {error}");
         self.record_launch_withheld(&meta, &run, &reason).await?;
-        return Ok(LaunchSettlement { outcome: None, withheld: Some(reason) });
+        return Ok(LaunchSettlement { outcome: None, withheld: Some(format!("withheld: {reason}")) });
       }
       Err(error) => {
         self.land_launch_failure(&meta, &run, &error, "RuntimeError").await;
-        return Err(StoreError::new(error.to_string()));
+        return Err(error);
       }
     };
     if meta.profile != TaskProfile::Manager {
-      return Err(StoreError::invalid(format!(
-        "run {run_id} (profile={}, kind={}) has no executable adapter",
-        profile_name(meta.profile),
-        kind_name(run.kind)
-      )));
+      return Err(
+        StoreError::invalid(format!(
+          "run {run_id} (profile={}, kind={}) has no executable adapter",
+          profile_name(meta.profile),
+          kind_name(run.kind)
+        ))
+        .into(),
+      );
     }
     if let Err(error) = self.execute_manager_turn(&cfg, &meta, &run, &option, &snapshot).await {
       self.land_launch_failure(&meta, &run, &error, "RuntimeError").await;
-      return Err(StoreError::new(error.to_string()));
+      return Err(error);
     }
     let outcome = self.await_terminal(session_id, run_id).await?;
     Ok(LaunchSettlement { outcome: Some(outcome), withheld: None })
@@ -266,15 +273,15 @@ impl TaskExecutionAdapter {
         Ok(settlement) => settlement,
         Err(error) => {
           tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_execution_failed");
-          if is_out_of_space_error(&error) {
+          if is_out_of_space_error(error.as_ref()) {
             adapter.note_launch_out_of_space(&session_id, &run_id);
           }
           match adapter.terminal_outcome(&session_id, &run_id) {
             Ok(Some(outcome)) => LaunchSettlement { outcome: Some(outcome), withheld: None },
-            Ok(None) => LaunchSettlement { outcome: None, withheld: Some(error.to_string()) },
+            Ok(None) => LaunchSettlement { outcome: None, withheld: Some(format!("failed-to-start: {error}")) },
             Err(read_error) => {
               tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %read_error, "run_terminal_read_failed");
-              LaunchSettlement { outcome: None, withheld: Some(error.to_string()) }
+              LaunchSettlement { outcome: None, withheld: Some(format!("failed-to-start: {error}")) }
             }
           }
         }
@@ -385,15 +392,12 @@ impl TaskExecutionAdapter {
     );
     let mut prompt = content;
     if fresh_native && meta.cc_session_id.is_some() {
-      let reason = if let Some(previous) = meta.native_backend.as_deref().filter(|backend| *backend != option.id) {
-        format!("the backend changed from {previous} to {}", option.id)
-      } else {
-        "this task's managed instructions or sources changed since the previous turn, so this turn starts a fresh native conversation".to_string()
+      let reason = match meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
+        Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
+        None => "this task's managed instructions or sources changed since the previous turn, so this turn starts a fresh native conversation".to_string(),
       };
       let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
-      prompt = format!(
-        "[Context reset: {reason}. Task: {goal}. The earlier conversation remains in this task's chat history.]\n\n{prompt}"
-      );
+      prompt = format!("{}\n\n{prompt}", session_anchors::context_reset_note(&reason, goal));
     }
     self.persist_launch_text(session_id, run_id, &prompt)?;
     tracing::info!(
@@ -633,7 +637,7 @@ impl TaskExecutionAdapter {
     let run =
       self.features.store.read_run_sync(session_id, run_id).ok().flatten().unwrap_or_else(|| initial_run.clone());
     let error_text = format!("{error_kind}: {error}").chars().take(2000).collect::<String>();
-    if run.pid.is_some() && is_out_of_space_error(error.root_cause()) {
+    if run.pid.is_some() && is_out_of_space_error(error.as_ref()) {
       if let Err(landing_error) = self.record_launch_error_event(session_id, run_id, &error_text, None).await {
         tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %landing_error, "task_run_launch_failure_landing_failed");
       }
@@ -648,12 +652,12 @@ impl TaskExecutionAdapter {
         self.record_turn_launch_notice(session_id, run_id, &error_text).await?;
       }
       self.dispatch.dispatch_pending(session_id).await?;
-      Ok::<(), StoreError>(())
+      Ok::<(), anyhow::Error>(())
     }
     .await;
     if let Err(landing_error) = landing {
       tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %landing_error, "task_run_launch_failure_landing_failed");
-      if is_out_of_space_error(&landing_error) {
+      if is_out_of_space_error(landing_error.as_ref()) {
         self.start_run_end_landing_retry(session_id, run_id);
       }
     }
@@ -665,7 +669,7 @@ impl TaskExecutionAdapter {
     run_id: &str,
     error_text: &str,
     quota_exhausted: Option<bool>,
-  ) -> StoreResult<()> {
+  ) -> anyhow::Result<()> {
     let event_path = self.features.store.run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);
     let mut event = Map::from_iter([
       ("type".to_string(), json!(event_types::ERROR)),
@@ -676,14 +680,15 @@ impl TaskExecutionAdapter {
     if let Some(quota_exhausted) = quota_exhausted {
       event.insert("quota_exhausted".to_string(), json!(quota_exhausted));
     }
+    let mut line = serde_json::to_string(&Value::Object(event))?;
+    line.push('\n');
     let mut file = OpenOptions::new()
       .create(true)
       .append(true)
       .open(&event_path)
-      .map_err(|error| StoreError::new(format!("{}: {error}", event_path.display())))?;
-    serde_json::to_writer(&mut file, &Value::Object(event)).map_err(|error| StoreError::new(error.to_string()))?;
-    file.write_all(b"\n").map_err(|error| StoreError::new(format!("{}: {error}", event_path.display())))?;
-    file.flush().map_err(|error| StoreError::new(format!("{}: {error}", event_path.display())))?;
+      .with_context(|| format!("opening {}", event_path.display()))?;
+    file.write_all(line.as_bytes()).with_context(|| format!("writing {}", event_path.display()))?;
+    file.flush().with_context(|| format!("flushing {}", event_path.display()))?;
     self
       .features
       .store
@@ -943,7 +948,7 @@ pub fn free_disk_gib(path: &Path) -> anyhow::Result<f64> {
     return Err(std::io::Error::last_os_error()).with_context(|| format!("reading disk space at {}", probe.display()));
   }
   let stat = unsafe { stat.assume_init() };
-  Ok((stat.f_bfree as f64 * stat.f_frsize as f64) / (1024.0_f64.powi(3)))
+  Ok((stat.f_bavail as f64 * stat.f_frsize as f64) / (1024.0_f64.powi(3)))
 }
 
 fn refuse_worker(meta: &SessionMetadata) -> StoreResult<()> {
@@ -1131,7 +1136,7 @@ mod tests {
   }
 
   #[test]
-  fn free_disk_probes_the_nearest_existing_ancestor_and_uses_free_blocks() {
+  fn free_disk_probes_the_nearest_existing_ancestor_and_uses_available_blocks() {
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let missing = directory.path().join("not-created").join("worktree");
     let root_free = free_disk_gib(directory.path()).expect("the temporary directory filesystem is readable");
@@ -1142,7 +1147,7 @@ mod tests {
     // The temporary directory exists and the NUL-terminated path is valid for statvfs.
     assert_eq!(unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) }, 0);
     let stat = unsafe { stat.assume_init() };
-    let expected = stat.f_bfree as f64 * stat.f_frsize as f64 / (1024.0_f64.powi(3));
+    let expected = stat.f_bavail as f64 * stat.f_frsize as f64 / (1024.0_f64.powi(3));
     assert_eq!(root_free, expected);
   }
 

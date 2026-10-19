@@ -37,6 +37,7 @@ shutdown and re-attachment into server lifespan.
 | `spawner_backends::resolve_backend_option` | `src/runtime/spawner_backends.py:22` |
 | `spawner_backends::resolve_session_default_backend_model` | `src/runtime/spawner_backends.py:49` |
 | `task_sessions::create_retry` | `src/runtime/task_sessions.py:1328` |
+| `session_anchors::context_reset_note` and `backend_switch_reset_reason` | `src/runtime/session_anchors.py:46`, `:36` |
 | `execution::LaunchSettlement` | `src/runtime/task_execution.py:170` |
 | `execution::TaskExecutionAdapter` and `TaskExecutionAdapter::new` | `src/runtime/task_execution.py:388-433` |
 | `TaskExecutionAdapter::call` | `src/runtime/task_execution.py:435-523` |

@@ -11,6 +11,7 @@ pub mod master_trigger;
 pub mod prompts;
 pub mod review_text;
 pub mod routes;
+pub mod session_anchors;
 pub mod spawner_backends;
 pub mod spawner_prompt;
 pub mod task_sessions;

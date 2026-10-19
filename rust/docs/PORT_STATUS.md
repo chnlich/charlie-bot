@@ -87,9 +87,9 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/diag/switch-events` | features/diag | todo |  |
 | POST | `/api/internal/slack/reply` | features/slack | ported |  |
 | POST | `/api/internal/slack/ack` | features/slack | ported |  |
-| POST | `/api/internal/discord/reply` | features/discord | todo |  |
-| POST | `/api/internal/discord/read` | features/discord | todo |  |
-| POST | `/api/internal/discord/check` | features/discord | todo |  |
+| POST | `/api/internal/discord/reply` | features/discord | ported |  |
+| POST | `/api/internal/discord/read` | features/discord | ported |  |
+| POST | `/api/internal/discord/check` | features/discord | ported |  |
 | POST | `/api/internal/web/reply` | features/web_reply | ported |  |
 | GET | `/api/internal/web/dialog` | features/web_reply | ported |  |
 | POST | `/api/internal/web/status` | features/web_reply | ported |  |

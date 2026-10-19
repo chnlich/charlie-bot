@@ -425,14 +425,24 @@ name = "charliebot-discord"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "charliebot-chat-threads",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "futures-util",
+ "http",
+ "percent-encoding",
+ "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]

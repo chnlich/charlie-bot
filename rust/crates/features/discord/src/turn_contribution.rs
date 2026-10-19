@@ -10,9 +10,10 @@ use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 use serde_json::{Value, json};
 
+use crate::discord_listener::DISCORD;
 use crate::event_types::DISCORD_REPLY;
 use crate::metadata::discord_origin;
-use crate::thread_contract::{DISCORD, thread_contract_part};
+use crate::thread_contract::thread_contract_part;
 
 /// The run kind that takes the manager contract (`task_prompts.MANAGER_KINDS`).
 const MANAGER_KIND: &str = "manager_turn";

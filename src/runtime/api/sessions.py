@@ -16,7 +16,6 @@ from src.infra import event_types as ET
 from src.infra import responses as infra_responses
 from src.runtime import (
     chat_events,
-    control_events,
     message_aggregator,
     run_token,
     runs,
@@ -1630,21 +1629,6 @@ async def _require_task_meta(task_mgr: task_sessions.TaskTreeManager, session_id
   return meta
 
 
-def _legacy_prompt_payload(path: pathlib.Path) -> dict:
-  """The legacy_prompt payload for one recorded raw launch-text file: ref, content hash, note."""
-  return {
-      "ref":
-          str(path),
-      "sha256":
-          control_events.sha256_hex(path.read_text(encoding="utf-8")),
-      "note":
-          (
-              "raw launch text recorded before the context stage: the managed "
-              "instructions are visible but per-source provenance was not "
-              "recorded, so this is limited evidence, not a full snapshot"),
-  }
-
-
 @router.get("/{session_id}/runs/{run_id}/context")
 async def get_run_context(
     session_id: str,
@@ -1656,53 +1640,32 @@ async def get_run_context(
 
   The snapshot is the committed object of record (blocks, provenance, hash,
   char_count) — the startup injection, never a recomposition from current
-  sources. Runs predating the context stage carry only a raw launch-text file:
-  reported as explicitly limited legacy evidence, never fabricated into full
-  provenance. Read-only and history-immutable.
+  sources. Read-only and history-immutable.
   """
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
     raise fastapi.HTTPException(status_code=404, detail=runs.run_not_found_in_task_text(run_id, session_id))
   snapshot_payload: dict | None = None
-  legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:
-    # Classification rides the recorded artifact contract, not the file's
-    # current contents: the snapshot stage records ``prompt_snapshot.json``
-    # (validated, provenance-carrying); a pre-stage run recorded a raw
-    # launch-text path instead.
     ref_path = pathlib.Path(run.prompt_snapshot_ref)
-    if ref_path.name == task_prompts.SNAPSHOT_FILENAME:
-      if not ref_path.is_file():
-        raise fastapi.HTTPException(
-            status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
-      try:
-        stored = json.loads(ref_path.read_text(encoding="utf-8"))
-      except (OSError, ValueError) as e:
-        raise fastapi.HTTPException(
-            status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
-      try:
-        snapshot_payload = task_prompts.PromptSnapshot.from_json_dict(stored).to_json_dict()
-      except task_prompts.TaskPromptError as e:
-        raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
-    else:
-      # A recorded raw launch-text ref: limited historical evidence — the
-      # managed instructions are visible but per-source provenance was never
-      # recorded. Never recomposed into snapshot-shaped provenance.
-      if not ref_path.is_file():
-        raise fastapi.HTTPException(
-            status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
-      legacy_prompt = _legacy_prompt_payload(ref_path)
-  else:
-    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
-    if legacy_path.is_file():
-      legacy_prompt = _legacy_prompt_payload(legacy_path)
+    if not ref_path.is_file():
+      raise fastapi.HTTPException(
+          status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
+    try:
+      stored = json.loads(ref_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+      raise fastapi.HTTPException(
+          status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
+    try:
+      snapshot_payload = task_prompts.PromptSnapshot.from_json_dict(stored).to_json_dict()
+    except task_prompts.TaskPromptError as e:
+      raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
   return {
       "session_id": session_id,
       "run_id": run_id,
       "kind": run.kind,
       "mode": "historical",
       "snapshot": snapshot_payload,
-      "legacy_prompt": legacy_prompt,
       "task_spec": ({
           "ref": run.task_spec_ref,
           "sha256": run.task_spec_hash

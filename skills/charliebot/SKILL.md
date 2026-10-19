@@ -15,7 +15,7 @@ Source code: `~/workspace/charlie-bot/src/`
 
 ## Worker & Review Workflow
 
-**Source:** `src/runtime/spawner_backends.py` and `src/runtime/spawner_prompt.py`
+**Source:** `src/runtime/task_execution.py`, `src/runtime/spawner_prompt.py`, `src/runtime/spawner_backends.py`
 
 1. Worker runs in isolated git worktree (`~/worktrees/`)
 2. Branch naming: `charliebot/task-{timestamp}-{id}`

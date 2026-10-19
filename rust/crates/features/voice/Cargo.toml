@@ -29,6 +29,9 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[build-dependencies]
+sherpa-onnx.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio-tungstenite.workspace = true

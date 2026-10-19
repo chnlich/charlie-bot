@@ -469,7 +469,7 @@ def _masked_ids(entries: dict[str, Entry], masks: dict[str, str]) -> dict[str, E
     if entry.kind == "file":
       data = entry.data
       for event_id, placeholder in masks.items():
-        data = data.replace(event_id.encode(), placeholder.encode())
+        data = data.replace(json.dumps(event_id).encode(), json.dumps(placeholder).encode())
       result[path] = Entry(entry.kind, data)
     else:
       result[path] = entry

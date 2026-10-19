@@ -158,3 +158,11 @@ def test_adjacent_pair_rule_keeps_a_pair_that_is_not_adjacent() -> None:
 def test_adjacent_pair_rule_keeps_a_log_without_the_first_event() -> None:
   candidate = [event for event in _chat_events(True) if event["type"] != "agent_message"]
   assert _ordered_diff(_chat_events(True), candidate) != []
+
+
+def test_adjacent_pair_rule_does_not_mask_event_ids_embedded_in_other_text() -> None:
+  baseline = _chat_events(True, "nudge-1")
+  candidate = _chat_events(False, "nudge-2")
+  baseline[1]["content"] = "reply to nudge-1"
+  candidate[2]["content"] = "reply to nudge-2"
+  assert _ordered_diff(baseline, candidate) != []

@@ -91,8 +91,9 @@ pub fn is_json_content_type(value: &str) -> bool {
     && (sub_type.eq_ignore_ascii_case("json") || sub_type.to_ascii_lowercase().ends_with("+json"))
 }
 
-/// A field type supported by the request models in the Python API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A field type supported by the request models in the Python API. Equality is not derived: a nested model holds a
+/// `ModelCheck` function pointer, which has no meaningful comparison.
+#[derive(Debug, Clone, Copy)]
 pub enum FieldType {
   String,
   NullableString,
@@ -101,11 +102,20 @@ pub enum FieldType {
   Boolean,
   Literal(&'static [&'static str]),
   NullableLiteral(&'static [&'static str]),
+  /// A `StrEnum` field: pydantic's `enum` error names the choices.
+  Enum(&'static [&'static str]),
+  NullableEnum(&'static [&'static str]),
   StringList,
+  /// A nested model or null, validated with its own fields. `class_name` is the model's name in its `model_type`
+  /// error.
+  NullableModel {
+    class_name: &'static str,
+    model: &'static BodyModel,
+  },
 }
 
 /// One model field in declaration order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Field {
   name: &'static str,
   field_type: FieldType,
@@ -131,70 +141,135 @@ pub enum BodyRequirement {
   Optional,
 }
 
-/// A request model's fields and body-parameter requirement.
+/// Whether a model keeps the keys it does not declare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtraKeys {
+  /// pydantic's default `extra="ignore"`: an undeclared key is dropped.
+  Ignore,
+  /// `extra="forbid"`: each undeclared key is an `extra_forbidden` error.
+  Forbid,
+}
+
+/// A model validator. It runs on the validated values once every field passes, and returns the message of the
+/// `ValueError` it raises, or `None` when the values are valid.
+pub type ModelCheck = fn(&Map<String, Value>) -> Option<String>;
+
+/// A request model's fields, body-parameter requirement, extra-key policy and model validator.
+#[derive(Debug, Clone, Copy)]
 pub struct BodyModel {
   fields: &'static [Field],
   requirement: BodyRequirement,
+  extra: ExtraKeys,
+  check: Option<ModelCheck>,
 }
 
 impl BodyModel {
   /// Declare a required model body.
   pub const fn required(fields: &'static [Field]) -> Self {
-    Self { fields, requirement: BodyRequirement::Required }
+    Self { fields, requirement: BodyRequirement::Required, extra: ExtraKeys::Ignore, check: None }
   }
 
-  /// Declare an optional model body.
+  /// Declare an optional model body, or a nested model.
   pub const fn optional(fields: &'static [Field]) -> Self {
-    Self { fields, requirement: BodyRequirement::Optional }
+    Self { fields, requirement: BodyRequirement::Optional, extra: ExtraKeys::Ignore, check: None }
+  }
+
+  /// Whether the model declares a field named `name`.
+  pub fn declares(&self, name: &str) -> bool {
+    self.fields.iter().any(|field| field.name == name)
+  }
+
+  /// Refuse undeclared keys, as `extra="forbid"` does.
+  pub const fn forbid_extra(mut self) -> Self {
+    self.extra = ExtraKeys::Forbid;
+    self
+  }
+
+  /// Run `check` on the validated values once every field passes.
+  pub const fn checked(mut self, check: ModelCheck) -> Self {
+    self.check = Some(check);
+    self
   }
 }
 
 impl RequestBody {
-  /// Validate this body against a model and return its declared fields.
-  pub fn validate(&self, model: &BodyModel) -> Result<Option<Value>, Box<Response>> {
+  /// Validate this body against a model and return its declared fields, or the errors FastAPI reports for it.
+  pub fn check(&self, model: &BodyModel) -> Result<Option<Value>, Vec<validation::FieldError>> {
     match self {
       // FastAPI passes a JSON `null` body as None, which a required model reports as missing.
       RequestBody::Absent | RequestBody::Json(Value::Null) => match model.requirement {
-        BodyRequirement::Required => Err(Box::new(validation::response(&[body_missing_error()]))),
+        BodyRequirement::Required => Err(vec![body_missing_error()]),
         BodyRequirement::Optional => Ok(None),
       },
-      RequestBody::Json(Value::Object(object)) => validate_object(object, model).map(Some),
-      RequestBody::Json(value) => Err(model_attributes_error(value.clone())),
+      RequestBody::Json(Value::Object(object)) => validate_object(object, model, &body_loc()).map(Some),
+      RequestBody::Json(value) => Err(vec![model_attributes_error(value.clone())]),
       RequestBody::Raw(bytes) => {
         let input = Value::String(String::from_utf8_lossy(bytes).into_owned());
-        Err(model_attributes_error(input))
+        Err(vec![model_attributes_error(input)])
       }
     }
   }
+
+  /// Validate this body against a model: its declared fields, or FastAPI's 422 response.
+  pub fn validate(&self, model: &BodyModel) -> Result<Option<Value>, Box<Response>> {
+    self.check(model).map_err(|errors| Box::new(validation::response(&errors)))
+  }
 }
 
-fn validate_object(object: &Map<String, Value>, model: &BodyModel) -> Result<Value, Box<Response>> {
+fn validate_object(
+  object: &Map<String, Value>,
+  model: &BodyModel,
+  loc: &[validation::Loc],
+) -> Result<Value, Vec<validation::FieldError>> {
   let mut values = Map::new();
   let mut errors = Vec::new();
   for field in model.fields {
+    let field_loc = child_loc(loc, field.name);
     match object.get(field.name) {
-      Some(value) => match validate_field(field, value) {
+      Some(value) => match validate_field(field, value, &field_loc) {
         Ok(value) => {
           values.insert(field.name.to_string(), value);
         }
         Err(mut field_errors) => errors.append(&mut field_errors),
       },
-      None if field.required => errors.push(field_error(field.name, None, Value::Null, validation::Kind::Missing)),
+      None if field.required => {
+        errors.push(validation::FieldError { loc: field_loc, input: Value::Null, kind: validation::Kind::Missing })
+      }
       None => {}
     }
   }
-  if errors.is_empty() { Ok(Value::Object(values)) } else { Err(Box::new(validation::response(&errors))) }
+  if model.extra == ExtraKeys::Forbid {
+    for (key, value) in object {
+      if !model.fields.iter().any(|field| field.name == key.as_str()) {
+        errors.push(validation::FieldError {
+          loc: child_loc(loc, key),
+          input: value.clone(),
+          kind: validation::Kind::ExtraForbidden,
+        });
+      }
+    }
+  }
+  if !errors.is_empty() {
+    return Err(errors);
+  }
+  match model.check.and_then(|check| check(&values)) {
+    Some(message) => Err(vec![validation::FieldError {
+      loc: loc.to_vec(),
+      input: Value::Object(object.clone()),
+      kind: validation::Kind::ValueError { message },
+    }]),
+    None => Ok(Value::Object(values)),
+  }
 }
 
-fn validate_field(field: &Field, value: &Value) -> Result<Value, Vec<validation::FieldError>> {
-  let failure = |kind| Err(vec![field_error(field.name, None, value.clone(), kind)]);
+fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
+  let failure = |kind| Err(vec![validation::FieldError { loc: loc.to_vec(), input: value.clone(), kind }]);
   match field.field_type {
     FieldType::String if value.is_string() => Ok(value.clone()),
     FieldType::NullableString if value.is_null() || value.is_string() => Ok(value.clone()),
     FieldType::String | FieldType::NullableString => failure(validation::Kind::StringType),
     FieldType::Integer | FieldType::NullableInteger => {
-      match integer_value(value, field.field_type == FieldType::NullableInteger) {
+      match integer_value(value, matches!(field.field_type, FieldType::NullableInteger)) {
         Ok(value) => Ok(value),
         Err(kind) => failure(kind),
       }
@@ -203,28 +278,53 @@ fn validate_field(field: &Field, value: &Value) -> Result<Value, Vec<validation:
       Ok(value) => Ok(value),
       Err(kind) => failure(kind),
     },
-    FieldType::Literal(choices) => match value.as_str() {
-      Some(value) if choices.contains(&value) => Ok(value.into()),
-      _ => failure(validation::Kind::Literal(choices)),
+    FieldType::Literal(choices) => match choice_value(value, choices) {
+      Some(value) => Ok(value),
+      None => failure(validation::Kind::Literal(choices)),
     },
     FieldType::NullableLiteral(_) if value.is_null() => Ok(Value::Null),
-    FieldType::NullableLiteral(choices) => match value.as_str() {
-      Some(value) if choices.contains(&value) => Ok(value.into()),
-      _ => failure(validation::Kind::Literal(choices)),
+    FieldType::NullableLiteral(choices) => match choice_value(value, choices) {
+      Some(value) => Ok(value),
+      None => failure(validation::Kind::Literal(choices)),
+    },
+    FieldType::Enum(choices) => match choice_value(value, choices) {
+      Some(value) => Ok(value),
+      None => failure(validation::Kind::Enum(choices)),
+    },
+    FieldType::NullableEnum(_) if value.is_null() => Ok(Value::Null),
+    FieldType::NullableEnum(choices) => match choice_value(value, choices) {
+      Some(value) => Ok(value),
+      None => failure(validation::Kind::Enum(choices)),
     },
     FieldType::StringList => match value.as_array() {
       Some(items) => {
         let mut errors = Vec::new();
         for (index, item) in items.iter().enumerate() {
           if !item.is_string() {
-            errors.push(field_error(field.name, Some(index), item.clone(), validation::Kind::StringType));
+            let mut item_loc = loc.to_vec();
+            item_loc.push(validation::Loc::Index(index));
+            errors.push(validation::FieldError {
+              loc: item_loc,
+              input: item.clone(),
+              kind: validation::Kind::StringType,
+            });
           }
         }
         if errors.is_empty() { Ok(value.clone()) } else { Err(errors) }
       }
       None => failure(validation::Kind::ListType),
     },
+    FieldType::NullableModel { class_name, model } => match value {
+      Value::Null => Ok(Value::Null),
+      Value::Object(object) => validate_object(object, model, loc),
+      _ => failure(validation::Kind::ModelType { class_name }),
+    },
   }
+}
+
+/// The string value when it is one of `choices`.
+fn choice_value(value: &Value, choices: &[&str]) -> Option<Value> {
+  value.as_str().filter(|text| choices.contains(text)).map(Value::from)
 }
 
 fn integer_value(value: &Value, nullable: bool) -> Result<Value, validation::Kind> {
@@ -267,28 +367,22 @@ fn boolean_value(value: &Value) -> Result<Value, validation::Kind> {
   }
 }
 
-fn field_error(field: &str, index: Option<usize>, input: Value, kind: validation::Kind) -> validation::FieldError {
-  let mut loc = vec![validation::Loc::Field("body".to_string()), validation::Loc::Field(field.to_string())];
-  if let Some(index) = index {
-    loc.push(validation::Loc::Index(index));
-  }
-  validation::FieldError { loc, input, kind }
+fn body_loc() -> Vec<validation::Loc> {
+  vec![validation::Loc::Field("body".to_string())]
+}
+
+fn child_loc(loc: &[validation::Loc], name: &str) -> Vec<validation::Loc> {
+  let mut child = loc.to_vec();
+  child.push(validation::Loc::Field(name.to_string()));
+  child
 }
 
 fn body_missing_error() -> validation::FieldError {
-  validation::FieldError {
-    loc: vec![validation::Loc::Field("body".to_string())],
-    input: Value::Null,
-    kind: validation::Kind::Missing,
-  }
+  validation::FieldError { loc: body_loc(), input: Value::Null, kind: validation::Kind::Missing }
 }
 
-fn model_attributes_error(input: Value) -> Box<Response> {
-  Box::new(validation::response(&[validation::FieldError {
-    loc: vec![validation::Loc::Field("body".to_string())],
-    input,
-    kind: validation::Kind::ModelAttributesType,
-  }]))
+fn model_attributes_error(input: Value) -> validation::FieldError {
+  validation::FieldError { loc: body_loc(), input, kind: validation::Kind::ModelAttributesType }
 }
 
 #[cfg(test)]
@@ -327,6 +421,27 @@ fn body_parse_error() -> Response {
 mod tests {
   use super::*;
 
+  const NESTED_FIELDS: &[Field] = &[Field::optional("goal", FieldType::String)];
+  const NESTED: BodyModel = BodyModel::optional(NESTED_FIELDS).forbid_extra();
+  const CHOICE_FIELDS: &[Field] = &[
+    Field::optional("mode", FieldType::NullableLiteral(&["manager", "worker"])),
+    Field::optional("kind", FieldType::NullableEnum(&["implement", "verify"])),
+    Field::optional("nested", FieldType::NullableModel { class_name: "Nested", model: &NESTED }),
+  ];
+  const CHOICES: BodyModel = BodyModel::optional(CHOICE_FIELDS).forbid_extra();
+
+  fn field_error(loc: &[&str], input: Value, kind: validation::Kind) -> validation::FieldError {
+    validation::FieldError {
+      loc: loc.iter().map(|part| validation::Loc::Field(part.to_string())).collect(),
+      input,
+      kind,
+    }
+  }
+
+  fn check(value: Value, model: &BodyModel) -> Vec<validation::FieldError> {
+    RequestBody::Json(value).check(model).unwrap_err()
+  }
+
   #[test]
   fn content_type_uses_case_insensitive_main_type_and_subtype() {
     assert!(is_json_content_type("application/json"));
@@ -335,5 +450,75 @@ mod tests {
     assert!(!is_json_content_type("text/json; charset=utf-8"));
     assert!(!is_json_content_type("application/jsonp"));
     assert!(!is_json_content_type("application/json/extra"));
+  }
+
+  #[test]
+  fn nullable_choices_accept_null_and_refuse_other_values() {
+    let accepted = RequestBody::Json(json!({"mode": null, "kind": null})).check(&CHOICES).unwrap();
+    assert_eq!(accepted, Some(json!({"mode": null, "kind": null})));
+    let errors = check(json!({"mode": "other", "kind": "other"}), &CHOICES);
+    assert_eq!(
+      errors,
+      vec![
+        field_error(&["body", "mode"], json!("other"), validation::Kind::Literal(&["manager", "worker"])),
+        field_error(&["body", "kind"], json!("other"), validation::Kind::Enum(&["implement", "verify"])),
+      ]
+    );
+  }
+
+  #[test]
+  fn forbidden_extra_keys_follow_the_field_errors() {
+    let errors = check(json!({"zzz": 1, "mode": 3}), &CHOICES);
+    assert_eq!(
+      errors,
+      vec![
+        field_error(&["body", "mode"], json!(3), validation::Kind::Literal(&["manager", "worker"])),
+        validation::FieldError {
+          loc: vec![validation::Loc::Field("body".to_string()), validation::Loc::Field("zzz".to_string())],
+          input: json!(1),
+          kind: validation::Kind::ExtraForbidden,
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn nested_model_errors_carry_the_nested_location() {
+    let errors = check(json!({"nested": {"goal": 1, "zzz": 2}}), &CHOICES);
+    assert_eq!(
+      errors,
+      vec![
+        field_error(&["body", "nested", "goal"], json!(1), validation::Kind::StringType),
+        validation::FieldError {
+          loc: ["body", "nested", "zzz"].iter().map(|part| validation::Loc::Field(part.to_string())).collect(),
+          input: json!(2),
+          kind: validation::Kind::ExtraForbidden,
+        },
+      ]
+    );
+    assert_eq!(
+      check(json!({"nested": "text"}), &CHOICES),
+      vec![field_error(&["body", "nested"], json!("text"), validation::Kind::ModelType { class_name: "Nested" })]
+    );
+    assert_eq!(RequestBody::Json(json!({"nested": null})).check(&CHOICES).unwrap(), Some(json!({"nested": null})));
+  }
+
+  const CHECKED: BodyModel = BodyModel::optional(CHOICE_FIELDS).checked(refuse_worker_kind);
+
+  fn refuse_worker_kind(values: &Map<String, Value>) -> Option<String> {
+    (values.get("mode") == Some(&json!("worker")) && values.get("kind").is_some())
+      .then(|| "a worker takes no kind".to_string())
+  }
+
+  #[test]
+  fn a_model_check_reports_a_value_error_at_the_model_location() {
+    let errors = check(json!({"mode": "worker", "kind": "verify"}), &CHECKED);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].loc, vec![validation::Loc::Field("body".to_string())]);
+    assert_eq!(errors[0].kind, validation::Kind::ValueError { message: "a worker takes no kind".to_string() });
+    assert_eq!(
+      RequestBody::Json(json!({"mode": "manager"})).check(&CHECKED).unwrap(),
+      Some(json!({"mode": "manager"}))
+    );
   }
 }

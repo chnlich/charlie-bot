@@ -190,6 +190,7 @@ name = "charliebot-agents"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

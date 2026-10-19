@@ -84,13 +84,17 @@ mod tests {
     assert_eq!(send(router, method).await.status(), StatusCode::OK);
   }
 
-  /// The FastAPI refusal: 405, the `allow` header and the `{"detail": ...}` body.
+  /// The FastAPI refusal: 405 and the `allow` header, then the `{"detail": ...}` body. axum drops the body of a HEAD
+  /// response, as hyper does, so a HEAD refusal has none to check.
   async fn assert_refused(router: Router, method: Method, allow: &str) {
+    let head = method == Method::HEAD;
     let response = send(router, method).await;
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.headers()[header::ALLOW], allow);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"detail": "Method Not Allowed"}));
+    if !head {
+      assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"detail": "Method Not Allowed"}));
+    }
   }
 
   #[tokio::test]

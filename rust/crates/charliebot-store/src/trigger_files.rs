@@ -3,6 +3,8 @@
 use std::fs::{self, Metadata};
 use std::path::{Path, PathBuf};
 
+use crate::metadata::UtcDateTime;
+
 /// Return every regular `*.json` trigger file with the stat from the directory walk.
 ///
 /// A trigger file that vanishes between the directory read and its stat is skipped. Errors opening or scanning the
@@ -25,6 +27,47 @@ pub fn iter_trigger_file_stats(triggers_dir: impl AsRef<Path>) -> std::io::Resul
     files.push((path, metadata));
   }
   Ok(files)
+}
+
+/// Return the pending trigger count and earliest parseable fire time for a trigger directory.
+pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<UtcDateTime>) {
+  let triggers_dir = triggers_dir.as_ref();
+  let trigger_files = match iter_trigger_file_stats(triggers_dir) {
+    Ok(files) => files,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+    Err(error) => {
+      tracing::debug!(path = %triggers_dir.display(), error = %error, "trigger_directory_read_failed");
+      Vec::new()
+    }
+  };
+  let mut pending_count = 0;
+  let mut next_trigger = None;
+  for (path, _) in trigger_files {
+    let raw = match fs::read_to_string(&path) {
+      Ok(raw) => raw,
+      Err(error) => {
+        tracing::debug!(path = %path.display(), error = %error, "trigger_meta_read_failed");
+        continue;
+      }
+    };
+    let trigger: serde_json::Value = match serde_json::from_str(&raw) {
+      Ok(trigger) => trigger,
+      Err(error) => {
+        tracing::debug!(path = %path.display(), error = %error, "trigger_meta_read_failed");
+        continue;
+      }
+    };
+    if trigger.get("status").and_then(serde_json::Value::as_str) != Some("pending") {
+      continue;
+    }
+    pending_count += 1;
+    if let Some(fire_at) = trigger.get("fire_at").and_then(serde_json::Value::as_str)
+      && let Ok(parsed) = UtcDateTime::parse(fire_at)
+    {
+      next_trigger = Some(next_trigger.map_or(parsed, |current: UtcDateTime| current.min(parsed)));
+    }
+  }
+  (pending_count, next_trigger)
 }
 
 #[cfg(test)]

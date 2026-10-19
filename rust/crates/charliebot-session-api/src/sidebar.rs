@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus};
 use charliebot_store::{Store, StoreResult};
 use serde_json::{Map, Value, json};
 
@@ -126,41 +126,7 @@ pub(crate) fn resolve_sidebar_state(
 fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreResult<Map<String, Value>> {
   let session_dir = store.session_dir(session_id);
   let triggers_dir = session_dir.join("triggers");
-  let mut pending_count = 0_i64;
-  let mut next_trigger = None;
-  let trigger_files = match charliebot_store::trigger_files::iter_trigger_file_stats(&triggers_dir) {
-    Ok(files) => files,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-    Err(error) => {
-      tracing::debug!(session_id, error = %error, "trigger_directory_read_failed");
-      Vec::new()
-    }
-  };
-  for (path, _) in trigger_files {
-    let raw = match fs::read_to_string(&path) {
-      Ok(raw) => raw,
-      Err(error) => {
-        tracing::debug!(session_id, path = %path.display(), error = %error, "trigger_meta_read_failed");
-        continue;
-      }
-    };
-    let trigger: Value = match serde_json::from_str(&raw) {
-      Ok(trigger) => trigger,
-      Err(error) => {
-        tracing::debug!(session_id, path = %path.display(), error = %error, "trigger_meta_read_failed");
-        continue;
-      }
-    };
-    if trigger.get("status").and_then(Value::as_str) != Some("pending") {
-      continue;
-    }
-    pending_count += 1;
-    if let Some(fire_at) = trigger.get("fire_at").and_then(Value::as_str)
-      && let Ok(parsed) = UtcDateTime::parse(fire_at)
-    {
-      next_trigger = Some(next_trigger.map_or(parsed, |current: UtcDateTime| current.min(parsed)));
-    }
-  }
+  let (pending_count, next_trigger) = charliebot_store::trigger_files::pending_trigger_state(&triggers_dir);
 
   let mut pending_plan_approval = false;
   for contribution in registry.sidebar_contributions() {

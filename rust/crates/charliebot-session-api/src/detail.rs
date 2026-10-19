@@ -97,51 +97,10 @@ async fn session_detail(
     Ok(meta) => meta,
     Err(error) => return store_error(error),
   };
-  match session_detail_payload(&features.store, &meta).await {
+  match features.store.session_detail(&meta.id) {
     Ok(payload) => responses::fast_json(StatusCode::OK, &payload),
     Err(error) => task_http_error(error),
   }
-}
-
-async fn session_detail_payload(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
-  let mut detail = serde_json::to_value(meta)?;
-  let object = detail.as_object_mut().expect("session metadata serializes to an object");
-  object.insert("task_state".to_string(), Value::String(store.task_state(&meta.id)?));
-  object.insert("work_state".to_string(), Value::String(store.task_tree_activity(&meta.id)?.work_state));
-  object.insert("archived".to_string(), Value::Bool(store.archived_of(&meta.id)?));
-
-  let mut ancestors = Vec::new();
-  for ancestor_id in store.ancestor_ids(&meta.id)? {
-    let ancestor = store
-      .get_session(&ancestor_id)
-      .await?
-      .ok_or_else(|| StoreError::not_found(format!("task {ancestor_id} not found")))?;
-    ancestors.push(json!({"id": ancestor.id, "name": ancestor.name}));
-  }
-  object.insert("ancestors".to_string(), Value::Array(ancestors));
-
-  let descendants = store.descendant_ids(&meta.id)?.len();
-  let prompt_rules = json!({
-    "subtree": prompt_rule_summary(store, meta.subtree_prompt_ref.as_deref())?,
-    "node": prompt_rule_summary(store, meta.node_prompt_ref.as_deref())?,
-    "affected_descendants": descendants,
-  });
-  object.insert("prompt_rules".to_string(), prompt_rules);
-  Ok(detail)
-}
-
-fn prompt_rule_summary(store: &Store, prompt_ref: Option<&str>) -> StoreResult<Value> {
-  let Some(prompt_ref) = prompt_ref else {
-    return Ok(json!({"ref": null, "source": null, "chars": 0, "text": null}));
-  };
-  let path = store.prompt_bodies_dir().join(format!("{prompt_ref}.md"));
-  let body = fs::read_to_string(&path).map_err(|error| path_error(&path, error))?;
-  Ok(json!({
-    "ref": prompt_ref,
-    "source": path.to_string_lossy(),
-    "chars": body.chars().count(),
-    "text": body,
-  }))
 }
 
 /// `GET /api/sessions/{session_id}/pending-triggers`: the session's pending delayed triggers, `fire_at` ascending.

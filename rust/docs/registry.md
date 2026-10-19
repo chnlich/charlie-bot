@@ -308,6 +308,30 @@ follows Python `src/runtime/api/sessions.py:793-810`: refusal variants use their
 include their message and blockers, and failures use the ordinary unhandled-exception response. Every task-error
 answer from a route uses this function.
 
+`fastapi_body::read(&headers, body).await` reads a route's body before its dependencies. With FastAPI's default strict
+content-type rule, it decodes only `application/json` and `application/*+json` bodies through `python_json`; other
+content types stay raw bytes. After the dependencies succeed, `RequestBody::validate(&model)` checks the pydantic model
+and returns its declared fields. A handler keeps that order:
+
+```rust
+async fn update(request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let session = match require_session(&parts).await {
+    Ok(session) => session,
+    Err(response) => return response,
+  };
+  let model = match body.validate(&SESSION_BODY) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  update_session(session, model).await
+}
+```
+
 ## The typed startup state
 
 `FeatureContext` holds the config and credentials (`Arc<HotReload<_>>`), the store, the registry and the

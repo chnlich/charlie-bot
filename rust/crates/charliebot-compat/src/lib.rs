@@ -3,6 +3,7 @@
 //! the outbound HTTP client. Each piece reproduces one Python module's bytes; a crate that answers
 //! the same routes takes them from here rather than writing its own.
 
+pub mod fastapi_body;
 pub mod headers;
 pub mod http_client;
 pub mod jinja;

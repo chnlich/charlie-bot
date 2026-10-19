@@ -13,21 +13,22 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
+use anyhow::Context;
 use charliebot_agents::transport::identity;
 use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::SequenceCompletion;
-use charliebot_store::metadata::{TaskProfile, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
-use charliebot_store::{PatchTask, TaskCaller};
+use charliebot_store::{CreateTask, PatchTask, TaskCaller};
 use charliebot_tasks::execution::is_out_of_space_error;
 use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  LOOP_KIND, LogCapture, LoopClose, LoopMarker, Stack, assert_logged_node_failure, assert_named_error, cold_read_spec,
-  implement_spec, script_option, synthetic_run,
+  BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, Stack, assert_logged_node_failure, assert_named_error,
+  cold_read_spec, implement_spec, script_option, synthetic_run,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// The stop request a node that closed before its queued run settles it with (`closed_task_stop_request_id`).
 fn closed_task_stop(run_id: &str) -> String {
@@ -1247,5 +1248,89 @@ async fn recovery_sweep_lands_an_interrupted_prompt_fact_once() -> anyhow::Resul
   stack.boot().await?;
   stack.boot().await?;
   assert_eq!(prompt_facts(&stack, &leaf.id)?, first, "the later passes append nothing");
+  Ok(())
+}
+
+/// A root node under a fixed session id. The boot pass visits the session directories in sorted order, so the id
+/// decides which node the pass reaches first.
+async fn node_with_id(stack: &Stack, session_id: &str, profile: TaskProfile) -> anyhow::Result<SessionMetadata> {
+  let request = CreateTask {
+    request_id: format!("create-{session_id}"),
+    task_parent_id: None,
+    profile,
+    task: None,
+    name: Some(format!("Synthetic {session_id}")),
+    backend: Some(BACKEND_ID.to_string()),
+    group: None,
+    session_id: Some(session_id.to_string()),
+  };
+  Ok(stack.store().create_task(request, TaskCaller::Operator, Map::new()).await?)
+}
+
+/// Boot a home holding a sequence node with one queued run of `sequence_kind` and a manager node with one dead turn.
+/// `sequence_first` gives the sequence node the id the boot pass reaches first, or the one it reaches second.
+async fn boot_past_a_refused_sequence_node(
+  sequence_kind: &str,
+  run_kind: RunKind,
+  sequence_first: bool,
+) -> anyhow::Result<()> {
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let stack = Stack::start("exit 0").await?;
+  // The drain builds the manager run's child environment, which signs a run token with `charliebot.access_key`.
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  let (sequence_id, manager_id) =
+    if sequence_first { ("synthetic-node-a", "synthetic-node-b") } else { ("synthetic-node-b", "synthetic-node-a") };
+  let sequence = node_with_id(&stack, sequence_id, TaskProfile::Worker).await?;
+  let manager = node_with_id(&stack, manager_id, TaskProfile::Manager).await?;
+  let sequence_ref =
+    SequenceRef { kind: sequence_kind.to_string(), owner_ref: "synthetic-owner".to_string(), position: 0 };
+  let queued = RunRecord { sequence_ref: Some(sequence_ref), ..queued_run(&sequence.id, "run-sequence", run_kind) };
+  stack.register(queued).await?;
+  stack.queue_run(&manager.id, "run-manager-dead", RunKind::ManagerTurn).await?;
+  stack.launch(&manager.id, "run-manager-dead", 424_821, "1-424000").await?;
+
+  let counters = stack.boot().await.expect("the boot pass returns Ok when one node is refused");
+
+  assert_eq!(counters.nodes, 2, "the boot pass visits both nodes");
+  assert_eq!(counters.drained, 1, "the manager node drains its dead turn");
+  settle_manager(&stack, &manager.id).await?;
+  let manager_events = stack.run_events(&manager.id)?;
+  assert!(
+    run_records::terminal_outcome(&manager_events, "run-manager-dead")?.is_some(),
+    "the manager node recovers its dead turn past the refused node"
+  );
+  let refused = stack.store().read_run_sync(&sequence.id, "run-sequence")?.expect("the queued run is recorded");
+  assert_eq!(refused.pid, None, "the refused run never launches");
+  let sequence_events = stack.run_events(&sequence.id)?;
+  assert!(
+    run_records::terminal_outcome(&sequence_events, "run-sequence")?.is_none(),
+    "the refused run keeps no terminal fact"
+  );
+  assert_logged_node_failure(&log, sequence_kind);
+  Ok(())
+}
+
+/// A refused `improve` run stops only its own node: the boot pass logs the named error and the manager node still
+/// recovers its dead turn, with the improve node first and with it second. There is no Python case, since Python runs
+/// the improve controller; this covers the interim refusal of `UNLANDED_SEQUENCE_KINDS`.
+#[tokio::test]
+async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
+  for sequence_first in [true, false] {
+    boot_past_a_refused_sequence_node("improve", RunKind::Iteration, sequence_first)
+      .await
+      .with_context(|| format!("with the sequence node first: {sequence_first}"))?;
+  }
+  Ok(())
+}
+
+/// The same refusal for a `cron` run, in both node orders: the cron controller has not landed either.
+#[tokio::test]
+async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
+  for sequence_first in [true, false] {
+    boot_past_a_refused_sequence_node("cron", RunKind::ScheduledStep, sequence_first)
+      .await
+      .with_context(|| format!("with the sequence node first: {sequence_first}"))?;
+  }
   Ok(())
 }

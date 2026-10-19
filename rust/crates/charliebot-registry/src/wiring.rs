@@ -80,7 +80,12 @@ pub trait Service: Send + Sync {
 /// serves a path; `path` is the absolute path without its leading "/". `Ok(Some)` answers the request, `Ok(None)`
 /// passes it on, and `Err` is the error response (Python raises `HTTPException`).
 pub trait FileView: Send + Sync {
-  fn view<'a>(&'a self, request: &'a Parts, path: &'a str) -> BoxFuture<'a, Result<Option<Response>, Response>>;
+  fn view<'a>(
+    &'a self,
+    features: &'a FeatureContext,
+    request: &'a Parts,
+    path: &'a str,
+  ) -> BoxFuture<'a, Result<Option<Response>, Response>>;
 }
 
 /// A startup check (`wiring.register_startup_check`) runs once before the server serves. A config check

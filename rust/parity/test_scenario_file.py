@@ -731,3 +731,54 @@ def test_unresolved_references_in_multipart_and_collect_fail_their_steps(tmp_pat
   scenario_file.check_references(scenario, manifest)
   messages = [scenario_file.unresolved_reference(step, manifest, {}, "/tree", "/tree/home") for step in scenario.steps]
   assert messages == [None, "unresolved reference ${capture.input_id}", "unresolved reference ${capture.input_id}"]
+
+
+def test_http_status_and_shape_compare_loads(tmp_path: pathlib.Path) -> None:
+  step = {
+      "name": "invalid json",
+      "method": "POST",
+      "path": "/api/sessions/",
+      "json": "{bad",
+      "expect_status": 422,
+      "compare": "status_and_shape",
+  }
+  scenario = _load(tmp_path, [step])
+  assert scenario.steps[0].http_compare == "status_and_shape"
+
+
+@pytest.mark.parametrize(
+    "step,message", [
+        (
+            {
+                "name": "not an error status",
+                "method": "GET",
+                "path": "/api/auth/status",
+                "expect_status": 200,
+                "compare": "status_and_shape",
+            },
+            "compare requires an expect_status of at least 400",
+        ),
+        (
+            {
+                "name": "no expected status",
+                "method": "GET",
+                "path": "/api/auth/status",
+                "compare": "status_and_shape",
+            },
+            "compare requires an expect_status of at least 400",
+        ),
+        (
+            {
+                "name": "unknown compare mode",
+                "method": "GET",
+                "path": "/api/auth/status",
+                "expect_status": 422,
+                "compare": "frames",
+            },
+            "compare must be status_and_shape",
+        ),
+    ])
+def test_http_compare_refused_without_an_error_status(
+    tmp_path: pathlib.Path, step: dict[str, Any], message: str) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
+    _load(tmp_path, [step])

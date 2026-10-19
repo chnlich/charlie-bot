@@ -437,7 +437,22 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
   tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "session_renamed");
   features.store.invalidate_tree_index();
   features.store.notify_task_tree_changed(session_id, Some("task_updated")).await;
-  features.store.session_detail(&meta.id).map_err(task_http_error)
+  let meta = response_metadata(&features.store, &meta).map_err(store_error)?;
+  rename_response(&meta)
+}
+
+fn rename_response(meta: &SessionMetadata) -> Result<Value, Response> {
+  let mut detail =
+    serde_json::to_value(meta).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
+  let object = detail.as_object_mut().expect("session metadata serializes to an object");
+  object.insert("task_state".to_string(), json!("open"));
+  if object.get("work_state").is_none_or(Value::is_null) {
+    object.insert("work_state".to_string(), json!("idle"));
+  }
+  object.insert("archived".to_string(), json!(false));
+  object.insert("ancestors".to_string(), json!([]));
+  object.insert("prompt_rules".to_string(), json!({}));
+  Ok(detail)
 }
 
 /// Validate a body against `model` and return its declared fields. FastAPI's 422 answers any other shape.
@@ -938,6 +953,8 @@ mod tests {
     assert_eq!(detail["name"], "Renamed");
     assert_eq!(detail["work_state"], "idle");
     assert_eq!(detail["task_state"], "open");
+    assert_eq!(detail["prompt_rules"], json!({}));
+    assert_eq!(detail["run_backend"], Value::Null);
     assert_eq!(detail["ancestors"], json!([]));
     assert_eq!(features.store.read_metadata_fresh(&node.id).expect("node read").expect("node").name, "Renamed");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("rename tree notification")).unwrap();

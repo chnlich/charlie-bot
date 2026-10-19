@@ -115,3 +115,10 @@ charliebot-usage = { path = "crates/charliebot-usage" }
 charliebot-usage-page = { path = "crates/features/usage" }
 charliebot-voice = { path = "crates/features/voice" }
 charliebot-web-reply = { path = "crates/features/web_reply" }
+
+# Line tables keep backtrace file and line numbers; full debug info bloats each test binary to ~400 MB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

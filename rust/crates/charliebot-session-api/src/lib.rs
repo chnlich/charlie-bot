@@ -1,6 +1,7 @@
 //! Session listing routes and the shared listing helpers.
 
 pub mod detail;
+mod fork_routes;
 pub mod listing;
 mod prompt_routes;
 mod routes;

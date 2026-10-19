@@ -46,6 +46,7 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/sessions/tree", get_only(session_tree))
     .route("/api/sessions/search", get_only(session_search))
     .merge(crate::writes::routes())
+    .merge(crate::fork_routes::routes())
     .merge(crate::detail::routes())
     .route(
       "/api/sessions/{session_id}",

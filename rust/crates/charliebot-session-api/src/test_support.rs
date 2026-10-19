@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::bail;
+use axum::body::{Body, to_bytes};
+use axum::http::header::{CONTENT_TYPE, HeaderValue};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::Response;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials::load_credentials;
@@ -12,11 +16,14 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
 };
-use charliebot_registry::sequence::{SequenceBinding, SequenceController, SequenceTree};
+use charliebot_registry::sequence::{
+  RestoreOutcome, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
+};
 use charliebot_registry::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::{RunRecord, Store};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+use charliebot_store::{ControlGuard, CreateTask, RunRecord, Store, StoreError, StoreResult, TaskCaller};
+use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
@@ -183,4 +190,91 @@ pub(crate) fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
   ));
   let startup = Arc::new(StartupState::default());
   (home, Arc::new(FeatureContext { config, credentials, store, registry, startup }))
+}
+
+/// Completion hooks for the route tests, which never finish a run or a sequence child: any call is a test error.
+struct NoCompletion;
+
+impl SequenceCompletion for NoCompletion {
+  fn evaluate_automatic_completion<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _run_id: &'a str,
+    _summary: Option<&'a str>,
+    _result_refs: Option<&'a [String]>,
+    _request_id: Option<&'a str>,
+  ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
+    Box::pin(async { Err(StoreError::new("unused sequence completion")) })
+  }
+
+  fn close_sequence_child<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _request_id: &'a str,
+    _outcome: &'a str,
+    _evidence: &'a Value,
+  ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
+    Box::pin(async { Err(StoreError::new("unused sequence completion")) })
+  }
+
+  fn restore_chain<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _request_id: &'a str,
+    _reason: &'a str,
+  ) -> BoxFuture<'a, StoreResult<Vec<String>>> {
+    Box::pin(async { Err(StoreError::new("unused sequence completion")) })
+  }
+
+  fn restore_chain_locked<'a>(
+    &'a self,
+    _guard: &'a ControlGuard,
+    _session_id: &'a str,
+    _request_id: &'a str,
+    _reason: &'a str,
+  ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
+    Box::pin(async { Err(StoreError::new("unused sequence completion")) })
+  }
+}
+
+impl RunFinishedCompletion for NoCompletion {
+  fn after_run_finished<'a>(&'a self, _session_id: &'a str, _run_id: &'a str) -> BoxFuture<'a, StoreResult<()>> {
+    Box::pin(async { Err(StoreError::new("unused run completion")) })
+  }
+}
+
+pub(crate) fn install_dispatcher(features: &FeatureContext) {
+  let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::new(NoCompletion), Arc::new(NoCompletion));
+  features.startup.insert(dispatcher).expect("one dispatcher per startup");
+}
+
+pub(crate) async fn create_node(
+  store: &Store,
+  request_id: &str,
+  parent: Option<&str>,
+  profile: TaskProfile,
+) -> SessionMetadata {
+  let request = CreateTask {
+    request_id: request_id.to_string(),
+    task_parent_id: parent.map(str::to_string),
+    profile,
+    task: None,
+    name: Some(request_id.to_string()),
+    backend: Some("synthetic-a".to_string()),
+    group: None,
+    session_id: None,
+  };
+  store.create_task(request, TaskCaller::System, Map::new()).await.expect("synthetic task node")
+}
+
+pub(crate) fn json_request(body: Value) -> (HeaderMap, Body) {
+  let mut headers = HeaderMap::new();
+  headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+  (headers, Body::from(body.to_string()))
+}
+
+pub(crate) async fn answer(response: Response) -> (StatusCode, Value) {
+  let status = response.status();
+  let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("response body");
+  (status, serde_json::from_slice(&bytes).expect("JSON response"))
 }

@@ -225,7 +225,8 @@ async fn create(
       return Err(store_error(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED)));
     };
     if let Some(requested) = fields.backend.as_deref() {
-      resolve_requested_backend(Some(requested), &cfg, &features.registry).map_err(store_error)?;
+      resolve_requested_backend(Some(requested), &cfg, &features.registry, &default_backend_id(&cfg))
+        .map_err(store_error)?;
     }
     let profile = match fields.profile {
       Some(profile) => profile,
@@ -257,7 +258,9 @@ async fn create(
   if !caller.is_operator() {
     return Err(store_error(StoreError::forbidden(AGENT_CREATE_SCOPE_REFUSAL)));
   }
-  let backend = resolve_requested_backend(fields.backend.as_deref(), &cfg, &features.registry).map_err(store_error)?;
+  let backend =
+    resolve_requested_backend(fields.backend.as_deref(), &cfg, &features.registry, &default_backend_id(&cfg))
+      .map_err(store_error)?;
   tracing::info!(target: LOG_TARGET, backend = %backend, name = ?fields.name, "creating_session");
   let request = CreateTask {
     request_id: format!("operator-create-{}", uuid::Uuid::new_v4()),
@@ -465,12 +468,12 @@ fn validated_object(body: &RequestBody, model: &BodyModel) -> Result<Map<String,
 }
 
 /// Deserialize validated fields. Validation has already fixed their shape, so a failure here is a server fault.
-fn typed<T: DeserializeOwned>(values: Map<String, Value>) -> Result<T, Response> {
+pub(crate) fn typed<T: DeserializeOwned>(values: Map<String, Value>) -> Result<T, Response> {
   serde_json::from_value(Value::Object(values))
     .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
-fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>, Response> {
+pub(crate) fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>, Response> {
   features.config.get().map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
@@ -479,16 +482,17 @@ fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
 }
 
 /// `_default_backend_id`: the first configured option, else `claude`.
-fn default_backend_id(cfg: &CharlieBotConfig) -> String {
+pub(crate) fn default_backend_id(cfg: &CharlieBotConfig) -> String {
   cfg.backends.options.first().map_or_else(|| "claude".to_string(), |option| option.id.clone())
 }
 
-/// `_resolve_requested_backend` with the default as its fallback: a configured id, a family-prefix alias (the first
-/// option of that type), or the default when no id was given.
-fn resolve_requested_backend(
+/// `_resolve_requested_backend`: a configured id, a family-prefix alias (the first option of that type), or, when no
+/// id was given, the fallback backend. The fallback is checked against the configured ids as the requested id is.
+pub(crate) fn resolve_requested_backend(
   requested: Option<&str>,
   cfg: &CharlieBotConfig,
   registry: &Registry,
+  fallback_backend: &str,
 ) -> StoreResult<String> {
   let valid = valid_backend_ids(cfg);
   if let Some(requested) = requested {
@@ -506,13 +510,12 @@ fn resolve_requested_backend(
     tracing::warn!(target: LOG_TARGET, requested, valid = ?valid, "invalid_backend_requested");
     return Err(unknown_backend(requested, &valid));
   }
-  let fallback = default_backend_id(cfg);
-  if !valid.contains(&fallback.as_str()) {
-    tracing::warn!(target: LOG_TARGET, fallback = %fallback, valid = ?valid, "invalid_fallback_backend");
-    return Err(unknown_backend(&fallback, &valid));
+  if !valid.contains(&fallback_backend) {
+    tracing::warn!(target: LOG_TARGET, fallback = fallback_backend, valid = ?valid, "invalid_fallback_backend");
+    return Err(unknown_backend(fallback_backend, &valid));
   }
-  tracing::info!(target: LOG_TARGET, fallback = %fallback, "using_fallback_backend");
-  Ok(fallback)
+  tracing::info!(target: LOG_TARGET, fallback = fallback_backend, "using_fallback_backend");
+  Ok(fallback_backend.to_string())
 }
 
 /// `_UNKNOWN_BACKEND_DETAIL`: the 400 for an id that no option answers to, naming the sorted valid ids.
@@ -563,7 +566,7 @@ fn list_repr(items: &[&str]) -> String {
 
 /// The `SessionMetadata` response form, which `response_model=models.SessionMetadata` serializes. Like every API return
 /// path it carries the live run backend and busy-since (`session_store.stamp_thinking_since`).
-fn model_response(store: &Store, meta: &SessionMetadata) -> Response {
+pub(crate) fn model_response(store: &Store, meta: &SessionMetadata) -> Response {
   let value = response_metadata(store, meta).and_then(|meta| Ok(serde_json::to_value(meta)?));
   match value {
     Ok(value) => responses::json(StatusCode::OK, &value),
@@ -575,23 +578,15 @@ fn model_response(store: &Store, meta: &SessionMetadata) -> Response {
 mod tests {
   use std::sync::{Arc, Mutex};
 
-  use axum::body::to_bytes;
   use charliebot_core::run_token::RunTokenClaims;
-  use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
-  use charliebot_store::{ControlGuard, SIDEBAR_CHANNEL, Store, session_channel};
-  use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
-  use futures_util::future::BoxFuture;
-  use http::header::{CONTENT_TYPE, HeaderValue};
+  use charliebot_store::{SIDEBAR_CHANNEL, session_channel};
   use tracing::field::{Field, Visit};
   use tracing::{Event, Subscriber};
   use tracing_subscriber::Layer;
   use tracing_subscriber::layer::{Context, SubscriberExt};
 
   use super::*;
-  use crate::test_support::feature_context;
-
-  /// The completion hooks of the dispatcher. The write-route tests reach none of them.
-  struct NoCompletion;
+  use crate::test_support::{answer, create_node, feature_context, install_dispatcher, json_request};
 
   struct LogMessage(Arc<Mutex<Vec<String>>>);
 
@@ -617,85 +612,6 @@ mod tests {
         self.0 = value.to_string();
       }
     }
-  }
-
-  impl SequenceCompletion for NoCompletion {
-    fn evaluate_automatic_completion<'a>(
-      &'a self,
-      _session_id: &'a str,
-      _run_id: &'a str,
-      _summary: Option<&'a str>,
-      _result_refs: Option<&'a [String]>,
-      _request_id: Option<&'a str>,
-    ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
-      Box::pin(async { Err(StoreError::new("unused sequence completion")) })
-    }
-
-    fn close_sequence_child<'a>(
-      &'a self,
-      _session_id: &'a str,
-      _request_id: &'a str,
-      _outcome: &'a str,
-      _evidence: &'a Value,
-    ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
-      Box::pin(async { Err(StoreError::new("unused sequence completion")) })
-    }
-
-    fn restore_chain<'a>(
-      &'a self,
-      _session_id: &'a str,
-      _request_id: &'a str,
-      _reason: &'a str,
-    ) -> BoxFuture<'a, StoreResult<Vec<String>>> {
-      Box::pin(async { Err(StoreError::new("unused sequence completion")) })
-    }
-
-    fn restore_chain_locked<'a>(
-      &'a self,
-      _guard: &'a ControlGuard,
-      _session_id: &'a str,
-      _request_id: &'a str,
-      _reason: &'a str,
-    ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
-      Box::pin(async { Err(StoreError::new("unused sequence completion")) })
-    }
-  }
-
-  impl RunFinishedCompletion for NoCompletion {
-    fn after_run_finished<'a>(&'a self, _session_id: &'a str, _run_id: &'a str) -> BoxFuture<'a, StoreResult<()>> {
-      Box::pin(async { Err(StoreError::new("unused run completion")) })
-    }
-  }
-
-  fn install_dispatcher(features: &FeatureContext) {
-    let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::new(NoCompletion), Arc::new(NoCompletion));
-    features.startup.insert(dispatcher).expect("one dispatcher per startup");
-  }
-
-  fn json_request(body: Value) -> (HeaderMap, Body) {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    (headers, Body::from(body.to_string()))
-  }
-
-  async fn answer(response: Response) -> (StatusCode, Value) {
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("response body");
-    (status, serde_json::from_slice(&bytes).expect("JSON response"))
-  }
-
-  async fn create_node(store: &Store, request_id: &str, parent: Option<&str>, profile: TaskProfile) -> SessionMetadata {
-    let request = CreateTask {
-      request_id: request_id.to_string(),
-      task_parent_id: parent.map(str::to_string),
-      profile,
-      task: None,
-      name: Some(request_id.to_string()),
-      backend: Some("synthetic-a".to_string()),
-      group: None,
-      session_id: None,
-    };
-    store.create_task(request, TaskCaller::System, Map::new()).await.expect("synthetic task node")
   }
 
   #[tokio::test]

@@ -28,6 +28,7 @@ members = [
     "crates/charliebot-store",
     "crates/charliebot-registry",
     "crates/charliebot-session-api",
+    "crates/charliebot-sched",
     "crates/charliebot-usage",
 ]
 
@@ -99,6 +100,7 @@ charliebot-registry = { path = "crates/charliebot-registry" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/charliebot-store" }
 charliebot-session-api = { path = "crates/charliebot-session-api" }
+charliebot-sched = { path = "crates/charliebot-sched" }
 charliebot-tasks = { path = "crates/charliebot-tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }

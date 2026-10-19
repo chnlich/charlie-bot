@@ -17,7 +17,7 @@ import yaml
 SCENARIO_DIR = pathlib.Path(__file__).resolve().parent / "scenarios"
 DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 FIXTURE_EXTRAS_DIR = pathlib.Path(__file__).resolve().parent / "fixture_extras"
-STEP_KINDS = ("http", "ws", "fake", "wait", "gate", "handover")
+STEP_KINDS = ("http", "ws", "fake", "wait", "gate", "handover", "process")
 AUTH_MODES = ("bearer", "cookie", "none")
 WS_AUTH_MODES = ("token", "none")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -44,6 +44,7 @@ _FAKE_STEP_KEYS = {"kind", "name", "fake", "action", "payload"}
 _WAIT_STEP_KEYS = {"kind", "name", "timeout_seconds", "until"}
 _GATE_STEP_KEYS = {"kind", "name", "open"}
 _HANDOVER_STEP_KEYS = {"kind", "name", "agent_after_stop"}
+_PROCESS_STEP_KEYS = {"kind", "name", "action", "process_id", "delay_seconds", "capture"}
 
 
 class ScenarioError(ValueError):
@@ -303,6 +304,7 @@ def _step(raw: Any, where: str) -> Step:
       "wait": _WAIT_STEP_KEYS,
       "gate": _GATE_STEP_KEYS,
       "handover": _HANDOVER_STEP_KEYS,
+      "process": _PROCESS_STEP_KEYS,
   }[kind]
   unknown = set(raw) - allowed
   if unknown:
@@ -425,6 +427,29 @@ def _step(raw: Any, where: str) -> Step:
     agent_after_stop = raw.get("agent_after_stop")
     if agent_after_stop not in ("alive", "exited", "terminated"):
       raise ScenarioError(f"{where}: 'agent_after_stop' must be alive, exited or terminated")
+  elif kind == "process":
+    action = raw.get("action")
+    if action not in ("start", "stop"):
+      raise ScenarioError(f"{where}: process action must be start or stop")
+    process_id = raw.get("process_id")
+    if not isinstance(process_id, str) or not process_id:
+      raise ScenarioError(f"{where}: process_id must be a non-empty string")
+    delay_seconds = raw.get("delay_seconds", 0)
+    valid_delay_type = isinstance(delay_seconds, (int, float)) and not isinstance(delay_seconds, bool)
+    try:
+      valid_delay = valid_delay_type and math.isfinite(delay_seconds) and delay_seconds >= 0
+    except OverflowError:
+      valid_delay = False
+    if not valid_delay or (action == "start" and delay_seconds != 0):
+      raise ScenarioError(f"{where}: delay_seconds must be nonnegative and only applies to stop")
+    timeout_seconds = float(delay_seconds)
+    payload = {"process_id": process_id}
+    if action == "start":
+      capture = _string_map(raw.get("capture", {}), f"{where}.capture")
+      if len(capture) != 1 or next(iter(capture.values())) != "pid":
+        raise ScenarioError(f"{where}: start requires one capture mapping to 'pid'")
+    elif raw.get("capture", {}):
+      raise ScenarioError(f"{where}: stop cannot capture process fields")
   return Step(
       kind=kind,
       name=raw["name"],

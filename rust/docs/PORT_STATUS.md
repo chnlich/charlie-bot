@@ -62,8 +62,8 @@ One row per route of the Python app (`server.app.routes` at `PORT_BASELINE`), in
 | POST | `/api/chat/{session_id}/cancel` | chat | ported |  |
 | GET | `/api/internal/version` | foundation | ported |  |
 | POST | `/api/internal/delegate` | internal | todo |  |
-| POST | `/api/internal/schedule-trigger` | internal | todo |  |
-| POST | `/api/internal/triggers/{session_id}/{trigger_id}/cancel` | internal | todo |  |
+| POST | `/api/internal/schedule-trigger` | internal | ported |  |
+| POST | `/api/internal/triggers/{session_id}/{trigger_id}/cancel` | internal | ported |  |
 | POST | `/api/internal/session-message` | internal | todo |  |
 | WS | `/ws/sessions/{session_id}` | session-stream | todo | the token check is ported; every upgrade answers 403 |
 | POST | `/api/internal/plan/present` | features/artifacts | todo |  |
@@ -175,7 +175,7 @@ implemented.
 | lifespan | 6. Start task-tree recovery | agent-runtime | todo | |
 | lifespan | 7. Start early services | services | todo | |
 | lifespan | 8. Await task-tree recovery | agent-runtime | todo | |
-| lifespan | 9. Recover pending triggers | agent-runtime | todo | |
+| lifespan | 9. Recover pending triggers | agent-runtime | ported | |
 | lifespan | 10. Start ready services | services | todo | |
 | lifespan | 11. Log ready and serve | foundation | ported | |
 | lifespan | 12. Stop services and close shared clients | services | todo | Signal shutdown and writer-fence release are implemented; service teardown is not. |
@@ -255,7 +255,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/data/runs/<run>/hang_diagnostics.json` | agent-runtime | todo | |
 | legacy `sessions/<sid>/data/master_runs/<started_at>/` | agent-runtime | todo | Read-only baseline layout. |
 | legacy `sessions/<sid>/threads/<tid>/data/` | agent-runtime | todo | Read-only baseline layout. |
-| `sessions/<sid>/triggers/<trigger_id>.json` | agent-runtime | todo | |
+| `sessions/<sid>/triggers/<trigger_id>.json` | agent-runtime | ported | |
 | `sessions/<sid>/launches/<launch_id>/metadata.json` | foundation | todo | |
 | `sessions/<sid>/launches/<launch_id>/log` | foundation | todo | |
 | `sessions/<sid>/launches/<launch_id>/exit` | foundation | todo | |

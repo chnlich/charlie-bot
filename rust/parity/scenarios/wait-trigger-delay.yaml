@@ -20,6 +20,63 @@ fake_agent:
       exit_code: 0
 expect_starts: 1
 steps:
+  - name: missing schedule target returns 404
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: synthetic-missing-trigger-session
+      delay_seconds: 2
+      message: Wake a missing synthetic target.
+    expect_status: 404
+  - name: empty watch list returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject an empty synthetic watch list.
+      watch_targets: []
+    expect_status: 400
+  - name: nonpositive pid returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic pid.
+      watch_targets: [{kind: local_pid, pid: 0}]
+    expect_status: 400
+  - name: nonpositive remote pid returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic remote pid.
+      watch_targets: [{kind: remote_pid, host: synthetic-host, pid: 0}]
+    expect_status: 400
+  - name: nonpositive job id returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic job id.
+      watch_targets: [{kind: slurm_job, job_id: 0}]
+    expect_status: 400
+  - name: malformed delay returns 422 with validation identity
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: invalid
+      message: Reject malformed synthetic delay.
+    expect_status: 422
+  - name: missing trigger cancellation returns 404
+    method: POST
+    path: /api/internal/triggers/${sessions.atlas}/synthetic-missing-trigger/cancel
+    json: {}
+    expect_status: 404
   - name: schedule a two-second trigger
     method: POST
     path: /api/internal/schedule-trigger

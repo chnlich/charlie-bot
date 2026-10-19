@@ -1,20 +1,22 @@
-//! `src/features/code_server`: registers the `code_server:` config section. The rest of the package is not ported yet.
+//! `src/features/code_server`: the `code_server:` config section, the `code_server_enabled` template global that shows
+//! the diff page's open button, and the `/api/code-server/open` route that opens a folder in code-server.
 
-use std::sync::Arc;
+// The helpers answer a failure as the HTTP response it sends, as `charliebot_registry::caller` does, so their
+// `Err` is a `Response`.
+#![allow(clippy::result_large_err)]
 
-use charliebot_core::config::{ConfigSection, SectionValue};
+mod api;
+mod config;
+mod which;
+
 use charliebot_registry::{Registry, RegistryError};
 
-/// `src/features/code_server`: the `code_server:` section.
+/// `register` (`src/features/code_server/__init__.py`): the router, the template global, then the config section.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(ConfigSection {
-    key: "code_server",
-    legacy_keys: &[("code_server_bin", "code_server.bin"), ("code_server_config", "code_server.config")],
-    parse: raw_section,
-  })
+  registry.router(api::routes, api::matches)?;
+  registry.template_global("code_server_enabled", api::code_server_enabled)?;
+  registry.config_section(config::section())
 }
 
-/// A config section kept as its YAML value until the owning package's port types it.
-fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
-  Ok(Arc::new(value.clone()))
-}
+#[cfg(test)]
+mod tests;

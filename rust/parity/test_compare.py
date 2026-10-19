@@ -81,3 +81,51 @@ def test_detail_list_against_detail_text_fails_in_both_orders() -> None:
   text = _response(422, {"detail": "invalid json"})
   assert _diff(errors, text) == ["body detail: a list on one side only"]
   assert _diff(text, errors) == ["body detail: a list on one side only"]
+
+
+NUDGE = compare.EventSelector(event_type="agent_message", match_fields={"from_session_name": "Web reply"})
+FINISHED = compare.EventSelector(event_type="run_finished", match_fields={"outcome": "success"})
+
+
+def _chat_delta(events: list[dict]) -> compare.Delta:
+  path = "home/sessions/synthetic-session/data/chat_events.jsonl"
+  data = "".join(json.dumps(event) + "\n" for event in events).encode()
+  return compare.Delta(added={}, removed=frozenset(), changed={path: compare.Entry("file", data)})
+
+
+def _chat_events(nudge_first: bool, nudge_id: str = "nudge-id") -> list[dict]:
+  nudge = {"type": "agent_message", "id": nudge_id, "from_session_name": "Web reply", "content": "Post the reply."}
+  finished = {"type": "run_finished", "id": "finished-id", "outcome": "success", "run_id": "synthetic-run"}
+  pair = [nudge, finished] if nudge_first else [finished, nudge]
+  events = [{"type": "master_done", "id": "done-id", "exit_code": 0}, *pair, {"type": "web_reply_notice"}]
+  for index, event in enumerate(events):
+    event["event_index"] = index
+  return events
+
+
+def _ordered_diff(baseline: list[dict], candidate: list[dict], candidate_is_python: bool = False) -> list[str]:
+  left, right = (compare.order_adjacent_pair(_chat_delta(events), NUDGE, FINISHED) for events in (baseline, candidate))
+  return compare.delta_diff(left, right, _context(), _context(), candidate_is_python=candidate_is_python)
+
+
+def test_adjacent_pair_compares_equal_in_either_order_with_different_ids() -> None:
+  assert _ordered_diff(_chat_events(True, "nudge-1"), _chat_events(False, "nudge-2")) == []
+  assert _ordered_diff(_chat_events(False, "nudge-1"), _chat_events(True, "nudge-2")) == []
+  assert _ordered_diff(_chat_events(True), _chat_events(False), candidate_is_python=True) == []
+
+
+def test_adjacent_pair_rule_still_reports_a_difference_outside_the_pair() -> None:
+  candidate = _chat_events(False)
+  candidate[0]["exit_code"] = 1
+  assert any("exit_code" in line for line in _ordered_diff(_chat_events(True), candidate))
+
+
+def test_adjacent_pair_rule_keeps_a_pair_that_is_not_adjacent() -> None:
+  candidate = _chat_events(False)
+  candidate.insert(2, {"type": "web_reply", "id": "between"})
+  assert _ordered_diff(_chat_events(True), candidate) != []
+
+
+def test_adjacent_pair_rule_keeps_a_log_without_the_first_event() -> None:
+  candidate = [event for event in _chat_events(True) if event["type"] != "agent_message"]
+  assert _ordered_diff(_chat_events(True), candidate) != []

@@ -239,6 +239,69 @@ def test_allowed_baseline_values_rule_loads(tmp_path: pathlib.Path) -> None:
   assert scenario.comparison_rules[0]["allowed_baseline_values_for_one_event_field"]["field"] == "outcome"
 
 
+_NUDGE_SELECTOR = {"type": "agent_message", "match_fields": {"from_session_name": "Web reply"}}
+_FINISHED_SELECTOR = {"type": "run_finished", "match_fields": {"outcome": "success"}}
+
+
+def test_either_order_rule_loads(tmp_path: pathlib.Path) -> None:
+  rule = {"first": _NUDGE_SELECTOR, "second": _FINISHED_SELECTOR}
+  scenario = _load(
+      tmp_path, [{
+          "name": "adjacent pair",
+          "method": "GET",
+          "path": "/api/auth/status"
+      }],
+      comparison_rules=[{
+          "either_order_of_adjacent_events": rule
+      }])
+  loaded = scenario.comparison_rules[0]["either_order_of_adjacent_events"]
+  assert loaded["first"] == _NUDGE_SELECTOR
+  assert loaded["second"] == _FINISHED_SELECTOR
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {
+            "first": _NUDGE_SELECTOR
+        },
+        {
+            "first": _NUDGE_SELECTOR,
+            "second": {
+                "type": "run_finished"
+            }
+        },
+        {
+            "first": {
+                "type": "agent_message",
+                "match_fields": {}
+            },
+            "second": _FINISHED_SELECTOR
+        },
+        {
+            "first": _NUDGE_SELECTOR,
+            "second": {
+                "type": "",
+                "match_fields": {
+                    "outcome": "success"
+                }
+            }
+        },
+    ],
+)
+def test_either_order_rule_rejects_malformed_selectors(tmp_path: pathlib.Path, rule: dict[str, Any]) -> None:
+  with pytest.raises(scenario_file.ScenarioError):
+    _load(
+        tmp_path, [{
+            "name": "adjacent pair",
+            "method": "GET",
+            "path": "/api/auth/status"
+        }],
+        comparison_rules=[{
+            "either_order_of_adjacent_events": rule
+        }])
+
+
 def test_http_status_and_shape_compare_mode_loads(tmp_path: pathlib.Path) -> None:
   scenario = _load(
       tmp_path, [

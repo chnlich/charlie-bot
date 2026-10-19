@@ -77,6 +77,7 @@ The subscription happens before the catch-up read. Thus no event falls between t
   - a JSON object whose `type` is not `cursor`;
   - an `index` that `int()` rejects.
 - A JSON frame that is not an object (for example `[]` or `1`) raises `AttributeError` in the handler. The socket closes before the catch-up. This is a defect of the Python server; the probe saw the exception.
+- The Rust handler logs `session_ws_cursor_parse_failed` and continues from cursor 0 when the JSON value is not an object.
 - A client disconnect during the wait ends the handler with no further frames.
 
 ### Catch-up

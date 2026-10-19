@@ -185,6 +185,11 @@ impl Store {
     self.streaming_manager.close_all();
   }
 
+  /// Build a message aggregator with the event renderers registered for this store.
+  pub fn new_message_aggregator(&self, event_index_offset: usize, emit_stream_deltas: bool) -> MessageAggregator {
+    MessageAggregator::with_renderers(event_index_offset, emit_stream_deltas, self.event_renderers.clone())
+  }
+
   /// Return the memoized message projection for an unarchived session.
   pub fn get_message_projection(&self, session_id: &str) -> StoreResult<Option<Arc<MessageProjection>>> {
     let archive_offset = self.read_archive_offset(session_id)?;
@@ -301,7 +306,7 @@ impl Store {
       }
       let events = self.load_chat_events_sync(session_id)?;
       let archive_offset = self.read_archive_offset(session_id)?;
-      let mut aggregator = MessageAggregator::with_renderers(archive_offset, false, self.event_renderers.clone());
+      let mut aggregator = self.new_message_aggregator(archive_offset, false);
       let mut dropped = false;
       let mut start = 0;
       while start < events.len() {

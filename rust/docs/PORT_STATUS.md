@@ -70,7 +70,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | POST | `/api/internal/schedule-trigger` | internal | ported |  |
 | POST | `/api/internal/triggers/{session_id}/{trigger_id}/cancel` | internal | ported |  |
 | POST | `/api/internal/session-message` | internal | todo |  |
-| WS | `/ws/sessions/{session_id}` | session-stream | todo | the token check is ported; every upgrade answers 403 |
+| WS | `/ws/sessions/{session_id}` | session-stream | ported |  |
 | POST | `/api/internal/plan/present` | features/artifacts | todo |  |
 | POST | `/api/internal/plan/amend` | features/artifacts | todo |  |
 | POST | `/api/internal/plan/approve` | features/artifacts | todo |  |

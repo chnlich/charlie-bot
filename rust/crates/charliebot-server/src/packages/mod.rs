@@ -88,5 +88,6 @@ mod tests {
       assert!(registry.event_renderer(event_type).is_some(), "no renderer for {event_type}");
     }
     assert!(registry.event_renderer("assistant").is_none());
+    assert!(registry.websocket_match("/ws/sessions/synthetic").is_some());
   }
 }

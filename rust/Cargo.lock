@@ -637,16 +637,18 @@ dependencies = [
  "charliebot-tasks",
  "charliebot-usage",
  "flate2",
+ "futures-util",
  "http",
  "percent-encoding",
  "serde",
  "serde_json",
  "tempfile",
  "time",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
+  "tokio",
+  "tower",
+  "tracing",
+  "tracing-subscriber",
+  "uuid",
 ]
 
 [[package]]

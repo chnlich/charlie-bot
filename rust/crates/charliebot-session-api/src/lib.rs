@@ -6,9 +6,12 @@ mod prompt_routes;
 mod routes;
 mod search;
 mod sidebar;
+#[cfg(test)]
+mod test_support;
 mod tree;
 mod worker_transcript;
 mod writes;
+mod write_routes;
 
 use std::sync::Arc;
 

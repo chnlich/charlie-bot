@@ -5,7 +5,8 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
-use charliebot_compat::routing::{get_and_delete, get_only};
+use axum::routing::get;
+use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
@@ -17,7 +18,7 @@ use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::listing::{self, SessionsListMemos};
-use crate::{search, sidebar, tree};
+use crate::{search, sidebar, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
 type StatusBodyCache = Mutex<Vec<(StatusKey, Vec<u8>)>>;
@@ -36,7 +37,8 @@ struct StatusKey {
 /// Register every supported listing route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/sessions/", get_only(list_active))
+    .route("/api/sessions/", refuse_other_methods(get(list_active).post(write_routes::create_session), "GET"))
+    .route("/api/sessions/{session_id}/backend", post_only(write_routes::switch_backend))
     .route("/api/sessions/archived", get_only(list_archived))
     .route("/api/sessions/starred", get_only(list_starred))
     .route("/api/sessions/groups", get_only(list_groups))
@@ -45,7 +47,15 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/sessions/search", get_only(session_search))
     .merge(crate::writes::routes())
     .merge(crate::detail::routes())
-    .route("/api/sessions/{session_id}", get_and_delete(crate::detail::session_detail, crate::writes::archive_session))
+    .route(
+      "/api/sessions/{session_id}",
+      refuse_other_methods(
+        get(crate::detail::session_detail)
+          .delete(crate::writes::archive_session)
+          .patch(write_routes::patch_session),
+        "GET",
+      ),
+    )
     .with_state(Arc::clone(features))
 }
 

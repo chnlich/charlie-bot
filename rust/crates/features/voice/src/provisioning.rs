@@ -178,7 +178,8 @@ fn ensure_artifact(path: &Path, url: &str, expected_sha256: &str, settings: &Set
 
   atomic_write_stream(path, |stream| {
     let runtime = Builder::new_current_thread().enable_all().build().context("build model download runtime")?;
-    let client = http_client::client(settings).context("build model download HTTP client")?;
+    // urlopen follows redirects, and a GitHub release asset answers 302, so the download client follows them too.
+    let client = http_client::urllib_client(settings).context("build model download HTTP client")?;
     runtime.block_on(async {
       // Python's src/features/voice/transcriber.py::_ensure_artifact passes
       // src/infra/timeouts.py::HTTP_MODEL_DOWNLOAD_TIMEOUT to urlopen here, which bounds each socket wait.
@@ -398,19 +399,33 @@ mod tests {
     format!("{:x}", Sha256::digest(bytes))
   }
 
-  fn loopback_response(status: u16, body: Vec<u8>) -> (String, thread::JoinHandle<()>) {
+  /// One full HTTP/1.1 answer that closes its connection: the status line, an optional `Location`, then the body.
+  fn http_answer(status_line: &str, location: Option<&str>, body: &[u8]) -> Vec<u8> {
+    let location = location.map(|location| format!("Location: {location}\r\n")).unwrap_or_default();
+    let head =
+      format!("HTTP/1.1 {status_line}\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    [head.as_bytes(), body].concat()
+  }
+
+  /// A loopback server that answers one connection per entry of `answers`, in order. It returns the `/model` URL
+  /// and a thread that yields the request line of each request.
+  fn loopback_server(answers: Vec<Vec<u8>>) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local HTTP server");
     let address = listener.local_addr().expect("read local HTTP address");
     let handle = thread::spawn(move || {
-      let (mut stream, _) = listener.accept().expect("accept the model request");
-      let mut request = [0_u8; 1024];
-      let _ = stream.read(&mut request).expect("read the model request");
-      let status_text = if status == 200 { "OK" } else { "Unavailable" };
-      write!(stream, "HTTP/1.1 {status} {status_text}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
-        .expect("write the response headers");
-      stream.write_all(&body).expect("write the model response");
+      answers
+        .into_iter()
+        .map(|answer| {
+          let (mut stream, _) = listener.accept().expect("accept the model request");
+          let mut request = [0_u8; 1024];
+          let read = stream.read(&mut request).expect("read the model request");
+          stream.write_all(&answer).expect("write the model response");
+          let text = String::from_utf8_lossy(&request[..read]);
+          text.lines().next().expect("the request has a request line").to_string()
+        })
+        .collect()
     });
-    (format!("http://{address}/model",), handle)
+    (format!("http://{address}/model"), handle)
   }
 
   fn assert_no_temporary_files(directory: &Path) {
@@ -481,7 +496,7 @@ mod tests {
     let root = tempfile::tempdir().expect("create a synthetic cache");
     let path = root.path().join("model.bin");
     let body = b"synthetic downloaded model".to_vec();
-    let (url, server) = loopback_response(200, body.clone());
+    let (url, server) = loopback_server(vec![http_answer("200 OK", None, &body)]);
 
     ensure_artifact(&path, &url, &sha256(&body), &Settings::default()).expect("download and publish the model");
     server.join().expect("finish the loopback HTTP server");
@@ -495,11 +510,29 @@ mod tests {
   }
 
   #[test]
+  fn download_follows_a_redirect_to_the_artifact() {
+    let root = tempfile::tempdir().expect("create a synthetic cache");
+    let path = root.path().join("model.bin");
+    let body = b"synthetic redirected model".to_vec();
+    let (url, server) =
+      loopback_server(vec![http_answer("302 Found", Some("/objects/model"), b""), http_answer("200 OK", None, &body)]);
+
+    ensure_artifact(&path, &url, &sha256(&body), &Settings::default())
+      .expect("follow the redirect and publish the model");
+
+    assert_eq!(
+      server.join().expect("finish the loopback HTTP server"),
+      ["GET /model HTTP/1.1", "GET /objects/model HTTP/1.1"]
+    );
+    assert_eq!(fs::read(&path).expect("read the published model"), body);
+  }
+
+  #[test]
   fn failed_download_removes_its_temporary_sibling() {
     let root = tempfile::tempdir().expect("create a synthetic cache");
     let path = root.path().join("model.bin");
     let body = b"wrong downloaded bytes".to_vec();
-    let (url, server) = loopback_response(200, body.clone());
+    let (url, server) = loopback_server(vec![http_answer("200 OK", None, &body)]);
 
     let error = ensure_artifact(&path, &url, &sha256(b"expected bytes"), &Settings::default())
       .expect_err("a downloaded hash mismatch must fail");

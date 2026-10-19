@@ -26,12 +26,13 @@ HANDOVER_DIRECTIONS = ("python-to-candidate", "candidate-to-python")
 FAKE_NAMES = ("slack", "discord", "gemini", "muse", "openai_compatible")
 FAKE_ACTIONS = {"slack": ("socket_event",), "discord": ("dispatch",)}
 WS_COMPARE_MODES = ("frames",)
+HTTP_COMPARE_MODES = ("full", "status_and_shape")
 MULTIPART_BOUNDARY = "charliebot-parity-multipart-boundary-1792318577"
 
 _REFERENCE = re.compile(r"\$\{(?P<ref>[A-Za-z0-9_.]+)\}")
 _SCENARIO_KEYS = {
     "stage", "name", "description", "steps", "fake_agent", "expect_starts", "directions", "config", "credentials",
-    "fakes", "fixture_extras", "voice_models"
+    "fakes", "fixture_extras", "voice_models", "comparison_rules"
 }
 _HTTP_STEP_KEYS = {
     "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "expect_status",
@@ -119,6 +120,7 @@ class Scenario:
   fakes: dict[str, dict]
   fixture_extras: tuple[str, ...]
   voice_models: bool
+  comparison_rules: tuple[dict[str, Any], ...]
 
 
 def _placeholder(ref: str) -> str:
@@ -296,6 +298,57 @@ def _fixture_extras(raw: Any, path: pathlib.Path) -> tuple[str, ...]:
   return tuple(names)
 
 
+def _comparison_rules(raw: Any, path: pathlib.Path) -> tuple[dict[str, Any], ...]:
+  if raw is None:
+    return ()
+  if not isinstance(raw, list):
+    raise ScenarioError(f"{path.name}.comparison_rules must be a list")
+  rules = []
+  for index, item in enumerate(raw, start=1):
+    where = f"{path.name}.comparison_rules[{index}]"
+    rule_name = "allowed_baseline_values_for_one_event_field"
+    if not isinstance(item, dict) or set(item) != {rule_name}:
+      raise ScenarioError(f"{where} must name one supported rule: {rule_name}")
+    rule = item[rule_name]
+    required = {"event", "field", "allowed_baseline_values", "required_candidate_value"}
+    if not isinstance(rule, dict) or set(rule) != required:
+      raise ScenarioError(
+          f"{where}.{rule_name} requires event, field, allowed_baseline_values and required_candidate_value")
+    event = rule["event"]
+    if not isinstance(event, dict) or set(event) != {"type", "match_fields"}:
+      raise ScenarioError(f"{where}.{rule_name}.event requires type and match_fields")
+    if not isinstance(event["type"], str) or not event["type"]:
+      raise ScenarioError(f"{where}.{rule_name}.event.type must be a non-empty string")
+    match_fields = event["match_fields"]
+    if not isinstance(match_fields, dict) or not match_fields or any(
+        not isinstance(key, str) or not key for key in match_fields):
+      raise ScenarioError(f"{where}.{rule_name}.event.match_fields must map non-empty field names to JSON values")
+    match_fields = _overlay_mapping(match_fields, f"{where}.{rule_name}.event.match_fields")
+    field = rule["field"]
+    if not isinstance(field, str) or not field or field in match_fields:
+      raise ScenarioError(f"{where}.{rule_name}.field must name one event field outside match_fields")
+    allowed_values = rule["allowed_baseline_values"]
+    if not isinstance(allowed_values, list) or not allowed_values:
+      raise ScenarioError(f"{where}.{rule_name}.allowed_baseline_values must be a non-empty list")
+    allowed_values = _overlay_value(allowed_values, f"{where}.{rule_name}.allowed_baseline_values")
+    required_candidate_value = _overlay_value(
+        rule["required_candidate_value"], f"{where}.{rule_name}.required_candidate_value")
+    rules.append(
+        {
+            rule_name:
+                {
+                    "event": {
+                        "type": event["type"],
+                        "match_fields": match_fields
+                    },
+                    "field": field,
+                    "allowed_baseline_values": allowed_values,
+                    "required_candidate_value": required_candidate_value,
+                }
+        })
+  return tuple(rules)
+
+
 def _step(raw: Any, where: str) -> Step:
   if not isinstance(raw, dict):
     raise ScenarioError(f"{where} must be a mapping")
@@ -385,6 +438,11 @@ def _step(raw: Any, where: str) -> Step:
     if "multipart" in raw:
       multipart_fields = _multipart(raw["multipart"], where)
     capture = _string_map(raw.get("capture", {}), f"{where}.capture")
+    compare_mode = raw.get("compare", "full")
+    if compare_mode not in HTTP_COMPARE_MODES:
+      raise ScenarioError(f"{where}.compare must be one of {HTTP_COMPARE_MODES}")
+    if compare_mode == "status_and_shape" and (expect_status is None or expect_status < 400):
+      raise ScenarioError(f"{where}.compare requires an expect_status of at least 400")
   elif kind == "ws":
     path = raw.get("path", "")
     if not isinstance(path, str) or not path.startswith("/ws/") or "?" in path:
@@ -599,6 +657,7 @@ def load(path: pathlib.Path) -> Scenario:
           raise ScenarioError(f"{path.name}.{overlay_name} only accepts ${{tree.root}} and ${{tree.home}} references")
   fakes = _fake_seeds(raw.get("fakes", {}), path)
   fixture_extras = _fixture_extras(raw.get("fixture_extras", []), path)
+  comparison_rules = _comparison_rules(raw.get("comparison_rules"), path)
   voice_models = raw.get("voice_models", False)
   if not isinstance(voice_models, bool):
     raise ScenarioError(f"{path.name}.voice_models must be a boolean")
@@ -650,6 +709,7 @@ def load(path: pathlib.Path) -> Scenario:
       fakes=fakes,
       fixture_extras=fixture_extras,
       voice_models=voice_models,
+      comparison_rules=comparison_rules,
   )
 
 

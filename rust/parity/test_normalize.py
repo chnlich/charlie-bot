@@ -7,11 +7,69 @@ import pathlib
 
 import pytest
 
-from rust.parity import fake_agent, normalize, parity
+from rust.parity import compare, fake_agent, normalize, parity
 
 
 def _context() -> normalize.Context:
   return normalize.Context(tree_root="/tmp/charliebot-parity-synthetic/base")
+
+
+def _cancel_event_rule() -> compare.EventFieldRule:
+  return compare.EventFieldRule(
+      event_type="run_finished",
+      match_fields={"run_id": "synthetic-run"},
+      field="outcome",
+      allowed_baseline_values=("failed", "interrupted"),
+      required_candidate_value="interrupted",
+  )
+
+
+def _cancel_event_delta(events: list[dict]) -> compare.Delta:
+  path = "sessions/synthetic-session/data/chat_events.jsonl"
+  data = "".join(json.dumps(event) + "\n" for event in events).encode()
+  return compare.Delta(added={}, removed=frozenset(), changed={path: compare.Entry("file", data)})
+
+
+def _cancel_event_diff(baseline: list[dict], candidate: list[dict], candidate_is_python: bool = False) -> list[str]:
+  return compare.delta_diff(
+      _cancel_event_delta(baseline),
+      _cancel_event_delta(candidate),
+      normalize.Context(tree_root="/synthetic/base"),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      ((_cancel_event_rule(), _cancel_event_rule()),),
+      candidate_is_python,
+  )
+
+
+def _cancel_events(outcome: str, finish_first: bool, unrelated_text: str = "same") -> list[dict]:
+  finished = {
+      "type": "run_finished",
+      "id": "10000000-0000-4000-8000-000000000001",
+      "run_id": "synthetic-run",
+      "input_event_ids": ["synthetic-input"],
+      "outcome": outcome,
+  }
+  done = {
+      "type": "master_done",
+      "id": "10000000-0000-4000-8000-000000000002",
+      "input_event_ids": ["synthetic-input"],
+      "exit_code": -15,
+  }
+  unrelated = {
+      "type": "assistant",
+      "id": "10000000-0000-4000-8000-000000000003",
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": unrelated_text
+          }]
+      },
+  }
+  if finish_first:
+    finished["event_index"], done["event_index"], unrelated["event_index"] = 7, 8, 9
+  else:
+    done["event_index"], finished["event_index"], unrelated["event_index"] = 7, 8, 9
+  return [finished, done, unrelated] if finish_first else [done, finished, unrelated]
 
 
 def test_library_default_headers_are_left_out_of_slack_requests() -> None:
@@ -31,6 +89,139 @@ def test_content_type_compares_media_type_so_a_form_body_differs_from_json() -> 
       "slack", {"content-type": ["application/x-www-form-urlencoded"]}, _context(), websocket=False)
   assert json_request == {"content-type": ["application/json"]}
   assert form_request != json_request
+
+
+def test_event_field_rule_accepts_allowed_baseline_and_required_candidate_and_masks_pair_order() -> None:
+  differences = _cancel_event_diff(_cancel_events("failed", False), _cancel_events("interrupted", True))
+  assert differences == []
+
+
+def test_event_field_rule_rejects_wrong_candidate_value() -> None:
+  differences = _cancel_event_diff(_cancel_events("interrupted", False), _cancel_events("failed", True))
+  assert differences
+  assert any("candidate" in line for line in differences)
+
+
+def test_event_field_rule_rejects_baseline_value_outside_allowed_set() -> None:
+  differences = _cancel_event_diff(_cancel_events("success", False), _cancel_events("interrupted", True))
+  assert differences
+  assert any("baseline" in line for line in differences)
+
+
+def test_event_field_rule_leaves_unrelated_events_in_the_comparison() -> None:
+  differences = _cancel_event_diff(
+      _cancel_events("failed", False, "baseline unrelated"),
+      _cancel_events("interrupted", True, "candidate unrelated"),
+  )
+  assert any("baseline unrelated" in line and "candidate unrelated" in line for line in differences)
+
+
+def test_python_vs_python_applies_the_baseline_value_set_to_both_sides() -> None:
+  differences = _cancel_event_diff(
+      _cancel_events("failed", False), _cancel_events("interrupted", True), candidate_is_python=True)
+  assert differences == []
+
+
+def _cancel_response(outcome: str, extra: str = "same") -> compare.Response:
+  body = {"run_id": "synthetic-run", "stop_requested": True, "outcome": outcome, "extra": extra}
+  return compare.Response(200, [("content-type", "application/json")], json.dumps(body).encode())
+
+
+def test_event_field_rule_applies_to_matching_cancel_response_and_keeps_other_fields() -> None:
+  differences = compare.response_diff(
+      "POST /api/sessions/{session_id}/runs/{run_id}/cancel",
+      _cancel_response("failed"),
+      _cancel_response("interrupted"),
+      normalize.Context(tree_root="/synthetic/base"),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      event_field_rules=((_cancel_event_rule(), _cancel_event_rule()),),
+  )
+  assert differences == []
+
+
+def test_event_field_rule_rejects_wrong_cancel_response_candidate_and_baseline_values() -> None:
+  candidate_differences = compare.response_diff(
+      "POST /api/sessions/{session_id}/runs/{run_id}/cancel",
+      _cancel_response("failed"),
+      _cancel_response("failed"),
+      normalize.Context(tree_root="/synthetic/base"),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      event_field_rules=((_cancel_event_rule(), _cancel_event_rule()),),
+  )
+  assert any("candidate response outcome" in line for line in candidate_differences)
+  baseline_differences = compare.response_diff(
+      "POST /api/sessions/{session_id}/runs/{run_id}/cancel",
+      _cancel_response("success"),
+      _cancel_response("interrupted"),
+      normalize.Context(tree_root="/synthetic/base"),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      event_field_rules=((_cancel_event_rule(), _cancel_event_rule()),),
+  )
+  assert any("baseline response outcome" in line for line in baseline_differences)
+
+
+def test_event_field_rule_still_compares_unrelated_cancel_response_fields() -> None:
+  differences = compare.response_diff(
+      "POST /api/sessions/{session_id}/runs/{run_id}/cancel",
+      _cancel_response("failed", "baseline extra"),
+      _cancel_response("interrupted", "candidate extra"),
+      normalize.Context(tree_root="/synthetic/base"),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      event_field_rules=((_cancel_event_rule(), _cancel_event_rule()),),
+  )
+  assert any("$.extra" in line for line in differences)
+
+
+def test_status_and_shape_response_comparison_ignores_json_leaf_values() -> None:
+  baseline = compare.Response(
+      422,
+      [("content-type", "application/json")],
+      b'{"detail":[{"type":"int_parsing","loc":["query","limit"],"msg":"baseline"}]}',
+  )
+  candidate = compare.Response(
+      422,
+      [("content-type", "application/json")],
+      b'{"detail":[{"type":"int_parsing","loc":["query","limit"],"msg":"candidate"}]}',
+  )
+  assert compare.response_diff(
+      "POST /api/sessions/{session_id}/runs",
+      baseline,
+      candidate,
+      _context(),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      "status_and_shape",
+  ) == []
+
+
+def test_status_and_shape_compares_error_type_and_location() -> None:
+  baseline = compare.Response(
+      422, [("content-type", "application/json")], b'{"detail":[{"type":"int_parsing","loc":["query","limit"]}]}')
+  candidate = compare.Response(
+      422, [("content-type", "application/json")], b'{"detail":[{"type":"float_parsing","loc":["path","limit"]}]}')
+  differences = compare.response_diff(
+      "POST /api/sessions/{session_id}/runs",
+      baseline,
+      candidate,
+      _context(),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      "status_and_shape",
+  )
+  assert differences
+  assert any("body detail[0] $.type" in line for line in differences)
+  assert any("body detail[0] $.loc" in line for line in differences)
+
+
+def test_status_and_shape_requires_detail_objects_on_both_sides() -> None:
+  baseline = compare.Response(422, [("content-type", "application/json")], b'{"error":"baseline"}')
+  candidate = compare.Response(422, [("content-type", "application/json")], b'{"error":"candidate"}')
+  assert compare.response_diff(
+      "POST /api/sessions/{session_id}/runs",
+      baseline,
+      candidate,
+      _context(),
+      normalize.Context(tree_root="/synthetic/candidate"),
+      "status_and_shape",
+  ) == ["body: both sides must be JSON objects with a detail key"]
 
 
 def test_discord_user_agent_is_compared_on_rest_only() -> None:

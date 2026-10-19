@@ -27,6 +27,25 @@ fake_agent:
         - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
       exit_code: 0
 expect_starts: 2
+# Python leaves this outcome undefined: chat.py:106 and runs.py:1148-1149 can record interrupted while
+# master_cc_queue.py:298 writes master_done before task_execution.py:1224-1229 finishes exit -15 as failed.
+comparison_rules:
+  - allowed_baseline_values_for_one_event_field:
+      event:
+        type: run_finished
+        match_fields:
+          input_event_ids: ["${capture.chat_cancel_input}"]
+      field: outcome
+      allowed_baseline_values: [failed, interrupted]
+      required_candidate_value: interrupted
+  - allowed_baseline_values_for_one_event_field:
+      event:
+        type: run_finished
+        match_fields:
+          run_id: "${capture.retry_run_id}"
+      field: outcome
+      allowed_baseline_values: [failed, interrupted]
+      required_candidate_value: interrupted
 steps:
   - name: cancel when there is no active manager run
     method: POST

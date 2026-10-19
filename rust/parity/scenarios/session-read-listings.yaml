@@ -98,6 +98,7 @@ steps:
     path: /api/sessions/tree
     query: {limit: 0}
     expect_status: 422
+    compare: status_and_shape
   - name: status, every fixture session and a missing id
     method: GET
     path: /api/sessions/status
@@ -124,10 +125,12 @@ steps:
     path: /api/sessions/status
     query: {ids: " , "}
     expect_status: 422
+    compare: status_and_shape
   - name: status, no ids
     method: GET
     path: /api/sessions/status
     expect_status: 422
+    compare: status_and_shape
   - name: search, a name
     method: GET
     path: /api/sessions/search

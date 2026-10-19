@@ -34,8 +34,9 @@ pub struct MasterResumeRecord {
 }
 
 pub type TaskSpawnCallback = Arc<dyn Fn(u32, Option<String>) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+/// Persist a manager finish transaction and return whether it also persisted `master_done`.
 pub type TaskFinishCallback =
-  Arc<dyn Fn(Option<String>, i32, Map<String, Value>) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+  Arc<dyn Fn(Option<String>, i32, Map<String, Value>, Value) -> BoxFuture<'static, anyhow::Result<bool>> + Send + Sync>;
 pub type ResumeLiveness = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// The inputs for one newly submitted manager turn.

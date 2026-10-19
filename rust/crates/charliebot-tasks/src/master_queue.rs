@@ -527,8 +527,16 @@ impl MasterQueue {
       done_object.insert(event_types::THINKING_SECONDS.to_string(), json!(seconds));
     }
     done_object.extend(result.finish_extras.clone());
-    (item.callbacks.persist_and_broadcast)(session_id.to_string(), done_event).await?;
-    (item.on_task_finish)(result.cc_session_id.clone(), result.exit_code, result.finish_extras.clone()).await?;
+    let finish_handled = (item.on_task_finish)(
+      result.cc_session_id.clone(),
+      result.exit_code,
+      result.finish_extras.clone(),
+      done_event.clone(),
+    )
+    .await?;
+    if !finish_handled {
+      (item.callbacks.persist_and_broadcast)(session_id.to_string(), done_event).await?;
+    }
     if let Some(completion) = item.completion.take() {
       let _ = completion.send(Ok(result.cc_session_id.clone()));
     }

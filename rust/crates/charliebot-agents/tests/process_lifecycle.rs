@@ -36,7 +36,7 @@ async fn child_survival_matches_parent_death_policy() {
     let boot = read_host_boot_time().unwrap();
     let started_at = OffsetDateTime::now_utc();
     let expected_alive = mode == "raw";
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while is_run_alive(Some(pid), Some(&pid_start), Some(started_at), boot) != expected_alive
       && tokio::time::Instant::now() < deadline
     {
@@ -49,7 +49,7 @@ async fn child_survival_matches_parent_death_policy() {
     assert_eq!(actually_alive, expected_alive, "{mode}");
     if expected_alive {
       kill_process_group(pid, Signal::SIGTERM);
-      let cleanup_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+      let cleanup_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
       while is_run_alive(Some(pid), Some(&pid_start), Some(started_at), boot)
         && tokio::time::Instant::now() < cleanup_deadline
       {

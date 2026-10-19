@@ -50,6 +50,7 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
+static CANCEL_ROUTE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Deserialize)]
 struct GoldenCase {
@@ -311,6 +312,15 @@ fn config_with_features_from_config(
   registry: Arc<Registry>,
   install_queue: bool,
 ) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
+  config_with_features_from_config_and_agent_path(cfg, registry, install_queue, "/usr/bin".to_string())
+}
+
+fn config_with_features_from_config_and_agent_path(
+  cfg: Arc<CharlieBotConfig>,
+  registry: Arc<Registry>,
+  install_queue: bool,
+  agent_path: String,
+) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
   std::fs::create_dir_all(&cfg.charliebot_home)?;
   let config_value = Arc::clone(&cfg);
   let config_file = cfg.config_file();
@@ -338,7 +348,7 @@ fn config_with_features_from_config(
   let startup = Arc::new(StartupState::default());
   startup.insert(AgentBaseEnvironment {
     values: Env::from([
-      ("PATH".to_string(), "/usr/bin".to_string()),
+      ("PATH".to_string(), agent_path),
       ("CLAUDECODE".to_string(), "stale-parent".to_string()),
       (charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string()),
     ]),
@@ -465,7 +475,8 @@ async fn run_fresh_case(
   let transport_dir = home.join("runs").join(&meta.id).join(&run_id);
   std::fs::create_dir_all(&transport_dir)?;
   let on_task_spawn: TaskSpawnCallback = Arc::new(|_pid, _start| Box::pin(async { Ok(()) }));
-  let on_task_finish: TaskFinishCallback = Arc::new(|_native_id, _exit_code, _extras| Box::pin(async { Ok(()) }));
+  let on_task_finish: TaskFinishCallback =
+    Arc::new(|_native_id, _exit_code, _extras, _done_event| Box::pin(async { Ok(false) }));
   queue
     .run_message(MasterTurnRequest {
       cfg,
@@ -521,7 +532,8 @@ async fn run_resume_case(
   let transport_dir = home.join("runs").join(&meta.id).join(&run_id);
   std::fs::create_dir_all(&transport_dir)?;
   let on_task_spawn: TaskSpawnCallback = Arc::new(|_pid, _start| Box::pin(async { Ok(()) }));
-  let on_task_finish: TaskFinishCallback = Arc::new(|_native_id, _exit_code, _extras| Box::pin(async { Ok(()) }));
+  let on_task_finish: TaskFinishCallback =
+    Arc::new(|_native_id, _exit_code, _extras, _done_event| Box::pin(async { Ok(false) }));
   let receiver = queue
     .enqueue_master_resume(MasterResumeRequest {
       cfg,
@@ -568,7 +580,7 @@ fn noop_task_spawn() -> TaskSpawnCallback {
 }
 
 fn noop_task_finish() -> TaskFinishCallback {
-  Arc::new(|_native_id, _exit_code, _extras| Box::pin(async { Ok(()) }))
+  Arc::new(|_native_id, _exit_code, _extras, _done_event| Box::pin(async { Ok(false) }))
 }
 
 async fn run_turn(
@@ -772,6 +784,146 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
   features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;
   drop(cfg);
   Ok(())
+}
+
+async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::Result<()> {
+  use std::os::unix::fs::PermissionsExt;
+
+  let _serial = CANCEL_ROUTE_TEST_LOCK.lock().await;
+  const ACCESS_KEY: &str = "synthetic-cancel-route-access-key";
+  const SESSION_ID: &str = "synthetic-cancel-loop-session";
+  const ITERATIONS: usize = 50;
+
+  let temp = tempfile::tempdir()?;
+  let home = temp.path().join("home");
+  std::fs::create_dir_all(&home)?;
+  std::fs::write(home.join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))?;
+  let control_dir = temp.path().join("fake-agent-control");
+  std::fs::create_dir_all(&control_dir)?;
+  let fake_bin = temp.path().join("bin");
+  std::fs::create_dir_all(&fake_bin)?;
+  let fake_agent = fake_bin.join("fake-agent");
+  let script = format!(
+    "counter=0; if [ -f '{0}/count' ]; then counter=$(/bin/cat '{0}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{0}/count'; touch '{0}/started-'\"$counter\"; printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"synthetic-native-session\"}}'; while [ ! -e '{0}/release-'\"$counter\" ]; do /bin/sleep 0.01; done",
+    control_dir.display()
+  );
+  std::fs::write(&fake_agent, script)?;
+  std::fs::set_permissions(&fake_agent, std::fs::Permissions::from_mode(0o755))?;
+
+  let option = backend_option("fake-agent".to_string());
+  let cfg = Arc::new(config(&home, Some(option)));
+  let agent_path = format!("{}:/usr/bin:/bin", fake_bin.display());
+  let registry = registry();
+  let (cfg, features) = config_with_features_from_config_and_agent_path(cfg, Arc::clone(&registry), false, agent_path)?;
+  execution::pre_recovery_step(Arc::clone(&features)).await?;
+  features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "synthetic-cancel-loop-task".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Synthetic cancellation loop".to_string()),
+        backend: Some("fake".to_string()),
+        group: None,
+        session_id: Some(SESSION_ID.to_string()),
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let dispatcher = dispatch::dispatcher(&features)?;
+  let app = routes::routes(&features);
+
+  for iteration in 1..=ITERATIONS {
+    let request_id = format!("synthetic-cancel-input-{iteration}");
+    let admitted = dispatcher
+      .admit_input(
+        SESSION_ID,
+        event_types::USER,
+        "Hold this synthetic manager turn for cancellation.",
+        "user",
+        json!({"input_id": request_id}),
+      )
+      .await?;
+    let input_event_id = admitted["id"].as_str().context("admitted manager input has no id")?.to_string();
+    let decision = dispatcher.dispatch_pending(SESSION_ID).await?;
+    assert_eq!(decision["launch"], true, "iteration {iteration} did not launch");
+    let run_id = decision["run_id"].as_str().context("manager dispatch did not return its run id")?.to_string();
+    let started = control_dir.join(format!("started-{iteration}"));
+    tokio::time::timeout(Duration::from_secs(30), async {
+      while !started.exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .with_context(|| format!("fake agent {iteration} did not reach its gate"))?;
+    assert!(
+      features.store.read_run_sync(SESSION_ID, &run_id)?.is_some_and(|run| run.pid.is_some()),
+      "iteration {iteration} did not persist the child pid before its gate"
+    );
+
+    let (uri, body) = if chat_cancel {
+      (format!("/api/chat/{SESSION_ID}/cancel"), String::new())
+    } else {
+      (
+        format!("/api/sessions/{SESSION_ID}/runs/{run_id}/cancel"),
+        format!(r#"{{"request_id":"synthetic-cancel-request-{iteration}"}}"#),
+      )
+    };
+    let response = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri(uri)
+          .header(header::AUTHORIZATION, format!("Bearer {ACCESS_KEY}"))
+          .header(header::CONTENT_TYPE, "application/json")
+          .body(Body::from(body))?,
+      )
+      .await?;
+    assert_eq!(response.status(), StatusCode::OK, "cancel failed on iteration {iteration}");
+    if !chat_cancel {
+      let body = to_bytes(response.into_body(), usize::MAX).await?;
+      assert_eq!(serde_json::from_slice::<Value>(&body)?["stop_requested"], true);
+    }
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+      loop {
+        let facts = features.store.load_all_facts(SESSION_ID)?;
+        let finished =
+          facts.iter().position(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id);
+        if let Some(finished_index) = finished {
+          assert_eq!(facts[finished_index]["outcome"], "interrupted", "iteration {iteration}");
+          let done = facts.iter().position(|event| {
+            event["type"] == event_types::MASTER_DONE && event["input_event_ids"] == json!([input_event_id])
+          });
+          if let Some(done_index) = done {
+            assert!(finished_index < done_index, "iteration {iteration} persisted master_done first");
+            break anyhow::Ok(());
+          }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .with_context(|| format!("manager run {run_id} did not finish with the required event order"))??;
+  }
+
+  features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;
+  drop(cfg);
+  Ok(())
+}
+
+#[tokio::test]
+async fn chat_cancel_records_interrupted_before_master_done_for_50_gated_manager_runs() -> anyhow::Result<()> {
+  cancel_gated_manager_runs_through_route(true).await
+}
+
+#[tokio::test]
+async fn run_cancel_records_interrupted_before_master_done_for_50_gated_manager_runs() -> anyhow::Result<()> {
+  cancel_gated_manager_runs_through_route(false).await
 }
 
 #[tokio::test]

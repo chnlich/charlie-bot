@@ -451,13 +451,15 @@ impl TaskExecutionAdapter {
     });
     let finish_features = Arc::clone(&self.features);
     let finish_dispatch = Arc::clone(&self.dispatch);
+    let persist_done = Arc::clone(&callbacks.persist_and_broadcast);
     let finish_session = session_id.to_string();
     let finish_run_id = run_id.to_string();
     let finish_option = option.clone();
     let raw_log = run_dir.join(run_records::RAW_LOG_NAME);
-    let on_task_finish: TaskFinishCallback = Arc::new(move |native_session_id, exit_code, extras| {
+    let on_task_finish: TaskFinishCallback = Arc::new(move |native_session_id, exit_code, extras, done_event| {
       let features = Arc::clone(&finish_features);
       let dispatch = Arc::clone(&finish_dispatch);
+      let persist_done = Arc::clone(&persist_done);
       let session_id = finish_session.clone();
       let run_id = finish_run_id.clone();
       let option = finish_option.clone();
@@ -485,12 +487,32 @@ impl TaskExecutionAdapter {
             ]),
           )
           .await?;
-        let mut outcome =
-          RunOutcome::new(if exit_code == 0 { RunOutcomeKind::Success } else { RunOutcomeKind::Failed });
-        outcome.exit_code = Some(exit_code);
+
+        let guard = features.store.control_lock().await;
+        let facts = features.store.load_all_facts(&session_id)?;
+        let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
+        let outcome = if stop_requested {
+          let mut outcome = RunOutcome::new(RunOutcomeKind::Interrupted);
+          outcome.exit_code = Some(exit_code);
+          outcome
+        } else {
+          let mut outcome =
+            RunOutcome::new(if exit_code == 0 { RunOutcomeKind::Success } else { RunOutcomeKind::Failed });
+          outcome.exit_code = Some(exit_code);
+          outcome
+        };
+        if stop_requested {
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+          persist_done(session_id.clone(), done_event).await?;
+        } else {
+          persist_done(session_id.clone(), done_event).await?;
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+        }
+        drop(guard);
+
         dispatch.finish_run(&session_id, &run_id, outcome).await?;
         dispatch.dispatch_pending(&session_id).await?;
-        Ok(())
+        Ok(true)
       })
     });
     let env = self.child_env(session_id, run_id, meta.name.as_str())?;
@@ -933,6 +955,18 @@ pub fn is_out_of_space_error(error: &(dyn Error + 'static)) -> bool {
 
 /// Free GiB on the filesystem containing `path`, probing its nearest existing ancestor.
 pub fn free_disk_gib(path: &Path) -> anyhow::Result<f64> {
+  let probe = nearest_existing_ancestor(path)?;
+  let path_c = CString::new(probe.as_os_str().as_bytes())?;
+  let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+  // `probe` is an existing path and `path_c` is NUL terminated.
+  if unsafe { libc::statvfs(path_c.as_ptr(), stat.as_mut_ptr()) } != 0 {
+    return Err(std::io::Error::last_os_error()).with_context(|| format!("reading disk space at {}", probe.display()));
+  }
+  let stat = unsafe { stat.assume_init() };
+  Ok(free_disk_gib_from_statvfs(stat.f_bavail, stat.f_frsize))
+}
+
+fn nearest_existing_ancestor(path: &Path) -> anyhow::Result<&Path> {
   let mut probe = path;
   while !probe.exists() {
     let parent = probe.parent().ok_or_else(|| anyhow!("no existing ancestor to probe for {}", path.display()))?;
@@ -941,14 +975,11 @@ pub fn free_disk_gib(path: &Path) -> anyhow::Result<f64> {
     }
     probe = parent;
   }
-  let path_c = CString::new(probe.as_os_str().as_bytes())?;
-  let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-  // `probe` is an existing path and `path_c` is NUL terminated.
-  if unsafe { libc::statvfs(path_c.as_ptr(), stat.as_mut_ptr()) } != 0 {
-    return Err(std::io::Error::last_os_error()).with_context(|| format!("reading disk space at {}", probe.display()));
-  }
-  let stat = unsafe { stat.assume_init() };
-  Ok((stat.f_bavail as f64 * stat.f_frsize as f64) / (1024.0_f64.powi(3)))
+  Ok(probe)
+}
+
+fn free_disk_gib_from_statvfs(available_blocks: libc::fsblkcnt_t, fragment_size: libc::c_ulong) -> f64 {
+  (available_blocks as f64 * fragment_size as f64) / (1024.0_f64.powi(3))
 }
 
 fn refuse_worker(meta: &SessionMetadata) -> StoreResult<()> {
@@ -1072,9 +1103,11 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
 
 #[cfg(test)]
 mod tests {
-  use super::{free_disk_gib, is_out_of_space_error, native_continuation_matches, pre_recovery_step};
+  use super::{
+    free_disk_gib_from_statvfs, is_out_of_space_error, native_continuation_matches, nearest_existing_ancestor,
+    pre_recovery_step,
+  };
   use charliebot_core::config::BackendOption;
-  use std::os::unix::ffi::OsStrExt;
 
   #[test]
   fn out_of_space_errors_are_found_through_context_and_cause() {
@@ -1088,20 +1121,17 @@ mod tests {
   }
 
   #[test]
-  fn free_disk_probes_the_nearest_existing_ancestor_and_uses_available_blocks() {
+  fn nearest_existing_ancestor_returns_the_closest_existing_path() {
     let directory = tempfile::tempdir().expect("temporary directory exists");
-    let missing = directory.path().join("not-created").join("worktree");
-    let root_free = free_disk_gib(directory.path()).expect("the temporary directory filesystem is readable");
-    let missing_free = free_disk_gib(&missing).expect("the nearest existing ancestor is readable");
-    assert!((missing_free - root_free).abs() < 1.0 / 1024.0, "{missing_free} differs from {root_free}");
+    let ancestor = directory.path().join("existing");
+    std::fs::create_dir(&ancestor).expect("the test ancestor is created");
+    let missing = ancestor.join("not-created").join("worktree");
+    assert_eq!(nearest_existing_ancestor(&missing).unwrap(), ancestor.as_path());
+  }
 
-    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    let path = std::ffi::CString::new(directory.path().as_os_str().as_bytes()).expect("path has no NUL");
-    // The temporary directory exists and the NUL-terminated path is valid for statvfs.
-    assert_eq!(unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) }, 0);
-    let stat = unsafe { stat.assume_init() };
-    let expected = stat.f_bavail as f64 * stat.f_frsize as f64 / (1024.0_f64.powi(3));
-    assert!((root_free - expected).abs() < 1.0 / 1024.0, "{root_free} differs from {expected}");
+  #[test]
+  fn free_disk_gib_arithmetic_uses_available_blocks_and_fragment_size() {
+    assert_eq!(free_disk_gib_from_statvfs(4, 1024 * 1024 * 1024), 4.0);
   }
 
   #[test]

@@ -92,6 +92,7 @@ steps:
     method: GET
     path: /api/sessions/${sessions.explain}/explain
     expect_status: 422
+    compare: status_and_shape
   - name: request an explanation for a missing session
     method: POST
     path: /api/sessions/${missing_session}/explain

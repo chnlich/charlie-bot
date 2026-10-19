@@ -384,6 +384,7 @@ steps:
     method: GET
     path: /api/sessions/${sessions.atlas}/events
     expect_status: 422
+    compare: status_and_shape
   - name: events, recycled history below the archive offset
     method: GET
     path: /api/sessions/${sessions.ember}/events

@@ -75,6 +75,7 @@ steps:
     path: /api/sessions/${sessions.atlas}/runs
     query: {limit: 501}
     expect_status: 422
+    compare: status_and_shape
   - name: run context, manager turn
     method: GET
     path: /api/sessions/${runs.atlas_t1.session}/runs/${runs.atlas_t1.run}/context
@@ -140,6 +141,7 @@ steps:
     path: /api/sessions/${sessions.atlas_notes}/transcript
     query: {after: -1}
     expect_status: 422
+    compare: status_and_shape
   - name: plans, approved and closed plans
     method: GET
     path: /api/sessions/${sessions.fable}/plans

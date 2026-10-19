@@ -194,6 +194,17 @@ class Delta:
   changed: dict[str, Entry]
 
 
+@dataclasses.dataclass(frozen=True)
+class EventFieldRule:
+  """One event field whose baseline value and pair order vary across Python runs."""
+
+  event_type: str
+  match_fields: dict[str, Any]
+  field: str
+  allowed_baseline_values: tuple[Any, ...]
+  required_candidate_value: Any
+
+
 def delta(before: Snapshot, after: Snapshot) -> Delta:
   return Delta(
       added={
@@ -238,12 +249,117 @@ def _content_diff(
     right: Entry,
     left_ctx: normalize.Context,
     right_ctx: normalize.Context,
+    event_field_rules: tuple[tuple[EventFieldRule, EventFieldRule], ...] = (),
+    candidate_is_python: bool = False,
 ) -> list[str]:
+  if (left_relative.endswith("/data/chat_events.jsonl") and right_relative.endswith("/data/chat_events.jsonl") and
+      left.kind == "file" and right.kind == "file" and event_field_rules):
+    return _event_log_diff(
+        left_relative, left, right_relative, right, left_ctx, right_ctx, event_field_rules, candidate_is_python)
   left_value = _normalized_file(left_relative, left, left_ctx)
   right_value = _normalized_file(right_relative, right, right_ctx)
   if isinstance(left_value, bytes) and isinstance(right_value, bytes):
     return [] if left_value == right_value else _text_diff(left_value, right_value)
   return json_diff(left_value, right_value)
+
+
+def _event_matches(event: Any, rule: EventFieldRule) -> bool:
+  return isinstance(event, dict) and event.get("type") == rule.event_type and all(
+      key in event and not json_diff(event[key], expected) for key, expected in rule.match_fields.items())
+
+
+def _matching_event_indices(events: list[Any], rule: EventFieldRule) -> list[int]:
+  return [index for index, event in enumerate(events) if _event_matches(event, rule)]
+
+
+def _value_is_allowed(value: Any, allowed: tuple[Any, ...]) -> bool:
+  return any(not json_diff(value, expected) for expected in allowed)
+
+
+def _master_done_index(events: list[Any], run_finished_index: int, run_finished: dict) -> int | None:
+  input_ids = run_finished.get("input_event_ids")
+  if not isinstance(input_ids, list) or not input_ids:
+    return None
+  candidates = [
+      index for index, event in enumerate(events)
+      if isinstance(event, dict) and event.get("type") == "master_done" and event.get("input_event_ids") == input_ids
+  ]
+  return min(candidates, key=lambda index: abs(index - run_finished_index)) if candidates else None
+
+
+def _canonicalize_run_finish_order(events: list[Any], run_finished_index: int) -> None:
+  finished = events[run_finished_index]
+  if not isinstance(finished, dict):
+    return
+  master_done_index = _master_done_index(events, run_finished_index, finished)
+  if master_done_index is None:
+    return
+  master_done = events[master_done_index]
+  first, second = sorted((run_finished_index, master_done_index))
+  if events[first].get("type") == "master_done":
+    events[first], events[second] = events[second], events[first]
+  finished["id"] = "<normalized-run-finished-id>"
+  finished.pop("event_index", None)
+  master_done["id"] = "<normalized-master-done-id>"
+  master_done.pop("event_index", None)
+
+
+def _event_log_diff(
+    left_relative: str,
+    left: Entry,
+    right_relative: str,
+    right: Entry,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+    event_field_rules: tuple[tuple[EventFieldRule, EventFieldRule], ...],
+    candidate_is_python: bool,
+) -> list[str]:
+  left_events = [json.loads(line) for line in left.data.splitlines() if line.strip()]
+  right_events = [json.loads(line) for line in right.data.splitlines() if line.strip()]
+  lines: list[str] = []
+  for baseline_rule, candidate_rule in event_field_rules:
+    rule_name = "allowed_baseline_values_for_one_event_field"
+    baseline_matches = _matching_event_indices(left_events, baseline_rule)
+    candidate_matches = _matching_event_indices(right_events, candidate_rule)
+    if not baseline_matches and not candidate_matches:
+      continue
+    if len(baseline_matches) != 1:
+      lines.append(f"{rule_name}: baseline matched {len(baseline_matches)} {baseline_rule.event_type} events")
+    if len(candidate_matches) != 1:
+      lines.append(f"{rule_name}: candidate matched {len(candidate_matches)} {candidate_rule.event_type} events")
+    if len(baseline_matches) != 1 or len(candidate_matches) != 1:
+      continue
+    baseline_index, candidate_index = baseline_matches[0], candidate_matches[0]
+    baseline_event = left_events[baseline_index]
+    candidate_event = right_events[candidate_index]
+    baseline_value = baseline_event.get(baseline_rule.field)
+    candidate_value = candidate_event.get(candidate_rule.field)
+    baseline_valid = baseline_rule.field in baseline_event and _value_is_allowed(
+        baseline_value, baseline_rule.allowed_baseline_values)
+    if not baseline_valid:
+      lines.append(
+          f"{rule_name}: baseline {baseline_rule.event_type}.{baseline_rule.field} "
+          f"is {_show(baseline_value)}, outside {_show(list(baseline_rule.allowed_baseline_values))}")
+    candidate_valid = candidate_rule.field in candidate_event and (
+        _value_is_allowed(candidate_value, candidate_rule.allowed_baseline_values)
+        if candidate_is_python else not json_diff(candidate_value, candidate_rule.required_candidate_value))
+    if not candidate_valid:
+      requirement = "one of " + _show(list(candidate_rule.allowed_baseline_values)) if candidate_is_python else _show(
+          candidate_rule.required_candidate_value)
+      lines.append(
+          f"{rule_name}: candidate {candidate_rule.event_type}.{candidate_rule.field} "
+          f"is {_show(candidate_value)}, expected {requirement}")
+    if baseline_valid:
+      baseline_event.pop(baseline_rule.field)
+    if candidate_valid:
+      candidate_event.pop(candidate_rule.field)
+    _canonicalize_run_finish_order(left_events, baseline_index)
+    _canonicalize_run_finish_order(right_events, candidate_index)
+  left_rules = normalize.file_rules(left_relative)
+  right_rules = normalize.file_rules(right_relative)
+  left_value = [normalize.normalize_json(event, left_rules, left_ctx) for event in left_events]
+  right_value = [normalize.normalize_json(event, right_rules, right_ctx) for event in right_events]
+  return [*lines, *json_diff(left_value, right_value)]
 
 
 def _normalized_path_map(paths: Any, ctx: normalize.Context) -> dict[str, str]:
@@ -268,7 +384,14 @@ def tree_diff(left: Snapshot, right: Snapshot, left_ctx: normalize.Context, righ
   return lines
 
 
-def delta_diff(left: Delta, right: Delta, left_ctx: normalize.Context, right_ctx: normalize.Context) -> list[str]:
+def delta_diff(
+    left: Delta,
+    right: Delta,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+    event_field_rules: tuple[tuple[EventFieldRule, EventFieldRule], ...] = (),
+    candidate_is_python: bool = False,
+) -> list[str]:
   """Every difference between what one step changed in each tree."""
   lines: list[str] = []
   for label, left_paths, right_paths in (
@@ -287,7 +410,8 @@ def delta_diff(left: Delta, right: Delta, left_ctx: normalize.Context, right_ctx
       left_path, right_path = left_names[path], right_names[path]
       lines.extend(
           f"file {path}: {line}" for line in _content_diff(
-              left_path, new_left[left_path], right_path, new_right[right_path], left_ctx, right_ctx))
+              left_path, new_left[left_path], right_path, new_right[right_path], left_ctx, right_ctx, event_field_rules,
+              candidate_is_python))
   return lines
 
 
@@ -403,41 +527,14 @@ def _normalized_body(response: Response, route: str, ctx: normalize.Context) -> 
   return normalize.normalize_body_bytes(body, route, ctx)
 
 
-def response_diff(
-    route: str, left: Response, right: Response, left_ctx: normalize.Context,
-    right_ctx: normalize.Context) -> list[str]:
-  """Every difference between the two responses: status, compared headers, then the body."""
-  lines: list[str] = []
-  if left.status != right.status:
-    lines.append(f"status: {left.status} != {right.status}")
-  left_headers = normalize.normalize_headers(left.headers, left_ctx, route)
-  right_headers = normalize.normalize_headers(right.headers, right_ctx, route)
-  lines.extend(
-      f"header {name}: {left_headers.get(name)} != {right_headers.get(name)}"
-      for name in sorted(left_headers.keys() | right_headers.keys())
-      if left_headers.get(name) != right_headers.get(name))
-  left_body = _normalized_body(left, route, left_ctx)
-  right_body = _normalized_body(right, route, right_ctx)
-  if isinstance(left_body, bytes) or isinstance(right_body, bytes):
-    if left_body != right_body:
-      if isinstance(left_body, bytes) and isinstance(right_body, bytes):
-        lines.extend(f"body: {line}" for line in _text_diff(left_body, right_body))
-      else:
-        lines.append("body: JSON on one side only")
-  else:
-    lines.extend(f"body {line}" for line in json_diff(left_body, right_body))
-  return lines
-
-
 def status_and_shape_diff(
-    route: str, left: Response, right: Response, left_ctx: normalize.Context,
-    right_ctx: normalize.Context) -> list[str]:
-  """The malformed-input comparison: the status, then each 422 error's type and loc, nothing else.
-
-  For a body whose ``detail`` is a list, it compares the list length and each item's ``type`` and ``loc``; the
-  error text may differ. For any other body, it only requires both sides to be JSON objects with a ``detail``
-  key, or both to be non-JSON.
-  """
+    route: str,
+    left: Response,
+    right: Response,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+) -> list[str]:
+  """Compare malformed-input status and error locations while ignoring error text."""
   lines: list[str] = []
   if left.status != right.status:
     lines.append(f"status: {left.status} != {right.status}")
@@ -465,3 +562,95 @@ def status_and_shape_diff(
   if not (left_object and right_object):
     lines.append("body: both sides must be JSON objects with a detail key")
   return lines
+
+
+def _response_event_rule_bodies(
+    route: str,
+    left: Response,
+    right: Response,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+    event_field_rules: tuple[tuple[EventFieldRule, EventFieldRule], ...],
+    candidate_is_python: bool,
+) -> tuple[Any, Any, list[str]]:
+  """Validate a matching run field carried by a response and omit only that field."""
+  if not event_field_rules or not (_is_json(left) and _is_json(right)):
+    return _normalized_body(left, route, left_ctx), _normalized_body(right, route, right_ctx), []
+  left_bytes = normalize.mask_proxy_message_ids(left.decoded_body(), route)
+  right_bytes = normalize.mask_proxy_message_ids(right.decoded_body(), route)
+  left_raw, right_raw = json.loads(left_bytes), json.loads(right_bytes)
+  lines: list[str] = []
+  for baseline_rule, candidate_rule in event_field_rules:
+    baseline_matches = isinstance(left_raw, dict) and all(
+        key in left_raw and not json_diff(left_raw[key], expected)
+        for key, expected in baseline_rule.match_fields.items())
+    candidate_matches = isinstance(right_raw, dict) and all(
+        key in right_raw and not json_diff(right_raw[key], expected)
+        for key, expected in candidate_rule.match_fields.items())
+    if not (baseline_matches and candidate_matches and baseline_rule.field in left_raw and
+            candidate_rule.field in right_raw):
+      continue
+    baseline_value = left_raw.get(baseline_rule.field)
+    candidate_value = right_raw.get(candidate_rule.field)
+    baseline_valid = baseline_rule.field in left_raw and _value_is_allowed(
+        baseline_value, baseline_rule.allowed_baseline_values)
+    if not baseline_valid:
+      lines.append(
+          "allowed_baseline_values_for_one_event_field: baseline response "
+          f"{baseline_rule.field} is {_show(baseline_value)}, outside "
+          f"{_show(list(baseline_rule.allowed_baseline_values))}")
+    candidate_valid = candidate_rule.field in right_raw and (
+        _value_is_allowed(candidate_value, candidate_rule.allowed_baseline_values)
+        if candidate_is_python else not json_diff(candidate_value, candidate_rule.required_candidate_value))
+    if not candidate_valid:
+      requirement = "one of " + _show(list(candidate_rule.allowed_baseline_values)) if candidate_is_python else _show(
+          candidate_rule.required_candidate_value)
+      lines.append(
+          "allowed_baseline_values_for_one_event_field: candidate response "
+          f"{candidate_rule.field} is {_show(candidate_value)}, expected {requirement}")
+    if baseline_valid:
+      left_raw.pop(baseline_rule.field)
+    if candidate_valid:
+      right_raw.pop(candidate_rule.field)
+  left_body = normalize.normalize_json(left_raw, normalize.response_rules(route), left_ctx)
+  right_body = normalize.normalize_json(right_raw, normalize.response_rules(route), right_ctx)
+  return left_body, right_body, lines
+
+
+def response_diff(
+    route: str,
+    left: Response,
+    right: Response,
+    left_ctx: normalize.Context,
+    right_ctx: normalize.Context,
+    compare_mode: str = "full",
+    event_field_rules: tuple[tuple[EventFieldRule, EventFieldRule], ...] = (),
+    candidate_is_python: bool = False) -> list[str]:
+  """Compare full responses or malformed-input status and error locations."""
+  if compare_mode == "status_and_shape":
+    return status_and_shape_diff(route, left, right, left_ctx, right_ctx)
+  if compare_mode != "full":
+    raise ValueError(f"unknown HTTP response comparison mode {compare_mode!r}")
+  lines: list[str] = []
+  if left.status != right.status:
+    lines.append(f"status: {left.status} != {right.status}")
+  left_headers = normalize.normalize_headers(left.headers, left_ctx, route)
+  right_headers = normalize.normalize_headers(right.headers, right_ctx, route)
+  lines.extend(
+      f"header {name}: {left_headers.get(name)} != {right_headers.get(name)}"
+      for name in sorted(left_headers.keys() | right_headers.keys())
+      if left_headers.get(name) != right_headers.get(name))
+  left_body, right_body, body_rule_lines = _response_event_rule_bodies(
+      route, left, right, left_ctx, right_ctx, event_field_rules, candidate_is_python)
+  lines.extend(body_rule_lines)
+  if isinstance(left_body, bytes) or isinstance(right_body, bytes):
+    if left_body != right_body:
+      if isinstance(left_body, bytes) and isinstance(right_body, bytes):
+        lines.extend(f"body: {line}" for line in _text_diff(left_body, right_body))
+      else:
+        lines.append("body: JSON on one side only")
+  else:
+    lines.extend(f"body {line}" for line in json_diff(left_body, right_body))
+  return lines
+
+

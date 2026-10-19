@@ -18,6 +18,7 @@ use tokio::process::{Child, ChildStderr, ChildStdout};
 use super::options::CodexOptions;
 use super::text::{py_strip, truthy};
 use super::translate::CodexTranslator;
+use crate::cli_base::prepend_path_dir;
 use crate::one_shot::{assistant_text, frame_system_prompt};
 use crate::transport::cgroup::system_cgroup_base_dir;
 use crate::transport::kill::{kill_process_group, python_exit_code};
@@ -318,14 +319,6 @@ async fn read_bounded_stderr(mut stderr: ChildStderr) -> anyhow::Result<Vec<u8>>
     }
     let room = MAX_ONE_SHOT_STDERR_BYTES - captured.len().min(MAX_ONE_SHOT_STDERR_BYTES);
     captured.extend_from_slice(&chunk[..room.min(read)]);
-  }
-}
-
-/// Prepends `dir` to the child PATH unless one of its entries is `dir` already.
-fn prepend_path_dir(env: &mut Env, dir: &str) {
-  let current = env.get("PATH").cloned().unwrap_or_default();
-  if !current.split(':').any(|entry| entry == dir) {
-    env.insert("PATH".to_string(), format!("{dir}:{current}"));
   }
 }
 

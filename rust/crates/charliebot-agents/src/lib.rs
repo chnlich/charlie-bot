@@ -4,6 +4,7 @@ pub mod agent_environment;
 pub mod backend_pool;
 pub mod backend_types;
 pub mod backends;
+pub mod cli_base;
 pub mod event_builders;
 pub mod launch_loop;
 pub mod runner;

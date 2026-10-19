@@ -168,3 +168,20 @@ test('the ⋯ menu entry opens the same backend menu and a tap picks a backend',
   assert.equal(storage['charliebot-voice-backend'], 'gemini');
   assert.ok(menu.classList.contains('hidden'));
 });
+
+test('the backend menu moves right when right alignment would cross the left screen edge', () => {
+  const {sandbox, menu} = buildHarness();
+  // A 320 px screen whose mic group ends at 100 px: right-aligned, the 256 px menu starts at -156 px.
+  // The layout is modelled: a right offset moves the menu's right edge left of the group's edge.
+  sandbox.window.innerWidth = 320;
+  menu.getBoundingClientRect = () => {
+    const right = 100 - parseFloat(menu.style.right || '0');
+    return {left: right - 256, right, top: 0, bottom: 0, width: 256, height: 0};
+  };
+  // Close, then reopen so the menu is positioned for this screen.
+  sandbox.toggleVoiceBackendMenu();
+  sandbox.toggleVoiceBackendMenu();
+  const rect = menu.getBoundingClientRect();
+  assert.ok(rect.left >= 8, `the menu's left edge ${rect.left} crosses the left screen edge`);
+  assert.ok(rect.right <= 312, `the menu's right edge ${rect.right} crosses the right screen edge`);
+});

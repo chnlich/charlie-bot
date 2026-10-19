@@ -278,16 +278,16 @@ function openVoiceBackendMenu() {
 }
 
 function positionVoiceBackendMenu() {
-  // The menu is right-aligned to the mic group. On the narrowest supported
-  // phone that group sits near the right edge, so a 16rem menu can cross the
-  // left viewport edge; shift it until both edges are in view.
+  // The menu is right-aligned to the mic group. Where the group's right edge
+  // leaves too little room for the menu, a negative right offset moves the
+  // menu's right edge past the group until its left edge sits at the margin.
   const margin = 8;
   voiceMenu.style.left = '';
   voiceMenu.style.right = '';
   const rect = voiceMenu.getBoundingClientRect();
   if (rect.left < margin) {
-    voiceMenu.style.left = (margin - rect.left) + 'px';
-    voiceMenu.style.right = 'auto';
+    voiceMenu.style.left = 'auto';
+    voiceMenu.style.right = (rect.left - margin) + 'px';
   } else if (rect.right > window.innerWidth - margin) {
     voiceMenu.style.left = 'auto';
     voiceMenu.style.right = (rect.right - (window.innerWidth - margin)) + 'px';

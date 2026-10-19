@@ -126,6 +126,11 @@ pub fn is_python_whitespace(character: char) -> bool {
   )
 }
 
+/// Python's `str.strip()` with no argument: trims the characters that `is_python_whitespace` accepts from both ends.
+pub fn strip(text: &str) -> &str {
+  text.trim_matches(is_python_whitespace)
+}
+
 pub fn split_whitespace(text: &str) -> Vec<&str> {
   let mut words = Vec::new();
   let mut start = None;
@@ -164,5 +169,11 @@ mod tests {
   #[test]
   fn python_split_uses_python_whitespace() {
     assert_eq!(split_whitespace("\u{001c}one\u{3000}two\u{001f}"), ["one", "two"]);
+  }
+
+  #[test]
+  fn python_strip_trims_both_ends_and_keeps_zero_width_space() {
+    assert_eq!(strip("\u{001c}\u{0085}\u{3000}pad\u{3000}\u{0085}\u{001c}"), "pad");
+    assert_eq!(strip("\u{200b}pad\u{200b}"), "\u{200b}pad\u{200b}");
   }
 }

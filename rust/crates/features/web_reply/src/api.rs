@@ -11,9 +11,9 @@ use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::fastapi_body::{self, BodyModel, Extra, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
-use charliebot_compat::validation::{self, FieldError, Kind, Loc, Source};
+use charliebot_compat::validation::{self, FieldError, Source};
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
@@ -101,34 +101,18 @@ fn session_id_param(query: &HashMap<String, String>) -> Result<String, Box<Field
 /// The fields of `WebReplyRequest` and `WebStatusRequest`: the calling session's id and a text, both required strings.
 const SESSION_TEXT_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
-const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS);
+const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).extra(Extra::Forbid);
 
-/// The validated `WebReplyRequest` or `WebStatusRequest`, whose model forbids extra keys.
+/// The validated `WebReplyRequest` or `WebStatusRequest`.
 struct SessionText {
   session_id: String,
   text: String,
 }
 
 impl SessionText {
-  /// Validates the body against `SESSION_TEXT_BODY` and refuses the keys the model does not declare.
+  /// Validates the body against `SESSION_TEXT_BODY`, which forbids the keys the model does not declare.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let validated = body.validate(&SESSION_TEXT_BODY);
-    if let RequestBody::Json(Value::Object(raw)) = body {
-      let extras: Vec<FieldError> = raw
-        .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "session_id" | "text"))
-        .map(|(key, value)| field_error(key, value.clone(), Kind::ExtraForbidden))
-        .collect();
-      if !extras.is_empty() {
-        let mut errors = match &validated {
-          Ok(_) => Vec::new(),
-          Err(_) => session_text_field_errors(raw),
-        };
-        errors.extend(extras);
-        return Err(Box::new(validation::response(&errors)));
-      }
-    }
-    let Some(Value::Object(mut fields)) = validated? else {
+    let Some(Value::Object(mut fields)) = body.validate(&SESSION_TEXT_BODY)? else {
       unreachable!("a required model validates a body to its fields")
     };
     Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text") })
@@ -141,24 +125,6 @@ fn text_field(fields: &mut Map<String, Value>, name: &str) -> String {
     Some(Value::String(text)) => text,
     _ => unreachable!("a validated {name} is a string"),
   }
-}
-
-/// A validation error at `body.<field>`.
-fn field_error(field: &str, input: Value, kind: Kind) -> FieldError {
-  FieldError { loc: vec![Loc::Field("body".to_string()), Loc::Field(field.to_string())], input, kind }
-}
-
-/// The declared-field errors for an object body, used to retain them alongside forbidden extras.
-fn session_text_field_errors(fields: &Map<String, Value>) -> Vec<FieldError> {
-  let mut errors = Vec::new();
-  for name in ["session_id", "text"] {
-    match fields.get(name) {
-      None => errors.push(field_error(name, Value::Null, Kind::Missing)),
-      Some(Value::String(_)) => {}
-      Some(value) => errors.push(field_error(name, value.clone(), Kind::StringType)),
-    }
-  }
-  errors
 }
 
 #[cfg(test)]

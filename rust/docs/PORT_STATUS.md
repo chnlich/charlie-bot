@@ -24,7 +24,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | GET | `/home` | pages | ported |  |
 | GET | `/` | foundation | ported |  |
 | GET | `/api/sessions/` | sessions | ported |  |
-| POST | `/api/sessions/` | sessions | ported | Registered slot values are checked for their keys only; a value of the wrong type is accepted. |
+| POST | `/api/sessions/` | sessions | ported |  |
 | GET | `/api/sessions/archived` | sessions | ported |  |
 | GET | `/api/sessions/starred` | sessions | ported |  |
 | GET | `/api/sessions/groups` | sessions | ported |  |

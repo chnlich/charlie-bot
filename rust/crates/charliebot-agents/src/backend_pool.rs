@@ -9,6 +9,7 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::future::BoxFuture;
+use serde_json::{Map, Value};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
 use charliebot_store::metadata::UtcDateTime;
@@ -153,12 +154,32 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
 
 /// Register the session metadata slot owned by `src.features.backend_pool`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.metadata_slot(MetadataSlot {
-    owner: "backend_pool",
-    on: MetadataFile::Session,
-    after: None,
-    fields: vec![SlotField { name: "backend_from_pool", default: serde_json::json!(false) }],
-  })
+  registry.metadata_slot_with_validator(
+    MetadataSlot {
+      owner: "backend_pool",
+      on: MetadataFile::Session,
+      after: None,
+      fields: vec![SlotField { name: "backend_from_pool", default: serde_json::json!(false) }],
+    },
+    validate_backend_pool_fields,
+  )
+}
+
+fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<String> {
+  let Some(value) = values.get_mut("backend_from_pool") else { return None };
+  let boolean = match value {
+    Value::Bool(value) => *value,
+    Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,
+    Value::Number(value) if value.as_i64() == Some(1) || value.as_f64() == Some(1.0) => true,
+    Value::String(value) => match value.to_ascii_lowercase().as_str() {
+      "1" | "true" | "t" | "yes" | "y" | "on" => true,
+      "0" | "false" | "f" | "no" | "n" | "off" => false,
+      _ => return Some("backend_from_pool must be a boolean".to_string()),
+    },
+    _ => return Some("backend_from_pool must be a boolean".to_string()),
+  };
+  *value = Value::Bool(boolean);
+  None
 }
 
 fn format_minutes(datetime: OffsetDateTime) -> String {

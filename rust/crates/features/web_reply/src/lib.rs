@@ -19,6 +19,8 @@ use axum::routing::post;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
+use charliebot_store::metadata::UtcDateTime;
+use serde_json::{Map, Value, json};
 use turn_contribution::WebReplyTurnContribution;
 
 /// `register` (`src/features/web_reply/__init__.py`): the `/api/internal` router, then the turn contribution, then the
@@ -26,12 +28,58 @@ use turn_contribution::WebReplyTurnContribution;
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
   registry.turn_contribution("web_reply", Arc::new(WebReplyTurnContribution))?;
-  registry.metadata_slot(MetadataSlot {
-    owner: "web_reply",
-    on: MetadataFile::Session,
-    after: None,
-    fields: vec![SlotField { name: "web_status", default: serde_json::Value::Null }],
-  })
+  registry.metadata_slot_with_validator(
+    MetadataSlot {
+      owner: "web_reply",
+      on: MetadataFile::Session,
+      after: None,
+      fields: vec![SlotField { name: "web_status", default: serde_json::Value::Null }],
+    },
+    validate_session_fields,
+  )
+}
+
+fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
+  if let Some(status) = values.get_mut("web_status")
+    && !normalize_web_status(status)
+  {
+    return Some("web_status must be a WebStatus or null".to_string());
+  }
+  None
+}
+
+fn normalize_web_status(value: &mut Value) -> bool {
+  if value.is_null() {
+    return true;
+  }
+  let Some(status) = value.as_object_mut() else { return false };
+  status.retain(|name, _| ["goal", "now", "waiting", "updated_at"].contains(&name.as_str()));
+  for name in ["goal", "now"] {
+    if status.get(name).is_some_and(|field| {
+      !field.is_null() && (!field.is_string() || field.as_str().is_some_and(|text| text.trim().is_empty()))
+    }) {
+      return false;
+    }
+    status.entry(name.to_string()).or_insert(Value::Null);
+  }
+  let waiting = status.entry("waiting".to_string()).or_insert_with(|| json!([]));
+  let Some(items) = waiting.as_array_mut() else { return false };
+  for item in items {
+    let Some(item) = item.as_object_mut() else { return false };
+    if item.keys().any(|name| !["text", "link"].contains(&name.as_str())) {
+      return false;
+    }
+    if !item.get("text").and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty()) {
+      return false;
+    }
+    if item.get("link").is_some_and(|link| !link.is_null() && !link.is_string()) {
+      return false;
+    }
+    item.entry("link".to_string()).or_insert(Value::Null);
+  }
+  let updated_at =
+    status.entry("updated_at".to_string()).or_insert_with(|| Value::String(UtcDateTime::now().to_python_string()));
+  updated_at.as_str().is_some_and(|value| UtcDateTime::parse(value).is_ok())
 }
 
 /// The web reply routes, with the feature context as their state. The reply and dialog paths have one method each; the

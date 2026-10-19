@@ -245,13 +245,6 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         when=(),
         reason="wall-clock time: each server records its agent launch on its own clock",
     ),
-    FieldRule(
-        name="session-runs-next-cursor",
-        target="GET /api/sessions/{session_id}/runs",
-        field="next_cursor",
-        when=(),
-        reason="opaque cursor: it encodes the run's start time and run id, which each server draws on its own",
-    ),
 )
 
 WS_FRAME_RULES: dict[str, tuple[FieldRule, ...]] = {}

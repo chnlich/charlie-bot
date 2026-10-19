@@ -37,7 +37,7 @@ steps:
   - name: the gated run, newest first
     method: GET
     path: /api/sessions/${sessions.delta}/runs
-    query: {order: desc, limit: 1}
+    query: {order: desc, limit: 100}
     capture: {run: items.0.id}
     expect_status: 200
     defer_files: true

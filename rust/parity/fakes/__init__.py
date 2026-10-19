@@ -17,7 +17,7 @@ FAKE_READY_TIMEOUT_SECONDS = 30.0
 FAKE_START_TIMEOUT_SECONDS = 10.0
 FAKE_STOP_TIMEOUT_SECONDS = 10.0
 FAKE_PUSH_TIMEOUT_SECONDS = 10.0
-_IMMEDIATE_READY_FAKES = frozenset({"gemini", "muse"})
+_IMMEDIATE_READY_FAKES = frozenset({"gemini", "muse", "openai_compatible"})
 
 
 class FakeSet:

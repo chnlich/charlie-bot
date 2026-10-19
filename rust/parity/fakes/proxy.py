@@ -35,6 +35,7 @@ HOST_FAKE = {
     "gateway.discord.gg": "discord",
     "generativelanguage.googleapis.com": "gemini",
     "api.meta.ai": "muse",
+    "openai-compatible.parity.test": "openai_compatible",
 }
 
 

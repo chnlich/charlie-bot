@@ -251,10 +251,14 @@ Scenario fields:
   replace the earlier value. `credentials` deep-merges into `credentials.yaml`; the harness refuses a
   `charliebot` key so the access key stays fixed. Strings in either overlay may use `${tree.root}` and
   `${tree.home}`.
-- `fakes` maps `slack`, `discord`, `gemini` or `muse` to that fake's seed mapping. Empty seeds select the
-  documented synthetic defaults. Seed keys are validated by each module: Slack accepts `channel_name`,
+- `fakes` maps `slack`, `discord`, `gemini`, `muse` or `openai_compatible` to that fake's seed mapping. Empty seeds
+  select the documented synthetic defaults. Seed keys are validated by each module: Slack accepts `channel_name`,
   `thread_messages` and `failures`; Discord accepts `bot_user_id`, `application_flags`, `guilds`, `channels`,
-  `messages` and `failures`; Gemini and Muse accept `transcript` and `handshake_error`.
+  `messages` and `failures`; Gemini and Muse accept `transcript` and `handshake_error`. `openai_compatible` accepts
+  `text` (the answer's text, default `Synthetic upstream answer.`) and `failure_marker` (a request whose messages
+  contain it gets a 503, default `synthetic-upstream-failure`). The fake answers a request whose `stream` is set with
+  two content chunks (the second carries the finish reason and the usage) and `[DONE]`, and any other request with one
+  chat completion. A scenario reaches it at `https://openai-compatible.parity.test/v1`.
 - `fixture_extras` is an ordered list of module names under `fixture_extras/`. Each module's `async build(b)`
   returns tree-relative values recorded at `extras.<name>` in the manifest. Sessions created by an extra use
   `Builder.node` and appear under `sessions`.
@@ -393,6 +397,10 @@ field one side omits still shows as a difference:
   keeps every header in `logs/fakes.jsonl`. `MEDIA_TYPE_REQUEST_HEADERS` names `content-type`, which compares as
   its media type: lowercased, without parameters. `IGNORED_REQUEST_HEADERS` names each other header that comes from
   a library or the transport, with its reason. A header that is neither listed fails the comparison.
+- the proxy message id rule masks `msg_` and 32 lowercase hex digits where a proxy route puts its minted message id:
+  the `id` of a JSON answer and of a stream's `message_start` frame (`normalize.mask_proxy_message_ids`). Other
+  routes, and an id in another form such as the upstream's `chatcmpl-` id, compare unchanged, so a proxy that copied
+  the upstream's id still shows as a difference;
 - the voice archive stem rule masks `YYYY-MM-DDTHHMMSS.mmmZ_<8 hex>` in paths because the write clock and uuid4
   draw are independent on each side;
 - the named Discord heartbeat rule omits only op 1 messages the gateway client sends, because its first interval

@@ -83,9 +83,11 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 ### Startup checks
 
 - Python: `wiring.py:93` `register_startup_check`
-- Rust: `startup_check(name: &'static str, check: CheckFn)`, where `CheckFn = fn(&CharlieBotConfig) -> Result<(), String>`.
-  The server runs each check once, after the config loads, and refuses to start on an `Err`.
-- Example: `registry.startup_check("publish_dir", check_publish_dir)?;`
+- Rust: `startup_check(name: &'static str, check: StartupCheckFn)`, where
+  `StartupCheckFn = fn(&Registry, &CharlieBotConfig) -> Result<(), String>`. The check reads the registry, so it can
+  resolve the usage sources and backend attributions the packages registered. The server runs each check once, after
+  the config loads, and refuses to start on an `Err`.
+- Example: `registry.startup_check("backend_ids", check_backend_ids)?;`
 
 ### Config checks
 

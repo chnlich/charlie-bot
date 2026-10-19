@@ -257,7 +257,7 @@ fn load_inputs(registry: &Arc<Registry>, repo_root: &RepoRoot) -> Result<StatePa
   config::require_backends(&cfg).map_err(|error| error.to_string())?;
   v1_sessions::require_no_v1_sessions(&cfg)?;
   for (_, check) in registry.startup_checks() {
-    check(&cfg)?;
+    check(registry, &cfg)?;
   }
   parts.credentials.get().map_err(|error| error.to_string())?;
   Ok(parts)

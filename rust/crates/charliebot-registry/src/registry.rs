@@ -18,7 +18,9 @@ use crate::sequence::SequenceController;
 use crate::sidebar::SidebarContribution;
 use crate::turn::TurnContribution;
 use crate::usage::UsageSource;
-use crate::wiring::{CheckFn, DiffRootFn, FileView, RouterRegistration, ScheduledHandlerFn, Service, WebSocketHandler};
+use crate::wiring::{
+  CheckFn, DiffRootFn, FileView, RouterRegistration, ScheduledHandlerFn, Service, StartupCheckFn, WebSocketHandler,
+};
 
 /// A package's `register` function: the package's contributions, made through the registry's typed methods.
 pub type RegisterFn = fn(&mut Registry) -> Result<(), RegistryError>;
@@ -111,7 +113,7 @@ pub struct Registry {
   pub(crate) websocket_routes: Ledger<WebSocketHandler>,
   pub(crate) services: Ledger<Arc<dyn Service>>,
   pub(crate) file_views: Ledger<Arc<dyn FileView>>,
-  pub(crate) startup_checks: Ledger<CheckFn>,
+  pub(crate) startup_checks: Ledger<StartupCheckFn>,
   pub(crate) config_checks: Ledger<CheckFn>,
   pub(crate) config_sections: Ledger<ConfigSection>,
   /// Every retired top-level key that packages registered, keyed by the retired name: the keys of

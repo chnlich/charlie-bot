@@ -88,9 +88,12 @@ pub trait FileView: Send + Sync {
   ) -> BoxFuture<'a, Result<Option<Response>, Response>>;
 }
 
-/// A startup check (`wiring.register_startup_check`) runs once before the server serves. A config check
-/// (`config_registry.register_config_check`) runs after every config load. Either fails with its message.
+/// A config check (`config_registry.register_config_check`) runs after every config load. It fails with its message.
 pub type CheckFn = fn(&CharlieBotConfig) -> Result<(), String>;
+
+/// A startup check (`wiring.register_startup_check`) runs once before the server serves. It reads the registry, so it
+/// can resolve the usage sources and backend attributions the packages registered. It fails with its message.
+pub type StartupCheckFn = fn(&Registry, &CharlieBotConfig) -> Result<(), String>;
 
 /// A diff root (`wiring.register_diff_root`): the diff view also accepts repositories under the path it returns.
 pub type DiffRootFn = fn(&CharlieBotConfig) -> PathBuf;
@@ -150,7 +153,7 @@ impl Registry {
   }
 
   /// Register a startup check (`wiring.register_startup_check`).
-  pub fn startup_check(&mut self, name: &'static str, check: CheckFn) -> Result<(), RegistryError> {
+  pub fn startup_check(&mut self, name: &'static str, check: StartupCheckFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.startup_checks.insert(package, name, check)
   }
@@ -189,7 +192,7 @@ impl Registry {
   }
 
   /// The startup checks in registration order.
-  pub fn startup_checks(&self) -> impl Iterator<Item = (&'static str, CheckFn)> + '_ {
+  pub fn startup_checks(&self) -> impl Iterator<Item = (&'static str, StartupCheckFn)> + '_ {
     self.startup_checks.pairs().map(|(name, check)| (name, *check))
   }
 

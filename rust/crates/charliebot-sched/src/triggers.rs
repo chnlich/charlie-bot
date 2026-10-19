@@ -15,7 +15,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, pyfmt, ssh};
@@ -43,12 +43,42 @@ const REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS: u64 = 900;
 const DORMANCY_CHECK_SECONDS: u64 = 60;
 const SSH_OVERALL_TIMEOUT_SECONDS: u64 = 60;
 const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
+const LOCAL_PID_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(&["local_pid"])),
+  Field::required("pid", FieldType::Integer),
+  Field::optional("exit_file", FieldType::NullableString),
+  Field::optional("log", FieldType::NullableString),
+];
+const LOCAL_PID: BodyModel = BodyModel::optional(LOCAL_PID_FIELDS);
+const REMOTE_PID_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(&["remote_pid"])),
+  Field::required("host", FieldType::String),
+  Field::required("pid", FieldType::Integer),
+  Field::optional("exit_file", FieldType::NullableString),
+  Field::optional("log", FieldType::NullableString),
+];
+const REMOTE_PID: BodyModel = BodyModel::optional(REMOTE_PID_FIELDS);
+const SLURM_JOB_FIELDS: &[Field] = &[
+  Field::required("kind", FieldType::Literal(&["slurm_job"])),
+  Field::optional("host", FieldType::NullableString),
+  Field::required("job_id", FieldType::Integer),
+];
+const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
+const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
+  TaggedVariant { tag: "local_pid", class_name: "LocalPid", model: &LOCAL_PID },
+  TaggedVariant { tag: "remote_pid", class_name: "RemotePid", model: &REMOTE_PID },
+  TaggedVariant { tag: "slurm_job", class_name: "SlurmJob", model: &SLURM_JOB },
+];
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required("delay_seconds", FieldType::Integer),
-  Field::required("message", FieldType::String),
+  Field::required("message", FieldType::String).max_length(MAX_TRIGGER_MESSAGE_CHARS),
+  Field::optional(
+    "watch_targets",
+    FieldType::NullableTaggedUnionList { discriminator: "kind", variants: WATCH_TARGET_VARIANTS },
+  ),
 ];
-const SCHEDULE_TRIGGER_BODY: BodyModel = BodyModel::required(SCHEDULE_TRIGGER_BODY_FIELDS);
+const SCHEDULE_TRIGGER_BODY: BodyModel = BodyModel::required(SCHEDULE_TRIGGER_BODY_FIELDS).forbid_extra();
 
 const SLURM_ACTIVE_STATES: [&str; 7] =
   ["PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"];
@@ -1305,23 +1335,63 @@ pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxF
   })
 }
 
+/// Build the schedule request from the fields the body model validated, in the model's declaration order.
+fn schedule_request(payload: &Value) -> ScheduleTriggerRequest {
+  ScheduleTriggerRequest {
+    session_id: payload["session_id"].as_str().expect("validated string field").to_string(),
+    delay_seconds: payload["delay_seconds"].as_i64().expect("validated integer field"),
+    message: payload["message"].as_str().expect("validated string field").to_string(),
+    watch_targets: match payload.get("watch_targets") {
+      None | Some(Value::Null) => None,
+      Some(Value::Array(items)) => Some(items.iter().map(watch_target).collect()),
+      other => unreachable!("validated watch targets are null or a list, not {other:?}"),
+    },
+  }
+}
+
+/// Build one watched target from a validated member of the tagged union.
+fn watch_target(value: &Value) -> WatchTarget {
+  match value["kind"].as_str().expect("validated tag") {
+    "local_pid" => WatchTarget::LocalPid {
+      pid: value["pid"].as_i64().expect("validated integer field"),
+      exit_file: optional_string(value, "exit_file"),
+      log: optional_string(value, "log"),
+    },
+    "remote_pid" => WatchTarget::RemotePid {
+      host: value["host"].as_str().expect("validated string field").to_string(),
+      pid: value["pid"].as_i64().expect("validated integer field"),
+      exit_file: optional_string(value, "exit_file"),
+      log: optional_string(value, "log"),
+    },
+    "slurm_job" => WatchTarget::SlurmJob {
+      host: optional_string(value, "host"),
+      job_id: value["job_id"].as_i64().expect("validated integer field"),
+    },
+    other => unreachable!("validated watch target kind {other}"),
+  }
+}
+
+/// An optional validated string field: null and absent are both `None`.
+fn optional_string(value: &Value, field: &str) -> Option<String> {
+  match &value[field] {
+    Value::Null => None,
+    Value::String(text) => Some(text.clone()),
+    other => unreachable!("validated string field {field} is null or a string, not {other:?}"),
+  }
+}
+
 async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match fastapi_body::read(&parts.headers, stream).await {
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let (request, errors) = match body {
-    RequestBody::Json(value) if value.is_object() => parse_schedule_request(value),
-    body => match body.validate(&SCHEDULE_TRIGGER_BODY) {
-      Ok(_) => unreachable!("a non-object body cannot validate to the schedule request model"),
-      Err(response) => return *response,
-    },
+  let payload = match body.validate(&SCHEDULE_TRIGGER_BODY) {
+    Ok(Some(payload)) => payload,
+    Ok(None) => unreachable!("a required request body validates to an object"),
+    Err(response) => return *response,
   };
-  if !errors.is_empty() {
-    return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({ "detail": errors }));
-  }
-  let request = request.expect("a request exists when validation has no errors");
+  let request = schedule_request(&payload);
 
   match features.store.get_session(&request.session_id).await {
     Ok(Some(_)) => {}
@@ -1417,308 +1487,6 @@ async fn cancel_trigger_route(
     }
     Err(error) => responses::internal_error("RuntimeError", error.to_string()),
   }
-}
-
-fn parse_schedule_request(value: Value) -> (Option<ScheduleTriggerRequest>, Vec<Value>) {
-  let Some(object) = value.as_object() else {
-    return (
-      None,
-      vec![validation_error(
-        "model_attributes_type",
-        vec![json!("body")],
-        value,
-        "Input should be a valid dictionary or object to extract fields from",
-      )],
-    );
-  };
-  let mut errors = Vec::new();
-  let session_id = match object.get("session_id") {
-    Some(value) => parse_string_field(value, &["session_id"], &mut errors),
-    None => {
-      errors.push(missing_error(&["session_id"]));
-      None
-    }
-  };
-  let delay_seconds = match object.get("delay_seconds") {
-    Some(value) => parse_integer_field(value, &["delay_seconds"], &mut errors),
-    None => {
-      errors.push(missing_error(&["delay_seconds"]));
-      None
-    }
-  };
-  let message = match object.get("message") {
-    Some(value) => match parse_string_field(value, &["message"], &mut errors) {
-      Some(message) if message.chars().count() > MAX_TRIGGER_MESSAGE_CHARS => {
-        errors.push(validation_error(
-          "string_too_long",
-          vec![json!("body"), json!("message")],
-          value.clone(),
-          "String should have at most 200 characters",
-        ));
-        None
-      }
-      message => message,
-    },
-    None => {
-      errors.push(missing_error(&["message"]));
-      None
-    }
-  };
-  let watch_targets = match object.get("watch_targets") {
-    None | Some(Value::Null) => Some(None),
-    Some(Value::Array(items)) => {
-      let mut targets = Vec::with_capacity(items.len());
-      for (index, item) in items.iter().enumerate() {
-        if let Some(target) = parse_watch_target(item, index, &mut errors) {
-          targets.push(target);
-        }
-      }
-      Some(Some(targets))
-    }
-    Some(value) => {
-      errors.push(validation_error(
-        "list_type",
-        vec![json!("body"), json!("watch_targets")],
-        value.clone(),
-        "Input should be a valid list",
-      ));
-      None
-    }
-  };
-  for (key, extra) in object {
-    if !["session_id", "delay_seconds", "message", "watch_targets"].contains(&key.as_str()) {
-      errors.push(validation_error(
-        "extra_forbidden",
-        vec![json!("body"), json!(key)],
-        extra.clone(),
-        "Extra inputs are not permitted",
-      ));
-    }
-  }
-  let request = if errors.is_empty() {
-    Some(ScheduleTriggerRequest {
-      session_id: session_id.expect("validated session id"),
-      delay_seconds: delay_seconds.expect("validated delay"),
-      message: message.expect("validated message"),
-      watch_targets: watch_targets.expect("validated watch targets"),
-    })
-  } else {
-    None
-  };
-  (request, errors)
-}
-
-fn parse_watch_target(value: &Value, index: usize, errors: &mut Vec<Value>) -> Option<WatchTarget> {
-  let location = ["body", "watch_targets"];
-  let Some(object) = value.as_object() else {
-    errors.push(validation_error(
-      "model_attributes_type",
-      vec![json!(location[0]), json!(location[1]), json!(index)],
-      value.clone(),
-      "Input should be a valid dictionary or object to extract fields from",
-    ));
-    return None;
-  };
-  let Some(kind) = object.get("kind").and_then(Value::as_str) else {
-    errors.push(validation_error(
-      "union_tag_not_found",
-      vec![json!(location[0]), json!(location[1]), json!(index)],
-      value.clone(),
-      "Unable to extract tag using discriminator 'kind'",
-    ));
-    return None;
-  };
-  if !["local_pid", "remote_pid", "slurm_job"].contains(&kind) {
-    errors.push(validation_error(
-      "union_tag_invalid",
-      vec![json!(location[0]), json!(location[1]), json!(index)],
-      value.clone(),
-      "Input tag does not match any of the expected tags",
-    ));
-    return None;
-  }
-  let mut target_errors = Vec::new();
-  let pid = || object.get("pid");
-  let job_id = || object.get("job_id");
-  let parsed = match kind {
-    "local_pid" => {
-      let pid = parse_target_integer(pid(), index, "pid", &mut target_errors);
-      let exit_file = parse_target_optional_string(object.get("exit_file"), index, "exit_file", &mut target_errors);
-      let log = parse_target_optional_string(object.get("log"), index, "log", &mut target_errors);
-      pid.map(|pid| WatchTarget::LocalPid { pid, exit_file, log })
-    }
-    "remote_pid" => {
-      let host = parse_target_string(object.get("host"), index, "host", &mut target_errors);
-      let pid = parse_target_integer(pid(), index, "pid", &mut target_errors);
-      let exit_file = parse_target_optional_string(object.get("exit_file"), index, "exit_file", &mut target_errors);
-      let log = parse_target_optional_string(object.get("log"), index, "log", &mut target_errors);
-      match (host, pid) {
-        (Some(host), Some(pid)) => Some(WatchTarget::RemotePid { host, pid, exit_file, log }),
-        _ => None,
-      }
-    }
-    "slurm_job" => {
-      let host = parse_target_optional_string(object.get("host"), index, "host", &mut target_errors);
-      let job_id = parse_target_integer(job_id(), index, "job_id", &mut target_errors);
-      job_id.map(|job_id| WatchTarget::SlurmJob { host, job_id })
-    }
-    _ => unreachable!("known watch target kind"),
-  };
-  let known = match kind {
-    "local_pid" => ["kind", "pid", "exit_file", "log"].as_slice(),
-    "remote_pid" => ["kind", "host", "pid", "exit_file", "log"].as_slice(),
-    "slurm_job" => ["kind", "host", "job_id"].as_slice(),
-    _ => unreachable!("known watch target kind"),
-  };
-  for (key, extra) in object {
-    if !known.contains(&key.as_str()) {
-      target_errors.push(validation_error(
-        "extra_forbidden",
-        vec![json!("body"), json!("watch_targets"), json!(index), json!(key)],
-        extra.clone(),
-        "Extra inputs are not permitted",
-      ));
-    }
-  }
-  let target_valid = target_errors.is_empty();
-  errors.extend(target_errors);
-  if target_valid { parsed } else { None }
-}
-
-fn parse_target_integer(value: Option<&Value>, index: usize, field: &str, errors: &mut Vec<Value>) -> Option<i64> {
-  let Some(value) = value else {
-    errors.push(target_missing_error(index, field));
-    return None;
-  };
-  match integer_value(value) {
-    Ok(integer) => Some(integer),
-    Err(kind) => {
-      errors.push(validation_error(
-        kind,
-        vec![json!("body"), json!("watch_targets"), json!(index), json!(field)],
-        value.clone(),
-        if kind == "int_parsing" {
-          "Input should be a valid integer, unable to parse string as an integer"
-        } else {
-          "Input should be a valid integer"
-        },
-      ));
-      None
-    }
-  }
-}
-
-fn parse_target_string(value: Option<&Value>, index: usize, field: &str, errors: &mut Vec<Value>) -> Option<String> {
-  let Some(value) = value else {
-    errors.push(target_missing_error(index, field));
-    return None;
-  };
-  match value.as_str() {
-    Some(value) => Some(value.to_string()),
-    None => {
-      errors.push(validation_error(
-        "string_type",
-        vec![json!("body"), json!("watch_targets"), json!(index), json!(field)],
-        value.clone(),
-        "Input should be a valid string",
-      ));
-      None
-    }
-  }
-}
-
-fn parse_target_optional_string(
-  value: Option<&Value>,
-  index: usize,
-  field: &str,
-  errors: &mut Vec<Value>,
-) -> Option<String> {
-  match value {
-    None | Some(Value::Null) => None,
-    Some(Value::String(value)) => Some(value.clone()),
-    Some(value) => {
-      errors.push(validation_error(
-        "string_type",
-        vec![json!("body"), json!("watch_targets"), json!(index), json!(field)],
-        value.clone(),
-        "Input should be a valid string",
-      ));
-      None
-    }
-  }
-}
-
-fn parse_string_field(value: &Value, fields: &[&str], errors: &mut Vec<Value>) -> Option<String> {
-  match value.as_str() {
-    Some(value) => Some(value.to_string()),
-    None => {
-      let mut location = vec![json!("body")];
-      location.extend(fields.iter().map(|field| json!(field)));
-      errors.push(validation_error("string_type", location, value.clone(), "Input should be a valid string"));
-      None
-    }
-  }
-}
-
-fn parse_integer_field(value: &Value, fields: &[&str], errors: &mut Vec<Value>) -> Option<i64> {
-  match integer_value(value) {
-    Ok(value) => Some(value),
-    Err(kind) => {
-      let mut location = vec![json!("body")];
-      location.extend(fields.iter().map(|field| json!(field)));
-      let message = if kind == "int_parsing" {
-        "Input should be a valid integer, unable to parse string as an integer"
-      } else {
-        "Input should be a valid integer"
-      };
-      errors.push(validation_error(kind, location, value.clone(), message));
-      None
-    }
-  }
-}
-
-fn integer_value(value: &Value) -> Result<i64, &'static str> {
-  if let Some(value) = value.as_i64() {
-    return Ok(value);
-  }
-  if let Some(value) = value.as_u64() {
-    return i64::try_from(value).map_err(|_| "int_parsing");
-  }
-  if let Some(value) = value.as_f64() {
-    if value.fract() != 0.0 {
-      return Err("int_from_float");
-    }
-    if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
-      return Ok(value as i64);
-    }
-    return Err("int_parsing");
-  }
-  if let Some(value) = value.as_str() {
-    return value.trim().parse::<i64>().map_err(|_| "int_parsing");
-  }
-  if let Some(value) = value.as_bool() {
-    return Ok(i64::from(value));
-  }
-  Err("int_type")
-}
-
-fn target_missing_error(index: usize, field: &str) -> Value {
-  validation_error(
-    "missing",
-    vec![json!("body"), json!("watch_targets"), json!(index), json!(field)],
-    Value::Null,
-    "Field required",
-  )
-}
-
-fn missing_error(fields: &[&str]) -> Value {
-  let mut location = vec![json!("body")];
-  location.extend(fields.iter().map(|field| json!(field)));
-  validation_error("missing", location, Value::Null, "Field required")
-}
-
-fn validation_error(kind: &str, location: Vec<Value>, input: Value, message: &str) -> Value {
-  json!({ "type": kind, "loc": location, "msg": message, "input": input })
 }
 
 #[cfg(test)]
@@ -2114,10 +1882,15 @@ mod tests {
     assert_eq!(target, WatchTarget::LocalPid { pid: 42, exit_file: None, log: None });
   }
 
-  #[test]
+  #[tokio::test]
   // Python: tests/test_trigger_remote_watch.py::test_cli_accepts_mixed_kinds
-  fn schedule_request_parses_mixed_watch_target_kinds() {
-    let (request, errors) = parse_schedule_request(json!({
+  async fn schedule_route_accepts_mixed_watch_target_kinds() {
+    let (home, features) = feature_context();
+    add_session(&features, SESSION_ID);
+    let manager =
+      fake_manager(Arc::clone(&features), home.path(), probe_behavior("ALIVE\n", "", 0), probe_behavior("", "", 0));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let body = json!({
       "session_id": SESSION_ID,
       "delay_seconds": 30,
       "message": "mixed targets",
@@ -2126,9 +1899,20 @@ mod tests {
         { "kind": "remote_pid", "host": "synthetic-host", "pid": 456 },
         { "kind": "slurm_job", "host": "synthetic-cluster", "job_id": 789 },
       ],
-    }));
-    assert!(errors.is_empty());
-    assert_eq!(request.expect("valid mixed request").watch_targets.expect("targets").len(), 3);
+    })
+    .to_string();
+    let response = send(&routes(&features), Method::POST, "/api/internal/schedule-trigger", &body).await;
+    assert_eq!(response.status(), StatusCode::OK, "{}", response_json(response).await);
+    let stored = manager.list_triggers(SESSION_ID).await.expect("trigger list");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+      stored[0].watch_targets,
+      vec![
+        WatchTarget::LocalPid { pid: 123, exit_file: None, log: None },
+        WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 456, exit_file: None, log: None },
+        WatchTarget::SlurmJob { host: Some("synthetic-cluster".to_string()), job_id: 789 },
+      ]
+    );
   }
 
   #[tokio::test]
@@ -2694,6 +2478,92 @@ mod tests {
     assert_eq!(body["detail"][0]["loc"], json!(["body", "delay_seconds"]));
   }
 
+  /// Assert every `detail` entry's `type` and `loc`, in pydantic's order.
+  async fn assert_validation_detail(response: Response, expected: &[(&str, Value)]) {
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response_json(response).await;
+    let detail = body["detail"].as_array().expect("detail list");
+    assert_eq!(detail.len(), expected.len(), "{detail:?}");
+    for (error, (error_type, location)) in detail.iter().zip(expected) {
+      assert_eq!(error["type"], *error_type);
+      assert_eq!(error["loc"], *location);
+    }
+  }
+
+  #[tokio::test]
+  // Python: tests/test_schedule_trigger_cmd.py::route request validation contract
+  async fn schedule_route_reports_member_and_field_errors_in_pydantic_order() {
+    let (_home, features) = feature_context();
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let response = send(
+      &routes(&features),
+      Method::POST,
+      "/api/internal/schedule-trigger",
+      r#"{"session_id":"synthetic-trigger-session","delay_seconds":60,"message":123,"watch_targets":[{}]}"#,
+    )
+    .await;
+    assert_validation_detail(
+      response,
+      &[("string_type", json!(["body", "message"])), ("union_tag_not_found", json!(["body", "watch_targets", 0]))],
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  // Python: tests/test_schedule_trigger_cmd.py::route request validation contract
+  async fn schedule_route_names_the_variant_of_a_bad_member_field() {
+    let (_home, features) = feature_context();
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let cases = [
+      (r#"{"kind":"local_pid","pid":"x"}"#, [("int_parsing", json!(["body", "watch_targets", 0, "local_pid", "pid"]))]),
+      (r#"{"kind":"synthetic-unknown"}"#, [("union_tag_invalid", json!(["body", "watch_targets", 0]))]),
+      (r#"42"#, [("model_attributes_type", json!(["body", "watch_targets", 0]))]),
+    ];
+    for (member, expected) in cases {
+      let body = format!(
+        r#"{{"session_id":"synthetic-trigger-session","delay_seconds":60,"message":"wake","watch_targets":[{member}]}}"#
+      );
+      let response = send(&routes(&features), Method::POST, "/api/internal/schedule-trigger", &body).await;
+      let expected = expected.iter().map(|(kind, loc)| (*kind, loc.clone())).collect::<Vec<_>>();
+      assert_validation_detail(response, &expected).await;
+    }
+    let response = send(
+      &routes(&features),
+      Method::POST,
+      "/api/internal/schedule-trigger",
+      r#"{"session_id":"synthetic-trigger-session","delay_seconds":60,"message":"wake","watch_targets":"nope"}"#,
+    )
+    .await;
+    assert_validation_detail(response, &[("list_type", json!(["body", "watch_targets"]))]).await;
+  }
+
+  #[tokio::test]
+  // Python: src/runtime/api/internal.py::schedule_trigger (member extra keys are dropped by model_dump)
+  async fn schedule_route_drops_an_undeclared_member_key_from_the_trigger_file() {
+    let (_home, features) = feature_context();
+    add_session(&features, SESSION_ID);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let response = send(
+      &routes(&features),
+      Method::POST,
+      "/api/internal/schedule-trigger",
+      r#"{"session_id":"synthetic-trigger-session","delay_seconds":60,"message":"wake","watch_targets":[{"kind":"local_pid","pid":7,"synthetic_extra":1}]}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "{}", response_json(response).await);
+    let trigger_id = response_json(response).await["trigger_id"].as_str().expect("trigger id").to_string();
+    let file = features.store.session_dir(SESSION_ID).join("triggers").join(format!("{trigger_id}.json"));
+    let record: Value =
+      serde_json::from_slice(&std::fs::read(&file).expect("trigger file")).expect("JSON trigger file");
+    assert_eq!(
+      record["watch_targets"],
+      json!([{ "kind": "local_pid", "pid": 7, "exit_file": Value::Null, "log": Value::Null }])
+    );
+  }
+
   #[tokio::test]
   // Python: src/runtime/api/internal.py::cancel_trigger
   async fn cancel_route_returns_python_not_found_and_success_answers() {
@@ -2832,7 +2702,7 @@ mod tests {
       (
         r#"{"session_id":"synthetic-session","delay_seconds":60,"message":"wake","watch_targets":[{"kind":"local_pid","pid":"bad"}]}"#,
         "int_parsing",
-        json!(["body", "watch_targets", 0, "pid"]),
+        json!(["body", "watch_targets", 0, "local_pid", "pid"]),
       ),
     ];
     for (body, error_type, location) in wrong_types {

@@ -188,6 +188,7 @@ implemented.
 | service | `usage_tally` | features/usage | todo | |
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
 | service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf provisioning is not ported`; warm-up events are deferred. |
+| registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
@@ -275,7 +276,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | Claude and Codex transcript files | backends/claude-code, backends/codex | ported | Read by `claude_code/usage_logs.rs` and `codex/usage_logs.rs`; swept by `claude_code/usage_sweep.rs` and `codex/usage_sweep.rs`; live pool copies trimmed by `claude_accounts::retire_transcript_copies`. Outside the home. |
 | worktree directories | agent-runtime | todo | Outside the home. |
 | worktree trash | agent-runtime | todo | Outside the home. |
-| sibling backup archives | features/backup | todo | Outside the home. |
+| sibling backup archives | features/backup | ported | `create_backup` writes `charliebot-<YYYYMMDD-HHMMSS>.tar.gz` (local time) into the sibling `<home name>_backup` directory, and `apply_retention` prunes it by the tiered policy: under 7 days keep all, 7-30 days keep Sundays, 30-90 days keep the 1st of the month, older delete. The handler fires through the cron scheduler, which the agent-runtime line ports. |
 | `<publish.dir>/<token>/<basename>` | CLI publish | todo | Outside the home. |
 | one-shot backend temporary directories | backends | todo | Outside the home. |
 | explain temporary directories | features/explain | ported | Outside the home. A read-only history copy per run, removed when the run ends. |

@@ -246,7 +246,18 @@ dependencies = [
 name = "charliebot-backup"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "charliebot-core",
  "charliebot-registry",
+ "charliebot-store",
+ "flate2",
+ "futures-util",
+ "libc",
+ "nix",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

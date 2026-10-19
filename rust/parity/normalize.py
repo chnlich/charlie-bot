@@ -113,7 +113,7 @@ _EXPLAIN_STAMP = (
 # A finish time is null while its entry is pending, and that null stays compared. A `when` holds one value per key,
 # so each ended state gets its own rule.
 _ENDED_STATES = ("ready", "error")
-_WEB_STATUS_STAMP = "wall-clock time of the write: each status set stamps the status with the server's clock"
+_WEB_STATUS_STAMP = "wall-clock time of the write"
 
 RESPONSE_RULES: tuple[FieldRule, ...] = (
     FieldRule(
@@ -324,8 +324,8 @@ FILE_RULES: tuple[FieldRule, ...] = (
         name="web-status-event-time",
         target="home/sessions/*/data/chat_events.jsonl",
         field="web_status.updated_at",
-        when=(),
-        reason=f"{_WEB_STATUS_STAMP}; only a web_status event carries a web_status object",
+        when=(("type", "web_status"),),
+        reason=_WEB_STATUS_STAMP,
     ),
     FieldRule(
         name="session-claude-start-time",

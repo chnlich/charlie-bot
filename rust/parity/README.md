@@ -329,8 +329,10 @@ directions: [python-to-candidate, candidate-to-python]
 
 Each `emit` writes one JSON line to stdout and flushes it. A string equal to `${argv:<flag>}` reads the value
 after `<flag>`. A missing flag writes an error to stderr and exits 2. A `gate` writes `at-<name>` and polls for
-`open-<name>` every 20 ms. Each start records its argv, cwd, pid, process start time, stdio, environment and
-verified run-token claims.
+`open-<name>` every 20 ms. A `sigterm: ignore` or `sigterm: default` step sets the SIGTERM disposition of the fake
+to ignored or to the default action; the steps after it run under that disposition, so a stop signal from a server
+ends the fake only once a `sigterm: default` step has run. Each start records its argv, cwd, pid, process start
+time, stdio, environment and verified run-token claims.
 
 Step fields:
 

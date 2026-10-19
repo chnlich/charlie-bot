@@ -31,7 +31,9 @@ pub fn agent_environment(inherited: &Env, venv_bin: &Path, repo_root: &Path) -> 
   if venv_bin.as_os_str().is_empty() {
     bail!("{VENV_BIN_ENV} is required and must name the server venv bin directory");
   }
-  let path = inherited.get("PATH").map(String::as_str).unwrap_or("");
+  let Some(path) = inherited.get("PATH") else {
+    bail!("PATH is not set in the server environment; the agent environment places the entry-point directory on it");
+  };
   let real_venv_bin = realpath(venv_bin)?;
   let mut values = inherited.clone();
   for name in ACTIVATION_VARIABLES {
@@ -54,35 +56,27 @@ pub fn agent_environment(inherited: &Env, venv_bin: &Path, repo_root: &Path) -> 
   Ok(AgentBaseEnvironment { values })
 }
 
-/// Read the process environment and build its agent-safe snapshot using the startup venv path.
-pub fn from_process_environment(startup: &StartupState) -> anyhow::Result<AgentBaseEnvironment> {
-  let values = process_environment()?;
-  rewrite_from_startup(startup, &values)
-}
-
-fn rewrite_from_startup(startup: &StartupState, values: &Env) -> anyhow::Result<AgentBaseEnvironment> {
-  let venv_bin = startup.require::<VenvBin>()?;
-  let repo_root = startup.require::<RepoRoot>()?;
-  agent_environment(values, venv_bin.path(), repo_root.path())
-}
-
-fn insert_agent_environment(startup: &StartupState, values: &Env) -> anyhow::Result<()> {
-  startup.insert(rewrite_from_startup(startup, values)?)?;
-  Ok(())
+/// Replace the server's process environment with its agent environment, as `server.py:582` does, and return that
+/// environment as the typed snapshot. `main` calls this before any thread starts and before the config load: every
+/// child process copies the process environment, so the web terminal's tmux server and the usage panel's
+/// `claude --version` probe inherit the agent environment too.
+pub fn replace_process_environment(venv_bin: &VenvBin, repo_root: &RepoRoot) -> anyhow::Result<AgentBaseEnvironment> {
+  let inherited = process_environment()?;
+  let agent = agent_environment(&inherited, venv_bin.path(), repo_root.path())?;
+  for name in inherited.keys().filter(|name| !agent.values.contains_key(*name)) {
+    // SAFETY: `main` calls this before the runtime and the logger start, so no other thread reads the environment.
+    unsafe { env::remove_var(name) };
+  }
+  for (name, value) in &agent.values {
+    // SAFETY: as above; this is the only thread.
+    unsafe { env::set_var(name, value) };
+  }
+  Ok(agent)
 }
 
 /// Require the agent environment owned by a startup state.
 pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<Arc<AgentBaseEnvironment>> {
   Ok(startup.require::<AgentBaseEnvironment>()?)
-}
-
-/// Insert the one typed agent environment before recovery starts.
-pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
-  Box::pin(async move {
-    let values = process_environment()?;
-    insert_agent_environment(&features.startup, &values)?;
-    Ok(())
-  })
 }
 
 /// Run the cgroup startup log and stale sweep against an injectable base.
@@ -107,9 +101,6 @@ fn process_environment() -> anyhow::Result<Env> {
   let mut values = BTreeMap::new();
   for (name, value) in env::vars_os() {
     let name = name.into_string().map_err(|_| anyhow::anyhow!("the server environment has a non-Unicode name"))?;
-    if name == VENV_BIN_ENV {
-      continue;
-    }
     let value =
       value.into_string().map_err(|_| anyhow::anyhow!("the server environment variable {name} is not Unicode"))?;
     values.insert(name, value);
@@ -165,7 +156,10 @@ fn realpath(path: &Path) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+  use std::process::Command;
+
   use super::*;
+  use charliebot_core::repo_root::REPO_ROOT_ENV;
   use charliebot_core::venv::VenvBin;
 
   #[test]
@@ -224,60 +218,72 @@ mod tests {
   }
 
   #[test]
-  fn pre_recovery_environment_uses_the_startup_venv_bin_and_repo_root() {
+  fn missing_path_is_an_error_that_names_path() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");
     fs::create_dir_all(&venv_bin).unwrap();
-    let startup = StartupState::default();
-    startup.insert(VenvBin::new(Some(venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
-    startup.insert(RepoRoot::new(Some(root.path().as_os_str().to_os_string())).unwrap()).unwrap();
-    let inherited = Env::from([
-      (VENV_BIN_ENV.to_string(), "/inherited/venv/bin".to_string()),
-      ("PATH".to_string(), venv_bin.display().to_string()),
-    ]);
+    let inherited = Env::from([("KEPT".to_string(), "value".to_string())]);
 
-    insert_agent_environment(&startup, &inherited).unwrap();
+    let error = agent_environment(&inherited, &venv_bin, root.path()).unwrap_err();
 
-    let rewritten = startup.require::<AgentBaseEnvironment>().unwrap();
-    assert_eq!(rewritten.values[VENV_BIN_ENV], venv_bin.display().to_string());
-    assert!(rewritten.values["PATH"].starts_with(&root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
+    assert!(error.to_string().contains("PATH"), "{error:#}");
   }
 
+  const STARTUP_TEST: &str = "agent_environment::tests::startup_environment_reaches_grandchildren";
+  /// Set only in the child process: the file the child writes the grandchild's environment to.
+  const CHILD_OUTPUT_ENV: &str = "CHARLIEBOT_STARTUP_ENV_OUTPUT";
+
   #[test]
-  fn separate_startup_states_build_their_own_agent_base_environments() {
-    let first_root = tempfile::tempdir().unwrap();
-    let first_venv_bin = first_root.path().join("venv/bin");
-    fs::create_dir_all(&first_venv_bin).unwrap();
-    let first_startup = StartupState::default();
-    first_startup.insert(VenvBin::new(Some(first_venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
-    first_startup.insert(RepoRoot::new(Some(first_root.path().as_os_str().to_os_string())).unwrap()).unwrap();
+  fn startup_environment_reaches_grandchildren() {
+    match env::var_os(CHILD_OUTPUT_ENV) {
+      Some(output) => startup_child(Path::new(&output)),
+      None => startup_parent(),
+    }
+  }
 
-    let second_root = tempfile::tempdir().unwrap();
-    let second_venv_bin = second_root.path().join("venv/bin");
-    fs::create_dir_all(&second_venv_bin).unwrap();
-    let second_startup = StartupState::default();
-    second_startup.insert(VenvBin::new(Some(second_venv_bin.as_os_str().to_os_string())).unwrap()).unwrap();
-    second_startup.insert(RepoRoot::new(Some(second_root.path().as_os_str().to_os_string())).unwrap()).unwrap();
+  /// Run this test again in a child process with the activation the server would start with, then read the
+  /// environment that the child's grandchild inherited.
+  fn startup_parent() {
+    let root = tempfile::tempdir().unwrap();
+    let venv_bin = root.path().join("venv/bin");
+    fs::create_dir_all(&venv_bin).unwrap();
+    let output = root.path().join("grandchild.env");
+    let path = [venv_bin.display().to_string(), "/usr/bin".to_string(), "/bin".to_string()].join(":");
 
-    insert_agent_environment(&first_startup, &Env::from([("PATH".to_string(), "/first/system".to_string())])).unwrap();
-    insert_agent_environment(&second_startup, &Env::from([("PATH".to_string(), "/second/system".to_string())]))
+    let status = Command::new(env::current_exe().unwrap())
+      .args(["--exact", STARTUP_TEST])
+      .env_clear()
+      .env("PATH", path)
+      .env("VIRTUAL_ENV", root.path().join("venv"))
+      .env("UV_RUN_RECURSION_DEPTH", "1")
+      .env(VENV_BIN_ENV, &venv_bin)
+      .env(REPO_ROOT_ENV, root.path())
+      .env(CHILD_OUTPUT_ENV, &output)
+      .status()
       .unwrap();
+    assert!(status.success(), "the startup child failed: {status}");
 
-    let first = first_startup.require::<AgentBaseEnvironment>().unwrap();
-    let second = second_startup.require::<AgentBaseEnvironment>().unwrap();
-    assert_eq!(first.values[VENV_BIN_ENV], first_venv_bin.display().to_string());
-    assert_eq!(second.values[VENV_BIN_ENV], second_venv_bin.display().to_string());
-    assert!(first.values["PATH"].starts_with(&first_root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
-    assert!(second.values["PATH"].starts_with(&second_root.path().join(ENTRY_POINT_RELATIVE).display().to_string()));
-    assert!(first.values["PATH"].ends_with("/first/system"));
-    assert!(second.values["PATH"].ends_with("/second/system"));
+    let grandchild = fs::read_to_string(&output).unwrap();
+    let vars: BTreeMap<&str, &str> = grandchild.lines().filter_map(|line| line.split_once('=')).collect();
+    assert!(!vars.contains_key("VIRTUAL_ENV"));
+    assert!(!vars.contains_key("UV_RUN_RECURSION_DEPTH"));
+    let entries: Vec<&str> = vars["PATH"].split(':').collect();
+    assert_eq!(entries[0], root.path().join(ENTRY_POINT_RELATIVE).to_str().unwrap());
+    assert!(!entries.contains(&venv_bin.to_str().unwrap()), "the venv bin is off PATH: {entries:?}");
+    assert_eq!(vars["PYDANTIC_DISABLE_PLUGINS"], "__all__");
+    assert_eq!(vars[VENV_BIN_ENV], venv_bin.to_str().unwrap());
   }
 
-  #[test]
-  fn pre_recovery_environment_requires_a_startup_venv_bin() {
-    let startup = StartupState::default();
-    let error = insert_agent_environment(&startup, &Env::new()).unwrap_err();
-    assert!(error.to_string().contains("VenvBin"));
+  /// The startup step as `main` runs it, then the grandchild whose environment the parent checks.
+  fn startup_child(output: &Path) {
+    let venv_bin = VenvBin::new(env::var_os(VENV_BIN_ENV)).unwrap();
+    let repo_root = RepoRoot::new(env::var_os(REPO_ROOT_ENV)).unwrap();
+
+    let agent = replace_process_environment(&venv_bin, &repo_root).unwrap();
+
+    assert_eq!(process_environment().unwrap(), agent.values);
+    let grandchild = Command::new("/usr/bin/env").output().unwrap();
+    fs::write(output, grandchild.stdout).unwrap();
   }
 
   #[test]

@@ -1,12 +1,12 @@
 //! `charliebot-server`: the CharlieBot HTTP server (`server.py`).
 //!
-//! Startup follows `server.main` then the lifespan: build the registry from the composition root, load and check the
-//! config, take the home writer fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`),
-//! capture the build identity, initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log
-//! `server_ready`, then bind the configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests
-//! finish for up to five seconds, stops the lifespan's services and runs its let-go steps, releases the fence, logs
-//! `charliebot_shutdown`, then raises the signal again under its default disposition, so the process ends killed by that
-//! signal as uvicorn's does.
+//! Startup follows `server.main` then the lifespan: replace the process environment with the agent environment before
+//! any thread starts, build the registry from the composition root, load and check the config, take the home writer
+//! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture the build identity,
+//! initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the
+//! configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests finish for up to five seconds,
+//! stops the lifespan's services and runs its let-go steps, releases the fence, logs `charliebot_shutdown`, then raises
+//! the signal again under its default disposition, so the process ends killed by that signal as uvicorn's does.
 //!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
 //! page packages and `configs/` the server serves; the Python server derives the same root from its own file location.
@@ -29,6 +29,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use charliebot_agents::agent_environment::{self, AgentBaseEnvironment};
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
@@ -54,12 +55,20 @@ const EXIT_CONFIG: u8 = 1;
 const EXIT_STARTUP: u8 = 3;
 
 fn main() -> ExitCode {
+  // Before the logger and the runtime start, so the environment changes while this is the only thread.
+  let (venv_bin, repo_root, agent_base) = match replace_environment() {
+    Ok(inputs) => inputs,
+    Err(message) => {
+      eprintln!("charliebot-server: {message}");
+      return ExitCode::from(EXIT_CONFIG);
+    }
+  };
   logging::init();
   let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("the tokio runtime builds");
-  runtime.block_on(run())
+  runtime.block_on(run(venv_bin, repo_root, agent_base))
 }
 
-async fn run() -> ExitCode {
+async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode {
   let mut stop = match StopSignal::install() {
     Ok(stop) => stop,
     Err(error) => {
@@ -75,8 +84,8 @@ async fn run() -> ExitCode {
       return ExitCode::from(EXIT_CONFIG);
     }
   };
-  let (repo_root, state_parts, venv_bin) = match load_inputs(&registry) {
-    Ok(inputs) => inputs,
+  let state_parts = match load_inputs(&registry, &repo_root) {
+    Ok(parts) => parts,
     Err(message) => {
       eprintln!("charliebot-server: {message}");
       return ExitCode::from(EXIT_CONFIG);
@@ -118,6 +127,7 @@ async fn run() -> ExitCode {
   let startup = StartupState::default();
   startup.insert(venv_bin).expect("the startup state is empty before the lifespan begins");
   startup.insert(repo_root.clone()).expect("the startup state is empty before the lifespan begins");
+  startup.insert(agent_base).expect("the startup state is empty before the lifespan begins");
   startup
     .insert(Templating::new(repo_root.path(), registry.page_packages()))
     .expect("the startup state is empty before the lifespan begins");
@@ -205,10 +215,18 @@ struct StateParts {
   credentials: Arc<charliebot_core::hot_reload::HotReload<charliebot_core::credentials::Credentials>>,
 }
 
-/// The repository root and the home's loaded files; any error names the input it concerns.
-fn load_inputs(registry: &Arc<Registry>) -> Result<(RepoRoot, StateParts, VenvBin), String> {
+/// The venv bin and the checkout, read once, and the process environment rewritten from them. Any error names the input
+/// it concerns.
+fn replace_environment() -> Result<(VenvBin, RepoRoot, AgentBaseEnvironment), String> {
   let venv_bin = VenvBin::new(std::env::var_os("CHARLIEBOT_VENV_BIN")).map_err(|error| error.to_string())?;
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
+  let agent_base =
+    agent_environment::replace_process_environment(&venv_bin, &repo_root).map_err(|error| format!("{error:#}"))?;
+  Ok((venv_bin, repo_root, agent_base))
+}
+
+/// The home's loaded files, checked against the checkout; any error names the input it concerns.
+fn load_inputs(registry: &Arc<Registry>, repo_root: &RepoRoot) -> Result<StateParts, String> {
   if !repo_root.path().join("web").join("templates").is_dir() {
     return Err(format!(
       "{REPO_ROOT_ENV}={} holds no web/templates directory; set it to a charlie-bot checkout",
@@ -227,7 +245,7 @@ fn load_inputs(registry: &Arc<Registry>) -> Result<(RepoRoot, StateParts, VenvBi
     check(&cfg)?;
   }
   parts.credentials.get().map_err(|error| error.to_string())?;
-  Ok((repo_root, parts, venv_bin))
+  Ok(parts)
 }
 
 /// uvicorn's `bind_socket`: an IPv6 socket when the host holds a `:`, IPv4 otherwise.

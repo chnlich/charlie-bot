@@ -1755,7 +1755,6 @@ fn remaining_until(deadline: UtcDateTime) -> Duration {
 
 #[cfg(test)]
 mod tests {
-  use std::os::unix::fs::PermissionsExt;
   use std::sync::Arc;
 
   use axum::body::{Body, to_bytes};
@@ -1835,21 +1834,33 @@ mod tests {
       .expect("create task-tree node");
   }
 
-  fn executable(path: &Path, body: &str) {
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).expect("write fake probe");
-    let mut permissions = std::fs::metadata(path).expect("fake probe metadata").permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(path, permissions).expect("fake probe executable mode");
+  fn probe_behavior(stdout: &str, stderr: &str, exit: i64) -> Value {
+    json!({ "stdout": stdout, "stderr": stderr, "exit": exit })
   }
 
-  fn fake_manager(features: Arc<FeatureContext>, root: &Path, ssh_body: &str, sacct_body: &str) -> Arc<TriggerManager> {
-    let ssh_path = root.join("fake-ssh");
-    let sacct_path = root.join("fake-sacct");
-    executable(&ssh_path, ssh_body);
-    executable(&sacct_path, sacct_body);
+  fn fake_probe_bin() -> PathBuf {
+    let exe = std::env::current_exe().expect("the test binary path");
+    exe
+      .ancestors()
+      .skip(1)
+      .map(|directory| directory.join("fake_probe"))
+      .find(|candidate| candidate.is_file())
+      .expect("cargo builds the fake-probe helper into the target directory that holds the test binary")
+  }
+
+  fn fake_manager(features: Arc<FeatureContext>, root: &Path, ssh_behavior: Value, sacct_behavior: Value) -> Arc<TriggerManager> {
+    let bin = root.join("fake-bin");
+    std::fs::create_dir_all(&bin).expect("fake bin directory");
+    let helper = fake_probe_bin();
+    for role in ["fake-ssh", "fake-sacct"] {
+      std::os::unix::fs::symlink(&helper, bin.join(role)).unwrap_or_else(|error| panic!("link fake program {role}: {error}"));
+    }
+    let behavior = json!({ "fake-ssh": ssh_behavior, "fake-sacct": sacct_behavior });
+    std::fs::write(bin.join("probe.json"), serde_json::to_vec(&behavior).expect("serialize probe behavior"))
+      .expect("write probe behavior");
     let manager = TriggerManager::new(features).test_probe_setup(
-      &ssh_path,
-      &sacct_path,
+      &bin.join("fake-ssh"),
+      &bin.join("fake-sacct"),
       &root.join("synthetic-home/.ssh/controlmasters"),
       Duration::from_millis(2),
     );
@@ -2096,7 +2107,7 @@ mod tests {
   // Python: tests/test_trigger_remote_watch.py::test_remote_create_alive_persists
   async fn remote_pid_is_verified_before_its_trigger_is_saved() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf 'ALIVE\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("ALIVE\n", "", 0), probe_behavior("", "", 0));
     let target = WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None };
     let trigger = manager
       .create_trigger(SESSION_ID, 3600, "remote wake", Some(vec![target.clone()]), None, None, true)
@@ -2110,7 +2121,7 @@ mod tests {
   // Python: tests/test_trigger_remote_watch.py::test_remote_create_dead_rejects
   async fn remote_pid_that_fails_verification_is_refused() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf 'DEAD\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("DEAD\n", "", 0), probe_behavior("", "", 0));
     let error = manager
       .create_trigger(
         SESSION_ID,
@@ -2134,7 +2145,7 @@ mod tests {
   // Python: tests/test_trigger_remote_watch.py::test_remote_finished_label_reads_the_exit_file_over_ssh
   async fn remote_finished_label_reads_the_exit_file_over_ssh() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf '7\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("7\n", "", 0), probe_behavior("", "", 0));
     let target = RemotePid {
       kind: "remote_pid".to_string(),
       host: "synthetic-host".to_string(),
@@ -2149,7 +2160,7 @@ mod tests {
   // Python: tests/test_trigger_remote_watch.py::test_remote_finished_label_exit_file_missing_states_no_code
   async fn remote_finished_label_names_a_missing_exit_file() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "exit 1\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("", "", 1), probe_behavior("", "", 0));
     let target = RemotePid {
       kind: "remote_pid".to_string(),
       host: "synthetic-host".to_string(),
@@ -2179,7 +2190,7 @@ mod tests {
   // Python: tests/test_trigger_remote_watch.py::test_remote_still_alive_at_timeout_carries_the_log
   async fn remote_pid_timeout_keeps_its_log_path() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf 'ALIVE\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("ALIVE\n", "", 0), probe_behavior("", "", 0));
     let trigger = pending_trigger("synthetic-remote-live", SESSION_ID, near_future(0), Vec::new());
     let target = RemotePid {
       kind: "remote_pid".to_string(),
@@ -2197,7 +2208,7 @@ mod tests {
   // Python: tests/test_trigger_remote_slurm_watch.py::test_remote_slurm_completes
   async fn remote_slurm_terminal_state_has_the_python_label() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf '123|COMPLETED|0:0\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("123|COMPLETED|0:0\n", "", 0), probe_behavior("", "", 0));
     let trigger = pending_trigger("synthetic-slurm", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
     let (finished, still_alive) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
@@ -2210,7 +2221,7 @@ mod tests {
   async fn unreachable_remote_slurm_group_reports_its_probe_error() {
     let (home, features) = feature_context();
     let manager =
-      fake_manager(Arc::clone(&features), home.path(), "printf 'synthetic ssh refusal\\n' >&2\nexit 255\n", "exit 0\n");
+      fake_manager(Arc::clone(&features), home.path(), probe_behavior("", "synthetic ssh refusal\n", 255), probe_behavior("", "", 0));
     let trigger = pending_trigger("synthetic-slurm-dark", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
     let (finished, still_alive) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
@@ -2222,7 +2233,7 @@ mod tests {
   // Python: tests/test_trigger_slurm_watch.py::test_slurm_single_job_terminal_state
   async fn local_slurm_terminal_state_has_the_python_label() {
     let (home, features) = feature_context();
-    let manager = fake_manager(Arc::clone(&features), home.path(), "exit 0\n", "printf '123|COMPLETED|0:0\\n'\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("", "", 0), probe_behavior("123|COMPLETED|0:0\n", "", 0));
     let trigger = pending_trigger("synthetic-local-slurm", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 123 };
     let (finished, still_alive) = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
@@ -2250,10 +2261,14 @@ mod tests {
   // Python: tests/test_trigger_slurm_watch.py::test_no_sacct_host_slurm_create_fails
   async fn local_slurm_creation_fails_when_sacct_is_missing() {
     let (home, features) = feature_context();
-    let ssh_path = home.path().join("fake-ssh");
-    executable(&ssh_path, "exit 0\n");
+    let bin = home.path().join("fake-bin");
+    std::fs::create_dir_all(&bin).expect("fake bin directory");
+    std::os::unix::fs::symlink(fake_probe_bin(), bin.join("fake-ssh")).expect("link fake ssh");
+    let behavior = json!({ "fake-ssh": probe_behavior("", "", 0) });
+    std::fs::write(bin.join("probe.json"), serde_json::to_vec(&behavior).expect("serialize probe behavior"))
+      .expect("write probe behavior");
     let manager = Arc::new(TriggerManager::new(features).test_probe_setup(
-      &ssh_path,
+      &bin.join("fake-ssh"),
       &home.path().join("missing-sacct"),
       &home.path().join("synthetic-home/.ssh/controlmasters"),
       Duration::from_millis(2),
@@ -2530,7 +2545,7 @@ mod tests {
   async fn schedule_route_maps_remote_verification_refusal_to_422() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf 'DEAD\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("DEAD\n", "", 0), probe_behavior("", "", 0));
     features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
     let response = send(
       &routes(&features),
@@ -2665,7 +2680,7 @@ mod tests {
   async fn schedule_route_returns_observed_remote_slurm_state() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
-    let manager = fake_manager(Arc::clone(&features), home.path(), "printf '123|RUNNING|0:0\\n'\n", "exit 0\n");
+    let manager = fake_manager(Arc::clone(&features), home.path(), probe_behavior("123|RUNNING|0:0\n", "", 0), probe_behavior("", "", 0));
     features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
     let response = send(
       &routes(&features),

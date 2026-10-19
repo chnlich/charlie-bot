@@ -1,4 +1,4 @@
-"""Create one fixture session with a synthetic Discord thread origin for reply scenarios."""
+"""Create a Discord thread session and a session without a thread for route scenarios."""
 
 from rust.parity.fixture import Builder
 
@@ -16,4 +16,5 @@ async def build(b: Builder) -> dict:
               }
       },
   )
-  return {"session": session}
+  no_thread_session = await b.node("discord_no_thread", "Discord parity session without a thread")
+  return {"session": session, "no_thread_session": no_thread_session}

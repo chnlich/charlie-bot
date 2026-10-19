@@ -53,6 +53,13 @@ fakes:
       "/api/v10/channels/900000000000000060/messages": 403
 fixture_extras: [discord_thread]
 steps:
+  - name: reply to a session without a Discord thread answers 409
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.no_thread_session}
+      text: Synthetic Discord parity reply.
+    expect_status: 409
   - name: reply refuses while the thread has unread messages
     method: POST
     path: /api/internal/discord/reply
@@ -66,12 +73,37 @@ steps:
     json:
       session_id: ${extras.discord_thread.session}
     expect_status: 200
+  - name: read the own thread with no unread messages
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      limit: 2
+    expect_status: 200
+  - name: reply with blank text answers 422
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: "  "
+    expect_status: 422
+  - name: reply with a file-server link answers 422
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: "Synthetic report: https://example.test/absolute_filepath/tmp/synthetic-report.md"
+    expect_status: 422
   - name: reply posts once the thread is read
     method: POST
     path: /api/internal/discord/reply
     json:
       session_id: ${extras.discord_thread.session}
       text: Synthetic Discord parity reply.
+    expect_status: 200
+  - name: Discord effective prompt carries the reply segment
+    method: GET
+    path: /api/sessions/${extras.discord_thread.session}/effective-prompt
     expect_status: 200
   - name: read a linked channel without marking it
     method: POST

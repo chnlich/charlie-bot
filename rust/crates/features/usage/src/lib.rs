@@ -1,17 +1,26 @@
-//! `src/features/usage`: the quota panel (`ext_usage`) is ported. The usage page, the usage tally and the cold-storage
-//! sweep are pending, and the home card stays registered.
+//! `src/features/usage`: the quota panel and usage ledger capture are ported. The usage page and cold-storage sweep
+//! are pending, and the home card stays registered.
 
 mod api;
+pub mod capture;
 mod ext_usage;
+pub mod ledger;
+mod ndjson;
 mod poller;
+mod sql;
 
 use std::sync::Arc;
 
+use charliebot_registry::context::FeatureContext;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
+use futures_util::FutureExt;
+
+pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage};
+pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 
 /// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the `ext_usage` service in phase
-/// Ready, then the home card.
+/// Ready, the home card, then the `usage_ledger` scheduled handler.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.service(Arc::new(poller::ExtUsagePoller::default()))?;
@@ -19,7 +28,29 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Token usage by model",
     url: "/token-usage",
     description: "Tokens per model across every agent log on this host.",
-  })
+  })?;
+  registry.scheduled_handler("usage_ledger", run_usage_ledger)
+}
+
+fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<String>> {
+  async move {
+    let context_for_capture = Arc::clone(&context);
+    let written = tokio::task::spawn_blocking(move || {
+      let config = context_for_capture.config.get()?;
+      let path = default_ledger_path(&config.charliebot_home);
+      let mut ledger = UsageLedger::open(path)?;
+      capture_local(&mut ledger, config.as_ref(), context_for_capture.registry.as_ref())
+    })
+    .await??;
+    let summary = written.iter().map(|(source, count)| format!("{source} {count}")).collect::<Vec<_>>().join("; ");
+    let sources = written
+      .iter()
+      .map(|(source, count)| (source.clone(), serde_json::Value::from(*count)))
+      .collect::<serde_json::Map<_, _>>();
+    tracing::info!(sources = ?sources, "usage_ledger_handler_done");
+    Ok(summary)
+  }
+  .boxed()
 }
 
 #[cfg(test)]

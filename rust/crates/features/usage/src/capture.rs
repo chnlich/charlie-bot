@@ -1,0 +1,675 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::io::ErrorKind;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, anyhow, bail};
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_registry::Registry;
+use charliebot_registry::usage::{RecordKind, UsageRecord, UsageSource, UsageSourceImpl};
+use serde_json::{Map, Value};
+
+use crate::ledger::UsageLedger;
+use crate::ndjson;
+
+const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
+const CLC_MASTER_ACCOUNT: &str = "clc-master";
+const THREAD_MARKERS: [&[u8]; 2] = [b"\"type\": \"result\"", b"\"session_id\""];
+const MASTER_MARKERS: [&[u8]; 2] = [b"\"type\": \"context\"", b"\"type\": \"result\""];
+const RUN_MARKERS: [&[u8]; 5] =
+  [b"\"type\": \"result\"", b"\"type\":\"result\"", b"\"turn.completed\"", b"\"session_id\"", b"\"thread.started\""];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+  Native,
+  CodexRule,
+  Fallback,
+}
+
+#[derive(Default)]
+struct LiveSessions {
+  by_source: HashMap<&'static str, HashSet<String>>,
+}
+
+impl LiveSessions {
+  fn excludes(&mut self, source: &UsageSource, ids: &HashSet<String>) -> anyhow::Result<bool> {
+    if !self.by_source.contains_key(source.name) {
+      let implementation = source
+        .implementation
+        .as_ref()
+        .ok_or_else(|| anyhow!("usage source {} declares live_cli_sessions without an implementation", source.name))?;
+      if !implementation.ops().live_cli_sessions {
+        bail!("usage source {} does not declare live_cli_sessions", source.name);
+      }
+      self.by_source.insert(source.name, implementation.live_cli_sessions()?);
+    }
+    let live = self.by_source.get(source.name).expect("the source was inserted above");
+    Ok(ids.iter().any(|session| live.contains(session)))
+  }
+}
+
+pub fn capture_usage(
+  ledger: &mut UsageLedger,
+  host: &str,
+  sessions_dir: &Path,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+) -> anyhow::Result<Vec<(String, usize)>> {
+  let sources = registry.usage_sources().collect::<Vec<_>>();
+  if sources.is_empty() {
+    bail!("no usage source is registered: the entry point must call registrations.register_all()");
+  }
+  let captured = ledger.captured_sigs(host)?;
+  ledger.batch(|ledger| {
+    let mut written = Vec::new();
+    for source in sources {
+      let Some(implementation) = source.implementation.as_ref() else {
+        continue;
+      };
+      let ops = implementation.ops();
+      if ops.logs && ops.read {
+        let count = capture_source(ledger, host, config, source, implementation.as_ref(), &captured)?;
+        written.push((source.name.to_string(), count));
+      }
+    }
+    let charliebot_count = capture_charliebot(ledger, host, sessions_dir, config, registry, &captured)?;
+    let run_count = capture_runs(ledger, host, sessions_dir, config, registry, &captured)?;
+    let count = charliebot_count + run_count;
+    written.push((CHARLIE_BOT_SOURCE.to_string(), count));
+    ledger.mark_capture_finished(host)?;
+    Ok(written)
+  })
+}
+
+pub fn capture_local(
+  ledger: &mut UsageLedger,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+) -> anyhow::Result<Vec<(String, usize)>> {
+  let host = nix::unistd::gethostname()?
+    .into_string()
+    .map_err(|hostname| anyhow!("hostname is not valid UTF-8: {}", hostname.to_string_lossy()))?;
+  capture_usage(ledger, &host, &config.sessions_dir(), config, registry)
+}
+
+pub fn capture_charliebot(
+  ledger: &mut UsageLedger,
+  host: &str,
+  sessions_dir: &Path,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+  captured: &BTreeMap<String, String>,
+) -> anyhow::Result<usize> {
+  let mut live = LiveSessions::default();
+  let mut written = 0;
+  for (kind, path, metadata) in charliebot_logs(sessions_dir)? {
+    let signature = format!("p2:{}:{}", mtime_ns(&metadata), metadata.len());
+    let path_text = path_text(&path)?;
+    if captured.get(path_text) == Some(&signature) {
+      continue;
+    }
+    let records = match kind {
+      CharlieLogKind::Thread => thread_records(&path, config, registry, &mut live)?,
+      CharlieLogKind::Master => master_records(&path, config, registry)?,
+    };
+    written += ledger.record_file(host, path_text, &signature, &records)?;
+  }
+  Ok(written)
+}
+
+pub fn capture_runs(
+  ledger: &mut UsageLedger,
+  host: &str,
+  sessions_dir: &Path,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+  captured: &BTreeMap<String, String>,
+) -> anyhow::Result<usize> {
+  let mut live = LiveSessions::default();
+  let mut written = 0;
+  for (path, metadata) in run_logs(sessions_dir)? {
+    let signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+    let path_text = path_text(&path)?;
+    if captured.get(path_text) == Some(&signature) {
+      continue;
+    }
+    let objects = ndjson::parse_marker_lines(&path, &RUN_MARKERS)?;
+    let metadata = run_metadata(&path)?;
+    let backend = string_field(&metadata, "backend")?;
+    let record = backend
+      .as_deref()
+      .map(|backend| run_record(&objects, &metadata, config, registry, backend, run_id(&path)?, &mut live))
+      .transpose()?
+      .flatten();
+    let records = record.into_iter().collect::<Vec<_>>();
+    written += ledger.record_file(host, path_text, &signature, &records)?;
+  }
+  Ok(written)
+}
+
+fn capture_source(
+  ledger: &mut UsageLedger,
+  host: &str,
+  config: &CharlieBotConfig,
+  source: &UsageSource,
+  implementation: &dyn UsageSourceImpl,
+  captured: &BTreeMap<String, String>,
+) -> anyhow::Result<usize> {
+  let mut written = 0;
+  for (path, account) in implementation.logs(config).with_context(|| format!("listing {} usage logs", source.name))? {
+    let path_text = path_text(&path)?;
+    let metadata = fs::metadata(&path).with_context(|| format!("statting {}", path.display()))?;
+    let previous = captured.get(path_text);
+    let stat_signature = format!("{}:{}", mtime_ns(&metadata), metadata.len());
+    if previous == Some(&stat_signature) {
+      continue;
+    }
+    let (signature, records) = implementation
+      .read(&path, &account, previous.map(String::as_str))
+      .with_context(|| format!("reading {} usage log {}", source.name, path.display()))?;
+    if previous == Some(&signature) && records.is_empty() {
+      continue;
+    }
+    written += ledger.record_file(host, path_text, &signature, &records)?;
+  }
+  Ok(written)
+}
+
+fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, PathBuf, fs::Metadata)>> {
+  let Some(sessions) = subdirs(sessions_dir)? else {
+    return Ok(Vec::new());
+  };
+  let mut logs = Vec::new();
+  for session in sessions {
+    for (kind, relative, filename) in [
+      (CharlieLogKind::Thread, Path::new("threads"), Path::new("data/events.jsonl")),
+      (CharlieLogKind::Master, Path::new("data/master_runs"), Path::new("agent.raw.ndjson")),
+    ] {
+      let container = session.join(relative);
+      let Some(entries) = subdirs(&container)? else {
+        continue;
+      };
+      for entry in entries {
+        let path = entry.join(filename);
+        match fs::metadata(&path) {
+          Ok(metadata) => logs.push((kind, path, metadata)),
+          Err(error) if error.kind() == ErrorKind::NotFound => {}
+          Err(error) => return Err(error).with_context(|| format!("statting {}", path.display())),
+        }
+      }
+    }
+  }
+  Ok(logs)
+}
+
+fn run_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(PathBuf, fs::Metadata)>> {
+  let Some(sessions) = subdirs(sessions_dir)? else {
+    return Ok(Vec::new());
+  };
+  let mut logs = Vec::new();
+  for session in sessions {
+    let Some(runs) = subdirs(&session.join("data/runs"))? else {
+      continue;
+    };
+    for run in runs {
+      let path = run.join("agent.raw.ndjson");
+      match fs::metadata(&path) {
+        Ok(metadata) => logs.push((path, metadata)),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("statting {}", path.display())),
+      }
+    }
+  }
+  Ok(logs)
+}
+
+fn subdirs(path: &Path) -> anyhow::Result<Option<Vec<PathBuf>>> {
+  let entries = match fs::read_dir(path) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("listing {}", path.display())),
+  };
+  let mut dirs = Vec::new();
+  for entry in entries {
+    let entry = entry.with_context(|| format!("listing {}", path.display()))?;
+    let file_type = entry.file_type().with_context(|| format!("reading entry under {}", path.display()))?;
+    if file_type.is_dir() && !file_type.is_symlink() {
+      dirs.push(entry.path());
+    }
+  }
+  Ok(Some(dirs))
+}
+
+fn mtime_ns(metadata: &fs::Metadata) -> i128 {
+  i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec())
+}
+
+fn path_text(path: &Path) -> anyhow::Result<&str> {
+  path.to_str().ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))
+}
+
+fn path_parts(path: &Path) -> anyhow::Result<Vec<String>> {
+  let parts = path
+    .components()
+    .map(|component| {
+      component
+        .as_os_str()
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("path component is not valid UTF-8 in {}", path.display()))
+    })
+    .collect::<anyhow::Result<Vec<_>>>()?;
+  if parts.len() < 5 {
+    bail!("{} does not have the expected usage-log path shape", path.display());
+  }
+  Ok(parts)
+}
+
+fn thread_records(
+  path: &Path,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+  live: &mut LiveSessions,
+) -> anyhow::Result<Vec<UsageRecord>> {
+  let Some(metadata) = thread_metadata(path)? else {
+    return Ok(Vec::new());
+  };
+  let Some(backend) = string_field(&metadata, "backend")? else {
+    return Ok(Vec::new());
+  };
+  let Some((verdict, source)) = backend_verdict(&backend, config, registry)? else {
+    return Ok(Vec::new());
+  };
+  let lines = ndjson::parse_marker_lines(path, &THREAD_MARKERS)?;
+  let mut results = Vec::new();
+  let mut ids = HashSet::new();
+  for line in &lines {
+    let object = as_object(line, "thread event")?;
+    if string_field(object, "type")?.as_deref() == Some("result") {
+      results.push(object);
+    } else if let Some(session) = string_field(object, "session_id")?
+      && !session.is_empty()
+    {
+      ids.insert(session);
+    }
+  }
+  if !admitted(verdict, source, &ids, live)? {
+    return Ok(Vec::new());
+  }
+  let model = thread_row_model(&metadata, config, registry, &backend)?;
+  let parts = path_parts(path)?;
+  let session = &parts[parts.len() - 5];
+  let thread = &parts[parts.len() - 3];
+  let mut records = Vec::with_capacity(results.len());
+  for (index, result) in results.into_iter().enumerate() {
+    let usage = usage_object(result.get("usage"))?;
+    let (in_fresh, cache_write, cache_read, output, in_unsplit) = verdict_counts(usage, verdict)?;
+    let sessions = if verdict == Verdict::Native { Vec::new() } else { sorted_ids(&ids) };
+    records.push(UsageRecord {
+      record_id: format!("thread:{session}/{thread}/{index}"),
+      kind: if verdict == Verdict::Native { RecordKind::Native } else { RecordKind::Fallback },
+      source: CHARLIE_BOT_SOURCE.to_string(),
+      model: model.clone(),
+      account: backend.clone(),
+      ts: string_field(result, "timestamp")?.unwrap_or_default(),
+      in_fresh,
+      cache_write,
+      cache_read,
+      output,
+      in_unsplit,
+      sessions,
+    });
+  }
+  Ok(records)
+}
+
+fn thread_metadata(path: &Path) -> anyhow::Result<Option<Map<String, Value>>> {
+  let metadata_path = path
+    .parent()
+    .and_then(Path::parent)
+    .ok_or_else(|| anyhow!("{} has no thread metadata path", path.display()))?
+    .join("metadata.json");
+  let data = match fs::read(&metadata_path) {
+    Ok(data) => data,
+    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("reading {}", metadata_path.display())),
+  };
+  let value: Value = serde_json::from_slice(&data).with_context(|| format!("parsing {}", metadata_path.display()))?;
+  value.as_object().cloned().map(Some).ok_or_else(|| anyhow!("{}: metadata is not an object", metadata_path.display()))
+}
+
+fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -> anyhow::Result<Vec<UsageRecord>> {
+  let lines = ndjson::parse_marker_lines(path, &MASTER_MARKERS)?;
+  let mut model = None;
+  let mut last_result = None;
+  for line in &lines {
+    let object = as_object(line, "master event")?;
+    match string_field(object, "type")?.as_deref() {
+      Some("context") => {
+        if let Some(named) = string_field(object, "model")?.filter(|named| !named.is_empty()) {
+          model = Some(named);
+        }
+      }
+      Some("result") => last_result = Some(object),
+      _ => {}
+    }
+  }
+  let (Some(model), Some(result)) = (model, last_result) else {
+    return Ok(Vec::new());
+  };
+  let usage = usage_object(result.get("usage"))?;
+  let input = count(usage, "input_tokens")?;
+  let cached = count(usage, "cached_tokens")?;
+  let output = count(usage, "output_tokens")?;
+  let mut account = CLC_MASTER_ACCOUNT.to_string();
+  for option in &config.backends.options {
+    if option.model == model && run_logs_only(option, registry)? {
+      account = option.id.clone();
+      break;
+    }
+  }
+  let parts = path_parts(path)?;
+  let session = &parts[parts.len() - 5];
+  let started = &parts[parts.len() - 2];
+  Ok(vec![UsageRecord {
+    record_id: format!("master:{session}/{started}"),
+    kind: RecordKind::Native,
+    source: CHARLIE_BOT_SOURCE.to_string(),
+    model: bare_model(&model),
+    account,
+    ts: started.clone(),
+    in_fresh: subtract(input, cached, "master cached tokens")?,
+    cache_write: 0,
+    cache_read: cached,
+    output,
+    in_unsplit: 0,
+    sessions: Vec::new(),
+  }])
+}
+
+fn run_metadata(path: &Path) -> anyhow::Result<Map<String, Value>> {
+  let metadata_path =
+    path.parent().ok_or_else(|| anyhow!("{} has no run metadata path", path.display()))?.join("metadata.json");
+  let data = fs::read(&metadata_path).with_context(|| format!("reading {}", metadata_path.display()))?;
+  let value: Value = serde_json::from_slice(&data).with_context(|| format!("parsing {}", metadata_path.display()))?;
+  value.as_object().cloned().ok_or_else(|| anyhow!("{}: metadata is not an object", metadata_path.display()))
+}
+
+fn run_record(
+  objects: &[Value],
+  metadata: &Map<String, Value>,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+  backend: &str,
+  id: &str,
+  live: &mut LiveSessions,
+) -> anyhow::Result<Option<UsageRecord>> {
+  let Some((verdict, source)) = backend_verdict(backend, config, registry)? else {
+    return Ok(None);
+  };
+  let (in_fresh, cache_write, cache_read, output, kind, sessions) = match verdict {
+    Verdict::Native => {
+      let Some(result) = last_result(objects)? else {
+        return Ok(None);
+      };
+      let usage = usage_object(result.get("usage"))?;
+      let input = count(usage, "input_tokens")?;
+      let cached = count(usage, "cached_tokens")?;
+      (
+        subtract(input, cached, "native run cached tokens")?,
+        0,
+        cached,
+        count(usage, "output_tokens")?,
+        RecordKind::Native,
+        Vec::new(),
+      )
+    }
+    Verdict::CodexRule => {
+      let Some((in_fresh, cache_read, output)) = turn_sums(objects)? else {
+        return Ok(None);
+      };
+      let ids = run_session_ids(objects, metadata)?;
+      if !admitted(verdict, source, &ids, live)? {
+        return Ok(None);
+      }
+      (in_fresh, 0, cache_read, output, RecordKind::Fallback, sorted_ids(&ids))
+    }
+    Verdict::Fallback => {
+      let Some(result) = last_result(objects)? else {
+        return Ok(None);
+      };
+      let usage = usage_object(result.get("usage"))?;
+      let (in_fresh, cache_write, cache_read, output) = usage_counts(usage)?;
+      let ids = run_session_ids(objects, metadata)?;
+      if !admitted(verdict, source, &ids, live)? {
+        return Ok(None);
+      }
+      (in_fresh, cache_write, cache_read, output, RecordKind::Fallback, sorted_ids(&ids))
+    }
+  };
+  let model = thread_row_model(metadata, config, registry, backend)?;
+  Ok(Some(UsageRecord {
+    record_id: format!("run:{id}"),
+    kind,
+    source: CHARLIE_BOT_SOURCE.to_string(),
+    model,
+    account: backend.to_string(),
+    ts: string_field(metadata, "started_at")?.unwrap_or_default(),
+    in_fresh,
+    cache_write,
+    cache_read,
+    output,
+    in_unsplit: 0,
+    sessions,
+  }))
+}
+
+fn last_result(objects: &[Value]) -> anyhow::Result<Option<&Map<String, Value>>> {
+  for value in objects.iter().rev() {
+    let object = as_object(value, "run event")?;
+    if string_field(object, "type")?.as_deref() == Some("result") {
+      return Ok(Some(object));
+    }
+  }
+  Ok(None)
+}
+
+fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(i64, i64, i64)>> {
+  let mut totals = (0i64, 0i64, 0i64);
+  let mut seen = false;
+  for value in objects {
+    let object = as_object(value, "run event")?;
+    if string_field(object, "type")?.as_deref() != Some("turn.completed") {
+      continue;
+    }
+    seen = true;
+    let usage = usage_object(object.get("usage"))?;
+    let cached = count(usage, "cached_input_tokens")?;
+    totals.0 =
+      add(totals.0, subtract(count(usage, "input_tokens")?, cached, "Codex cached tokens")?, "Codex input tokens")?;
+    totals.1 = add(totals.1, cached, "Codex cached tokens")?;
+    totals.2 = add(totals.2, count(usage, "output_tokens")?, "Codex output tokens")?;
+  }
+  Ok(seen.then_some(totals))
+}
+
+fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::Result<HashSet<String>> {
+  let mut ids = HashSet::new();
+  if let Some(id) = string_field(metadata, "native_session_id")?
+    && !id.is_empty()
+  {
+    ids.insert(id);
+  }
+  for value in objects {
+    let object = as_object(value, "run event")?;
+    if let Some(id) = string_field(object, "session_id")?
+      && !id.is_empty()
+    {
+      ids.insert(id);
+    }
+    if string_field(object, "type")?.as_deref() == Some("thread.started")
+      && let Some(id) = string_field(object, "thread_id")?
+      && !id.is_empty()
+    {
+      ids.insert(id);
+    }
+  }
+  Ok(ids)
+}
+
+fn backend_verdict<'a>(
+  backend: &str,
+  config: &'a CharlieBotConfig,
+  registry: &'a Registry,
+) -> anyhow::Result<Option<(Verdict, &'a UsageSource)>> {
+  let source = if let Some(option) = config.get_backend_option(backend) {
+    registry.usage_source_for(&option.backend_type)?
+  } else {
+    registry.usage_sources().find(|source| source.id_prefixes.iter().any(|prefix| backend.starts_with(prefix)))
+  };
+  let Some(source) = source else {
+    return Ok(None);
+  };
+  let verdict = if source.run_logs_only {
+    Verdict::Native
+  } else if source.implementation.as_ref().is_some_and(|implementation| implementation.ops().live_cli_sessions) {
+    Verdict::CodexRule
+  } else {
+    Verdict::Fallback
+  };
+  Ok(Some((verdict, source)))
+}
+
+fn admitted(
+  verdict: Verdict,
+  source: &UsageSource,
+  ids: &HashSet<String>,
+  live: &mut LiveSessions,
+) -> anyhow::Result<bool> {
+  match verdict {
+    Verdict::Native => Ok(true),
+    Verdict::Fallback => Ok(!ids.is_empty()),
+    Verdict::CodexRule => Ok(!ids.is_empty() && !live.excludes(source, ids)?),
+  }
+}
+
+fn run_logs_only(option: &BackendOption, registry: &Registry) -> anyhow::Result<bool> {
+  Ok(registry.usage_source_for(&option.backend_type)?.is_some_and(|source| source.run_logs_only))
+}
+
+fn thread_row_model(
+  metadata: &Map<String, Value>,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+  backend: &str,
+) -> anyhow::Result<String> {
+  if let Some(model) = string_field(metadata, "model")?.filter(|model| !model.is_empty()) {
+    return Ok(bare_model(&model));
+  }
+  if backend.is_empty() {
+    return Ok("unknown".to_string());
+  }
+  if let Some(option) = config.get_backend_option(backend)
+    && !option.model.is_empty()
+  {
+    return Ok(bare_model(&option.model));
+  }
+  let mut prefix = "";
+  for source in registry.usage_sources() {
+    if let Some(known) = source.id_prefixes.iter().find(|prefix| backend.starts_with(**prefix)) {
+      prefix = known;
+      break;
+    }
+  }
+  Ok(backend.strip_prefix(prefix).unwrap_or(backend).to_string())
+}
+
+fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Result<(i64, i64, i64, i64, i64)> {
+  let (input, cache_write, cache_read, output) = usage_counts(usage)?;
+  match verdict {
+    Verdict::CodexRule => Ok((subtract(input, cache_read, "thread cached tokens")?, 0, cache_read, output, 0)),
+    Verdict::Native => Ok((0, 0, 0, output, input)),
+    Verdict::Fallback => Ok((input, cache_write, cache_read, output, 0)),
+  }
+}
+
+fn usage_counts(usage: &Map<String, Value>) -> anyhow::Result<(i64, i64, i64, i64)> {
+  Ok((
+    count(usage, "input_tokens")?,
+    count(usage, "cache_creation_input_tokens")?,
+    count(usage, "cache_read_input_tokens")?,
+    count(usage, "output_tokens")?,
+  ))
+}
+
+fn usage_object(value: Option<&Value>) -> anyhow::Result<&Map<String, Value>> {
+  match value {
+    None | Some(Value::Null) => Ok(empty_object()),
+    Some(Value::Object(object)) => Ok(object),
+    Some(_) => bail!("usage field is not an object"),
+  }
+}
+
+fn empty_object() -> &'static Map<String, Value> {
+  static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
+  &EMPTY
+}
+
+fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
+  match object.get(key) {
+    None | Some(Value::Null) => Ok(0),
+    Some(Value::Number(number)) => {
+      number.as_i64().ok_or_else(|| anyhow!("usage count {key} is outside the signed 64-bit range"))
+    }
+    Some(_) => bail!("usage count {key} is not an integer"),
+  }
+}
+
+fn subtract(left: i64, right: i64, label: &str) -> anyhow::Result<i64> {
+  left.checked_sub(right).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
+}
+
+fn add(left: i64, right: i64, label: &str) -> anyhow::Result<i64> {
+  left.checked_add(right).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
+}
+
+fn string_field(object: &Map<String, Value>, key: &str) -> anyhow::Result<Option<String>> {
+  match object.get(key) {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::String(value)) => Ok(Some(value.clone())),
+    Some(_) => bail!("field {key} is not a string"),
+  }
+}
+
+fn as_object<'a>(value: &'a Value, label: &str) -> anyhow::Result<&'a Map<String, Value>> {
+  value.as_object().ok_or_else(|| anyhow!("{label} is not an object"))
+}
+
+fn bare_model(model: &str) -> String {
+  model.rsplit('/').next().unwrap_or(model).to_string()
+}
+
+fn sorted_ids(ids: &HashSet<String>) -> Vec<String> {
+  let mut ids = ids.iter().cloned().collect::<Vec<_>>();
+  ids.sort();
+  ids
+}
+
+fn run_id(path: &Path) -> anyhow::Result<&str> {
+  path
+    .parent()
+    .and_then(Path::file_name)
+    .and_then(|id| id.to_str())
+    .ok_or_else(|| anyhow!("{} has no UTF-8 run id", path.display()))
+}
+
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod tests;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharlieLogKind {
+  Thread,
+  Master,
+}

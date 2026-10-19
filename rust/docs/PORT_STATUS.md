@@ -189,10 +189,11 @@ implemented.
 | service | `discord` | features/discord | todo | |
 | service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
 | service | `merge_pool` | features/trace | ported | In-process builds share one cache-key flight and a bounded build gate. |
-| service | `usage_tally` | features/usage | todo | |
+| service | `usage_tally` | features/usage | not applicable | It only preloads Python modules; Rust has no import cost to hide. |
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
 | service | `speech` | features/voice | ported | Runs sherpa model provisioning in the early background service. `qwen3_hf` provisioning is not ported; warm-up events are deferred. |
 | registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
+| registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. Python also captures opencode; Rust registers no opencode source until the agent-runtime line ports that backend. The cron scheduler that fires it is not ported yet (agent-runtime). |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
 | registration | turn contribution `memory` | features/memory | ported | Adds the memory segments of every run's managed instructions. No Rust code launches a run yet, so nothing calls it until the run launch path lands. |
 | registration | turn contribution `web_reply`: instruction segments | features/web_reply | ported | Adds `prompts/web_reply.md` to a manager run of a web session. The run launch path that assembles the segments is not ported yet. |
@@ -220,7 +221,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `/tmp/merge-chunks-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `/tmp/merge-members-*` | features/trace | not applicable | the Rust merge runs in-process (parent-approved); the cache key is unchanged |
 | `host_auth.json` | features/host_auth | ported | written atomically with `json.dumps(indent=2)` and a newline |
-| `usage/ledger.sqlite3` | features/usage | todo | |
+| `usage/ledger.sqlite3` | features/usage | ported | Rust preserves the Python schema, trigger text, queries and value formats. Python also captures opencode; Rust registers no opencode source until the agent-runtime line ports that backend. |
 | `prompt_bodies/<sha256>.md` | agent-runtime | ported | Written once by `store_prompt_body` (`charliebot-store/src/task_tree.rs:485-499`); read with the sha256 check (`charliebot-tasks/src/prompts/sources.rs:97-115`). Python: `src/runtime/task_sessions.py:1527-1538`, `src/runtime/task_prompts.py:258-270`. |
 | `memory/` | features/memory | ported | Git repository created by `ensure_store` on first use. |
 | `memory/topics` | features/memory | ported | Seeded when missing; read by the selection. |

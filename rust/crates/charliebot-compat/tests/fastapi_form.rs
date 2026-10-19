@@ -112,7 +112,7 @@ async fn fastapi_form_matches_fastapi_for_the_multipart_corpus() {
 
   let client = Client::new();
   let cases = corpus();
-  assert_eq!(cases.len(), 15);
+  assert_eq!(cases.len(), 22);
   eprintln!("multipart differential corpus: {} cases", cases.len());
   for case in &cases {
     let (python_status, python_body) = send(&client, python_address, case).await;
@@ -337,6 +337,70 @@ fn corpus() -> Vec<Case> {
       expected_status: StatusCode::BAD_REQUEST,
       cookie: None,
       compare_body: false,
+    },
+    Case {
+      name: "urlencoded body with an empty file field",
+      item_id: "present",
+      body: b"file=".to_vec(),
+      content_type: "application/x-www-form-urlencoded".to_string(),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "urlencoded body with a file value and a note",
+      item_id: "present",
+      body: b"file=x&note=y".to_vec(),
+      content_type: "application/x-www-form-urlencoded".to_string(),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "part header with an invalid character",
+      item_id: "present",
+      body: format!("--{BOUNDARY}\r\nBad Header: x\r\n\r\nv\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "part header without a colon",
+      item_id: "present",
+      body: format!("--{BOUNDARY}\r\nContent-Disposition\r\n\r\nv\r\n--{BOUNDARY}--\r\n").into_bytes(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::BAD_REQUEST,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "part without a closing boundary",
+      item_id: "present",
+      body: [file_part("file", "open.bin", b"open data"), form_part("note", b"open note")].concat(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "boundary without a following CRLF",
+      item_id: "present",
+      body: [file_part("file", "open.bin", b"open data"), format!("--{BOUNDARY}Note: x\r\n\r\nvalue\r\n").into_bytes()]
+        .concat(),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}"),
+      expected_status: StatusCode::UNPROCESSABLE_ENTITY,
+      cookie: None,
+      compare_body: false,
+    },
+    Case {
+      name: "form field with a latin-1 charset",
+      item_id: "present",
+      body: multipart_body(vec![file_part("file", "synthetic.bin", b"file data"), form_part("note", b"caf\xe9")]),
+      content_type: format!("multipart/form-data; boundary={BOUNDARY}; charset=latin-1"),
+      expected_status: StatusCode::OK,
+      cookie: None,
+      compare_body: true,
     },
   ]
 }

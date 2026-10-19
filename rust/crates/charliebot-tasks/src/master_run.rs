@@ -582,6 +582,7 @@ impl RunProcess for TurnProcess<'_> {
       request.tasks_max =
         u64::try_from(self.item.cfg.server.session_tasks_max).context("negative session task limit")?;
       request.on_event = on_event;
+      request.gate_child_until_on_spawn();
       request.on_spawn = Some({
         let tracker = Arc::clone(&self.tracker);
         let on_task_spawn = Arc::clone(&self.item.on_task_spawn);

@@ -554,13 +554,16 @@ name = "charliebot-tasks"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "charliebot-agents",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
  "charliebot-usage",
  "charliebot-web-reply",
  "futures-util",
+ "libc",
  "regex",
  "serde",
  "serde_json",
@@ -568,7 +571,9 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

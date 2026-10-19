@@ -1,9 +1,10 @@
 //! Durable task input admission, claims, finishes, and child reports.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use charliebot_core::event_types;
+use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
@@ -209,16 +210,7 @@ impl Dispatcher {
       }
       claimed.extend(run.input_event_ids);
     }
-    Ok(
-      facts
-        .input_candidates
-        .into_iter()
-        .filter(|event| {
-          let input_id = python_string(event.get("id"));
-          !facts.confirmed_input_ids.contains(&input_id) && !claimed.contains(&input_id)
-        })
-        .collect(),
-    )
+    Ok(deduplicate_pending_inputs(facts.input_candidates, &facts.confirmed_input_ids, &claimed))
   }
 
   /// Return the structural blocker for this task's pending inputs.
@@ -761,6 +753,44 @@ pub fn dispatcher(features: &FeatureContext) -> Result<Arc<Dispatcher>, StateErr
   features.startup.require::<Dispatcher>()
 }
 
+/// Return the task input type assigned to a verified operator or agent caller.
+pub fn input_event_type_for_caller(caller: &CallerIdentity) -> &'static str {
+  match caller {
+    CallerIdentity::Operator { .. } => event_types::USER,
+    CallerIdentity::Agent { .. } => event_types::AGENT_MESSAGE,
+  }
+}
+
+/// Return the source provenance for agent-relayed input, or no provenance for the operator.
+pub fn agent_provenance(caller: &CallerIdentity) -> (Option<String>, Option<String>) {
+  match caller {
+    CallerIdentity::Operator { .. } => (None, None),
+    CallerIdentity::Agent { claims } => (Some(claims.session_id.clone()), None),
+  }
+}
+
+fn deduplicate_pending_inputs(
+  candidates: Vec<Value>,
+  confirmed: &HashSet<String>,
+  claimed: &HashSet<String>,
+) -> Vec<Value> {
+  let mut positions = HashMap::new();
+  let mut pending = Vec::new();
+  for event in candidates {
+    let input_id = python_string(event.get("id"));
+    if confirmed.contains(&input_id) || claimed.contains(&input_id) {
+      continue;
+    }
+    if let Some(position) = positions.get(&input_id).copied() {
+      pending[position] = event;
+    } else {
+      positions.insert(input_id, pending.len());
+      pending.push(event);
+    }
+  }
+  pending
+}
+
 struct AdmitFields {
   input_id: Option<String>,
   uploaded_files: Option<Vec<Value>>,
@@ -846,5 +876,46 @@ fn python_string(value: Option<&Value>) -> String {
     Some(Value::Bool(true)) => "True".to_string(),
     Some(Value::Bool(false)) => "False".to_string(),
     Some(value) => value.to_string(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{agent_provenance, deduplicate_pending_inputs, input_event_type_for_caller};
+  use charliebot_core::event_types;
+  use charliebot_core::run_token::RunTokenClaims;
+  use charliebot_registry::caller::CallerIdentity;
+  use serde_json::json;
+  use std::collections::HashSet;
+
+  #[test]
+  fn pending_input_ids_keep_the_first_position_and_last_event() {
+    let pending = deduplicate_pending_inputs(
+      vec![
+        json!({"id":"same","content":"first"}),
+        json!({"id":"other","content":"other"}),
+        json!({"id":"same","content":"last"}),
+      ],
+      &HashSet::new(),
+      &HashSet::new(),
+    );
+    assert_eq!(pending, [json!({"id":"same","content":"last"}), json!({"id":"other","content":"other"})]);
+  }
+
+  #[test]
+  fn caller_input_type_and_provenance_follow_the_verified_identity() {
+    let operator = CallerIdentity::Operator { session_id: Some("synthetic-caller".to_string()) };
+    assert_eq!(input_event_type_for_caller(&operator), event_types::USER);
+    assert_eq!(agent_provenance(&operator), (None, None));
+
+    let agent = CallerIdentity::Agent {
+      claims: RunTokenClaims {
+        session_id: "synthetic-agent".to_string(),
+        run_id: "synthetic-run".to_string(),
+        agent: "synthetic-manager".to_string(),
+      },
+    };
+    assert_eq!(input_event_type_for_caller(&agent), event_types::AGENT_MESSAGE);
+    assert_eq!(agent_provenance(&agent), (Some("synthetic-agent".to_string()), None));
   }
 }

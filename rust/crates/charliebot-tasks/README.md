@@ -34,6 +34,21 @@ shutdown and re-attachment into server lifespan.
 | `autonamer::is_default_session_name`, `prefix_session_number_if_default`, and `build_groups_clause` | `src/runtime/autonamer.py:53`, `:62`, `:94` |
 | `autonamer::parse_name_and_group` and `fuzzy_match_group` | `src/runtime/autonamer.py:108`, `:141` |
 | `spawner_backends::unknown_backend_pin_refusal` | `src/runtime/spawner_backends.py:32` |
+| `spawner_backends::resolve_backend_option` | `src/runtime/spawner_backends.py:22` |
+| `spawner_backends::resolve_session_default_backend_model` | `src/runtime/spawner_backends.py:49` |
+| `task_sessions::create_retry` | `src/runtime/task_sessions.py:1328` |
+| `execution::LaunchSettlement` | `src/runtime/task_execution.py:170` |
+| `execution::TaskExecutionAdapter` and `TaskExecutionAdapter::new` | `src/runtime/task_execution.py:388-433` |
+| `TaskExecutionAdapter::call` | `src/runtime/task_execution.py:435-523` |
+| `TaskExecutionAdapter::launch`, `execute_run`, and `launch_and_settle` | `src/runtime/task_execution.py:589-605`, `:749-865`, `:1074-1124` |
+| `execution::pre_recovery_step` and crate `register` | `src/runtime/task_execution.py:2625-2638` |
+| `execution::apply_sequence_wake_duties` | `src/runtime/task_execution.py:380-386` |
+| `execution::native_continuation_matches` | `src/runtime/task_execution.py:111-129` |
+| `execution::compose_input_prompt` | `src/runtime/task_execution.py:237-280` |
+| `execution::is_out_of_space_error`, `free_disk_gib` | `src/runtime/task_execution.py:193-234` |
+| `routes::routes`, `routes::matches`, and `register` | `src/runtime/api/chat.py:48-131`; `src/runtime/api/sessions.py:1689-1715`, `:1829-1857` |
+| `dispatch::input_event_type_for_caller`, `agent_provenance` | `src/runtime/session_dispatch.py:812-850` |
+| `Dispatcher::pending_inputs` input-id deduplication | `src/runtime/session_dispatch.py:374-379` |
 
 ## Input dispatch and master triggers
 

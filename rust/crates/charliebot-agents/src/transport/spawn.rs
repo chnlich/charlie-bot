@@ -10,6 +10,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use nix::sys::signal::Signal;
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
@@ -203,6 +205,30 @@ where
     return Err(error);
   }
   Ok((spawned, identity))
+}
+
+pub(crate) async fn wait_until_stopped(child: &mut Child) -> io::Result<()> {
+  let pid = child.id().expect("spawned child has a process id");
+  let process = Pid::from_raw(i32::try_from(pid).expect("process id fits pid_t"));
+  let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+  loop {
+    match waitpid(process, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)) {
+      Ok(WaitStatus::Stopped(_, _)) => return Ok(()),
+      Ok(WaitStatus::StillAlive | WaitStatus::Continued(_)) => {}
+      Ok(status) => return Err(io::Error::other(format!("spawn gate child ended before stopping: {status:?}"))),
+      Err(nix::errno::Errno::EINTR) => continue,
+      Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
+    }
+    if tokio::time::Instant::now() >= deadline {
+      return Err(io::Error::new(io::ErrorKind::TimedOut, "spawn gate child did not stop within 5 s"));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+  }
+}
+
+pub(crate) fn continue_stopped_child(pid: u32) -> io::Result<()> {
+  let process = Pid::from_raw(i32::try_from(pid).expect("process id fits pid_t"));
+  nix::sys::signal::kill(process, Signal::SIGCONT).map_err(|error| io::Error::from_raw_os_error(error as i32))
 }
 
 /// Read and parse each complete NDJSON stream line, awaiting the caller for every valid event.

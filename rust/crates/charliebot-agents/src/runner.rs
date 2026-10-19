@@ -53,6 +53,7 @@ pub struct RunRequest {
   pub swap_max_mb: u64,
   pub tasks_max: u64,
   pub on_spawn: Option<OnSpawnFn>,
+  child_waits_for_spawn_callback: bool,
   pub on_event: EventFn,
   pub post_result_timeout: Duration,
   pub cleanup_timeout: Duration,
@@ -80,6 +81,7 @@ impl RunRequest {
       swap_max_mb: 0,
       tasks_max: 0,
       on_spawn: None,
+      child_waits_for_spawn_callback: false,
       on_event: Arc::new(|_| Box::pin(async { Ok(()) })),
       post_result_timeout: DEFAULT_POST_RESULT_TIMEOUT,
       cleanup_timeout: DEFAULT_CLEANUP_TIMEOUT,
@@ -95,6 +97,11 @@ impl RunRequest {
   ) -> anyhow::Result<Self> {
     let agent_environment = crate::agent_environment::require_agent_base_environment(&features.startup)?;
     Ok(Self::new(prompt, cwd, agent_environment.as_ref().clone(), cgroup_base, Arc::clone(&features.registry)))
+  }
+
+  /// Hold the spawned shell until `on_spawn` has durably registered its process identity.
+  pub fn gate_child_until_on_spawn(&mut self) {
+    self.child_waits_for_spawn_callback = true;
   }
 }
 
@@ -173,10 +180,18 @@ impl AgentRunner {
     );
     let final_env = backend.prepare_env(child_environment)?;
     let buffer_limit = self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT);
-    let program = command.first().context("backend command is empty")?.clone();
+    let original_program = command.first().context("backend command is empty")?.clone();
+    let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
+      let mut args =
+        vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), original_program.into()];
+      args.extend(command.iter().skip(1).cloned().map(Into::into));
+      ("/bin/sh".into(), args)
+    } else {
+      (original_program.into(), command.iter().skip(1).cloned().map(Into::into).collect())
+    };
     let spec = SpawnSpec::new(
       program,
-      command.iter().skip(1).cloned().map(Into::into).collect(),
+      args,
       Some(request.cwd),
       final_env.into_iter().map(|(key, value)| (key.into(), value.into())).collect::<HashMap<_, _>>(),
       self.launch.cgroup_session_id.clone(),
@@ -192,6 +207,9 @@ impl AgentRunner {
       if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null },
     )
     .await?;
+    if request.child_waits_for_spawn_callback {
+      spawn::wait_until_stopped(&mut spawned.child).await?;
+    }
     let stdin = spawned.child.stdin.take();
     let stdin_task = match stdin_prompt {
       Some(prompt) => {
@@ -211,6 +229,9 @@ impl AgentRunner {
       }
     })
     .await?;
+    if request.child_waits_for_spawn_callback {
+      spawn::continue_stopped_child(identity.pid)?;
+    }
 
     let cgroup = spawned.cgroup.take();
     let child = spawned.child;
@@ -507,6 +528,48 @@ mod tests {
     assert_eq!(fs::read_to_string(cwd.join("HARNESS.md")).unwrap(), "synthetic instructions");
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert!(logs.join(RAW_LOG_NAME).exists());
+  }
+
+  #[tokio::test]
+  async fn gated_child_waits_until_spawn_callback_finishes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("backend-started");
+    let runner = AgentRunner::new(
+      Box::new(ShellBackend::new("touch \"$MARKER\"; printf '%s\\n' '{\"type\":\"result\"}'")),
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let mut request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([
+        ("PATH".to_string(), "/bin".to_string()),
+        ("MARKER".to_string(), marker.to_string_lossy().into_owned()),
+      ]),
+      root.path().join("cgroups"),
+    );
+    request.gate_child_until_on_spawn();
+    let callback_saw_stopped_child = Arc::new(AtomicBool::new(false));
+    request.on_spawn = Some(Arc::new({
+      let marker = marker.clone();
+      let callback_saw_stopped_child = Arc::clone(&callback_saw_stopped_child);
+      move |_| {
+        let marker = marker.clone();
+        let callback_saw_stopped_child = Arc::clone(&callback_saw_stopped_child);
+        Box::pin(async move {
+          tokio::time::sleep(Duration::from_millis(20)).await;
+          callback_saw_stopped_child.store(!marker.exists(), Ordering::Release);
+          Ok(())
+        })
+      }
+    }));
+
+    let outcome = runner.run(request).await.unwrap();
+
+    assert_eq!(outcome.exit_code, Some(0));
+    assert!(callback_saw_stopped_child.load(Ordering::Acquire));
+    assert!(marker.exists());
   }
 
   #[tokio::test]

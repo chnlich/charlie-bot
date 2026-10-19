@@ -56,7 +56,7 @@ This crate owns the process transport below the agent backends. Raw-log children
 | `event_builders` and its `make_text_event`, `make_error_event`, `make_master_done_event`, `make_result_event`, `make_tool_use_event`, `make_tool_result_event`, `make_context_reading_event`, `make_compact_boundary_event`, `make_context_compacted_event`, and `make_context_compact_failed_event` | `src/runtime/agent_process/base.py:220-350` |
 | `runs::clean_control_characters`, `runs::select_error_hint`, and `runs::run_alive_probe` | `src/runtime/runs.py:148`, `:247` |
 | `runner::{DEFAULT_POST_RESULT_TIMEOUT, DEFAULT_CLEANUP_TIMEOUT, OnSpawnFn, EventFn}` | `src/runtime/agent_process/base.py:37`, `:660-661`, `:919`, `:936` |
-| `RunRequest`, its fields, `RunRequest::new`, and `RunRequest::from_features` | `src/runtime/agent_process/base.py:653-708`, `:936-1033` |
+| `RunRequest`, its fields, `RunRequest::new`, `RunRequest::from_features`, and `RunRequest::gate_child_until_on_spawn` | `src/runtime/agent_process/base.py:653-708`, `:919-936`, `:936-1033` |
 | `RunOutcome` and its fields, including post-result hang diagnostics | `src/runtime/agent_process/base.py:98-120`, `:703`, `:1000-1050`, `:1110` |
 | `AgentRunner`, `AgentRunner::new`, `run`, `terminate`, and `detach` | `src/runtime/agent_process/base.py:936-1050`, `:1180-1205` |
 | `python_json::{loads, loads_text, LoadError, MAX_DEPTH}` (`charliebot_compat::python_json`, re-exported here) | `json.loads` on the stored prompt snapshot in `src/runtime/api/sessions.py:1589-1688`; CPython's `_json.c` scanner and `detect_encoding` |

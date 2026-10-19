@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{StoreError, StoreResult};
 
@@ -18,7 +18,9 @@ const PREVIEW_HIDING_TYPES: &[&str] = &["message", "assistant_error", "error"];
 #[derive(Default)]
 struct StreamingState {
   channels: HashMap<String, ChannelState>,
+  sockets: HashMap<u64, mpsc::UnboundedSender<CloseRequest>>,
   next_subscriber_id: u64,
+  next_socket_id: u64,
   next_window_id: u64,
 }
 
@@ -69,6 +71,29 @@ impl Drop for Subscription {
       remove_subscriber(&self.manager, &self.channel, self.id);
       self.active = false;
     }
+  }
+}
+
+/// The shutdown's request that one open socket send its close frame. The socket replies with the send's outcome.
+pub type CloseRequest = oneshot::Sender<Result<(), String>>;
+
+/// One open WebSocket in the shutdown registry. Dropping it removes the socket from the registry.
+pub struct SocketHandle {
+  id: u64,
+  requests: mpsc::UnboundedReceiver<CloseRequest>,
+  manager: Weak<StreamingInner>,
+}
+
+impl SocketHandle {
+  /// Receive the shutdown's close request for this socket.
+  pub async fn recv_close_request(&mut self) -> Option<CloseRequest> {
+    self.requests.recv().await
+  }
+}
+
+impl Drop for SocketHandle {
+  fn drop(&mut self) {
+    remove_socket(&self.manager, self.id);
   }
 }
 
@@ -167,9 +192,35 @@ impl StreamingManager {
     Ok(())
   }
 
-  /// Close every subscription and discard every pending stream frame.
-  pub fn close_all(&self) {
-    self.inner.state.lock().expect("streaming state mutex is not poisoned").channels.clear();
+  /// Register one open socket, so that the shutdown closes it. The socket answers each close request from its handle.
+  pub fn register_socket(&self) -> SocketHandle {
+    let (sender, requests) = mpsc::unbounded_channel();
+    let id = {
+      let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
+      let id = state.next_socket_id;
+      state.next_socket_id += 1;
+      state.sockets.insert(id, sender);
+      id
+    };
+    SocketHandle { id, requests, manager: Arc::downgrade(&self.inner) }
+  }
+
+  /// Discard every pending stream frame, then close each registered socket with code 1000 and wait for its reply.
+  /// A close that fails is logged, and the next socket closes. A discarded frame's flush timer finds no window and
+  /// does nothing.
+  pub async fn close_all(&self) {
+    let sockets: Vec<_> = {
+      let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
+      for channel in state.channels.values_mut() {
+        channel.stream_window = None;
+      }
+      state.sockets.values().cloned().collect()
+    };
+    for requests in sockets {
+      if let Err(error) = close_socket(&requests).await {
+        tracing::debug!(error = %error, "ws_close_on_shutdown_failed");
+      }
+    }
   }
 }
 
@@ -186,6 +237,17 @@ pub fn serialize_frame(frame: &Value) -> StoreResult<String> {
 
 fn send_to_channel(channel: &mut ChannelState, frame: String) {
   channel.subscribers.retain(|_, sender| sender.send(frame.clone()).is_ok());
+}
+
+async fn close_socket(requests: &mpsc::UnboundedSender<CloseRequest>) -> Result<(), String> {
+  let (reply, outcome) = oneshot::channel();
+  requests.send(reply).map_err(|_| "the socket ended before the shutdown reached it".to_string())?;
+  outcome.await.map_err(|_| "the socket ended before it replied".to_string())?
+}
+
+fn remove_socket(manager: &Weak<StreamingInner>, id: u64) {
+  let Some(manager) = manager.upgrade() else { return };
+  manager.state.lock().expect("streaming state mutex is not poisoned").sockets.remove(&id);
 }
 
 fn remove_subscriber(manager: &Weak<StreamingInner>, channel: &str, id: u64) {
@@ -288,6 +350,20 @@ mod tests {
     assert!(first.recv().await.is_none());
     manager.broadcast("session:synthetic", json!({"type": "notice"})).await.unwrap();
     assert_eq!(second.recv().await.unwrap(), r#"{"type":"notice"}"#);
+  }
+
+  #[tokio::test]
+  async fn close_all_asks_the_next_socket_after_a_failed_close() {
+    let manager = StreamingManager::new();
+    let mut failing = manager.register_socket();
+    let mut closing = manager.register_socket();
+    let answer_failing = async { failing.recv_close_request().await.unwrap().send(Err("broken pipe".into())).unwrap() };
+    let answer_closing = async { closing.recv_close_request().await.unwrap().send(Ok(())).unwrap() };
+    tokio::time::timeout(Duration::from_secs(1), async {
+      tokio::join!(manager.close_all(), answer_failing, answer_closing)
+    })
+    .await
+    .expect("the shutdown asks every socket to close");
   }
 
   #[test]

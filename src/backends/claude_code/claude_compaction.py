@@ -12,12 +12,13 @@ warm cache, a context below the configured floor, or a non-Fable session runs
 without compaction; nothing is compacted speculatively at the end of a turn,
 where the cache is still warm.
 
-The module runs ``claude -p --resume <uuid> --model claude-sonnet-5`` with
-``/compact`` on stdin inside the account's login directory and judges success
-from two facts: the transcript gained a ``compact_boundary`` row, and the
-models that took part in the run — those whose token counters grew over the
-transcript's newest ``cost-state`` row — are Sonnet alone. Growth over that row
-is the fact that counts, not presence in ``modelUsage``: ``--resume`` restores
+``run_compaction`` runs a Claude Code command line with ``/compact`` on stdin
+inside the account's login directory and judges success from two facts: the
+transcript gained a ``compact_boundary`` row, and the models that took part in
+the run — those whose token counters grew over the transcript's newest
+``cost-state`` row — are the expected model family alone. ``compact_with_sonnet``
+runs the Sonnet command line, ``claude -p --resume <uuid> --model claude-sonnet-5``.
+Growth over that row is the fact that counts, not presence in ``modelUsage``: ``--resume`` restores
 the session's per-model totals from the transcript's ``cost-state`` rows, so
 the run's ``modelUsage`` always repeats the session's earlier turns' usage next
 to the run's own. Success and failure surface through the same
@@ -186,6 +187,10 @@ class CompactionOutcome:
   ok: bool
   error: str | None = None
   models: tuple[str, ...] = ()
+  # The post-compaction size the new boundary row carries; None when the row carries none.
+  post_tokens: int | None = None
+  # Cache-read tokens the run added over the transcript's restored totals, summed over ``models``.
+  cache_read_tokens: int | None = None
 
 
 def compaction_command(cc_session_id: str) -> list[str]:
@@ -236,12 +241,32 @@ def _models_that_grew(result: dict, baseline: dict) -> tuple[str, ...]:
   return tuple(grew)
 
 
-def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: int) -> CompactionOutcome:
+def _result_object(stdout: bytes) -> dict | None:
+  """The run's result object: the JSON on the last non-empty stdout line.
+
+  ``json`` output is that one line; ``stream-json`` output ends with it.
+  """
+  lines = [line for line in stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
+  if not lines:
+    return None
   try:
-    result = json.loads(stdout.decode("utf-8", errors="replace") or "null")
+    result = json.loads(lines[-1])
   except ValueError:
-    result = None
-  if not isinstance(result, dict):
+    return None
+  return result if isinstance(result, dict) else None
+
+
+def _cache_read_growth(result: dict, baseline: dict, names: tuple[str, ...]) -> int:
+  """Cache-read tokens the run added over the restored totals, summed over the models in *names*."""
+  usage = result.get("modelUsage") or {}
+  return sum(
+      usage[name].get("cacheReadInputTokens", 0) - (baseline.get(name) or {}).get("cacheReadInputTokens", 0)
+      for name in names)
+
+
+def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: int, family: str) -> CompactionOutcome:
+  result = _result_object(stdout)
+  if result is None:
     return CompactionOutcome(ok=False, error=f"exit {returncode}, no JSON result on stdout")
   models = _models_that_grew(result, baseline)
   if returncode != 0 or result.get("is_error"):
@@ -249,9 +274,114 @@ def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: i
     return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
   if after <= before:
     return CompactionOutcome(ok=False, error="transcript gained no compact_boundary row", models=models)
-  if not models or any(model_family.model_family(name) != COMPACTION_FAMILY for name in models):
+  if not models or any(model_family.model_family(name) != family for name in models):
     return CompactionOutcome(ok=False, error=f"compaction served by {', '.join(models) or 'no model'}", models=models)
-  return CompactionOutcome(ok=True, models=models)
+  return CompactionOutcome(ok=True, models=models, cache_read_tokens=_cache_read_growth(result, baseline, models))
+
+
+async def run_compaction(
+    *,
+    argv: list[str],
+    env: dict[str, str],
+    cwd: str,
+    config_dir: str | pathlib.Path,
+    cc_session_id: str,
+    family: str,
+    model: str,
+    trigger: str,
+    failure_trigger: str | None,
+    pre_tokens: int | None,
+    persist_and_broadcast: Callable[[dict], Awaitable[None]],
+    log_context: dict,
+    timeout: float = CLAUDE_COMPACTION_TIMEOUT,
+    cgroup_session_id: str | None = None,
+) -> CompactionOutcome:
+  """Run ``/compact`` on *cc_session_id*'s transcript with the command line *argv*; judge the run.
+
+  *family* is the model family that must have served the run, and *model* names the
+  compacting model on the chat event. A successful run emits one ``context_compacted``
+  with *trigger*; a failed run emits one ``context_compact_failed`` with *failure_trigger*,
+  and None there omits the key. Never raises for a failed run. A run rejected after its
+  boundary row landed (the model check) leaves the compacted transcript in place.
+
+  *cgroup_session_id* is the owning CharlieBot session, so the compaction process lands in
+  that session's cgroup; None (no session home) spawns without one.
+  """
+  transcript = claude_accounts.transcript_path(config_dir, cc_session_id)
+  if transcript is None:
+    return await _fail(
+        persist_and_broadcast,
+        log_context,
+        f"no transcript for {cc_session_id} under {config_dir}",
+        model=model,
+        trigger=failure_trigger)
+  before = count_compact_boundaries(transcript)
+  # The run's modelUsage covers the whole session (--resume restores the newest
+  # cost-state row), so the judge compares against these pre-run totals.
+  baseline = _newest_cost_state_model_usage(transcript)
+  log.info("claude_compaction_starting", cc_session_id=cc_session_id, pre_tokens=pre_tokens, **log_context)
+  cfg = config.get_config()
+  session_cgroup = process.prepare_session_cgroup(
+      cgroup_session_id,
+      memory_max_mb=cfg.server.session_memory_max_mb,
+      swap_max_mb=cfg.server.session_swap_max_mb,
+      tasks_max=cfg.server.session_tasks_max,
+  )
+  try:
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=cwd,
+        env=env,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+        preexec_fn=process.make_session_cgroup_preexec(session_cgroup.path if session_cgroup else None),
+    )
+  except OSError as exc:
+    return await _fail(
+        persist_and_broadcast, log_context, f"could not start {argv[0]}: {exc}", model=model, trigger=failure_trigger)
+  try:
+    stdout, stderr = await asyncio.wait_for(proc.communicate(COMPACT_PROMPT.encode("utf-8")), timeout)
+  except TimeoutError:
+    if proc.pid is not None:
+      process.kill_process_group(proc.pid)
+    await proc.wait()
+    return await _fail(
+        persist_and_broadcast, log_context, f"timed out after {int(timeout)} s", model=model, trigger=failure_trigger)
+  after = count_compact_boundaries(transcript)
+  outcome = _judge(proc.returncode or 0, stdout, baseline, before, after, family)
+  if not outcome.ok:
+    stderr_tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
+    log.warning(
+        "claude_compaction_failed",
+        cc_session_id=cc_session_id,
+        error=outcome.error,
+        models=list(outcome.models),
+        stderr=stderr_tail,
+        **log_context,
+    )
+    await persist_and_broadcast(
+        base.make_context_compact_failed_event(outcome.error, model=model, trigger=failure_trigger))
+    return outcome
+  # The boundary row's payload travels whole; the caller's own reading still wins
+  # for the pre count (today's precedence). When the row carries no readable
+  # compactMetadata the payload stays None and the line renders from what the
+  # caller contributed alone.
+  compact_metadata = _newest_boundary_compact_metadata(transcript)
+  if pre_tokens is not None:
+    compact_metadata = {**(compact_metadata or {}), ET.COMPACT_PRE_TOKENS: pre_tokens}
+  post_tokens = compact_metadata.get(ET.COMPACT_POST_TOKENS) if compact_metadata else None
+  log.info(
+      "claude_compaction_done",
+      cc_session_id=cc_session_id,
+      pre_tokens=compact_metadata.get(ET.COMPACT_PRE_TOKENS) if compact_metadata else None,
+      post_tokens=post_tokens,
+      models=list(outcome.models),
+      **log_context,
+  )
+  await persist_and_broadcast(base.make_context_compacted_event(trigger, compact_metadata, model=model))
+  return dataclasses.replace(outcome, post_tokens=post_tokens)
 
 
 async def compact_with_sonnet(
@@ -267,87 +397,40 @@ async def compact_with_sonnet(
 ) -> bool:
   """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.
 
-  Emits one ``context_compacted`` (``model`` = Sonnet; ``compact_metadata`` is
-  the new boundary row's payload, with the caller's pre-compaction reading
-  winning for ``pre_tokens``) or one ``context_compact_failed`` (``error``
-  names the cause). Never raises for a failed run; a run rejected after its
-  boundary row landed (the model check) leaves the compacted transcript in
-  place.
-
-  *cgroup_session_id* is the owning CharlieBot session, so the compaction
-  process lands in that session's cgroup; None (no session home)
-  spawns exactly as before.
+  Emits one ``context_compacted`` (``model`` = Sonnet; ``compact_metadata`` is the new
+  boundary row's payload, with the caller's pre-compaction reading winning for
+  ``pre_tokens``) or one ``context_compact_failed`` (``error`` names the cause). Never
+  raises for a failed run; see :func:`run_compaction`.
   """
-  transcript = claude_accounts.transcript_path(config_dir, cc_session_id)
-  if transcript is None:
-    return await _fail(persist_and_broadcast, log_context, f"no transcript for {cc_session_id} under {config_dir}")
-  before = count_compact_boundaries(transcript)
-  # The run's modelUsage covers the whole session (--resume restores the newest
-  # cost-state row), so the judge compares against these pre-run totals.
-  baseline = _newest_cost_state_model_usage(transcript)
-  cmd = compaction_command(cc_session_id)
-  log.info("claude_compaction_starting", cc_session_id=cc_session_id, pre_tokens=pre_tokens, **log_context)
-  cfg = config.get_config()
-  session_cgroup = process.prepare_session_cgroup(
-      cgroup_session_id,
-      memory_max_mb=cfg.server.session_memory_max_mb,
-      swap_max_mb=cfg.server.session_swap_max_mb,
-      tasks_max=cfg.server.session_tasks_max,
-  )
-  try:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=cwd,
-        env=compaction_env(config_dir),
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-        preexec_fn=process.make_session_cgroup_preexec(session_cgroup.path if session_cgroup else None),
-    )
-  except OSError as exc:
-    return await _fail(persist_and_broadcast, log_context, f"could not start {cmd[0]}: {exc}")
-  try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(COMPACT_PROMPT.encode("utf-8")), timeout)
-  except TimeoutError:
-    if proc.pid is not None:
-      process.kill_process_group(proc.pid)
-    await proc.wait()
-    return await _fail(persist_and_broadcast, log_context, f"timed out after {int(timeout)} s")
-  after = count_compact_boundaries(transcript)
-  outcome = _judge(proc.returncode or 0, stdout, baseline, before, after)
-  if not outcome.ok:
-    stderr_tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
-    log.warning(
-        "claude_compaction_failed",
-        cc_session_id=cc_session_id,
-        error=outcome.error,
-        models=list(outcome.models),
-        stderr=stderr_tail,
-        **log_context,
-    )
-    await persist_and_broadcast(base.make_context_compact_failed_event(outcome.error, model=COMPACTION_MODEL))
-    return False
-  # The boundary row's payload travels whole; the caller's own reading still wins
-  # for the pre count (today's precedence). When the row carries no readable
-  # compactMetadata the payload stays None and the line renders from what the
-  # caller contributed alone.
-  compact_metadata = _newest_boundary_compact_metadata(transcript)
-  if pre_tokens is not None:
-    compact_metadata = {**(compact_metadata or {}), ET.COMPACT_PRE_TOKENS: pre_tokens}
-  log.info(
-      "claude_compaction_done",
+  outcome = await run_compaction(
+      argv=compaction_command(cc_session_id),
+      env=compaction_env(config_dir),
+      cwd=cwd,
+      config_dir=config_dir,
       cc_session_id=cc_session_id,
-      pre_tokens=compact_metadata.get(ET.COMPACT_PRE_TOKENS) if compact_metadata else None,
-      post_tokens=compact_metadata.get(ET.COMPACT_POST_TOKENS) if compact_metadata else None,
-      models=list(outcome.models),
-      **log_context,
+      family=COMPACTION_FAMILY,
+      model=COMPACTION_MODEL,
+      # The chat line has always named this compaction "manual". Its failure carries no
+      # trigger: a failure that names one renders as that trigger's compaction, the idle line.
+      trigger="manual",
+      failure_trigger=None,
+      pre_tokens=pre_tokens,
+      persist_and_broadcast=persist_and_broadcast,
+      log_context=log_context,
+      timeout=timeout,
+      cgroup_session_id=cgroup_session_id,
   )
-  await persist_and_broadcast(base.make_context_compacted_event("manual", compact_metadata, model=COMPACTION_MODEL))
-  return True
+  return outcome.ok
 
 
-async def _fail(persist_and_broadcast: Callable[[dict], Awaitable[None]], log_context: dict, error: str) -> bool:
+async def _fail(
+    persist_and_broadcast: Callable[[dict], Awaitable[None]],
+    log_context: dict,
+    error: str,
+    *,
+    model: str,
+    trigger: str | None,
+) -> CompactionOutcome:
   log.warning("claude_compaction_failed", error=error, **log_context)
-  await persist_and_broadcast(base.make_context_compact_failed_event(error, model=COMPACTION_MODEL))
-  return False
+  await persist_and_broadcast(base.make_context_compact_failed_event(error, model=model, trigger=trigger))
+  return CompactionOutcome(ok=False, error=error)

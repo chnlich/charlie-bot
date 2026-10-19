@@ -2,11 +2,14 @@
 
 import pathlib
 import re
+import subprocess
+import sys
 from typing import Any
 
 import pytest
 import yaml
 
+from rust.parity import parity
 from rust.parity import scenario_file
 
 
@@ -199,6 +202,125 @@ def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> N
 def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}], **fields)
   assert scenario.name == "loader"
+
+
+def test_allowed_baseline_values_rule_loads(tmp_path: pathlib.Path) -> None:
+  scenario = _load(
+      tmp_path,
+      [{
+          "name": "event comparison",
+          "method": "GET",
+          "path": "/api/auth/status"
+      }],
+      comparison_rules=[
+          {
+              "allowed_baseline_values_for_one_event_field":
+                  {
+                      "event": {
+                          "type": "run_finished",
+                          "match_fields": {
+                              "run_id": "synthetic-run"
+                          },
+                      },
+                      "field": "outcome",
+                      "allowed_baseline_values": ["failed", "interrupted"],
+                      "required_candidate_value": "interrupted",
+                  },
+          }
+      ],
+  )
+  assert scenario.comparison_rules[0]["allowed_baseline_values_for_one_event_field"]["field"] == "outcome"
+
+
+def test_http_status_and_shape_compare_mode_loads(tmp_path: pathlib.Path) -> None:
+  scenario = _load(
+      tmp_path, [
+          {
+              "name": "value varies",
+              "method": "POST",
+              "path": "/api/sessions/synthetic/runs",
+              "expect_status": 422,
+              "compare": "status_and_shape",
+          }
+      ])
+  assert scenario.steps[0].compare == "status_and_shape"
+
+
+@pytest.mark.parametrize("expect_status", [None, 200, 399])
+def test_http_status_and_shape_requires_error_status(tmp_path: pathlib.Path, expect_status: int | None) -> None:
+  raw_step = {
+      "name": "malformed input",
+      "method": "POST",
+      "path": "/api/sessions/synthetic/runs",
+      "compare": "status_and_shape",
+  }
+  if expect_status is not None:
+    raw_step["expect_status"] = expect_status
+  with pytest.raises(scenario_file.ScenarioError, match="requires an expect_status of at least 400"):
+    _load(tmp_path, [raw_step])
+
+
+def _process_step(action: str = "stop", **fields: Any) -> dict[str, Any]:
+  return {"kind": "process", "name": "synthetic process", "action": action, "process_id": "worker", **fields}
+
+
+@pytest.mark.parametrize("action", ["restart", "", None, 1])
+def test_process_rejects_action_other_than_start_or_stop(tmp_path: pathlib.Path, action: Any) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match="process action must be start or stop"):
+    _load(tmp_path, [_process_step(action=action)])
+
+
+@pytest.mark.parametrize("process_id", ["", None, 7, []])
+def test_process_rejects_empty_or_non_string_id(tmp_path: pathlib.Path, process_id: Any) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match="process_id must be a non-empty string"):
+    _load(tmp_path, [_process_step(process_id=process_id)])
+
+
+@pytest.mark.parametrize("delay_seconds", [-0.1, float("nan"), float("inf"), True, "soon", None])
+def test_process_rejects_invalid_delay(tmp_path: pathlib.Path, delay_seconds: Any) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match="delay_seconds must be nonnegative"):
+    _load(tmp_path, [_process_step(delay_seconds=delay_seconds)])
+
+
+def test_process_rejects_delay_on_start(tmp_path: pathlib.Path) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match="delay_seconds must be nonnegative and only applies to stop"):
+    _load(tmp_path, [_process_step("start", delay_seconds=1, capture={"pid": "pid"})])
+
+
+@pytest.mark.parametrize("capture", [{}, {"pid": "process_id"}, {"first": "pid", "second": "pid"}])
+def test_process_start_requires_exactly_one_pid_capture(tmp_path: pathlib.Path, capture: dict[str, str]) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match="start requires one capture mapping to 'pid'"):
+    _load(tmp_path, [_process_step("start", capture=capture)])
+
+
+def test_process_rejects_capture_on_stop(tmp_path: pathlib.Path) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match="stop cannot capture process fields"):
+    _load(tmp_path, [_process_step("stop", capture={"pid": "pid"})])
+
+
+def test_process_rejects_unknown_key(tmp_path: pathlib.Path) -> None:
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape("unknown keys ['unexpected']")):
+    _load(tmp_path, [_process_step(unexpected="value")])
+
+
+def test_scenario_cleanup_stops_leftover_synthetic_process_and_reports_it(tmp_path: pathlib.Path) -> None:
+  side = parity.Side("baseline", parity.servers.Tree(label="baseline", root=tmp_path), port=18600)
+  process = subprocess.Popen(
+      [sys.executable, "-c", "import time; time.sleep(60)"],
+      stdin=subprocess.DEVNULL,
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL)
+  side.processes["leftover"] = process
+
+  try:
+    cleanup_lines, notes = parity._cleanup_scenario([side])
+    assert process.poll() is not None
+    assert cleanup_lines == ["baseline synthetic process 'leftover' needed cleanup at scenario end"]
+    assert notes == []
+  finally:
+    if process.poll() is None:
+      process.kill()
+      process.wait()
 
 
 @pytest.mark.parametrize(

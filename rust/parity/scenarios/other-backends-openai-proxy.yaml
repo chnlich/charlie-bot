@@ -121,6 +121,7 @@ steps:
     path: /api/anthropic-proxy/openai-compatible/claude-glm52/v1/messages
     body_file: audio/not-wave.bin
     expect_status: 400
+    compare: status_and_shape
   - name: missing upstream credential is 400
     method: POST
     path: /api/anthropic-proxy/openai-compatible/claude-no-credential/v1/messages

@@ -266,6 +266,28 @@ Scenario fields:
   `Builder.node` and appear under `sessions`.
 - `voice_models: true` links the three sherpa entries from `--voice-models` into `<tree>/home/models/`. The
   source directory is read only.
+- `comparison_rules` adds a scoped rule to the existing home comparison. Use
+  `allowed_baseline_values_for_one_event_field` when Python can produce several values for one event field:
+
+  ```yaml
+  comparison_rules:
+    - allowed_baseline_values_for_one_event_field:
+        event:
+          type: run_finished
+          match_fields: {run_id: "${capture.run_id}"}
+        field: outcome
+        allowed_baseline_values: [failed, interrupted]
+        required_candidate_value: interrupted
+  ```
+
+  When either side contains a matching event, the harness requires exactly one matching event on each side. The
+  baseline value must be allowed, and the candidate value must equal `required_candidate_value`. In
+  `--python-vs-python` mode, both values must be in
+  `allowed_baseline_values`. After validation, the comparison omits only the named event field and accepts either
+  order for that run's `run_finished` and matching `master_done`. It normalizes those two events' generated ids by
+  event type and omits their position-derived `event_index`; other event fields and events keep comparing. If an HTTP
+  response contains the same match fields and named field, the rule validates and omits only that response field too;
+  all other response fields keep comparing.
 
 Each fake-agent start names its executable, lists its steps and gives its exit code. A start without a matching
 entry prints the stand-in line and records `scripted: false`.

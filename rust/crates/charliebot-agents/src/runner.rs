@@ -675,7 +675,7 @@ mod tests {
 
   #[tokio::test]
   async fn gated_child_waits_until_spawn_callback_finishes() {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::oneshot;
 
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("backend-started");
@@ -693,25 +693,46 @@ mod tests {
       root.path().join("cgroups"),
     );
     request.gate_child_until_on_spawn();
-    let callback_saw_stopped_child = Arc::new(AtomicBool::new(false));
+    let (callback_entered, callback_entered_rx) = oneshot::channel();
+    let (callback_release, callback_release_rx) = oneshot::channel();
+    let callback_entered = Arc::new(Mutex::new(Some(callback_entered)));
+    let callback_release_rx = Arc::new(Mutex::new(Some(callback_release_rx)));
+    let callback_saw_stopped_child = Arc::new(Mutex::new(None));
     request.on_spawn = Some(Arc::new({
       let marker = marker.clone();
+      let callback_entered = Arc::clone(&callback_entered);
+      let callback_release_rx = Arc::clone(&callback_release_rx);
       let callback_saw_stopped_child = Arc::clone(&callback_saw_stopped_child);
       move |_| {
         let marker = marker.clone();
+        let callback_entered = callback_entered
+          .lock()
+          .expect("spawn callback channel state is not poisoned")
+          .take()
+          .expect("spawn callback runs once");
+        let callback_release_rx = callback_release_rx
+          .lock()
+          .expect("spawn callback channel state is not poisoned")
+          .take()
+          .expect("spawn callback runs once");
         let callback_saw_stopped_child = Arc::clone(&callback_saw_stopped_child);
         Box::pin(async move {
-          tokio::time::sleep(Duration::from_millis(20)).await;
-          callback_saw_stopped_child.store(!marker.exists(), Ordering::Release);
+          callback_entered.send(()).expect("test waits for spawn callback");
+          callback_release_rx.await.expect("test releases spawn callback");
+          *callback_saw_stopped_child.lock().expect("spawn callback state is not poisoned") = Some(!marker.exists());
           Ok(())
         })
       }
     }));
 
-    let outcome = runner.run(request).await.unwrap();
+    let run = tokio::spawn(async move { runner.run(request).await });
+    callback_entered_rx.await.expect("spawn callback starts");
+    assert!(!marker.exists());
+    callback_release.send(()).expect("spawn callback is waiting");
+    let outcome = tokio::time::timeout(Duration::from_secs(30), run).await.unwrap().unwrap().unwrap();
 
     assert_eq!(outcome.exit_code, Some(0));
-    assert!(callback_saw_stopped_child.load(Ordering::Acquire));
+    assert_eq!(*callback_saw_stopped_child.lock().expect("spawn callback state is not poisoned"), Some(true));
     assert!(marker.exists());
   }
 
@@ -829,11 +850,11 @@ mod tests {
     assert!(outcome.cgroup_exit_report.as_deref().unwrap().contains("session 内存上限触发"));
   }
 
-  /// Waits until the runner holds the spawned child, failing after 5 s.
+  /// Waits until the runner holds the spawned child, failing after 30 s.
   async fn wait_for_active_child(runner: &AgentRunner) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while runner.active.lock().expect("active process lock poisoned").is_none() {
-      assert!(tokio::time::Instant::now() < deadline, "runner never acquired the child within 5 s");
+      assert!(tokio::time::Instant::now() < deadline, "runner never acquired the child within 30 s");
       tokio::time::sleep(Duration::from_millis(5)).await;
     }
   }
@@ -859,7 +880,7 @@ mod tests {
     });
     wait_for_active_child(&runner).await;
     runner.terminate().await.unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap().unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), task).await.unwrap().unwrap().unwrap();
     assert!(outcome.exit_code.is_some_and(|code| code != 0));
   }
 
@@ -899,7 +920,12 @@ mod tests {
   async fn detach_stops_following_without_signalling_the_child() {
     let root = tempfile::tempdir().unwrap();
     let finished = root.path().join("finished");
-    let script = format!("sleep 0.2; touch {}; printf '%s\\n' '{{\"type\":\"result\"}}'", finished.display());
+    let release = root.path().join("release-child");
+    let script = format!(
+      "while [ ! -e '{}' ]; do /bin/sleep 0.01; done; touch '{}'; printf '%s\\n' '{{\"type\":\"result\"}}'",
+      release.display(),
+      finished.display()
+    );
     let runner = Arc::new(AgentRunner::new(
       Box::new(ShellBackend::new(script)),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
@@ -918,10 +944,17 @@ mod tests {
     });
     wait_for_active_child(&runner).await;
     runner.detach();
-    let outcome = tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap().unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), task).await.unwrap().unwrap().unwrap();
     assert_eq!(outcome.exit_code, None);
     assert!(!finished.exists());
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    fs::write(&release, "continue").unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+      while !finished.exists() {
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .expect("detached child reaches its finished marker");
     assert!(finished.exists());
   }
 

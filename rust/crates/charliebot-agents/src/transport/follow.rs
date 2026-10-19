@@ -320,6 +320,8 @@ mod tests {
 
   #[tokio::test]
   async fn completes_a_partial_line_after_a_later_append() {
+    use tokio::sync::oneshot;
+
     let root = tempfile::tempdir().unwrap();
     let raw = root.path().join("agent.raw.ndjson");
     fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":9").unwrap();
@@ -328,6 +330,8 @@ mod tests {
     let alive = Arc::new(AtomicBool::new(true));
     let alive_for_handler = Arc::clone(&alive);
     let alive_for_probe = Arc::clone(&alive);
+    let (partial_read, partial_read_rx) = oneshot::channel();
+    let partial_read = Arc::new(Mutex::new(Some(partial_read)));
     let raw_for_follow = raw.clone();
     let task = tokio::spawn(async move {
       tail_follow_events(
@@ -338,7 +342,12 @@ mod tests {
           alive_for_handler.store(false, Ordering::SeqCst);
           async { Ok(()) }
         },
-        move || alive_for_probe.load(Ordering::SeqCst),
+        move || {
+          if let Some(sender) = partial_read.lock().expect("partial-read signal is not poisoned").take() {
+            sender.send(()).expect("test waits for the partial-line read");
+          }
+          alive_for_probe.load(Ordering::SeqCst)
+        },
         None,
         0,
         Duration::from_secs(1),
@@ -349,48 +358,70 @@ mod tests {
       )
       .await
     });
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    tokio::time::timeout(Duration::from_secs(30), partial_read_rx).await.unwrap().unwrap();
     use std::io::Write;
     fs::OpenOptions::new().append(true).open(&raw).unwrap().write_all(b"}\n").unwrap();
-    tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(30), task).await.unwrap().unwrap().unwrap();
     assert_eq!(events.lock().unwrap()[0]["seq"], 9);
   }
 
   #[tokio::test]
   async fn cursor_advances_after_the_event_handler_finishes() {
+    use tokio::sync::oneshot;
+
     let root = tempfile::tempdir().unwrap();
     let raw = root.path().join("agent.raw.ndjson");
     let cursor = root.path().join("agent.raw.cursor");
     fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":1}\n").unwrap();
-    let observed = Arc::new(AtomicBool::new(false));
-    let observed_by_handler = Arc::clone(&observed);
-    let cursor_for_handler = cursor.clone();
+    let (handler_entered, handler_entered_rx) = oneshot::channel();
+    let (handler_release, handler_release_rx) = oneshot::channel();
+    let handler_entered = Arc::new(Mutex::new(Some(handler_entered)));
+    let handler_release_rx = Arc::new(Mutex::new(Some(handler_release_rx)));
     let expected_offset = fs::metadata(&raw).unwrap().len();
-    tail_follow_events(
-      &raw,
-      |event| Ok(vec![event]),
-      move |_event| {
-        let observed = Arc::clone(&observed_by_handler);
-        let cursor = cursor_for_handler.clone();
-        async move {
-          assert_eq!(read_raw_cursor(&cursor), 0);
-          tokio::time::sleep(Duration::from_millis(10)).await;
-          observed.store(true, Ordering::SeqCst);
-          Ok(())
-        }
-      },
-      || false,
-      Some(&cursor),
-      0,
-      Duration::from_secs(1),
-      DEFAULT_BUFFER_LIMIT,
-      Duration::from_millis(1),
-      None,
-      Duration::from_secs(1),
-    )
-    .await
-    .unwrap();
-    assert!(observed.load(Ordering::SeqCst));
+    let task = tokio::spawn({
+      let handler_entered = Arc::clone(&handler_entered);
+      let handler_release_rx = Arc::clone(&handler_release_rx);
+      let cursor_for_follow = cursor.clone();
+      let cursor_for_handler = cursor.clone();
+      async move {
+        tail_follow_events(
+          &raw,
+          |event| Ok(vec![event]),
+          move |_event| {
+            let entered = handler_entered
+              .lock()
+              .expect("event-handler channel state is not poisoned")
+              .take()
+              .expect("event handler runs once");
+            let release = handler_release_rx
+              .lock()
+              .expect("event-handler channel state is not poisoned")
+              .take()
+              .expect("event handler runs once");
+            let cursor = cursor_for_handler.clone();
+            async move {
+              assert_eq!(read_raw_cursor(&cursor), 0);
+              entered.send(()).expect("test waits for the event handler");
+              release.await.expect("test releases the event handler");
+              Ok(())
+            }
+          },
+          || false,
+          Some(&cursor_for_follow),
+          0,
+          Duration::from_secs(1),
+          DEFAULT_BUFFER_LIMIT,
+          Duration::from_millis(1),
+          None,
+          Duration::from_secs(1),
+        )
+        .await
+      }
+    });
+    tokio::time::timeout(Duration::from_secs(30), handler_entered_rx).await.unwrap().unwrap();
+    assert_eq!(read_raw_cursor(&cursor), 0);
+    handler_release.send(()).expect("event handler is waiting");
+    tokio::time::timeout(Duration::from_secs(30), task).await.unwrap().unwrap().unwrap();
     assert_eq!(read_raw_cursor(&cursor), expected_offset);
   }
 

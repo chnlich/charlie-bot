@@ -172,6 +172,35 @@ def _substitute(side: Side, value: object, manifest: dict) -> object:
   return scenario_file.substitute(value, manifest, side.captures, str(side.tree.root), str(side.tree.home))
 
 
+def _event_field_rules(
+    scenario: scenario_file.Scenario,
+    sides: list[Side],
+    manifest: dict,
+) -> tuple[tuple[compare.EventFieldRule, compare.EventFieldRule], ...]:
+  rules = []
+  rule_name = "allowed_baseline_values_for_one_event_field"
+  for raw_rule in scenario.comparison_rules:
+    raw = raw_rule[rule_name]
+    try:
+      baseline = _substitute(sides[0], raw, manifest)
+      candidate = _substitute(sides[1], raw, manifest)
+    except scenario_file.UnresolvedReferenceError:
+      continue
+
+    def build_rule(value: dict) -> compare.EventFieldRule:
+      event = value["event"]
+      return compare.EventFieldRule(
+          event_type=event["type"],
+          match_fields=event["match_fields"],
+          field=value["field"],
+          allowed_baseline_values=tuple(value["allowed_baseline_values"]),
+          required_candidate_value=value["required_candidate_value"],
+      )
+
+    rules.append((build_rule(baseline), build_rule(candidate)))
+  return tuple(rules)
+
+
 def _prepare_contexts(sides: list[Side], snapshots: list[compare.Snapshot]) -> None:
   for side, snapshot in zip(sides, snapshots, strict=True):
     extra_files = ()
@@ -555,6 +584,7 @@ def _run_handover_step(
     manifest: dict,
     before: list[compare.Snapshot],
     handover_argv: list[list[str]],
+    candidate_is_python: bool,
 ) -> tuple[StepResult, list[compare.Snapshot]]:
   if step.agent_after_stop is None:
     raise RuntimeError(f"handover step {step.name!r} has no validated agent_after_stop value")
@@ -584,7 +614,10 @@ def _run_handover_step(
   after = _settle_sides(sides)
   _prepare_contexts(sides, after)
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
-  lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
+  lines.extend(
+      compare.delta_diff(
+          deltas[0], deltas[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
+          candidate_is_python))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
   lines.extend(_exit_lines(sides, f"during handover step {step.name!r}"))
   result = StepResult(
@@ -616,9 +649,10 @@ def _unresolved_result(
 
 def _run_step(
     scenario: scenario_file.Scenario, sides: list[Side], step: scenario_file.Step, manifest: dict,
-    before: list[compare.Snapshot], handover_argv: list[list[str]]) -> tuple[StepResult, list[compare.Snapshot]]:
+    before: list[compare.Snapshot], handover_argv: list[list[str]],
+    candidate_is_python: bool) -> tuple[StepResult, list[compare.Snapshot]]:
   if step.kind == "handover":
-    return _run_handover_step(scenario, sides, step, manifest, before, handover_argv)
+    return _run_handover_step(scenario, sides, step, manifest, before, handover_argv, candidate_is_python)
   lines: list[str] = []
   responses: list[compare.Response | None] = []
   record_marks = _recording_marks(sides)
@@ -709,12 +743,24 @@ def _run_step(
     if step.kind == "http" and step.http_compare == "status_and_shape":
       lines.extend(compare.status_and_shape_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
     else:
-      lines.extend(compare.response_diff(step.route, baseline, candidate, sides[0].ctx, sides[1].ctx))
+      lines.extend(
+          compare.response_diff(
+              step.route,
+              baseline,
+              candidate,
+              sides[0].ctx,
+              sides[1].ctx,
+              event_field_rules=_event_field_rules(scenario, sides, manifest),
+              candidate_is_python=candidate_is_python,
+          ))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
   deltas = None
   if not step.defer_files:
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
-    lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
+    lines.extend(
+        compare.delta_diff(
+            deltas[0], deltas[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
+            candidate_is_python))
   if step.kind == "http":
     for side, response in zip(sides, responses, strict=True):
       if response is not None:
@@ -828,6 +874,7 @@ def _run_scenario(
     guard_report: guard.Report,
     certificates: authority.Certificates | None,
     voice_model_dir: pathlib.Path,
+    candidate_is_python: bool,
 ) -> list[StepResult]:
   log_dir = work_dir / "logs"
   log_dir.mkdir(parents=True)
@@ -893,7 +940,7 @@ def _run_scenario(
       if unresolved is not None:
         results.append(unresolved)
         continue
-      result, before = _run_step(scenario, sides, step, manifest, before, handover_argv)
+      result, before = _run_step(scenario, sides, step, manifest, before, handover_argv, candidate_is_python)
       results.append(result)
       if not result.passed and result.responses:
         _save_responses(log_dir, number, sides, result)
@@ -909,8 +956,12 @@ def _run_scenario(
         StepResult(
             scenario.name,
             "server shutdown and fake-agent cleanup",
-            "(shutdown)", (None, None),
-            [*cleanup_lines, *compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx)],
+            "(shutdown)", (None, None), [
+                *cleanup_lines,
+                *compare.delta_diff(
+                    deltas[0], deltas[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
+                    candidate_is_python),
+            ],
             compare.describe_delta(deltas[0]), [],
             notes=refusal_notes))
   for side in sides:
@@ -1013,7 +1064,7 @@ def main() -> int:
         with servers.pick_ports(2) as ports:
           scenario_results = _run_scenario(
               scenario, scenario_dir, ports, candidate_first, candidate_handover, direction, args.tamper, guard_report,
-              certificates, voice_model_dir)
+              certificates, voice_model_dir, args.python_vs_python)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

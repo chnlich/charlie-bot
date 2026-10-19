@@ -210,7 +210,7 @@ where
 pub(crate) async fn wait_until_stopped(child: &mut Child) -> io::Result<()> {
   let pid = child.id().expect("spawned child has a process id");
   let process = Pid::from_raw(i32::try_from(pid).expect("process id fits pid_t"));
-  let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+  let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
   loop {
     match waitpid(process, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)) {
       Ok(WaitStatus::Stopped(_, _)) => return Ok(()),
@@ -220,7 +220,7 @@ pub(crate) async fn wait_until_stopped(child: &mut Child) -> io::Result<()> {
       Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
     }
     if tokio::time::Instant::now() >= deadline {
-      return Err(io::Error::new(io::ErrorKind::TimedOut, "spawn gate child did not stop within 5 s"));
+      return Err(io::Error::new(io::ErrorKind::TimedOut, "spawn gate child did not stop within 30 s"));
     }
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
   }
@@ -408,8 +408,8 @@ mod tests {
     fs::create_dir(&cgroup_path).unwrap();
     fs::write(cgroup_path.join("cgroup.procs"), "").unwrap();
     let spec = SpawnSpec::new(
-      "/bin/sh",
-      ["-c", "sleep 0.05; ps -o ni= -p $$"].into_iter().map(OsString::from).collect(),
+      "/bin/sleep",
+      ["30"].into_iter().map(OsString::from).collect(),
       None,
       HashMap::new(),
       Some("test1234-session".into()),
@@ -422,11 +422,10 @@ mod tests {
     let pid = spawned.child.id().unwrap();
     assert_eq!(fs::read_to_string(cgroup_path.join("cgroup.procs")).unwrap(), pid.to_string());
     assert!(spawned.cgroup.is_some());
-    let mut stdout = spawned.child.stdout.take().unwrap();
-    let mut nice = String::new();
-    stdout.read_to_string(&mut nice).await.unwrap();
-    assert_eq!(spawned.child.wait().await.unwrap().code(), Some(0));
-    assert_eq!(nice.trim(), "10");
+    let nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
+    spawned.child.kill().await.unwrap();
+    spawned.child.wait().await.unwrap();
+    assert_eq!(nice, 10);
   }
 
   #[tokio::test]

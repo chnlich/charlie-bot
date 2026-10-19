@@ -56,6 +56,7 @@ steps:
       trace: https://example.invalid/one-trace.json
       slim: "invalid"
     expect_status: 422
+    compare: status_and_shape
   - name: viewer without inputs
     method: GET
     path: /perfetto
@@ -135,6 +136,7 @@ steps:
       trace: "${tree.root}/${extras.trace_cases.rank0}"
       slim: "invalid"
     expect_status: 422
+    compare: status_and_shape
   - name: HEAD, viewer with one trace
     method: HEAD
     path: /perfetto

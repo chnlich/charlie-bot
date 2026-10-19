@@ -291,7 +291,7 @@ def cases_file() -> dict:
   return cases
 
 
-def python_answer(helper: str, case: dict):
+def python_answer(helper: str, case: dict) -> object:
   platform = PLATFORMS.get(case.get("platform"))
   if helper == "chunk_text":
     return thread_entry.chunk_text(case["text"], case["limit"])

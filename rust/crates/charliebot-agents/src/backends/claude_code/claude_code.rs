@@ -316,6 +316,89 @@ impl AgentBackend for ClaudeCodeBackend {
   }
 }
 
+/// Every Claude Code model-selection variable pinned to one model: the main model, the opus, sonnet and haiku slot
+/// defaults, and the subagent model. An unset slot falls back to a CLI default, so the endpoint backend sets all five.
+pub fn claude_model_env(model: &str) -> Env {
+  [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]
+  .into_iter()
+  .map(|name| (name.to_string(), model.to_string()))
+  .collect()
+}
+
+/// Claude Code pointed at an Anthropic-compatible endpoint by environment. The endpoint URL and bearer token ride
+/// `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, and `claude_model_env` pins every model-selection variable, so the
+/// command carries no `--model` flag. Each backend type that names its endpoint builds one of these.
+pub struct AnthropicEndpointBackend {
+  backend: ClaudeCodeBackend,
+  base_url: String,
+  auth_token: String,
+  model: String,
+}
+
+impl AnthropicEndpointBackend {
+  /// The backend for `model` at `base_url`, authenticated with `auth_token`. `launch` carries the per-launch
+  /// arguments of [`ClaudeCodeBackend`], such as the session id and the instructions file.
+  pub fn new(
+    base_url: String,
+    auth_token: String,
+    model: String,
+    claude_config_dir: Option<String>,
+    launch: LaunchArgs,
+  ) -> anyhow::Result<Self> {
+    let backend = ClaudeCodeBackend::from_launch(None, None, None, false, claude_config_dir, launch)?;
+    Ok(Self { backend, base_url, auth_token, model })
+  }
+}
+
+impl AgentBackend for AnthropicEndpointBackend {
+  fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+    self.backend.instructions_target()
+  }
+
+  fn prepare_transport(&mut self, log_dir: &std::path::Path) -> anyhow::Result<()> {
+    self.backend.prepare_transport(log_dir)
+  }
+
+  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
+    self.backend.build_command(prompt)
+  }
+
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+    let mut env = self.backend.prepare_env(env)?;
+    env.insert("ANTHROPIC_BASE_URL".to_string(), self.base_url.clone());
+    env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), self.auth_token.clone());
+    env.extend(claude_model_env(&self.model));
+    Ok(env)
+  }
+
+  fn stdin_prompt(&self, prompt: &str) -> Option<String> {
+    self.backend.stdin_prompt(prompt)
+  }
+
+  fn translator(&self) -> Box<dyn Translate> {
+    self.backend.translator()
+  }
+
+  fn transport(&self) -> TransportKind {
+    self.backend.transport()
+  }
+
+  fn one_shot_text<'a>(
+    &'a mut self,
+    prompt: &'a str,
+    system: &'a str,
+    timeout: Option<Duration>,
+  ) -> BoxFuture<'a, anyhow::Result<String>> {
+    self.backend.one_shot_text(prompt, system, timeout)
+  }
+}
+
 struct IdentityTranslate;
 
 impl Translate for IdentityTranslate {
@@ -426,6 +509,31 @@ mod tests {
     assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
     assert_eq!(settings, r#"{"disableClaudeAiConnectors":true,"fastMode":true}"#);
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
+  }
+
+  #[test]
+  fn anthropic_endpoint_sets_the_endpoint_and_pins_every_model_variable_without_a_flag() {
+    let backend = AnthropicEndpointBackend::new(
+      "http://localhost:8123/api/anthropic-proxy/openai-compatible/cc-synthetic".to_string(),
+      "synthetic-token".to_string(),
+      "synthetic/model-1".to_string(),
+      None,
+      LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+    )
+    .unwrap();
+    let command = backend.build_command("prompt").unwrap();
+    assert!(!command.iter().any(|value| value == "--model"));
+    assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
+
+    let env = backend.prepare_env(Env::from([("PATH".to_string(), "/synthetic/bin".to_string())])).unwrap();
+    assert_eq!(env["ANTHROPIC_BASE_URL"], "http://localhost:8123/api/anthropic-proxy/openai-compatible/cc-synthetic");
+    assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "synthetic-token");
+    for name in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"] {
+      assert_eq!(env[name], "synthetic/model-1");
+    }
+    assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "synthetic/model-1");
+    assert_eq!(env["CLAUDE_CODE_SUBAGENT_MODEL"], "synthetic/model-1");
+    assert_eq!(env["PATH"], "/synthetic/bin");
   }
 
   #[test]

@@ -21,9 +21,9 @@ pub mod usage_sweep;
 mod backend;
 
 pub use backend::{
-  ClaudeCodeBackend, DISALLOWED_TOOLS_FLAG, HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_FILE_NAME,
-  INSTRUCTIONS_WRITTEN_EVENT, SKIP_PERMISSIONS_FLAG, claude_child_env, claude_reading_limits,
-  claude_reading_limits_from, headless_claude_env, out_of_family_served_models,
+  AnthropicEndpointBackend, ClaudeCodeBackend, DISALLOWED_TOOLS_FLAG, HEADLESS_DISALLOWED_TOOLS,
+  INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT, SKIP_PERMISSIONS_FLAG, claude_child_env, claude_model_env,
+  claude_reading_limits, claude_reading_limits_from, headless_claude_env, out_of_family_served_models,
 };
 
 use std::path::PathBuf;

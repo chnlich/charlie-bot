@@ -1,5 +1,6 @@
 # The explain routes: one divider's generation starts one agent run, a second request joins it while it is pending, and
-# the reads reap a stale pending entry the way a restarted server leaves one.
+# the reads reap a stale pending entry the way a restarted server leaves one. A malformed body answers 422 before the session
+# check; a body with a wrong field type or a missing field answers the session refusal first when the session is missing.
 stage: features
 name: features-explain
 fixture_extras: [explain_cases]
@@ -98,6 +99,44 @@ steps:
     path: /api/sessions/${missing_session}/explain
     json: {event_index: 3, backend: claude-sonnet}
     expect_status: 404
+  - name: malformed JSON for a missing session is refused before the session check
+    method: POST
+    path: /api/sessions/${missing_session}/explain
+    headers: {Content-Type: application/json}
+    body_file: explain-malformed.json
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type for a missing session answers the session refusal
+    method: POST
+    path: /api/sessions/${missing_session}/explain
+    json: {event_index: "soon", backend: claude-sonnet}
+    expect_status: 404
+    compare: status_and_shape
+  - name: a missing field for a missing session answers the session refusal
+    method: POST
+    path: /api/sessions/${missing_session}/explain
+    json: {backend: claude-sonnet}
+    expect_status: 404
+    compare: status_and_shape
+  - name: malformed JSON for an existing session is refused
+    method: POST
+    path: /api/sessions/${sessions.explain}/explain
+    headers: {Content-Type: application/json}
+    body_file: explain-malformed.json
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type for an existing session is refused
+    method: POST
+    path: /api/sessions/${sessions.explain}/explain
+    json: {event_index: "soon", backend: claude-sonnet}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a missing field for an existing session is refused
+    method: POST
+    path: /api/sessions/${sessions.explain}/explain
+    json: {backend: claude-sonnet}
+    expect_status: 422
+    compare: status_and_shape
   - name: request an explanation of a divider whose agent answers empty
     method: POST
     path: /api/sessions/${sessions.explain}/explain

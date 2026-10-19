@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+use charliebot_core::event_types;
+
 use crate::aggregator::MessageAggregator;
 use crate::projection::MessageProjection;
 use crate::streaming::{self, Subscription};
@@ -87,7 +89,7 @@ impl Store {
     self.stamp_event_index(session_id, &mut event)?;
     self.feed_and_broadcast(session_id, &event, &aggregator).await?;
 
-    if event.get("type").and_then(Value::as_str) == Some("master_done")
+    if event.get("type").and_then(Value::as_str) == Some(event_types::MASTER_DONE)
       && let Some(meta) = meta
     {
       for work in self.runtime_hooks.after_turn(meta, event.clone(), self.cfg.clone()) {

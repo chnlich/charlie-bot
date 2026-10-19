@@ -25,7 +25,17 @@ total_executions=0
 
 for pkg in "$@"; do
   mapfile -t bins < <(cargo test --no-run -p "$pkg" --message-format=json 2>/dev/null \
-    | grep -o '"executable":"[^"]*"' | cut -d'"' -f4 | sort -u)
+    | python3 -c '
+import json, sys
+for line in sys.stdin:
+  try:
+    artifact = json.loads(line)
+  except ValueError:
+    continue
+  kinds = artifact.get("target", {}).get("kind", []) if artifact.get("reason") == "compiler-artifact" else []
+  if ("test" in kinds or "lib" in kinds) and artifact.get("executable"):
+    print(artifact["executable"])
+' | sort -u)
   if [ "${#bins[@]}" -eq 0 ]; then
     echo "stress-tests: no test binaries found for $pkg" >&2
     exit 1

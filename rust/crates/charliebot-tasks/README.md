@@ -311,9 +311,10 @@ before they can pass, and the rest need a store fixture with live run processes.
 `tests/worker.rs` ports the cases of `tests/test_worker_account_relay.py`, `tests/test_worker_backend_build.py`,
 `tests/test_worker_diagnostics.py`, `tests/test_worker_event_line.py` and `tests/test_worker_quota_scan.py`, and the
 non-Claude build case of `tests/test_backend_hooks.py`. Each test carries its `// Python:` comment. It runs scripted
-`/bin/sh` processes, which the process-group guard kills when a test ends, and it starts no agent CLI. Twenty of the
-twenty-one cases pass. `test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes` is not ported:
-it swaps `claude_accounts.select` for a stub, and `select` is a `charliebot-agents` function with no seam in this crate.
-Two cases differ in what they check. The hang-diagnostics case checks the written file's shape rather than its content,
-since the runner captures the diagnostics itself. The compaction case checks the events log, not a spy on
-`compact_with_sonnet`.
+`/bin/sh` processes, which the process-group guard kills when a test ends, and it starts no agent CLI. All twenty-one
+cases pass. Three differ in how they observe the Python behavior. The falls-back case raises the below-line target's
+reading from a subscriber on the thread channel, when the safe point's `user` frame is broadcast. The watch has observed
+that event by then, and the move reads the pool only after the process exits, so the reading rises between the gate and
+the move. The Python case stubs `claude_accounts.select` instead. The hang-diagnostics case checks the written file's
+shape rather than its content, since the runner captures the diagnostics itself. The compaction case checks the events
+log, not a spy on `compact_with_sonnet`.

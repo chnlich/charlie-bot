@@ -706,9 +706,43 @@ async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
 
 // Python: tests/test_worker_account_relay.py::test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes
 //
-// Not ported: the case swaps `claude_accounts.select` for a stub that raises the target's reading between the gate and
-// the move. `select` is a function of `charliebot-agents`, and the port has no seam at that point, so this case has no
-// Rust test.
+// The Python case raises the target's reading between the gate and the move by stubbing `select`. Here a subscriber on
+// the thread channel raises it when the safe point's `user` frame is broadcast: the watch has already observed that
+// event (the gate), and the move reads the pool only after the process has exited.
+#[tokio::test]
+async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  // ext-1 is the gate's below-line destination; ext-2 already sits at the line.
+  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.85), Some(reading_at(0)));
+  claude_accounts::observe_rate_limit(&state, "ext-2", &rate_limit_info("allowed", 0.92), Some(reading_at(0)));
+  let scripts =
+    Scripts::new(vec![holds(&[rate_limit("allowed_warning", 0.92), user_tool_result()]), exits(&[result()], 0)]);
+  let config = pooled_config(&root, &["main", "ext-1", "ext-2"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let mut frames = setup.features.store.subscribe("t1");
+  let raised_state = Arc::clone(&state);
+  let raise = tokio::spawn(async move {
+    while let Some(frame) = frames.recv().await {
+      let frame: Value = serde_json::from_str(&frame)?;
+      if frame["type"] == ET::USER {
+        claude_accounts::observe_rate_limit(&raised_state, "ext-1", &rate_limit_info("allowed_warning", 0.95), None);
+        return anyhow::Ok(true);
+      }
+    }
+    anyhow::Ok(false)
+  });
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  assert_eq!(task_worker.run().await?, 0);
+
+  assert!(raise.await??, "the safe point's frame reached the subscriber");
+  // The below-line move finds no account, so the regular select lands ext-2, at the line, over ext-1's 0.95.
+  let builds = scripts.builds();
+  assert_eq!((account_label(&builds[1]), task_worker.account_relays()), (Some("ext-2"), 1));
+  Ok(())
+}
 
 // Python: tests/test_worker_account_relay.py::test_worker_warning_relays_past_the_cap_with_below_line_destinations
 #[tokio::test]

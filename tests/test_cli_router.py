@@ -279,7 +279,7 @@ def test_a_malformed_router_yaml_exits_non_zero_naming_the_file_and_field(
   assert captured.out == ""
   assert captured.err.startswith("router: ")
   assert str(path) in captured.err
-  assert "url" in captured.err
+  assert "jev.url" in captured.err
 
 
 def test_router_yaml_that_is_not_yaml_exits_non_zero_naming_the_file(

@@ -132,7 +132,10 @@ Known-alive symbols:
   100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to
-  delete.
+  delete. The same marker takes a second form: an unreachable `yield` after a `raise` in
+  `tests/test_task_run_backend_types.py` and `tests/test_turn_contributions.py`, which vulture
+  reads as unreachable code after `raise` at 100% confidence; the yield is again what keeps the
+  fake backend's `run()` an async generator, as each site's inline comment states.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
   `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,
@@ -513,7 +516,10 @@ Known-alive symbols:
   reached by string via `@pytest.mark.usefixtures("empty_registry")`; the
   `tests/test_turn_contributions.py` copy, injected by parameter name for its registry-reset side
   effect) and `usage_services_only` (`tests/test_ext_usage.py`, same usefixtures string form) —
-  pytest fixtures, same class as the `_clean_ceiling_env` entry above. Vulture flags each
+  pytest fixtures, same class as the `_clean_ceiling_env` entry above. `probe_slots`
+  (`tests/test_metadata_slots.py`) draws the same pair of flags: six tests request it through
+  `@pytest.mark.usefixtures("probe_slots")` and the `create_env` fixture takes it as an unread
+  injected parameter. Vulture flags each
   definition as an unused function and, at the parameter-injection sites, each unread parameter
   as an unused variable at 100% confidence; `stop_servers` (`tests/test_opencode_backend.py`)
   draws the same pair of flags as a `pytest_asyncio` fixture the file's tests request by
@@ -538,7 +544,10 @@ Known-alive symbols:
   `metadata_slot_registration.register_metadata_fields` through the `_probe(...)` prefix
   (`f"{__name__}:{name}"`), and the registry imports the class from that string on the first
   metadata_slots call, same class as the `PoolNodeMetadata` entry above. Vulture flags each class
-  as unused at 60% confidence.
+  as unused at 60% confidence. The probe classes' fields draw their own flags: `probe_tag`
+  (`ProbeThreadFields`) and `late_note` (`LateSessionFields`) are read through
+  `metadata_slots.set_fields` keyword arguments and `check_registered`'s dict, never as
+  attributes, so vulture flags each field as an unused variable at 60% confidence.
 - `CronSequenceController` (`src/features/cron/sequence_controller.py`) and
   `ImproveSequenceController` (`src/features/improve/sequence_controller.py`) — reached by
   string: each package's `register()` passes `"src.features.<package>.sequence_controller:<class>"`
@@ -555,3 +564,39 @@ Known-alive symbols:
   and those registration strings, so vulture flags each as an unused class at 60% confidence. Same
   string-registration class as the `AccountsConfig` entry above; `DiscordConfig` is the class the
   `_reject_legacy_allow_list` entry's validator lives on.
+- `context_refs` (`TaskSpec` in `src/infra/models.py`), `reviewer_context_file`
+  (`DelegateInvocationMetadata` in `src/infra/models.py`), `next_before_id`
+  (`ArchivedSessionsPage` in `src/runtime/api/sessions.py`), `stopped_runs`
+  (`CancelSessionResponse` in `src/runtime/api/sessions.py`), `tree_revision`
+  (`TreePageResponse` in `src/runtime/api/sessions.py`), `child_count` and
+  `open_descendant_count` (`SessionRow` in `src/infra/models.py`), `to_session`,
+  `winner_generation` and `client_ts` (`SwitchEventRequest` in `src/features/diag/api.py`), and
+  `pending_trigger_count` (`SessionMetadata` in `src/infra/models.py`, written by the sidebar
+  probe in `src/runtime/session_sidebar.py`) — pydantic model fields nothing in Python
+  attribute-reads; every consumer reads the serialized key.
+  `web/static/js/sidebar/modals.js` renders `t.context_refs`,
+  `web/static/js/chat/rendering.js` reads `invocation.reviewer_context_file`,
+  `web/static/js/sidebar/archived.js` passes `page.next_before_id` into the next archive
+  request, the session CLI reads `result.get("stopped_runs")`
+  (`src/runtime/cli/session.py`), `web/static/js/sidebar/session-view.js` fills the
+  switch-event body the diag handler logs whole through `req.model_dump()`, and
+  `web/static/js/sidebar/status.js` with `web/static/js/chat/triggers-tray.js` read
+  `pending_trigger_count` off status payloads. `child_count`/`open_descendant_count` ride every
+  tree-page row and the tree-changed signal, `tree_revision` rides every tree page, and the
+  tree and archive tests read those keys off the decoded bodies. Vulture flags each field
+  declaration (plus the sidebar probe's attribute write) as an unused variable or attribute.
+- `subtree_prompt` and `node_prompt` (`PatchSessionTaskRequest` in `src/infra/models.py`) —
+  read by string: `task_sessions.patch_task` tests `req.model_fields_set` for the two field
+  names and reads each value through `getattr(req, f"{scope}_prompt")`, and the task-prompt
+  tests construct the request with each keyword. Vulture flags each field as an unused variable
+  at 60% confidence.
+- `prompt_rules` (`SessionDetailResponse` in `src/runtime/api/sessions.py`) — kept
+  deliberately: the detail builder writes `prompt_rule_summaries` into every session-detail
+  payload, and the field's comment names its reader, the later Task/Context UI. Nothing reads
+  the attribute today, so vulture flags the declaration as an unused variable at 60%
+  confidence.
+- `stray` (`tests/test_metadata_slots.py`) and `unregistered_key`
+  (`tests/test_sessions_status_scope.py`) — attribute writes of keys no owner registers on an
+  `extra="allow"` metadata model; the same tests read each key back through `model_dump_json()`
+  key order and `model_extra` when asserting the copy and ordering rules. Vulture flags each
+  write as an unused attribute at 60% confidence.

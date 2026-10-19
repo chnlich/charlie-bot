@@ -12,7 +12,7 @@ use std::path::Path;
 use std::str::Utf8Error;
 
 use charliebot_compat::python_json;
-use charliebot_core::pyfmt;
+use charliebot_core::pyfmt::{self, JsonStyle};
 use serde_json::{Map, Value, json};
 
 use crate::plan_paths;
@@ -214,7 +214,12 @@ pub fn read_plans_tolerant(plans_path: &Path, session_id: &str) -> Result<PlansR
 /// read's answer.
 pub(crate) fn load_registry(plans_path: &Path) -> Result<Value, LoadFailure> {
   let bytes = fs::read(plans_path).map_err(|error| LoadFailure::Caught(os_error_text(&error, plans_path)))?;
-  let text = std::str::from_utf8(&bytes).map_err(|error| LoadFailure::Caught(utf8_error_text(&error, &bytes)))?;
+  decode_registry(&bytes)
+}
+
+/// `read_text(encoding="utf-8")` of the file's bytes, then `json.loads`: the registry document, or the decode failure.
+pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
+  let text = std::str::from_utf8(bytes).map_err(|error| LoadFailure::Caught(utf8_error_text(&error, bytes)))?;
   // Python's text-mode read translates every line ending to "\n", and the JSON error positions count that text.
   let text = text.replace("\r\n", "\n").replace('\r', "\n");
   python_json::loads_text(&text).map_err(|error| match error {
@@ -224,6 +229,16 @@ pub(crate) fn load_registry(plans_path: &Path) -> Result<Value, LoadFailure> {
     }
   })
 }
+
+/// `json_utils.write_json_atomically(path, registry, indent=2)`: the bytes of a registry file. The fork copy and the
+/// plan verbs both write through it, so a registry has one spelling on disk.
+pub(crate) fn registry_text(registry: &Value) -> String {
+  pyfmt::json_dumps(registry, &REGISTRY_JSON)
+}
+
+/// `json.dumps(registry, ensure_ascii=False, indent=2)`: the registry's JSON style.
+const REGISTRY_JSON: JsonStyle =
+  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
 /// The items `for item in value` yields for a registry list. A dict yields its keys and a string its characters. A
 /// number, `null` or a boolean is not iterable, which raises `TypeError` out of the read.

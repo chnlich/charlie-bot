@@ -122,8 +122,8 @@ impl AgentBackend for ScriptedAgent {
     _prompt: &'a str,
     _system: &'a str,
     _timeout: Option<std::time::Duration>,
-  ) -> BoxFuture<'a, anyhow::Result<String>> {
-    Box::pin(async { bail!("native one-shot is unused in this test") })
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    Some(Box::pin(async { bail!("native one-shot is unused in this test") }))
   }
 }
 

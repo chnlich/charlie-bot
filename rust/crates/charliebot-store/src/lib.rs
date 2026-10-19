@@ -20,6 +20,8 @@ pub mod streaming;
 mod task_tree;
 mod thinking;
 pub mod trigger_files;
+#[cfg(feature = "write-faults")]
+pub mod write_faults;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use control::ControlGuard;

@@ -954,6 +954,8 @@ impl Store {
   fn write_run_record(&self, session_id: &str, run: &RunRecord) -> StoreResult<()> {
     require_session_match(session_id, run)?;
     let path = self.run_metadata_path(session_id, &run.id);
+    #[cfg(feature = "write-faults")]
+    self.fail_run_record_write(run, &path)?;
     let parent = path.parent().expect("run metadata path has a parent");
     fs::create_dir_all(parent).map_err(|error| path_error(parent, error))?;
     let value = serde_json::to_value(run).map_err(|error| StoreError::new(error.to_string()))?;

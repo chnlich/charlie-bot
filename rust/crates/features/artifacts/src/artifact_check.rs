@@ -852,9 +852,10 @@ mod tests {
   use std::fs;
   use std::path::{Path, PathBuf};
 
-  use serde_json::Value;
+  use serde_json::{Value, json};
 
   use super::*;
+  use crate::test_support::chrome_program;
 
   fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repository").to_path_buf()
@@ -902,13 +903,10 @@ mod tests {
   }
 
   fn stub_chrome(directory: &Path, height: i32) -> PathBuf {
-    let path = directory.join(format!("chrome-{height}.sh"));
-    fs::write(&path, format!("#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n")).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&path, permissions).unwrap();
-    path
+    chrome_program(
+      directory,
+      json!([{"stdout": format!("probe output <pre id=\"page-height\">{height}</pre>\n")}, {"exit": 0}]),
+    )
   }
 
   fn outcome_value(outcome: &AssertionOutcome) -> Value {
@@ -1032,12 +1030,7 @@ mod tests {
   fn plan_page_height_probe_is_removed_after_a_renderer_launch_failure() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
-    let chrome = directory.path().join("chrome-fails.sh");
-    fs::write(&chrome, "#!/bin/sh\necho failure >&2\nexit 1\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = fs::metadata(&chrome).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&chrome, permissions).unwrap();
+    let chrome = chrome_program(directory.path(), json!([{"stderr": "failure\n"}, {"exit": 1}]));
     let outcomes = run_assertions_sync("plan", &page, chrome.to_str().unwrap(), &repo_root()).unwrap();
     assert!(!by_name(&outcomes, PAGE_HEIGHT)[0].passed);
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);

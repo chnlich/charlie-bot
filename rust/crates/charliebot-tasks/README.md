@@ -77,6 +77,35 @@ shutdown and re-attachment into server lifespan.
 | `completion::pause_reason` | `src/runtime/task_completion.py:1005` |
 | `git::git_verify_commit_landed` | `src/infra/git.py:683` |
 
+## Git worktree and remote helpers
+
+The git helpers task runs and the improve loop call. One subprocess path (`git::git_proc_bytes`, Python
+`_git_proc_bytes`) serves the whole module; `git_verify_commit_landed` runs on it too. The
+`test-hooks` feature shrinks the worktree-add and per-attempt remote limits and injects a test
+git program; production builds keep the Python values.
+
+| Rust item | Python source |
+| --- | --- |
+| `git::git_worktree_dir_name` | `src/infra/git.py:32` |
+| `git::git_current_branch` | `src/infra/git.py:37` |
+| `git::BaseBranchResolutionError` | `src/infra/git.py:57` |
+| `git::BaseResolution` and its fields | `src/infra/git.py:68` |
+| `git::git_stdout` (crate-public) | `src/infra/git.py:102` |
+| `git::git_rev_parse_optional` (crate-public) | `src/infra/git.py:118` |
+| `git::git_remote_default_branch_and_tip` | `src/infra/git.py:173` |
+| `git::resolve_base_branch` | `src/infra/git.py:200` |
+| `git::git_create_worktree` | `src/infra/git.py:360` |
+| `git::git_worktree_remove` | `src/infra/git.py:532` |
+| `git::git_worktree_remove_reporting` | `src/infra/git.py:575` |
+| `git::git_worktree_prune` | `src/infra/git.py:623` |
+| `git::git_rev_parse` | `src/infra/git.py:658` |
+| `git::git_push_branch` | `src/infra/git.py:727` |
+| `git::git_push_refspec` | `src/infra/git.py:733` |
+| `git::SUBPROCESS_GIT_READ_TIMEOUT_ASYNC` | `src/infra/timeouts.py:14` |
+| `git::SUBPROCESS_GIT_WRITE_TIMEOUT` | `src/infra/timeouts.py:20` |
+| `git::SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT` | `src/infra/timeouts.py:27` |
+| `git::GIT_REMOTE_MAX_ATTEMPTS` | `src/infra/timeouts.py:28` |
+
 ## Input dispatch and master triggers
 
 `dispatch::Dispatcher` owns durable task inputs, run claims and child reports over the shared store. Its executor and

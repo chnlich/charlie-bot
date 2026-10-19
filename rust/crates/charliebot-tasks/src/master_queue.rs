@@ -389,7 +389,6 @@ impl MasterQueue {
       }
     };
 
-    self.state.lock().expect("master queue mutex is not poisoned").active_procs.remove(&session_id);
     let (callbacks, auto_trigger, active) = retired;
     if let Err(error) = &active {
       tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "task_tree_activity_failed");
@@ -413,6 +412,7 @@ impl MasterQueue {
     state.consumer_cancel.remove(session_id);
     state.current_items.remove(session_id);
     state.running_turns.remove(session_id);
+    state.active_procs.remove(session_id);
     let queued = state.session_queues.remove(session_id).unwrap_or_default();
     for mut item in queued {
       if let Some(completion) = item.completion.take() {

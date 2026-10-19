@@ -690,4 +690,22 @@ mod tests {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body.as_ref(), b"Internal Server Error");
   }
+
+  #[tokio::test]
+  async fn chat_upload_reports_an_unwritable_destination_as_save_failure() {
+    let (_home, features) = feature_context();
+    const SESSION_ID: &str = "synthetic-upload-unwritable";
+    create_upload_session(&features, SESSION_ID).await;
+    let config = features.config.get().unwrap();
+    let uploads_dir = config.sessions_dir().join(SESSION_ID).join("uploads");
+    std::fs::create_dir_all(uploads_dir.join("synthetic.txt")).unwrap();
+
+    let response = routes(&features)
+      .oneshot(multipart_upload(&format!("/api/chat/{SESSION_ID}/upload"), "synthetic.txt", b"content"))
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({ "detail": "Failed to save uploaded file" }));
+  }
 }

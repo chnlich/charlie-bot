@@ -36,6 +36,11 @@ BASE_COMMAND: list[str] = [
     HEADLESS_DISALLOWED_TOOLS,
 ]
 
+# Moves per-machine sections (cwd, env info, memory paths, git status) out of the system prompt into
+# the first user message, so the system prompt stays stable across sessions and cross-run
+# prompt-cache reuse improves. Only the Claude Code CLI family supports this flag.
+EXCLUDE_DYNAMIC_SECTIONS_FLAG = "--exclude-dynamic-system-prompt-sections"
+
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
 # of each reported shape is the whole alarm and every repeat re-fires it.

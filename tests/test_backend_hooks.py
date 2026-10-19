@@ -16,7 +16,7 @@ import uuid
 import conftest
 import pytest
 
-from src.backends.claude_code import claude_accounts, claude_lifecycle, claude_relay
+from src.backends.claude_code import claude_accounts, claude_code, claude_relay
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, worker
@@ -118,7 +118,7 @@ async def test_cli_variant_turn_checks_the_transcript_and_adds_the_dynamic_secti
   assert present.resume_id == CC_ID
   assert fresh.resume_id is None
   for launch in (missing, present, fresh):
-    assert launch.backend_kwargs == {"extra_flags": [claude_lifecycle.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    assert launch.backend_kwargs == {"extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
 
 
 @pytest.mark.parametrize("backend_type", CLI_VARIANT_TYPES)
@@ -159,7 +159,7 @@ async def test_non_pooled_cc_claude_turn_checks_the_transcript_and_selects_no_ac
   assert (missing.resume_id, present.resume_id) == (None, CC_ID)
   for launch in (missing, present):
     assert launch.account_label is None
-    assert launch.backend_kwargs == {"extra_flags": [claude_lifecycle.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    assert launch.backend_kwargs == {"extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
   assert lifecycle.watch(_turn_context(cfg, option, CC_ID, tmp_path), present) is None
 
 

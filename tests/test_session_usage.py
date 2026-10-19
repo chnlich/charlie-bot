@@ -1,5 +1,6 @@
 """Focused tests for session usage resolution."""
 
+import datetime
 import json
 import pathlib
 from typing import Any
@@ -7,7 +8,7 @@ from typing import Any
 import conftest
 import pytest
 
-from src.backends.claude_code import claude_code, claude_launch
+from src.backends.claude_code import claude_code, claude_compaction, claude_launch
 from src.backends.codex import codex_usage
 from src.infra import config, models
 from src.runtime.agent_process import base
@@ -295,3 +296,31 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: pathlib.Path) -> None:
       profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=conftest.OPUS_BACKEND_ID)
   _write_session(session_blocks, empty_meta, [])
   assert await session_blocks.anchors.resolve_session_usage(empty_meta.id, empty_meta) is None
+
+
+# ---------------------------------------------------------------------------
+# A context_compacted event's post_tokens is the claude reading after it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_compacted_post_tokens_becomes_the_claude_reading(tmp_path: pathlib.Path) -> None:
+  """The reading after an idle compaction is the post-compaction size, and a Fable session at that
+  size stays under its expired-cache floor even when its cache has expired."""
+  session_blocks, meta = _session_rig(tmp_path, "session-idle-fold", "Idle fold", conftest.OPUS_BACKEND_ID)
+  _write_session(
+      session_blocks, meta, [
+          _assistant_event("claude-fable-5-1", input_tokens=281_000),
+          base.make_context_compacted_event("idle", {"post_tokens": 9_111}, model="claude-fable-5-1"),
+      ])
+
+  usage = await _resolved_usage(session_blocks, meta)
+
+  assert usage["context_tokens"] == 9_111
+  last_request = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
+  assert claude_compaction.expired_cache_compaction_wanted(
+      _build_cfg(tmp_path),
+      "claude-fable-5-1",
+      usage["context_tokens"],
+      last_request - datetime.timedelta(minutes=61),
+      now=last_request) is False

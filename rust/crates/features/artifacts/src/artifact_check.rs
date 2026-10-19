@@ -534,9 +534,9 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
       ),
     )]);
   }
-  let height = match measure_page_height(&chrome_bin, context.artifact) {
+  let height = match measure_page_height(&chrome_bin, context.artifact)? {
     Ok(height) => height,
-    Err(error) => return Ok(vec![outcome(PAGE_HEIGHT, false, error.to_string())]),
+    Err(message) => return Ok(vec![outcome(PAGE_HEIGHT, false, message)]),
   };
   if height > PAGE_HEIGHT_TARGET {
     Ok(vec![outcome(
@@ -549,7 +549,9 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
   }
 }
 
-fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<i32> {
+/// The inner error is a renderer failure, which Python reports as a failed assertion. Any other error,
+/// such as a probe that cannot be written, propagates as Python's `OSError` does.
+fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<Result<i32, String>> {
   let probe = artifact
     .parent()
     .expect("an artifact path has a parent")
@@ -559,13 +561,15 @@ fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<i32
   let page =
     PAGE_PROBE_TEMPLATE.replace("{width}", &PAGE_PROBE_WIDTH_PX.to_string()).replace("{src}", artifact_uri.as_str());
   fs::write(&probe, page.as_bytes())?;
-  let result = (|| {
-    let probe_uri = Url::from_file_path(fs::canonicalize(&probe)?)
-      .map_err(|()| anyhow!("could not build a file URL for probe {}", probe.display()))?;
-    headless_render::render_height(chrome_bin, probe_uri.as_str()).map_err(|error| anyhow!("{error}"))
-  })();
+  let result = render_probe(chrome_bin, &probe);
   fs::remove_file(&probe)?;
   result
+}
+
+fn render_probe(chrome_bin: &Path, probe: &Path) -> anyhow::Result<Result<i32, String>> {
+  let probe_uri = Url::from_file_path(fs::canonicalize(probe)?)
+    .map_err(|()| anyhow!("could not build a file URL for probe {}", probe.display()))?;
+  Ok(headless_render::render_height(chrome_bin, probe_uri.as_str()))
 }
 
 fn python_decimal_integer(text: &str) -> Result<String, String> {
@@ -996,8 +1000,8 @@ mod tests {
     let first = measure_page_height(&chrome, &page);
     let second = measure_page_height(&chrome, &page);
     headless_render::close_renderer().unwrap();
-    let first = first.unwrap();
-    let second = second.unwrap();
+    let first = first.unwrap().unwrap();
+    let second = second.unwrap().unwrap();
     assert!(first > 0 && first == second, "the warm render must be deterministic for identical bytes");
   }
 
@@ -1049,10 +1053,6 @@ mod tests {
   }
 
   #[test]
-  fn test_byte_integrity_fails_on_non_lf_control_byte() {
-    let directory = tempfile::tempdir().unwrap();
-    let chrome = stub_chrome(directory.path(), 800);
-  #[test]
   fn plan_section_number_span_must_hold_digits() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1070,6 +1070,10 @@ mod tests {
     assert!(by_name(&outcomes, ORDINAL_NAMED)[0].passed);
   }
 
+  #[test]
+  fn test_byte_integrity_fails_on_non_lf_control_byte() {
+    let directory = tempfile::tempdir().unwrap();
+    let chrome = stub_chrome(directory.path(), 800);
     for (damaged, hex_name) in [('\t', "0x09"), ('\u{000c}', "0x0c"), ('\r', "0x0d")] {
       let source = plan_page(&format!("Before{damaged}After"));
       let page = write_page(directory.path(), "plan.html", &source);

@@ -2,10 +2,10 @@
 
 Each server owns one temporary tree. The tree is the server's ``HOME``; ``home/`` inside it is its
 ``CHARLIEBOT_HOME`` and ``tmp/`` its ``TMPDIR``. A server runs with a sanitized ``PATH`` (the tree's
-``fake-bin`` plus ``/usr/bin:/bin``) whose agent CLI names are scripted fakes, and with every proxy variable
-pointed at a closed loopback port, so no request leaves the host. Every process under test (the fixture generator
-and each server) runs inside sandbox.py's Landlock ruleset and under ``strace``; guard.py reads the trace for
-writes outside each tree.
+``fake-bin``, the Nsight fake's ``bin``, plus ``/usr/bin:/bin``) whose agent CLI names are scripted fakes, and with
+every proxy variable pointed at a closed loopback port, so no request leaves the host. Every process under test (the
+fixture generator and each server) runs inside sandbox.py's Landlock ruleset and under ``strace``; guard.py reads the
+trace for writes outside each tree.
 """
 
 import ast
@@ -166,7 +166,7 @@ def server_env(
       "CHARLIEBOT_HOME": str(tree.home),
       "TMPDIR": str(tree.tmp),
       "TMUX_TMPDIR": str(tree.tmp),
-      "PATH": f"{tree.fake_bin}:/usr/bin:/bin",
+      "PATH": f"{tree.fake_bin}:{repo_root / 'rust/parity/fakes/nsight/bin'}:/usr/bin:/bin",
       "CHARLIEBOT_VENV_BIN": str(repo_root / ".venv" / "bin"),
       "CHARLIEBOT_REPO_ROOT": str(repo_root),
       "LANG": "C.UTF-8",

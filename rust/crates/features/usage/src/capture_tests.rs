@@ -2098,4 +2098,52 @@ fn malformed_timestamp_shapes_capture_the_rows_python_writes() {
   }
 }
 
+const MASTER_RESULT: &str =
+  r#"{"type": "result", "usage": {"input_tokens": 20, "cached_tokens": 4, "output_tokens": 7}}"#;
+
+#[test]
+fn malformed_master_model_shapes_capture_the_rows_python_writes() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  write_master(
+    &home,
+    "s-model",
+    "2026-09-01T00:00:00Z",
+    &events(&[
+      r#"{"type": "context", "model": 7}"#,
+      r#"{"type": "context", "model": 1.5}"#,
+      r#"{"type": "context", "model": true}"#,
+      r#"{"type": "context", "model": [1]}"#,
+      r#"{"type": "context", "model": {"a": 1}}"#,
+      r#"{"type": "context", "model": "vendor/native-model"}"#,
+      MASTER_RESULT,
+    ]),
+  );
+  write_master(&home, "s-model", "2026-09-02T00:00:00Z", &events(&[r#"{"type": "context", "model": 7}"#]));
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
+  let rows = charlie_rows(&mut ledger);
+  let native = row(&rows, "charlie-bot", "native-model");
+  assert_eq!(
+    (native.calls, native.in_fresh, native.cache_read, native.output, native.total),
+    (1, Count::Int(16), Count::Int(4), Count::Int(7), Count::Int(27))
+  );
+  assert_eq!((native.first.as_str(), native.last.as_str()), ("2026-09-01", "2026-09-01"));
+  assert_eq!(native.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(), ["charlie-code-native"]);
+  // A non-string model that is the last truthy one when the row is built fails Python's rsplit, so the capture raises.
+  let raising: [[&str; 3]; 2] = [
+    [r#"{"type": "context", "model": "vendor/native-model"}"#, r#"{"type": "context", "model": 7}"#, MASTER_RESULT],
+    [r#"{"type": "context", "model": 7}"#, r#"{"type": "context", "model": ""}"#, MASTER_RESULT],
+  ];
+  for lines in raising {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (config, registry) = fixture(&home);
+    write_master(&home, "s-model", "2026-09-03T00:00:00Z", &events(&lines));
+    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+  }
+}
+
 const TS_A: &str = "2026-01-10T08:00:00+00:00";

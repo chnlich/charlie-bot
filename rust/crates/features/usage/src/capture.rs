@@ -346,7 +346,8 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
   for line in &lines {
     let object = as_object(line, "master event")?;
     if is_type(object, "context") {
-      if let Some(named) = truthy_string(object, "model")? {
+      // The last truthy model wins, so a non-string model before a string one is never read as a name.
+      if let Some(named) = object.get("model").filter(|named| !is_falsy(named)) {
         model = Some(named);
       }
     } else if is_type(object, "result") {
@@ -356,6 +357,7 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
   let (Some(model), Some(result)) = (model, last_result) else {
     return Ok(Vec::new());
   };
+  let model = model.as_str().ok_or_else(|| anyhow!("master context model is not a string"))?;
   let usage = usage_object(result.get("usage"))?;
   let input = count(usage, "input_tokens")?;
   let cached = count(usage, "cached_tokens")?;
@@ -374,7 +376,7 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
     record_id: format!("master:{session}/{started}"),
     kind: RecordKind::Native,
     source: CHARLIE_BOT_SOURCE.to_string(),
-    model: bare_model(&model),
+    model: bare_model(model),
     account,
     ts: SqlValue::Text(started.clone()),
     in_fresh: input.sub(cached, "master cached tokens")?,

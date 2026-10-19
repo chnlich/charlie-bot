@@ -440,6 +440,13 @@ def build_fixture(home: pathlib.Path) -> pathlib.Path:
           }
       }) + _line({"session_id": "timestamps-kept"}),
   )
+  # Non-string context models before a string one: Python keeps the last truthy model, so the row takes the string.
+  _master(
+      home, "session-model-shapes", "2026-09-05T00:00:00Z",
+      _line({"type": "context", "model": 7}) + _line({"type": "context", "model": 1.5}) +
+      _line({"type": "context", "model": True}) + _line({"type": "context", "model": ["x"]}) +
+      _line({"type": "context", "model": {"a": 1}}) + _line({"type": "context", "model": NATIVE_MODEL}) +
+      _line({"type": "result", "usage": {"input_tokens": 20, "cached_tokens": 4, "output_tokens": 7}}))
   return live_ids
 
 

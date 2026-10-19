@@ -444,8 +444,8 @@ async def tail_follow_events(
       the follow continues unchanged afterwards.
   """
   while not raw_path.exists():
-    # The raw file is created by the spawner before the subprocess starts, so
-    # a missing file here means "never spawned"; once the producer is gone
+    # The raw file is created by run() before the subprocess starts, so a
+    # missing file here means "never spawned"; once the producer is gone
     # there is nothing to follow.
     if not is_alive():
       return

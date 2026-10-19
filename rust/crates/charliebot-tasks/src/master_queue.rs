@@ -14,7 +14,7 @@ use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::autonamer;
@@ -52,7 +52,6 @@ pub struct SessionCallbacks {
 #[derive(Default)]
 struct QueueState {
   session_queues: HashMap<String, VecDeque<WorkItem>>,
-  session_notifies: HashMap<String, Arc<Notify>>,
   session_consumers: HashMap<String, JoinHandle<()>>,
   consumer_cancel: HashMap<String, watch::Sender<bool>>,
   current_items: HashMap<String, Vec<String>>,
@@ -322,16 +321,13 @@ impl MasterQueue {
       }
       let (thinking_since, created) =
         callbacks.features.store.mark_busy(&session_id, resumed_start.unwrap_or_else(UtcDateTime::now))?;
-      let notify =
-        Arc::clone(state.session_notifies.entry(session_id.clone()).or_insert_with(|| Arc::new(Notify::new())));
       state.session_queues.entry(session_id.clone()).or_default().push_back(item);
-      notify.notify_one();
       if !state.session_consumers.contains_key(&session_id) {
         let (cancel_sender, cancel) = watch::channel(false);
         state.consumer_cancel.insert(session_id.clone(), cancel_sender);
         let queue = Arc::clone(self);
         let task_session = session_id.clone();
-        let handle = tokio::spawn(async move { queue.session_consumer(task_session, notify, cancel).await });
+        let handle = tokio::spawn(async move { queue.session_consumer(task_session, cancel).await });
         state.session_consumers.insert(session_id.clone(), handle);
       }
       (thinking_since, created)
@@ -342,38 +338,28 @@ impl MasterQueue {
     Ok(())
   }
 
-  async fn session_consumer(
-    self: Arc<Self>,
-    session_id: String,
-    notify: Arc<Notify>,
-    mut cancel: watch::Receiver<bool>,
-  ) {
+  /// Drain the session's queue, then retire this consumer. A queue that is empty after a turn ends the consumer, as
+  /// Python's `_session_consumer` does, so the busy interval closes when the last turn finishes.
+  async fn session_consumer(self: Arc<Self>, session_id: String, cancel: watch::Receiver<bool>) {
     let mut last_cc_session_id: Option<String> = None;
     let mut last_account_label: Option<String> = None;
-    let mut teardown: Option<(SessionCallbacks, bool)> = None;
-    loop {
-      let notified = notify.notified();
-      let item = {
+    let mut last_turn: Option<(SessionCallbacks, bool)> = None;
+    let retired = loop {
+      let mut item = {
         let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-        let item = state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front);
-        if let Some(item) = &item {
-          state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
-          state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
-          teardown = Some((item.callbacks.clone(), item.auto_trigger));
-        }
-        item
-      };
-      let Some(mut item) = item else {
-        if *cancel.borrow() {
-          break;
-        }
-        tokio::select! {
-          _ = notified => continue,
-          changed = cancel.changed() => {
-            if changed.is_err() || *cancel.borrow() { break; }
+        match state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front) {
+          Some(item) => {
+            state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
+            state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
+            last_turn = Some((item.callbacks.clone(), item.auto_trigger));
+            item
+          }
+          // The consumer pops its first item before it can retire: the enqueue that spawned it pushed that item.
+          None => {
+            let turn = last_turn.as_ref().expect("a consumer pops an item before it retires");
+            break Self::retire_locked(&mut state, &session_id, turn);
           }
         }
-        continue;
       };
       item.cancel = cancel.clone();
 
@@ -392,50 +378,61 @@ impl MasterQueue {
         if let Some(completion) = item.completion.take() {
           let _ = completion.send(Err(error));
         }
-      } else if *cancel.borrow() {
-        if let Some(completion) = item.completion.take() {
-          let _ = completion.send(Err(anyhow!("manager turn cancelled during server shutdown")));
-        }
-        break;
+      } else if *cancel.borrow()
+        && let Some(completion) = item.completion.take()
+      {
+        let _ = completion.send(Err(anyhow!("manager turn cancelled during server shutdown")));
       }
       if *cancel.borrow() {
-        break;
-      }
-    }
-
-    let teardown = {
-      let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-      state.session_consumers.remove(&session_id);
-      state.consumer_cancel.remove(&session_id);
-      state.current_items.remove(&session_id);
-      state.running_turns.remove(&session_id);
-      let queued = state.session_queues.remove(&session_id).unwrap_or_default();
-      state.session_notifies.remove(&session_id);
-      for mut item in queued {
-        if let Some(completion) = item.completion.take() {
-          let _ = completion.send(Err(anyhow!("manager turn cancelled during server shutdown")));
-        }
-      }
-      if let Some((callbacks, auto_trigger)) = teardown {
-        callbacks.features.store.clear_busy(&session_id);
-        let active = (callbacks.task_tree_activity)(&session_id).map(|(active, _)| active);
-        Some((callbacks, auto_trigger, active))
-      } else {
-        None
+        let turn = last_turn.as_ref().expect("a consumer pops an item before it retires");
+        break self.retire(&session_id, turn);
       }
     };
+
     self.state.lock().expect("master queue mutex is not poisoned").active_procs.remove(&session_id);
-    if let Some((callbacks, auto_trigger, active)) = teardown {
-      if let Err(error) = &active {
-        tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "task_tree_activity_failed");
-      }
-      let has_running_tasks = active.unwrap_or(false);
-      if let Err(error) =
-        broadcast_running_changed(&callbacks, &session_id, has_running_tasks, None, auto_trigger).await
-      {
-        tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "master_queue_running_changed_failed");
+    let (callbacks, auto_trigger, active) = retired;
+    if let Err(error) = &active {
+      tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "task_tree_activity_failed");
+    }
+    let has_running_tasks = active.unwrap_or(false);
+    if let Err(error) = broadcast_running_changed(&callbacks, &session_id, has_running_tasks, None, auto_trigger).await
+    {
+      tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "master_queue_running_changed_failed");
+    }
+  }
+
+  /// Retire the session's consumer and clear its busy interval, in one section under the queue mutex with no await.
+  /// The caller holds the mutex across its empty-queue check, so an enqueue cannot interleave: it either finds the
+  /// queue non-empty and extends this consumer, or finds no consumer and starts one that marks busy again.
+  fn retire_locked(
+    state: &mut QueueState,
+    session_id: &str,
+    turn: &(SessionCallbacks, bool),
+  ) -> (SessionCallbacks, bool, anyhow::Result<bool>) {
+    state.session_consumers.remove(session_id);
+    state.consumer_cancel.remove(session_id);
+    state.current_items.remove(session_id);
+    state.running_turns.remove(session_id);
+    let queued = state.session_queues.remove(session_id).unwrap_or_default();
+    for mut item in queued {
+      if let Some(completion) = item.completion.take() {
+        let _ = completion.send(Err(anyhow!("manager turn cancelled during server shutdown")));
       }
     }
+    let (callbacks, auto_trigger) = turn;
+    callbacks.features.store.clear_busy(session_id);
+    let active = (callbacks.task_tree_activity)(session_id).map(|(active, _)| active);
+    (callbacks.clone(), *auto_trigger, active)
+  }
+
+  /// Retire the consumer after a cancelled turn, taking the queue mutex for the retirement section.
+  fn retire(
+    &self,
+    session_id: &str,
+    turn: &(SessionCallbacks, bool),
+  ) -> (SessionCallbacks, bool, anyhow::Result<bool>) {
+    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+    Self::retire_locked(&mut state, session_id, turn)
   }
 
   async fn process_item(
@@ -676,7 +673,7 @@ async fn broadcast_running_changed(
 
 #[cfg(test)]
 mod tests {
-  use std::path::Path;
+  use std::path::{Path, PathBuf};
 
   use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
   use charliebot_agents::backends::claude_code::claude_metadata;
@@ -692,6 +689,7 @@ mod tests {
   use serde_json::Map;
 
   use super::*;
+  use crate::master_state::{TaskFinishCallback, TaskRunBinding};
 
   struct SyntheticUsageResolver;
 
@@ -910,5 +908,123 @@ mod tests {
         .await
         .unwrap();
     assert_eq!(context_tokens, None);
+  }
+
+  /// A manager turn that starts no agent: its session pins no backend, so the queue refuses it.
+  fn refused_turn(
+    queue: &Arc<MasterQueue>,
+    features: &Arc<FeatureContext>,
+    session_id: &str,
+    on_task_finish: TaskFinishCallback,
+  ) -> MasterTurnRequest {
+    let callbacks = SessionCallbacks {
+      after_round: None,
+      ..queue.session_callbacks(Arc::clone(features), Arc::new(|_| Ok((false, String::new()))))
+    };
+    MasterTurnRequest {
+      cfg: features.config.get().unwrap(),
+      session_meta: manager_metadata(session_id, ""),
+      user_content: "synthetic turn".to_string(),
+      callbacks,
+      user_event_ids: Vec::new(),
+      task_instructions: String::new(),
+      task_run: TaskRunBinding {
+        session_id: session_id.to_string(),
+        run_id: "synthetic-run".to_string(),
+        transport_dir: PathBuf::from("synthetic-transport"),
+        fresh_native_context: false,
+      },
+      on_task_spawn: Arc::new(|_: u32, _: Option<String>| -> BoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(async { Ok(()) })
+      }),
+      on_task_finish,
+      auto_trigger: false,
+      backend_option: None,
+      extra_claude_flags: None,
+      uploaded_files: None,
+      extra_env: None,
+    }
+  }
+
+  /// A finish callback that records whether the turn's session was busy when the turn finished.
+  fn busy_at_finish(
+    features: &Arc<FeatureContext>,
+    session_id: &str,
+    observed: Arc<Mutex<Vec<bool>>>,
+  ) -> TaskFinishCallback {
+    let features = Arc::clone(features);
+    let session_id = session_id.to_string();
+    Arc::new(move |_: Option<String>, _: i32, _: Map<String, Value>, _: Value| {
+      let features = Arc::clone(&features);
+      let session_id = session_id.clone();
+      let observed = Arc::clone(&observed);
+      Box::pin(async move {
+        observed.lock().unwrap().push(features.store.busy_since(&session_id).is_some());
+        Ok(false)
+      })
+    })
+  }
+
+  /// Whether the session's busy interval closes within one second. A consumer that never retires keeps it open.
+  async fn busy_interval_closes(features: &FeatureContext, session_id: &str) -> bool {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+      while features.store.busy_since(session_id).is_some() {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+      }
+    })
+    .await
+    .is_ok()
+  }
+
+  #[tokio::test]
+  async fn a_drained_manager_turn_clears_the_busy_state_it_opened() {
+    let home = tempfile::tempdir().unwrap();
+    let features = context_features(home.path());
+    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let on_finish = busy_at_finish(&features, "drained-session", Arc::clone(&observed));
+
+    queue.run_message(refused_turn(&queue, &features, "drained-session", on_finish)).await.unwrap();
+
+    assert!(busy_interval_closes(&features, "drained-session").await);
+    assert_eq!(*observed.lock().unwrap(), [true]);
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn an_enqueue_racing_the_consumer_teardown_runs_once_and_marks_busy() {
+    let home = tempfile::tempdir().unwrap();
+    let features = context_features(home.path());
+    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    for delay in 0..8 {
+      let session_id = format!("race-session-{delay}");
+      let first_observed = Arc::new(Mutex::new(Vec::new()));
+      let second_observed = Arc::new(Mutex::new(Vec::new()));
+      let first = refused_turn(
+        &queue,
+        &features,
+        &session_id,
+        busy_at_finish(&features, &session_id, Arc::clone(&first_observed)),
+      );
+      let second = refused_turn(
+        &queue,
+        &features,
+        &session_id,
+        busy_at_finish(&features, &session_id, Arc::clone(&second_observed)),
+      );
+
+      let first_queue = Arc::clone(&queue);
+      let first_run = tokio::spawn(async move { first_queue.run_message(first).await });
+      for _ in 0..delay {
+        tokio::task::yield_now().await;
+      }
+      let second_queue = Arc::clone(&queue);
+      let second_run = tokio::spawn(async move { second_queue.run_message(second).await });
+      first_run.await.unwrap().unwrap();
+      second_run.await.unwrap().unwrap();
+
+      assert_eq!(*first_observed.lock().unwrap(), [true], "delay {delay}");
+      assert_eq!(*second_observed.lock().unwrap(), [true], "delay {delay}");
+      assert!(busy_interval_closes(&features, &session_id).await, "delay {delay}");
+    }
   }
 }

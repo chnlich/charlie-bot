@@ -414,41 +414,66 @@ def _adjacent_pair(events: list[Any], first: EventSelector, second: EventSelecto
   return (firsts[0], neighbours[0]) if len(neighbours) == 1 else None
 
 
-def _ordered_chat_log(data: bytes, first: EventSelector, second: EventSelector) -> bytes:
+def _ordered_chat_log(data: bytes, first: EventSelector, second: EventSelector) -> tuple[bytes, dict[str, str]]:
+  """The log with its pair written as first, then second, and each pair event's raw id mapped to its placeholder."""
   lines = [line for line in data.splitlines() if line.strip()]
   events = [_jsonl_line_value(line) for line in lines]
   pair = _adjacent_pair(events, first, second)
   if pair is None:
-    return data
+    return data, {}
   first_index, second_index = pair
   lower, upper = sorted(pair)
   placed = {lower: events[first_index], upper: events[second_index]}
   rewritten = list(lines)
+  masks: dict[str, str] = {}
   for position, event in placed.items():
     event.pop("event_index", None)
     if "id" in event:
-      event["id"] = f"<normalized-{event['type']}-id>"
+      placeholder = f"<normalized-{event['type']}-id>"
+      masks[event["id"]] = placeholder
+      event["id"] = placeholder
     rewritten[position] = json.dumps(event).encode()
-  return b"".join(line + b"\n" for line in rewritten)
+  return b"".join(line + b"\n" for line in rewritten), masks
 
 
 def order_adjacent_pair(delta: Delta, first: EventSelector, second: EventSelector) -> Delta:
   """*delta* with each chat log's adjacent (first, second) pair written as first, then second.
 
-  The pair then compares as one order, whichever order the tree wrote it in. A swap moves each event's position and
-  minted id, so both events' event_index and id are masked. A log without exactly one *first* event and one neighbour
-  that matches *second* keeps its content, and the diff reports it.
+  The pair then compares as one order, whichever order the tree wrote it in. A swap moves each event's position, so
+  event_index is dropped from both events. Each event's id is masked wherever the tree names it, in its own line and in
+  every later reference such as input_event_ids, so a run record that names the nudge compares as well. A log without
+  exactly one *first* event and one neighbour that matches *second* keeps its content, and the diff reports it.
   """
+  masks: dict[str, str] = {}
 
   def ordered(entries: dict[str, Entry]) -> dict[str, Entry]:
-    return {
-        path:
-            Entry(entry.kind, _ordered_chat_log(entry.data, first, second))
-            if entry.kind == "file" and path.endswith("/data/chat_events.jsonl") else entry
-        for path, entry in entries.items()
-    }
+    result: dict[str, Entry] = {}
+    for path, entry in entries.items():
+      if entry.kind == "file" and path.endswith("/data/chat_events.jsonl"):
+        data, pair_masks = _ordered_chat_log(entry.data, first, second)
+        masks.update(pair_masks)
+        result[path] = Entry(entry.kind, data)
+      else:
+        result[path] = entry
+    return result
 
-  return dataclasses.replace(delta, added=ordered(delta.added), changed=ordered(delta.changed))
+  added = ordered(delta.added)
+  changed = ordered(delta.changed)
+  return dataclasses.replace(delta, added=_masked_ids(added, masks), changed=_masked_ids(changed, masks))
+
+
+def _masked_ids(entries: dict[str, Entry], masks: dict[str, str]) -> dict[str, Entry]:
+  """*entries* with each file's references to a masked event id replaced by that event's placeholder."""
+  result: dict[str, Entry] = {}
+  for path, entry in entries.items():
+    if entry.kind == "file":
+      data = entry.data
+      for event_id, placeholder in masks.items():
+        data = data.replace(event_id.encode(), placeholder.encode())
+      result[path] = Entry(entry.kind, data)
+    else:
+      result[path] = entry
+  return result
 
 
 def delta_diff(

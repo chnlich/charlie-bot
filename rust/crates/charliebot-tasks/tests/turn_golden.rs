@@ -2,41 +2,52 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, bail};
+use axum::body::{Body, to_bytes};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
+use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_core::repo_root::RepoRoot;
+use charliebot_core::run_token::{RunTokenClaims, sign_run_token};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
   TransportKind,
 };
+use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, EmptyRuntimeEventHooks, SequenceArchiveHook, SequenceBindingMover,
-  SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
+  AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RunKind, RunRecord,
+  SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
+  TaskCaller,
 };
 use charliebot_tasks::autonamer;
+use charliebot_tasks::dispatch;
+use charliebot_tasks::execution::{self, TaskExecutionAdapter};
 use charliebot_tasks::master_queue::{
   MarkUnreadFn, PersistAccountLabelFn, PersistAndBroadcastFn, PersistNativeIdFn, SessionCallbacks,
 };
 use charliebot_tasks::master_state::{
   MasterResumeRecord, MasterResumeRequest, MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback,
 };
-use charliebot_tasks::{master_queue, master_state};
+use charliebot_tasks::{master_queue, master_state, routes, task_sessions};
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as YamlValue};
 use tempfile::TempDir;
 use tokio::sync::oneshot;
+use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
 
@@ -292,6 +303,14 @@ fn config_with_features(
   install_queue: bool,
 ) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
   let cfg = Arc::new(config(home, option));
+  config_with_features_from_config(cfg, registry, install_queue)
+}
+
+fn config_with_features_from_config(
+  cfg: Arc<CharlieBotConfig>,
+  registry: Arc<Registry>,
+  install_queue: bool,
+) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
   std::fs::create_dir_all(&cfg.charliebot_home)?;
   let config_value = Arc::clone(&cfg);
   let config_file = cfg.config_file();
@@ -325,6 +344,11 @@ fn config_with_features(
     ]),
   })?;
   startup.insert(BackendPool::default())?;
+  let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+    .ancestors()
+    .nth(3)
+    .context("tasks crate manifest has no repository root ancestor")?;
+  startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
   if install_queue {
     let features = Arc::new(FeatureContext {
       config: Arc::new(config_reload),
@@ -620,6 +644,355 @@ async fn manager_turn_matches_python_event_stream_matrix() -> anyhow::Result<()>
     assert_eq!(actual, expected, "persisted events differ for {}", case.name);
     assert_eq!(unread, case.mark_unread, "unread calls differ for {}", case.name);
   }
+  Ok(())
+}
+
+#[tokio::test]
+async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializes_pending_inputs() -> anyhow::Result<()>
+{
+  const ACCESS_KEY: &str = "synthetic-manager-access-key";
+  let temp = tempfile::tempdir()?;
+  let home = temp.path().join("manager-adapter-home");
+  std::fs::create_dir_all(&home)?;
+  std::fs::write(home.join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))?;
+
+  let first_started = home.join("first-started");
+  let second_started = home.join("second-started");
+  let release_first = home.join("release-first");
+  let mut script = "printf '%s\\n' \"$CHARLIEBOT_RUN_TOKEN\" >> \"$CHARLIEBOT_HOME/run-tokens\"\n".to_string();
+  script.push_str(&format!(
+    "if [ ! -e '{}' ]; then touch '{}'; while [ ! -e '{}' ]; do /bin/sleep 0.01; done; else touch '{}'; fi\n",
+    first_started.display(),
+    first_started.display(),
+    release_first.display(),
+    second_started.display(),
+  ));
+  script.push_str(&scripted_process(
+    &[
+      json!({"type":"system","subtype":"init","session_id":"synthetic-native-session"}),
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":"synthetic answer"}]}}),
+      json!({"type":"result","subtype":"success","result":"","usage":{"input_tokens":1,"output_tokens":1}}),
+    ],
+    0,
+    "",
+  )?);
+  let option = backend_option(script);
+  let mut cfg = config(&home, Some(option));
+  cfg.server.min_free_disk_gib = i64::MAX;
+  let registry = registry();
+  let (cfg, features) = config_with_features_from_config(Arc::new(cfg), Arc::clone(&registry), false)?;
+  execution::pre_recovery_step(Arc::clone(&features)).await?;
+
+  let meta = features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "synthetic-manager-adapter".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Synthetic manager".to_string()),
+        backend: Some("fake".to_string()),
+        group: None,
+        session_id: Some("synthetic-manager-adapter-session".to_string()),
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let dispatcher = dispatch::dispatcher(&features)?;
+  let first_input = dispatcher
+    .admit_input(&meta.id, event_types::USER, "first synthetic input", "user", json!({"input_id":"first-input"}))
+    .await?;
+  let first_decision = dispatcher.dispatch_pending(&meta.id).await?;
+  assert_eq!(first_decision["launch"], true);
+  let first_run_id = first_decision["run_id"].as_str().context("first dispatch has no run id")?.to_string();
+  assert_eq!(
+    features
+      .store
+      .read_run_sync(&meta.id, &first_run_id)?
+      .context("first run record was not registered")?
+      .input_event_ids,
+    [first_input["id"].as_str().context("first input has no id")?.to_string()]
+  );
+
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while !first_started.exists() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .context("first manager child did not reach its gate")?;
+  let launched =
+    features.store.read_run_sync(&meta.id, &first_run_id)?.context("first run record disappeared after launch")?;
+  assert!(launched.pid.is_some());
+  assert!(launched.pid_start.is_some());
+  let token = std::fs::read_to_string(home.join("run-tokens"))?;
+  let token = token.lines().next().context("manager child did not receive a run token")?;
+  let mut headers = HeaderMap::new();
+  headers.insert(header::AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {token}"))?);
+  assert!(matches!(caller::resolve_caller(&headers, &features), Ok(CallerIdentity::Agent { .. })));
+
+  let second_input = dispatcher
+    .admit_input(&meta.id, event_types::USER, "second synthetic input", "user", json!({"input_id":"second-input"}))
+    .await?;
+  let waiting_decision = dispatcher.dispatch_pending(&meta.id).await?;
+  assert_eq!(waiting_decision["launch"], false);
+  std::fs::write(&release_first, b"continue")?;
+
+  tokio::time::timeout(Duration::from_secs(8), async {
+    loop {
+      let facts = features.store.load_all_facts(&meta.id)?;
+      let finished = facts
+        .iter()
+        .filter(|event| event["type"] == event_types::RUN_FINISHED)
+        .filter_map(|event| event["run_id"].as_str())
+        .collect::<Vec<_>>();
+      if finished.len() == 2 && second_started.exists() {
+        break anyhow::Ok(());
+      }
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+  })
+  .await
+  .context("the manager adapter did not dispatch the input queued during the first turn")??;
+
+  let records = features.store.list_run_records_sync(&meta.id)?;
+  assert_eq!(records.len(), 2, "the two durable inputs must produce exactly two manager runs");
+  let second_run = records.iter().find(|run| run.id != first_run_id).context("second run was not registered")?;
+  assert_eq!(second_run.input_event_ids, [second_input["id"].as_str().context("second input has no id")?.to_string()]);
+  let finished = features
+    .store
+    .load_all_facts(&meta.id)?
+    .into_iter()
+    .filter(|event| event["type"] == event_types::RUN_FINISHED)
+    .collect::<Vec<_>>();
+  assert_eq!(finished.len(), 2);
+  assert!(finished.iter().all(|event| event["outcome"] == "success"));
+  features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;
+  drop(cfg);
+  Ok(())
+}
+
+#[tokio::test]
+async fn worker_execution_refuses_before_registering_or_writing_a_run() -> anyhow::Result<()> {
+  let home = tempfile::tempdir()?;
+  let option = backend_option(scripted_process(&[json!({"type":"result","subtype":"success"})], 0, "")?);
+  let registry = registry();
+  let (_cfg, features) = config_with_features(home.path(), Some(option), Arc::clone(&registry), false)?;
+  execution::pre_recovery_step(Arc::clone(&features)).await?;
+  let worker = features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "synthetic-worker-refusal".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Worker,
+        task: None,
+        name: Some("Synthetic worker".to_string()),
+        backend: Some("fake".to_string()),
+        group: None,
+        session_id: Some("synthetic-worker-refusal-session".to_string()),
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let before = features.store.load_all_facts(&worker.id)?;
+  let adapter = features.startup.require::<TaskExecutionAdapter>()?;
+  let error = adapter.call(&worker.id, &[], None).await.unwrap_err().to_string();
+  assert!(error.contains("worker-run task"), "{error}");
+  let error = adapter.execute_run(&worker.id, "synthetic-unknown-run").await.unwrap_err().to_string();
+  assert!(error.contains("worker-run task"), "{error}");
+  assert!(features.store.list_run_records_sync(&worker.id)?.is_empty());
+  assert_eq!(features.store.load_all_facts(&worker.id)?, before);
+  features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;
+  Ok(())
+}
+
+#[tokio::test]
+async fn agent_run_caller_cannot_retry_or_cancel_another_run() -> anyhow::Result<()> {
+  const ACCESS_KEY: &str = "synthetic-route-access-key";
+  let home = tempfile::tempdir()?;
+  std::fs::write(home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))?;
+  let option = backend_option(String::new());
+  let registry = registry();
+  let (_cfg, features) = config_with_features(home.path(), Some(option), Arc::clone(&registry), false)?;
+  let session_id = "synthetic-agent-route-session";
+  features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "synthetic-agent-route-node".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Synthetic route node".to_string()),
+        backend: Some("fake".to_string()),
+        group: None,
+        session_id: Some(session_id.to_string()),
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let claims = RunTokenClaims {
+    session_id: session_id.to_string(),
+    run_id: "synthetic-own-run".to_string(),
+    agent: "synthetic-agent".to_string(),
+  };
+  let run = RunRecord {
+    id: claims.run_id.clone(),
+    session_id: claims.session_id.clone(),
+    kind: RunKind::ManagerTurn,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
+    backend: Some("fake".to_string()),
+    model: Some("fake-model".to_string()),
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
+    repo_path: None,
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
+  };
+  let guard = features.store.control_lock().await;
+  features.store.register_run_locked(&guard, session_id, run, None).await?;
+  drop(guard);
+  features.store.record_launch(session_id, &claims.run_id, 424242, "12345").await?;
+
+  let token = sign_run_token(&claims, ACCESS_KEY)?;
+  let app = routes::routes(&features);
+  let retry = app
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{session_id}/retry"))
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"request_id":"synthetic-agent-retry","run_id":"synthetic-own-run"}"#))?,
+    )
+    .await?;
+  assert_eq!(retry.status(), StatusCode::FORBIDDEN);
+  let retry_body = to_bytes(retry.into_body(), usize::MAX).await?;
+  assert_eq!(
+    serde_json::from_slice::<Value>(&retry_body)?,
+    json!({"detail":"retrying a run requires operator credentials"})
+  );
+
+  let cancel = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{session_id}/runs/synthetic-other-run/cancel"))
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"request_id":"synthetic-agent-cancel"}"#))?,
+    )
+    .await?;
+  assert_eq!(cancel.status(), StatusCode::FORBIDDEN);
+  let cancel_body = to_bytes(cancel.into_body(), usize::MAX).await?;
+  assert_eq!(
+    serde_json::from_slice::<Value>(&cancel_body)?,
+    json!({"detail":"an agent may only stop its own bound run"})
+  );
+  Ok(())
+}
+
+#[tokio::test]
+async fn retry_record_reuses_the_request_and_preserves_the_manager_input_batch() -> anyhow::Result<()> {
+  let home = tempfile::tempdir()?;
+  let option = backend_option(String::new());
+  let registry = registry();
+  let (cfg, features) = config_with_features(home.path(), Some(option), Arc::clone(&registry), false)?;
+  let session_id = "synthetic-retry-session";
+  features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "synthetic-retry-node".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Synthetic retry node".to_string()),
+        backend: Some("fake".to_string()),
+        group: None,
+        session_id: Some(session_id.to_string()),
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let original = RunRecord {
+    id: "synthetic-failed-manager-run".to_string(),
+    session_id: session_id.to_string(),
+    kind: RunKind::ManagerTurn,
+    input_event_ids: vec!["synthetic-manager-input".to_string()],
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
+    backend: Some("fake".to_string()),
+    model: Some("fake-model".to_string()),
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
+    repo_path: None,
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
+  };
+  let guard = features.store.control_lock().await;
+  features.store.register_run_locked(&guard, session_id, original, None).await?;
+  drop(guard);
+
+  let first = task_sessions::create_retry(
+    &features.store,
+    &cfg,
+    session_id,
+    "synthetic-retry-request",
+    "synthetic-failed-manager-run",
+    None,
+    None,
+  )
+  .await?;
+  let replay = task_sessions::create_retry(
+    &features.store,
+    &cfg,
+    session_id,
+    "synthetic-retry-request",
+    "synthetic-failed-manager-run",
+    None,
+    None,
+  )
+  .await?;
+  assert_eq!(first.id, replay.id);
+  assert_eq!(first.retry_of_run_id.as_deref(), Some("synthetic-failed-manager-run"));
+  assert_eq!(first.kind, RunKind::ManagerTurn);
+  assert_eq!(first.input_event_ids, ["synthetic-manager-input"]);
+  assert_eq!(first.backend.as_deref(), Some("fake"));
+  assert_eq!(first.model.as_deref(), Some("fake-model"));
   Ok(())
 }
 

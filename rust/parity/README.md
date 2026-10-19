@@ -95,7 +95,9 @@ a run sweeps `/tmp`: it removes every `charliebot-parity-*` tree of our user who
 that holds no `--keep` marker; a tree from before this change has no record, and the sweep removes it when it
 is older than six hours. The sweep never touches a live run's tree, a marked tree, or the port lock directory
 `/tmp/charliebot-parity-ports`. `--keep` writes that marker into the tree it keeps, so the next start sweep
-leaves it. See `scratch.py`.
+leaves it. The record goes down under a temp name and a rename, so a crash leaves no partial file; when the
+sweep meets a record it cannot parse, it stops with an error that names the tree and tells the reader to delete
+it. See `scratch.py`.
 
 ### Reading the report
 

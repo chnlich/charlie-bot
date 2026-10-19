@@ -3,9 +3,12 @@
 import concurrent.futures
 import os
 import pathlib
+import shutil
 import socket
+import tempfile
 import threading
 import time
+from collections.abc import Iterator
 
 import pytest
 
@@ -24,12 +27,22 @@ RUST_FIELDS = (
 PROVISIONING = ("speech_models_ready", "speech_model_provisioning_failed")
 
 
-def test_wait_ready_refuses_a_listener_outside_the_server_tree(tmp_path: pathlib.Path) -> None:
+@pytest.fixture
+def short_root() -> Iterator[pathlib.Path]:
+  """A tree root directly under /tmp: the runner's TMPDIR makes the tmux socket path pass 107 bytes."""
+  root = pathlib.Path(tempfile.mkdtemp(dir="/tmp"))
+  try:
+    yield root
+  finally:
+    shutil.rmtree(root)
+
+
+def test_wait_ready_refuses_a_listener_outside_the_server_tree(short_root: pathlib.Path) -> None:
   # This test process holds the listener, so the server's tree never owns the port.
   with servers.pick_ports(1) as ports, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
     listener.bind((servers.HOST, ports[0]))
     listener.listen()
-    tree = servers.make_tree("candidate", tmp_path / "candidate")
+    tree = servers.make_tree("candidate", short_root / "candidate")
     server = servers.ServerProcess("candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1)
     server.start()
     try:

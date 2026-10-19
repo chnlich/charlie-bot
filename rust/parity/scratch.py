@@ -43,7 +43,10 @@ def record_owner(scratch: pathlib.Path) -> None:
   if start_time is None:
     raise RuntimeError(f"cannot read the /proc start time of pid {pid}")
   record = {"pid": pid, "start_time": start_time}
-  (scratch / OWNER_RECORD).write_text(json.dumps(record) + "\n", encoding="utf-8")
+  # A temp name and a rename: a crash mid-write leaves no partial file for the sweep to trip on.
+  temp = scratch / (OWNER_RECORD + ".tmp")
+  temp.write_text(json.dumps(record) + "\n", encoding="utf-8")
+  os.replace(temp, scratch / OWNER_RECORD)
 
 
 def sweep(root: pathlib.Path = SCRATCH_ROOT, now: float | None = None) -> None:
@@ -57,7 +60,7 @@ def sweep(root: pathlib.Path = SCRATCH_ROOT, now: float | None = None) -> None:
       continue
     if (path / KEEP_MARKER).exists():
       continue
-    owner = _read_owner(path)
+    owner = _read_owner(path, path)
     if owner is not None:
       if process_start_time(owner["pid"]) == owner["start_time"]:
         continue
@@ -66,11 +69,25 @@ def sweep(root: pathlib.Path = SCRATCH_ROOT, now: float | None = None) -> None:
     shutil.rmtree(path)
 
 
-def _read_owner(scratch: pathlib.Path) -> dict | None:
+def _read_owner(scratch: pathlib.Path, tree: pathlib.Path) -> dict | None:
+  """The tree's owner record, or None when it has none; a record that cannot parse stops the sweep."""
   try:
-    return json.loads((scratch / OWNER_RECORD).read_text(encoding="utf-8"))
+    record_text = (scratch / OWNER_RECORD).read_text(encoding="utf-8")
   except FileNotFoundError:
     return None
+  try:
+    record = json.loads(record_text)
+    pid = record["pid"]
+    start_time = record["start_time"]
+  except (json.JSONDecodeError, KeyError, TypeError):
+    raise RuntimeError(
+        f"parity: scratch tree {tree} holds an owner record that cannot be parsed; "
+        "check that no run is writing it, then delete the tree") from None
+  if not isinstance(pid, int) or not isinstance(start_time, int):
+    raise RuntimeError(
+        f"parity: scratch tree {tree} holds an owner record whose pid or start time is not an integer; "
+        "check that no run is writing it, then delete the tree")
+  return {"pid": pid, "start_time": start_time}
 
 
 def finalize(scratch: pathlib.Path, keep: bool, clean: bool, runs: list[dict]) -> None:

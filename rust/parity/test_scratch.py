@@ -3,9 +3,12 @@
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
+
+import pytest
 
 from rust.parity import scratch
 
@@ -99,3 +102,16 @@ def test_sweep_leaves_the_port_lock_directory(tmp_path: pathlib.Path) -> None:
   os.utime(tree, (old, old))
   scratch.sweep(root=tmp_path)
   assert tree.exists()
+
+
+def test_sweep_stops_on_an_owner_record_that_cannot_parse(tmp_path: pathlib.Path) -> None:
+  tree = _make_tree(tmp_path)
+  (tree / scratch.OWNER_RECORD).write_text("{not json", encoding="utf-8")
+  with pytest.raises(RuntimeError, match=re.escape(str(tree))):
+    scratch.sweep(root=tmp_path)
+
+
+def test_record_owner_writes_the_record_under_one_name(tmp_path: pathlib.Path) -> None:
+  tree = _make_tree(tmp_path)
+  scratch.record_owner(tree)
+  assert [path.name for path in tree.iterdir()] == [scratch.OWNER_RECORD]

@@ -35,6 +35,26 @@ const BOUNDED_FIELDS: &[Field] = &[
   Field::required("tags", FieldType::StringList).max_length(2),
 ];
 const BOUNDED_MODEL: BodyModel = BodyModel::required(BOUNDED_FIELDS).forbid_extra();
+const UPLOADED_FILE_FIELDS: &[Field] = &[
+  Field::required("filename", FieldType::String),
+  Field::required("path", FieldType::String),
+  Field::optional("size", FieldType::NullableInteger),
+];
+const UPLOADED_FILE: BodyModel = BodyModel::optional(UPLOADED_FILE_FIELDS);
+const MESSAGE_FIELDS: &[Field] = &[
+  Field::required("content", FieldType::String),
+  Field::optional("uploaded_files", FieldType::ModelList { class_name: "UploadedFileRef", model: &UPLOADED_FILE }),
+  Field::optional("input_mode", FieldType::NullableString),
+];
+const MESSAGE: BodyModel = BodyModel::required(MESSAGE_FIELDS);
+const ATTACHMENT_FIELDS: &[Field] =
+  &[Field::required("filename", FieldType::String), Field::optional("size", FieldType::NullableInteger)];
+const ATTACHMENT: BodyModel = BodyModel::optional(ATTACHMENT_FIELDS).forbid_extra();
+const ATTACHMENTS_FIELDS: &[Field] =
+  &[Field::optional("attachments", FieldType::NullableModelList { class_name: "StrictFileRef", model: &ATTACHMENT })
+    .min_length(2)
+    .max_length(3)];
+const ATTACHMENTS: BodyModel = BodyModel::required(ATTACHMENTS_FIELDS);
 
 struct Case {
   name: &'static str,
@@ -119,8 +139,11 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
 
   let python = PythonServer::start(python_address).await;
   let rust_server = tokio::spawn(async move {
-    let router =
-      Router::new().route("/items/{item_id}", post(read_item)).route("/bounds/{item_id}", post(read_bounded));
+    let router = Router::new()
+      .route("/items/{item_id}", post(read_item))
+      .route("/bounds/{item_id}", post(read_bounded))
+      .route("/messages/{item_id}", post(read_message))
+      .route("/attachments/{item_id}", post(read_attachments));
     axum::serve(rust_listener, router).await.expect("the axum test app serves requests");
   });
 
@@ -131,6 +154,12 @@ async fn fastapi_body_matches_fastapi_for_the_request_corpus() {
   let bounded = bounded_corpus();
   assert_eq!(bounded.len(), 28);
   compare_corpus(&client, python_address, rust_address, "/bounds", &bounded).await;
+  let messages = message_corpus();
+  assert_eq!(messages.len(), 17);
+  compare_corpus(&client, python_address, rust_address, "/messages", &messages).await;
+  let attachments = attachment_corpus();
+  assert_eq!(attachments.len(), 20);
+  compare_corpus(&client, python_address, rust_address, "/attachments", &attachments).await;
 
   rust_server.abort();
   match rust_server.await {
@@ -147,6 +176,14 @@ async fn read_item(request: Request<Body>) -> Response {
 
 async fn read_bounded(request: Request<Body>) -> Response {
   read_model(request, &BOUNDED_MODEL).await
+}
+
+async fn read_message(request: Request<Body>) -> Response {
+  read_model(request, &MESSAGE).await
+}
+
+async fn read_attachments(request: Request<Body>) -> Response {
+  read_model(request, &ATTACHMENTS).await
 }
 
 async fn read_model(request: Request<Body>, model: &BodyModel) -> Response {
@@ -422,7 +459,145 @@ fn bounded_value() -> Value {
 /// The valid bounded body with each `(field, value)` set. A name the model does not declare is an extra key, in the
 /// order given.
 fn bounded_with(changes: &[(&str, Value)]) -> Value {
-  let mut body = bounded_value();
+  with_changes(bounded_value(), changes)
+}
+
+/// The message model's corpus, sent to `/messages`: the valid body, each non-list value and each kind of bad item for
+/// `uploaded_files`, a wrong `content` with a bad item, and two bad items with two errors each.
+fn message_corpus() -> Vec<Case> {
+  vec![
+    json_ok_case("the valid message", message_value()),
+    json_ok_case("uploaded_files absent keeps the default", json!({"content": "hi"})),
+    json_ok_case("uploaded_files empty", message_with(&[("uploaded_files", json!([]))])),
+    json_ok_case("input_mode null", message_with(&[("input_mode", Value::Null)])),
+    json_ok_case(
+      "an extra key in an uploaded item is ignored",
+      message_with(&[("uploaded_files", json!([{"filename": "a.txt", "path": "uploads/a.txt", "colour": "red"}]))]),
+    ),
+    json_value_case("uploaded_files null", message_with(&[("uploaded_files", Value::Null)])),
+    json_value_case("uploaded_files as a string", message_with(&[("uploaded_files", json!("a.txt"))])),
+    json_value_case(
+      "uploaded_files as an object",
+      message_with(&[("uploaded_files", json!({"filename": "a.txt", "path": "uploads/a.txt"}))]),
+    ),
+    json_value_case("uploaded item is a string", message_with(&[("uploaded_files", json!(["a.txt"]))])),
+    json_value_case("uploaded item is a number", message_with(&[("uploaded_files", json!([7]))])),
+    json_value_case(
+      "uploaded item is a list",
+      message_with(&[("uploaded_files", json!([["a.txt", "uploads/a.txt"]]))]),
+    ),
+    json_value_case("uploaded item is null", message_with(&[("uploaded_files", json!([null]))])),
+    json_value_case(
+      "uploaded item missing its path",
+      message_with(&[("uploaded_files", json!([{"filename": "a.txt"}]))]),
+    ),
+    json_value_case(
+      "a wrong content and a bad uploaded item",
+      message_with(&[("content", json!(5)), ("uploaded_files", json!([{"filename": 3, "path": "uploads/a.txt"}]))]),
+    ),
+    json_value_case(
+      "two bad uploaded items with two errors each",
+      message_with(&[("uploaded_files", json!([{"filename": 1, "path": 2}, {"filename": "b.txt", "size": "big"}]))]),
+    ),
+    json_value_case("input_mode as a number", message_with(&[("input_mode", json!(5))])),
+    json_value_case("missing content", json!({"uploaded_files": []})),
+  ]
+}
+
+/// The message model's valid body: one uploaded file, with every field the model declares.
+fn message_value() -> Value {
+  json!({
+    "content": "hi",
+    "uploaded_files": [{"filename": "a.txt", "path": "uploads/a.txt", "size": 3}],
+    "input_mode": "text",
+  })
+}
+
+fn message_with(changes: &[(&str, Value)]) -> Value {
+  with_changes(message_value(), changes)
+}
+
+/// The list model's corpus, sent to `/attachments`: the length bounds at, below and above their limits, a null or
+/// absent list, each non-list value and each kind of bad item, extra keys in an item, and the error order of items
+/// with a length error.
+fn attachment_corpus() -> Vec<Case> {
+  vec![
+    json_ok_case("the valid attachments", attachments_value()),
+    json_ok_case("attachments absent keeps the default", json!({})),
+    json_ok_case("attachments null", json!({"attachments": null})),
+    json_ok_case(
+      "attachments at the maximum length",
+      attachments_with(&[("attachments", json!([{"filename": "a"}, {"filename": "b"}, {"filename": "c", "size": 1}]))]),
+    ),
+    json_value_case(
+      "attachments below the minimum length",
+      attachments_with(&[("attachments", json!([{"filename": "a.txt"}]))]),
+    ),
+    json_value_case("attachments empty", attachments_with(&[("attachments", json!([]))])),
+    json_value_case(
+      "attachments above the maximum length",
+      attachments_with(&[(
+        "attachments",
+        json!([{"filename": "a"}, {"filename": "b"}, {"filename": "c"}, {"filename": "d"}]),
+      )]),
+    ),
+    json_value_case(
+      "too long with bad items reports only the length",
+      attachments_with(&[("attachments", json!([{"filename": 1}, "x", 3, [], {"filename": "e"}]))]),
+    ),
+    json_value_case(
+      "too short with a bad item reports only the item",
+      attachments_with(&[("attachments", json!([{"filename": 1}]))]),
+    ),
+    json_value_case("attachments as a string", attachments_with(&[("attachments", json!("a.txt"))])),
+    json_value_case("attachments as an object", attachments_with(&[("attachments", json!({"filename": "a.txt"}))])),
+    json_value_case(
+      "attachment is a string",
+      attachments_with(&[("attachments", json!(["a.txt", {"filename": "b"}]))]),
+    ),
+    json_value_case("attachment is a number", attachments_with(&[("attachments", json!([7, {"filename": "b"}]))])),
+    json_value_case(
+      "attachment is a list",
+      attachments_with(&[("attachments", json!([["a.txt"], {"filename": "b"}]))]),
+    ),
+    json_value_case(
+      "attachment with an extra key",
+      attachments_with(&[("attachments", json!([{"filename": "a.txt", "zzz": 1}, {"filename": "b"}]))]),
+    ),
+    json_value_case(
+      "attachment with two extra keys in input order",
+      attachments_with(&[("attachments", json!([{"zeta": 1, "filename": "a.txt", "alpha": 2}, {"filename": "b"}]))]),
+    ),
+    json_value_case(
+      "a field error before an extra key",
+      attachments_with(&[("attachments", json!([{"filename": 1, "zzz": 2}, {"filename": "b"}]))]),
+    ),
+    json_value_case(
+      "two bad attachments with two errors each",
+      attachments_with(&[("attachments", json!([{"filename": 1, "size": "x"}, {"size": 1.5}]))]),
+    ),
+    json_value_case(
+      "bad attachments in index order",
+      attachments_with(&[("attachments", json!([{"filename": 1}, "x", {"filename": "ok", "zzz": 1}]))]),
+    ),
+    json_value_case(
+      "a missing filename",
+      attachments_with(&[("attachments", json!([{"size": 1}, {"filename": "b"}]))]),
+    ),
+  ]
+}
+
+/// The list model's valid body: two attachments, the first without a size.
+fn attachments_value() -> Value {
+  json!({"attachments": [{"filename": "a.txt"}, {"filename": "b.txt", "size": 3}]})
+}
+
+fn attachments_with(changes: &[(&str, Value)]) -> Value {
+  with_changes(attachments_value(), changes)
+}
+
+/// `body` with each `(field, value)` set, in the order given. A name the body does not declare is an extra key.
+fn with_changes(mut body: Value, changes: &[(&str, Value)]) -> Value {
   let object = body.as_object_mut().expect("the model value is an object");
   for (field, value) in changes {
     object.insert(field.to_string(), value.clone());

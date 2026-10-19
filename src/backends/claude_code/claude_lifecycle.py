@@ -25,6 +25,7 @@ from src.backends.claude_code import (
     claude_accounts,
     claude_code,
     claude_config,
+    claude_idle_compaction,
     claude_metadata,
     claude_relay,
     login_dirs,
@@ -35,11 +36,6 @@ from src.infra import event_types as ET
 from src.runtime.hooks import backend_lifecycle
 
 log = log_once.LazyStructlogLogger()
-
-# Moves per-machine sections (cwd, env info, memory paths, git status) out of the system prompt into
-# the first user message, so the system prompt stays stable across sessions and cross-run
-# prompt-cache reuse improves. Only the Claude Code CLI family supports this flag.
-EXCLUDE_DYNAMIC_SECTIONS_FLAG = "--exclude-dynamic-system-prompt-sections"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,7 +60,7 @@ def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -
   first process of a task opens the conversation id the runtime chose (a later one resumes it). A task run
   that resumes a held conversation (a worker-node continuation) opens no new id — the resume flag names it."""
   if ctx.kind == "turn":
-    return {"extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    return {"extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
   if ctx.kind == "task":
     if first_process and ctx.preassigned_native_id and ctx.held_native_id is None:
       return {"claude_session_id": ctx.preassigned_native_id}
@@ -154,6 +150,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     raise ValueError(f"unknown launch kind {ctx.kind!r}")
 
   async def _place_turn(self, ctx: backend_lifecycle.LaunchContext) -> backend_lifecycle.Launch:
+    await claude_idle_compaction.settle_for_turn(ctx.session_meta.id)
     resume_id = self._pooled_resume_id(ctx)
     context_tokens, last_request_at = await ctx.context_state()
     account = await master_cc_relay.place_turn(ctx, resume_id, context_tokens, last_request_at)
@@ -309,12 +306,15 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
         ctx, next_account, resume_id=native_id, prompt=claude_relay.CONTINUATION_PROMPT, relays=relays)
 
   async def after_round(self, ctx: backend_lifecycle.LaunchContext, native_id: str | None, succeeded: bool) -> None:
-    """Collapse the pool's copies of the transcript to the newest two after a sound turn.
+    """Arm the session's idle compaction timer, and collapse the pool's copies of the transcript after a sound turn.
 
     Every relay leaves its source copy behind. A failed round keeps every copy as its fallback.
-    turn: runs after the round's account label is persisted.
+    turn: arms the idle timer (claude_idle_compaction.arm); the copies collapse after the round's account
+    label is persisted.
     task: does nothing.
     """
+    if ctx.kind == "turn":
+      await claude_idle_compaction.arm(ctx)
     if ctx.kind == "turn" and succeeded and native_id and claude_metadata.account_of(ctx.session_meta):
       await asyncio.to_thread(claude_accounts.retire_transcript_copies, ctx.cfg, native_id)
 

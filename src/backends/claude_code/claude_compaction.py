@@ -18,7 +18,8 @@ transcript gained a ``compact_boundary`` row, and the models that took part in
 the run — those whose token counters grew over the transcript's newest
 ``cost-state`` row — are the expected model family alone. ``compact_with_sonnet``
 runs the Sonnet command line, ``claude -p --resume <uuid> --model claude-sonnet-5``.
-Growth over that row is the fact that counts, not presence in ``modelUsage``: ``--resume`` restores
+The idle compaction (src/backends/claude_code/claude_idle_compaction.py) runs its
+session's own command line through the same runner. Growth over that row is the fact that counts, not presence in ``modelUsage``: ``--resume`` restores
 the session's per-model totals from the transcript's ``cost-state`` rows, so
 the run's ``modelUsage`` always repeats the session's earlier turns' usage next
 to the run's own. Success and failure surface through the same

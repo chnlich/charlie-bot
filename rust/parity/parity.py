@@ -423,6 +423,45 @@ def _check_agent_after_stop(side: Side, expected: str, starts: list[dict], pendi
   return lines
 
 
+def _gate_markers(tree: servers.Tree) -> set[tuple[str, str]]:
+  """The at-<name> gate markers of a tree's fake agents, as (file name, text) pairs."""
+  agent_dir = tree.root / "fake-agent"
+  return {(path.name, path.read_text(encoding="utf-8")) for path in agent_dir.glob("at-*") if path.is_file()}
+
+
+def _unsettled_starts(side: Side, pending: set[int], markers_before: set[tuple[str, str]]) -> list[int]:
+  """The pending starts that have neither exited nor written a gate marker of their own since the gate opened."""
+  reached = {int(text) for _, text in _gate_markers(side.tree) - markers_before if text.isdigit()}
+  agent_dir = side.tree.root / "fake-agent"
+  return [index for index in sorted(pending) if index not in reached and not (agent_dir / f"exit-{index}").is_file()]
+
+
+def _open_gate_while_stopped(sides: list[Side], gate: str, pending_by_side: list[set[int]],
+                             timeout_seconds: float) -> list[str]:
+  """Open *gate* in each fake-agent directory, then wait for each pending start to exit or reach a gate anew.
+
+  A start that does neither before the timeout fails the step, and the line names its side and start index.
+  """
+  markers_before = [_gate_markers(side.tree) for side in sides]
+  for side in sides:
+    (side.tree.root / "fake-agent" / f"open-{gate}").write_text("open\n", encoding="utf-8")
+  deadline = time.monotonic() + timeout_seconds
+  while True:
+    unsettled = [
+        _unsettled_starts(side, pending, markers)
+        for side, pending, markers in zip(sides, pending_by_side, markers_before, strict=True)
+    ]
+    if not any(unsettled):
+      return []
+    if time.monotonic() >= deadline:
+      break
+    time.sleep(0.02)
+  return [
+      f"{side.label} fake-agent start {index} neither exited nor reached a gate anew within {timeout_seconds}s "
+      f"after open-{gate}" for side, starts in zip(sides, unsettled, strict=True) for index in starts
+  ]
+
+
 def _exit_lines(sides: list[Side], when: str) -> list[str]:
   """Name each server that has exited. Call it only while the harness means every server in *sides* to be running."""
   lines = []
@@ -621,6 +660,10 @@ def _run_handover_step(
     if side.server is None:
       raise RuntimeError(f"{side.label} has no server to hand over")
     side.server.stop_server()
+  if step.open_while_stopped is not None:
+    if step.timeout_seconds is None:
+      raise RuntimeError(f"handover step {step.name!r} has no validated timeout for open_while_stopped")
+    lines.extend(_open_gate_while_stopped(sides, step.open_while_stopped, pending_before_stop, step.timeout_seconds))
   lines.extend(
       line for side, starts, pending in zip(sides, starts_before_stop, pending_before_stop, strict=True)
       for line in _check_agent_after_stop(side, step.agent_after_stop, starts, pending))

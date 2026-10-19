@@ -4,6 +4,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 from typing import Any
 
 import pytest
@@ -974,3 +975,92 @@ def test_http_compare_refused_without_an_error_status(
     tmp_path: pathlib.Path, step: dict[str, Any], message: str) -> None:
   with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
     _load(tmp_path, [step])
+
+
+def _handover_script() -> dict[str, Any]:
+  return {"starts": [{"name": "claude", "steps": [{"gate": "stop"}], "exit_code": 0}]}
+
+
+@pytest.mark.parametrize(
+    "fields,message", [
+        ({
+            "open_while_stopped": "stop"
+        }, "'timeout_seconds' is required with open_while_stopped"),
+        ({
+            "timeout_seconds": 5
+        }, "'timeout_seconds' applies only with open_while_stopped"),
+        ({
+            "open_while_stopped": ""
+        }, "'open_while_stopped' must be a non-empty string"),
+        ({
+            "open_while_stopped": 3,
+            "timeout_seconds": 5
+        }, "'open_while_stopped' must be a non-empty string"),
+        ({
+            "open_while_stopped": "stop",
+            "timeout_seconds": 0
+        }, "timeout_seconds must be positive"),
+        (
+            {
+                "open_while_stopped": "missing",
+                "timeout_seconds": 5
+            }, "opens gate 'missing', which no fake_agent start declares"),
+    ])
+def test_handover_open_while_stopped_validation(tmp_path: pathlib.Path, fields: dict[str, Any], message: str) -> None:
+  step = {"kind": "handover", "name": "hand over", "agent_after_stop": "alive", **fields}
+  with pytest.raises(scenario_file.ScenarioError, match=re.escape(message)):
+    _load(tmp_path, [step], fake_agent=_handover_script(), expect_starts=1, directions=["python-to-candidate"])
+
+
+def test_handover_open_while_stopped_keeps_its_gate_and_timeout(tmp_path: pathlib.Path) -> None:
+  step = {
+      "kind": "handover",
+      "name": "hand over",
+      "agent_after_stop": "exited",
+      "open_while_stopped": "stop",
+      "timeout_seconds": 5,
+  }
+  scenario = _load(tmp_path, [step], fake_agent=_handover_script(), expect_starts=1, directions=["python-to-candidate"])
+  assert (scenario.steps[0].open_while_stopped, scenario.steps[0].timeout_seconds) == ("stop", 5.0)
+
+
+def _write(path: pathlib.Path, text: str) -> None:
+  path.write_text(text, encoding="utf-8")
+
+
+def _tree_side(root: pathlib.Path, label: str) -> parity.Side:
+  return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+
+
+def test_open_while_stopped_fails_a_start_that_stays_at_its_old_gate(tmp_path: pathlib.Path) -> None:
+  # Start 1 reached the gate before the stop, so its marker predates the open and does not count as a new gate.
+  agent_dir = tmp_path / "fake-agent"
+  agent_dir.mkdir()
+  _write(agent_dir / "at-stop", "1")
+
+  lines = parity._open_gate_while_stopped([_tree_side(tmp_path, "baseline")], "stop", [{1}], timeout_seconds=0.2)
+
+  assert len(lines) == 1
+  assert "baseline fake-agent start 1" in lines[0]
+  assert (agent_dir / "open-stop").is_file()
+
+
+def test_open_while_stopped_settles_on_an_exit_or_a_new_gate_marker(tmp_path: pathlib.Path) -> None:
+  agent_dir = tmp_path / "fake-agent"
+  agent_dir.mkdir()
+  _write(agent_dir / "at-first", "1")
+  # Start 1 moves on to a gate of its own after the open; start 2 exits. Both arrive after the wait begins.
+  arrivals = [
+      threading.Timer(0.1, _write, (agent_dir / "at-second", "1")),
+      threading.Timer(0.1, _write, (agent_dir / "exit-2", "0")),
+  ]
+  for arrival in arrivals:
+    arrival.start()
+  try:
+    lines = parity._open_gate_while_stopped([_tree_side(tmp_path, "candidate")], "first", [{1, 2}], timeout_seconds=5)
+  finally:
+    for arrival in arrivals:
+      arrival.join()
+
+  assert lines == []
+  assert (agent_dir / "open-first").is_file()

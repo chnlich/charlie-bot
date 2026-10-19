@@ -383,6 +383,13 @@ Step fields:
 - `gate` requires `open`; the harness writes `open-<name>` in both fake-agent directories.
 - `handover` requires `agent_after_stop`: `alive`, `exited` or `terminated`. It checks every scripted start that
   had no exit marker before the server stopped.
+- `handover` with `open_while_stopped: <gate>` also requires `timeout_seconds`, and `timeout_seconds` is refused
+  without it. The step stops every server, then writes `open-<gate>` in both fake-agent directories while no server
+  runs. It then waits, up to the timeout, until each scripted start that had no exit marker before the stop has
+  written its `exit-<index>` marker or a new `at-<name>` gate marker holding its index. A start that does neither
+  fails the step, and the line names its side and start index. Then the `agent_after_stop` check runs, and the next
+  servers start. The gate must be a `gate` step of some start in the scenario's `fake_agent`, or the scenario does
+  not load.
 - `ws` targets any `/ws/...` path. It accepts `query`, `auth` (`token` or `none`), an ordered `send` list of
   `{json: ...}`, `{text: ...}` or `{binary_file: PATH}` frames, an optional `collect` rule, a required `until`
   condition and a required `timeout_seconds`. `wait_for_fake_handshake: FAKE` holds outgoing frames until the proxy

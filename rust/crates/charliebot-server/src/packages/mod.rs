@@ -41,7 +41,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.usage", charliebot_usage_page::register), // stub: src.features.usage
   ("src.features.voice", charliebot_voice::register),      // stub: src.features.voice
   ("src.backends.openai_compatible", charliebot_agents::backends::openai_compatible::register),
-  ("src.backends.antigravity", backends::antigravity), // stub: src.backends.antigravity
+  ("src.backends.antigravity", charliebot_agents::backends::antigravity::register),
   ("src.backends.charlie_code", charliebot_agents::backends::charlie_code::register),
   ("src.backends.claude_code", backends::claude_code), // stub: src.backends.claude_code
   ("src.backends.codex", charliebot_agents::backends::codex::register),

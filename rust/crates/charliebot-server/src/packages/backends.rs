@@ -62,10 +62,6 @@ impl BackendFactory for NotPorted {
   }
 }
 
-pub fn antigravity(registry: &mut Registry) -> Result<(), RegistryError> {
-  register_type(registry, "antigravity", plain(ResumeStyle::NativeId, false), None, false)
-}
-
 /// `src/backends/claude_code`: the registered backend, `accounts:` section and metadata fields.
 pub fn claude_code(registry: &mut Registry) -> Result<(), RegistryError> {
   charliebot_agents::backends::claude_code::register(registry)

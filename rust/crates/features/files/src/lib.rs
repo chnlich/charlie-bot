@@ -15,9 +15,9 @@ use axum::Router;
 use axum::extract::{Path, Request, State};
 use axum::http::request::Parts;
 use axum::response::Response;
-use axum::routing::get;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_compat::responses;
+use charliebot_compat::routing::get_and_head;
 use charliebot_compat::static_files::{self, StaticDirectory};
 use charliebot_core::paths;
 use charliebot_registry::pages::HomeCard;
@@ -46,8 +46,8 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 /// because `Router::route` takes its path as written.
 fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/absolute_filepath/", get(serve_root).fallback(method_not_allowed))
-    .route("/absolute_filepath/{*path}", get(serve).fallback(method_not_allowed))
+    .route("/absolute_filepath/", get_and_head(serve_root))
+    .route("/absolute_filepath/{*path}", get_and_head(serve))
     .with_state(Arc::clone(features))
 }
 
@@ -67,12 +67,6 @@ async fn serve_root(State(features): State<Arc<FeatureContext>>, request: Reques
 async fn serve(State(features): State<Arc<FeatureContext>>, Path(path): Path<String>, request: Request) -> Response {
   let (parts, _) = request.into_parts();
   answer(&features.registry, &parts, &path).await
-}
-
-/// FastAPI's 405 for the route's methods. Starlette lists them in set order, which varies per process, so the
-/// `allow` value here is one fixed order.
-async fn method_not_allowed() -> Response {
-  responses::method_not_allowed("GET, HEAD")
 }
 
 /// The answer to `path`: the first registered file view that answers, else the file system.

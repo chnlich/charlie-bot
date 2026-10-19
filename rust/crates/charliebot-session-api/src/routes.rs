@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
-use axum::routing::get;
+use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
@@ -36,13 +36,13 @@ struct StatusKey {
 /// Register every supported listing route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/sessions/", get(list_active).fallback(method_not_allowed))
-    .route("/api/sessions/archived", get(list_archived).fallback(method_not_allowed))
-    .route("/api/sessions/starred", get(list_starred).fallback(method_not_allowed))
-    .route("/api/sessions/groups", get(list_groups).fallback(method_not_allowed))
-    .route("/api/sessions/status", get(session_status).fallback(method_not_allowed))
-    .route("/api/sessions/tree", get(session_tree).fallback(method_not_allowed))
-    .route("/api/sessions/search", get(session_search).fallback(method_not_allowed))
+    .route("/api/sessions/", get_only(list_active))
+    .route("/api/sessions/archived", get_only(list_archived))
+    .route("/api/sessions/starred", get_only(list_starred))
+    .route("/api/sessions/groups", get_only(list_groups))
+    .route("/api/sessions/status", get_only(session_status))
+    .route("/api/sessions/tree", get_only(session_tree))
+    .route("/api/sessions/search", get_only(session_search))
     .merge(crate::detail::routes())
     .with_state(Arc::clone(features))
 }
@@ -50,10 +50,6 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 /// Match the route family for the server's bare-path slash redirect.
 pub(crate) fn matches(path: &str) -> bool {
   path == "/api/sessions" || path.strip_prefix("/api/sessions/").is_some()
-}
-
-pub(crate) async fn method_not_allowed() -> Response {
-  responses::method_not_allowed("GET")
 }
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {

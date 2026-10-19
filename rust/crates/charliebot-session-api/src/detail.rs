@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
-use axum::routing::get;
+use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
@@ -42,14 +42,14 @@ static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| Mutex::n
 /// Register the session detail, transcript, usage, events, and task-read routes.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
-    .route("/api/sessions/{session_id}", get(session_detail).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/bootstrap", get(session_bootstrap).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/usage", get(session_usage).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/events", get(session_events).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/transcript", get(session_transcript).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/events.jsonl", get(events_jsonl).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/runs", get(session_runs).fallback(method_not_allowed))
-    .route("/api/sessions/{session_id}/task-inputs/pending", get(pending_task_inputs).fallback(method_not_allowed))
+    .route("/api/sessions/{session_id}", get_only(session_detail))
+    .route("/api/sessions/{session_id}/bootstrap", get_only(session_bootstrap))
+    .route("/api/sessions/{session_id}/usage", get_only(session_usage))
+    .route("/api/sessions/{session_id}/events", get_only(session_events))
+    .route("/api/sessions/{session_id}/transcript", get_only(session_transcript))
+    .route("/api/sessions/{session_id}/events.jsonl", get_only(events_jsonl))
+    .route("/api/sessions/{session_id}/runs", get_only(session_runs))
+    .route("/api/sessions/{session_id}/task-inputs/pending", get_only(pending_task_inputs))
 }
 
 /// Build the bootstrap payload for a session, shared with the future index-page owner.
@@ -590,10 +590,6 @@ fn is_bad_run_cursor(error: &StoreError) -> bool {
 
 fn events_file_not_found() -> Response {
   responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Events file not found"}))
-}
-
-async fn method_not_allowed() -> Response {
-  responses::method_not_allowed("GET")
 }
 
 fn gzip_json_body(request: &Request<Body>, body: Vec<u8>) -> Response {

@@ -8,8 +8,8 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::request::Parts;
 use axum::response::Response;
-use axum::routing::{get, post};
 use charliebot_compat::responses;
+use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
 use http::{StatusCode, header};
 use serde_json::{Value, json};
@@ -22,9 +22,9 @@ use crate::timestamps;
 /// Register host-auth routes with the application feature context as shared state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/host-auth", get(host_auth_page).head(get_not_allowed).fallback(get_not_allowed))
-    .route("/api/host-auth/status", get(host_auth_status).head(get_not_allowed).fallback(get_not_allowed))
-    .route("/api/host-auth/probe", post(host_auth_probe).fallback(post_not_allowed))
+    .route("/host-auth", get_only(host_auth_page))
+    .route("/api/host-auth/status", get_only(host_auth_status))
+    .route("/api/host-auth/probe", post_only(host_auth_probe))
     .with_state(Arc::clone(features))
 }
 
@@ -105,14 +105,6 @@ fn see_other() -> Response {
     .header(header::LOCATION, "/host-auth")
     .body(Body::empty())
     .expect("the redirect builds")
-}
-
-async fn get_not_allowed() -> Response {
-  responses::method_not_allowed("GET")
-}
-
-async fn post_not_allowed() -> Response {
-  responses::method_not_allowed("POST")
 }
 
 /// `ServerErrorMiddleware`'s answer to a handler that raised.

@@ -7,8 +7,8 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
-use axum::routing::get;
 use charliebot_compat::responses;
+use charliebot_compat::routing::get_only;
 use charliebot_registry::FeatureContext;
 use charliebot_session_api::listing::{self, SessionsListMemos};
 
@@ -18,21 +18,14 @@ use crate::sidebar::THREADS_VIEW;
 /// the Threads body.
 static CHAT_THREADS_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
 
-/// The route table, built with the shared feature context. The explicit HEAD route answers 405: axum would otherwise
-/// send a HEAD request to the GET handler, and an API GET route does not answer HEAD.
+/// The route table, built with the shared feature context.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new()
-    .route("/api/sessions/chat-threads", get(list_chat_threads).head(method_not_allowed).fallback(method_not_allowed))
-    .with_state(Arc::clone(features))
+  Router::new().route("/api/sessions/chat-threads", get_only(list_chat_threads)).with_state(Arc::clone(features))
 }
 
 /// Match the route family for the server's trailing-slash redirect.
 pub(crate) fn matches(path: &str) -> bool {
   path == "/api/sessions/chat-threads"
-}
-
-async fn method_not_allowed() -> Response {
-  responses::method_not_allowed("GET")
 }
 
 /// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the complement over the

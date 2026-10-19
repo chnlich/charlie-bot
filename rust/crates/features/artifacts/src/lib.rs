@@ -1,6 +1,8 @@
-//! `src/features/artifacts`: registers the `publish:` config section. The rest of the package is not ported yet.
+//! `src/features/artifacts`: registers the `publish:` config section and the session plan list route. The rest of
+//! the package is not ported yet.
 
 pub mod artifact_check;
+mod api;
 mod artifact_view;
 mod headless_render;
 pub mod plan_diff;
@@ -21,6 +23,7 @@ use serde_json::Value;
 /// `src/features/artifacts`: the `publish:` section.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.file_view("artifacts", Arc::new(artifact_view::ArtifactView))?;
+  registry.router(api::routes, api::matches)?;
   registry.config_section(ConfigSection {
     key: "publish",
     legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],

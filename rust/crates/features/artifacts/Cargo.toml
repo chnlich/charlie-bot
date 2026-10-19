@@ -29,6 +29,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+tower.workspace = true
 
 [[bin]]
 name = "artifact-plan-diff"

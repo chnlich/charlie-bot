@@ -280,6 +280,30 @@ async fn reports_are_stable_recovered_and_wake_the_parent_dispatcher() {
 }
 
 #[tokio::test]
+async fn elone_redelivers_a_subtree_close_report_before_the_source_closes() {
+  let harness = Harness::new();
+  let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let source = harness.create_task("source", Some(&root.id), TaskProfile::Manager, "Feature").await;
+  let child = harness.create_task("child", Some(&source.id), TaskProfile::Worker, "Child").await;
+  // The crash window: the child's close fact is durable and its report is not delivered yet.
+  harness.close_task(&child.id, "close-child", Some(&source.id)).await;
+  assert_eq!(harness.dispatcher.undelivered_report_blockers(&child.id).unwrap().len(), 1);
+
+  harness.store.elone_session(&source.id, 0, None, &*harness.dispatcher).await.unwrap();
+
+  let facts = harness.store.load_all_facts(&source.id).unwrap();
+  let reports: Vec<usize> =
+    facts.iter().enumerate().filter(|(_, e)| e["type"] == event_types::CHILD_REPORT).map(|(i, _)| i).collect();
+  let closes: Vec<usize> =
+    facts.iter().enumerate().filter(|(_, e)| e["type"] == event_types::TASK_CLOSED).map(|(i, _)| i).collect();
+  assert_eq!((reports.len(), closes.len()), (1, 1));
+  assert!(reports[0] < closes[0]);
+  assert_eq!(facts[reports[0]]["child_session_id"], child.id);
+  assert_eq!(facts[closes[0]]["outcome"], "archived");
+  assert!(harness.dispatcher.undelivered_report_blockers(&child.id).unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn acknowledging_one_child_report_leaves_the_later_report_pending_after_reload() {
   let harness = Harness::new();
   let parent = harness.create_task("parent", None, TaskProfile::Manager, "Parent").await;

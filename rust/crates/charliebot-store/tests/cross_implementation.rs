@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,10 +9,11 @@ use charliebot_core::proc_identity;
 use charliebot_core::run_token;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::terminal_outcome;
+use charliebot_store::session_fork::CloseReportRedelivery;
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RetryRunFields, RunBlocker, RunKind,
-  RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook, SequenceBindingMover,
-  SequenceListingFields, StopResult, Store, StoreError, StoreHookFuture, StoreHooks, TaskCaller,
+  AccountLabelKeeper, AnchorFieldReconciler, ControlGuard, CreateTask, EmptyRuntimeEventHooks, RetryRunFields,
+  RunBlocker, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook,
+  SequenceBindingMover, SequenceListingFields, StopResult, Store, StoreError, StoreHookFuture, StoreHooks, TaskCaller,
 };
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -571,6 +572,96 @@ async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
     fs::read_to_string(rust_home.join("sessions/synthetic-archive-leaf/data/chat_events.jsonl")).unwrap();
   assert!(leaf_facts.contains("\"archived_with\": \"synthetic-archive-root\""));
   assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+}
+
+const FORK_ROOT_ID: &str = "synthetic-fork-root";
+
+/// The fork and elone cases of `python_store_ops.py::FORK_CASES`, in the same order.
+const FORK_CASES: [(&str, &str, Option<i64>); 9] = [
+  ("fork-null", "fork", None),
+  ("fork-first", "fork", Some(0)),
+  ("fork-middle", "fork", Some(2)),
+  ("fork-last", "fork", Some(3)),
+  ("fork-past-end", "fork", Some(4)),
+  ("elone-first", "elone", Some(0)),
+  ("elone-middle", "elone", Some(2)),
+  ("elone-last", "elone", Some(3)),
+  ("elone-past-end", "elone", Some(4)),
+];
+
+/// The elone redelivery step with no subtree close reports to redeliver: the fixture root has no children.
+struct NoRedelivery;
+
+impl CloseReportRedelivery for NoRedelivery {
+  fn redeliver_close_reports_locked<'a>(
+    &'a self,
+    _guard: &'a ControlGuard,
+    _session_id: &'a str,
+  ) -> StoreHookFuture<'a, ()> {
+    Box::pin(async { Ok(()) })
+  }
+}
+
+/// The session directory names under a home.
+fn session_names(home: &Path) -> BTreeSet<String> {
+  fs::read_dir(home.join("sessions"))
+    .unwrap()
+    .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+    .collect()
+}
+
+/// The session directories created since the base home was copied.
+fn fresh_sessions(home: &Path, base: &BTreeSet<String>) -> Vec<String> {
+  session_names(home).difference(base).cloned().collect()
+}
+
+/// The home's normalized files, with each fresh session id replaced by one name: each implementation draws its own.
+fn normalized_home(home: &Path, base: &BTreeSet<String>) -> BTreeMap<PathBuf, Vec<u8>> {
+  let fresh = fresh_sessions(home, base);
+  normalized_files(home)
+    .into_iter()
+    .map(|(path, bytes)| {
+      let mut path = path.to_string_lossy().into_owned();
+      for id in &fresh {
+        path = path.replace(id.as_str(), "generated-session");
+      }
+      (PathBuf::from(path), bytes)
+    })
+    .collect()
+}
+
+#[tokio::test]
+async fn python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index() {
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_fork", root.path(), &[]);
+  let base = root.path().join("fork-base");
+  let base_sessions = session_names(&base);
+  run_python_helper("fork_cases", root.path(), &[]);
+  let python_outcomes: BTreeMap<String, Value> =
+    serde_json::from_str(&fs::read_to_string(root.path().join("fork-outcomes.json")).unwrap()).unwrap();
+
+  for (name, operation, event_index) in FORK_CASES {
+    let python_home = root.path().join(format!("python-{name}"));
+    let rust_home = root.path().join(format!("rust-{name}"));
+    copy_tree(&base, &rust_home);
+    let store = make_store(&rust_home);
+    let rust = if operation == "fork" {
+      store.fork_session(FORK_ROOT_ID, event_index, Some("synthetic")).await.map(|_| ())
+    } else {
+      let index = event_index.expect("an elone case names an index");
+      store.elone_session(FORK_ROOT_ID, index, Some("synthetic"), &NoRedelivery).await.map(|_| ())
+    };
+    let rust_refused = match rust {
+      Ok(()) => false,
+      Err(StoreError::Invalid(_)) => true,
+      Err(error) => panic!("{name}: unexpected store error {error:?}"),
+    };
+    assert_eq!(python_outcomes[name]["outcome"] == "refused", rust_refused, "{name}: refusal differs");
+    let created = usize::from(!rust_refused);
+    assert_eq!(fresh_sessions(&python_home, &base_sessions).len(), created, "{name}: python session dirs");
+    assert_eq!(fresh_sessions(&rust_home, &base_sessions).len(), created, "{name}: rust session dirs");
+    assert_eq!(normalized_home(&python_home, &base_sessions), normalized_home(&rust_home, &base_sessions), "{name}");
+  }
 }
 
 #[tokio::test]

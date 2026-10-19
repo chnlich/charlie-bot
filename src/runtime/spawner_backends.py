@@ -29,6 +29,11 @@ def resolve_backend_option(cfg: config.CharlieBotConfig, backend_id: str, model:
   return option.model_copy(update={"model": model})
 
 
+def session_backend_id(cfg: config.CharlieBotConfig, session_meta: models.SessionMetadata) -> str:
+  """The backend id the session's own defaults resolve to (its pin, or the first option)."""
+  return _resolve_session_default_backend_model(cfg, session_meta)[0]
+
+
 def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
   """Core wording of the refusal for a session pinned to an unknown backend id.
 

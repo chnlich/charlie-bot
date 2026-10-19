@@ -102,6 +102,18 @@ class PathsConfig(pydantic.BaseModel):
     return self
 
 
+class RoutingConfig(pydantic.BaseModel):
+  """``backends.routing:`` section: the host-configured router program that orders unpinned work."""
+
+  model_config = pydantic.ConfigDict(extra='forbid')
+
+  # The router argv (src/features/artifacts/publish.py's publish.command convention): the first
+  # item resolves on the server process's PATH. One invocation per selection; stdin and stdout
+  # carry the router contract JSON (src/runtime/backend_pool.route). Absent (default): every
+  # selection behaves as if the router did not exist.
+  command: list[str]
+
+
 class BackendsConfig(pydantic.BaseModel):
   """``backends:`` section: model-switch options and the rotation pool of unpinned work."""
 
@@ -128,6 +140,12 @@ class BackendsConfig(pydantic.BaseModel):
   # delegating session's backend, the reviewer runs on the worker's backend, and the session
   # namer and page check skip their one-shot.
   pool: list[str] = []
+
+  # The router program that orders unpinned work (None: the pool rotation alone decides, as it
+  # always has). The routed roles — implement, quick-edit, script-run, verify and new thread
+  # sessions — ask it before the pool; every other caller (cold read, naming, page check, the
+  # improve loop) never sees it.
+  routing: RoutingConfig | None = None
 
   # Backend options available for model switching. Each entry parses as the option model that
   # its ``type`` names in the config registry (src/infra/config_registry.py). Additional

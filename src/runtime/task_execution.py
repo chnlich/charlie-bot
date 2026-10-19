@@ -2116,10 +2116,12 @@ class TaskExecutionAdapter:
     return True, self._quota_failures.pop((session_id, run_id))
 
   def _pool_chose_backend(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
-    """True when the backends.pool picked the run's backend: a review run, or a node whose delegation named none."""
+    """True when the run's backend came from the shared rotation: a review run, a node whose
+    delegation named none, or a node whose router route the pool fallback answered."""
     if run.kind == "review":
       return True
-    return metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).backend_from_pool
+    fields = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER)
+    return fields.backend_from_pool or bool(fields.route is not None and fields.route.backends)
 
   async def _fail_over_quota(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
     """Continue a quota-interrupted run on the next pool member, in the same worktree; False when none is available.
@@ -2129,7 +2131,13 @@ class TaskExecutionAdapter:
         a revision round's retry carries the same review feedback.
         """
     session_id = meta.id
-    member = backend_pool.select(self._cfg, caller="failover", exclude={run.backend or ""})
+    route = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).route
+    member = None
+    if route is not None and route.backends:
+      member = backend_pool.pick_ordered(
+          self._cfg, caller="failover", backends=route.backends, exclude={run.backend or ""})
+    if member is None:
+      member = backend_pool.select(self._cfg, caller="failover", exclude={run.backend or ""})
     if member is None:
       return False
     await self._tree.set_node_backend(session_id, member.id)
@@ -2140,6 +2148,14 @@ class TaskExecutionAdapter:
         backend=member.id,
         input_event_ids=list(run.input_event_ids),
     )
+    until = backend_pool.cooling_until(run.backend or "")
+    await self._events.persist_and_broadcast(
+        session_id, {
+            "type": ET.QUOTA_FAILOVER,
+            "from": run.backend or "",
+            "to": member.id,
+            "recovers_at": until.isoformat(timespec="minutes") if until is not None else "",
+        })
     log.warning(
         "worker_quota_failover",
         session_id=session_id,
@@ -2383,14 +2399,21 @@ class TaskExecutionAdapter:
         return existing[0].id
       attempts = len(existing)
       used = {r.backend for r in tree.runs.list_run_records_sync(session_id) if r.backend}
-      selection = review.select_reviewer_backend(
-          self._cfg,
-          "reviewer",
-          work_run.backend or "",
-          work_run.model,
-          [r.backend for r in existing if r.backend],
-          used_backends=used,
-      )
+      tried = [r.backend for r in existing if r.backend]
+      # A routed node's reviewer reuses the worker's route list (no router call): the first
+      # available member that avoids the worker's and the node's used backends. An empty or fully
+      # avoided list, and every unrouted node, take today's pool selection.
+      meta = await tree.load_meta(session_id)
+      route = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).route if meta else None
+      selection = None
+      if route is not None and route.backends:
+        option = backend_pool.pick_ordered(
+            self._cfg, caller="reviewer", backends=route.backends, exclude={work_run.backend or "", *used, *tried})
+        if option is not None:
+          selection = (option.id, models.option_default_model(option, subject="routed backend "), tried)
+      if selection is None:
+        selection = review.select_reviewer_backend(
+            self._cfg, "reviewer", work_run.backend or "", work_run.model, tried, used_backends=used)
       if selection is None:
         log.warning("reviewer_backends_exhausted", session_id=session_id, work_run=work_run.id)
         return None

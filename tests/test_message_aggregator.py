@@ -181,6 +181,7 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
                   "delegate_invocation": invocation,
                   "backend": "codex-o3",
                   "model": "o3",
+                  "route": None,
                   "event_index": 0,
                   "id": "legacy:0",
                   "timestamp": "2026-07-01T12:00:00Z",

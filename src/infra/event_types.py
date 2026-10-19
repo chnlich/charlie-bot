@@ -214,6 +214,7 @@ RATE_LIMIT_INFO = "rate_limit_info"
 
 # -- Session backend switching ----------------------------------------------
 BACKEND_SWITCHED = "backend_switched"
+QUOTA_FAILOVER = "quota_failover"
 
 # -- Turn-end model attribution ----------------------------------------------
 # Synthetic round-end notice from the master run detector — never a CLI stream

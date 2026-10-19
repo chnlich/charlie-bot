@@ -180,6 +180,12 @@ steps:
     json: {}
     expect_status: 422
     compare: status_and_shape
+  - name: chat-message content and uploaded_files both fail validation
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: 42, uploaded_files: [{filename: 42, path: synthetic-path}]}
+    expect_status: 422
+    compare: status_and_shape
   - name: malformed chat-message JSON wins over a missing session
     method: POST
     path: /api/chat/${missing_session}/message

@@ -438,6 +438,20 @@ test('a phone collapsed row counts the descendant items and stays one row', asyn
   assert.equal(rig.panel.children[0].dataset.childCount, '3');
 });
 
+test('the phone toggle row sticks to the panel top, the desktop panel has no toggle row', async () => {
+  const rig = panelRig();
+  switchLayout(rig, 'mobile');
+  await openSession(rig, {web_status: STATUS});
+  const toggle = rig.panel.children[0];
+  for (const cls of ['sticky', '-top-2', 'z-10', 'bg-slate-900']) {
+    assert.equal(toggle.classList.contains(cls), true, `toggle row carries ${cls}`);
+  }
+
+  switchLayout(rig, 'desktop');
+  assert.equal(rig.panel.children.some((el) => el.classList.contains('sticky')), false,
+      'the desktop panel holds no toggle row');
+});
+
 test('a tap expands the phone panel with the row at its top, and a second tap collapses it', async () => {
   const rig = panelRig();
   switchLayout(rig, 'mobile');

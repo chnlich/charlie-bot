@@ -652,6 +652,10 @@ video {
   inset: 0px;
 }
 
+.-top-2 {
+  top: -0.5rem;
+}
+
 .bottom-24 {
   bottom: 6rem;
 }

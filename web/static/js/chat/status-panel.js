@@ -189,7 +189,7 @@
   function toggleRow() {
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'block w-full text-left text-slate-200 hover:text-slate-100 transition-colors';
+    row.className = 'sticky -top-2 z-10 bg-slate-900 block w-full text-left text-slate-200 hover:text-slate-100 transition-colors';
     row.dataset.statusRow = 'toggle';
     row.setAttribute('aria-expanded', String(panelExpanded));
     row.onclick = () => {

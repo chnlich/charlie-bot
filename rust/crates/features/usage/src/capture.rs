@@ -15,7 +15,7 @@ use crate::count::Count;
 use crate::ledger::{StoredRecord, UsageLedger};
 use crate::ndjson;
 
-const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
+pub(crate) const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
 const CLC_MASTER_ACCOUNT: &str = "clc-master";
 const THREAD_MARKERS: [&[u8]; 2] = [b"\"type\": \"result\"", b"\"session_id\""];
 const MASTER_MARKERS: [&[u8]; 2] = [b"\"type\": \"context\"", b"\"type\": \"result\""];
@@ -89,10 +89,14 @@ pub fn capture_local(
   config: &CharlieBotConfig,
   registry: &Registry,
 ) -> anyhow::Result<Vec<(String, usize)>> {
-  let host = nix::unistd::gethostname()?
+  capture_usage(ledger, &host_name()?, &config.sessions_dir(), config, registry)
+}
+
+/// This host's name, as the ledger keys its capture times (`socket.gethostname()` in the Python ledger).
+pub(crate) fn host_name() -> anyhow::Result<String> {
+  nix::unistd::gethostname()?
     .into_string()
-    .map_err(|hostname| anyhow!("hostname is not valid UTF-8: {}", hostname.to_string_lossy()))?;
-  capture_usage(ledger, &host, &config.sessions_dir(), config, registry)
+    .map_err(|hostname| anyhow!("hostname is not valid UTF-8: {}", hostname.to_string_lossy()))
 }
 
 pub fn capture_charliebot(
@@ -507,17 +511,25 @@ fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::
   Ok(ids)
 }
 
+/// The usage source one backend id attributes to, or `None` when it has none (`backend_source` in token_tally.py): a
+/// registered id reads its config type, and an id that left the config reads the id prefix its source registers.
+pub(crate) fn backend_source<'a>(
+  backend: &str,
+  config: &CharlieBotConfig,
+  registry: &'a Registry,
+) -> anyhow::Result<Option<&'a UsageSource>> {
+  if let Some(option) = config.get_backend_option(backend) {
+    return registry.usage_source_for(&option.backend_type);
+  }
+  Ok(registry.usage_sources().find(|source| source.id_prefixes.iter().any(|prefix| backend.starts_with(prefix))))
+}
+
 fn backend_verdict<'a>(
   backend: &str,
-  config: &'a CharlieBotConfig,
+  config: &CharlieBotConfig,
   registry: &'a Registry,
 ) -> anyhow::Result<Option<(Verdict, &'a UsageSource)>> {
-  let source = if let Some(option) = config.get_backend_option(backend) {
-    registry.usage_source_for(&option.backend_type)?
-  } else {
-    registry.usage_sources().find(|source| source.id_prefixes.iter().any(|prefix| backend.starts_with(prefix)))
-  };
-  let Some(source) = source else {
+  let Some(source) = backend_source(backend, config, registry)? else {
     return Ok(None);
   };
   let verdict = if source.run_logs_only {

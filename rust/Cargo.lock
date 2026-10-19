@@ -779,6 +779,7 @@ dependencies = [
  "charliebot-store",
  "futures-util",
  "http",
+ "libc",
  "nix",
  "rusqlite",
  "serde_json",

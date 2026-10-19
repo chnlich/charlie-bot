@@ -1,5 +1,5 @@
-//! `src/features/usage`: the quota panel, the usage ledger capture and the `backend_ids` startup check are ported. The
-//! usage page and cold-storage sweep are pending, and the home card stays registered.
+//! `src/features/usage`: the quota panel, the usage ledger capture, the token usage page and the `backend_ids` startup
+//! check are ported. The cold-storage sweep is pending, and the home card stays registered.
 
 mod api;
 mod backend_ids;
@@ -8,8 +8,12 @@ mod count;
 mod ext_usage;
 pub mod ledger;
 mod ndjson;
+mod page;
+mod page_rows;
 mod poller;
 mod sql;
+#[cfg(test)]
+mod test_support;
 
 use std::sync::Arc;
 
@@ -22,10 +26,11 @@ pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage
 pub use count::Count;
 pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 
-/// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the `ext_usage` service in phase
-/// Ready, the home card, the `usage_ledger` scheduled handler, then the `backend_ids` startup check.
+/// `register` (`src/features/usage/__init__.py`): the `/api` router of `ext_usage`, the page router, the `ext_usage`
+/// service in phase Ready, the home card, the `usage_ledger` scheduled handler, then the `backend_ids` startup check.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
+  registry.router(page::routes, page::matches)?;
   registry.service(Arc::new(poller::ExtUsagePoller::default()))?;
   registry.home_card(HomeCard {
     name: "Token usage by model",
@@ -64,10 +69,10 @@ mod tests {
   use super::*;
 
   #[test]
-  fn register_mounts_the_router_starts_the_service_lists_the_card_and_checks_the_ids() {
+  fn register_mounts_the_routers_starts_the_service_lists_the_card_and_checks_the_ids() {
     let mut registry = Registry::new();
     registry.register_package("src.features.usage", register).expect("the package registers");
-    assert_eq!(registry.routers().len(), 1);
+    assert_eq!(registry.routers().len(), 2);
     let services = registry.services_in(Phase::Ready);
     assert_eq!(services.iter().map(|service| service.name()).collect::<Vec<_>>(), ["ext_usage"]);
     assert!(registry.services_in(Phase::Early).is_empty());

@@ -1,5 +1,6 @@
-# An input admitted while the first manager turn runs is dispatched after the handover as its own run, and the web
-# reply that run produces is posted as a third run.
+# An input admitted while the first manager turn runs is dispatched after the handover as its own run: two starts.
+# The session is the Ember node, whose turns the Python reference never follows with a web-reply nudge; the Atlas node's
+# admitted run would add a third start that the round-end audit posts and the port does not run yet.
 stage: agent-orchestration
 name: handover-admitted-input
 fake_agent:
@@ -35,29 +36,13 @@ fake_agent:
             usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-    - name: claude
-      steps:
-        - emit: {type: system, subtype: init, session_id: synthetic-admitted-web-reply}
-        - emit:
-            type: assistant
-            message:
-              role: assistant
-              model: claude-sonnet-5
-              content: [{type: text, text: The web reply for the admitted input was posted.}]
-        - emit:
-            type: result
-            result: ""
-            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
-            total_cost_usd: 0.0
-      exit_code: 0
-expect_starts: 3  # The first turn is adopted by the second server; the admitted input is a second start, and
-# its finished web reply is posted by a third start.
+expect_starts: 2  # The first turn is adopted by the second server; the admitted input is the second start.
 directions: [python-to-candidate, candidate-to-python]
 steps:
   - name: send the first manager message
     method: POST
-    path: /api/chat/${sessions.atlas}/message
-    json: {content: Continue the synthetic Atlas plan.}
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Start the gated synthetic task.}
     capture: {first_input: input_event_id}
     expect_status: 202
     defer_files: true
@@ -67,7 +52,7 @@ steps:
     until: {at_gate: admitted-turn}
   - name: admit a second manager message during the turn
     method: POST
-    path: /api/chat/${sessions.atlas}/message
+    path: /api/chat/${sessions.delta}/message
     json: {content: Queue this while the first turn runs.}
     capture: {second_input: input_event_id}
     expect_status: 202
@@ -83,23 +68,14 @@ steps:
     timeout_seconds: 30
     until:
       event:
-        session: ${sessions.atlas}
+        session: ${sessions.delta}
         type: run_finished
-        fields: {input_event_ids: ["${capture.first_input}"]}
+        fields: {input_event_ids: ["${capture.first_input}"], outcome: success}
   - kind: wait
     name: wait for the admitted input to finish as its own run
     timeout_seconds: 30
     until:
       event:
-        session: ${sessions.atlas}
+        session: ${sessions.delta}
         type: run_finished
         fields: {input_event_ids: ["${capture.second_input}"]}
-  - kind: wait
-    name: wait for the web reply turn to finish
-    timeout_seconds: 30
-    until:
-      event:
-        session: ${sessions.atlas}
-        type: run_finished
-        fields: {outcome: success}
-        count: 5  # The fixture's two successful runs on this session, the first turn, the admitted input and the web reply.

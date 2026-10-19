@@ -65,21 +65,6 @@ pub struct TaskExecutionAdapter {
   pub(crate) recovery: Arc<RecoveryState>,
 }
 
-/// The outcome of a finished manager turn: interrupted once a stop was requested, else by the exit code.
-fn finished_turn_outcome(stop_requested: bool, exit_code: i32, ended_at: Option<UtcDateTime>) -> RunOutcome {
-  let kind = if stop_requested {
-    RunOutcomeKind::Interrupted
-  } else if exit_code == 0 {
-    RunOutcomeKind::Success
-  } else {
-    RunOutcomeKind::Failed
-  };
-  let mut outcome = RunOutcome::new(kind);
-  outcome.exit_code = Some(exit_code);
-  outcome.ended_at = ended_at;
-  outcome
-}
-
 impl TaskExecutionAdapter {
   /// Build the adapter that dispatches manager turns on `queue`.
   pub fn new(features: Arc<FeatureContext>, queue: Arc<MasterQueue>, dispatch: Arc<Dispatcher>) -> Self {
@@ -533,8 +518,8 @@ impl TaskExecutionAdapter {
 
   /// The finish recorder both manager-turn paths hand the master queue (`task_execution.py:1203`,
   /// `_manager_finish_recorder`): it records the run's evidence, lands the terminal fact with the observed exit, and
-  /// dispatches the node's pending inputs. Without a stop request it persists `master_done` first, then records the
-  /// observation, then writes `run_finished`. `ended_at` is the drain rule's end time for a turn that ended unseen; None
+  /// dispatches the node's pending inputs. It records the observation before persisting `master_done` and
+  /// `run_finished` under the control lock. `ended_at` is the drain rule's end time for a turn that ended unseen; None
   /// keeps the observed write time.
   pub fn manager_finish_recorder(
     &self,
@@ -559,43 +544,50 @@ impl TaskExecutionAdapter {
       let option = option.clone();
       let raw_log = raw_log.clone();
       Box::pin(async move {
-        let observation = Map::from_iter([
-          ("native_session_id".to_string(), json!(native_session_id)),
-          (
-            "model".to_string(),
-            json!(
-              extras.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).unwrap_or(&option.model)
-            ),
-          ),
-          ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
-          ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
-        ]);
-        let stop_requested = {
-          let _guard = features.store.control_lock().await;
-          let facts = features.store.load_all_facts(&session_id)?;
-          run_records::stop_requested_in_events(&facts, &run_id, None)
-        };
-        let outcome = if stop_requested {
-          // A stop request writes the interrupted run_finished before master_done. The cancel scenario's comparison takes
-          // either order of that pair.
-          features.store.record_observation(&session_id, &run_id, observation).await?;
-          let guard = features.store.control_lock().await;
-          let outcome = finished_turn_outcome(true, exit_code, ended_at);
-          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-          persist_done(session_id.clone(), done_event).await?;
-          outcome
+        features
+          .store
+          .record_observation(
+            &session_id,
+            &run_id,
+            Map::from_iter([
+              ("native_session_id".to_string(), json!(native_session_id)),
+              (
+                "model".to_string(),
+                json!(
+                  extras
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|model| !model.is_empty())
+                    .unwrap_or(&option.model)
+                ),
+              ),
+              ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
+              ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
+            ]),
+          )
+          .await?;
+
+        let guard = features.store.control_lock().await;
+        let facts = features.store.load_all_facts(&session_id)?;
+        let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
+        let kind = if stop_requested {
+          RunOutcomeKind::Interrupted
+        } else if exit_code == 0 {
+          RunOutcomeKind::Success
         } else {
-          // Python's order: master_done first, which starts each after-turn contribution, then the observation, then
-          // run_finished. The stop check is read again under the control lock for the terminal fact.
-          persist_done(session_id.clone(), done_event).await?;
-          features.store.record_observation(&session_id, &run_id, observation).await?;
-          let guard = features.store.control_lock().await;
-          let facts = features.store.load_all_facts(&session_id)?;
-          let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
-          let outcome = finished_turn_outcome(stop_requested, exit_code, ended_at);
-          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-          outcome
+          RunOutcomeKind::Failed
         };
+        let mut outcome = RunOutcome::new(kind);
+        outcome.exit_code = Some(exit_code);
+        outcome.ended_at = ended_at;
+        if stop_requested {
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+          persist_done(session_id.clone(), done_event).await?;
+        } else {
+          persist_done(session_id.clone(), done_event).await?;
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+        }
+        drop(guard);
 
         dispatch.finish_run(&session_id, &run_id, outcome).await?;
         dispatch.dispatch_pending(&session_id).await?;

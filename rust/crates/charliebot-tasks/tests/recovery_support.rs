@@ -1,0 +1,738 @@
+#![allow(dead_code)]
+//! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
+//! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
+
+use std::collections::HashMap;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::Context;
+use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_pool::BackendPool;
+use charliebot_core::config::{
+  BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
+};
+use charliebot_core::credentials::load_credentials;
+use charliebot_core::event_types;
+use charliebot_core::hot_reload::HotReload;
+use charliebot_core::repo_root::RepoRoot;
+use charliebot_registry::Registry;
+use charliebot_registry::RegistryError;
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
+  TransportKind,
+};
+use charliebot_registry::context::{FeatureContext, StartupState};
+use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
+use charliebot_store::run_records;
+use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+use charliebot_store::{
+  AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, SequenceArchiveHook,
+  SequenceBindingMover, SequenceListingFields, Store, StoreError, StoreHookFuture, StoreHooks, StoreResult, TaskCaller,
+};
+use charliebot_tasks::completion::TaskCompletion;
+use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
+use charliebot_tasks::execution::TaskExecutionAdapter;
+use charliebot_tasks::master_queue::MasterQueue;
+use charliebot_tasks::recovery::{self, PassCounters};
+use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use serde_yaml::{Mapping, Value as YamlValue};
+use tempfile::TempDir;
+use tracing_subscriber::fmt::MakeWriter;
+
+/// The backend type every synthetic option of these tests uses.
+pub const BACKEND_TYPE: &str = "recovery_script";
+/// The option the synthetic nodes are created with.
+pub const BACKEND_ID: &str = "fake";
+
+#[derive(Default)]
+struct TestHooks;
+
+impl AccountLabelKeeper for TestHooks {
+  fn record_account_label(&self, _meta: &mut SessionMetadata, _label: Option<&str>) -> StoreResult<bool> {
+    Ok(false)
+  }
+
+  fn account_label(&self, _meta: &SessionMetadata) -> Option<String> {
+    None
+  }
+}
+
+impl AnchorFieldReconciler for TestHooks {
+  fn reconcile(&self, disk: &SessionMetadata, attempted: &mut SessionMetadata) -> StoreResult<()> {
+    attempted.cc_session_id = disk.cc_session_id.clone();
+    attempted.cc_session_started_at = disk.cc_session_started_at;
+    attempted.native_backend = disk.native_backend.clone();
+    Ok(())
+  }
+}
+
+impl SequenceArchiveHook for TestHooks {
+  fn on_archive<'a>(&'a self, _session_id: &'a str) -> StoreHookFuture<'a, ()> {
+    Box::pin(async { Ok(()) })
+  }
+}
+
+impl SequenceBindingMover for TestHooks {
+  fn move_bindings<'a>(&'a self, _source_session_id: &'a str, _new_session_id: &'a str) -> StoreHookFuture<'a, bool> {
+    Box::pin(async { Ok(false) })
+  }
+}
+
+impl SequenceListingFields for TestHooks {
+  fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+    false
+  }
+
+  fn listing_fields(
+    &self,
+    _session_ids: &[String],
+    _now: UtcDateTime,
+  ) -> StoreResult<HashMap<String, Map<String, Value>>> {
+    Ok(HashMap::new())
+  }
+
+  fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+    Ok(HashMap::new())
+  }
+
+  fn view_subtree_roots(&self, _metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+    Ok(HashMap::new())
+  }
+}
+
+/// A `/bin/sh -c` backend whose script is the option's `script` field.
+struct ScriptFactory;
+
+impl BackendFactory for ScriptFactory {
+  fn build(
+    &self,
+    option: Option<&BackendOption>,
+    _cfg: &CharlieBotConfig,
+    _launch: LaunchArgs,
+  ) -> anyhow::Result<Box<dyn AgentBackend>> {
+    let option = option.context("scripted backend requires an option")?;
+    let key = YamlValue::String("script".to_string());
+    let script =
+      option.type_fields.get(&key).and_then(YamlValue::as_str).context("scripted option has no script")?.to_string();
+    Ok(Box::new(ScriptBackend { script }))
+  }
+}
+
+struct ScriptBackend {
+  script: String,
+}
+
+impl AgentBackend for ScriptBackend {
+  fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+    None
+  }
+
+  fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {
+    Ok(())
+  }
+
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])
+  }
+
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+    Ok(env)
+  }
+
+  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+    None
+  }
+
+  fn translator(&self) -> Box<dyn Translate> {
+    Box::new(IdentityTranslate)
+  }
+
+  fn transport(&self) -> TransportKind {
+    TransportKind::RawLog
+  }
+}
+
+struct IdentityTranslate;
+
+impl Translate for IdentityTranslate {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![raw])
+  }
+}
+
+fn register_scripted_backend(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  registry.backend_type(BackendTypeRegistration {
+    type_name: BACKEND_TYPE,
+    traits: BackendTraits {
+      resume: ResumeStyle::CliFlag,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: |_| Ok(()),
+    factory: Arc::new(ScriptFactory),
+    lifecycle: None,
+    translate_fallback: false,
+  })
+}
+
+fn registry() -> anyhow::Result<Registry> {
+  let mut registry = Registry::new();
+  registry.register_package("test.recovery_backend", register_scripted_backend)?;
+  registry.register_package("test.synthetic_loop", register_loop_controller)?;
+  Ok(registry)
+}
+
+/// The synthetic option a node runs on: a `/bin/sh` script that prints nothing.
+pub fn script_option(id: &str, script: &str) -> BackendOption {
+  let mut type_fields = Mapping::new();
+  type_fields.insert(YamlValue::String("script".to_string()), YamlValue::String(script.to_string()));
+  BackendOption {
+    id: id.to_string(),
+    label: id.to_string(),
+    prompt_overlay: None,
+    model: format!("{id}-model"),
+    backend_type: BACKEND_TYPE.to_string(),
+    type_fields,
+  }
+}
+
+fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>) -> CharlieBotConfig {
+  CharlieBotConfig {
+    charliebot_home: home.to_path_buf(),
+    headless_chrome_bin: "/bin/false".to_string(),
+    server: ServerConfig {
+      host: "127.0.0.1".to_string(),
+      port: 18650,
+      subprocess_buffer_limit_mb: 1,
+      session_memory_max_mb: 0,
+      session_swap_max_mb: 0,
+      session_tasks_max: 0,
+      min_free_disk_gib: 0,
+    },
+    paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
+    backends: BackendsConfig { pool, options },
+    ui: UiConfig { home_services: Vec::new() },
+    telegram: TelegramConfig { chat_id: None },
+    sections: Sections::default(),
+  }
+}
+
+/// The run-finish completion with a one-shot fault: the next successful finish's follow-up fails with the given
+/// message, after the terminal fact and the run record have landed. Every other call delegates to the real completion.
+pub struct FollowUpFault {
+  inner: Arc<TaskCompletion>,
+  remaining: AtomicUsize,
+  message: Mutex<String>,
+}
+
+impl RunFinishedCompletion for FollowUpFault {
+  fn after_run_finished<'a>(&'a self, session_id: &'a str, run_id: &'a str) -> BoxFuture<'a, StoreResult<()>> {
+    Box::pin(async move {
+      if self.remaining.load(Ordering::SeqCst) > 0 {
+        self.remaining.fetch_sub(1, Ordering::SeqCst);
+        return Err(StoreError::new(self.message.lock().expect("fault message is not poisoned").clone()));
+      }
+      RunFinishedCompletion::after_run_finished(self.inner.as_ref(), session_id, run_id).await
+    })
+  }
+}
+
+/// The task-execution stack a startup pass runs on: the store, the registry, the dispatcher with its adapter, and the
+/// completion owner. The wiring matches `execution::pre_recovery_step`, with the run-finish completion wrapped.
+pub struct Stack {
+  pub home: TempDir,
+  pub cfg: Arc<CharlieBotConfig>,
+  pub features: Arc<FeatureContext>,
+  pub adapter: TaskExecutionAdapter,
+  pub dispatch: Arc<Dispatcher>,
+  pub completion: Arc<TaskCompletion>,
+  pub fault: Arc<FollowUpFault>,
+}
+
+impl Stack {
+  /// A stack whose only backend option is `fake`, with the given script.
+  pub async fn start(script: &str) -> anyhow::Result<Stack> {
+    Stack::start_with(vec![script_option(BACKEND_ID, script)], vec![BACKEND_ID.to_string()]).await
+  }
+
+  pub async fn start_with(options: Vec<BackendOption>, pool: Vec<String>) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let cfg = Arc::new(config(home.path(), options, pool));
+    let registry = Arc::new(registry()?);
+    let hooks = Arc::new(TestHooks);
+    let store = Store::new(
+      (*cfg).clone(),
+      registry.metadata_slots(),
+      StoreHooks {
+        account_labels: Some(hooks.clone()),
+        anchor_reconciler: Some(hooks.clone()),
+        sequence_listing: Some(hooks.clone()),
+        sequence_archive: Some(hooks.clone()),
+        sequence_binding_mover: Some(hooks),
+        runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
+      },
+    )?;
+    let startup = Arc::new(StartupState::default());
+    startup.insert(AgentBaseEnvironment {
+      values: charliebot_registry::backend::Env::from([("PATH".to_string(), "/usr/bin".to_string())]),
+    })?;
+    startup.insert(BackendPool::default())?;
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .ancestors()
+      .nth(3)
+      .context("tasks crate manifest has no repository root ancestor")?;
+    startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
+    let config_value = Arc::clone(&cfg);
+    let config_reload =
+      HotReload::new(cfg.config_file(), "recovery_config_reload_failed", Box::new(move || Ok((*config_value).clone())));
+    let credential_home = cfg.charliebot_home.clone();
+    let credentials_reload = HotReload::new(
+      cfg.credentials_file(),
+      "recovery_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    );
+    let features = Arc::new(FeatureContext {
+      config: Arc::new(config_reload),
+      credentials: Arc::new(credentials_reload),
+      store: Arc::new(store),
+      registry,
+      startup,
+    });
+
+    // The wiring of `execution::pre_recovery_step`, with the run-finish completion behind a fault seam.
+    let pool = charliebot_agents::backend_pool::backend_pool(&features)?;
+    features.startup.insert(MasterQueue::new(pool))?;
+    let queue = features.startup.require::<MasterQueue>()?;
+    features.startup.insert(TaskCompletion::new(Arc::clone(&features)))?;
+    let completion = features.startup.require::<TaskCompletion>()?;
+    let fault = Arc::new(FollowUpFault {
+      inner: Arc::clone(&completion),
+      remaining: AtomicUsize::new(0),
+      message: Mutex::new(String::new()),
+    });
+    let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
+    let run_completion: Arc<dyn RunFinishedCompletion> = fault.clone();
+    features.startup.insert(Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion))?;
+    let dispatch = features.startup.require::<Dispatcher>()?;
+    let adapter = TaskExecutionAdapter::new(Arc::clone(&features), queue, Arc::clone(&dispatch));
+    dispatch.set_executor(Some(Arc::new(adapter.clone())));
+    features.startup.insert(adapter.clone())?;
+    Ok(Stack { home, cfg, features, adapter, dispatch, completion, fault })
+  }
+
+  pub fn store(&self) -> &Store {
+    &self.features.store
+  }
+
+  /// Make the next `times` successful finishes fail their follow-up with `message`.
+  pub fn fail_follow_up(&self, times: usize, message: &str) {
+    *self.fault.message.lock().expect("fault message is not poisoned") = message.to_string();
+    self.fault.remaining.store(times, Ordering::SeqCst);
+  }
+
+  /// One create through the store, under the operator's caller.
+  pub async fn node(
+    &self,
+    request_id: &str,
+    parent: Option<&str>,
+    profile: TaskProfile,
+    task: Option<TaskSpec>,
+  ) -> anyhow::Result<SessionMetadata> {
+    let meta = self
+      .store()
+      .create_task(
+        CreateTask {
+          request_id: request_id.to_string(),
+          task_parent_id: parent.map(str::to_string),
+          profile,
+          task,
+          name: Some(format!("Synthetic {request_id}")),
+          backend: Some(BACKEND_ID.to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await?;
+    Ok(meta)
+  }
+
+  /// Persist a queued run on `session_id`, as the reservation of a launch does before any process exists.
+  pub async fn queue_run(&self, session_id: &str, run_id: &str, kind: RunKind) -> anyhow::Result<RunRecord> {
+    let record = RunRecord {
+      backend: Some(BACKEND_ID.to_string()),
+      model: Some(format!("{BACKEND_ID}-model")),
+      ..synthetic_run(session_id, run_id, kind)
+    };
+    self.register(record).await
+  }
+
+  /// Persist a run record through the control lock, as a reservation does.
+  pub async fn register(&self, record: RunRecord) -> anyhow::Result<RunRecord> {
+    let session_id = record.session_id.clone();
+    let guard = self.store().control_lock().await;
+    Ok(self.store().register_run_locked(&guard, &session_id, record, None).await?)
+  }
+
+  /// Close a node the way the completion owner does: one durable `task_closed` fact.
+  pub async fn close(&self, session_id: &str, request_id: &str) -> anyhow::Result<()> {
+    let guard = self.store().control_lock().await;
+    let event = charliebot_store::control_events::build_control_event(
+      "task_closed",
+      "agent",
+      session_id,
+      Some(&charliebot_store::control_events::stable_close_event_id(session_id, request_id)),
+      None,
+      [
+        ("request_id".to_string(), json!(request_id)),
+        ("outcome".to_string(), json!("completed")),
+        ("summary".to_string(), json!("synthetic close")),
+        ("result_refs".to_string(), json!([])),
+        ("run_ids".to_string(), json!([])),
+        ("report_to".to_string(), Value::Null),
+      ],
+    );
+    self.store().append_control_fact(&guard, session_id, event).await?;
+    Ok(())
+  }
+
+  /// Claim the node's pending inputs for a queued run, as the dispatcher does before a launch.
+  pub async fn claim(&self, session_id: &str, run_id: &str) -> anyhow::Result<Vec<String>> {
+    let guard = self.store().control_lock().await;
+    Ok(self.dispatch.claim_input_batch_locked(&guard, session_id, run_id, None)?)
+  }
+
+  /// Record the launched process identity of a run, as the launch does once the process exists.
+  pub async fn launch(&self, session_id: &str, run_id: &str, pid: u32, pid_start: &str) -> anyhow::Result<RunRecord> {
+    Ok(self.store().record_launch(session_id, run_id, pid, pid_start).await?)
+  }
+
+  /// Persist a run's terminal fact through the dispatcher's finish path.
+  pub async fn finish(&self, session_id: &str, run_id: &str, outcome: RunOutcomeKind) -> anyhow::Result<RunRecord> {
+    Ok(self.dispatch.finish_run(session_id, run_id, RunOutcome::new(outcome)).await?)
+  }
+
+  /// A run's terminal fact as a crash leaves it: the store's finish, with no dispatcher follow-up behind it.
+  pub async fn record_terminal(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    outcome: RunOutcomeKind,
+  ) -> anyhow::Result<RunRecord> {
+    let guard = self.store().control_lock().await;
+    Ok(self.store().record_finish_locked(&guard, session_id, run_id, RunOutcome::new(outcome)).await?)
+  }
+
+  /// The boot pass: every node of this home, through the startup step the server runs.
+  pub async fn boot(&self) -> anyhow::Result<PassCounters> {
+    recovery::reconcile_task_tree(&self.features, &self.adapter).await
+  }
+
+  /// One node's pass with no driver in this process, as the boot pass runs it.
+  pub async fn node_pass(&self, session_id: &str) -> anyhow::Result<PassCounters> {
+    let mut counters = PassCounters::default();
+    recovery::reconcile_node(&self.features, &self.adapter, session_id, &mut counters, None).await?;
+    Ok(counters)
+  }
+
+  pub fn run_events(&self, session_id: &str) -> anyhow::Result<Vec<Value>> {
+    Ok(self.store().load_all_facts(session_id)?)
+  }
+
+  pub fn run_records(&self, session_id: &str) -> anyhow::Result<Vec<RunRecord>> {
+    Ok(self.store().list_run_records_sync(session_id)?)
+  }
+}
+
+/// A run record with only the identity fields set, as `process_guard`'s tests and the launch path build one.
+pub fn synthetic_run(session_id: &str, run_id: &str, kind: RunKind) -> RunRecord {
+  RunRecord {
+    id: run_id.to_string(),
+    session_id: session_id.to_string(),
+    kind,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
+    backend: None,
+    model: None,
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
+    repo_path: None,
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
+  }
+}
+
+/// A cold-read task spec over a page that the replay never reads: the named-error paths stop before the page.
+pub fn cold_read_spec(page: &Path) -> TaskSpec {
+  TaskSpec {
+    goal: "synthetic cold read".to_string(),
+    task_type: Some(charliebot_store::metadata::TaskType::ColdRead),
+    cold_read: Some(charliebot_store::metadata::ColdReadSpec {
+      page_path: page.display().to_string(),
+      genre: "sitrep".to_string(),
+      trigger: "where are we?".to_string(),
+    }),
+    ..TaskSpec::default()
+  }
+}
+
+/// A worker task spec with a repository, as an implement node carries.
+pub fn implement_spec(repo: &Path) -> TaskSpec {
+  TaskSpec {
+    goal: "synthetic implement".to_string(),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    task_type: Some(charliebot_store::metadata::TaskType::Implement),
+    ..TaskSpec::default()
+  }
+}
+
+/// Captures the tracing events of one test, so the node pass's `task_recovery_node_failed` log line can be asserted.
+#[derive(Clone, Default)]
+pub struct LogCapture(Arc<Mutex<Vec<u8>>>);
+
+impl LogCapture {
+  /// The subscriber guard for the current thread; the events of this test land in the capture until it drops.
+  pub fn install(&self) -> tracing::subscriber::DefaultGuard {
+    let subscriber = tracing_subscriber::fmt()
+      .with_writer(self.clone())
+      .with_ansi(false)
+      .with_max_level(tracing::Level::INFO)
+      .finish();
+    tracing::subscriber::set_default(subscriber)
+  }
+
+  pub fn text(&self) -> String {
+    String::from_utf8_lossy(&self.0.lock().expect("log capture is not poisoned")).into_owned()
+  }
+}
+
+impl Write for LogCapture {
+  fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    self.0.lock().expect("log capture is not poisoned").extend_from_slice(buf);
+    Ok(buf.len())
+  }
+
+  fn flush(&mut self) -> io::Result<()> {
+    Ok(())
+  }
+}
+
+impl<'a> MakeWriter<'a> for LogCapture {
+  type Writer = LogCapture;
+
+  fn make_writer(&'a self) -> Self::Writer {
+    self.clone()
+  }
+}
+
+/// The error text the node pass returns for a replay step its owning task has not landed yet.
+pub fn owner_not_landed_text(owner: &str) -> String {
+  format!("owned by the {owner} task, which has not landed; the node pass cannot replay it")
+}
+
+/// Assert that the node pass refused a replay step with the named error of `owner`.
+pub fn assert_named_error(error: &anyhow::Error, owner: &str) {
+  let text = format!("{error:#}");
+  assert!(text.contains(&owner_not_landed_text(owner)), "expected the {owner} named error, got: {text}");
+}
+
+/// Assert that the startup pass logged its node failure with the named error of `owner`.
+pub fn assert_logged_node_failure(log: &LogCapture, owner: &str) {
+  let logged = log.text();
+  assert!(logged.contains("task_recovery_node_failed"), "the startup pass logged no node failure: {logged}");
+  assert!(logged.contains(&owner_not_landed_text(owner)), "the logged node failure lacks the {owner} error: {logged}");
+}
+
+/// The sequence kind of the synthetic loop controller, and the name of its state marker in the child's session
+/// directory.
+pub const LOOP_KIND: &str = "synthetic-loop";
+pub const LOOP_MARKER: &str = "synthetic-loop.json";
+
+/// The loop's close step: the child closes with `outcome` and one report carrying `summary` and `result_refs`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LoopClose {
+  pub outcome: String,
+  pub summary: String,
+  pub result_refs: Vec<String>,
+}
+
+/// The loop's durable state. `status` is the loop's own state: a `running` loop is marked `interrupted` by the boot
+/// pass. `close` is the close the loop is owed once none of its iterations is launched.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LoopMarker {
+  pub status: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub close: Option<LoopClose>,
+}
+
+/// The test sequence controller (`sequence_controllers.SequenceController`). It owns the marker file of each loop child
+/// and nothing else, so the startup pass's sequence step and its run replays are the only code under test.
+pub struct SyntheticLoop;
+
+impl SyntheticLoop {
+  /// The close step (`close_ended_loop_child`): a child that is open, has no close fact yet, and has no launched
+  /// iteration in flight closes with its owed outcome. Queued iterations get a stop request first, so they never block
+  /// the close.
+  async fn close_if_due(child_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<bool> {
+    let Some(marker) = read_marker_at(tree.config(), child_id)? else {
+      return Ok(false);
+    };
+    let Some(close) = marker.close else {
+      return Ok(false);
+    };
+    if tree.task_state(child_id)? != "open" {
+      return Ok(false);
+    }
+    let events = tree.load_events_sync(child_id)?;
+    if events.iter().any(|event| event["type"] == event_types::TASK_CLOSED) {
+      return Ok(false);
+    }
+    let runs = tree.list_run_records_sync(child_id)?;
+    let terminal = |run_id: &str| tree.terminal_outcome(&events, run_id).is_some();
+    if runs.iter().any(|run| run.pid.is_some() && !terminal(&run.id)) {
+      return Ok(false);
+    }
+    for run in &runs {
+      if run.pid.is_none() && !terminal(&run.id) && !run_records::stop_requested_in_events(&events, &run.id, None) {
+        tree.request_stop(child_id, &run.id, &format!("loop-close:{}", run.id)).await?;
+      }
+    }
+    let evidence = json!({"summary": close.summary, "result_refs": close.result_refs, "run_ids": []});
+    tree.completion().close_sequence_child(child_id, "synthetic-loop-close", &close.outcome, &evidence).await?;
+    Ok(true)
+  }
+}
+
+impl SequenceController for SyntheticLoop {
+  fn sequence_kind(&self) -> &'static str {
+    LOOP_KIND
+  }
+
+  fn redrive<'a>(&'a self, _session_id: &'a str, _tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn launch_context<'a>(
+    &'a self,
+    _meta: &'a SessionMetadata,
+    _run: &'a RunRecord,
+    _launch_text: &'a str,
+  ) -> BoxFuture<'a, anyhow::Result<Option<String>>> {
+    Box::pin(async { Ok(None) })
+  }
+
+  fn after_run<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _run: &'a RunRecord,
+    _tree: &'a dyn SequenceTree,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn recover_run<'a>(
+    &'a self,
+    session_id: &'a str,
+    _run: &'a RunRecord,
+    outcome: Option<&'a str>,
+    tree: &'a dyn SequenceTree,
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
+    Box::pin(async move {
+      if outcome.is_none() {
+        return Ok(false);
+      }
+      SyntheticLoop::close_if_due(session_id, tree).await
+    })
+  }
+
+  fn reconcile_interrupted<'a>(&'a self, tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      let sessions = tree.config().sessions_dir();
+      let mut children =
+        std::fs::read_dir(&sessions)?.map(|entry| entry.map(|entry| entry.path())).collect::<io::Result<Vec<_>>>()?;
+      children.sort();
+      for child in children {
+        let Some(child_id) = child.file_name().and_then(|name| name.to_str()).map(str::to_string) else {
+          continue;
+        };
+        let Some(mut marker) = read_marker_at(tree.config(), &child_id)? else {
+          continue;
+        };
+        if marker.status == "running" {
+          marker.status = "interrupted".to_string();
+          write_marker_at(tree.config(), &child_id, &marker)?;
+        }
+        SyntheticLoop::close_if_due(&child_id, tree).await?;
+      }
+      Ok(())
+    })
+  }
+
+  fn binding(&self, _session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    None
+  }
+
+  fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+    false
+  }
+
+  fn listing_fields(&self, _session_ids: &[String], _now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
+    HashMap::new()
+  }
+}
+
+fn register_loop_controller(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.sequence_controller(LOOP_KIND, Arc::new(SyntheticLoop))
+}
+
+fn marker_path(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {
+  cfg.sessions_dir().join(session_id).join(LOOP_MARKER)
+}
+
+fn read_marker_at(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Result<Option<LoopMarker>> {
+  let path = marker_path(cfg, session_id);
+  if !path.is_file() {
+    return Ok(None);
+  }
+  Ok(Some(serde_json::from_str(&std::fs::read_to_string(&path)?)?))
+}
+
+fn write_marker_at(cfg: &CharlieBotConfig, session_id: &str, marker: &LoopMarker) -> anyhow::Result<()> {
+  std::fs::write(marker_path(cfg, session_id), serde_json::to_string(marker)?)?;
+  Ok(())
+}
+
+impl Stack {
+  /// Write a loop child's marker, as the loop's own state write leaves it on disk.
+  pub fn write_marker(&self, session_id: &str, marker: &LoopMarker) -> anyhow::Result<()> {
+    write_marker_at(&self.cfg, session_id, marker)
+  }
+
+  pub fn read_marker(&self, session_id: &str) -> anyhow::Result<LoopMarker> {
+    read_marker_at(&self.cfg, session_id)?.context("the loop child has no marker")
+  }
+}

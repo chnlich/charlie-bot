@@ -1,0 +1,120 @@
+stage: agent-orchestration
+name: task-completion-routes
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - gate: completion-cancel-run
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic cancellation run finished.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The cancellation report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+steps:
+  - name: complete refuses an open descendant
+    method: POST
+    path: /api/sessions/${sessions.atlas}/complete
+    json:
+      request_id: synthetic-completion-blocked
+      summary: Atlas plan is ready.
+      result_refs: [atlas-plan]
+      run_ids: ["${runs.atlas_t1.run}"]
+    expect_status: 409
+  - name: complete a task with successful run evidence
+    method: POST
+    path: /api/sessions/${sessions.fable}/complete
+    json:
+      request_id: synthetic-completion-success
+      summary: Fable roadmap is ready.
+      result_refs: [roadmap]
+      run_ids: ["${runs.fable_t1.run}"]
+    expect_status: 200
+  - name: replay the successful completion request
+    method: POST
+    path: /api/sessions/${sessions.fable}/complete
+    json:
+      request_id: synthetic-completion-success
+      summary: Fable roadmap is ready.
+      result_refs: [roadmap]
+      run_ids: ["${runs.fable_t1.run}"]
+    expect_status: 200
+  - name: cancel the stopped queued worker to deliver its report
+    method: POST
+    path: /api/sessions/${sessions.atlas_scout}/cancel
+    json: {request_id: synthetic-scout-cancel, reason: Stop the queued scout run.}
+    expect_status: 200
+  - name: cancellation waits for the active manager run
+    method: POST
+    path: /api/sessions/${sessions.atlas_survey}/cancel
+    json: {request_id: synthetic-cancel-active, reason: Stop after the active run.}
+    expect_status: 409
+  - kind: gate
+    name: release the active manager run
+    open: completion-cancel-run
+  - kind: wait
+    name: wait for the manager run to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas_survey}
+        type: run_finished
+        fields: {outcome: success}
+        count: 3
+  - name: cancel the task after its run finishes
+    method: POST
+    path: /api/sessions/${sessions.atlas_survey}/cancel
+    json: {request_id: synthetic-cancel-active, reason: Stop after the active run.}
+    expect_status: 200
+  - name: acknowledge the pending Cobalt input
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json:
+      request_id: synthetic-cobalt-ack
+      input_ids: ["${inputs.cobalt_u1}"]
+      note: The supplier request was handled.
+    expect_status: 200
+  - name: replay the input acknowledgement
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json:
+      request_id: synthetic-cobalt-ack
+      input_ids: ["${inputs.cobalt_u1}"]
+      note: The supplier request was handled.
+    expect_status: 200
+  - name: reject an unknown input id
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json: {request_id: synthetic-cobalt-unknown-ack, input_ids: [synthetic-missing-input]}
+    expect_status: 409
+  - name: malformed acknowledgement reports a 422 field location
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json: {request_id: synthetic-cobalt-malformed-ack, input_ids: synthetic-not-a-list}
+    expect_status: 422
+  - name: operator restores an archived ancestor chain
+    method: POST
+    path: /api/sessions/${sessions.beacon_draft}/unarchive
+    json: {}
+    expect_status: 200

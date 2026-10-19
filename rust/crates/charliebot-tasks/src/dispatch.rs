@@ -458,13 +458,40 @@ impl Dispatcher {
     result_refs: Option<&[String]>,
     recipient: Option<&str>,
   ) -> StoreResult<(Value, bool)> {
+    self
+      .deliver_child_report_locked_as_actor(
+        guard,
+        child_session_id,
+        source_event,
+        outcome,
+        summary,
+        result_refs,
+        recipient,
+        "agent",
+      )
+      .await
+  }
+
+  /// Persist a report with an explicit actor while the caller holds the shared control lock.
+  #[allow(clippy::too_many_arguments)]
+  pub async fn deliver_child_report_locked_as_actor(
+    &self,
+    guard: &ControlGuard,
+    child_session_id: &str,
+    source_event: Value,
+    outcome: &str,
+    summary: &str,
+    result_refs: Option<&[String]>,
+    recipient: Option<&str>,
+    actor: &str,
+  ) -> StoreResult<(Value, bool)> {
     if recipient.is_none() {
       return Ok((Value::Object(Map::new()), false));
     }
     self
       .deliver_child_report_locked_as(
         guard,
-        ChildReportInput { child_session_id, source_event, outcome, summary, result_refs, recipient, actor: "agent" },
+        ChildReportInput { child_session_id, source_event, outcome, summary, result_refs, recipient, actor },
       )
       .await
   }

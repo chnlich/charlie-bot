@@ -66,9 +66,9 @@ pub struct SwitchEvent {
   pub phase: String,
   pub from_session: Option<String>,
   pub to_session: String,
-  pub generation: i64,
-  pub winner_generation: Option<i64>,
-  pub elapsed_ms: Option<i64>,
+  pub generation: i128,
+  pub winner_generation: Option<i128>,
+  pub elapsed_ms: Option<i128>,
   pub error: Option<String>,
   pub client_ts: String,
 }
@@ -83,9 +83,9 @@ impl SwitchEvent {
       phase: string(&values, "phase"),
       from_session: optional_string(&values, "from_session"),
       to_session: string(&values, "to_session"),
-      generation: integer(&values, "generation")?.expect("a required integer validates to a value"),
-      winner_generation: integer(&values, "winner_generation")?,
-      elapsed_ms: integer(&values, "elapsed_ms")?,
+      generation: integer(&values, "generation").expect("a required integer validates to a value"),
+      winner_generation: integer(&values, "winner_generation"),
+      elapsed_ms: integer(&values, "elapsed_ms"),
       error: optional_string(&values, "error"),
       client_ts: string(&values, "client_ts"),
     })
@@ -107,19 +107,18 @@ fn optional_string(values: &serde_json::Map<String, Value>, name: &str) -> Optio
   }
 }
 
-/// An integer field of the validated body, `None` when the field is absent or null. The body reader accepts an integer
-/// up to the unsigned 64-bit maximum and the record stores a signed one, so a larger value answers 500, as
-/// `rust/docs/PORT_STATUS.md` states for a route that stores a signed 64-bit integer.
-fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Result<Option<i64>, Box<Response>> {
+/// An integer field of the validated body, `None` when the field is absent or null. `i128` holds the signed 64-bit
+/// range and the positive values through the unsigned 64-bit maximum accepted by the FastAPI body reader.
+fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> {
   match values.get(name) {
-    None | Some(Value::Null) => Ok(None),
-    Some(Value::Number(number)) => match number.as_i64() {
-      Some(value) => Ok(Some(value)),
-      None => {
-        let detail = format!("{name} is above the signed 64-bit maximum");
-        Err(Box::new(responses::internal_error("OverflowError", detail)))
-      }
-    },
+    None | Some(Value::Null) => None,
+    Some(Value::Number(number)) => Some(
+      number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+        .expect("the validated body carries a 64-bit integer"),
+    ),
     other => unreachable!("the validated body carries an integer or null {name}, got {other:?}"),
   }
 }
@@ -158,7 +157,7 @@ pub fn switch_record<'a>(event: &'a SwitchEvent, error: &'a str) -> Vec<(&'stati
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LogValue<'a> {
   Str(&'a str),
-  Int(i64),
+  Int(i128),
   Null,
 }
 
@@ -170,7 +169,7 @@ impl<'a> LogValue<'a> {
     }
   }
 
-  fn of_int(value: Option<i64>) -> Self {
+  fn of_int(value: Option<i128>) -> Self {
     match value {
       Some(value) => Self::Int(value),
       None => Self::Null,
@@ -200,7 +199,7 @@ fn log_switch_event(event: &SwitchEvent) {
     phase = %phase.1,
     from_session = %from_session.1,
     to_session = %to_session.1,
-    generation = event.generation,
+    generation = %event.generation,
     winner_generation = %winner_generation.1,
     elapsed_ms = %elapsed_ms.1,
     error = %error.1,
@@ -256,6 +255,23 @@ mod tests {
     assert_eq!(values["phase"], "completed");
     assert_eq!(values["generation"], 3);
     assert_eq!(values["elapsed_ms"], 1500);
+  }
+
+  #[test]
+  fn unsigned_values_above_i64_max_are_preserved() {
+    let mut body = valid_body();
+    body["generation"] = json!(i64::MAX as u64 + 1);
+    body["winner_generation"] = json!(u64::MAX);
+    body["elapsed_ms"] = json!(i64::MAX as u64 + 1);
+    let event = SwitchEvent::validate(&RequestBody::Json(body)).expect("the body reader's integer range is valid");
+
+    assert_eq!(event.generation, i64::MAX as i128 + 1);
+    assert_eq!(event.winner_generation, Some(u64::MAX as i128));
+    assert_eq!(event.elapsed_ms, Some(i64::MAX as i128 + 1));
+    let record = switch_record(&event, "");
+    assert_eq!(record[3].1, LogValue::Int(i64::MAX as i128 + 1));
+    assert_eq!(record[4].1, LogValue::Int(u64::MAX as i128));
+    assert_eq!(record[5].1, LogValue::Int(i64::MAX as i128 + 1));
   }
 
   #[test]

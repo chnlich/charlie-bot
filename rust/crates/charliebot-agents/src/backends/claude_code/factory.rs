@@ -16,20 +16,7 @@ impl BackendFactory for ClaudeCodeFactory {
     _cfg: &CharlieBotConfig,
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
-    let mut launch = launch;
-    if launch.extra_flags.is_empty()
-      && let Some(value) = launch.backend_kwargs.get("extra_flags").filter(|value| !value.is_null())
-    {
-      launch.extra_flags = value
-        .as_array()
-        .context("backend_kwargs.extra_flags must be an array")?
-        .iter()
-        .map(|value| value.as_str().context("backend_kwargs.extra_flags entries must be strings"))
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    }
+    let launch = launch_with_kwargs(launch)?;
     let backend = match option {
       None => ClaudeCodeBackend::from_launch(None, None, None, false, None, launch)?,
       Some(option) => {
@@ -47,7 +34,27 @@ impl BackendFactory for ClaudeCodeFactory {
   }
 }
 
-fn launch_config_dir(launch: &LaunchArgs) -> anyhow::Result<Option<String>> {
+/// The launch's `extra_flags` kwarg, taken into the launch's flags when the launch carries none of its own.
+pub(crate) fn launch_with_kwargs(launch: LaunchArgs) -> anyhow::Result<LaunchArgs> {
+  let mut launch = launch;
+  if launch.extra_flags.is_empty()
+    && let Some(value) = launch.backend_kwargs.get("extra_flags").filter(|value| !value.is_null())
+  {
+    launch.extra_flags = value
+      .as_array()
+      .context("backend_kwargs.extra_flags must be an array")?
+      .iter()
+      .map(|value| value.as_str().context("backend_kwargs.extra_flags entries must be strings"))
+      .collect::<anyhow::Result<Vec<_>>>()?
+      .into_iter()
+      .map(str::to_string)
+      .collect();
+  }
+  Ok(launch)
+}
+
+/// The account directory the launch names: `claude_config_dir`, else the `claude_account`'s `config_dir`.
+pub(crate) fn launch_config_dir(launch: &LaunchArgs) -> anyhow::Result<Option<String>> {
   let value = launch
     .backend_kwargs
     .get("claude_config_dir")

@@ -1,5 +1,5 @@
-//! The outbound client sends https requests through the proxy `HTTPS_PROXY` names, and refuses a certificate
-//! bundle with no certificate in it.
+//! The outbound client sends https requests through the proxy `HTTPS_PROXY` names, refuses a certificate
+//! bundle with no certificate in it, and returns a redirect without following it.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -32,6 +32,34 @@ async fn https_requests_go_through_https_proxy() {
   let error = client.get("https://example.test/").send().await.expect_err("the proxy refuses the tunnel");
   assert!(error.is_connect(), "{error}");
   assert_eq!(proxy.join().expect("the proxy thread finishes"), "CONNECT example.test:443 HTTP/1.1\r\n");
+}
+
+#[tokio::test]
+async fn a_redirect_comes_back_unfollowed() {
+  // The Location names a port that nothing listens on: a followed redirect fails the send instead of answering.
+  let closed = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+  let location = format!("http://{}/followed", closed.local_addr().expect("the listener has an address"));
+  drop(closed);
+  let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+  let url = format!("http://{}/start", listener.local_addr().expect("the listener has an address"));
+  let answer_location = location.clone();
+  let server = std::thread::spawn(move || {
+    let (mut stream, _) = listener.accept().expect("the client connects");
+    let head: Vec<String> = BufReader::new(stream.try_clone().expect("clone the connection"))
+      .lines()
+      .map_while(Result::ok)
+      .take_while(|line| !line.is_empty())
+      .collect();
+    stream
+      .write_all(format!("HTTP/1.1 302 Found\r\nLocation: {answer_location}\r\nContent-Length: 0\r\n\r\n").as_bytes())
+      .expect("answer the request");
+    head.into_iter().next().expect("the request has a request line")
+  });
+  let client = http_client::client(&Settings::default()).expect("the client builds");
+  let response = client.get(url).send().await.expect("the redirect comes back as the response");
+  assert_eq!(response.status(), 302);
+  assert_eq!(response.headers()["location"].to_str().expect("the location is text"), location);
+  assert_eq!(server.join().expect("the server thread finishes"), "GET /start HTTP/1.1");
 }
 
 #[test]

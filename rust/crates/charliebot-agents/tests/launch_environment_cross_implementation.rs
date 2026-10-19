@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -35,9 +35,8 @@ fn complete_agent_child_environments_match_python_for_each_launch_kind() {
   let system_bin = root.path().join("system-bin");
   fs::create_dir_all(&venv_bin).unwrap();
   fs::create_dir_all(&system_bin).unwrap();
-  let codex_binary = system_bin.join("codex");
-  fs::write(&codex_binary, "").unwrap();
-  fs::set_permissions(&codex_binary, fs::Permissions::from_mode(0o755)).unwrap();
+  symlink(env!("CARGO_BIN_EXE_fake_program"), system_bin.join("codex")).unwrap();
+  fs::write(system_bin.join("probe.json"), json!({"codex": [{"exit": 0}]}).to_string()).unwrap();
   let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf();
   let cases = cases(&venv_bin, &system_bin);
   let python = run_python_reference(&repository, &cases);

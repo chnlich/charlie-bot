@@ -559,7 +559,9 @@ async fn finish_stdin(
   }
 }
 
-async fn capture_process_diagnostics(pid: u32) -> Value {
+/// A best-effort snapshot of a process that outlives its result: its pgid, `ps` process tree, `/proc` status, open fds
+/// and children. A probe that fails is recorded in its own field, so the snapshot always comes back.
+pub async fn capture_process_diagnostics(pid: u32) -> Value {
   let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
   let pgid_field = if pgid < 0 {
     let error = std::io::Error::last_os_error();

@@ -200,7 +200,7 @@ report, then `complete` or `error`. Nothing outside the tests constructs `Worker
 | `worker::SpawnedFn` | `src/runtime/worker.py:97` (`on_spawned`), `:238-246` (`_on_spawn` awaits it with the thread node) |
 | `Worker::account_relays` | `src/runtime/worker.py:130` |
 | `Worker::run` | `src/runtime/worker.py:223-310` |
-| `Worker::resume` | `src/runtime/worker.py:311-376` |
+| `Worker::resume` | `src/runtime/worker.py:311-375` |
 | `Worker::terminate`, `Worker::detach` | `src/runtime/worker.py:446-455` |
 | `Worker::build_backend` (private) | `src/runtime/worker.py:133-194` |
 | `Worker::launch_context` (private) | `src/runtime/worker.py:195-222` |

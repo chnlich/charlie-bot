@@ -544,14 +544,22 @@ mod tests {
   async fn task_routes_refuse_head_and_put_and_serve_post() {
     let (_home, features) = feature_context();
     let router = routes(&features);
+    // Python: src/runtime/api/sessions.py:1747-1823 resolves the session dependency before the caller, so
+    // the four completion routes answer 404 for an unknown session before any credential check.
     let route_cases = [
       ("/api/chat/synthetic-session/message", r#"{"content":"synthetic message"}"#),
       ("/api/chat/synthetic-session/cancel", ""),
       ("/api/sessions/synthetic-session/retry", r#"{"request_id":"synthetic-request","run_id":"synthetic-run"}"#),
       ("/api/sessions/synthetic-session/runs/synthetic-run/cancel", r#"{"request_id":"synthetic-request"}"#),
+    ];
+    // The four task-completion routes take the session first, so an unknown session is 404, not 401.
+    let session_first_route_cases = [
       ("/api/sessions/synthetic-session/complete", r#"{"request_id":"synthetic-request"}"#),
       ("/api/sessions/synthetic-session/cancel", r#"{"request_id":"synthetic-request","reason":"synthetic"}"#),
-      ("/api/sessions/synthetic-session/task-inputs/acknowledge", r#"{"request_id":"synthetic-request","input_ids":[]}"#),
+      (
+        "/api/sessions/synthetic-session/task-inputs/acknowledge",
+        r#"{"request_id":"synthetic-request","input_ids":[]}"#,
+      ),
       ("/api/sessions/synthetic-session/unarchive", "{}"),
     ];
 
@@ -572,6 +580,19 @@ mod tests {
 
       let post = send(&router, Method::POST, path, post_body).await;
       assert_eq!(post.status(), StatusCode::UNAUTHORIZED, "POST {path} must reach its handler");
+    }
+
+    for (path, post_body) in session_first_route_cases {
+      let head = send(&router, Method::HEAD, path, "").await;
+      assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED, "HEAD {path}");
+      assert_eq!(head.headers()[header::ALLOW], "POST", "HEAD {path}");
+
+      let put = send(&router, Method::PUT, path, "").await;
+      assert_eq!(put.status(), StatusCode::METHOD_NOT_ALLOWED, "PUT {path}");
+      assert_eq!(put.headers()[header::ALLOW], "POST", "PUT {path}");
+
+      let post = send(&router, Method::POST, path, post_body).await;
+      assert_eq!(post.status(), StatusCode::NOT_FOUND, "POST {path} must reach its handler");
     }
   }
 }

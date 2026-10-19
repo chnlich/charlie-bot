@@ -12,14 +12,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use charliebot_core::config::CREDENTIALS_FILENAME;
+use charliebot_core::home::OPENCODE_DIR_NAME;
 use charliebot_store::run_records::THREADS_DIR_NAME;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
 use crate::tar_writer::{Member, finish, python_code_points, write_member};
-
-/// The profile's opencode store directory name (`src/infra/home.py`).
-const OPENCODE_DIR_NAME: &str = "opencode";
 
 const BACKUP_PREFIX: &str = "charliebot-";
 const BACKUP_SUFFIX: &str = ".tar.gz";

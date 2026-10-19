@@ -104,7 +104,7 @@ for such input set `compare: status_and_shape`. The port refuses integers outsid
 | GET | `/api/sessions/{session_id}/explain/status` | features/explain | ported |  |
 | POST | `/api/internal/improve/stop` | features/improve | todo |  |
 | POST | `/api/internal/improve` | features/improve | todo |  |
-| GET | `/ncu` | features/ncu | todo |  |
+| GET | `/ncu` | features/ncu | ported | a cache miss runs a Python child, `rust/helpers/ncu_report_helper.py`, when the Nsight install has `extras/python`; otherwise the native `ncu --import --csv` path answers. See `rust/docs/python_helper.md` |
 | WS | `/ws/terminal` | features/terminal | ported |  |
 | GET | `/perfetto` | features/trace | ported |  |
 | GET | `/perfetto/merged` | features/trace | ported |  |

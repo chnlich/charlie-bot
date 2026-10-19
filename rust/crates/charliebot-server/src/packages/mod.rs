@@ -36,7 +36,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.explain", charliebot_explain::register),
   ("src.features.improve", stub), // stub: src.features.improve
   ("src.features.memory", charliebot_memory::register),
-  ("src.features.ncu", charliebot_ncu::register), // stub: src.features.ncu
+  ("src.features.ncu", charliebot_ncu::register),
   ("src.features.terminal", charliebot_terminal::register),
   ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage_page::register), // stub: src.features.usage

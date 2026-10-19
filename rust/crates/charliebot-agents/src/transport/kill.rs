@@ -90,18 +90,53 @@ pub fn detach(child: Child) {
 /// Terminate a child process group and wait for exit before returning.
 pub async fn terminate_child(child: &mut Child) -> std::io::Result<()> {
   let Some(pid) = child.id() else {
-    return Ok(());
+    return wait_child(child).await;
   };
   let sent = kill_process_group(pid, Signal::SIGTERM);
   if !sent {
-    return Ok(());
+    return kill_child_and_reap(child).await;
   }
-  if tokio::time::timeout(KILL_ESCALATION_GRACE, child.wait()).await.is_err() {
-    tracing::warn!(target: "charliebot_agents", pid, "backend_terminate_timeout");
-    kill_process_group(pid, Signal::SIGKILL);
-    child.wait().await?;
+  match tokio::time::timeout(KILL_ESCALATION_GRACE, child.wait()).await {
+    Ok(Ok(_)) => return Ok(()),
+    Ok(Err(error)) if is_already_reaped(&error) => return Ok(()),
+    Ok(Err(error)) => return Err(error),
+    Err(_) => {
+      tracing::warn!(target: "charliebot_agents", pid, "backend_terminate_timeout");
+      kill_process_group(pid, Signal::SIGKILL);
+      kill_child_and_reap(child).await?;
+    }
   }
   Ok(())
+}
+
+async fn kill_child_and_reap(child: &mut Child) -> std::io::Result<()> {
+  match child.try_wait() {
+    Ok(Some(_)) => return Ok(()),
+    Ok(None) => {}
+    Err(error) if is_already_reaped(&error) => return Ok(()),
+    Err(error) => return Err(error),
+  }
+  if let Err(error) = child.start_kill() {
+    match child.try_wait() {
+      Ok(Some(_)) => return Ok(()),
+      Err(wait_error) if is_already_reaped(&wait_error) => return Ok(()),
+      Ok(None) => return Err(error),
+      Err(wait_error) => return Err(wait_error),
+    }
+  }
+  wait_child(child).await
+}
+
+async fn wait_child(child: &mut Child) -> std::io::Result<()> {
+  match child.wait().await {
+    Ok(_) => Ok(()),
+    Err(error) if is_already_reaped(&error) => Ok(()),
+    Err(error) => Err(error),
+  }
+}
+
+fn is_already_reaped(error: &std::io::Error) -> bool {
+  error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32)
 }
 
 /// Convert an exit status to Python's integer convention, including negative signal numbers.
@@ -128,5 +163,17 @@ mod tests {
       tokio::process::Command::new("/bin/sh").args(["-c", "exec /bin/sleep 30"]).process_group(0).spawn().unwrap();
     terminate_child(&mut child).await.unwrap();
     assert!(child.try_wait().unwrap().is_some());
+  }
+
+  #[tokio::test]
+  async fn terminate_reaps_a_child_that_exited_before_its_group_signal() {
+    let mut child = tokio::process::Command::new("/bin/sh").args(["-c", "exit 0"]).process_group(0).spawn().unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    terminate_child(&mut child).await.unwrap();
+    match child.try_wait() {
+      Ok(Some(_)) => {}
+      Err(error) if is_already_reaped(&error) => {}
+      status => panic!("the exited child was not reaped: {status:?}"),
+    }
   }
 }

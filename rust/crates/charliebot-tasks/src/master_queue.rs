@@ -384,7 +384,9 @@ impl MasterQueue {
         state.running_turns.remove(&session_id);
       }
       if let Err(error) = outcome {
-        if error.downcast_ref::<master_run::TurnLetGo>().is_none() {
+        if error.downcast_ref::<master_run::TurnLetGo>().is_none()
+          && error.downcast_ref::<master_run::TurnCancelled>().is_none()
+        {
           tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "session_consumer_item_error");
         }
         if let Some(completion) = item.completion.take() {
@@ -453,7 +455,7 @@ impl MasterQueue {
       return Err(master_run::TurnLetGo.into());
     }
     if result.cancelled {
-      return Err(anyhow!("manager turn cancelled"));
+      return Err(master_run::TurnCancelled.into());
     }
     if result.finish_extras.get("zero_output").and_then(Value::as_bool) == Some(true) {
       if result.error_msg.is_none() {

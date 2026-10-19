@@ -253,13 +253,8 @@ impl AgentRunner {
       if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null },
     )
     .await?;
-    if request.child_waits_for_spawn_callback
-      && let Err(error) = spawn::wait_until_stopped(&mut spawned.child).await
-    {
-      if let Err(terminate_error) = kill::terminate_child(&mut spawned.child).await {
-        tracing::warn!(target: "charliebot_agents", error = %terminate_error, "backend_terminate_timeout");
-      }
-      return Err(error.into());
+    if request.child_waits_for_spawn_callback {
+      wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
     let stdin = spawned.child.stdin.take();
     let stdin_task = match stdin_prompt {
@@ -372,6 +367,9 @@ impl AgentRunner {
     log_dir: &Path,
   ) -> anyhow::Result<RunOutcome> {
     let mut spawned = spawn::spawn_piped(spec).await?;
+    if request.child_waits_for_spawn_callback {
+      wait_until_stopped_or_terminate(&mut spawned.child).await?;
+    }
     let mut stdout = spawned.child.stdout.take().context("agent stdout was not piped")?;
     let mut stderr = spawned.child.stderr.take().context("agent stderr was not piped")?;
     let cgroup = spawned.cgroup.take();
@@ -384,6 +382,9 @@ impl AgentRunner {
     })
     .await?;
     let pid = identity.pid;
+    if request.child_waits_for_spawn_callback {
+      spawn::continue_stopped_child(pid)?;
+    }
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(spawned.child, sender));
     let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false) });
@@ -492,6 +493,16 @@ impl AgentRunner {
       slot.take();
     }
   }
+}
+
+async fn wait_until_stopped_or_terminate(child: &mut Child) -> anyhow::Result<()> {
+  if let Err(wait_error) = spawn::wait_until_stopped(child).await {
+    kill::terminate_child(child)
+      .await
+      .with_context(|| format!("terminating and reaping the child after the spawn gate failed: {wait_error}"))?;
+    return Err(wait_error.into());
+  }
+  Ok(())
 }
 
 async fn reap_child(mut child: Child, sender: watch::Sender<Option<Result<i32, String>>>) {
@@ -744,6 +755,62 @@ mod tests {
     assert_eq!(outcome.exit_code, Some(0));
     assert_eq!(*callback_saw_stopped_child.lock().expect("spawn callback state is not poisoned"), Some(true));
     assert!(marker.exists());
+  }
+
+  #[tokio::test]
+  async fn gated_final_stdout_child_waits_until_spawn_callback_finishes() {
+    use tokio::sync::oneshot;
+
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("final-stdout-started");
+    let runner = AgentRunner::new(
+      Box::new(FinalStdoutShell::new("touch \"$MARKER\"; printf 'answer'", None, None)),
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let mut request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([
+        ("PATH".to_string(), "/bin".to_string()),
+        ("MARKER".to_string(), marker.to_string_lossy().into_owned()),
+      ]),
+      root.path().join("cgroups"),
+    );
+    request.gate_child_until_on_spawn();
+    let (callback_entered, callback_entered_rx) = oneshot::channel();
+    let (callback_release, callback_release_rx) = oneshot::channel();
+    let callback_entered = Arc::new(Mutex::new(Some(callback_entered)));
+    let callback_release_rx = Arc::new(Mutex::new(Some(callback_release_rx)));
+    request.on_spawn = Some(Arc::new({
+      let callback_entered = Arc::clone(&callback_entered);
+      let callback_release_rx = Arc::clone(&callback_release_rx);
+      move |_| {
+        let callback_entered = callback_entered
+          .lock()
+          .expect("spawn callback channel state is not poisoned")
+          .take()
+          .expect("spawn callback runs once");
+        let callback_release_rx = callback_release_rx
+          .lock()
+          .expect("spawn callback channel state is not poisoned")
+          .take()
+          .expect("spawn callback runs once");
+        Box::pin(async move {
+          callback_entered.send(()).expect("test waits for spawn callback");
+          callback_release_rx.await.expect("test releases spawn callback");
+          Ok(())
+        })
+      }
+    }));
+
+    let run = tokio::spawn(async move { runner.run(request).await });
+    callback_entered_rx.await.expect("spawn callback starts");
+    assert!(!marker.exists());
+    callback_release.send(()).expect("spawn callback is waiting");
+    let outcome = tokio::time::timeout(Duration::from_secs(30), run).await.unwrap().unwrap().unwrap();
+
+    assert!(marker.exists());
+    assert_eq!(outcome.exit_code, Some(0));
   }
 
   #[tokio::test]

@@ -82,6 +82,8 @@ def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytes
 
   assert env["CLAUDE_CONFIG_DIR"] == "/home/test-user/accounts/invite-1"
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+  assert env["BASH_DEFAULT_TIMEOUT_MS"] == "900000"
+  assert env["BASH_MAX_TIMEOUT_MS"] == "900000"
 
 
 @pytest.mark.asyncio

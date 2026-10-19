@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
+use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
 use crate::prompts::{self, PromptEnv, PromptSnapshot, TaskPromptError};
 use crate::recovery::{self, RecoveryState};
@@ -266,6 +267,9 @@ impl TaskExecutionAdapter {
       );
     }
     if let Err(error) = self.execute_manager_turn(&cfg, &meta, &run, &option, &snapshot).await {
+      if error.downcast_ref::<master_run::TurnLetGo>().is_some() {
+        return Err(error);
+      }
       self.land_launch_failure(&meta, &run, &error, "RuntimeError").await;
       return Err(error);
     }

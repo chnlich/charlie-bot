@@ -1,7 +1,7 @@
 """Small FastAPI app used by the Rust request-body differential test."""
 
 import argparse
-from typing import Literal
+from typing import Annotated, Literal
 
 import fastapi
 import pydantic
@@ -51,6 +51,39 @@ class AttachmentsRequest(pydantic.BaseModel):
   attachments: list[StrictFileRef] | None = pydantic.Field(default=None, min_length=2, max_length=3)
 
 
+class LocalPid(pydantic.BaseModel):
+  kind: Literal["local_pid"] = "local_pid"
+  pid: int
+  exit_file: str | None = None
+  log: str | None = None
+
+
+class RemotePid(pydantic.BaseModel):
+  kind: Literal["remote_pid"] = "remote_pid"
+  host: str
+  pid: int
+  exit_file: str | None = None
+  log: str | None = None
+
+
+class SlurmJob(pydantic.BaseModel):
+  kind: Literal["slurm_job"] = "slurm_job"
+  host: str | None = None
+  job_id: int
+
+
+WatchTarget = Annotated[LocalPid | RemotePid | SlurmJob, pydantic.Field(discriminator="kind")]
+
+
+class ScheduleTriggerRequest(pydantic.BaseModel):
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  session_id: str
+  delay_seconds: int
+  message: str = pydantic.Field(max_length=200)
+  watch_targets: list[WatchTarget] | None = None
+
+
 async def require_item(item_id: str) -> str:
   if item_id == "missing":
     raise fastapi.HTTPException(status_code=404, detail="missing item")
@@ -75,6 +108,11 @@ async def read_message(body: SendMessageRequest, item_id: str = fastapi.Depends(
 
 @app.post("/attachments/{item_id}")
 async def read_attachments(body: AttachmentsRequest, item_id: str = fastapi.Depends(require_item)) -> dict:
+  return body.model_dump(mode="json", exclude_unset=True)
+
+
+@app.post("/triggers/{item_id}")
+async def read_trigger(body: ScheduleTriggerRequest, item_id: str = fastapi.Depends(require_item)) -> dict:
   return body.model_dump(mode="json", exclude_unset=True)
 
 

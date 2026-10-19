@@ -323,8 +323,8 @@ def _event_log_diff(
     event_field_rules: tuple[tuple[EventFieldRule, EventFieldRule], ...],
     candidate_is_python: bool,
 ) -> list[str]:
-  left_events = [json.loads(line) for line in left.data.splitlines() if line.strip()]
-  right_events = [json.loads(line) for line in right.data.splitlines() if line.strip()]
+  left_events = [_jsonl_line_value(line) for line in left.data.splitlines() if line.strip()]
+  right_events = [_jsonl_line_value(line) for line in right.data.splitlines() if line.strip()]
   lines: list[str] = []
   for baseline_rule, candidate_rule in event_field_rules:
     rule_name = "allowed_baseline_values_for_one_event_field"

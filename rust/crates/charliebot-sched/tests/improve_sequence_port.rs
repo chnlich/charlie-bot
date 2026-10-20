@@ -26,7 +26,7 @@ use charliebot_tasks::spawner_backends::{self, SubagentRole};
 use futures_util::future::BoxFuture;
 use recovery_support::{Scripts, Stack, SyntheticRepo};
 use serde_json::{Map, Value, json};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};
 
 const SESSION_REQUEST: &str = "improve-port-manager";
@@ -121,10 +121,12 @@ struct LoopHarness {
   scripts: Scripts,
   wakes: Arc<Mutex<Vec<String>>>,
   process_guard: process_guard::ProcessGroupGuard,
+  _git_override_guard: AsyncMutexGuard<'static, ()>,
 }
 
 impl LoopHarness {
   async fn new(pool_ids: &[&str], extra_ids: &[&str], scripts: Vec<String>) -> anyhow::Result<LoopHarness> {
+    let git_override_guard = GIT_OVERRIDE_LOCK.lock().await;
     let scripts = Scripts::new(scripts);
     let mut option_ids = if pool_ids.is_empty() { vec!["fake"] } else { pool_ids.to_vec() };
     for id in extra_ids {
@@ -188,6 +190,7 @@ impl LoopHarness {
       scripts,
       wakes,
       process_guard: process_guard::ProcessGroupGuard::new(),
+      _git_override_guard: git_override_guard,
     })
   }
 
@@ -332,7 +335,24 @@ async fn the_second_iteration_reads_the_live_goal_file() -> anyhow::Result<()> {
     }
   })
   .await;
-  wait_for_first_run.expect("the first worker process starts");
+  if let Err(timeout_error) = wait_for_first_run {
+    let state = command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?;
+    let mut run_diagnostics = Vec::new();
+    for run in harness.stack.run_records(&harness.child.id)? {
+      let errors: Vec<Value> =
+        run_events_of(&harness, &run.id)?.into_iter().filter(|event| event["type"] == event_types::ERROR).collect();
+      run_diagnostics.push(format!(
+        "run {} (pid={:?}, backend={:?}, worktree={:?}) launch error and error events: {errors:#?}",
+        run.id, run.pid, run.backend, run.worktree_path
+      ));
+    }
+    panic!(
+      "the first worker process starts: {timeout_error:?}; improve state status={} end_error={:?}; iteration runs:\n{}",
+      state.status,
+      state.end_error,
+      if run_diagnostics.is_empty() { "<none>".to_string() } else { run_diagnostics.join("\n") }
+    );
+  }
   std::fs::write(
     command::loop_goal_path(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id),
     "revised live goal",
@@ -647,6 +667,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   )
   .await?;
   assert_eq!(explicit_child.backend, "other");
+  drop(explicit);
 
   let inherited = LoopHarness::new(&[], &[], Vec::new()).await?;
   let (backend, model, from_pool) = spawner_backends::resolve_requested_subagent_backend_model(

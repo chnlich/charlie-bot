@@ -70,8 +70,24 @@ The account owner gives consent in a browser. Only the owner can do this step.
 
 `add` writes the token only when the consenting account has the given email address.
 
-When Google shows the error `org_internal`, the OAuth client accepts only users of its organization.
-Then put a Desktop-app `client_id` and `client_secret` into the `google_account_<name>` section, and start again at step 1.
+Two consent errors mean that the OAuth client does not admit the account:
+
+- The error `org_internal`: the OAuth client accepts only users of its organization.
+- The error `access_denied` with "The app is currently being tested": the client is in Testing, and the account is not a test user.
+
+A client admits the account when one of these conditions is true:
+
+- Its project has the Internal user type, and the account belongs to the project's organization.
+- Its project has the External user type and the Production status. An unverified client shows a warning and admits at most 100 new users.
+- Its project has the Testing status and lists the account as a test user.
+
+A Google Workspace administrator can block a client for the accounts of the organization.
+When Google shows one of these errors, choose a Desktop-app client that admits the account.
+Put its `client_id` and `client_secret` into the `google_account_<name>` section.
+Then start again at step 1.
+Two OAuth clients can carry one app name, and the consent page shows that name.
+The name alone does not identify the client: compare the `client_id` values.
+In the report to the account owner, name the blocking client by its `client_id`.
 
 ## Bootstrap / Re-Authorization
 

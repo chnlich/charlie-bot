@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // One prefix, one path. A file link under /absolute_filepath/ resolves to one
-// absolute path, one card and one plan badge; the retired /files/ alias is no
-// prefix at all. A link whose target the server has nothing at is marked where
-// it appears, in each of the three carriers the render already walks. The
+// absolute path, one card and one plan badge. Retired /files/ aliases are
+// recognized and marked without a request. A link whose target the server has nothing at is
+// marked where it appears, in each of the three carriers the render already walks. The
 // marking costs the render no request it was not already going to make. The
 // fake DOM and the vm harness live in file_link_dom_stub.js, shared with
 // chat_url_ascii_boundary.test.js.
@@ -236,10 +236,10 @@ test('a code-carried link followed by CJK prose probes the plain path and marks 
 });
 
 // ---------------------------------------------------------------------------
-// Origin normalization
+// Cross-origin fidelity
 // ---------------------------------------------------------------------------
 
-test('a link to this host with the wrong scheme or port is pulled back to the page origin', async () => {
+test('a cross-origin link to this host stays as written and unprobed', async () => {
   const wrongScheme = 'http://charliebot.example/absolute_filepath/tmp/a.txt';
   const wrongPort = 'https://charliebot.example:8080/absolute_filepath/tmp/b.txt';
   const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
@@ -248,15 +248,12 @@ test('a link to this host with the wrong scheme or port is pulled back to the pa
 
   await render(context, root);
 
-  assert.equal(links[0].getAttribute('href'), 'https://charliebot.example/absolute_filepath/tmp/a.txt');
-  assert.equal(links[1].getAttribute('href'), 'https://charliebot.example/absolute_filepath/tmp/b.txt');
-  assert.deepEqual(requests.map((request) => request.url), [
-    'https://charliebot.example/absolute_filepath/tmp/a.txt',
-    'https://charliebot.example/absolute_filepath/tmp/b.txt',
-  ]);
+  assert.equal(links[0].getAttribute('href'), wrongScheme);
+  assert.equal(links[1].getAttribute('href'), wrongPort);
+  assert.deepEqual(requests, []);
 });
 
-test('a link to another hostname is left as written', async () => {
+test('a link to another hostname is left as written and unprobed', async () => {
   const foreign = 'https://other.example/absolute_filepath/tmp/a.txt';
   const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
   const link = anchor(foreign);
@@ -265,7 +262,7 @@ test('a link to another hostname is left as written', async () => {
   await render(context, root);
 
   assert.equal(link.getAttribute('href'), foreign);
-  assert.deepEqual(requests.map((request) => request.url), [foreign]);
+  assert.deepEqual(requests, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -306,12 +303,12 @@ test('one HEAD per unique path across every carrier an occurrence used', async (
 // Unrecognized-prefix artifact links: the second recognition channel. A
 // same-host link the known prefix does not resolve still enters the probe when
 // its path carries an /artifacts/ segment — a mis-composed prefix keeps that
-// tail — and a 404 marks it like any other missing file. Same-host
-// application routes carry no such segment, another hostname is another
-// server, and a link channel 1 resolved is never probed twice.
+// tail — and a 404 marks it like any other missing file. Unshemed local anchors
+// are also probed at their literal same-origin URL. Other hosts and ports are
+// left as written and unprobed.
 // ---------------------------------------------------------------------------
 
-test('an unrecognized-prefix artifact link on this host is probed at its normalized URL and marked', async () => {
+test('an unrecognized-prefix artifact link on this host is probed at its literal URL and marked', async () => {
   // The incident shape: the prefix was composed from memory and the server answers on neither
   // known prefix, but the /artifacts/ tail survives. Same host, so the probe runs, and a 404
   // marks the link where it appears instead of letting it pass as a plain link.
@@ -329,8 +326,11 @@ test('an unrecognized-prefix artifact link on this host is probed at its normali
   assert.equal(link.getAttribute('href'), href, 'the anchor is left clickable');
 });
 
-test('a same-host link without an /artifacts/ segment is not probed and not marked', async () => {
-  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+test('unschemed anchors are probed at their literal same-origin URL', async () => {
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({
+    '/diff': 405,
+    '/perfetto': 405,
+  })});
   const links = [
     anchor('/diff?repo=charlie-bot'),
     anchor('/perfetto'),
@@ -340,8 +340,12 @@ test('a same-host link without an /artifacts/ segment is not probed and not mark
 
   await render(context, root);
 
-  assert.deepEqual(requests, [], 'an application route and an artifact-less path probe nothing');
-  assert.equal(markersIn(prose).length, 0);
+  assert.deepEqual(requests, [
+    {url: 'https://charliebot.example/diff?repo=charlie-bot', method: 'HEAD'},
+    {url: 'https://charliebot.example/perfetto', method: 'HEAD'},
+    {url: 'https://charliebot.example/file-server/tmp/notes.md', method: 'HEAD'},
+  ], 'unschemed anchors receive one same-origin HEAD');
+  assert.equal(markersIn(prose).length, 1, 'the missing local path is marked; 405 routes are left unmarked');
 });
 
 test('an artifact-shaped link to another hostname is left alone', async () => {
@@ -355,6 +359,16 @@ test('an artifact-shaped link to another hostname is left alone', async () => {
   assert.deepEqual(requests, [], 'another hostname is another server; no probe');
   assert.equal(markersIn(prose).length, 0);
   assert.equal(link.getAttribute('href'), foreign, 'the link is left exactly as written');
+});
+
+test('a bare retired-prefix URL in prose is marked without a request', async () => {
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const {root, prose} = makeMessage([new FakeText('Retired route: https://charliebot.example/files/')]);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, []);
+  assert.equal(markersIn(prose).length, 1);
 });
 
 test('a known-prefix link is resolved and probed once, with no second probe from the artifact channel', async () => {
@@ -377,7 +391,7 @@ test('two spellings of one unrecognized-prefix artifact URL share one probe', as
 
   await render(context, root);
 
-  assert.equal(requests.length, 1, 'the channel-2 budget dedupes on the normalized URL');
+  assert.equal(requests.length, 1, 'the channel-2 budget dedupes on the literal URL');
   assert.equal(requests[0].method, 'HEAD');
   assert.equal(markersIn(prose).length, 2, 'each occurrence carries its own marker');
 });

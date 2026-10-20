@@ -1,15 +1,27 @@
 """Internal API endpoints behind ``charliebot web reply``, ``charliebot web dialog`` and ``charliebot web status``."""
 
 import asyncio
+import pathlib
 
 import fastapi
 import pydantic
 
+from src.infra import config
 from src.features.web_reply import reply, status
-from src.runtime import session_events, session_lifecycle, session_store, task_sessions
+from src.runtime import file_urls, session_events, session_lifecycle, session_store, task_sessions
 from src.runtime.api import deps
 
 router = fastapi.APIRouter()
+
+
+def _file_link_scan_context(
+    cfg: config.CharlieBotConfig, store: session_store.SessionStore, session_id: str) -> file_urls.ScanContext:
+  return file_urls.ScanContext(
+      cfg.server.port,
+      cfg.charliebot_home,
+      store.session_dir(session_id),
+      pathlib.Path.home(),
+  )
 
 
 class WebReplyRequest(pydantic.BaseModel):
@@ -45,6 +57,7 @@ class WebAskCheckRequest(pydantic.BaseModel):
 @router.post("/web/reply")
 async def web_reply(
     req: WebReplyRequest,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
@@ -52,11 +65,17 @@ async def web_reply(
   """Record the calling session's web reply and return the readback the CLI prints.
 
   Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, a worker or a language hold, 422
-  blank text or an empty keep_language reason. Nothing is recorded on a refusal.
+  blank text, an empty keep_language reason or a dead file link. Nothing is recorded on a refusal.
   """
   try:
     return await reply.post_web_reply(
-        req.session_id, req.text, store, events, lifecycle, keep_language=req.keep_language)
+        req.session_id,
+        req.text,
+        store,
+        events,
+        lifecycle,
+        keep_language=req.keep_language,
+        scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
@@ -79,6 +98,7 @@ async def web_dialog(
 @router.post("/web/status")
 async def web_status_set(
     req: WebStatusRequest,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     tree: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
@@ -86,11 +106,12 @@ async def web_status_set(
   """Store the calling session's status items and return the stored status the CLI prints.
 
   Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, worker, or unread waiting item, and
-  422 a file that is not a JSON object of valid items or has a waiting item without context. Nothing is stored or
-  recorded on a refusal.
+  422 a file that is not a JSON object of valid items, has a waiting item without context or links a dead file.
+  Nothing is stored or recorded on a refusal.
   """
   try:
-    return await status.set_status(req.session_id, req.text, store, events, tree)
+    return await status.set_status(
+        req.session_id, req.text, store, events, tree, scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
@@ -98,16 +119,18 @@ async def web_status_set(
 @router.post("/web/status/unread")
 async def web_status_unread(
     req: WebStatusRequest,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
 ) -> dict:
   """Return the status file's waiting items that no cold read of this session has read as they stand.
 
-  The file parses and validates as a set's does, including the waiting-item context check; refusals match the set's.
-  Nothing is stored or recorded.
+  The file parses and validates as a set's does, including the waiting-item context and file-link checks; refusals
+  match the set's. Nothing is stored or recorded.
   """
   try:
-    return await status.unread_waiting(req.session_id, req.text, store, events)
+    return await status.unread_waiting(
+        req.session_id, req.text, store, events, scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 

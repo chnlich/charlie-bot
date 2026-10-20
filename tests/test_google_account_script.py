@@ -303,95 +303,6 @@ def test_add_pending_section_inserts_refresh_token_and_description(
   assert fields["client_secret"] == ["personal-secret"]
 
 
-def test_add_empty_account_mapping_inserts_written_keys(
-    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  with credentials_file.open("a", encoding="utf-8") as output:
-    output.write("\ngoogle_account_personal: {}\n")
-  add_responses(monkeypatch)
-
-  exit_code, _, _ = run_cli(
-      [
-          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
-          "http://localhost/?code=auth-code&state=personal", "--description", "personal mailbox"
-      ], capsys)
-
-  parsed = yaml.safe_load(credentials_file.read_text(encoding="utf-8"))
-  assert exit_code == 0
-  assert parsed["google_account_personal"] == {
-      "refresh_token": "new-refresh",
-      "description": "personal mailbox",
-  }
-
-
-def test_add_populated_flow_mapping_inserts_description_and_uses_section_client(
-    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  with credentials_file.open("a", encoding="utf-8") as output:
-    output.write(
-        "\ngoogle_account_personal: {client_id: personal-client, client_secret: personal-secret, "
-        "refresh_token: old-refresh}\n")
-  original = credentials_file.read_bytes()
-  requests: list[Any] = []
-  stub_urlopen(
-      monkeypatch, [
-          {
-              "access_token": "temporary-access",
-              "refresh_token": "new-refresh"
-          },
-          {
-              "emailAddress": "person@example.invalid"
-          },
-      ], requests)
-
-  exit_code, _, _ = run_cli(
-      [
-          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
-          "http://localhost/?code=auth-code&state=personal", "--description", "personal mailbox"
-      ], capsys)
-
-  updated = credentials_file.read_bytes()
-  parsed = yaml.safe_load(updated)
-  assert exit_code == 0
-  assert updated.split(
-      b"google_account_personal:", maxsplit=1)[0] == original.split(
-          b"google_account_personal:", maxsplit=1)[0]
-  assert parsed["google_account_personal"] == {
-      "client_id": "personal-client",
-      "client_secret": "personal-secret",
-      "refresh_token": "new-refresh",
-      "description": "personal mailbox",
-  }
-  fields = urllib.parse.parse_qs(requests[0].data.decode("utf-8"))
-  assert fields["client_id"] == ["personal-client"]
-  assert fields["client_secret"] == ["personal-secret"]
-
-
-def test_add_after_final_block_scalar_stays_in_section(
-    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  with credentials_file.open("a", encoding="utf-8") as output:
-    output.write(
-        "\ngoogle_account_personal:\n"
-        "  notes: |\n"
-        "    first line\n"
-        "    second line\n"
-        "google_account_after:\n"
-        "  refresh_token: after-refresh\n")
-  add_responses(monkeypatch)
-
-  exit_code, _, _ = run_cli(
-      [
-          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
-          "http://localhost/?code=auth-code&state=personal"
-      ], capsys)
-
-  parsed = yaml.safe_load(credentials_file.read_text(encoding="utf-8"))
-  assert exit_code == 0
-  assert parsed["google_account_personal"] == {
-      "notes": "first line\nsecond line\n",
-      "refresh_token": "new-refresh",
-  }
-  assert parsed["google_account_after"] == {"refresh_token": "after-refresh"}
-
-
 def test_add_existing_section_replaces_description_line(
     credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   with credentials_file.open("a", encoding="utf-8") as output:
@@ -434,6 +345,86 @@ def test_add_default_name_inserts_google_description(
       "  description: work mailbox",
   ]
   assert yaml.safe_load(credentials_file.read_text(encoding="utf-8"))["google"]["description"] == "work mailbox"
+
+
+LONG_DESCRIPTION = (
+    "Shared family mailbox for travel bookings, school notices, receipts, appointments and the tax paperwork of "
+    "the household")
+
+
+def test_add_long_description_on_pending_section_stays_on_one_line(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("\ngoogle_account_personal:\n  description: old text\n  refresh_token: old-refresh\n")
+  original_lines = credentials_file.read_text(encoding="utf-8").splitlines()
+  add_responses(monkeypatch)
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost/?code=auth-code&state=personal", "--description", LONG_DESCRIPTION
+      ], capsys)
+
+  updated_lines = credentials_file.read_text(encoding="utf-8").splitlines()
+  assert exit_code == 0
+  assert stdout == "personal: person@example.invalid\n"
+  assert stderr == ""
+  changes = [(before, after) for before, after in zip(original_lines, updated_lines, strict=True) if before != after]
+  assert len(updated_lines) == len(original_lines)
+  assert changes == [
+      ("  description: old text", f"  description: {LONG_DESCRIPTION}"),
+      ("  refresh_token: old-refresh", "  refresh_token: new-refresh"),
+  ]
+  assert yaml.safe_load(
+      credentials_file.read_text(encoding="utf-8"))["google_account_personal"]["description"] == LONG_DESCRIPTION
+
+
+def test_add_long_description_on_default_name_stays_on_one_line(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  add_responses(monkeypatch)
+
+  exit_code, _, stderr = run_cli(
+      [
+          "add", "default", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost/?code=auth-code&state=default", "--description", LONG_DESCRIPTION
+      ], capsys)
+
+  updated_lines = credentials_file.read_text(encoding="utf-8").splitlines()
+  assert exit_code == 0
+  assert stderr == ""
+  assert updated_lines == [
+      "google:",
+      "  client_id: default-client",
+      "  client_secret: default-secret",
+      "  refresh_token: new-refresh",
+      f"  description: {LONG_DESCRIPTION}",
+  ]
+  assert yaml.safe_load(credentials_file.read_text(encoding="utf-8"))["google"]["description"] == LONG_DESCRIPTION
+
+
+@pytest.mark.parametrize("inline_section", [
+    "{client_id: personal-client, client_secret: personal-secret}",
+    "{}",
+])
+def test_add_rejects_inline_section_without_changes(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    inline_section: str) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write(f"\ngoogle_account_personal: {inline_section}\n")
+  original = credentials_file.read_bytes()
+  add_responses(monkeypatch)
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost/?code=auth-code&state=personal", "--description", "personal mailbox"
+      ], capsys)
+
+  assert exit_code == 1
+  assert stdout == ""
+  assert "credentials.google_account_personal must be a block mapping" in stderr
+  assert credentials_file.read_bytes() == original
+  assert not list(credentials_file.parent.glob(".credentials.yaml.*.tmp"))
 
 
 def test_add_duplicate_refresh_token_lines_fail_without_changes(

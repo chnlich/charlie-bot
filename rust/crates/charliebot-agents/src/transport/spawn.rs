@@ -340,6 +340,48 @@ mod tests {
 
   use super::*;
 
+  struct ProcessGroupGuard {
+    process_group: i32,
+    armed: bool,
+  }
+
+  impl ProcessGroupGuard {
+    fn new(pid: u32) -> Self {
+      Self { process_group: i32::try_from(pid).unwrap(), armed: true }
+    }
+
+    fn disarm(&mut self) {
+      self.armed = false;
+    }
+  }
+
+  impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+      if self.armed && unsafe { libc::kill(-self.process_group, libc::SIGKILL) } == -1 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+          eprintln!("could not kill test process group {}: {error}", self.process_group);
+        }
+      }
+    }
+  }
+
+  fn temp_cgroup(root: &Path) -> (PathBuf, PathBuf) {
+    let base = root.join("app.slice");
+    fs::create_dir(&base).unwrap();
+    let path = base.join("charliebot-sess-test1234");
+    fs::create_dir(&path).unwrap();
+    let procs = path.join("cgroup.procs");
+    fs::write(&procs, "").unwrap();
+    (base, procs)
+  }
+
+  async fn stop_child(child: &mut Child, guard: &mut ProcessGroupGuard) {
+    assert_ne!(unsafe { libc::kill(-guard.process_group, libc::SIGKILL) }, -1);
+    child.wait().await.unwrap();
+    guard.disarm();
+  }
+
   fn spec(program: &str, args: &[&str], base: &Path) -> SpawnSpec {
     SpawnSpec::new(
       program,
@@ -426,6 +468,35 @@ mod tests {
     spawned.child.kill().await.unwrap();
     spawned.child.wait().await.unwrap();
     assert_eq!(nice, 10);
+  }
+
+  #[tokio::test]
+  async fn shared_opencode_server_keeps_the_test_nice_and_stays_outside_the_session_cgroup() {
+    let root = tempfile::tempdir().unwrap();
+    let (base, procs) = temp_cgroup(root.path());
+    let spec = SpawnSpec::new(
+      "/bin/sleep",
+      ["30"].into_iter().map(OsString::from).collect(),
+      None,
+      HashMap::new(),
+      None,
+      base,
+      0,
+      0,
+      0,
+    );
+    let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
+    let pid = spawned.child.id().unwrap();
+    let mut guard = ProcessGroupGuard::new(pid);
+    let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    assert!(own_nice < 10, "test process nice must be below 10, got {own_nice}");
+    let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
+    let child_session = unsafe { libc::getsid(pid as i32) };
+    let cgroup_procs = fs::read_to_string(procs).unwrap();
+    assert_eq!(child_nice, own_nice);
+    assert_eq!(child_session, pid as i32);
+    assert_eq!(cgroup_procs, "");
+    stop_child(&mut spawned.child, &mut guard).await;
   }
 
   #[tokio::test]

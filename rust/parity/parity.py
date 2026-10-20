@@ -80,7 +80,7 @@ class StepResult:
   scenario: str
   name: str
   route: str
-  statuses: tuple[int | None, int | None]
+  statuses: tuple[int | str | None, int | str | None]
   lines: list[str]
   files: str
   responses: list[compare.Response | None]
@@ -763,11 +763,17 @@ def _wait_for_fake_handshake(side: Side, fake: str, mark: int, deadline: float) 
   return False
 
 
+def _close_outcome(error: exceptions.ConnectionClosed) -> str:
+  """The WebSocket close a side's outcome records: its close code, or that the connection closed without one."""
+  frame = error.rcvd if error.rcvd is not None else error.sent
+  return "closed without a close frame" if frame is None else f"closed with code {frame.code}"
+
+
 def _websocket_request(
     side: Side,
     step: scenario_file.Step,
     manifest: dict,
-) -> tuple[int | None, list[dict], str, list[str]]:
+) -> tuple[int | str | None, list[dict], str, list[str]]:
   if side.server is None:
     raise RuntimeError(f"{side.label} has no running server")
   path = _substitute(side, step.path, manifest)
@@ -813,25 +819,29 @@ def _websocket_request(
       if not _wait_for_fake_handshake(side, step.wait_for_fake_handshake, fake_mark, deadline):
         lines.append(f"{side.label} did not reach the {step.wait_for_fake_handshake} WebSocket handshake")
         return 101, frames, collected, lines
-    for outgoing in step.send:
-      resolved = _substitute(side, outgoing, manifest)
-      if "json" in resolved:
-        socket.send(json.dumps(resolved["json"], ensure_ascii=False))
-      elif "text" in resolved:
-        socket.send(resolved["text"])
-      else:
-        socket.send((scenario_file.DATA_DIR / resolved["binary_file"]).read_bytes())
-    while True:
+    close: str | None = None
+    try:
+      for outgoing in step.send:
+        resolved = _substitute(side, outgoing, manifest)
+        if "json" in resolved:
+          socket.send(json.dumps(resolved["json"], ensure_ascii=False))
+        elif "text" in resolved:
+          socket.send(resolved["text"])
+        else:
+          socket.send((scenario_file.DATA_DIR / resolved["binary_file"]).read_bytes())
+    except exceptions.ConnectionClosed as error:
+      close = _close_outcome(error)
+    while close is None:
       if "frames" in step.until and len(frames) >= step.until["frames"]:
         break
       if "collected_contains" in step.until and step.until["collected_contains"] in collected:
         break
       try:
         received = socket.recv(timeout=max(0.0, deadline - time.monotonic()))
-      except exceptions.ConnectionClosed:
-        if "close" in step.until:
-          break
-        lines.append(f"{side.label} WebSocket closed before until condition {step.until}")
+      except exceptions.ConnectionClosed as error:
+        close = _close_outcome(error)
+        if "close" not in step.until:
+          lines.append(f"{side.label} WebSocket {close} before until condition {step.until}")
         break
       except TimeoutError:
         lines.append(f"{side.label} WebSocket receive timed out waiting for {step.until}")
@@ -861,7 +871,7 @@ def _websocket_request(
               raise ValueError(f"{side.label} collect field {step.collect['field']!r} is not text")
       if "collected_contains" in step.until and step.until["collected_contains"] in collected:
         break
-  return 101, frames, collected, lines
+  return (close if close is not None else 101), frames, collected, lines
 
 
 def _run_handover_step(
@@ -1023,6 +1033,8 @@ def _run_step(
       left_frames = [_normalize_ws_frame(frame, step.route, sides[0].ctx) for frame in outcomes[0][1]]
       right_frames = [_normalize_ws_frame(frame, step.route, sides[1].ctx) for frame in outcomes[1][1]]
       lines.extend(f"WebSocket {line}" for line in compare.json_diff(left_frames, right_frames))
+    if statuses[0] != statuses[1]:
+      lines.append(f"WebSocket outcome {sides[0].label} {statuses[0]}, {sides[1].label} {statuses[1]}")
   else:
     raise ValueError(f"unknown scenario step kind {step.kind!r}")
   after = _settle_sides(sides)

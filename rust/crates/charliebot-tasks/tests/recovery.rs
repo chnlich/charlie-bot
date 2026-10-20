@@ -30,8 +30,8 @@ use charliebot_tasks::execution::is_out_of_space_error;
 use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, Stack, SyntheticRepo, assert_logged_node_failure,
-  assert_named_error, cold_read_spec, implement_spec, script_option, synthetic_run,
+  BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Stack, SyntheticRepo,
+  assert_logged_node_failure, assert_named_error, cold_read_spec, implement_spec, script_option, synthetic_run,
 };
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;
@@ -1107,6 +1107,42 @@ async fn iteration(
     ..queued_work(child_id, run_id)
   };
   stack.register(record).await
+}
+
+/// One scheduled step of the probe controller: a run of the child that carries the probe's sequence reference.
+fn probe_step(session_id: &str, run_id: &str, position: i64) -> RunRecord {
+  RunRecord {
+    kind: RunKind::ScheduledStep,
+    sequence_ref: Some(SequenceRef {
+      kind: PROBE_KIND.to_string(),
+      owner_ref: "cron:nightly@2026-10-08T00:00Z".to_string(),
+      position,
+    }),
+    ..queued_run(session_id, run_id, RunKind::ScheduledStep)
+  }
+}
+
+/// `test_sequence_controller_runs.py::test_a_finished_sequence_run_asks_its_owning_controller_after_run`: a durable
+/// finish asks the owning controller's after-run duty. A cron step's finish re-drives its firing, and a running loop's
+/// iteration leaves its child open. No owned run logs the no-controller warning.
+#[tokio::test]
+async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyhow::Result<()> {
+  // Python: tests/test_sequence_controller_runs.py::test_a_finished_sequence_run_asks_its_owning_controller_after_run.
+  let stack = Stack::start("exit 0").await?;
+  // A running loop owes no close yet, so its close step returns and the child stays open.
+  let (manager, child) = loop_child(&stack, marker("running", None)).await?;
+  stack.register(probe_step(&child, "step-0", 0)).await?;
+  iteration(&stack, &child, &manager, "iter-1", 1).await?;
+
+  stack.adapter.after_worker_run_for_test(&child, "step-0", "success").await?;
+  assert_eq!(stack.probe_calls(&child)?, ["after_run step-0"]);
+
+  let log = LogCapture::default();
+  let _guard = log.install();
+  stack.adapter.after_worker_run_for_test(&child, "iter-1", "success").await?;
+  assert!(!log.text().contains("sequence_run_without_controller"), "an owned run logs no warning: {}", log.text());
+  assert_eq!(stack.store().task_state(&child)?, "open");
+  Ok(())
 }
 
 /// `test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller`: the registered

@@ -1187,14 +1187,13 @@ class TaskTreeManager:
     A logical manager child directly under the caller's own manager task is
     coordination work and needs no user authorization; a worker child is
     implementation delegation and still rides the runtime gate (takeoff_gate:
-    a real user message somewhere on the open task chain) — except a read-only
-    delegation (verify, cold-read), which the one shared judgment
-    (takeoff_gate.is_read_only_exempt) excuses here exactly as it does on the
-    route and at the launch. On a replayed create *task* is
-    the ORIGINAL node's spec, so re-labeling a replay cannot borrow the
-    exemption for a node created as implementation. Any other shape — an
-    unrelated root, a foreign parent, a worker parent — is
-    outside an agent's scope.
+    a real user message or a thread platform summon somewhere on the open task
+    chain) — except a read-only delegation (verify, cold-read), which the one
+    shared judgment (takeoff_gate.is_read_only_exempt) excuses here exactly as
+    it does on the route and at the launch. On a replayed create *task* is the
+    ORIGINAL node's spec, so re-labeling a replay cannot borrow the exemption
+    for a node created as implementation. Any other shape — an unrelated root,
+    a foreign parent, a worker parent — is outside an agent's scope.
     """
     assert isinstance(caller, run_token.CallerIdentity)
     claims = caller.claims
@@ -1286,8 +1285,9 @@ class TaskTreeManager:
     """The runtime gate for a v2 task caller (takeoff_gate).
 
     The calling node must be a manager, every node up to the root an open
-    task, and some node on that chain must hold a real user message; agent
-    messages, scheduled triggers and child reports never count.
+    task, and some node on that chain must hold a real user message or a
+    thread platform summon; other agent messages, scheduled triggers and child
+    reports never count.
     """
     index = await self._get_index()
 

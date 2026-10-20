@@ -185,7 +185,8 @@ An understanding page lists the divergences of a request that admits several rea
 ## Runtime delegation authorization
 
 The runtime gate admits a delegation when the calling manager and its ancestors are open
-and the chain holds a real user message. Verify and cold-read always pass.
+and the chain holds a real user message or a thread platform summon. Verify and cold-read
+always pass.
 The gate judges the chain alone; its definitions live in src/runtime/takeoff_gate.py.
 
 ## Execution

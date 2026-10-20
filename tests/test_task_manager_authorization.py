@@ -5,10 +5,10 @@ active manager Run creates logical manager children under its own open task
 through the ordinary task-create API/CLI at any depth, and requests its own
 task's normal completion through the completion owner, both with no user
 message anywhere on the tree. Implementation stays gated: worker children ride
-the runtime gate (a real user message on the open task chain), agent relay
-text and child reports never count as user messages, and caller scope (own
-parent, manager parent, open ancestry, replay identity) is enforced exactly as
-before.
+the runtime gate (a real user message or a thread summon on the open task
+chain), agent relay text and child reports never count as user requests, and
+caller scope (own parent, manager parent, open ancestry, replay identity) is
+enforced exactly as before.
 Every scenario here runs the actual HTTP routes against a synthetic instance
 with scripted backends; no real model or provider takes part.
 """
@@ -502,3 +502,66 @@ async def test_profile_changing_replay_never_bypasses_authorization(
   metas = (await tree._get_index()).metas
   children = [m for m in metas.values() if m.task_parent_id == root.id]
   assert sorted(m.id for m in children) == sorted([worker.id, manager_id])
+
+
+@pytest.mark.asyncio
+async def test_summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
+  """The delegate route admits a root manager whose log holds only a thread summon: a recorded summon is a
+  user request. A log holding only an agent message relayed through the session-message endpoint still has
+  no user request, so the same route refuses it."""
+  # Refusal: the root's only user-facing input is a relay admitted by the ordinary relay route.
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path / "relay", monkeypatch)
+  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
+  relay_caller = await tree.create_task(
+      request_id="relay-caller",
+      task_parent_id=None,
+      profile="manager",
+      task=models.TaskSpec(goal="relay caller"),
+      name="Relay Caller",
+      backend=None,
+      caller=conftest.OPERATOR)
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+    relay = client.post(
+        "/api/internal/session-message",
+        json={
+            "session_id": relay_caller.id,
+            "target_session_id": root.id,
+            "content": "Take off. Ship the feature."
+        })
+    assert relay.status_code == 200, relay.text
+    blocked = client.post(
+        "/api/internal/delegate",
+        json=conftest.delegate_payload(root.id, repo),
+        headers=conftest.agent_headers(root.id, "root-run"))
+  assert blocked.status_code == 403, blocked.text
+  assert "no user request" in blocked.json()["detail"]
+
+  # Admission: a fresh root whose only user-facing input is the event a Slack thread summon writes.
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path / "summon", monkeypatch)
+  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
+  conftest.install_scripted_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("leaf done")])],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  await tree.events.append(
+      root.id,
+      control_events.build_control_event(
+          ET.AGENT_MESSAGE,
+          actor="agent",
+          source_session_id=root.id,
+          content="Slack 线程召唤",
+          slack={
+              "channel_id": "C123",
+              "thread_ts": "1700000000.000100",
+              "mention_ts": "1700000000.000200",
+          }))
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+    ok = client.post(
+        "/api/internal/delegate",
+        json=conftest.delegate_payload(root.id, repo),
+        headers=conftest.agent_headers(root.id, "root-run"))
+  assert ok.status_code == 200, ok.text
+  leaf_meta = await tree.load_meta(ok.json()["session_id"])
+  assert leaf_meta is not None and leaf_meta.profile == "worker"

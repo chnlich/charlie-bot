@@ -269,7 +269,7 @@ pub async fn reconcile_node(
 
 /// Re-drive every terminal run's follow-up that its crash window lost (`task_execution._replay_followups`). Each
 /// follow-up is idempotent by stable ids, so a repeated pass lands nothing twice.
-async fn replay_followups(
+pub async fn replay_followups(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
   session_id: &str,

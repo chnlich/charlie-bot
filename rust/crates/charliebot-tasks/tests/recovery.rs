@@ -1109,14 +1109,14 @@ async fn iteration(
   stack.register(record).await
 }
 
-/// One scheduled step of the probe controller: a run of the child that carries the probe's sequence reference.
-fn probe_step(session_id: &str, run_id: &str, position: i64) -> RunRecord {
+/// One scheduled step of the probe controller: a queued run of the child that carries the probe's sequence reference.
+fn probe_step(session_id: &str, run_id: &str) -> RunRecord {
   RunRecord {
     kind: RunKind::ScheduledStep,
     sequence_ref: Some(SequenceRef {
       kind: PROBE_KIND.to_string(),
       owner_ref: "cron:nightly@2026-10-08T00:00Z".to_string(),
-      position,
+      position: 0,
     }),
     ..queued_run(session_id, run_id, RunKind::ScheduledStep)
   }
@@ -1131,7 +1131,7 @@ async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyho
   let stack = Stack::start("exit 0").await?;
   // A running loop owes no close yet, so its close step returns and the child stays open.
   let (manager, child) = loop_child(&stack, marker("running", None)).await?;
-  stack.register(probe_step(&child, "step-0", 0)).await?;
+  stack.register(probe_step(&child, "step-0")).await?;
   iteration(&stack, &child, &manager, "iter-1", 1).await?;
 
   stack.adapter.after_worker_run_for_test(&child, "step-0", "success").await?;
@@ -1142,6 +1142,31 @@ async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyho
   stack.adapter.after_worker_run_for_test(&child, "iter-1", "success").await?;
   assert!(!log.text().contains("sequence_run_without_controller"), "an owned run logs no warning: {}", log.text());
   assert_eq!(stack.store().task_state(&child)?, "open");
+  Ok(())
+}
+
+/// `test_sequence_controller_runs.py::test_recovery_asks_the_owning_controller_and_counts_one_follow_up`: recovery
+/// replays a terminal step and an unlaunched one, one follow-up each, and leaves a launched, non-terminal step to the
+/// earlier pass.
+#[tokio::test]
+async fn recovery_asks_the_owning_controller_and_counts_one_follow_up() -> anyhow::Result<()> {
+  // Python: tests/test_sequence_controller_runs.py::test_recovery_asks_the_owning_controller_and_counts_one_follow_up.
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let child = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.register(probe_step(&child.id, "step-fin")).await?;
+  stack.register(probe_step(&child.id, "step-queued")).await?;
+  stack.register(probe_step(&child.id, "step-live")).await?;
+  stack.record_terminal(&child.id, "step-fin", RunOutcomeKind::Success).await?;
+  stack.launch(&child.id, "step-live", 999_999, "1-424000").await?;
+
+  let mut counters = PassCounters::default();
+  recovery::replay_followups(&stack.features, &stack.adapter, &child.id, &mut counters).await?;
+
+  assert_eq!(counters.followups, 2);
+  assert_eq!(stack.probe_calls(&child.id)?, ["recover_run step-fin success", "recover_run step-queued none"]);
+  let events = stack.run_events(&child.id)?;
+  assert!(run_records::terminal_outcome(&events, "step-live")?.is_none(), "the launched step keeps no terminal fact");
   Ok(())
 }
 

@@ -571,10 +571,11 @@ mod tests {
     std::fs::write(&path, &original).unwrap();
     features.store.mark_busy(&node.id, charliebot_store::metadata::UtcDateTime::now()).unwrap();
 
-    let (status, _) =
+    let (status, body) =
       send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": "synthetic-alt"})).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("running work")));
     assert_eq!(std::fs::read_to_string(path).unwrap(), original);
     assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic");
   }

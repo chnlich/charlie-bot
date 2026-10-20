@@ -174,10 +174,9 @@ fn run_token_header(session_id: &str, run_id: &str, agent: &str) -> anyhow::Resu
 /// `test_delegate_inherited_authorization.py::test_authorized_ancestor_delegates_without_a_local_user_message`: a
 /// child manager with no user message of its own delegates through an authorized ancestor. One leaf and one run
 /// are created, and a replay returns the same child and run without a second process.
+// Python: tests/test_delegate_inherited_authorization.py::test_authorized_ancestor_delegates_without_a_local_user_message
 #[tokio::test]
 async fn authorized_ancestor_delegates_without_a_local_user_message() -> anyhow::Result<()> {
-  // Python: tests/test_delegate_inherited_authorization.py::
-  //   test_authorized_ancestor_delegates_without_a_local_user_message.
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![result_script("leaf done")]);
@@ -524,8 +523,7 @@ async fn verify_no_backend_defaults_to_first_differing_preference() -> anyhow::R
 /// session backend outside the pool leaves the first pool member.
 #[tokio::test]
 async fn verify_no_backend_session_backend_not_in_preference_uses_first_entry() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::
-  //   test_verify_no_backend_session_backend_not_in_preference_uses_first_entry.
+// Python: tests/test_internal_delegate_takeoff.py::test_verify_no_backend_session_backend_not_in_preference_uses_first_entry
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, "kimi-k2.5").await?;
@@ -641,8 +639,7 @@ async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Resu
 /// implement without a backend resolves to the parent's backend, and the child record keeps it.
 #[tokio::test]
 async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::
-  //   test_implement_delegate_without_backend_resolves_to_the_parent_backend.
+// Python: tests/test_internal_delegate_takeoff.py::test_implement_delegate_without_backend_resolves_to_the_parent_backend
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -663,8 +660,7 @@ async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> 
 /// the next member other than the session's own.
 #[tokio::test]
 async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyhow::Result<()> {
-  // Python: tests/test_internal_delegate_takeoff.py::
-  //   test_pool_runs_unnamed_workers_and_leaves_named_and_verify_routing.
+  // Python: tests/test_internal_delegate_takeoff.py::test_pool_runs_unnamed_workers_and_leaves_named_and_verify_routing
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;

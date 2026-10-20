@@ -526,9 +526,18 @@ def require_backends(cfg: CharlieBotConfig) -> None:
     if backend_id not in ids:
       problems.append(f"{cfg.config_file}: backends.pool[{index}] names unknown backend '{backend_id}'")
   if problems:
-    raise ValueError(
-        "backend references must name a backends.options id (id rule: BackendsConfig in "
-        "src/infra/config.py):\n" + "\n".join(f"  {problem}" for problem in problems))
+    raise backend_reference_error(problems)
+
+
+def backend_reference_error(problems: list[str]) -> ValueError:
+  """Build the one error every backend-reference check raises, each violation on its own line.
+
+  The catalog check in this module and the per-package startup checks share the
+  preamble, so a rejected reference reads the same wherever it is caught.
+  """
+  return ValueError(
+      "backend references must name a backends.options id (id rule: BackendsConfig in "
+      "src/infra/config.py):\n" + "\n".join(f"  {problem}" for problem in problems))
 
 
 def get_config() -> CharlieBotConfig:

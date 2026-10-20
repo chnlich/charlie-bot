@@ -2001,6 +2001,9 @@ async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::
   Ok(())
 }
 
+/// The same recovery for a `cron` run, in both node orders: the registered cron controller recovers the queued run
+/// without launching it, while the manager node still drains its dead turn.
+#[tokio::test]
 async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
   // Python: tests/test_cron_sequence.py::test_recovery_redrives_a_mid_chain_firing_from_durable_facts
   for sequence_first in [true, false] {

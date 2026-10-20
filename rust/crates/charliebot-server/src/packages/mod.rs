@@ -67,7 +67,7 @@ mod tests {
 
   #[test]
   fn the_listed_packages_render_the_five_chat_lines() {
-    // Python: tests/test_scheduled_handlers.py::test_the_packages_register_the_built_in_handlers
+    // Python: tests/test_scheduled_handlers.py::test_the_packages_register_the_built_in_handlers (lines 43-45)
     let registry = registry().expect("the listed packages register");
     for event_type in [
       "slack_reply",

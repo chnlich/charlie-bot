@@ -654,6 +654,47 @@ pub struct SyntheticRepo {
   pub origin: PathBuf,
 }
 
+impl SyntheticRepo {
+  /// Create a repo with one published seed commit and an up-to-date `origin/main` tracking ref.
+  pub fn create() -> anyhow::Result<SyntheticRepo> {
+    let dir = tempfile::tempdir()?;
+    let repo = dir.path().join("repo");
+    let origin = dir.path().join("origin.git");
+    run_git(
+      dir.path(),
+      &["init", "--bare", "--initial-branch=main", origin.to_str().context("origin path is UTF-8")?],
+    )?;
+    run_git(dir.path(), &["init", "--initial-branch=main", repo.to_str().context("repo path is UTF-8")?])?;
+    run_git(&repo, &["config", "user.email", "synthetic@example.com"])?;
+    run_git(&repo, &["config", "user.name", "Synthetic"])?;
+    std::fs::write(repo.join("README.md"), "synthetic repository\n")?;
+    run_git(&repo, &["add", "README.md"])?;
+    run_git(&repo, &["commit", "-m", "synthetic seed"])?;
+    run_git(&repo, &["remote", "add", "origin", origin.to_str().context("origin path is UTF-8")?])?;
+    run_git(&repo, &["push", "-u", "origin", "main"])?;
+    Ok(SyntheticRepo { _dir: dir, repo, origin })
+  }
+
+  /// Add a named branch as a worktree based at the published main tip.
+  pub fn add_worktree(&self, path: &Path, branch: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent)?;
+    }
+    run_git(
+      &self.repo,
+      &["worktree", "add", "-b", branch, path.to_str().context("worktree path is UTF-8")?, "origin/main"],
+    )?;
+    Ok(())
+  }
+
+  /// Push the current worktree's branch tip to the published `main` ref.
+  pub fn publish_worktree(&self, path: &Path) -> anyhow::Result<()> {
+    run_git(path, &["push", "origin", "HEAD:main"])?;
+    Ok(())
+  }
+}
+
+
 fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<()> {
   let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
   anyhow::ensure!(

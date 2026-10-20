@@ -2,6 +2,9 @@
 //! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
 //! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
 
+#[path = "process_guard.rs"]
+mod process_guard;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -397,7 +400,7 @@ pub struct Stack {
   pub dispatch: Arc<Dispatcher>,
   pub completion: Arc<TaskCompletion>,
   pub fault: Arc<FollowUpFault>,
-  process_guard: crate::process_guard::ProcessGroupGuard,
+  process_guard: process_guard::ProcessGroupGuard,
 }
 
 impl Drop for Stack {
@@ -519,7 +522,7 @@ impl Stack {
       dispatch,
       completion,
       fault,
-      process_guard: crate::process_guard::ProcessGroupGuard::new(),
+      process_guard: process_guard::ProcessGroupGuard::new(),
     })
   }
 

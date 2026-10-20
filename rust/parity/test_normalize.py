@@ -323,6 +323,15 @@ def test_probe_stdout_pipe_inodes_compare_equal_and_a_file_path_still_differs() 
   assert baseline != file_path
 
 
+def test_task_branch_normalization_masks_only_the_wall_clock_second() -> None:
+  earlier = normalize.normalize_text("charliebot/task-1792480595-81e5922b", _context())
+  later = normalize.normalize_text("charliebot/task-1792480596-81e5922b", _context())
+  assert earlier == later == "charliebot/task-<task-branch-timestamp>-81e5922b"
+  other_run = normalize.normalize_text("charliebot/task-1792480596-81e5922c", _context())
+  assert later != other_run
+  assert normalize.normalize_text("task-1792480595-81e5922b", _context()) == "task-1792480595-81e5922b"
+
+
 PROXY_ROUTE = "POST /api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages"
 MINTED_ID = b'"id":"msg_0123456789abcdef0123456789abcdef"'
 

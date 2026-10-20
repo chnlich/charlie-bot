@@ -31,6 +31,7 @@ _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
+_TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot/task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
 _PIPE_INODE = re.compile(r"pipe:\[(?P<value>\d+)\]")
 
 
@@ -52,6 +53,12 @@ TEMP_DIR_SUFFIX_RULE = TextPatternRule(
     "temp-dir-suffix",
     _TEMP_DIR_SUFFIX,
     "tempfile.mkdtemp random suffix; the directory's role is fixed by its prefix",
+)
+
+TASK_BRANCH_TIMESTAMP_RULE = TextPatternRule(
+    "task-branch-timestamp",
+    _TASK_BRANCH_TIMESTAMP,
+    "worktree branch names use time.time() seconds; independent servers can straddle a second",
 )
 
 
@@ -717,8 +724,13 @@ def _mask_temp_dir_suffix(match: re.Match[str]) -> str:
   return match[0][:match.start("value") - match.start()] + f"<{TEMP_DIR_SUFFIX_RULE.name}>"
 
 
+def _mask_task_branch_timestamp(match: re.Match[str]) -> str:
+  """The branch prefix and run suffix stay visible; only the independent servers' wall-clock second is replaced."""
+  return f"{match['prefix']}<{TASK_BRANCH_TIMESTAMP_RULE.name}>{match['suffix']}"
+
+
 def normalize_text(text: str, ctx: Context) -> str:
-  """The tree path, minted UUID and scratch directory rules: each server-specific value reads as a placeholder."""
+  """The tree path, minted UUID, scratch directory and task-branch timestamp read as placeholders."""
   normalized = text.replace(ctx.tree_root, TREE_PLACEHOLDER)
 
   def replace_uuid(match: re.Match[str]) -> str:
@@ -729,6 +741,7 @@ def normalize_text(text: str, ctx: Context) -> str:
 
   normalized = VOICE_STEM_RULE.pattern.sub(f"<{VOICE_STEM_RULE.name}>", normalized)
   normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
+  normalized = TASK_BRANCH_TIMESTAMP_RULE.pattern.sub(_mask_task_branch_timestamp, normalized)
   return _UUID.sub(replace_uuid, normalized)
 
 

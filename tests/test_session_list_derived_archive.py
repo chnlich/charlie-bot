@@ -15,8 +15,7 @@ import orjson
 import pytest
 
 from src.infra import models
-from src.runtime import task_errors
-from src.runtime import task_sessions
+from src.runtime import task_errors, task_sessions
 
 
 async def create(tree: task_sessions.TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):

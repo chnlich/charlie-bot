@@ -1265,6 +1265,39 @@ async fn recovery_without_a_controller_lands_interrupted_then_only_logs() -> any
   Ok(())
 }
 
+/// `test_sequence_controller_runs.py::test_recovery_follows_a_live_sequence_run_without_its_controller`: a launched,
+/// non-terminal Run without its controller is followed like any other live Run, with no interrupted finish and no
+/// warning.
+#[tokio::test]
+async fn recovery_follows_a_live_sequence_run_without_its_controller() -> anyhow::Result<()> {
+  // Python: tests/test_sequence_controller_runs.py::test_recovery_follows_a_live_sequence_run_without_its_controller.
+  let guard = ProcessGroupGuard::new();
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.register(orphan_run(&leaf.id, "orphan")).await?;
+  let mut live = Command::new("/bin/sleep").arg("30").process_group(0).spawn()?;
+  guard.track(live.id());
+  let pid_start = identity::pin_process_identity(live.id()).pid_start.expect("the live process has a stat line");
+  stack.launch(&leaf.id, "orphan", live.id(), &pid_start).await?;
+  let log = LogCapture::default();
+  let _log_guard = log.install();
+
+  let counters = stack.node_pass(&leaf.id).await?;
+
+  let key = (leaf.id.clone(), "orphan".to_string());
+  assert!(stack.adapter.resume_follows().contains(&key), "the live run is followed in the background");
+  assert_eq!(counters.resumed, 1);
+  assert_eq!(counters.followups, 0);
+  assert!(!log.text().contains("sequence_run_without_controller"), "a live run logs no warning: {}", log.text());
+  assert!(run_records::terminal_outcome(&stack.run_events(&leaf.id)?, "orphan")?.is_none());
+  assert!(live.try_wait()?.is_none(), "the node pass leaves the live run running");
+  live.kill()?;
+  live.wait()?;
+  settle_until(|| Ok(!stack.adapter.resume_follows().contains(&key))).await?;
+  Ok(())
+}
+
 /// `test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller`: the registered
 /// controller marks a loop that a prior process left running as interrupted, during the boot pass.
 #[tokio::test]

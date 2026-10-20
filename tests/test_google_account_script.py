@@ -357,6 +357,20 @@ def test_list_check_reads_email_without_printing_tokens(
   assert "personal-refresh" not in stdout
 
 
+def test_list_check_keeps_pending_account_row_with_empty_address(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  stub_urlopen(monkeypatch, [{"access_token": "default-access"}, {"emailAddress": "work@example.invalid"}])
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  description: personal mailbox\n")
+
+  exit_code, stdout, stderr = run_cli(["list", "--check"], capsys)
+
+  assert exit_code == 0
+  assert stderr == ""
+  assert stdout == ("default\tdefault\tready\t\twork@example.invalid\n"
+                    "personal\t\tpending\tpersonal mailbox\t\n")
+
+
 def test_relative_profile_home_is_rejected(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   monkeypatch.setenv("CHARLIEBOT_HOME", "relative/profile")
 

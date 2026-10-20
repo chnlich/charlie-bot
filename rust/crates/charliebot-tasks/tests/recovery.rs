@@ -1216,6 +1216,55 @@ async fn a_finish_without_a_controller_warns_and_does_nothing_else() -> anyhow::
   Ok(())
 }
 
+/// One replay pass over a node, returning the log lines the pass wrote.
+async fn replay_pass(stack: &Stack, session_id: &str, counters: &mut PassCounters) -> anyhow::Result<LogCapture> {
+  let log = LogCapture::default();
+  let _guard = log.install();
+  recovery::replay_followups(&stack.features, &stack.adapter, session_id, counters).await?;
+  Ok(log)
+}
+
+/// The `run_finished` facts a node holds for one run.
+fn run_finished_count(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<usize> {
+  Ok(
+    stack
+      .run_events(session_id)?
+      .iter()
+      .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id)
+      .count(),
+  )
+}
+
+/// `test_sequence_controller_runs.py::test_recovery_without_a_controller_lands_interrupted_then_only_logs`: recovery of a
+/// registered, unlaunched Run whose controller is gone lands its interrupted finish once and logs the warning. A second
+/// pass finds the terminal fact and only logs.
+#[tokio::test]
+async fn recovery_without_a_controller_lands_interrupted_then_only_logs() -> anyhow::Result<()> {
+  // Python: tests/test_sequence_controller_runs.py::test_recovery_without_a_controller_lands_interrupted_then_only_logs.
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.register(orphan_run(&leaf.id, "orphan")).await?;
+  let mut counters = PassCounters::default();
+
+  let first = replay_pass(&stack, &leaf.id, &mut counters).await?;
+
+  assert_eq!(counters.followups, 0);
+  assert_one_no_controller_warning(&first, &leaf.id, "orphan");
+  let stored = stack.store().read_run_sync(&leaf.id, "orphan")?.expect("the orphan run stays registered");
+  assert!(stored.ended_at.is_some(), "the interrupted finish writes the run's end");
+  let events = stack.run_events(&leaf.id)?;
+  assert_eq!(run_records::terminal_outcome(&events, "orphan")?, Some(RunOutcomeKind::Interrupted));
+  assert_eq!(run_finished_count(&stack, &leaf.id, "orphan")?, 1);
+
+  let second = replay_pass(&stack, &leaf.id, &mut counters).await?;
+
+  assert_eq!(counters.followups, 0, "a terminal Run only logs");
+  assert_one_no_controller_warning(&second, &leaf.id, "orphan");
+  assert_eq!(run_finished_count(&stack, &leaf.id, "orphan")?, 1, "the second pass lands nothing twice");
+  Ok(())
+}
+
 /// `test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller`: the registered
 /// controller marks a loop that a prior process left running as interrupted, during the boot pass.
 #[tokio::test]

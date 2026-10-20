@@ -1213,14 +1213,18 @@ impl TaskExecutionAdapter {
   ) -> anyhow::Result<()> {
     let session_id = meta.id.as_str();
     if let Some(sequence_ref) = &run.sequence_ref {
-      let controller = self
-        .features
-        .registry
-        .sequence_controllers()
-        .find(|controller| controller.sequence_kind() == sequence_ref.kind)
-        .ok_or_else(|| {
-          recovery::owner_not_landed(&sequence_ref.kind, &format!("the after-run duty for run {}", run.id))
-        })?;
+      let step = format!("the after-run duty for run {}", run.id);
+      let Some(controller) = recovery::owning_controller(&self.features, &sequence_ref.kind, &step)? else {
+        // A Run whose owning package is gone only logs its finish (`task_execution.py:2168-2177`).
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id,
+          run_id = %run.id,
+          owner_ref = %sequence_ref.owner_ref,
+          "sequence_run_without_controller"
+        );
+        return Ok(());
+      };
       let tree = recovery::sequence_tree(&self.features, self)?;
       controller.after_run(session_id, run, &tree).await?;
       return Ok(());

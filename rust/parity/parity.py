@@ -24,7 +24,6 @@ import http.client
 import json
 import os
 import pathlib
-import shutil
 import signal
 import subprocess
 import sys
@@ -132,9 +131,10 @@ class Side:
     self.server.wait_ready()
 
 
-def _preflight(rust_bin: pathlib.Path | None, strace: pathlib.Path) -> None:
-  for path, what in ((PYTHON, "the worktree venv (run `uv run python --version` once)"), (strace, "strace")):
-    if not os.access(path, os.X_OK):
+def _preflight(rust_bin: pathlib.Path | None, strace: pathlib.Path, tmux: pathlib.Path) -> None:
+  for path, what in ((PYTHON, "the worktree venv (run `uv run python --version` once)"), (strace, "strace"),
+                     (tmux, "tmux (provide it with --tmux PATH)")):
+    if not path.is_file() or not os.access(path, os.X_OK):
       raise SystemExit(f"parity: missing {what}: {path}")
   if rust_bin is not None and not os.access(rust_bin, os.X_OK):
     raise SystemExit(f"parity: --rust-bin is not an executable file: {rust_bin}")
@@ -1213,6 +1213,11 @@ def _check_headless_chrome(scenarios: list[scenario_file.Scenario], chrome: path
     raise SystemExit(f"parity: missing headless Chrome {chrome}; provide it with --headless-chrome PATH")
 
 
+def _link_tmux(sides: list[Side], tmux: pathlib.Path) -> None:
+  for side in sides:
+    servers.link_tmux(side.tree, tmux)
+
+
 def _link_headless_chrome(sides: list[Side], chrome: pathlib.Path) -> None:
   for side in sides:
     bin_dir = side.tree.root / "bin"
@@ -1232,6 +1237,7 @@ def _run_scenario(
     certificates: authority.Certificates | None,
     voice_model_dir: pathlib.Path,
     strace: pathlib.Path,
+    tmux: pathlib.Path,
     headless_chrome: pathlib.Path,
     candidate_is_python: bool,
 ) -> list[StepResult]:
@@ -1252,6 +1258,7 @@ def _run_scenario(
     sides.append(side)
   if len(str(sides[0].tree.root)) != len(str(sides[1].tree.root)):
     raise RuntimeError(f"tree roots differ in length: {sides[0].tree.root} {sides[1].tree.root}")
+  _link_tmux(sides, tmux)
   manifest = _build_fixtures(sides, scenario.fixture_extras)
   scenario_file.check_references(scenario, manifest)
   if scenario.voice_models:
@@ -1381,6 +1388,12 @@ def main() -> int:
       help="strace binary that traces every process under test",
   )
   parser.add_argument(
+      "--tmux",
+      type=pathlib.Path,
+      default=servers.TMUX_BIN,
+      help="tmux executable that each tree's server resolves on its PATH",
+  )
+  parser.add_argument(
       "--tamper",
       action="store_true",
       help=f"rename session {TAMPER_SESSION!r} in the candidate home: the run must fail")
@@ -1388,7 +1401,8 @@ def main() -> int:
   args = parser.parse_args()
   rust_bin = args.rust_bin.resolve() if args.rust_bin else None
   strace = args.strace.expanduser().resolve()
-  _preflight(rust_bin, strace)
+  tmux = args.tmux.expanduser().resolve()
+  _preflight(rust_bin, strace, tmux)
   servers.become_child_subreaper()
   candidate_argv = [str(rust_bin)] if rust_bin else [str(PYTHON), "server.py"]
   scenarios = scenario_file.load_all(args.stage)
@@ -1398,8 +1412,6 @@ def main() -> int:
   _check_headless_chrome(scenarios, headless_chrome)
   if any(scenario.fakes for scenario in scenarios) and not authority.OPENSSL.is_file():
     raise SystemExit(f"parity: fake services require {authority.OPENSSL}")
-  if any(scenario.name == "features-harness-terminal" for scenario in scenarios) and shutil.which("tmux") is None:
-    raise SystemExit("parity: features-harness-terminal requires tmux on PATH")
   guard_report = guard.Report()
   output: list[str] = []
 
@@ -1445,7 +1457,7 @@ def main() -> int:
         with servers.pick_ports(2) as ports:
           scenario_results = _run_scenario(
               scenario, scenario_dir, ports, candidate_first, candidate_handover, direction, args.tamper, guard_report,
-              certificates, voice_model_dir, strace, headless_chrome, args.python_vs_python)
+              certificates, voice_model_dir, strace, tmux, headless_chrome, args.python_vs_python)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

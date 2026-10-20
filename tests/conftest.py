@@ -639,6 +639,11 @@ def read_chat_events(home: pathlib.Path, session_id: str) -> list[dict]:
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def events_of_type(events: list[dict], event_type: str) -> list[dict]:
+  """Filter unmodeled event dicts to one ``type`` value; an event without the key drops out."""
+  return [ev for ev in events if ev.get("type") == event_type]
+
+
 def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[pathlib.Path],
                                                                             bool]) -> list[pathlib.Path]:
   """Patch ``Path.read_text`` to collect every read path that *include* accepts; returns the live list.

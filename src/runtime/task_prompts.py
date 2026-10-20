@@ -328,7 +328,9 @@ def _worker_kind_rule_segments(
   NOT here — the adapters render them as task/input context from the same
   maintained sections.
   """
-  base = _sections_text(cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch"))
+  # Worker kinds carry the text-writing pointer; managers carry master.md's subsection instead.
+  base = _sections_text(
+      cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch", "text_model_reads"))
   segments = [RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),))]
 
   if kind == "review":

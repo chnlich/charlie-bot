@@ -31,11 +31,12 @@ use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller};
-use charliebot_tasks::task_sessions;
+use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
+use charliebot_tasks::{cold_read, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Build, Scripts, Stack, init_repo_with_origin, post_delegate, result_script, scripted_type,
-  settle_until, synthetic_git, synthetic_run,
+  BACKEND_ID, BACKEND_TYPE, Build, Scripts, Stack, cold_read_body, init_repo_with_origin, last_child_report,
+  post_delegate, result_script, scripted_type, settle_until, synthetic_git, synthetic_run, write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -1316,5 +1317,208 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   assert!(summary.contains("fake2 cooling until 2030-01-02T02:00"), "{summary}");
   assert!(summary.contains("fake3 cooling until 2030-01-02T03:04"), "{summary}");
   settle_node(&stack, &manager.id).await?;
+  Ok(())
+}
+
+/// A stack over the option ids `ids`, each taking the scripts in launch order, with `pool` as the rotation. The
+/// operator's access key is on disk, so the delegation route authorizes the call.
+async fn cold_read_stack(scripts: &Scripts, ids: &[&str], pool: &[&str]) -> anyhow::Result<Stack> {
+  let options = ids.iter().map(|id| scripts.option(id, BACKEND_TYPE)).collect();
+  let stack = Stack::start_with(options, pool.iter().map(|id| id.to_string()).collect()).await?;
+  stack.write_access_key()?;
+  Ok(stack)
+}
+
+/// A script that prints one `error` event carrying `message`, then exits with `code`: a failed attempt's evidence.
+fn error_script(message: &str, code: i32) -> String {
+  format!("printf '%s\\n' '{}'; exit {code}", json!({"type": "error", "message": message, "content": message}))
+}
+
+/// A script that prints one successful result event carrying `text`. The shell argument is single-quoted, so its
+/// single quotes are escaped.
+fn answer_script(text: &str) -> String {
+  let event = json!({"type": "result", "subtype": "success", "result": text}).to_string();
+  format!("printf '%s\\n' '{}'", event.replace('\'', r"'\''"))
+}
+
+/// Delegate one cold read of `page` under `manager_id`. Returns the child's session id and its first run's id.
+async fn delegate_cold_read(stack: &Stack, manager_id: &str, page: &Path) -> anyhow::Result<(String, String)> {
+  let (status, response) = post_delegate(&routes::routes(&stack.features), cold_read_body(manager_id, page)).await?;
+  anyhow::ensure!(status == StatusCode::OK, "{response}");
+  Ok((text(&response, "session_id")?, text(&response, "run_id")?))
+}
+
+/// A string field of a response body.
+fn text(body: &Value, key: &str) -> anyhow::Result<String> {
+  Ok(body[key].as_str().ok_or_else(|| anyhow::anyhow!("the body names no {key}: {body}"))?.to_string())
+}
+
+/// The backends of a node's work runs, in run order.
+fn work_backends(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<String>> {
+  let runs = stack.run_records(session_id)?;
+  Ok(runs.into_iter().filter(|run| run.kind == RunKind::Work).filter_map(|run| run.backend).collect())
+}
+
+/// The charlie-bot checkout, whose `prompts/` the cold-read run reads.
+fn repo_checkout() -> anyhow::Result<&'static Path> {
+  Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).ok_or_else(|| anyhow::anyhow!("no repository root"))
+}
+
+/// `test_artifact_check.py::test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions`:
+/// the run's managed instructions hold the cold-reader system prompt alone, and its input is the page with the seven
+/// questions.
+#[tokio::test]
+async fn cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions()
+-> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![answer_script("(1) fine.")]);
+  let stack = cold_read_stack(&scripts, &[BACKEND_ID, "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (child_id, run_id) = delegate_cold_read(&stack, &manager.id, &page).await?;
+  assert_eq!(stack.wait_terminal(&child_id, &run_id).await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+
+  let run_dir = stack.store().run_dir(&child_id, &run_id);
+  let snapshot: Value = serde_json::from_slice(&std::fs::read(run_dir.join(SNAPSHOT_FILENAME))?)?;
+  let (system_prompt, questions) = cold_read::load_texts(repo_checkout()?)?;
+  let block_texts =
+    snapshot["blocks"].as_array().into_iter().flatten().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>();
+  assert_eq!(block_texts, [system_prompt.as_str()]);
+  let launch_text = std::fs::read_to_string(run_dir.join(LAUNCH_TEXT_FILENAME))?;
+  let page_text = std::fs::read_to_string(&page)?;
+  assert_eq!(launch_text, cold_read::probe_input(&page_text, &questions, "where are we?"));
+  let builds = scripts.builds();
+  let prompt = builds[0].prompt.lock().expect("prompt mutex is not poisoned").clone();
+  assert_eq!(prompt.as_deref(), Some(launch_text.as_str()));
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_success_report_carries_attempts_backend_and_answers`: a first reader that
+/// fails and a second that answers. The report states the page, the failed attempt, the answering backend and its
+/// answer, and the child completes.
+#[tokio::test]
+async fn cold_read_success_report_carries_attempts_backend_and_answers() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_success_report_carries_attempts_backend_and_answers.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts =
+    Scripts::new(vec![error_script("alpha exploded", 1), answer_script("(1) The reader's problem.\n(2) confirmed.")]);
+  let stack = cold_read_stack(&scripts, &[BACKEND_ID, "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (child_id, _run_id) = delegate_cold_read(&stack, &manager.id, &page).await?;
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+
+  let digest = charliebot_store::control_events::sha256_hex(&std::fs::read_to_string(&page)?);
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(report["outcome"], "completed");
+  assert_eq!(
+    report["summary"],
+    format!(
+      "cold read of {}\npage sha256 {digest}\nattempt alpha failed: alpha exploded\nbackend beta\n\
+       (1) The reader's problem.\n(2) confirmed.",
+      page.display()
+    )
+  );
+  assert_eq!(stack.store().task_state(&child_id)?, "completed");
+  // The retry took the next pool backend past the tried one.
+  assert_eq!(work_backends(&stack, &child_id)?, ["alpha", "beta"]);
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_empty_answer_counts_as_a_failed_run`: a reader that exits with an empty answer
+/// is a failed attempt, and the next backend answers.
+#[tokio::test]
+async fn cold_read_empty_answer_counts_as_a_failed_run() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_empty_answer_counts_as_a_failed_run.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![answer_script(""), answer_script("(1) answered.")]);
+  let stack = cold_read_stack(&scripts, &[BACKEND_ID, "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  delegate_cold_read(&stack, &manager.id, &page).await?;
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(report["outcome"], "completed");
+  let summary = text(&report, "summary")?;
+  let lines = summary.lines().collect::<Vec<_>>();
+  assert!(lines.contains(&"attempt alpha failed: empty final answer"), "{summary}");
+  assert!(lines.contains(&"backend beta"), "{summary}");
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_retry_selects_the_next_backend_with_the_tried_list`: the retry passes the
+/// failed run's backend as tried, so the selection skips it and the next pool member takes the work. Python spies the
+/// selection's tried list; here the selection is called with the same lists, and the retry's run is checked.
+#[tokio::test]
+async fn cold_read_retry_selects_the_next_backend_with_the_tried_list() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_retry_selects_the_next_backend_with_the_tried_list.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![error_script("alpha exploded", 1), answer_script("(1) answered.")]);
+  let stack = cold_read_stack(&scripts, &[BACKEND_ID, "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (child_id, _run_id) = delegate_cold_read(&stack, &manager.id, &page).await?;
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  assert_eq!(work_backends(&stack, &child_id)?, ["alpha", "beta"]);
+
+  // The delegation resolves the first backend with an empty tried list; the retry passes ["alpha"].
+  let cfg = stack.features.config.get()?;
+  let pool = backend_pool::backend_pool(&stack.features)?;
+  let first =
+    spawner_backends::select_verify_backend(&cfg, stack.store(), &manager.id, "cold_read", &[], &pool).await?;
+  assert_eq!(first.map(|(backend, _, tried)| (backend, tried)), Some(("alpha".to_string(), vec!["alpha".to_string()])));
+  let retry = spawner_backends::select_verify_backend(
+    &cfg,
+    stack.store(),
+    &manager.id,
+    "cold_read",
+    &["alpha".to_string()],
+    &pool,
+  )
+  .await?;
+  assert_eq!(
+    retry.map(|(backend, _, tried)| (backend, tried)),
+    Some(("beta".to_string(), vec!["alpha".to_string(), "beta".to_string()]))
+  );
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_every_backend_failed_reports_and_the_child_is_archived`: every reader fails,
+/// so the report names each attempt and the trailer, and its delivery archives the child once.
+#[tokio::test]
+async fn cold_read_every_backend_failed_reports_and_the_child_is_archived() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_every_backend_failed_reports_and_the_child_is_archived.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![
+    error_script("alpha exploded", 1),
+    error_script("beta exploded", 1),
+    error_script("fake exploded", 1),
+  ]);
+  let stack = cold_read_stack(&scripts, &[BACKEND_ID, "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (child_id, _run_id) = delegate_cold_read(&stack, &manager.id, &page).await?;
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+
+  let digest = charliebot_store::control_events::sha256_hex(&std::fs::read_to_string(&page)?);
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(report["outcome"], "failed");
+  assert_eq!(
+    report["summary"],
+    format!(
+      "cold read of {}\npage sha256 {digest}\nattempt alpha failed: alpha exploded\n\
+       attempt beta failed: beta exploded\nattempt fake failed: fake exploded\nevery model failed (3 tried)",
+      page.display()
+    )
+  );
+  // The all-failed report's delivery archived the stopped child.
+  settle_until(|| Ok(stack.store().task_state(&child_id)? == "archived")).await?;
+  let closes = stack.closes(&child_id)?;
+  assert_eq!(closes.len(), 1);
+  assert_eq!(closes[0]["outcome"], "archived");
+  assert_eq!(closes[0]["actor"], "system");
   Ok(())
 }

@@ -736,6 +736,28 @@ pub fn synthetic_run(session_id: &str, run_id: &str, kind: RunKind) -> RunRecord
   }
 }
 
+/// A synthetic sitrep page in `dir`, the file a cold-read delegation names.
+pub fn write_sitrep(dir: &Path) -> anyhow::Result<PathBuf> {
+  let page = dir.join("sitrep.html");
+  std::fs::write(&page, "<html><body><p>sitrep body</p></body></html>")?;
+  Ok(page)
+}
+
+/// The cold-read delegation body over `page`: its genre and the trigger message the reader answers.
+pub fn cold_read_body(session_id: &str, page: &Path) -> Value {
+  json!({
+    "session_id": session_id,
+    "description": format!("cold read of {}", page.display()),
+    "task_type": "cold-read",
+    "cold_read": {"page_path": page.display().to_string(), "genre": "sitrep", "trigger": "where are we?"},
+  })
+}
+
+/// The newest child report the manager has received.
+pub fn last_child_report(stack: &Stack, manager_id: &str) -> anyhow::Result<Value> {
+  stack.child_reports(manager_id)?.pop().context("the manager has received a child report")
+}
+
 /// A cold-read task spec over a page that the replay never reads: the named-error paths stop before the page.
 pub fn cold_read_spec(page: &Path) -> TaskSpec {
   TaskSpec {
@@ -1161,12 +1183,22 @@ pub async fn post_delegate_as(
   body: Value,
   authorization: &str,
 ) -> anyhow::Result<(StatusCode, Value)> {
+  post_internal(router, "/api/internal/delegate", body, authorization).await
+}
+
+/// One JSON POST to the internal route `path` under the given `Authorization` header.
+pub async fn post_internal(
+  router: &axum::Router,
+  path: &str,
+  body: Value,
+  authorization: &str,
+) -> anyhow::Result<(StatusCode, Value)> {
   let response = router
     .clone()
     .oneshot(
       Request::builder()
         .method("POST")
-        .uri("/api/internal/delegate")
+        .uri(path)
         .header(header::AUTHORIZATION, authorization)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(&body)?))?,

@@ -341,16 +341,23 @@ pub async fn replay_followups(
     if run.kind == RunKind::Work {
       counters.followups += 1;
       if task_type == Some(TaskType::ColdRead) {
-        if outcome == RunOutcomeKind::Success {
-          completion.after_run_finished(session_id, &run.id).await?;
-          bail!(owner_not_landed("cold-read", &format!("the cold-read delivery of run {}", run.id)));
-        }
-        let later_work = run_records[run_index + 1..].iter().any(|later| later.kind == RunKind::Work);
-        if outcome == RunOutcomeKind::Failed && !later_work {
-          bail!(owner_not_landed("cold-read", &format!("the cold-read failure chain of run {}", run.id)));
-        }
-        if outcome == RunOutcomeKind::Interrupted {
-          bail!(owner_not_landed("cold-read", &format!("the cold-read interrupted report of run {}", run.id)));
+        // The execution layer owns a cold-read run's delivery; the generic completion skips its task type. A failed run
+        // re-drives only when no retry run follows it, since a registered retry's own finish drives the rest. An
+        // interrupted run reports through the generic failure entry, never the next-backend retry.
+        match outcome {
+          RunOutcomeKind::Success => {
+            completion.after_run_finished(session_id, &run.id).await?;
+            adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
+          }
+          RunOutcomeKind::Failed => {
+            let later_work = run_records[run_index + 1..].iter().any(|later| later.kind == RunKind::Work);
+            if !later_work {
+              adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
+            }
+          }
+          RunOutcomeKind::Interrupted => {
+            adapter.report_failure_to_parent(session_id, run, outcome_name(outcome), None).await?;
+          }
         }
         continue;
       }

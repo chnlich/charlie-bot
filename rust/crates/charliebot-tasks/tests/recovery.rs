@@ -31,7 +31,8 @@ use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
   BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Stack, SyntheticRepo,
-  assert_logged_node_failure, assert_named_error, cold_read_spec, implement_spec, script_option, synthetic_run,
+  assert_logged_node_failure, assert_named_error, cold_read_spec, implement_spec, last_child_report, script_option,
+  synthetic_run,
 };
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;
@@ -443,37 +444,6 @@ async fn a_drained_worker_run_lands_its_result_and_raw_end_time() -> anyhow::Res
 }
 
 const REPO: &str = "/synthetic/repo";
-const PAGE: &str = "/synthetic/page.html";
-
-/// Run the node pass, then the startup pass: the node pass refuses with the named error of `owner`, and the startup
-/// pass logs that node's failure. Returns the node pass's error text.
-async fn assert_refused_by(stack: &Stack, log: &LogCapture, session_id: &str, owner: &str) -> anyhow::Result<String> {
-  let error = stack.node_pass(session_id).await.expect_err("the replay step belongs to a later task");
-  assert_named_error(&error, owner);
-  stack.boot().await?;
-  assert_logged_node_failure(log, owner);
-  Ok(format!("{error:#}"))
-}
-
-/// A queued worker run enters its adapter at boot and lands its launch failure once.
-async fn assert_queued_worker_launch_fails(
-  stack: &Stack,
-  log: &LogCapture,
-  session_id: &str,
-  expected_error: &str,
-) -> anyhow::Result<()> {
-  let run_id =
-    stack.store().list_run_records_sync(session_id)?.last().context("the queued worker run is recorded")?.id.clone();
-  stack.boot().await?;
-  settle_until(|| Ok(run_records::terminal_outcome(&stack.run_events(session_id)?, &run_id)?.is_some())).await?;
-  assert_eq!(run_records::terminal_outcome(&stack.run_events(session_id)?, &run_id)?, Some(RunOutcomeKind::Failed));
-  let events_path = stack.store().run_dir(session_id, &run_id).join(run_records::RUN_EVENTS_NAME);
-  let events_log = std::fs::read_to_string(events_path)?;
-  assert!(events_log.contains(expected_error), "{events_log}");
-  assert!(log.text().contains(expected_error), "{}", log.text());
-  Ok(())
-}
-
 /// A successful work run with real repo, branch and worktree provenance.
 async fn finished_work_run(
   stack: &Stack,
@@ -840,102 +810,206 @@ async fn recovery_after_a_failed_review_picks_the_next_preference_backend() -> a
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_delivery`: a cold-read run that succeeded and whose
-/// delivery a crash cut belongs to the cold-read task, so the node pass names that owner.
-#[tokio::test]
-async fn recovery_cold_read_delivery_refers_to_the_cold_read_task() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_delivery.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
-  let stack = Stack::start("exit 0").await?;
-  let reader = stack.node("cold-read", None, TaskProfile::Worker, Some(cold_read_spec(Path::new(PAGE)))).await?;
-  stack.queue_run(&reader.id, "run-cold", RunKind::Work).await?;
-  stack.finish(&reader.id, "run-cold", RunOutcomeKind::Success).await?;
-
-  let text = assert_refused_by(&stack, &log, &reader.id, "cold-read").await?;
-  assert!(text.contains("the cold-read delivery of run run-cold"), "{text}");
+/// Append one run's events log, as the worker writes it: one JSON object per line.
+fn write_run_events(stack: &Stack, session_id: &str, run_id: &str, events: &[Value]) -> anyhow::Result<()> {
+  let path = stack.store().run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);
+  std::fs::create_dir_all(path.parent().context("a run events log has a run directory")?)?;
+  let text: String = events.iter().map(|event| format!("{event}\n")).collect();
+  std::fs::write(path, text)?;
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_failure_chain`: a failed cold-read run with no later
-/// run has its failure chain owned by the cold-read task, so the node pass names that owner.
+/// A cold-read child of `manager` over a page file in `dir`, with the page's sha256 as its report states it.
+async fn cold_read_child(
+  stack: &Stack,
+  manager: &SessionMetadata,
+  dir: &Path,
+) -> anyhow::Result<(SessionMetadata, PathBuf, String)> {
+  let page = dir.join("page.html");
+  let text = "<html><body><p>sitrep body</p></body></html>";
+  std::fs::write(&page, text)?;
+  let worker = stack.node("cold-read", Some(&manager.id), TaskProfile::Worker, Some(cold_read_spec(&page))).await?;
+  Ok((worker, page, charliebot_store::control_events::sha256_hex(text)))
+}
+
+/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_delivery`: a cold-read run that succeeded and whose
+/// delivery a crash cut is replayed: the parent gets the report body and the child closes. A repeated pass lands nothing
+/// twice.
 #[tokio::test]
-async fn recovery_cold_read_failure_chain_refers_to_the_cold_read_task() -> anyhow::Result<()> {
+async fn recovery_replays_a_lost_cold_read_delivery() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_delivery.
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let dir = tempfile::tempdir()?;
+  let (worker, page, digest) = cold_read_child(&stack, &manager, dir.path()).await?;
+  stack.queue_run(&worker.id, "run-cold", RunKind::Work).await?;
+  write_run_events(&stack, &worker.id, "run-cold", &[json!({"type": "result", "result": "(1) answered."})])?;
+  stack.finish(&worker.id, "run-cold", RunOutcomeKind::Success).await?;
+
+  stack.boot().await?;
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(report["outcome"], "completed");
+  assert_eq!(
+    report["summary"],
+    format!("cold read of {}\npage sha256 {digest}\nbackend fake\n(1) answered.", page.display())
+  );
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+
+  // A repeated pass lands nothing twice.
+  stack.boot().await?;
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(stack.run_records(&worker.id)?.len(), 1);
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  Ok(())
+}
+
+/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_failure_chain`: a failed cold-read run whose chain a
+/// crash cut with one backend left. The replay records the attempt, starts the retry on the next pool backend, and the
+/// retry's answer delivers the report.
+#[tokio::test]
+async fn recovery_replays_a_lost_cold_read_failure_chain() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_failure_chain.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start_with(
-    vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
-    vec!["fake".to_string(), "fake2".to_string()],
+    vec![script_option(BACKEND_ID, "exit 0"), script_option("fake2", &result_script("(1) answered."))],
+    vec!["fake2".to_string()],
   )
   .await?;
-  let reader = stack.node("cold-read", None, TaskProfile::Worker, Some(cold_read_spec(Path::new(PAGE)))).await?;
-  stack.queue_run(&reader.id, "run-cold-1", RunKind::Work).await?;
-  stack.finish(&reader.id, "run-cold-1", RunOutcomeKind::Failed).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let dir = tempfile::tempdir()?;
+  let (worker, page, digest) = cold_read_child(&stack, &manager, dir.path()).await?;
+  stack.queue_run(&worker.id, "run-cold-1", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-cold-1", RunOutcomeKind::Failed).await?;
 
-  let text = assert_refused_by(&stack, &log, &reader.id, "cold-read").await?;
-  assert!(text.contains("the cold-read failure chain of run run-cold-1"), "{text}");
-  assert_eq!(closes_of(&stack, &reader.id)?, 0, "the refused chain archives nothing");
+  stack.boot().await?;
+  settle_until(|| Ok(!stack.child_reports(&manager.id)?.is_empty())).await?;
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(report["outcome"], "completed");
+  assert_eq!(
+    report["summary"],
+    format!(
+      "cold read of {}\npage sha256 {digest}\nattempt fake failed: run run-cold-1 failed without a reportable output\n\
+       backend fake2\n(1) answered.",
+      page.display()
+    )
+  );
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+
+  // A repeated pass lands nothing twice.
+  stack.boot().await?;
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Work)?.len(), 2);
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_all_failed_report`: with no backend left the failure
-/// chain is still the cold-read task's, so the node pass names the same owner and archives nothing.
+/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_all_failed_report`: with no backend left, the replay
+/// reports the parent with the attempt line and the all-failed trailer, and the report's delivery archives the child. A
+/// repeated pass lands nothing twice.
 #[tokio::test]
-async fn recovery_cold_read_all_failed_report_refers_to_the_cold_read_task() -> anyhow::Result<()> {
+async fn recovery_replays_a_lost_cold_read_all_failed_report() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_all_failed_report.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  let reader = stack.node("cold-read", None, TaskProfile::Worker, Some(cold_read_spec(Path::new(PAGE)))).await?;
-  stack.queue_run(&reader.id, "run-cold-1", RunKind::Work).await?;
-  stack.finish(&reader.id, "run-cold-1", RunOutcomeKind::Failed).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let dir = tempfile::tempdir()?;
+  let (worker, page, digest) = cold_read_child(&stack, &manager, dir.path()).await?;
+  stack.queue_run(&worker.id, "run-cold-1", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-cold-1", RunOutcomeKind::Failed).await?;
 
-  let text = assert_refused_by(&stack, &log, &reader.id, "cold-read").await?;
-  assert!(text.contains("the cold-read failure chain of run run-cold-1"), "{text}");
-  assert_eq!(closes_of(&stack, &reader.id)?, 0);
+  stack.boot().await?;
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(report["outcome"], "failed");
+  assert_eq!(
+    report["summary"],
+    format!(
+      "cold read of {}\npage sha256 {digest}\nattempt fake failed: run run-cold-1 failed without a reportable output\n\
+       every model failed (1 tried)",
+      page.display()
+    )
+  );
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
+  let closes = stack.closes(&worker.id)?;
+  assert_eq!(closes.len(), 1);
+  assert_eq!(closes[0]["outcome"], "archived");
+  assert_eq!(closes[0]["actor"], "system");
+  assert_eq!(closes[0]["request_id"], "unsuccessful:run-cold-1");
+
+  // A repeated pass lands nothing twice.
+  stack.boot().await?;
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(stack.run_records(&worker.id)?.len(), 1);
+  assert_eq!(stack.closes(&worker.id)?.len(), 1);
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_interrupted_report`: an interrupted cold-read run's
-/// report belongs to the cold-read task, and no retry run follows it.
+/// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_interrupted_report`: an interrupted cold-read run
+/// reports at replay exactly as the live chain's fall-through does, never through the next-backend retry. The report's
+/// delivery archives the child. A repeated pass lands nothing twice.
 #[tokio::test]
-async fn recovery_cold_read_interrupted_report_refers_to_the_cold_read_task() -> anyhow::Result<()> {
+async fn recovery_replays_a_lost_cold_read_interrupted_report() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_recovery_replays_a_lost_cold_read_interrupted_report.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  let reader = stack.node("cold-read", None, TaskProfile::Worker, Some(cold_read_spec(Path::new(PAGE)))).await?;
-  stack.queue_run(&reader.id, "run-cold-1", RunKind::Work).await?;
-  stack.finish(&reader.id, "run-cold-1", RunOutcomeKind::Interrupted).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let dir = tempfile::tempdir()?;
+  let (worker, _page, _digest) = cold_read_child(&stack, &manager, dir.path()).await?;
+  stack.queue_run(&worker.id, "run-cold-1", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-cold-1", RunOutcomeKind::Interrupted).await?;
 
-  let text = assert_refused_by(&stack, &log, &reader.id, "cold-read").await?;
-  assert!(text.contains("the cold-read interrupted report of run run-cold-1"), "{text}");
-  assert_eq!(run_ids_of_kind(&stack, &reader.id, RunKind::Work)?, ["run-cold-1"], "no retry run follows");
+  stack.boot().await?;
+  let outcomes = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect::<Vec<_>>();
+  assert_eq!(outcomes, [json!("interrupted")]);
+  assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Work)?, ["run-cold-1"], "no retry run follows");
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
+  let closes = stack.closes(&worker.id)?;
+  assert_eq!(closes.len(), 1);
+  assert_eq!(closes[0]["actor"], "system");
+  assert_eq!(closes[0]["request_id"], "unsuccessful:run-cold-1");
+  assert_eq!(closes[0]["summary"], "run run-cold-1 ended interrupted; archived by the server");
+
+  // A repeated pass lands nothing twice.
+  stack.boot().await?;
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(stack.closes(&worker.id)?.len(), 1);
   Ok(())
 }
 
 /// `test_task_recovery.py::test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries`: a failed
-/// cold-read run with a registered retry drives nothing itself. The retry's context failure lands once, so the failed
-/// attempt is never re-driven and no second retry appears.
+/// cold-read run whose retry a crash left registered but unlaunched. The replay launches the queued retry and never
+/// re-drives the failed attempt's chain, so there is one retry run and one report.
 #[tokio::test]
 async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_recovery_cold_read_failure_with_a_registered_retry_never_double_retries.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
   let stack = Stack::start_with(
-    vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
-    vec!["fake".to_string(), "fake2".to_string()],
+    vec![script_option(BACKEND_ID, "exit 0"), script_option("fake2", &result_script("(1) answered."))],
+    vec!["fake2".to_string()],
   )
   .await?;
-  let reader = stack.node("cold-read", None, TaskProfile::Worker, Some(cold_read_spec(Path::new(PAGE)))).await?;
-  stack.queue_run(&reader.id, "run-cold-1", RunKind::Work).await?;
-  stack.finish(&reader.id, "run-cold-1", RunOutcomeKind::Failed).await?;
-  stack.queue_run(&reader.id, "run-cold-2", RunKind::Work).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let dir = tempfile::tempdir()?;
+  let (worker, page, digest) = cold_read_child(&stack, &manager, dir.path()).await?;
+  stack.queue_run(&worker.id, "run-cold-1", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-cold-1", RunOutcomeKind::Failed).await?;
+  let retry = RunRecord {
+    backend: Some("fake2".to_string()),
+    model: Some("fake2-model".to_string()),
+    ..synthetic_run(&worker.id, "run-cold-2", RunKind::Work)
+  };
+  stack.register(retry).await?;
 
-  assert_queued_worker_launch_fails(&stack, &log, &reader.id, "cold-read").await?;
-  assert_eq!(run_ids_of_kind(&stack, &reader.id, RunKind::Work)?, ["run-cold-1", "run-cold-2"]);
-  assert_eq!(closes_of(&stack, &reader.id)?, 0, "the failed attempt is never re-driven into an archive");
+  stack.boot().await?;
+  settle_until(|| Ok(!stack.child_reports(&manager.id)?.is_empty())).await?;
+  let report = last_child_report(&stack, &manager.id)?;
+  assert_eq!(report["outcome"], "completed");
+  assert_eq!(
+    report["summary"],
+    format!("cold read of {}\npage sha256 {digest}\nbackend fake2\n(1) answered.", page.display())
+  );
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Work)?, ["run-cold-1", "run-cold-2"]);
   Ok(())
 }
 

@@ -84,7 +84,7 @@ test('a routed delegation renders its backend list and reason under the backend/
   assert.match(html, /design p=0\.9/);
 });
 
-test('a delegation without a route renders no route row', () => {
+test('an empty route list renders pool and the router reason', () => {
   const context = loadChatRendering();
 
   const html = context.renderMessage({
@@ -93,9 +93,25 @@ test('a delegation without a route renders no route row', () => {
     thread_id: 'thread-9',
     backend: 'fake',
     model: 'fake-model',
+    route: {backends: [], reason: 'routine p=0.12'},
   }, 'session-a');
 
-  assert.doesNotMatch(html, /route/);
+  assert.match(html, /route<\/span><span[^>]*>pool &middot; routine p=0\.12<\/span>/);
+});
+
+test('a delegation without a route renders no route row', () => {
+  const context = loadChatRendering();
+
+  const message = {
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-9',
+    backend: 'fake',
+    model: 'fake-model',
+  };
+
+  assert.doesNotMatch(context.renderMessage(message, 'session-a'), /route/);
+  assert.doesNotMatch(context.renderMessage({...message, route: null}, 'session-a'), /route/);
 });
 
 test('task_delegated verify metadata renders explicit none for repo and base', () => {

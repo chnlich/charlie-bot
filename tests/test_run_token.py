@@ -191,6 +191,13 @@ def test_task_gate_admits_a_thread_summon_anywhere_on_the_chain(summon: dict) ->
 
 
 @pytest.mark.parametrize(
+    ("node", "summon"), [("child", _LEGACY_SLACK_SUMMON), ("grandchild", _DISCORD_SUMMON)], ids=["child", "grandchild"])
+def test_task_gate_admits_a_summon_on_a_descendant_node(node: str, summon: dict) -> None:
+  """A grandchild can delegate from a summon recorded on its own node or its child ancestor."""
+  assert _gate("grandchild", {node: [summon]}) == node
+
+
+@pytest.mark.parametrize(
     "event", [
         pytest.param(
             {

@@ -133,7 +133,7 @@ def _validate_owner(section_name: str, values: dict[str, object]) -> str | None:
   owner = values.get("owner")
   if owner is None:
     return None
-  if not isinstance(owner, str) or "\n" in owner or "\r" in owner:
+  if not isinstance(owner, str) or not owner.strip() or "\n" in owner or "\r" in owner:
     raise CliError(f"credentials.{section_name}.owner must be one line", 2)
   return owner
 
@@ -200,6 +200,10 @@ def _load_table() -> AccountTable:
     raw_bytes = path.read_bytes()
   except OSError as error:
     raise CliError(f"cannot read credentials file: {path}", 2) from error
+  return _table_from_bytes(path, raw_bytes)
+
+
+def _table_from_bytes(path: pathlib.Path, raw_bytes: bytes) -> AccountTable:
   try:
     raw_text = raw_bytes.decode("utf-8")
   except UnicodeDecodeError as error:
@@ -527,6 +531,9 @@ def _add_account(
   account = table.by_name.get(name)
   if account is None:
     account = Account(name, f"{_ACCOUNT_PREFIX}{name}", is_default=False, values={})
+  # Reject a table that the write would leave invalid before the consent code is spent.
+  validated_bytes, _ = _updated_content(table, account, "validation-only", description, owner)
+  _table_from_bytes(table.path, validated_bytes)
   code = _redirect_code(redirect_url, name)
   client_id, client_secret = _client_for(table, account)
   response = _post_form(

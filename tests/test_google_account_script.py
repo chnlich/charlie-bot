@@ -796,13 +796,13 @@ def test_add_owner_writes_into_new_and_existing_sections(
   exit_code, _, stderr = run_cli(
       [
           "add", "existing", "--email", "existing@example.invalid", "--redirect-url",
-          "http://localhost?state=existing&code=c", "--owner", "blake"
+          "http://localhost?state=existing&code=c", "--owner", "carol"
       ], capsys)
   assert exit_code == 0, stderr
 
   data = yaml.safe_load(credentials_file.read_text(encoding="utf-8"))
   assert data["google_account_fresh"]["owner"] == "blake"
-  assert data["google_account_existing"]["owner"] == "blake"
+  assert data["google_account_existing"]["owner"] == "carol"
   assert data["google_account_existing"]["description"] == "existing"
 
 
@@ -833,3 +833,61 @@ def test_add_without_owner_exits_when_google_sets_owner(
   assert requests == []
   assert credentials_file.read_bytes() == original
   assert not list(credentials_file.parent.glob(".credentials.yaml.*.tmp"))
+
+
+def test_add_owner_without_google_owner_exits_before_network(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  requests: list[Any] = []
+  stub_urlopen(monkeypatch, [{"unexpected": "no call"}], requests)
+  original = credentials_file.read_bytes()
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost?state=personal&code=c", "--owner", "blake"
+      ], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal sets owner but credentials.google does not" in stderr
+  assert stdout == ""
+  assert requests == []
+  assert credentials_file.read_bytes() == original
+
+
+def test_add_leaving_person_without_primary_exits_before_network(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  requests: list[Any] = []
+  stub_urlopen(monkeypatch, [{"unexpected": "no call"}], requests)
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: c\n"
+      "  client_secret: s\n"
+      "  refresh_token: r\n"
+      "  owner: avery\n"
+      "google_account_blake-a:\n"
+      "  refresh_token: ra\n"
+      "  owner: blake\n",
+      encoding="utf-8")
+  original = credentials_file.read_bytes()
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "blake-b", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost?state=blake-b&code=c", "--owner", "blake"
+      ], capsys)
+
+  assert exit_code == 2
+  assert "person blake has several accounts and none sets primary: true" in stderr
+  assert stdout == ""
+  assert requests == []
+  assert credentials_file.read_bytes() == original
+
+
+def test_empty_owner_is_rejected(credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  refresh_token: r\n  owner: ''\n")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal.owner must be one line" in stderr

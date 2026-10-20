@@ -554,6 +554,40 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn claude_one_shot_applies_nice_and_session_cgroup_before_exec() {
+    let root = tempfile::tempdir().unwrap();
+    let (_base, procs) = temp_cgroup(root.path());
+    let script = r#"printf '%s\n' "$(ps -o ni= -p $$ | tr -d ' ')" "$(cat "$CGROUP_PROCS")"; read -r line"#;
+    let mut command = Command::new("/bin/sh");
+    command
+      .args(["-c", script])
+      .env_clear()
+      .env("CGROUP_PROCS", &procs)
+      .env("PATH", "/usr/bin:/bin")
+      .stdin(std::process::Stdio::piped())
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::piped())
+      .process_group(0);
+    let mut child = command.spawn().unwrap();
+    let pid = child.id().unwrap();
+    let mut guard = ProcessGroupGuard::new(pid);
+    let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
+    let mut recorded_nice = String::new();
+    let mut recorded_cgroup = String::new();
+    stdout.read_line(&mut recorded_nice).await.unwrap();
+    stdout.read_line(&mut recorded_cgroup).await.unwrap();
+    let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
+    let child_session = unsafe { libc::getsid(pid as i32) };
+    let cgroup_procs = fs::read_to_string(procs).unwrap();
+    assert_eq!(recorded_nice.trim(), "10");
+    assert_eq!(recorded_cgroup.trim(), pid.to_string());
+    assert_eq!(child_nice, 10);
+    assert_eq!(child_session, pid as i32);
+    assert_eq!(cgroup_procs, pid.to_string());
+    stop_child(&mut child, &mut guard).await;
+  }
+
+  #[tokio::test]
   async fn one_shot_uses_null_stdin_and_piped_output() {
     let root = tempfile::tempdir().unwrap();
     let mut spawned = spawn_one_shot(

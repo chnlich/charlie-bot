@@ -180,6 +180,7 @@ The remaining unported follow-ups return an error that names the owner and the s
 
 | Owner | Rust call site | Follow-up that Python replays (`task_execution.py:2802-2914`) |
 | --- | --- | --- |
+| cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
 | improve | `replay_followups` for an improve sequence run, queued, launched or terminal; no terminal fact is written | the loop's close step (`ImproveSequenceController::recover_run`, `src/features/improve/sequence_controller.py:66-79`) |
 | cron | `replay_followups` for a cron sequence run, queued, launched or terminal; no terminal fact is written | the frontier redrive (`CronSequenceController::recover_run`, `src/features/cron/sequence_controller.py:135-149`) |
 

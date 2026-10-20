@@ -710,7 +710,7 @@ pub(crate) fn owning_controller(
 
 /// The task-tree handle the sequence controllers use: the dispatcher, the completion owner, the store's session events,
 /// and the adapter as the launch executor.
-pub(crate) fn sequence_tree(
+pub fn sequence_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
 ) -> anyhow::Result<StoreSequenceTree> {
@@ -745,7 +745,7 @@ impl SequenceSessionEvents for StoreSessionEvents {
 /// The sequence kinds whose controllers Python registers but the port has not landed: a run of one of these kinds fails
 /// the node pass by name. The owning task is named by the kind. Each task deletes its entry when it registers its
 /// controller.
-const UNLANDED_SEQUENCE_KINDS: &[&str] = &["improve", "cron"];
+const UNLANDED_SEQUENCE_KINDS: &[&str] = &["cron"];
 
 /// The error of a replay step whose owning task has not landed: the node pass fails and names the owner.
 pub(crate) fn owner_not_landed(owner: &str, step: &str) -> anyhow::Error {
@@ -958,22 +958,6 @@ mod tests {
   async fn node_pass(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<()> {
     let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
     reconcile_node(features, &adapter, session_id, &mut PassCounters::default(), None).await
-  }
-
-  #[tokio::test]
-  async fn a_queued_improve_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
-    let (_home, features) = startup_features().await;
-    let session_id = queue_sequence_run(&features, "improve", RunKind::Iteration).await;
-
-    let error = node_pass(&features, &session_id).await.expect_err("the improve run has no controller to replay it");
-
-    let message = format!("{error:#}");
-    assert!(
-      message.contains(QUEUED_RUN_ID) && message.contains("improve task"),
-      "the error names the owner: {message}"
-    );
-    let events = features.store.load_all_facts(&session_id).expect("the session facts load");
-    assert!(!has_terminal_fact(&events, QUEUED_RUN_ID).expect("the terminal fact reads"));
   }
 
   #[tokio::test]

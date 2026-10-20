@@ -33,7 +33,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),
   ("src.features.explain", charliebot_explain::register),
-  ("src.features.improve", stub), // stub: src.features.improve
+  ("src.features.improve", charliebot_sched::improve::register),
   ("src.features.memory", charliebot_memory::register),
   ("src.features.ncu", charliebot_ncu::register),
   ("src.features.terminal", charliebot_terminal::register),
@@ -61,11 +61,6 @@ pub fn registry() -> Result<Registry, RegistryError> {
     registry.register_package(package, register)?;
   }
   Ok(registry)
-}
-
-/// The `register` of a stub that makes no registration.
-fn stub(_registry: &mut Registry) -> Result<(), RegistryError> {
-  Ok(())
 }
 
 #[cfg(test)]

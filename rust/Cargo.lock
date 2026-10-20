@@ -591,6 +591,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "charliebot-agents",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
@@ -598,6 +599,7 @@ dependencies = [
  "charliebot-tasks",
  "futures-util",
  "libc",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

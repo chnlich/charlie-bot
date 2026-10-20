@@ -101,7 +101,7 @@ fn error_text(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<S
 /// making sits at the gate when the stack drops (`tests/test_task_execution.py` `_settle_parent`).
 ///
 /// A delivered child report schedules the parent's manager turn in the background. Its run record may not exist yet
-/// when the state above already holds, so a node holding child reports also waits for that turn's run to exist.
+/// when the state above already holds, so the node also waits for one manager turn per delivered report.
 async fn settle_node(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
   settle_until(|| {
     let events = stack.run_events(session_id)?;
@@ -113,9 +113,7 @@ async fn settle_node(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
     if !stack.dispatch.pending_inputs(session_id)?.is_empty() {
       return Ok(false);
     }
-    if !stack.child_reports(session_id)?.is_empty()
-      && stack.run_ids_of_kind(session_id, RunKind::ManagerTurn)?.is_empty()
-    {
+    if stack.run_ids_of_kind(session_id, RunKind::ManagerTurn)?.len() < stack.child_reports(session_id)?.len() {
       return Ok(false);
     }
     Ok(true)

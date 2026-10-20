@@ -18,7 +18,7 @@ import pytest
 
 from src.features.memory import memory, store_root
 from src.infra import constants, models
-from src.runtime import task_prompts, task_sessions
+from src.runtime import spawner_prompt, task_prompts, task_sessions
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,6 +65,13 @@ def sources_of(snapshot: task_prompts.PromptSnapshot) -> list[tuple[str, str, st
 
 def segment_texts(snapshot: task_prompts.PromptSnapshot) -> list[str]:
   return [b.text for b in snapshot.blocks]
+
+
+def text_model_reads_section() -> str:
+  """The worker-only text-writing section of prompts/task_base.md, selected by its section id."""
+  sections = spawner_prompt.load_marker_sections(
+      conftest.ROOT / "prompts" / "task_base.md", ("text_model_reads",), extraction="task-base-prompt")
+  return sections["text_model_reads"].strip()
 
 
 async def patched_refs(mgr: task_sessions.TaskTreeManager, session_id: str, subtree: str | None, node: str | None):
@@ -121,6 +128,7 @@ async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: pathlib.
   assert "Direct work and delegation divide by where the change lands." in joined
   assert "Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker." in joined
   assert "Repository implementation stays with worker leaves at every manager depth." in joined
+  assert text_model_reads_section() not in joined
   # Every second-level section of the old single-file master.md reaches the
   # manager: 15 still in master.md, the 6 moved ones through manager_workflows.md.
   for filename in ("master.md", "manager_workflows.md"):
@@ -151,6 +159,7 @@ async def test_worker_kinds_get_their_applicable_contracts(tmp_path: pathlib.Pat
   snapshot = task_prompts.assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/task_base.md" in refs
+  assert text_model_reads_section() in snapshot.instructions_text
   if kind == "review":
     assert any(ref.startswith("src/runtime/review.py") for ref in refs)
   elif meta.task.task_type == "implement" or kind != "work":
@@ -174,6 +183,7 @@ async def test_verify_task_gets_the_verify_contract(tmp_path: pathlib.Path) -> N
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/verify.md" in refs
   assert "prompts/worker.md" not in refs
+  assert text_model_reads_section() in snapshot.instructions_text
 
 
 async def test_type_less_task_renders_the_implement_contract() -> None:

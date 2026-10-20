@@ -26,10 +26,6 @@ from src.runtime.hooks import backend_lifecycle
 # other four never do and therefore never raise FileNotFoundError on build.
 BINARY_RESOLVING_TYPES = ["antigravity", "codex", "gemini", "charlie-code"]
 
-# Every binary-resolving backend reads resolve_binary as base.resolve_binary at
-# call time, so hiding a binary means patching that one shared attribute.
-_RESOLVER_PATCH_TARGETS = ["src.runtime.agent_process.base.resolve_binary"]
-
 
 def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
   """Make every agent CLI binary unresolvable, independent of host install state."""
@@ -37,8 +33,9 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
   def _missing(name: str, fallback_dir: str) -> str:
     raise FileNotFoundError(f"{name} binary not found on PATH or at {pathlib.Path(fallback_dir) / name}")
 
-  for target in _RESOLVER_PATCH_TARGETS:
-    monkeypatch.setattr(target, _missing)
+  # Every binary-resolving backend reads resolve_binary as base.resolve_binary at call time, so
+  # hiding a binary means patching that one shared attribute.
+  monkeypatch.setattr(conftest.BASE_RESOLVE_BINARY_PATCH_TARGET, _missing)
 
 
 # Sections the registry reads secrets from: cc-kimi resolves its api_key under

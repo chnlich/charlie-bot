@@ -54,6 +54,19 @@ pub struct LaunchSettlement {
   pub withheld: Option<String>,
 }
 
+#[derive(Debug)]
+struct SequenceRunWithoutControllerError {
+  message: String,
+}
+
+impl std::fmt::Display for SequenceRunWithoutControllerError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str(&self.message)
+  }
+}
+
+impl Error for SequenceRunWithoutControllerError {}
+
 type LaunchKey = (String, String);
 
 #[derive(Default)]
@@ -567,9 +580,14 @@ impl TaskExecutionAdapter {
       let step = format!("the launch context of run {run_id}");
       let Some(controller) = recovery::owning_controller(&self.features, &sequence_ref.kind, &step)? else {
         // Python raises TaskInvalidError here (`task_execution.py:1390-1394`), before any process starts.
-        anyhow::bail!(
-          "sequence run {run_id} carries owner_ref {:?} and no registered controller owns its kind",
-          sequence_ref.owner_ref
+        return Err(
+          SequenceRunWithoutControllerError {
+            message: format!(
+              "sequence run {run_id} carries owner_ref {} and no registered controller owns its kind",
+              pyfmt::str_repr(&sequence_ref.owner_ref)
+            ),
+          }
+          .into(),
         );
       };
       let launch_text = launch_prompt.unwrap_or_default();
@@ -2304,6 +2322,9 @@ fn manager_run_record(session_id: &str, run_id: &str, backend: &str, model: Opti
 fn launch_error_class(error: &anyhow::Error, call_site: &'static str) -> &'static str {
   if error.downcast_ref::<crate::git::BaseBranchResolutionError>().is_some() {
     return "BaseBranchResolutionError";
+  }
+  if error.downcast_ref::<SequenceRunWithoutControllerError>().is_some() {
+    return "TaskInvalidError";
   }
   call_site
 }

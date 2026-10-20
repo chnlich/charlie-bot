@@ -1690,10 +1690,9 @@ CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.infra.timeouts.CLI_CONNECT_
 # test fires, whichever module fires it.
 TASKS_CREATE_LOGGED_TASK_PATCH_TARGET = "src.infra.tasks.create_logged_task"
 
-# Import-path patch target for the master wake. Its producers (the thread core's round-end
-# nudge, the web_reply audit) read trigger_master through the src.runtime.master_trigger
-# module at call time (`master_trigger.trigger_master`), so mock setattrs the stand-in on
-# that module attribute.
+# Import-path patch target for the master wake. Its producers read trigger_master through
+# the src.runtime.master_trigger module at call time (`master_trigger.trigger_master`), so
+# mock setattrs the stand-in on that module attribute.
 MASTER_TRIGGER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 
 # Import-path patch targets for the platform client factories every listener outbound path

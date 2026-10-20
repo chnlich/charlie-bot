@@ -5,6 +5,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use crate::cli_base::resolve_binary;
+use crate::transport::cgroup::SessionCgroupLimits;
 
 use super::CodexHost;
 use super::backend::CodexBackend;
@@ -25,7 +26,7 @@ impl BackendFactory for CodexFactory {
   fn build(
     &self,
     option: Option<&BackendOption>,
-    _cfg: &CharlieBotConfig,
+    cfg: &CharlieBotConfig,
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the codex backend type needs its backends.options entry")?;
@@ -35,7 +36,14 @@ impl BackendFactory for CodexFactory {
     let fields = options::parse(&option.type_fields).map_err(anyhow::Error::msg)?;
     let user_local_bin = self.host.user_local_bin();
     let codex_bin = resolve_binary("codex", &self.host.path, &user_local_bin)?;
-    Ok(Box::new(CodexBackend::from_launch(codex_bin, &user_local_bin, &option.model, &fields, launch)?))
+    Ok(Box::new(CodexBackend::from_launch(
+      codex_bin,
+      &user_local_bin,
+      &option.model,
+      &fields,
+      launch,
+      SessionCgroupLimits::from_server(&cfg.server),
+    )?))
   }
 }
 

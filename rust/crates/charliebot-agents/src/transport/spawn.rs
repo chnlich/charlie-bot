@@ -93,6 +93,28 @@ pub enum RawStdin {
   Null,
 }
 
+/// Stdin shape for a process with captured output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildStdin {
+  /// Connect `/dev/null` to stdin.
+  Null,
+  /// Keep stdin piped for a prompt writer.
+  Piped,
+}
+
+/// Timing and scope of turn-tree setup for one child.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnSetup {
+  /// Apply nice 10 and the session cgroup after exec.
+  ParentSideTurnTree,
+  /// Apply nice 10 and the session cgroup before exec.
+  ChildSideTurnTree,
+  /// Move into the session cgroup before exec without changing nice.
+  ChildSideCgroup,
+  /// Start a new session without turn-tree limits.
+  None,
+}
+
 /// Child handle and cgroup counters for exit attribution.
 pub struct SpawnedChild {
   /// Spawned process handle.
@@ -125,7 +147,7 @@ pub async fn spawn_raw_log(
     })
     .stdout(std::process::Stdio::from(raw))
     .stderr(std::process::Stdio::from(stderr));
-  configure_child_setup(&mut command, None);
+  configure_child_setup(&mut command, None, SpawnSetup::ParentSideTurnTree, cgroup.clone());
   let child = spawn_command(command).await?;
   apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
   Ok(SpawnedChild { child, cgroup })
@@ -133,21 +155,40 @@ pub async fn spawn_raw_log(
 
 /// Spawn a piped child with a new session and parent-death SIGKILL.
 pub async fn spawn_piped(spec: &SpawnSpec) -> io::Result<SpawnedChild> {
-  spawn_piped_with_signal(spec, Some(Signal::SIGKILL)).await
+  spawn_with_setup(spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::ParentSideTurnTree).await
 }
 
 /// Spawn a one-shot child with `/dev/null` stdin, piped output, and optional parent-death signal.
 pub async fn spawn_one_shot(spec: &SpawnSpec, pdeathsig: Option<Signal>) -> io::Result<SpawnedChild> {
-  spawn_piped_with_signal(spec, pdeathsig).await
+  spawn_with_setup(spec, pdeathsig, ChildStdin::Null, SpawnSetup::ParentSideTurnTree).await
 }
 
-async fn spawn_piped_with_signal(spec: &SpawnSpec, pdeathsig: Option<Signal>) -> io::Result<SpawnedChild> {
-  let cgroup = spec.prepare_cgroup();
+/// Spawn a child with captured output and an explicit session and turn-tree setup policy.
+pub async fn spawn_with_setup(
+  spec: &SpawnSpec,
+  pdeathsig: Option<Signal>,
+  stdin: ChildStdin,
+  setup: SpawnSetup,
+) -> io::Result<SpawnedChild> {
+  let cgroup = match setup {
+    SpawnSetup::None => None,
+    SpawnSetup::ParentSideTurnTree | SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup => {
+      spec.prepare_cgroup()
+    }
+  };
   let mut command = spec.command();
-  command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
-  configure_child_setup(&mut command, pdeathsig);
+  command
+    .stdin(match stdin {
+      ChildStdin::Null => std::process::Stdio::null(),
+      ChildStdin::Piped => std::process::Stdio::piped(),
+    })
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped());
+  configure_child_setup(&mut command, pdeathsig, setup, cgroup.clone());
   let child = spawn_command(command).await?;
-  apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
+  if setup == SpawnSetup::ParentSideTurnTree {
+    apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
+  }
   Ok(SpawnedChild { child, cgroup })
 }
 
@@ -155,7 +196,12 @@ async fn spawn_command(mut command: Command) -> io::Result<Child> {
   tokio::task::spawn_blocking(move || command.spawn()).await.map_err(io::Error::other)?
 }
 
-fn configure_child_setup(command: &mut Command, pdeathsig: Option<Signal>) {
+fn configure_child_setup(
+  command: &mut Command,
+  pdeathsig: Option<Signal>,
+  setup: SpawnSetup,
+  cgroup: Option<SessionCgroup>,
+) {
   let parent_pid = unsafe { libc::getpid() };
   unsafe {
     command.as_std_mut().pre_exec(move || {
@@ -170,6 +216,22 @@ fn configure_child_setup(command: &mut Command, pdeathsig: Option<Signal>) {
           libc::kill(libc::getpid(), libc::SIGKILL);
           return Err(io::Error::other("parent exited during child setup"));
         }
+      }
+      match setup {
+        SpawnSetup::ChildSideTurnTree => {
+          if libc::setpriority(libc::PRIO_PROCESS, 0, TURN_TREE_NICE) == -1 {
+            return Err(io::Error::last_os_error());
+          }
+          if let Some(cgroup) = &cgroup {
+            cgroup::move_current_process_to_cgroup(cgroup)?;
+          }
+        }
+        SpawnSetup::ChildSideCgroup => {
+          if let Some(cgroup) = &cgroup {
+            cgroup::move_current_process_to_cgroup(cgroup)?;
+          }
+        }
+        SpawnSetup::ParentSideTurnTree | SpawnSetup::None => {}
       }
       Ok(())
     });
@@ -485,7 +547,7 @@ mod tests {
       0,
       0,
     );
-    let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
+    let mut spawned = spawn_with_setup(&spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::None).await.unwrap();
     let pid = spawned.child.id().unwrap();
     let mut guard = ProcessGroupGuard::new(pid);
     let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
@@ -509,9 +571,9 @@ mod tests {
       HashMap::new(),
       Some("test1234-session".into()),
       base,
+      64,
       0,
-      0,
-      0,
+      16,
     );
     let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -536,9 +598,9 @@ mod tests {
       HashMap::new(),
       Some("test1234-session".into()),
       base,
+      64,
       0,
-      0,
-      0,
+      16,
     );
     let mut spawned = spawn_one_shot(&spec, None).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -555,21 +617,27 @@ mod tests {
   #[tokio::test]
   async fn claude_one_shot_applies_nice_and_session_cgroup_before_exec() {
     let root = tempfile::tempdir().unwrap();
-    let (_base, procs) = temp_cgroup(root.path());
+    let (base, procs) = temp_cgroup(root.path());
     let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
     let expected_nice = (own_nice + TURN_TREE_NICE).min(19);
     let script = r#"printf '%s\n' "$(ps -o ni= -p $$ | tr -d ' ')" "$(cat "$CGROUP_PROCS")"; read -r line"#;
-    let mut command = Command::new("/bin/sh");
-    command
-      .args(["-c", script])
-      .env_clear()
-      .env("CGROUP_PROCS", &procs)
-      .env("PATH", "/usr/bin:/bin")
-      .stdin(std::process::Stdio::piped())
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped())
-      .process_group(0);
-    let mut child = command.spawn().unwrap();
+    let env = HashMap::from([
+      (OsString::from("CGROUP_PROCS"), procs.as_os_str().to_os_string()),
+      (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+    ]);
+    let spec = SpawnSpec::new(
+      "/bin/sh",
+      ["-c", script].into_iter().map(OsString::from).collect(),
+      None,
+      env,
+      Some("test1234-session".into()),
+      base,
+      64,
+      0,
+      16,
+    );
+    let mut child =
+      spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await.unwrap().child;
     let pid = child.id().unwrap();
     let mut guard = ProcessGroupGuard::new(pid);
     let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
@@ -594,32 +662,25 @@ mod tests {
     let (base, procs) = temp_cgroup(root.path());
     let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
     assert!(own_nice < 19, "test process nice must be below 19, got {own_nice}");
-    let group = cgroup::prepare_session_cgroup(&base, Some("test1234-session"), 64, 0, 16).unwrap();
     let script = r#"printf '%s\n' "$(ps -o ni= -p $$ | tr -d ' ')" "$(cat "$CGROUP_PROCS")"; read -r line"#;
-    let mut command = Command::new("/bin/sh");
-    command
-      .args(["-c", script])
-      .env_clear()
-      .env("CGROUP_PROCS", &procs)
-      .env("PATH", "/usr/bin:/bin")
-      .stdin(std::process::Stdio::piped())
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped());
-    unsafe {
-      command.as_std_mut().pre_exec(|| {
-        if libc::setsid() == -1 {
-          return Err(io::Error::last_os_error());
-        }
-        if libc::nice(10) == -1 {
-          return Err(io::Error::last_os_error());
-        }
-        Ok(())
-      });
-    }
-    let mut child = command.spawn().unwrap();
+    let env = HashMap::from([
+      (OsString::from("CGROUP_PROCS"), procs.as_os_str().to_os_string()),
+      (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
+    ]);
+    let spec = SpawnSpec::new(
+      "/bin/sh",
+      ["-c", script].into_iter().map(OsString::from).collect(),
+      None,
+      env,
+      Some("test1234-session".into()),
+      base,
+      64,
+      0,
+      16,
+    );
+    let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await.unwrap().child;
     let pid = child.id().unwrap();
     let mut guard = ProcessGroupGuard::new(pid);
-    cgroup::move_process_to_cgroup(pid, &group);
     let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
     let mut recorded_nice = String::new();
     let mut recorded_cgroup = String::new();

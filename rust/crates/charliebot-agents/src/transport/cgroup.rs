@@ -12,6 +12,25 @@ use charliebot_core::cgroup::SESSION_CGROUP_PREFIX;
 
 static DEGRADED_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+/// Session cgroup caps copied from the server configuration for one backend launch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionCgroupLimits {
+  pub memory_max_mb: i64,
+  pub swap_max_mb: i64,
+  pub tasks_max: i64,
+}
+
+impl SessionCgroupLimits {
+  /// Copy the caps that the runtime runner uses for the same server configuration.
+  pub fn from_server(server: &charliebot_core::config::ServerConfig) -> Self {
+    Self {
+      memory_max_mb: server.session_memory_max_mb,
+      swap_max_mb: server.session_swap_max_mb,
+      tasks_max: server.session_tasks_max,
+    }
+  }
+}
+
 /// The pre-spawn memory counter snapshot for one session cgroup.
 #[derive(Clone, Debug)]
 pub struct SessionCgroup {
@@ -156,10 +175,20 @@ pub fn prepare_session_cgroup(
 /// Move a spawned process into a cgroup; failures match the Python warning and do not fail spawn.
 pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
   let path = cgroup.path.join("cgroup.procs");
-  let result = OpenOptions::new().write(true).open(&path).and_then(|mut file| write!(file, "{pid}"));
+  let result = write_process_to_cgroup(pid, &path);
   if let Err(error) = result {
     tracing::warn!(target: "charliebot_agents", pid, path = %path.display(), error = %error, "session_cgroup_move_failed");
   }
+}
+
+/// Move the current child into its prepared cgroup before exec; return write failures to `pre_exec`.
+pub fn move_current_process_to_cgroup(cgroup: &SessionCgroup) -> io::Result<()> {
+  let pid = u32::try_from(unsafe { libc::getpid() }).expect("process id fits u32");
+  write_process_to_cgroup(pid, &cgroup.path.join("cgroup.procs"))
+}
+
+fn write_process_to_cgroup(pid: u32, path: &Path) -> io::Result<()> {
+  OpenOptions::new().write(true).open(path).and_then(|mut file| write!(file, "{pid}"))
 }
 
 /// Remove an empty session cgroup; a populated or unavailable directory is retained.

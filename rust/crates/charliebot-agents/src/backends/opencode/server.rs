@@ -25,7 +25,7 @@ use uuid::Uuid;
 use super::opencode_limits;
 use crate::cli_base::apply_proxy_env;
 use crate::transport::kill::{kill_process_group, python_exit_code};
-use crate::transport::spawn::{SpawnSpec, SpawnedChild, spawn_one_shot};
+use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
 
 const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 const READ_CHUNK_BYTES: usize = 64 * 1024;
@@ -552,7 +552,8 @@ impl OpenCodeServer {
       0,
       0,
     );
-    let SpawnedChild { mut child, .. } = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await?;
+    let SpawnedChild { mut child, .. } =
+      spawn_with_setup(&spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::None).await?;
     let pid = child.id().context("opencode serve did not expose its process id")?;
     let stdout = child.stdout.take().context("opencode serve stdout was not piped")?;
     let stderr = child.stderr.take().context("opencode serve stderr was not piped")?;

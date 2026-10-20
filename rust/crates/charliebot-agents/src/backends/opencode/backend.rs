@@ -23,7 +23,7 @@ use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, Turn
 use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
 use crate::event_builders;
 use crate::runner::EventFn;
-use crate::transport::cgroup::system_cgroup_base_dir;
+use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{SpawnSpec, spawn_one_shot};
 
@@ -78,6 +78,7 @@ pub struct OpenCodeBackend {
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
   launch: LaunchArgs,
+  cgroup_limits: SessionCgroupLimits,
 }
 
 impl OpenCodeBackend {
@@ -87,8 +88,9 @@ impl OpenCodeBackend {
     host: OpenCodeHost,
     pool: Arc<OpenCodeServerPool>,
     launch: LaunchArgs,
+    cgroup_limits: SessionCgroupLimits,
   ) -> Self {
-    Self { model, proxy_url: option.proxy_url, host, pool, launch }
+    Self { model, proxy_url: option.proxy_url, host, pool, launch, cgroup_limits }
   }
 
   fn run_plan(&self) -> Arc<OpenCodeRunPlan> {
@@ -115,6 +117,7 @@ impl OpenCodeBackend {
       model: self.model.clone(),
       proxy_url: self.proxy_url.clone(),
       cgroup_session_id: self.launch.cgroup_session_id.clone(),
+      cgroup_limits: self.cgroup_limits,
       base_env: base_env.clone(),
       prompt: prompt.to_string(),
       system: system.to_string(),
@@ -186,13 +189,20 @@ impl BackendFactory for OpenCodeFactory {
   fn build(
     &self,
     option: Option<&charliebot_core::config::BackendOption>,
-    _cfg: &charliebot_core::config::CharlieBotConfig,
+    cfg: &charliebot_core::config::CharlieBotConfig,
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the opencode backend type needs its backends.options entry")?;
     let model = option_default_model(option, "backend ")?;
     let fields = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
-    Ok(Box::new(OpenCodeBackend::new(model, fields, self.host.clone(), Arc::clone(&self.pool), launch)))
+    Ok(Box::new(OpenCodeBackend::new(
+      model,
+      fields,
+      self.host.clone(),
+      Arc::clone(&self.pool),
+      launch,
+      SessionCgroupLimits::from_server(&cfg.server),
+    )))
   }
 }
 
@@ -802,6 +812,7 @@ struct OpenCodeOneShotRequest {
   model: String,
   proxy_url: Option<String>,
   cgroup_session_id: Option<String>,
+  cgroup_limits: SessionCgroupLimits,
   base_env: Env,
   prompt: String,
   system: String,
@@ -815,7 +826,17 @@ fn oneshot_root() -> anyhow::Result<tempfile::TempDir> {
 }
 
 async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String> {
-  let OpenCodeOneShotRequest { host, model, proxy_url, cgroup_session_id, base_env, prompt, system, timeout } = request;
+  let OpenCodeOneShotRequest {
+    host,
+    model,
+    proxy_url,
+    cgroup_session_id,
+    cgroup_limits,
+    base_env,
+    prompt,
+    system,
+    timeout,
+  } = request;
   if !host.program.program.is_file() {
     bail!("opencode 2.0 binary not found at {}", host.program.display.display());
   }
@@ -846,9 +867,9 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
     env.into_iter().map(|(key, value)| (key.into(), value.into())).collect(),
     cgroup_session_id,
     system_cgroup_base_dir(),
-    0,
-    0,
-    0,
+    cgroup_limits.memory_max_mb,
+    cgroup_limits.swap_max_mb,
+    cgroup_limits.tasks_max,
   );
   let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.context("spawning the opencode one-shot")?;
   let pid = spawned.child.id().context("opencode one-shot did not expose its process id")?;

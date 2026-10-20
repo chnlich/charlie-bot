@@ -8,6 +8,7 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 use super::kimi_claude;
 use super::options::CcKimiOption;
 use crate::backends::claude_code::factory::{launch_config_dir, launch_with_kwargs};
+use crate::transport::cgroup::SessionCgroupLimits;
 
 pub struct KimiFactory;
 
@@ -28,7 +29,8 @@ impl BackendFactory for KimiFactory {
     }
     let launch = launch_with_kwargs(launch)?;
     let config_dir = launch_config_dir(&launch)?;
-    let backend = kimi_claude::backend(&api_key, &option.model, config_dir, launch)?;
+    let backend =
+      kimi_claude::backend(&api_key, &option.model, config_dir, launch, SessionCgroupLimits::from_server(&cfg.server))?;
     Ok(Box::new(backend))
   }
 }

@@ -20,6 +20,7 @@ use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, ServerTime
 use super::{OpenCodeBackend, OpenCodeOption, OpenCodeTranslator};
 use crate::agent_environment::AgentBaseEnvironment;
 use crate::runner::{AgentRunner, RunOutcome, RunRequest};
+use crate::transport::cgroup::SessionCgroupLimits;
 use crate::transport::identity::{ProcessIdentity, read_pid_stat};
 use crate::transport::kill::kill_process_group;
 
@@ -96,6 +97,7 @@ impl Harness {
       self.host.clone(),
       Arc::clone(&self.pool),
       launch.clone(),
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
     );
     let server = self.pool.server_for(proxy_url);
     let mut servers = self.servers.lock().expect("test server list is not poisoned");
@@ -780,6 +782,7 @@ async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line()
     harness.host.clone(),
     Arc::clone(&harness.pool),
     LaunchArgs::default(),
+    SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
   );
   let empty_env = Env::new();
   let answer =

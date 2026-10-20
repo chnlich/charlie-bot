@@ -320,7 +320,7 @@ the validated checkout root held in typed startup state. Python reads this path 
 | `cold_read::page_sha256` | `src/runtime/task_execution.py:1744-1748` (the sha256 `_build_cold_read_context` records) |
 | `execution::TaskExecutionAdapter::after_cold_read_run` (`pub(crate)`) | `src/runtime/task_execution.py:2454-2497` |
 | `recovery::replay_followups` cold-read rows (private) | `src/runtime/task_execution.py:2863-2890` |
-| `text_length::weighted_length` | `src/infra/text_length.py` (`weighted_length`) |
+| `text_length::weighted_length` | `src/infra/text_length.py:15` |
 | `routes::session_message` | `src/runtime/api/internal.py:320-375` |
 
 Known divergences from Python:

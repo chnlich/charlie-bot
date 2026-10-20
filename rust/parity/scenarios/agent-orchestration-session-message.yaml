@@ -25,6 +25,21 @@ steps:
     path: /api/internal/session-message
     body_file: session-message-over-limit.json
     expect_status: 422
+  - name: an ASCII relay over the weighted limit is refused before any lookup
+    method: POST
+    path: /api/internal/session-message
+    body_file: session-message-over-limit-ascii.json
+    expect_status: 422
+  - name: extra relay fields keep the FastAPI validation shape
+    method: POST
+    path: /api/internal/session-message
+    json:
+      session_id: ${sessions.atlas}
+      target_session_id: ${sessions.atlas_survey}
+      content: Extra field.
+      surprise: refused
+    expect_status: 422
+    compare: status_and_shape
   - name: a relay from an unknown session returns not found
     method: POST
     path: /api/internal/session-message

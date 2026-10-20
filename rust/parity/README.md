@@ -288,13 +288,8 @@ steps:
 Scenario fields:
 
 - `fake_agent` gives the starts each fake agent consumes in order. `expect_starts` gives the required record count
-  in each tree at scenario end.
-- `exclude_file_globs` omits matching tree-relative paths from file-delta comparison and UUID-normalization input.
-  Use a narrow pattern only for artifacts whose creation order is not part of the scenario contract; the remaining
-  files, including session events and loop state, still compare.
-- `compare_fake_agent_spawns: false` keeps the `expect_starts` count check but skips argv and launch-context equality,
-  and excludes spawn records from UUID-normalization input. Use it when asynchronous work can interleave launches in
-  either order and the scenario checks its durable events and state directly.
+  in each tree at scenario end. Spawn records are grouped by run-token session; starts within each session retain
+  their order and compare argv, prompts and launch context.
 - `directions` names a non-empty subset of `python-to-candidate` and `candidate-to-python`. Add it when a scenario
   has a `handover` step. A scenario without handover refuses this key.
 - `config` deep-merges into the synthetic `config.yaml`; nested mappings merge, while lists and scalar values
@@ -356,15 +351,16 @@ Scenario fields:
           match_fields: {outcome: success}
   ```
 
-- `compare_event_type_streams` scopes to one session and compares selected event types in their own original order,
-  after the other events. Unselected events keep their order. Use it when independent workers can interleave event types
-  differently while each type's durable sequence still has to match:
+- `compare_event_type_streams` scopes to one session and moves selected event types after the other events, preserving
+  the selected events' combined original order. Unselected events keep their order, and position-derived `event_index`
+  is omitted because moving selected events changes every event's position. Use it when independent workers can
+  interleave selected events with unselected events differently, while the selected events still have a strict order:
 
   ```yaml
   comparison_rules:
     - compare_event_type_streams:
         session: ${sessions.atlas}
-        event_types: [improve_iteration_completed, child_report, master_done]
+        event_types: [master_done, run_finished]
   ```
 
 Each fake-agent start names its executable, lists its steps and gives its exit code. A start without a matching

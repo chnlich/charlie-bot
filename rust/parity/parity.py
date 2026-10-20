@@ -18,7 +18,6 @@ import collections
 import concurrent.futures
 import contextlib
 import dataclasses
-import fnmatch
 import hashlib
 import hmac
 import http.client
@@ -267,51 +266,82 @@ def _delta_diff_lines(
       delta = compare.order_adjacent_pair(delta, first, second)
     for path, event_types in _event_type_stream_rules(scenario, side, manifest):
       delta = compare.order_event_type_streams_in_delta(delta, path, event_types)
-    delta = _exclude_delta_paths(delta, scenario.exclude_file_globs)
     ordered.append(delta)
   return compare.delta_diff(
       ordered[0], ordered[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
       candidate_is_python)
 
 
-def _exclude_delta_paths(delta: compare.Delta, patterns: tuple[str, ...]) -> compare.Delta:
-  if not patterns:
-    return delta
-  return compare.Delta(
-      added={path: entry for path, entry in delta.added.items() if not _path_is_excluded(path, patterns)},
-      removed=frozenset(path for path in delta.removed if not _path_is_excluded(path, patterns)),
-      changed={path: entry for path, entry in delta.changed.items() if not _path_is_excluded(path, patterns)},
-  )
-
-
-def _path_is_excluded(path: str, patterns: tuple[str, ...]) -> bool:
-  return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
-
-
 def _prepare_contexts(
     sides: list[Side],
     snapshots: list[compare.Snapshot],
-    excluded_paths: tuple[str, ...] = (),
-    compare_fake_agent_spawns: bool = True,
     event_type_stream_rules: list[list[tuple[str, tuple[str, ...]]]] | None = None,
 ) -> None:
   rules_by_side = event_type_stream_rules or [[] for _ in sides]
   for side, snapshot, side_rules in zip(sides, snapshots, rules_by_side, strict=True):
-    comparable = {
-        path: entry for path, entry in snapshot.items() if not _path_is_excluded(path, excluded_paths)
-    }
+    spawns_path = _spawns_path(side.tree)
+    spawn_records = _read_spawns(side.tree) if spawns_path.exists() else []
+    _seed_spawn_run_ids(snapshot, spawn_records, side.ctx)
+    comparable = dict(snapshot)
     for path, event_types in side_rules:
       entry = comparable.get(path)
       if entry is not None and entry.kind == "file":
         comparable[path] = compare.Entry(entry.kind, compare.order_event_type_streams(entry.data, event_types))
     extra_files = ()
-    spawns_path = _spawns_path(side.tree)
-    if compare_fake_agent_spawns and spawns_path.exists():
-      extra_files = (("fake-agent/spawns.jsonl", spawns_path.read_bytes()),)
     fake_log = side.tree.root / "logs" / "fakes.jsonl"
     if fake_log.exists():
       extra_files += (("logs/fakes.jsonl", fake_log.read_bytes()),)
     compare.prepare_context(comparable, side.ctx, extra_files)
+    if spawns_path.exists():
+      grouped = _spawn_groups(spawn_records, side.ctx)
+      grouped_data = b"".join(json.dumps(record).encode() + b"\n" for group in grouped for record in group)
+      normalize.prepare_snapshot([("fake-agent/spawns.jsonl", "file", grouped_data)], side.ctx)
+
+
+def _seed_spawn_run_ids(snapshot: compare.Snapshot, records: list[dict], ctx: normalize.Context) -> None:
+  """Give run ids stable names from their session's launch order before tree paths introduce them."""
+  session_paths = {
+      "/".join(parts[:3])
+      for path in snapshot
+      if (parts := path.split("/")) and len(parts) >= 3 and parts[:2] == ["home", "sessions"]
+  }
+  normalize.prepare_snapshot([(path, "dir", b"") for path in sorted(session_paths)], ctx)
+  for group in _spawn_groups(records, ctx):
+    for launch_number, record in enumerate(group, start=1):
+      claims = record["run_token_claims"]
+      if claims is None:
+        continue
+      run_id = claims["run_id"]
+      if not isinstance(run_id, str) or not run_id:
+        raise RuntimeError(f"fake-agent spawn has an invalid run claim: {claims!r}")
+      if run_id in ctx.fixture_uuids:
+        continue
+      session_key = normalize.normalize_text(claims["session_id"], ctx)
+      session_hash = hashlib.sha256(session_key.encode()).hexdigest()
+      alias = f"<spawn-run-{session_hash}-{launch_number}>"
+      existing = ctx.stable_uuids.get(run_id)
+      if existing is not None and existing != alias:
+        raise RuntimeError(f"fake-agent run {run_id!r} changed launch group from {existing!r} to {alias!r}")
+      ctx.stable_uuids[run_id] = alias
+
+
+def _spawn_groups(records: list[dict], ctx: normalize.Context) -> list[list[dict]]:
+  """Group fake-agent starts by their known session id, preserving launch order within each session."""
+  groups: dict[str, list[dict]] = collections.defaultdict(list)
+  for record in records:
+    claims = record["run_token_claims"]
+    if claims is None:
+      session_key = ""
+    else:
+      session_id = claims["session_id"]
+      if not isinstance(session_id, str) or not session_id:
+        raise RuntimeError(f"fake-agent spawn has an invalid session claim: {claims!r}")
+      known_before = session_id in ctx.fixture_uuids or session_id in ctx.minted_uuids
+      session_key = normalize.normalize_text(session_id, ctx)
+      if not known_before and session_key != session_id:
+        raise RuntimeError(f"fake-agent spawn session {session_id!r} is absent from the home snapshot")
+    groups[session_key].append(record)
+  return [groups[key] for key in sorted(groups)]
 
 
 def _process_alive(record: dict) -> bool:
@@ -804,9 +834,7 @@ def _run_handover_step(
     side.wait_ready()
   lines.extend(_wait_for_provisioning(sides))
   after = _settle_sides(sides)
-  _prepare_contexts(
-      sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
-      [_event_type_stream_rules(scenario, side, manifest) for side in sides])
+  _prepare_contexts(sides, after, [_event_type_stream_rules(scenario, side, manifest) for side in sides])
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
   lines.extend(_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
@@ -928,9 +956,7 @@ def _run_step(
   else:
     raise ValueError(f"unknown scenario step kind {step.kind!r}")
   after = _settle_sides(sides)
-  _prepare_contexts(
-      sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
-      [_event_type_stream_rules(scenario, side, manifest) for side in sides])
+  _prepare_contexts(sides, after, [_event_type_stream_rules(scenario, side, manifest) for side in sides])
   lines.extend(_exit_lines(sides, f"during step {step.name!r}"))
   if baseline is not None and candidate is not None:
     if step.kind == "http" and step.http_compare == "status_and_shape":
@@ -1071,21 +1097,22 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
   return lines, notes
 
 
-def _spawns_diff(sides: list[Side], expect_starts: int | None, compare_spawns: bool = True) -> list[str]:
+def _spawns_diff(sides: list[Side], expect_starts: int | None) -> list[str]:
   records = [_read_spawns(side.tree) for side in sides]
   lines = []
   if expect_starts is not None:
     for side, starts in zip(sides, records, strict=True):
       if len(starts) != expect_starts:
         lines.append(f"{side.label} has {len(starts)} fake-agent starts; scenario expects {expect_starts}")
-  if not compare_spawns:
-    return lines
   normalized = [
       [
-          normalize.normalize_json(record, normalize.file_rules("fake-agent/spawns.jsonl"), side.ctx)
-          for record in starts
-      ]
-      for side, starts in zip(sides, records, strict=True)
+          [
+              {
+                  key: value for key, value in normalize.normalize_json(
+                      record, normalize.file_rules("fake-agent/spawns.jsonl"), side.ctx).items() if key != "index"
+              } for record in group
+          ] for group in _spawn_groups(starts, side.ctx)
+      ] for side, starts in zip(sides, records, strict=True)
   ]
   lines.extend(f"fake-agent spawns {line}" for line in compare.json_diff(normalized[0], normalized[1]))
   return lines
@@ -1183,9 +1210,7 @@ def _run_scenario(
         missing = side.fake_set.wait_ready(tuple(scenario.fakes), fakes.FAKE_READY_TIMEOUT_SECONDS)
         startup_lines.extend(f"{side.label} fake {name} did not become ready" for name in missing)
     after = _settle_sides(sides)
-    _prepare_contexts(
-        sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
-        [_event_type_stream_rules(scenario, side, manifest) for side in sides])
+    _prepare_contexts(sides, after, [_event_type_stream_rules(scenario, side, manifest) for side in sides])
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
     startup_lines.extend(_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python))
     startup_lines.extend(_recording_diff_since(sides, startup_marks, "(startup)"))
@@ -1213,12 +1238,10 @@ def _run_scenario(
     shutdown_marks = _recording_marks(sides)
     cleanup_lines, cleanup_notes = _cleanup_scenario(sides)
     after = _settle_sides(sides)
-    _prepare_contexts(
-        sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
-        [_event_type_stream_rules(scenario, side, manifest) for side in sides])
+    _prepare_contexts(sides, after, [_event_type_stream_rules(scenario, side, manifest) for side in sides])
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
     cleanup_lines.extend(_recording_diff_since(sides, shutdown_marks, "(shutdown)"))
-    cleanup_lines.extend(_spawns_diff(sides, scenario.expect_starts, scenario.compare_fake_agent_spawns))
+    cleanup_lines.extend(_spawns_diff(sides, scenario.expect_starts))
     results.append(
         StepResult(
             scenario.name,

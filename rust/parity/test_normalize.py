@@ -286,80 +286,116 @@ def test_unnamed_request_header_fails_fast() -> None:
     normalize.request_headers("gemini", {"x-unexpected": ["1"]}, _context(), websocket=True)
 
 
-def _spawn_side(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, label: str, stdin: bytes) -> parity.Side:
-  """A side whose only fake-agent start is the spawn record the fake writes for *stdin*."""
+def _spawn_side(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, label: str, records: list[dict]) -> parity.Side:
+  """A side whose fake-agent directory contains the given spawn records."""
   # The record reads the run token from the environment; a test run inside an agent session must not carry one.
   monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
   root = tmp_path / label
   (root / "fake-agent").mkdir(parents=True)
-  record = fake_agent._spawn_record(0, "claude", scripted=True, stdin_bytes=stdin)
-  (root / "fake-agent" / "spawns.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+  data = "".join(json.dumps(record) + "\n" for record in records)
+  (root / "fake-agent" / "spawns.jsonl").write_text(data, encoding="utf-8")
   return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+
+
+def _spawn_record(index: int, session: str, run: str, stdin: bytes) -> dict:
+  record = fake_agent._spawn_record(index, "claude", scripted=True, stdin_bytes=stdin)
+  record["run_token_claims"] = {"session_id": session, "run_id": run, "agent": "claude"}
+  return record
 
 
 def test_stdin_naming_only_the_tree_root_compares_equal(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # Both tree roots have one length, as the harness gives them, so the stdin_bytes counts agree.
-  baseline = _spawn_side(tmp_path, monkeypatch, "base", f"Read {tmp_path / 'base'}/home/notes.md".encode())
-  candidate = _spawn_side(tmp_path, monkeypatch, "cand", f"Read {tmp_path / 'cand'}/home/notes.md".encode())
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  baseline = _spawn_side(
+      tmp_path, monkeypatch, "base", [
+          fake_agent._spawn_record(
+              0, "claude", scripted=True, stdin_bytes=f"Read {tmp_path / 'base'}/home/notes.md".encode())
+      ])
+  candidate = _spawn_side(
+      tmp_path, monkeypatch, "cand", [
+          fake_agent._spawn_record(
+              0, "claude", scripted=True, stdin_bytes=f"Read {tmp_path / 'cand'}/home/notes.md".encode())
+      ])
   assert parity._spawns_diff([baseline, candidate], expect_starts=1) == []
 
 
 def test_stdin_text_difference_names_the_stdin_field(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  baseline = _spawn_side(tmp_path, monkeypatch, "base", b"Summarize the notes.")
-  candidate = _spawn_side(tmp_path, monkeypatch, "cand", b"Summarize the draft.")
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  baseline = _spawn_side(
+      tmp_path, monkeypatch, "base",
+      [fake_agent._spawn_record(0, "claude", scripted=True, stdin_bytes=b"Summarize the notes.")])
+  candidate = _spawn_side(
+      tmp_path, monkeypatch, "cand",
+      [fake_agent._spawn_record(0, "claude", scripted=True, stdin_bytes=b"Summarize the draft.")])
   lines = parity._spawns_diff([baseline, candidate], expect_starts=1)
   assert len(lines) == 1
-  assert lines[0].startswith("fake-agent spawns $[0].stdin:")
+  assert lines[0].startswith("fake-agent spawns $[0][0].stdin:")
 
 
-def test_spawn_comparison_can_keep_the_count_check_only(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  baseline = _spawn_side(tmp_path, monkeypatch, "base", b"Summarize the notes.")
-  candidate = _spawn_side(tmp_path, monkeypatch, "cand", b"Summarize the draft.")
-  assert parity._spawns_diff([baseline, candidate], expect_starts=1, compare_spawns=False) == []
+def test_spawn_groups_compare_each_sessions_order_and_launch_context(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  baseline = _spawn_side(
+      tmp_path, monkeypatch, "base", [
+          _spawn_record(0, "manager", "manager-run-1", b"Parent audit one."),
+          _spawn_record(1, "loop-child", "iteration-run-1", b"Iteration prompt one."),
+          _spawn_record(2, "manager", "manager-run-2", b"Parent audit two."),
+      ])
+  candidate = _spawn_side(
+      tmp_path, monkeypatch, "cand", [
+          _spawn_record(0, "loop-child", "iteration-run-1", b"Iteration prompt one."),
+          _spawn_record(1, "manager", "manager-run-1", b"Parent audit one."),
+          _spawn_record(2, "manager", "manager-run-2", b"Parent audit two."),
+      ])
+  assert parity._spawns_diff([baseline, candidate], expect_starts=3) == []
+
+  records = parity._read_spawns(candidate.tree)
+  records[1]["argv"].append("--different-launch")
+  parity._spawns_path(candidate.tree).write_text(
+      "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+  assert parity._spawns_diff([baseline, candidate], expect_starts=3)
 
 
-def test_excluded_run_files_do_not_hide_loop_state() -> None:
-  run_file = "home/sessions/synthetic/data/runs/run-id/metadata.json"
-  loop_file = "home/sessions/synthetic/loops/1/state.json"
-  delta = compare.Delta(
-      added={run_file: compare.Entry("file", b"{}"), loop_file: compare.Entry("file", b"{}")},
-      removed=frozenset({run_file}),
-      changed={run_file: compare.Entry("file", b"{\"status\":\"running\"}"),
-               loop_file: compare.Entry("file", b"{\"status\":\"blocked\"}")},
-  )
-
-  filtered = parity._exclude_delta_paths(delta, ("home/sessions/*/data/runs/**",))
-
-  assert set(filtered.added) == {loop_file}
-  assert filtered.removed == frozenset()
-  assert set(filtered.changed) == {loop_file}
-
-
-def test_excluded_paths_do_not_seed_uuid_normalization(tmp_path: pathlib.Path) -> None:
-  run_id = "10000000-0000-4000-8000-000000000001"
-  unrelated_id = "10000000-0000-4000-8000-000000000002"
-  spawn_id = "10000000-0000-4000-8000-000000000003"
+def test_interleaved_session_spawns_seed_uuid_normalization_in_group_order(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  manager_id = "10000000-0000-4000-8000-000000000001"
+  child_ids = ("10000000-0000-4000-8000-000000000011", "10000000-0000-4000-8000-000000000012")
+  manager_runs = ("10000000-0000-4000-8000-000000000021", "10000000-0000-4000-8000-000000000022")
+  child_runs = ("10000000-0000-4000-8000-000000000031", "10000000-0000-4000-8000-000000000032")
   snapshots = []
   sides = []
-  for label in ("base", "cand"):
-    root = tmp_path / label
-    root.mkdir()
-    side = parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+  for label, child_id, manager_run, child_run, records in (
+      ("base", child_ids[0], manager_runs[0], child_runs[0], [
+          _spawn_record(0, manager_id, manager_runs[0], b"Parent prompt."),
+          _spawn_record(1, child_ids[0], child_runs[0], b"Iteration prompt."),
+      ]),
+      ("cand", child_ids[1], manager_runs[1], child_runs[1], [
+          _spawn_record(0, child_ids[1], child_runs[1], b"Iteration prompt."),
+          _spawn_record(1, manager_id, manager_runs[1], b"Parent prompt."),
+      ]),
+  ):
+    side = _spawn_side(tmp_path, monkeypatch, label, records)
+    side.ctx.fixture_uuids = frozenset({manager_id})
     sides.append(side)
-    (root / "fake-agent").mkdir()
-    (root / "fake-agent" / "spawns.jsonl").write_text(json.dumps({"run_id": spawn_id}) + "\n", encoding="utf-8")
     snapshots.append({
-        "home/sessions/synthetic/data/runs/run-id/metadata.json": compare.Entry(
-            "file", json.dumps({"run_id": run_id, "other": unrelated_id}).encode()),
-        "home/sessions/synthetic/data/chat_events.jsonl": compare.Entry(
-            "file", (json.dumps({"run_id": run_id}) + "\n").encode()),
+        f"home/sessions/{child_id}/data/chat_events.jsonl": compare.Entry("file", b"{}\n"),
     })
 
-  parity._prepare_contexts(sides, snapshots, ("home/sessions/*/data/runs/**",), compare_fake_agent_spawns=False)
+  parity._prepare_contexts(sides, snapshots)
 
-  for side in sides:
-    assert side.ctx.minted_uuids == {run_id: "<minted-1>"}
+  for side, child_id, manager_run, child_run in zip(sides, child_ids, manager_runs, child_runs, strict=True):
+    assert side.ctx.minted_uuids[child_id] == "<minted-1>"
+    assert manager_run not in side.ctx.minted_uuids
+    assert child_run not in side.ctx.minted_uuids
+    assert side.ctx.stable_uuids[manager_run] == sides[0].ctx.stable_uuids[manager_runs[0]]
+    assert side.ctx.stable_uuids[child_run] == sides[0].ctx.stable_uuids[child_runs[0]]
+    assert normalize.normalize_text(manager_run, side.ctx) == side.ctx.stable_uuids[manager_run]
+    assert normalize.normalize_text(child_run, side.ctx) == side.ctx.stable_uuids[child_run]
+  assert sides[0].ctx.stable_uuids[manager_runs[0]] != sides[0].ctx.stable_uuids[child_runs[0]]
+  assert parity._spawns_diff(sides, expect_starts=2) == []
 
 
 def test_interleaved_event_streams_do_not_seed_different_uuid_orders(tmp_path: pathlib.Path) -> None:
@@ -372,17 +408,35 @@ def test_interleaved_event_streams_do_not_seed_different_uuid_orders(tmp_path: p
       "10000000-0000-4000-8000-000000000016",
   )
   event_path = "home/sessions/synthetic-session/data/chat_events.jsonl"
-  event_types = ("improve_iteration_completed", "master_done")
+  event_types = ("master_done",)
   sequences = (
       [
-          {"type": "improve_iteration_completed", "id": ids[0]},
-          {"type": "master_done", "id": ids[1]},
-          {"type": "improve_iteration_completed", "id": ids[2]},
+          {
+              "type": "improve_iteration_completed",
+              "id": ids[0]
+          },
+          {
+              "type": "master_done",
+              "id": ids[1]
+          },
+          {
+              "type": "improve_iteration_completed",
+              "id": ids[2]
+          },
       ],
       [
-          {"type": "improve_iteration_completed", "id": ids[3]},
-          {"type": "improve_iteration_completed", "id": ids[4]},
-          {"type": "master_done", "id": ids[5]},
+          {
+              "type": "improve_iteration_completed",
+              "id": ids[3]
+          },
+          {
+              "type": "improve_iteration_completed",
+              "id": ids[4]
+          },
+          {
+              "type": "master_done",
+              "id": ids[5]
+          },
       ],
   )
   sides = []
@@ -484,10 +538,15 @@ def test_plan_takeoff_time_masks_only_the_stamp_and_its_version_still_differs() 
 
 
 def test_plan_version_created_time_masks_each_stamp_and_each_version_number_still_differs() -> None:
+
   def registry(stamp: str, numbers: tuple[int, int]) -> dict:
     versions = [{"v": number, "created_at": stamp} for number in numbers]
     return {
-        "plans": [{"id": plan_id, "title": "Synthetic plan", "versions": versions} for plan_id in (1, 2)],
+        "plans": [{
+            "id": plan_id,
+            "title": "Synthetic plan",
+            "versions": versions
+        } for plan_id in (1, 2)],
     }
 
   earlier = _masked_plan_registry(registry("2026-10-19T09:41:00+00:00", (1, 2)))
@@ -530,6 +589,54 @@ def _masked_run_metadata(metadata: dict) -> dict:
 def _masked_chat_event(event: dict) -> dict:
   rules = normalize.file_rules("home/sessions/synthetic-session/data/chat_events.jsonl")
   return normalize.normalize_json(event, rules, _context())
+
+
+def test_improve_loop_state_masks_only_creation_time_and_server_pid() -> None:
+  path = "home/sessions/synthetic-session/loops/1/state.json"
+  rules = normalize.file_rules(path)
+  baseline = normalize.normalize_json(
+      {
+          "created_at": "2026-10-20T10:00:00Z",
+          "server_pid": 100,
+          "iteration": 2,
+          "status": "running"
+      },
+      rules,
+      _context(),
+  )
+  candidate = normalize.normalize_json(
+      {
+          "created_at": "2026-10-20T10:01:00Z",
+          "server_pid": 200,
+          "iteration": 2,
+          "status": "blocked"
+      },
+      rules,
+      _context(),
+  )
+
+  assert baseline["created_at"] == candidate["created_at"] == "<improve-loop-created-time>"
+  assert baseline["server_pid"] == candidate["server_pid"] == "<improve-loop-server-pid>"
+  assert baseline["iteration"] == candidate["iteration"]
+  assert baseline["status"] != candidate["status"]
+
+
+def test_improve_child_spec_hash_rule_does_not_mask_another_request_id() -> None:
+  path = "home/sessions/synthetic-session/data/chat_events.jsonl"
+  rules = normalize.file_rules(path)
+  assert normalize.normalize_json({
+      "request_id": "improve:1",
+      "task_spec_hash": "synthetic-hash"
+  }, rules, _context()) == normalize.normalize_json(
+      {
+          "request_id": "improve:1",
+          "task_spec_hash": "another-hash"
+      }, rules, _context())
+
+  other_request = {"request_id": "improve:2", "task_spec_hash": "synthetic-hash"}
+  other_request_changed = {"request_id": "improve:2", "task_spec_hash": "another-hash"}
+  assert normalize.normalize_json(other_request, rules,
+                                  _context()) != normalize.normalize_json(other_request_changed, rules, _context())
 
 
 def test_the_session_runs_task_spec_hash_is_masked_only_for_the_local_repository() -> None:

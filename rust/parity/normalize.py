@@ -691,6 +691,7 @@ class Context:
 
   tree_root: str
   fixture_uuids: frozenset[str] = frozenset()
+  stable_uuids: dict[str, str] = dataclasses.field(default_factory=dict)
   minted_uuids: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
@@ -707,7 +708,7 @@ def _observe(value: Any, ctx: Context) -> None:
   if isinstance(value, str):
     for match in _UUID.finditer(value):
       identifier = match[0]
-      if identifier not in ctx.fixture_uuids:
+      if identifier not in ctx.fixture_uuids and identifier not in ctx.stable_uuids:
         ctx.minted_uuids.setdefault(identifier, f"<minted-{len(ctx.minted_uuids) + 1}>")
   elif isinstance(value, list):
     for item in value:
@@ -758,6 +759,8 @@ def normalize_text(text: str, ctx: Context) -> str:
     identifier = match[0]
     if identifier in ctx.fixture_uuids:
       return identifier
+    if identifier in ctx.stable_uuids:
+      return ctx.stable_uuids[identifier]
     return ctx.minted_uuids.setdefault(identifier, f"<minted-{len(ctx.minted_uuids) + 1}>")
 
   normalized = VOICE_STEM_RULE.pattern.sub(f"<{VOICE_STEM_RULE.name}>", normalized)

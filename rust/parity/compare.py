@@ -467,18 +467,24 @@ def order_adjacent_pair(delta: Delta, first: EventSelector, second: EventSelecto
 
 
 def order_event_type_streams(data: bytes, event_types: tuple[str, ...]) -> bytes:
-  """Group selected event types after other events while preserving each type's original order."""
+  """Move selected events after other events while preserving their combined original order.
+
+  Every event's event_index is omitted because moving selected events changes every event's position.
+  """
   lines = [line for line in data.splitlines() if line.strip()]
   events = [_jsonl_line_value(line) for line in lines]
-  selected = {event_type: [] for event_type in event_types}
+  selected_types = set(event_types)
+  selected = []
   remaining = []
   for event in events:
+    if isinstance(event, dict):
+      event.pop("event_index", None)
     event_type = event.get("type") if isinstance(event, dict) else None
-    if isinstance(event_type, str) and event_type in selected:
-      selected[event_type].append(event)
+    if isinstance(event_type, str) and event_type in selected_types:
+      selected.append(event)
     else:
       remaining.append(event)
-  ordered = [*remaining, *(event for event_type in event_types for event in selected[event_type])]
+  ordered = [*remaining, *selected]
   return b"".join(json.dumps(event).encode() + b"\n" for event in ordered)
 
 

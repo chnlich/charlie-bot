@@ -811,9 +811,8 @@ def normalize_text(text: str, ctx: Context) -> str:
   normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
   normalized = TASK_BRANCH_TIMESTAMP_RULE.pattern.sub(_mask_task_branch_timestamp, normalized)
   normalized = _CRON_FIRING_STAMP.sub(
-      lambda match: (
-          f"{match['prefix']}{match['date']}<cron-firing-time>{match['offset']}{match['suffix'] or ''}"
-      ), normalized)
+      lambda match: (f"{match['prefix']}{match['date']}<cron-firing-time>{match['offset']}{match['suffix'] or ''}"),
+      normalized)
   return _UUID.sub(replace_uuid, normalized)
 
 

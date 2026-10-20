@@ -583,25 +583,32 @@ def test_cron_firing_masks_the_clock_stamp_and_keeps_the_task_identity() -> None
   assert normalize.normalize_text(earlier, _context()) == normalize.normalize_text(later, _context())
   assert normalize.normalize_text("cron:another-task:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != (
       normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()))
+  assert normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf",
+                                  _context()) != normalize.normalize_text(
+                                      "cron:synthetic-cron:2026-10-20T02:26:06.696542-07:00:leaf", _context())
   assert normalize.normalize_text(
-      "cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != normalize.normalize_text(
-          "cron:synthetic-cron:2026-10-20T02:26:06.696542-07:00:leaf", _context())
-  assert normalize.normalize_text("2026-10-20T09:26:06.696542+00:00", _context()) != (
-      normalize.normalize_text("2026-10-20T02:26:06.735915-07:00", _context()))
-  assert normalize.normalize_text(
-      "cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != normalize.normalize_text(
-          "cron:synthetic-cron:2026-10-20T09:26:06.696542001+00:00:leaf", _context())
+      "2026-10-20T09:26:06.696542+00:00",
+      _context()) != (normalize.normalize_text("2026-10-20T02:26:06.735915-07:00", _context()))
+  assert normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf",
+                                  _context()) != normalize.normalize_text(
+                                      "cron:synthetic-cron:2026-10-20T09:26:06.696542001+00:00:leaf", _context())
 
 
 def test_cron_last_scheduled_run_masks_the_stamp_and_keeps_the_expression() -> None:
   rules = normalize.file_rules("home/sessions/synthetic-session/metadata.json")
   earlier = normalize.normalize_json(
-      {"last_scheduled_run": "2026-10-20T09:26:06.696542+00:00", "last_scheduled_cron": "0 8 * * *"},
+      {
+          "last_scheduled_run": "2026-10-20T09:26:06.696542+00:00",
+          "last_scheduled_cron": "0 8 * * *"
+      },
       rules,
       _context(),
   )
   later = normalize.normalize_json(
-      {"last_scheduled_run": "2026-10-20T09:26:06.735915+00:00", "last_scheduled_cron": "0 8 * * *"},
+      {
+          "last_scheduled_run": "2026-10-20T09:26:06.735915+00:00",
+          "last_scheduled_cron": "0 8 * * *"
+      },
       rules,
       _context(),
   )
@@ -814,14 +821,15 @@ def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placehold
             _spawn_record(1, manager_id, manager_run, b"Cron finish report."),
         ])
     sides.append(side)
-    snapshots.append({
-        f"home/sessions/{manager_id}/data/chat_events.jsonl":
-            compare.Entry("file", b'{"id": "%s"}\n' % manager_run.encode()),
-        f"home/sessions/{leaf_id}/data/chat_events.jsonl":
-            compare.Entry("file", b'{"id": "%s"}\n' % leaf_run.encode()),
-        f"home/sessions/{minted_id}/data/chat_events.jsonl":
-            compare.Entry("file", b'{"id": "40000000-0000-4000-8000-000000000003"}\n'),
-    })
+    snapshots.append(
+        {
+            f"home/sessions/{manager_id}/data/chat_events.jsonl":
+                compare.Entry("file", b'{"id": "%s"}\n' % manager_run.encode()),
+            f"home/sessions/{leaf_id}/data/chat_events.jsonl":
+                compare.Entry("file", b'{"id": "%s"}\n' % leaf_run.encode()),
+            f"home/sessions/{minted_id}/data/chat_events.jsonl":
+                compare.Entry("file", b'{"id": "40000000-0000-4000-8000-000000000003"}\n'),
+        })
 
   parity._prepare_contexts(sides, snapshots)
 
@@ -829,8 +837,8 @@ def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placehold
     assert side.ctx.minted_uuids[minted_id] == "<minted-1>"
     assert normalize.normalize_text("40000000-0000-4000-8000-000000000003", side.ctx) == "<minted-2>"
 
-  for side, manager_id, leaf_id, manager_run, leaf_run in zip(
-      sides, manager_ids, leaf_ids, manager_runs, leaf_runs, strict=True):
+  for side, manager_id, leaf_id, manager_run, leaf_run in zip(sides, manager_ids, leaf_ids, manager_runs, leaf_runs,
+                                                              strict=True):
     assert side.ctx.stable_uuids[manager_id] == "<spawn-session-2>"
     assert side.ctx.stable_uuids[leaf_id] == "<spawn-session-1>"
     assert normalize.normalize_text(manager_id, side.ctx) == "<spawn-session-2>"

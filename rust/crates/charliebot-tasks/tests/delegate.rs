@@ -1,5 +1,6 @@
-//! The delegation route's gate, backend choice, and child record, ported from the Python delegate tests. Each case
-//! drives `routes::routes` through `post_delegate` (or `post_delegate_as` for a run token) on a synthetic task tree.
+//! The delegation route's gate, backend choice, and child record, ported from the Python delegate tests, and the
+//! session-message relay that the same router serves. Each case drives `routes::routes` through `post_delegate` (or
+//! `post_delegate_as` for a run token, `post_internal` for the relay) on a synthetic task tree.
 //!
 //! Python disarms the launch of a delegated run in some cases; the adapter here starts the process at once. Those cases
 //! hold the process open with `HANG` and let the guard kill it, or run it to a terminal fact.
@@ -14,14 +15,15 @@ use axum::http::StatusCode;
 use charliebot_core::event_types;
 use charliebot_core::run_token::{self, RunTokenClaims};
 use charliebot_store::control_events;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{CreateTask, TaskCaller};
+use charliebot_tasks::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
 use charliebot_tasks::routes;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Scripts, Stack, init_repo_with_origin, post_delegate, post_delegate_as, result_script,
-  settle_until,
+  BACKEND_ID, BACKEND_TYPE, Scripts, Stack, cold_read_body, init_repo_with_origin, post_delegate, post_delegate_as,
+  post_internal, result_script, settle_until, write_sitrep,
 };
 use serde_json::{Map, Value, json};
 
@@ -682,5 +684,247 @@ async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyh
   let (status, verify) = post_delegate(&router, verify_body(&manager.id)).await?;
   assert_eq!(status, StatusCode::OK, "{verify}");
   assert_launched_on(&stack, &guard, &verify, "codex-o3").await?;
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_delegation_from_a_manager_succeeds_without_takeoff`: a manager with no user
+/// message delegates a cold read. The read-only exemption admits it, the child is named after the page file, and its
+/// first run goes to the first pool member.
+#[tokio::test]
+async fn cold_read_delegation_from_a_manager_succeeds_without_takeoff() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_delegation_from_a_manager_succeeds_without_takeoff.
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![HANG.to_string()]);
+  let stack = stack_with(&scripts, &["opus", "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = node(&stack, "root", None, TaskProfile::Manager, "opus").await?;
+
+  let (status, response) = post_delegate(&routes::routes(&stack.features), cold_read_body(&manager.id, &page)).await?;
+  assert_eq!(status, StatusCode::OK, "{response}");
+  let child = session_of(&stack, &text(&response, "session_id")?).await?;
+  assert_eq!(child.task_parent_id.as_deref(), Some(manager.id.as_str()));
+  assert_eq!(child.profile, TaskProfile::Worker);
+  assert_eq!(child.name, format!("Cold read: {}", page.file_name().unwrap().to_string_lossy()));
+  let task = child.task.clone().expect("the cold-read child carries its task");
+  assert_eq!(task.task_type, Some(TaskType::ColdRead));
+  assert_eq!(
+    task.cold_read,
+    Some(ColdReadSpec {
+      page_path: page.display().to_string(),
+      genre: "sitrep".to_string(),
+      trigger: "where are we?".to_string(),
+    })
+  );
+  assert!(task.repo_path.is_none() && task.base_branch.is_none());
+  assert_launched_on(&stack, &guard, &response, "alpha").await?;
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_delegation_with_a_repo_field_gets_400`: a cold-read delegation that names a
+/// repository or a base branch is refused with 400, and no child is written.
+#[tokio::test]
+async fn cold_read_delegation_with_a_repo_field_gets_400() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_delegation_with_a_repo_field_gets_400.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &["opus", "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = node(&stack, "root", None, TaskProfile::Manager, "opus").await?;
+  let router = routes::routes(&stack.features);
+
+  for (field, value) in [("repo_path", json!("/synthetic/repo")), ("base_branch", json!("main"))] {
+    let mut body = cold_read_body(&manager.id, &page);
+    body[field] = value;
+    let (status, response) = post_delegate(&router, body).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+    assert_eq!(response["detail"], format!("cold-read delegations are repo-less; omit {field}"));
+  }
+  assert!(stack.store().child_ids(&manager.id)?.is_empty());
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_cold_read_delegation_requires_cold_read`: a cold-read delegation without its
+/// `cold_read` spec is refused with 400.
+#[tokio::test]
+async fn cold_read_delegation_requires_cold_read() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_cold_read_delegation_requires_cold_read.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &["opus", "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = node(&stack, "root", None, TaskProfile::Manager, "opus").await?;
+  let mut body = cold_read_body(&manager.id, &page);
+  body["cold_read"] = Value::Null;
+
+  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+  assert_eq!(response["detail"], "cold-read delegations require cold_read");
+  Ok(())
+}
+
+/// `test_artifact_check.py::test_other_task_types_reject_cold_read`: a verify delegation that carries a `cold_read`
+/// spec is refused with 400.
+#[tokio::test]
+async fn other_task_types_reject_cold_read() -> anyhow::Result<()> {
+  // Python: tests/core/test_artifact_check.py::test_other_task_types_reject_cold_read.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &["opus", "alpha", "beta"], &["alpha", "beta"]).await?;
+  let manager = node(&stack, "root", None, TaskProfile::Manager, "opus").await?;
+  let mut body = cold_read_body(&manager.id, &page);
+  body["task_type"] = json!("verify");
+
+  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+  assert_eq!(response["detail"], "verify delegations reject cold_read");
+  Ok(())
+}
+
+/// One relay from `from` to `to` carrying `content`, as `charliebot session send` posts it.
+async fn relay(stack: &Stack, from: &str, to: &str, content: &str) -> anyhow::Result<(StatusCode, Value)> {
+  let body = json!({"session_id": from, "target_session_id": to, "content": content});
+  post_internal(&routes::routes(&stack.features), "/api/internal/session-message", body, "Bearer synthetic-access-key")
+    .await
+}
+
+/// The `agent_message` events admitted into `session_id`, in order.
+fn admitted_messages(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
+  Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::AGENT_MESSAGE).collect())
+}
+
+/// `test_agent_message.py::test_session_message_refuses_an_archived_task_node`: a relay to an archived task node is
+/// refused with 409 and the archived sentence, and the node stays archived.
+#[tokio::test]
+async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
+  // Python: tests/test_agent_message.py::test_session_message_refuses_an_archived_task_node.
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
+  stack.store().archive_subtree(&target.id, TaskCaller::Operator).await?;
+
+  let (status, body) = relay(&stack, &caller.id, &target.id, "status please").await?;
+  assert_eq!(status, StatusCode::CONFLICT, "{body}");
+  assert_eq!(body["detail"], format!("task {} is archived", target.id));
+  assert_eq!(stack.store().task_state(&target.id)?, "archived");
+  Ok(())
+}
+
+/// `test_agent_message.py::test_session_message_relay_admits_and_dispatches_a_task_input`: a relay admits one
+/// `agent_message` into the target, carrying the sender's identity, and dispatch starts the target's turn with it.
+#[tokio::test]
+async fn session_message_relay_admits_and_dispatches_a_task_input() -> anyhow::Result<()> {
+  // Python: tests/test_agent_message.py::test_session_message_relay_admits_and_dispatches_a_task_input.
+  let scripts = Scripts::new(vec![result_script("status received")]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
+
+  let (status, body) = relay(&stack, &caller.id, &target.id, "status please").await?;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  assert_eq!(body, json!({"status": "accepted"}));
+  let admitted = admitted_messages(&stack, &target.id)?;
+  assert_eq!(admitted.len(), 1);
+  assert_eq!(admitted[0]["content"], "status please");
+  assert_eq!(admitted[0]["from_session"], caller.id);
+  assert_eq!(admitted[0]["from_session_name"], caller.name);
+  settle_runs(&stack, &target.id).await?;
+  let input_id = text(&admitted[0], "id")?;
+  let turns =
+    stack.run_records(&target.id)?.into_iter().filter(|run| run.kind == RunKind::ManagerTurn).collect::<Vec<_>>();
+  assert!(turns.iter().any(|run| run.input_event_ids.contains(&input_id)), "a turn claims the relayed input");
+  Ok(())
+}
+
+/// `test_agent_message.py::test_session_message_request_rejects_extra_fields`: a field the request model does not name
+/// is refused with 422.
+#[tokio::test]
+async fn session_message_request_rejects_extra_fields() -> anyhow::Result<()> {
+  // Python: tests/test_agent_message.py::test_session_message_request_rejects_extra_fields.
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let body = json!({
+    "session_id": caller.id,
+    "target_session_id": target.id,
+    "content": "status please",
+    "surprise": "field",
+  });
+
+  let (status, response) = post_internal(
+    &routes::routes(&stack.features),
+    "/api/internal/session-message",
+    body,
+    "Bearer synthetic-access-key",
+  )
+  .await?;
+  assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{response}");
+  assert!(admitted_messages(&stack, &target.id)?.is_empty());
+  Ok(())
+}
+
+/// `test_agent_message.py::test_session_message_accepts_a_message_at_the_weighted_limit`: 1000 CJK ideographs weigh
+/// exactly the limit, so the relay is accepted and admits one `agent_message`.
+#[tokio::test]
+async fn session_message_accepts_a_message_at_the_weighted_limit() -> anyhow::Result<()> {
+  // Python: tests/test_agent_message.py::test_session_message_accepts_a_message_at_the_weighted_limit.
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let content = "一".repeat(1000);
+
+  let (status, body) = relay(&stack, &caller.id, &target.id, &content).await?;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  assert_eq!(body, json!({"status": "accepted"}));
+  let admitted = admitted_messages(&stack, &target.id)?;
+  assert_eq!(admitted.len(), 1);
+  assert_eq!(admitted[0]["content"], content.as_str());
+  Ok(())
+}
+
+/// `test_agent_message.py::test_session_message_refuses_a_message_over_the_weighted_limit`: 1001 CJK ideographs weigh
+/// 2002, so the relay answers 422 with the measured length and the limit, and the target gains no input.
+#[tokio::test]
+async fn session_message_refuses_a_message_over_the_weighted_limit() -> anyhow::Result<()> {
+  // Python: tests/test_agent_message.py::test_session_message_refuses_a_message_over_the_weighted_limit.
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
+
+  let (status, body) = relay(&stack, &caller.id, &target.id, &"一".repeat(1001)).await?;
+  assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+  assert_eq!(
+    body["detail"],
+    format!(
+      "Message is 2002 weighted characters; the limit is {MAX_AGENT_MESSAGE_WEIGHTED_CHARS}.\n\
+       CJK characters, CJK punctuation, and fullwidth characters count 2.\n\
+       Write the long content to a file. Send a short message with the conclusion,\n\
+       the request, and the file path."
+    )
+  );
+  assert!(admitted_messages(&stack, &target.id)?.is_empty());
+  assert!(stack.dispatch.pending_inputs(&target.id)?.is_empty());
+  Ok(())
+}
+
+/// `test_agent_message.py::test_session_message_refuses_an_over_limit_ascii_message`: 2001 ASCII characters weigh 2001,
+/// so the relay answers 422 and writes nothing to the target.
+#[tokio::test]
+async fn session_message_refuses_an_over_limit_ascii_message() -> anyhow::Result<()> {
+  // Python: tests/test_agent_message.py::test_session_message_refuses_an_over_limit_ascii_message.
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
+
+  let (status, body) = relay(&stack, &caller.id, &target.id, &"a".repeat(2001)).await?;
+  assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+  assert!(text(&body, "detail")?.contains("2001"), "{body}");
+  assert!(admitted_messages(&stack, &target.id)?.is_empty());
   Ok(())
 }

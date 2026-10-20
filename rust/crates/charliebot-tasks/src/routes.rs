@@ -25,7 +25,9 @@ use uuid::Uuid;
 use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
 use crate::execution::TaskExecutionAdapter;
+use crate::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
 use crate::task_sessions;
+use crate::text_length;
 
 struct RequiredTaskSession(SessionMetadata);
 
@@ -52,6 +54,7 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/sessions/{session_id}/task-inputs/acknowledge", post_only(acknowledge_task_inputs))
     .route("/api/sessions/{session_id}/unarchive", post_only(unarchive_task))
     .route("/api/internal/delegate", post_only(delegate_task))
+    .route("/api/internal/session-message", post_only(session_message))
     .with_state(Arc::clone(features))
 }
 
@@ -64,7 +67,7 @@ pub fn matches(path: &str) -> bool {
     ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
     ["", "api", "sessions", session_id, "complete" | "cancel" | "unarchive"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "task-inputs", "acknowledge"] => !session_id.is_empty(),
-    ["", "api", "internal", "delegate"] => true,
+    ["", "api", "internal", "delegate" | "session-message"] => true,
     _ => false,
   }
 }
@@ -612,6 +615,99 @@ async fn send_message(
     response["reason"] = reason.clone();
   }
   responses::json(StatusCode::ACCEPTED, &response)
+}
+
+const SESSION_MESSAGE_BODY_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("target_session_id", FieldType::String),
+  Field::required("content", FieldType::String),
+];
+const SESSION_MESSAGE_BODY: BodyModel = BodyModel::required(SESSION_MESSAGE_BODY_FIELDS).forbid_extra();
+
+struct SessionMessageRequest {
+  session_id: String,
+  target_session_id: String,
+  content: String,
+}
+
+fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageRequest, Box<Response>> {
+  let values = body.validate(&SESSION_MESSAGE_BODY)?;
+  let values = values.expect("a required request body validates to an object");
+  Ok(SessionMessageRequest {
+    session_id: validated_string(&values, "session_id"),
+    target_session_id: validated_string(&values, "target_session_id"),
+    content: validated_string(&values, "content"),
+  })
+}
+
+/// The agent relay behind `charliebot session send`: one `agent_message` admitted into the target session, then
+/// dispatched (`src/runtime/api/internal.py` `session_message`). An over-limit message is refused before any lookup.
+async fn session_message(State(features): State<Arc<FeatureContext>>, request: axum::http::Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let request = match parse_session_message_request(&body) {
+    Ok(request) => request,
+    Err(response) => return *response,
+  };
+  let weighted_chars = text_length::weighted_length(&request.content);
+  if weighted_chars > MAX_AGENT_MESSAGE_WEIGHTED_CHARS {
+    tracing::info!(
+      target: "charliebot_tasks",
+      session = %request.session_id,
+      target_session = %request.target_session_id,
+      weighted_chars,
+      limit = MAX_AGENT_MESSAGE_WEIGHTED_CHARS,
+      "session_message_refused"
+    );
+    let detail = format!(
+      "Message is {weighted_chars} weighted characters; the limit is {MAX_AGENT_MESSAGE_WEIGHTED_CHARS}.\n\
+       CJK characters, CJK punctuation, and fullwidth characters count 2.\n\
+       Write the long content to a file. Send a short message with the conclusion,\n\
+       the request, and the file path."
+    );
+    return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({ "detail": detail }));
+  }
+  let caller = match features.store.get_session(&request.session_id).await {
+    Ok(Some(caller)) => caller,
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Err(error) => return task_http_error(error),
+  };
+  match features.store.get_session(&request.target_session_id).await {
+    Ok(Some(_)) => {}
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Target session not found" })),
+    Err(error) => return task_http_error(error),
+  }
+  let dispatch = match dispatch::dispatcher(&features) {
+    Ok(dispatch) => dispatch,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let fields = json!({ "from_session": caller.id, "from_session_name": caller.name });
+  if let Err(error) = dispatch
+    .admit_input(
+      &request.target_session_id,
+      charliebot_core::event_types::AGENT_MESSAGE,
+      &request.content,
+      "agent",
+      fields,
+    )
+    .await
+  {
+    return task_http_error(error);
+  }
+  if let Err(error) = dispatch.dispatch_pending(&request.target_session_id).await {
+    return task_http_error(error);
+  }
+  tracing::info!(
+    target: "charliebot_tasks",
+    session = %request.session_id,
+    target_session = %request.target_session_id,
+    content_chars = request.content.chars().count(),
+    "session_message_dispatched"
+  );
+  responses::json(StatusCode::OK, &json!({ "status": "accepted" }))
 }
 
 async fn cancel_chat(

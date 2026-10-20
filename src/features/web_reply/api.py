@@ -85,8 +85,9 @@ async def web_status_set(
 ) -> dict:
   """Store the calling session's status items and return the stored status the CLI prints.
 
-  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session or a worker, 422 a file that is not a
-  JSON object of valid items. Nothing is stored or recorded on a refusal.
+  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, worker, or unread waiting item, and
+  422 a file that is not a JSON object of valid items or has a waiting item without context. Nothing is stored or
+  recorded on a refusal.
   """
   try:
     return await status.set_status(req.session_id, req.text, store, events, tree)

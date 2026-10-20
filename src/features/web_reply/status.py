@@ -1,22 +1,19 @@
 """A web session's status: the Goal, Now and Waiting on you items that ``charliebot web status`` sets and reads.
 
 A set replaces the items its file names, stores the status in the ``web_status`` metadata field, records one
-``web_status`` event and tells every ancestor page. The set's return holds the stored status plus ``now_chars`` (the
-length of the stored Now) and ``now_over_budget``; the stored status and the event keep neither. A read lists two
-groups, both newest first: the open descendants whose status holds Waiting on you items (``descendants``), and the
-open direct children whose status holds a Now (``children``).
+``web_status`` event and tells every ancestor page. Waiting items need non-blank context and a matching
+``web_ask_check`` digest before the set stores them. The set's return holds the stored status plus ``now_chars`` and
+``now_over_budget``; the stored status and event keep neither. A read lists open waiting descendants and open children
+with a Now, both newest first.
 
-The cold-read side keeps one digest of a Waiting on you item and two queries over it: the unread query lists the items
-of a status file that no ``web_ask_check`` event names, and the ask-check record persists one such event. The set does
-not consult either; commit B's CLI gates the store.
+The cold-read side keeps one digest of a Waiting on you item. The unread query and set gate use the same digest and
+``web_ask_check`` event lookup.
 """
 
 import asyncio
 import datetime
 import hashlib
 import json
-import pathlib
-import urllib.parse
 
 import pydantic
 
@@ -91,6 +88,14 @@ async def set_status(
   """
   meta = await reply.require_web_session(store, session_id)
   patch = parse_patch(text)
+  if "waiting" in patch.model_fields_set:
+    for item in patch.waiting:
+      if item.context is None:
+        raise reply.WebReplyError(422, f"Waiting item needs context: {item.text}")
+    unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
+    if unread:
+      names = "; ".join(item.text for item in unread)
+      raise reply.WebReplyError(409, f"Waiting on you items need a cold read: {names}")
   stored = metadata_slots.fields_of(meta, OWNER).web_status
   base = metadata.WebStatus() if stored is None else stored
   named = {item: getattr(patch, item) for item in ITEMS if item in patch.model_fields_set}
@@ -116,25 +121,6 @@ async def set_status(
   return {**payload, "now_chars": now_chars, "now_over_budget": now_chars > NOW_BUDGET_CHARS}
 
 
-def _host_file(link: str | None) -> pathlib.Path | None:
-  """The host file *link* names, or None when it names no file on this host.
-
-  A file-server path names the absolute path after the mount (``file_urls.FILE_SERVER_MOUNTS``), whatever scheme or
-  host precedes the path. A bare absolute path (with no query or fragment, so an application route like
-  ``/?session=...`` names none) names itself. A link to another host names no local file.
-  """
-  if not link:
-    return None
-  parts = urllib.parse.urlsplit(link)
-  path = urllib.parse.unquote(parts.path)
-  for mount in file_urls.FILE_SERVER_MOUNTS:
-    if path.startswith(mount + "/"):
-      return pathlib.Path(path[len(mount):])
-  if not parts.scheme and not parts.netloc and not parts.query and not parts.fragment and path.startswith("/"):
-    return pathlib.Path(path)
-  return None
-
-
 def item_sha256(item: metadata.WaitingItem) -> str:
   """The digest that names *item* as it stands: its three fields and the bytes of the host file its link names.
 
@@ -147,7 +133,7 @@ def item_sha256(item: metadata.WaitingItem) -> str:
           "link": item.link
       }, sort_keys=True, ensure_ascii=False)
   digest = hashlib.sha256(payload.encode("utf-8"))
-  path = _host_file(item.link)
+  path = file_urls.host_file(item.link)
   if path is not None:
     digest.update(path.read_bytes())
   return digest.hexdigest()
@@ -192,10 +178,19 @@ async def unread_waiting(
   """
   await reply.require_web_session(store, session_id)
   patch = parse_patch(text)
-  loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
-  read = {ev.get(ITEM_SHA256) for ev in loaded if ev.get("type") == ET.WEB_ASK_CHECK}
-  unread = [item for item in patch.waiting if item_sha256(item) not in read]
+  unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
   return {"unread": [item.model_dump(mode="json") for item in unread]}
+
+
+async def _read_item_digests(session_id: str, events: session_events.SessionEvents) -> set[str | None]:
+  """The item digests of every web_ask_check event in *session_id*."""
+  loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
+  return {ev.get(ITEM_SHA256) for ev in loaded if ev.get("type") == ET.WEB_ASK_CHECK}
+
+
+def _unread_items(items: list[metadata.WaitingItem], read_digests: set[str | None]) -> list[metadata.WaitingItem]:
+  """The items whose current digest is absent from *read_digests*."""
+  return [item for item in items if item_sha256(item) not in read_digests]
 
 
 async def _open_statuses(

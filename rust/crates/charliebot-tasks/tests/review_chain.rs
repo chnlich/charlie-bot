@@ -226,6 +226,22 @@ fn child_reports(stack: &Stack, parent_id: &str) -> anyhow::Result<Vec<Value>> {
   Ok(stack.run_events(parent_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
 }
 
+/// The parent's child reports, polled until *count* arrive: the report dispatches after the run's
+/// terminal fact, so reading it right after `wait_for_run` races under load.
+async fn wait_for_child_reports(stack: &Stack, parent_id: &str, count: usize) -> anyhow::Result<Vec<Value>> {
+  tokio::time::timeout(Duration::from_secs(10), async {
+    loop {
+      let reports = child_reports(stack, parent_id)?;
+      if reports.len() >= count {
+        return Ok(reports);
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .map_err(|_| anyhow::anyhow!("timed out waiting for {count} child reports to reach {parent_id}"))?
+}
+
 async fn queue_and_launch_work(stack: &Stack, session_id: &str, run_id: &str, task_spec: &str) -> anyhow::Result<()> {
   let record = RunRecord {
     backend: Some("fake".to_string()),
@@ -1561,8 +1577,7 @@ async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Resul
   assert_eq!(continuation.review_of_run_id.as_deref(), Some("run-work"));
   stack.dispatch.set_executor(None);
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Failed);
-  let reports = child_reports(&stack, &manager.id)?;
-  assert_eq!(reports.len(), 1);
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports[0]["outcome"], "failed");
   Ok(())
 }
@@ -1628,8 +1643,7 @@ async fn review_continuation_fails_when_its_backend_is_removed() -> anyhow::Resu
   stack.dispatch.set_executor(None);
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Failed);
   assert_eq!(fs::read_to_string(control.path().join("count"))?, "1");
-  let reports = child_reports(&stack, &manager.id)?;
-  assert_eq!(reports.len(), 1);
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports[0]["outcome"], "failed");
   Ok(())
 }

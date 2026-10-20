@@ -693,6 +693,7 @@ async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> a
   stack.set_min_free_disk_gib(0)?;
   let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
   assert_eq!(stack.wait_terminal(&worker.id, &launched_run_id(&decision)?).await?, RunOutcomeKind::Success);
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 
@@ -756,6 +757,7 @@ async fn non_space_end_failure_lands_immediately_and_starts_no_retry() -> anyhow
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
   let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();
   assert!(!outcomes[1..].contains(&json!("failed")), "{outcomes:?}");
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 

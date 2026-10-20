@@ -14,6 +14,9 @@ ANCESTOR_HOP_LIMIT = 1000
 # The restore chain walks the same relation; it shares the bound.
 RESTORE_CHAIN_HOP_LIMIT = ANCESTOR_HOP_LIMIT
 
+# Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
+DESCENDANT_NODE_LIMIT = 1000
+
 
 class TaskInvalidError(ValueError):
   """Empty target or illegal relation (API: 400)."""

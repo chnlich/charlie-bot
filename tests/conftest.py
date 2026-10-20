@@ -621,6 +621,11 @@ def append_events(path: pathlib.Path, events: list[dict]) -> None:
     f.writelines(json.dumps(event) + "\n" for event in events)
 
 
+def read_events(path: pathlib.Path) -> list[dict]:
+  """Parse one JSONL event log, blank lines skipped; each event stays an unmodeled dict."""
+  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def read_chat_events(home: pathlib.Path, session_id: str) -> list[dict]:
   """Parse a session's chat_events.jsonl under a staged CHARLIEBOT_HOME; [] when absent.
 

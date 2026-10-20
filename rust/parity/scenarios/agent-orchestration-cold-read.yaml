@@ -1,0 +1,136 @@
+stage: agent-orchestration
+name: agent-orchestration-cold-read
+# One pool member, the worker's own backend: a failed attempt leaves no backend to retry, so the chain
+# reports every model failed. An empty pool would retry the worker's backend without end.
+config:
+  backends:
+    pool: [claude-sonnet]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-answer}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic sitrep answer.}]
+        - emit:
+            type: result
+            result: Synthetic sitrep answer.
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-cold-read}
+        - gate: manager-after-cold-read
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The cold-read report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-failure}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-cold-read-failure}
+        - gate: manager-after-cold-read-failure
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The failed cold-read report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 4
+steps:
+  - name: delegate a cold read of the synthetic page
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Read the synthetic sitrep.
+      task_type: cold-read
+      cold_read:
+        page_path: rust/parity/data/cold-read-sitrep.html
+        genre: sitrep
+        trigger: where are we?
+      request_id: synthetic-cold-read-success
+    capture: {success_child: session_id, success_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the cold-read worker's answer
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.success_child}
+        type: run_finished
+        fields: {run_id: "${capture.success_run}", outcome: success}
+  - kind: wait
+    name: the manager receives the cold-read report
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.success_child}", outcome: completed}
+  - kind: wait
+    name: wait for the manager after the cold-read report
+    timeout_seconds: 30
+    until: {at_gate: manager-after-cold-read}
+  - kind: gate
+    name: let the manager finish the cold-read report
+    open: manager-after-cold-read
+  - name: delegate a cold read whose only attempt fails
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Read the synthetic sitrep with a failing attempt.
+      task_type: cold-read
+      cold_read:
+        page_path: rust/parity/data/cold-read-sitrep.html
+        genre: sitrep
+        trigger: where are we again?
+      request_id: synthetic-cold-read-failure
+    capture: {failed_child: session_id, failed_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the manager after the failed cold-read report
+    timeout_seconds: 30
+    until: {at_gate: manager-after-cold-read-failure}
+  - kind: gate
+    name: let the manager finish the failed cold-read report
+    open: manager-after-cold-read-failure
+  - kind: wait
+    name: the manager receives the failed cold-read report
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.failed_child}", outcome: failed}
+  - kind: wait
+    name: the failed cold-read worker is archived
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.failed_child}
+        type: task_closed
+        fields: {outcome: archived}

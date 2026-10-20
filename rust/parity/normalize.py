@@ -32,8 +32,12 @@ TREE_PLACEHOLDER = "<tree>"
 _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _ISO_WALL_CLOCK = r"(?P<date>\d{4}-\d{2}-\d{2}T)(?P<value>\d{2}:\d{2}:\d{2}(?:\.\d{6})?)(?P<offset>[+-]\d{2}:\d{2})"
+# The ` · ` form is the cron leaf session name `<task name> · <firing>` that cron_sequence.py:257 writes. It reaches the
+# compared files as metadata.json's `name`, as the `- Session:` line of launch_prompt.md (prompts/worker.md:3, rendered
+# by task_prompts.render_session_info) and in the spawn stdin. A task name is one word that starts with a letter or
+# digit (loader.py _valid_cron_name), so the form is that word at the start of a text or after whitespace.
 _CRON_FIRING_STAMP = re.compile(
-    rf"(?P<prefix>cron:[^:\s]+:|[^:\n]* · ){_ISO_WALL_CLOCK}"
+    rf"(?P<prefix>cron:[^:\s]+:|(?<!\S)[A-Za-z0-9][A-Za-z0-9._-]* · ){_ISO_WALL_CLOCK}"
     r"(?P<suffix>:(?:leaf|work|step:\d+))?(?=$|\s)")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
